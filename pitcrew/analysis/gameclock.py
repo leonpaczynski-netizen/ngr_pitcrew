@@ -1,0 +1,272 @@
+"""What a lobby's time-of-day setting actually does, measured from the stream.
+
+GT7's lobby does not offer a clock. It offers names — *Late Morning*,
+*Afternoon*, *Evening* — and what hour each one starts at differs by track and
+is documented nowhere reliable. The community lists that do exist are from
+2022, cover a subset of the circuits, and map no preset to an hour at all.
+
+**It does not need to be looked up, because it is broadcast.** GT7 sends its own
+clock in every packet. Three things fall straight out of it:
+
+* **the hour the session started**, which is what the preset means at this
+  circuit;
+* **the time multiplier**, as the rate the game clock runs against the real
+  one — measured, not typed. Session 9 of the Monza practice reads exactly
+  6.00 on eight consecutive laps;
+* **where the clock stops**. A circuit without a 24-hour cycle runs its clock
+  forward to the end of its range and then holds it there — it does not roll
+  into the next morning. Session 9 shows precisely that: ×6.00 for eight laps,
+  then 3.33, then nothing for the last five. So **a race at a high multiplier
+  can cover far less of the day than the multiplier suggests**, and which is
+  the case is a property of the circuit. No table carries it; the stream does.
+
+One caution the driver supplied and the data confirms: **practice is often not
+run at the race's clock at all.** Of six Monza practice sessions, two ran with
+the clock frozen and one at ×1. Stopping the clock keeps the lobby light, which
+is exactly why it gets done — and exactly why a race run into the dark is never
+practised. `practice_clock_warning` exists to say so.
+
+So a preset is not interpreted here, it is **measured**, per circuit, the first
+time it is run. Until then the app says it does not know, which is the honest
+state and the one that tells the driver what to go and drive.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from statistics import median
+
+from pitcrew.analysis.session import LapInput
+
+DAY_MS = 24 * 60 * 60 * 1000
+
+# Below this the game clock is not moving: the lobby is set to a fixed time of
+# day, or the circuit's clock has run to the end of its range and stopped.
+STOPPED_RATIO = 0.05
+
+# A lap whose frame buffer covers more than the lap itself - the first of a
+# session, an out-lap picked up mid-pit - reports a ratio far above the truth.
+# The median across laps handles it; this only keeps the obvious nonsense out.
+MAX_PLAUSIBLE_MULTIPLIER = 120.0
+
+
+@dataclass(frozen=True)
+class ClockReading:
+    """What the game clock did across one session."""
+    multiplier: float | None
+    start_hour: float | None
+    end_hour: float | None
+    stopped_at_hour: float | None
+    laps_sampled: int
+    note: str
+
+    @property
+    def measured(self) -> bool:
+        return self.multiplier is not None or self.start_hour is not None
+
+    def as_export(self) -> dict:
+        return {
+            "multiplier": self.multiplier,
+            "startHour": self.start_hour,
+            "endHour": self.end_hour,
+            "stoppedAtHour": self.stopped_at_hour,
+            "lapsSampled": self.laps_sampled,
+            "source": "measured-from-the-game-clock",
+            "note": self.note,
+        }
+
+
+def _stamps(lap: LapInput) -> list[int]:
+    """The clock at the ends of this lap.
+
+    The stored pair first, because it is on every lap. Falling back to the
+    frames means only laps something else chose to decode can be read, and
+    that is precisely how the Monza reading came to be taken from six laps
+    after a pit stop with the clock already stopped.
+    """
+    if lap.tod_start_ms is not None and lap.tod_end_ms is not None:
+        return [lap.tod_start_ms, lap.tod_end_ms]
+    return [frame["time_of_day_ms"] for frame in (lap.frames or ())
+            if frame.get("time_of_day_ms") is not None]
+
+
+def _hour(time_of_day_ms: float) -> float:
+    return (time_of_day_ms % DAY_MS) / 3_600_000.0
+
+
+def lap_multiplier(lap: LapInput) -> float | None:
+    """How much game time this lap covered, per second of real time."""
+    stamps = _stamps(lap)
+    if len(stamps) < 2 or lap.lap_time_ms <= 0:
+        return None
+    game_ms = stamps[-1] - stamps[0]
+    if game_ms < 0:                      # the clock wrapped past midnight
+        game_ms += DAY_MS
+    ratio = game_ms / lap.lap_time_ms
+    return ratio if ratio <= MAX_PLAUSIBLE_MULTIPLIER else None
+
+
+def read_clock(laps: list[LapInput]) -> ClockReading:
+    """Everything the game clock says about one session's conditions."""
+    ratios = [(lap, lap_multiplier(lap)) for lap in laps]
+    ratios = [(lap, ratio) for lap, ratio in ratios if ratio is not None]
+    if not ratios:
+        return ClockReading(
+            None, None, None, None, 0,
+            "No lap carries GT7's clock, so what this lobby setting means at "
+            "this circuit is unknown. Run one session at it and the app will "
+            "read the hour and the multiplier off the stream.")
+
+    moving = [ratio for _, ratio in ratios if ratio > STOPPED_RATIO]
+    multiplier = round(median(moving), 2) if moving else 0.0
+
+    stamps = [stamp for lap, _ in ratios for stamp in _stamps(lap)]
+    start_hour = round(_hour(stamps[0]), 3) if stamps else None
+    end_hour = round(_hour(stamps[-1]), 3) if stamps else None
+
+    stopped = _stopped_at(ratios)
+    return ClockReading(
+        multiplier=multiplier,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        stopped_at_hour=stopped,
+        laps_sampled=len(ratios),
+        note=_note(multiplier, start_hour, end_hour, stopped, len(ratios)),
+    )
+
+
+def _stopped_at(ratios: list[tuple[LapInput, float]]) -> float | None:
+    """The hour the clock stopped advancing, if it did so mid-session.
+
+    A circuit without a 24-hour cycle holds its clock at the end of its range
+    rather than rolling into the next morning, so this is that circuit's
+    ceiling - and it is a hard limit on what any race here can cover, however
+    long the race or however high the multiplier.
+    """
+    moved = False
+    for lap, ratio in ratios:
+        if ratio > STOPPED_RATIO:
+            moved = True
+            continue
+        if moved:
+            stamps = _stamps(lap)
+            return round(_hour(stamps[0]), 3) if stamps else None
+    return None
+
+
+def _note(multiplier: float | None, start: float | None, end: float | None,
+          stopped: float | None, laps: int) -> str:
+    if multiplier == 0.0:
+        return (f"The clock did not move across {laps} laps, so this setting "
+                f"holds a fixed time of day"
+                + (f" at {clock(start)}." if start is not None else "."))
+    parts = [f"Measured over {laps} laps: the game clock runs at "
+             f"x{multiplier:g}"]
+    if start is not None:
+        parts.append(f"from {clock(start)}")
+    if stopped is not None:
+        parts.append(
+            f"and stops at {clock(stopped)} - this circuit has no 24-hour "
+            f"cycle, so its clock holds there rather than running into the "
+            f"next morning, and no race here can cover conditions past it")
+    elif end is not None:
+        parts.append(f"to {clock(end)}")
+    return " ".join(parts) + "."
+
+
+def clock(hour: float | None) -> str:
+    if hour is None:
+        return "unknown"
+    hour = hour % 24.0
+    whole = int(hour)
+    return f"{whole:02d}:{int(round((hour - whole) * 60)) % 60:02d}"
+
+
+def practice_clock_warning(per_session: list[ClockReading],
+                           race_multiplier: float | None) -> str | None:
+    """Where practice was not run at the clock the race will use.
+
+    The driver's own reason for it: *"sometimes I don't, because the lobby gets
+    too dark too quick with doing a practice session."* Entirely reasonable,
+    and precisely the problem - **practice gets run in daylight and the race
+    gets run into the dark**, which is how a compound that never came up to
+    temperature in the race was never seen to be short of temperature in
+    practice.
+
+    A frozen clock is the worst case and the easiest to miss: it sits the whole
+    session at one hour, so it produces plenty of laps and no evidence at all
+    about a race that sweeps through several.
+    """
+    measured = [reading for reading in per_session
+                if reading.multiplier is not None]
+    if not measured or race_multiplier is None:
+        return None
+
+    frozen = [r for r in measured if r.multiplier == 0.0]
+    different = [r for r in measured
+                 if r.multiplier and abs(r.multiplier - race_multiplier) > 0.5]
+    if not frozen and not different:
+        return None
+
+    parts = []
+    if frozen:
+        parts.append(
+            f"{len(frozen)} of {len(measured)} practice sessions ran with the "
+            f"clock frozen, so they sat at one hour and say nothing about a "
+            f"race that moves through several")
+    if different:
+        rates = ", ".join(f"x{r.multiplier:g}" for r in different)
+        parts.append(
+            f"{len(different)} ran at {rates} against the race's "
+            f"x{race_multiplier:g}")
+    return (
+        "Practice was not run at the race's clock: " + "; ".join(parts) +
+        ". Stopping the clock keeps the lobby light, which is why it gets "
+        "done - and it is why a compound short of temperature in the race was "
+        "never short of it in practice.")
+
+
+def race_span(reading: ClockReading | None, minutes: float | None,
+              declared_start: float | None = None,
+              declared_multiplier: float | None = None
+              ) -> tuple[float, float] | None:
+    """The game hours a race actually passes through.
+
+    **The driver's declaration is primary and the measurement corroborates it**
+    (`CLAUDE.md` §4.1). This used to be the other way round, and the reading is
+    taken off *practice* — which this module's own docstring says is frequently
+    not run at the race's clock, and which `practice_clock_warning` exists to
+    report. A frozen practice session measures 0.0, which is not None, so it
+    won: a race declared 18:00 ×6 for 50 minutes came back as the span
+    (15:00, 15:00), `raceSpanHours: 0.0`, `covered: true`, on a race that
+    actually runs 18:00 to 23:00 with none of it driven. The quieter case is
+    practice at ×1 against a declared ×6, which reported 0.83 h of a 5 h race.
+
+    So a measurement only fills a gap the driver left. A **stopped** practice
+    clock never fills it at all: 0.0 is a fact about that lobby, not about the
+    race, and there is no reading of it that says how fast the race's clock
+    will run.
+
+    The circuit's own ceiling still wins over both, because it is a property
+    of the track rather than of the session: a race cannot run into conditions
+    the circuit's clock will not reach. That is the difference between
+    planning five hours of an evening and planning the ninety minutes the
+    track will actually give.
+    """
+    start = declared_start
+    multiplier = declared_multiplier
+    ceiling = None
+    if reading is not None:
+        if start is None:
+            start = reading.start_hour
+        if multiplier is None and reading.multiplier:
+            multiplier = reading.multiplier
+        ceiling = reading.stopped_at_hour
+
+    if start is None or not minutes or multiplier is None:
+        return None
+    end = start + (minutes * multiplier) / 60.0
+    if ceiling is not None:
+        # The ceiling is a clock hour; unwrap it onto the same axis as `end`.
+        limit = ceiling if ceiling >= start else ceiling + 24.0
+        end = min(end, limit)
+    return start, end

@@ -1,0 +1,1201 @@
+<!DOCTYPE html><script type="application/json" id="cowork-artifact-meta">
+{
+  "name": "Gt7 Race Engineering",
+  "schemaVersion": 1,
+  "description": "GT7 setup brief generator. Pick a car (580 in GT7) and circuit (55), enter event parameters, slider min/max ranges, build and assists, and it produces a structured brief to paste into the Claude project session, which returns race and qualifying setup sheets in GT7 in-game layout for manual entry into Pit Crew. A Driver Feedback tab carries the car, circuit and event across from the brief, captures the setup as run, symptoms by corner phase, pace, tyre and fuel data and optional Pit Crew telemetry, and emits a setup-refinement prompt. A quick-reference tab holds the change hierarchy, rear-stability stack, GT7 traps and baseline sheet.",
+  "mcpTools": [],
+  "mcpServerNames": []
+}
+</script>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GT7 Race Engineering — Setup Brief Generator</title>
+<style>
+:root{
+  --bg:#0d0f12; --panel:#15181d; --panel2:#1b1f26; --line:#282d36;
+  --ink:#e8eaed; --ink2:#a4abb6; --ink3:#6d7684;
+  --accent:#a3d84a; --accent-dim:#7ba832;
+  --warn:#e8a13a; --danger:#e06b5e; --info:#5aa8d6;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px 80px}
+
+header{border-bottom:1px solid var(--line);background:linear-gradient(180deg,#12151a,#0d0f12);
+  padding:22px 0 0;margin-bottom:24px}
+.hrow{max-width:1180px;margin:0 auto;padding:0 20px;display:flex;align-items:flex-start;
+  justify-content:space-between;gap:24px;flex-wrap:wrap}
+h1{margin:0;font-size:20px;font-weight:650;letter-spacing:-.01em}
+h1 span{color:var(--accent)}
+.sub{color:var(--ink3);font-size:12.5px;margin-top:4px;letter-spacing:.02em}
+.driverchip{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+  padding:9px 13px;font-size:12px;color:var(--ink2);max-width:420px}
+.driverchip b{color:var(--accent);font-weight:600}
+
+nav{max-width:1180px;margin:20px auto 0;padding:0 20px;display:flex;gap:2px}
+nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--ink3);
+  padding:10px 16px;font-size:13.5px;font-weight:550;cursor:pointer;font-family:inherit}
+nav button:hover{color:var(--ink2)}
+nav button.on{color:var(--accent);border-bottom-color:var(--accent)}
+
+.tab{display:none}.tab.on{display:block}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+  padding:20px;margin-bottom:16px}
+.card h2{margin:0 0 3px;font-size:13px;font-weight:650;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--accent)}
+.card .hint{color:var(--ink3);font-size:12.5px;margin:0 0 16px}
+
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:820px){.g2,.g3,.g4{grid-template-columns:1fr}}
+
+label{display:block;font-size:11.5px;font-weight:600;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--ink3);margin-bottom:6px}
+input,select,textarea{width:100%;background:var(--panel2);border:1px solid var(--line);
+  color:var(--ink);border-radius:7px;padding:9px 11px;font:inherit;font-size:14px}
+input:focus,select:focus,textarea:focus{outline:0;border-color:var(--accent-dim)}
+textarea{resize:vertical;min-height:80px;font-family:var(--mono);font-size:12.5px;line-height:1.5}
+select{cursor:pointer}
+::placeholder{color:#525a66}
+
+.picker{position:relative}
+.results{position:absolute;z-index:40;top:100%;left:0;right:0;margin-top:4px;
+  background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+  max-height:290px;overflow:auto;display:none;box-shadow:0 12px 32px rgba(0,0,0,.55)}
+.results.on{display:block}
+.results div{padding:8px 12px;cursor:pointer;font-size:13.5px;display:flex;
+  justify-content:space-between;gap:12px;border-bottom:1px solid #21252c}
+.results div:last-child{border-bottom:0}
+.results div:hover,.results div.sel{background:#232830}
+.results .meta{color:var(--ink3);font-size:11.5px;font-family:var(--mono);white-space:nowrap}
+.results .none{color:var(--ink3);cursor:default;justify-content:center}
+
+.specs{margin-top:12px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:8px;padding:12px 14px;display:none}
+.specs.on{display:block}
+.specs .t{font-size:14.5px;font-weight:600;margin-bottom:9px}
+.pills{display:flex;flex-wrap:wrap;gap:6px}
+.pill{background:#252a33;border:1px solid #313742;border-radius:5px;padding:3px 9px;
+  font-size:11.5px;font-family:var(--mono);color:var(--ink2)}
+.pill b{color:var(--ink);font-weight:600}
+.pill.hi{border-color:var(--accent-dim);color:var(--accent)}
+.pill.wa{border-color:#6b5320;color:var(--warn)}
+.pill.dg{border-color:#6e3a34;color:var(--danger)}
+
+.note{border-left:2px solid var(--accent);background:rgba(163,216,74,.05);
+  padding:10px 14px;border-radius:0 7px 7px 0;font-size:13px;color:var(--ink2);margin-top:14px}
+.note.w{border-color:var(--warn);background:rgba(232,161,58,.05)}
+.note.i{border-color:var(--info);background:rgba(90,168,214,.05)}
+.note b{color:var(--ink)}
+
+.btnrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+button.act{background:var(--accent);color:#0d0f12;border:0;border-radius:8px;
+  padding:11px 20px;font:inherit;font-size:14px;font-weight:650;cursor:pointer}
+button.act:hover{background:#b4e85e}
+button.ghost{background:transparent;color:var(--ink2);border:1px solid var(--line);
+  border-radius:8px;padding:11px 18px;font:inherit;font-size:14px;font-weight:550;cursor:pointer}
+button.ghost:hover{border-color:var(--ink3);color:var(--ink)}
+
+.out{display:none}.out.on{display:block}
+pre.brief{background:#0a0c0f;border:1px solid var(--line);border-radius:9px;padding:16px;
+  font-family:var(--mono);font-size:12px;line-height:1.6;color:#c8cdd6;white-space:pre-wrap;
+  max-height:480px;overflow:auto;margin:0 0 12px}
+
+.chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink2);
+  background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:8px 10px;
+  cursor:pointer;text-transform:none;letter-spacing:0;font-weight:400;margin:0}
+.chk input{width:auto;margin:0;accent-color:var(--accent)}
+.chk:hover{border-color:var(--ink3)}
+.chk.on{border-color:var(--accent-dim);background:rgba(163,216,74,.06);color:var(--ink)}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink3);font-weight:650;padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:8px 10px;border-bottom:1px solid #1e222a;color:var(--ink2);vertical-align:top}
+td b{color:var(--ink);font-weight:600}
+tr:last-child td{border-bottom:0}
+code{font-family:var(--mono);font-size:12px;background:#22262e;padding:1px 5px;
+  border-radius:4px;color:var(--accent)}
+.rngwrap{border:1px solid var(--line);border-radius:9px;background:var(--panel2);overflow:hidden}
+.rnggrp{padding:4px 0}
+.rnghdr{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+  font-weight:650;padding:12px 14px 6px;border-top:1px solid var(--line)}
+.rnggrp:first-child .rnghdr{border-top:0}
+.rngrow{display:grid;grid-template-columns:1fr 108px 108px 46px;gap:10px;align-items:center;
+  padding:5px 14px}
+.rngrow .nm{font-size:13px;color:var(--ink2)}
+.rngrow .nm i{font-style:normal;color:var(--ink3);font-size:11px;margin-left:6px}
+.rngrow .nm .pc{color:var(--warn)}
+.rngrow input{padding:6px 9px;font-size:13px;font-family:var(--mono);text-align:right}
+.rngrow .un{font-size:11.5px;color:var(--ink3);font-family:var(--mono)}
+.rngcap{display:grid;grid-template-columns:1fr 108px 108px 46px;gap:10px;padding:8px 14px 2px;
+  font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);font-weight:650}
+.rngcap span:nth-child(2),.rngcap span:nth-child(3){text-align:right}
+@media(max-width:820px){
+  .rngrow,.rngcap{grid-template-columns:1fr 1fr 1fr;}
+  .rngcap span:nth-child(4),.rngrow .un{display:none}
+  .rngrow .nm{grid-column:1/-1}
+}
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(80px);
+  background:var(--accent);color:#0d0f12;padding:11px 22px;border-radius:8px;font-weight:650;
+  font-size:14px;transition:transform .22s;z-index:99}
+.toast.on{transform:translateX(-50%) translateY(0)}
+.foot{color:var(--ink3);font-size:11.5px;text-align:center;margin-top:34px;line-height:1.7}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <div>
+      <h1>GT7 <span>Race Engineering</span> — Setup Brief Generator</h1>
+      <div class="sub">580 cars · 55 circuits · v1.70 physics baseline · no-BoP open tuning</div>
+    </div>
+    <div class="driverchip">
+      <b>Driver profile locked:</b> Leon Paczynski — front-end-led precision attacker.
+      Deep trail braking, immediate turn-in, early partial throttle, low tolerance for
+      rear snap/skate/float. Brake bias stays near neutral.
+    </div>
+  </div>
+  <nav>
+    <button class="on" data-t="brief">New Setup Brief</button>
+    <button data-t="log">Driver Feedback</button>
+    <button data-t="ref">Quick Reference</button>
+  </nav>
+</header>
+
+<div class="wrap">
+
+<!-- ================= BRIEF ================= -->
+<section class="tab on" id="brief">
+
+  <div class="card">
+    <h2>1 · Car</h2>
+    <p class="hint">Type any part of the name. Filter narrows the list first.</p>
+    <div class="grid g4">
+      <div>
+        <label>Category filter</label>
+        <select id="catf">
+          <option value="">All categories</option>
+          <option>Gr.1</option><option>Gr.2</option><option selected>Gr.3</option>
+          <option>Gr.4</option><option>Gr.B</option><option>Gr.X</option>
+          <option>Road</option><option>VGT</option>
+        </select>
+      </div>
+      <div style="grid-column:span 3">
+        <label>Car</label>
+        <div class="picker">
+          <input id="carq" placeholder="e.g. 911 RSR, Huracan, GT350R…" autocomplete="off">
+          <div class="results" id="carr"></div>
+        </div>
+      </div>
+    </div>
+    <div class="specs" id="carspec"></div>
+  </div>
+
+  <div class="card">
+    <h2>2 · Circuit</h2>
+    <p class="hint">Circuit character seeds the setup direction — downforce level, kerb severity, wear axle and pit cost.</p>
+    <div class="picker">
+      <input id="trkq" placeholder="e.g. Spa, Fuji, Bathurst, Sainte-Croix…" autocomplete="off">
+      <div class="results" id="trkr"></div>
+    </div>
+    <div class="specs" id="trkspec"></div>
+  </div>
+
+  <div class="card">
+    <h2>3 · Event format</h2>
+    <p class="hint">This sets how hard the race sheet is biased toward stint consistency over one-lap pace.</p>
+    <div class="grid g3">
+      <div>
+        <label>Format</label>
+        <select id="fmt">
+          <option>Sprint — no mandatory stop</option>
+          <option selected>Sprint — one mandatory stop</option>
+          <option>Long — multi-stop</option>
+          <option>Endurance</option>
+          <option>Time trial / hot lap only</option>
+        </select>
+      </div>
+      <div>
+        <label>Length measured in</label>
+        <select id="durmode"><option>Minutes</option><option>Laps</option></select>
+      </div>
+      <div>
+        <label>Value</label>
+        <input id="durval" type="number" min="1" placeholder="40" value="40">
+      </div>
+    </div>
+    <div class="grid g4" style="margin-top:14px">
+      <div><label>Tyre wear multiplier</label>
+        <select id="tw"><option>Off</option><option>1x</option><option>2x</option><option>3x</option>
+        <option selected>4x</option><option>5x</option><option>6x</option><option>8x</option>
+        <option>10x</option><option>15x</option><option>20x</option></select></div>
+      <div><label>Fuel multiplier</label>
+        <select id="fu"><option>Off</option><option>1x</option><option selected>2x</option><option>3x</option>
+        <option>4x</option><option>5x</option><option>6x</option><option>8x</option><option>10x</option></select></div>
+      <div><label>Mandatory stops</label>
+        <select id="stops"><option>0</option><option selected>1</option><option>2</option><option>3+</option></select></div>
+      <div><label>Compounds available</label>
+        <select id="comp"><option selected>Racing H / M / S</option><option>Racing M / S only</option>
+        <option>Racing Hard only</option><option>Racing Medium only</option>
+        <option>Sports H / M / S</option><option>Comfort H / M / S</option><option>Other — see notes</option></select></div>
+    </div>
+    <div class="grid g3" style="margin-top:14px">
+      <div><label>Start type</label>
+        <select id="start"><option selected>Rolling</option><option>Standing</option><option>Grid — no track limit</option></select></div>
+      <div><label>Conditions</label>
+        <select id="cond"><option selected>Dry</option><option>Dry, rain possible</option><option>Wet</option><option>Dynamic / variable</option></select></div>
+      <div><label>Time of day</label>
+        <select id="tod"><option selected>Fixed day</option><option>Fixed night</option><option>Day→night transition</option></select></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4 · Build — no BoP, open tuning</h2>
+    <p class="hint">Actual as-raced figures. Leave blank to use the car's stock values shown above.</p>
+    <div class="grid g4">
+      <div><label>Power (BHP)</label><input id="bhp" type="number" placeholder="stock"></div>
+      <div><label>Weight (kg)</label><input id="wt" type="number" placeholder="stock"></div>
+      <div><label>PP (actual)</label><input id="pp" type="number" step="0.01" placeholder="stock"></div>
+      <div><label>PP cap (if any)</label><input id="ppcap" type="number" step="0.01" placeholder="none"></div>
+    </div>
+    <div class="grid g3" style="margin-top:14px">
+      <div><label>Ballast</label><select id="ball">
+        <option selected>Not used</option><option>Permitted, currently 0 kg</option><option>In use — see notes</option>
+        <option>Prohibited by league</option></select></div>
+      <div><label>Power restrictor / ECU</label><select id="restr">
+        <option selected>None</option><option>Power restrictor in use</option>
+        <option>ECU output reduced</option><option>Both</option></select></div>
+      <div><label>Adjustable aero</label><select id="aero">
+        <option selected>Yes — front and rear</option><option>Rear only</option>
+        <option>Fixed / none fitted</option><option>Unknown</option></select></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>5 · Slider ranges — what this car will actually accept</h2>
+    <p class="hint">GT7's suspension, aero and gearing endpoints are per-car. Feeding the real min/max
+      in means the returned sheet is enterable in Pit Crew without clamping. Ranges already recorded for a car
+      load themselves when you pick it; anything else starts from GT7 typical windows. Enter the real limits once,
+      save them, and you never type them again.</p>
+
+    <div class="grid g3" style="margin-bottom:14px">
+      <div><label>Prefill preset</label><select id="rngpre">
+        <option value="race" selected>Race car — Gr.1–Gr.4 / racing</option>
+        <option value="road">Road car — fully customisable</option>
+        <option value="blank">Blank — I'll enter everything</option>
+      </select></div>
+      <div style="grid-column:span 2;display:flex;align-items:flex-end">
+        <label class="chk" style="width:100%"><input type="checkbox" id="rngver">
+          These are read off <b style="margin:0 4px">this car's</b> in-game sheet — not defaults</label>
+      </div>
+    </div>
+
+    <div id="rngstat" class="note" style="margin:0 0 14px"></div>
+
+    <div class="rngwrap" id="rngwrap"></div>
+
+    <div class="note w" style="margin-top:14px"><b>Values marked <span style="color:var(--warn)">per-car</span>
+      are the ones that actually vary.</b> ARB (1–10), LSD (5–60), brake balance (−5 to +5) and the damper
+      windows are near-universal; ride height, natural frequency, downforce and gearing are not — a Gr.3 car
+      and a road car share almost nothing there. Leave a row blank to omit it from the brief.</div>
+
+    <div class="btnrow" style="margin-top:14px">
+      <button class="act" id="rngsave">Save these ranges for this car</button>
+      <button class="ghost" id="rngreset">Reset ranges to preset</button>
+    </div>
+
+    <div class="out" id="rngout" style="margin-top:16px">
+      <p class="hint" style="margin:0 0 10px">Send this back to me and I'll bake it into the tool and the
+        knowledge base, so this car auto-fills its own real limits from here on.</p>
+      <pre class="brief" id="rngtxt" style="max-height:300px"></pre>
+      <div class="btnrow">
+        <button class="act" id="cp3">Copy range record</button>
+        <button class="ghost" id="dl3">Download .md</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>6 · Assists and hardware</h2>
+    <div class="grid g4">
+      <div><label>ABS</label><select id="abs">
+        <option>Default</option><option selected>Weak</option><option>Off</option></select></div>
+      <div><label>TCS — qualifying</label><select id="tcsq">
+        <option selected>0</option><option>1</option><option>2</option><option>3</option></select></div>
+      <div><label>TCS — race</label><select id="tcsr">
+        <option>0</option><option selected>1</option><option>2</option><option>3</option></select></div>
+      <div><label>Countersteer assist</label><select id="csa"><option selected>Off</option><option>On</option></select></div>
+    </div>
+    <div class="note i" style="margin-top:14px"><b>Rig assumed constant:</b> Fanatec DD Extreme @ 18 Nm ·
+      ClubSport V3 pedals, load-cell brake, hydraulic throttle damper · GT7 sensitivity 10 · PS5.
+      Flag it in the notes below if anything changed — a hardware change invalidates the previous exit diagnosis.</div>
+  </div>
+
+  <div class="card">
+    <h2>7 · Context and known issues</h2>
+    <p class="hint">Anything from previous running on this combination, league rules, or a specific problem you want solved.</p>
+    <textarea id="notes" placeholder="e.g. Ran here last round — rear went sketchy under braking into T1 from lap 6. League bans ballast. Need to be able to defend down the back straight."></textarea>
+    <div class="grid g2" style="margin-top:14px">
+      <div><label>Priority for this round</label><select id="prio">
+        <option selected>Balanced — quali grid + race pace</option>
+        <option>Qualifying — track position is everything here</option>
+        <option>Race pace and tyre life</option>
+        <option>Fuel economy / strategy</option>
+        <option>Drivability — I need to finish</option></select></div>
+      <div><label>Previous setup exists?</label><select id="prev">
+        <option selected>No — build from baseline</option>
+        <option>Yes — refine it, I'll paste it</option>
+        <option>Yes — but scrap it and start over</option></select></div>
+    </div>
+    <div class="btnrow" style="margin-top:18px">
+      <button class="act" id="gen">Generate setup brief</button>
+      <button class="ghost" id="clr">Reset form</button>
+    </div>
+  </div>
+
+  <div class="card out" id="briefout">
+    <h2>Setup brief</h2>
+    <p class="hint">Paste this into the Claude project session. You'll get a race sheet and a qualifying sheet in GT7 layout, ready to enter into Pit Crew by hand.</p>
+    <pre class="brief" id="brieftxt"></pre>
+    <div class="btnrow">
+      <button class="act" id="cp1">Copy brief</button>
+      <button class="ghost" id="dl1">Download .md</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= LOG ================= -->
+<section class="tab" id="log">
+  <div class="card">
+    <h2>1 · Session</h2>
+    <p class="hint">What you ran, and what you want out of the revision. Car, circuit and event details carry
+      across from the setup brief automatically — override them here if you're reporting on something else.</p>
+
+    <div class="grid g2">
+      <div><label>Session type</label><select id="fsess">
+        <option value="practice" selected>Practice / shakedown — refine before the race</option>
+        <option value="quali">Qualifying run — refine before the race</option>
+        <option value="tt">Time trial — one-lap chase</option>
+        <option value="race">Race completed — full post-mortem</option>
+      </select></div>
+      <div><label>What I want prioritised in the revision</label><select id="fpri">
+        <option selected>Fix the problem, keep everything that works</option>
+        <option>Race pace and tyre life</option>
+        <option>One-lap qualifying pace</option>
+        <option>Drivability — I need to be able to lean on it</option>
+        <option>Front-end confidence on entry</option>
+        <option>Rear stability — it's costing me commitment</option>
+        <option>Fuel and stint length</option>
+      </select></div>
+    </div>
+
+    <div id="fcarry" class="note i" style="display:none"></div>
+
+    <div class="grid g3" style="margin-top:14px">
+      <div><label>Car</label><input id="lcar" placeholder="e.g. Porsche 911 RSR (991) '17"></div>
+      <div><label>Circuit</label><input id="ltrk" placeholder="e.g. Fuji Speedway (Full)"></div>
+      <div><label>Date</label><input id="ldate" type="date"></div>
+    </div>
+
+    <div class="grid g3" style="margin-top:14px">
+      <div><label>Laps run this session</label><input id="flaps" type="number" min="1" placeholder="e.g. 12"></div>
+      <div><label>Compound run</label><select id="fcomp">
+        <option value="">—</option><option>Racing Hard</option><option selected>Racing Medium</option>
+        <option>Racing Soft</option><option>Intermediate</option><option>Heavy Wet</option>
+        <option>Sports Hard</option><option>Sports Medium</option><option>Sports Soft</option>
+        <option>Comfort</option><option>Mixed — see notes</option></select></div>
+      <div><label>Conditions on track</label><select id="fcond2">
+        <option selected>Dry, representative</option><option>Dry, cooler than the race</option>
+        <option>Dry, hotter than the race</option><option>Damp / drying</option>
+        <option>Wet</option><option>Night</option></select></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2 · Setup as run</h2>
+    <p class="hint">Paste the sheet you actually had in the car. Optional — leave blank and I'll work from
+      the sheet issued for this combination — but pasting it removes all ambiguity about which version you ran.</p>
+    <div class="grid g2">
+      <div><label>Which sheet was in the car</label><select id="fsheet">
+        <option selected>The race sheet as issued</option>
+        <option>The qualifying sheet as issued</option>
+        <option>The issued sheet with my own changes on top</option>
+        <option>An older sheet for this combination</option>
+        <option>Something else — see notes</option></select></div>
+      <div><label>Changes I made away from the sheet</label>
+        <input id="fchanges" placeholder="e.g. rear ARB 4→3, brake balance −1 from lap 6"></div>
+    </div>
+    <textarea id="fsetup" style="margin-top:14px;min-height:130px"
+      placeholder="Paste the setup sheet as run — GT7 layout, or however it was issued…"></textarea>
+  </div>
+
+  <div class="card">
+    <h2>3 · What the car did</h2>
+    <p class="hint">Tick everything the car actually did. These map onto the symptom dictionary in the driver
+      profile, so they're read literally — don't soften them.</p>
+    <div class="grid g3" id="symwrap"></div>
+    <div class="grid g2" style="margin-top:16px">
+      <div><label>Biggest single limitation</label><select id="fworst">
+        <option value="">— tick symptoms above first —</option></select></div>
+      <div><label>Where it costs me most</label><select id="fwhere">
+        <option value="">—</option><option>Slow corners</option><option>Medium-speed corners</option>
+        <option>Fast corners</option><option>Heavy braking zones</option><option>Kerbs and elevation</option>
+        <option>Everywhere, consistently</option><option>Only when I push for a lap</option>
+        <option>Only late in a stint</option></select></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4 · Pace, tyres and fuel</h2>
+    <p class="hint">Only what you actually measured. Blank is better than a guess — I'd rather diagnose from
+      the driver report than from a number you made up.</p>
+
+    <div class="grid g3" data-s="practice quali tt">
+      <div><label>Best lap</label><input id="fbest" placeholder="1:33.412"></div>
+      <div><label>Lap I can repeat</label><input id="fcons" placeholder="1:34.0 — the honest one"></div>
+      <div><label>Gap to target / pole</label><input id="fgap" placeholder="e.g. +0.8s"></div>
+    </div>
+
+    <div class="grid g4" data-s="race">
+      <div><label>Best quali lap</label><input id="lq" placeholder="1:33.412"></div>
+      <div><label>Best race lap</label><input id="lr" placeholder="1:34.180"></div>
+      <div><label>Avg race lap</label><input id="la" placeholder="1:35.6"></div>
+      <div><label>Result</label><input id="lres" placeholder="P3 of 14"></div>
+    </div>
+
+    <div class="grid g3" data-s="practice race" style="margin-top:14px">
+      <div><label>Stint length achieved</label><input id="lstint" placeholder="e.g. 11 laps on RM"></div>
+      <div><label>Which tyre went first</label><select id="lwear">
+        <option value="">—</option><option>Front-left</option><option>Front-right</option>
+        <option>Rear-left</option><option>Rear-right</option><option>Both fronts</option>
+        <option>Both rears</option><option>Balanced</option></select></div>
+      <div><label>Fuel — enough?</label><select id="lfuel">
+        <option value="">—</option><option>Comfortable margin</option><option>Just made it</option>
+        <option>Had to save</option><option>Ran short</option><option>N/A</option></select></div>
+    </div>
+
+    <div class="grid g2" data-s="practice quali tt race" style="margin-top:14px">
+      <div><label>How the balance moved over the run</label><select id="fdrift">
+        <option value="">—</option><option>Held steady</option>
+        <option>Migrated to understeer</option><option>Migrated to oversteer</option>
+        <option>Went off a cliff rather than fading</option>
+        <option>Fine until traffic / dirty air</option>
+        <option>Too few laps to say</option></select></div>
+      <div><label>Tyre state at the end of the run</label><select id="ftyre">
+        <option value="">—</option><option>Still green</option><option>Working, plenty left</option>
+        <option>Past peak but usable</option><option>Gone — dropping a second a lap</option>
+        <option>One corner gone, rest fine</option></select></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>5 · Pit Crew data — optional</h2>
+    <p class="hint">Everything above works on its own. If you ran the Pit Crew app, paste its output here and
+      it gets treated as the telemetry channel alongside your report. The ingestion format is specified in the
+      project at <code>claude/gt7/10-pit-crew-data-format.md</code> — build the export to that and it parses cleanly.</p>
+    <label class="chk" style="max-width:420px"><input type="checkbox" id="fpcuse">
+      I have Pit Crew output for this session</label>
+    <textarea id="lpc" style="margin-top:12px;min-height:150px;display:none"
+      placeholder="Paste Pit Crew output — JSON block or the markdown report…"></textarea>
+  </div>
+
+  <div class="card">
+    <h2>6 · In your own words</h2>
+    <p class="hint">The most valuable field on the page. Say it the way you'd say it over the radio — it's
+      preserved verbatim in the prompt and read as primary evidence.</p>
+    <textarea id="lnotes" style="min-height:120px"
+      placeholder="What the car did, where you lost confidence, what you changed mid-run and whether it helped, what you want to be able to do that you currently can't."></textarea>
+    <div class="btnrow" style="margin-top:16px">
+      <button class="act" id="genlog">Generate feedback prompt</button>
+      <button class="ghost" id="clrfb">Reset feedback</button>
+    </div>
+  </div>
+
+  <div class="card out" id="logout">
+    <h2>Driver feedback prompt</h2>
+    <p class="hint">Paste this into the Claude project session. You'll get a diagnosis, revised sheets and a
+      delta table explaining every change against what you ran.</p>
+    <pre class="brief" id="logtxt"></pre>
+    <div class="btnrow">
+      <button class="act" id="cp2">Copy prompt</button>
+      <button class="ghost" id="dl2">Download .md</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= REF ================= -->
+<section class="tab" id="ref">
+  <div class="card">
+    <h2>Preferred change hierarchy</h2>
+    <p class="hint">When several controls could fix the same symptom, work down this list.</p>
+    <table><tbody>
+      <tr><td><b>1</b></td><td><b>Hardware / calibration</b></td><td>Bad data makes a good chassis look wrong</td></tr>
+      <tr><td><b>2</b></td><td><b>Brake stability / rear support</b></td><td>The whole style depends on trail braking</td></tr>
+      <tr><td><b>3</b></td><td><b>Mechanical front grip / ARB / geometry</b></td><td>Front response is the primary performance language</td></tr>
+      <tr><td><b>4</b></td><td><b>LSD axis targeted to symptom</b></td><td>Large diff changes flip the balance fast</td></tr>
+      <tr><td><b>5</b></td><td><b>Ride height / rake</b></td><td>Useful, but brings brake and aero side effects</td></tr>
+      <tr><td><b>6</b></td><td><b>Aero balance</b></td><td>Powerful at speed; respect drag and fuel economics</td></tr>
+      <tr><td><b>7</b></td><td><b>Brake bias</b></td><td>Fine trim only, after the mechanics are right</td></tr>
+    </tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Rear stability stack — the alternative to front brake bias</h2>
+    <p class="hint">GT7 has no engine-braking map, so LSD braking sensitivity <i>is</i> the off-throttle rear toolkit.</p>
+    <table>
+      <thead><tr><th>Priority</th><th>Lever</th><th>Direction</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td><b>1</b></td><td><b>LSD braking sensitivity</b></td><td>Higher, +2 at a time</td><td>Stop when turn-in starts to dull</td></tr>
+        <tr><td><b>2</b></td><td>Rear expansion damping</td><td>Lower −2 to −4</td><td>A rear that extends fast on lift unloads abruptly</td></tr>
+        <tr><td><b>3</b></td><td>Rear toe-in</td><td>+0.05 to +0.10</td><td>Costs top speed and tyre life — trim, not foundation</td></tr>
+        <tr><td><b>4</b></td><td>Front compression damping</td><td>Higher +2 to +4</td><td>Conflicts with turn-in bite. Take stability from 1–3 first</td></tr>
+        <tr><td><b>5</b></td><td>Reduce rake</td><td>−2 to −3 mm</td><td>Positive rake promotes entry rotation</td></tr>
+        <tr><td><b>6</b></td><td>Rear ARB softer</td><td>−1</td><td>More rear grip mid-corner</td></tr>
+        <tr><td><b>7</b></td><td><s>Brake bias forward</s></td><td>—</td><td>Ruled out as a permanent answer</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>The GT7 traps</h2>
+    <table><tbody>
+      <tr><td><b>Camber ≠ turn-in</b></td><td>In GT7 camber acts mid-corner and costs braking and traction immediately. Start <code>1.0–1.5°</code>, not 3.0.</td></tr>
+      <tr><td><b>Turn-in is owned by</b></td><td>Front compression damping (lower), front ARB, front toe, brake balance. Not camber.</td></tr>
+      <tr><td><b>Front toe is contested</b></td><td>May be inverted vs real life. A/B <code>−0.05 / 0.00 / +0.05</code> per car. Never run toe-<i>in</i> at the front.</td></tr>
+      <tr><td><b>Wheelspin is a gearbox problem</b></td><td>Lengthening 1st/2nd/3rd is the top-ranked GT7 traction fix, ahead of every diff and spring change.</td></tr>
+      <tr><td><b>Max Speed slider wipes ratios</b></td><td>It's a generator, not a trim. Set it first, then final drive, then individual gears. Never touch it again.</td></tr>
+      <tr><td><b>Kerbs = ride height</b></td><td>Post-1.49, raise ride height 3–5 mm first. A car that suddenly won't turn is arch rub, not balance.</td></tr>
+      <tr><td><b>Brake balance sign</b></td><td><code>negative = FRONT</code>, <code>positive = REAR</code>. It's a delta from each car's own factory bias.</td></tr>
+      <tr><td><b>Chassis tuning is free</b></td><td>Suspension, gears and LSD values cost zero PP. Fitting the parts costs PP. Aero is <i>not</i> free.</td></tr>
+      <tr><td><b>Aero ≠ lap time</b></td><td>~1,300 lb of downforce measured at ~0.1 s/lap. Use aero for balance, not for grip.</td></tr>
+      <tr><td><b>Discard any guide mentioning</b></td><td>Tyre pressure, caster, brake pressure, high/low-speed damper split. None exist in GT7.</td></tr>
+    </tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Baseline starting sheet</h2>
+    <p class="hint">Where a new car begins, before car-specific work. Percent-of-range where GT7's ranges are per-car.</p>
+    <table>
+      <thead><tr><th>Parameter</th><th>Start</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Ride height F / R</td><td><b>+3–5 / +5–8 clicks above min</b></td><td>Never minimum. Mild positive rake.</td></tr>
+        <tr><td>Natural frequency</td><td><b>70–80% of range, rear ≥ front</b></td><td>Softer front, stiffer rear = rotation on a stable platform</td></tr>
+        <tr><td>ARB F / R</td><td><b>MR 6/3–4 · FR 6/4</b></td><td>Soften front one step when you want more front bite</td></tr>
+        <tr><td>Damper compression F / R</td><td><b>28 / 30</b></td><td>Front low for turn-in bite</td></tr>
+        <tr><td>Damper expansion F / R</td><td><b>40 / 38</b></td><td>Rear low-ish for lift-off stability; expansion &gt; compression</td></tr>
+        <tr><td>Camber F / R</td><td><b>1.2 / 1.2</b></td><td>Low. Camber taxes braking and traction.</td></tr>
+        <tr><td>Toe F</td><td><b>0.00</b>, then A/B ±0.05</td><td>Never toe-in at the front</td></tr>
+        <tr><td>Toe R</td><td><b>+0.05 to +0.10</b></td><td>Keep it small — wear and drag</td></tr>
+        <tr><td>LSD initial</td><td><b>5–8</b></td><td>High preload is a silent cause of mid-corner push</td></tr>
+        <tr><td>LSD acceleration</td><td><b>MR 15 · FR 25</b></td><td>Low, and prove you need more</td></tr>
+        <tr><td>LSD braking</td><td><b>MR 20 · FR 10</b>, walk up +2</td><td>The primary rear-stability axis</td></tr>
+        <tr><td>Brake balance</td><td><b>0</b></td><td>Trim, applied last</td></tr>
+        <tr><td>Downforce</td><td><b>Max front, trim rear to balance</b></td><td>Never trim rear first for top speed</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="foot">
+  GT7 Race Engineering · knowledge base v1.0 · 10 Aug 2026 · physics baseline v1.70<br>
+  Any GT7 setup published before Aug 2024 is void; before Feb 2025 is suspect.
+</div>
+</div>
+
+<div class="toast" id="toast">Copied</div>
+
+<script>
+const CARS=[{"m":"Abarth","n":"1500 Biposto Bertone B.A.T 1","y":"52","cat":"Road","dt":"FR","hp":73,"kg":870,"pp":262.24,"asp":"NA"},{"m":"Abarth","n":"Abarth 500","y":"09","cat":"Road","dt":"FF","hp":133,"kg":1035,"pp":415.44,"asp":"Turbo"},{"m":"Abarth","n":"Abarth 595 SS","y":"70","cat":"Road","dt":"RR","hp":30,"kg":470,"pp":175.22,"asp":"NA"},{"m":"AFEELA","n":"AFEELA 1","y":"26","cat":"Road","dt":"4WD","hp":null,"kg":null,"pp":530.28,"asp":"EV"},{"m":"AFEELA","n":"AFEELA Prototype 2024","y":"","cat":"Gr.X","dt":"4WD","hp":null,"kg":null,"pp":536.43,"asp":"EV"},{"m":"Alfa Romeo","n":"155 2.5 V6 TI","y":"93","cat":"Gr.4","dt":"4WD","hp":413,"kg":1010,"pp":662.94,"asp":"NA"},{"m":"Alfa Romeo","n":"4C","y":"14","cat":"Road","dt":"MR","hp":235,"kg":950,"pp":534.25,"asp":"Turbo"},{"m":"Alfa Romeo","n":"4C Gr.3","y":"","cat":"Gr.3","dt":"MR","hp":528,"kg":1220,"pp":713.68,"asp":"Turbo"},{"m":"Alfa Romeo","n":"4C Gr.3 Road Car","y":"","cat":"Road","dt":"MR","hp":443,"kg":1320,"pp":573.69,"asp":"Turbo"},{"m":"Alfa Romeo","n":"4C Gr.4","y":"","cat":"Gr.4","dt":"MR","hp":295,"kg":1020,"pp":628.56,"asp":"Turbo"},{"m":"Alfa Romeo","n":"8C 2900B Touring Berlinetta","y":"38","cat":"Road","dt":"FR","hp":179,"kg":1310,"pp":394.51,"asp":"SC"},{"m":"Alfa Romeo","n":"8C Competizione","y":"08","cat":"Road","dt":"FR","hp":442,"kg":1585,"pp":561.09,"asp":"NA"},{"m":"Alfa Romeo","n":"Giulia GTAm","y":"20","cat":"Road","dt":"FR","hp":532,"kg":1580,"pp":600.47,"asp":"Turbo"},{"m":"Alfa Romeo","n":"Giulia Sprint GT Veloce","y":"67","cat":"Road","dt":"FR","hp":104,"kg":1040,"pp":344.64,"asp":"NA"},{"m":"Alfa Romeo","n":"GIULIA TZ2 carrozzata da ZAGATO","y":"65","cat":"Gr.X","dt":"FR","hp":168,"kg":620,"pp":489.47,"asp":"NA"},{"m":"Alfa Romeo","n":"MiTo","y":"09","cat":"Road","dt":"FF","hp":152,"kg":1145,"pp":426.99,"asp":"Turbo"},{"m":"Alpine","n":"A110","y":"72","cat":"Road","dt":"RR","hp":138,"kg":715,"pp":420.38,"asp":"NA"},{"m":"Alpine","n":"A110","y":"17","cat":"Road","dt":"MR","hp":248,"kg":1103,"pp":532.32,"asp":"Turbo"},{"m":"Alpine","n":"A220 Race Car","y":"68","cat":"Gr.X","dt":"MR","hp":319,"kg":690,"pp":585.75,"asp":"NA"},{"m":"Alpine","n":"Alpine VGT","y":"","cat":"VGT","dt":"MR","hp":443,"kg":900,"pp":688.5,"asp":"NA"},{"m":"Alpine","n":"Alpine VGT","y":"17","cat":"Gr.1","dt":"RR","hp":594,"kg":930,"pp":860.45,"asp":"NA"},{"m":"Alpine","n":"Alpine VGT Race","y":"","cat":"VGT","dt":"MR","hp":443,"kg":900,"pp":738.46,"asp":"NA"},{"m":"AMG","n":"300 SEL 6.8 AMG","y":"71","cat":"Gr.X","dt":"FR","hp":422,"kg":1635,"pp":517.12,"asp":"NA"},{"m":"AMG","n":"A 45 AMG","y":"13","cat":"Road","dt":"4WD","hp":355,"kg":1555,"pp":522.33,"asp":"Turbo"},{"m":"AMG","n":"GT3","y":"20","cat":"Gr.3","dt":"FR","hp":614,"kg":1285,"pp":745.37,"asp":"NA"},{"m":"AMG","n":"Mercedes-AMG C 63 S","y":"15","cat":"Road","dt":"FR","hp":503,"kg":1725,"pp":576.28,"asp":"Turbo"},{"m":"AMG","n":"Mercedes-AMG GT Black Series","y":"20","cat":"Road","dt":"FR","hp":719,"kg":1540,"pp":667.83,"asp":"Turbo"},{"m":"AMG","n":"Mercedes-AMG GT R","y":"17","cat":"Road","dt":"FR","hp":576,"kg":1660,"pp":611.52,"asp":"Turbo"},{"m":"AMG","n":"Mercedes-AMG GT S","y":"15","cat":"Road","dt":"FR","hp":502,"kg":1570,"pp":586.81,"asp":"Turbo"},{"m":"AMG","n":"Mercedes-AMG GT Safety Car","y":"","cat":"Gr.X","dt":"FR","hp":502,"kg":1570,"pp":594.56,"asp":"Turbo"},{"m":"AMG","n":"Mercedes-AMG GT3","y":"16","cat":"Gr.3","dt":"FR","hp":614,"kg":1325,"pp":739.15,"asp":"NA"},{"m":"AMG","n":"Mercedes-Benz AMG VGT","y":"","cat":"VGT","dt":"FR","hp":576,"kg":1385,"pp":663.39,"asp":"Turbo"},{"m":"AMG","n":"Mercedes-Benz AMG VGT Racing Series","y":"","cat":"VGT","dt":"FR","hp":590,"kg":1300,"pp":732.83,"asp":"Turbo"},{"m":"AMG","n":"SLS AMG","y":"10","cat":"Road","dt":"FR","hp":570,"kg":1620,"pp":588.16,"asp":"NA"},{"m":"AMG","n":"SLS AMG Gr.4","y":"","cat":"Gr.4","dt":"FR","hp":419,"kg":1415,"pp":639.19,"asp":"NA"},{"m":"AMG","n":"SLS AMG GT3","y":"11","cat":"Gr.3","dt":"FR","hp":614,"kg":1350,"pp":721.39,"asp":"NA"},{"m":"Amuse","n":"Amuse NISMO 380RS Super Leggera","y":"","cat":"Road","dt":"FR","hp":380,"kg":1370,"pp":572.93,"asp":"NA"},{"m":"Amuse","n":"Amuse S2000 GT1 Turbo","y":"","cat":"Road","dt":"FR","hp":616,"kg":1120,"pp":682.89,"asp":"Turbo"},{"m":"Aston Martin","n":"DB11","y":"16","cat":"Road","dt":"FR","hp":599,"kg":1770,"pp":598.01,"asp":"Turbo"},{"m":"Aston Martin","n":"DB3S","y":"53","cat":"Gr.X","dt":"FR","hp":224,"kg":856,"pp":487.06,"asp":"NA"},{"m":"Aston Martin","n":"DB5","y":"64","cat":"Road","dt":"FR","hp":281,"kg":1468,"pp":444.78,"asp":"NA"},{"m":"Aston Martin","n":"DBR9 GT1","y":"10","cat":"Gr.3","dt":"FR","hp":599,"kg":1100,"pp":720.71,"asp":"NA"},{"m":"Aston Martin","n":"DP-100 VGT","y":"","cat":"VGT","dt":"4WD","hp":799,"kg":1375,"pp":699.31,"asp":"Turbo"},{"m":"Aston Martin","n":"One-77","y":"11","cat":"Road","dt":"FR","hp":748,"kg":1630,"pp":634.32,"asp":"NA"},{"m":"Aston Martin","n":"V12 Vantage GT3","y":"12","cat":"Gr.3","dt":"FR","hp":591,"kg":1250,"pp":715.21,"asp":"NA"},{"m":"Aston Martin","n":"V8 Vantage Gr.4","y":"","cat":"Gr.4","dt":"FR","hp":399,"kg":1350,"pp":638.94,"asp":"NA"},{"m":"Aston Martin","n":"V8 Vantage S","y":"15","cat":"Road","dt":"FR","hp":429,"kg":1610,"pp":557.39,"asp":"NA"},{"m":"Aston Martin","n":"Valkyrie","y":"21","cat":"Road","dt":"MR","hp":1139,"kg":1270,"pp":875.35,"asp":"NA"},{"m":"Aston Martin","n":"Vantage","y":"18","cat":"Road","dt":"FR","hp":502,"kg":1530,"pp":595.91,"asp":"Turbo"},{"m":"Aston Martin","n":"Vulcan","y":"16","cat":"Road","dt":"FR","hp":820,"kg":1360,"pp":765.28,"asp":"NA"},{"m":"Audi","n":"Audi e-tron VGT","y":"","cat":"VGT","dt":"4WD","hp":803,"kg":1450,"pp":853.42,"asp":"EV"},{"m":"Audi","n":"Audi VGT","y":"","cat":"Gr.1","dt":"4WD","hp":735,"kg":1250,"pp":868.99,"asp":"Turbo"},{"m":"Audi","n":"R18","y":"16","cat":"Gr.1","dt":"4WD","hp":506,"kg":875,"pp":864.22,"asp":"Turbo"},{"m":"Audi","n":"R18 TDI","y":"11","cat":"Gr.1","dt":"MR","hp":532,"kg":900,"pp":863.86,"asp":"Turbo"},{"m":"Audi","n":"R8 4.2","y":"07","cat":"Road","dt":"4WD","hp":414,"kg":1560,"pp":553.66,"asp":"NA"},{"m":"Audi","n":"R8 Coupé V10 plus","y":"16","cat":"Road","dt":"4WD","hp":601,"kg":1454,"pp":626.1,"asp":"NA"},{"m":"Audi","n":"R8 LMS","y":"15","cat":"Gr.3","dt":"MR","hp":585,"kg":1225,"pp":739.23,"asp":"NA"},{"m":"Audi","n":"R8 LMS Evo","y":"19","cat":"Gr.3","dt":"MR","hp":576,"kg":1235,"pp":739.68,"asp":"NA"},{"m":"Audi","n":"RS 5 Turbo DTM","y":"19","cat":"Gr.2","dt":"FR","hp":603,"kg":986,"pp":855.93,"asp":"Turbo"},{"m":"Audi","n":"Sport quattro S1 Pikes Peak","y":"87","cat":"Gr.B","dt":"4WD","hp":588,"kg":1000,"pp":678.85,"asp":"Turbo"},{"m":"Audi","n":"TT Coupe 3.2 quattro","y":"03","cat":"Road","dt":"4WD","hp":239,"kg":1520,"pp":471.33,"asp":"NA"},{"m":"Audi","n":"TT Cup","y":"16","cat":"Gr.4","dt":"FF","hp":335,"kg":1125,"pp":625.74,"asp":"Turbo"},{"m":"Audi","n":"TTS Coupe","y":"14","cat":"Road","dt":"4WD","hp":305,"kg":1385,"pp":530.93,"asp":"Turbo"},{"m":"Audi","n":"TTS Coupe","y":"09","cat":"Road","dt":"4WD","hp":268,"kg":1415,"pp":509.55,"asp":"Turbo"},{"m":"Autobianchi","n":"A112 Abarth","y":"85","cat":"Road","dt":"FF","hp":71,"kg":710,"pp":315.46,"asp":"NA"},{"m":"BAC","n":"Mono","y":"16","cat":"Road","dt":"MR","hp":304,"kg":580,"pp":644.13,"asp":"NA"},{"m":"BMW","n":"3.0 CSL","y":"73","cat":"Road","dt":"FR","hp":202,"kg":1250,"pp":423.95,"asp":"NA"},{"m":"BMW","n":"3.0 CSL","y":"71","cat":"Road","dt":"FR","hp":177,"kg":1165,"pp":412.97,"asp":"NA"},{"m":"BMW","n":"BMW VGT","y":"","cat":"VGT","dt":"FR","hp":541,"kg":1180,"pp":719.18,"asp":"Turbo"},{"m":"BMW","n":"i3","y":"15","cat":"Gr.X","dt":"MR","hp":166,"kg":1260,"pp":400.14,"asp":"EV"},{"m":"BMW","n":"M Hybrid V8","y":"25","cat":"Gr.1","dt":"MR","hp":641,"kg":1030,"pp":853.52,"asp":"Turbo"},{"m":"BMW","n":"M2 Competition","y":"18","cat":"Road","dt":"FR","hp":405,"kg":1575,"pp":552.38,"asp":"Turbo"},{"m":"BMW","n":"M3","y":"07","cat":"Road","dt":"FR","hp":415,"kg":1655,"pp":545.74,"asp":"NA"},{"m":"BMW","n":"M3","y":"03","cat":"Road","dt":"FR","hp":339,"kg":1560,"pp":524.2,"asp":"NA"},{"m":"BMW","n":"M3","y":"89","cat":"Road","dt":"FR","hp":212,"kg":1200,"pp":461.07,"asp":"NA"},{"m":"BMW","n":"M3","y":"97","cat":"Road","dt":"FR","hp":316,"kg":1460,"pp":498.18,"asp":"NA"},{"m":"BMW","n":"M3 GT","y":"11","cat":"Gr.3","dt":"FR","hp":500,"kg":1245,"pp":702.88,"asp":"NA"},{"m":"BMW","n":"M3 Sport Evolution","y":"89","cat":"Road","dt":"FR","hp":234,"kg":1200,"pp":466.56,"asp":"NA"},{"m":"BMW","n":"M4","y":"14","cat":"Road","dt":"FR","hp":425,"kg":1497,"pp":570.02,"asp":"Turbo"},{"m":"BMW","n":"M4 Gr.4","y":"","cat":"Gr.4","dt":"FR","hp":394,"kg":1365,"pp":624.17,"asp":"Turbo"},{"m":"BMW","n":"M4 Safety Car","y":"","cat":"Gr.X","dt":"FR","hp":425,"kg":1497,"pp":570.13,"asp":"Turbo"},{"m":"BMW","n":"M6 GT3 Endurance Model","y":"16","cat":"Gr.3","dt":"FR","hp":584,"kg":1300,"pp":741.34,"asp":"Turbo"},{"m":"BMW","n":"M6 GT3 Sprint Model","y":"16","cat":"Gr.3","dt":"FR","hp":584,"kg":1300,"pp":741.94,"asp":"Turbo"},{"m":"BMW","n":"McLaren F1 GTR Race Car","y":"97","cat":"Gr.2","dt":"MR","hp":602,"kg":950,"pp":786.75,"asp":"NA"},{"m":"BMW","n":"Z4 3.0i","y":"03","cat":"Road","dt":"FR","hp":227,"kg":1290,"pp":483.79,"asp":"NA"},{"m":"BMW","n":"Z4 GT3","y":"11","cat":"Gr.3","dt":"FR","hp":522,"kg":1190,"pp":712.78,"asp":"NA"},{"m":"BMW","n":"Z8","y":"01","cat":"Road","dt":"FR","hp":395,"kg":1610,"pp":544.3,"asp":"NA"},{"m":"Bugatti","n":"Bugatti VGT","y":"","cat":"VGT","dt":"4WD","hp":1626,"kg":1400,"pp":914.41,"asp":"Turbo"},{"m":"Bugatti","n":"Bugatti VGT (Gr.1)","y":"","cat":"Gr.1","dt":"4WD","hp":641,"kg":980,"pp":876.09,"asp":"Turbo"},{"m":"Bugatti","n":"Chiron","y":"16","cat":"Road","dt":"4WD","hp":1479,"kg":1995,"pp":696.63,"asp":"Turbo"},{"m":"Bugatti","n":"Veyron 16.4","y":"13","cat":"Road","dt":"4WD","hp":986,"kg":1888,"pp":656.12,"asp":"Turbo"},{"m":"Bugatti","n":"Veyron Gr.4","y":"","cat":"Gr.4","dt":"4WD","hp":433,"kg":1650,"pp":623.53,"asp":"Turbo"},{"m":"BVLGARI","n":"BVLGARI Aluminium VGT","y":"","cat":"VGT","dt":"MR","hp":394,"kg":1000,"pp":631.7,"asp":"NA"},{"m":"Chaparral","n":"2J","y":"70","cat":"Gr.X","dt":"MR","hp":683,"kg":821,"pp":850.43,"asp":"NA"},{"m":"Chaparral","n":"Chaparral 2X VGT","y":"","cat":"VGT","dt":null,"hp":905,"kg":450,"pp":1088.74,"asp":"NA"},{"m":"Chevrolet","n":"Camaro 1969 Race-Mod","y":"","cat":"Road","dt":"FR","hp":657,"kg":1320,"pp":672.59,"asp":"SC"},{"m":"Chevrolet","n":"Camaro SS","y":"16","cat":"Road","dt":"FR","hp":453,"kg":1672,"pp":564.68,"asp":"NA"},{"m":"Chevrolet","n":"Camaro Z28","y":"69","cat":"Road","dt":"FR","hp":289,"kg":1415,"pp":456.8,"asp":"NA"},{"m":"Chevrolet","n":"Camaro ZL1 1LE Package","y":"18","cat":"Road","dt":"FR","hp":649,"kg":1732,"pp":637.78,"asp":"SC"},{"m":"Chevrolet","n":"Chevelle SS 454 Sport Coupé","y":"70","cat":"Road","dt":"FR","hp":449,"kg":1762,"pp":470.57,"asp":"NA"},{"m":"Chevrolet","n":"Corvette (C1)","y":"58","cat":"Road","dt":"FR","hp":243,"kg":1327,"pp":437.66,"asp":"NA"},{"m":"Chevrolet","n":"Corvette (C2)","y":"63","cat":"Road","dt":"FR","hp":359,"kg":1380,"pp":512.87,"asp":"NA"},{"m":"Chevrolet","n":"Corvette C7","y":"14","cat":"Road","dt":"FR","hp":453,"kg":1500,"pp":576.48,"asp":"NA"},{"m":"Chevrolet","n":"Corvette C7 Gr.3","y":"","cat":"Gr.3","dt":"FR","hp":571,"kg":1300,"pp":718.34,"asp":"NA"},{"m":"Chevrolet","n":"Corvette C7 Gr.3 Road Car","y":"","cat":"Road","dt":"FR","hp":493,"kg":1480,"pp":572.96,"asp":"NA"},{"m":"Chevrolet","n":"Corvette C7 Gr.4","y":"","cat":"Gr.4","dt":"FR","hp":414,"kg":1350,"pp":645.21,"asp":"NA"},{"m":"Chevrolet","n":"Corvette C7 ZR1","y":"19","cat":"Road","dt":"FR","hp":754,"kg":1615,"pp":657.89,"asp":"SC"},{"m":"Chevrolet","n":"Corvette C8 Stingray","y":"20","cat":"Road","dt":"MR","hp":494,"kg":1530,"pp":589.7,"asp":"NA"},{"m":"Chevrolet","n":"Corvette Convertible (C3)","y":"69","cat":"Road","dt":"FR","hp":298,"kg":1552,"pp":452.15,"asp":"NA"},{"m":"Chevrolet","n":"Corvette CX Concept","y":"25","cat":"Gr.X","dt":"4WD","hp":2145,"kg":1400,"pp":911.6,"asp":"EV"},{"m":"Chevrolet","n":"Corvette CX.R Vision Gran Turismo Concept","y":"","cat":"Road","dt":"4WD","hp":2038,"kg":1250,"pp":931.55,"asp":"Turbo"},{"m":"Chevrolet","n":"Corvette Stingray (C3)","y":"69","cat":"Road","dt":"FR","hp":350,"kg":1490,"pp":506.19,"asp":"NA"},{"m":"Chevrolet","n":"Corvette Stingray Racer Concept","y":"59","cat":"Gr.X","dt":"FR","hp":314,"kg":1150,"pp":519.2,"asp":"NA"},{"m":"Chevrolet","n":"Corvette Z06 (C5)","y":"01","cat":"Road","dt":"FR","hp":384,"kg":1409,"pp":562.97,"asp":"NA"},{"m":"Chevrolet","n":"Corvette ZR-1 (C4)","y":"89","cat":"Road","dt":"FR","hp":375,"kg":1572,"pp":521.7,"asp":"NA"},{"m":"Chevrolet","n":"Corvette ZR1 (C6)","y":"09","cat":"Road","dt":"FR","hp":639,"kg":1508,"pp":612.43,"asp":"SC"},{"m":"Chris Holstrom Concepts","n":"CHC 1967 Chevy Nova","y":"","cat":"Road","dt":"FR","hp":732,"kg":1366,"pp":620.48,"asp":"SC"},{"m":"Citroen","n":"BX 19 TRS","y":"87","cat":"Road","dt":"FF","hp":103,"kg":995,"pp":357.04,"asp":"NA"},{"m":"Citroen","n":"DS 21 Pallas","y":"70","cat":"Road","dt":"FF","hp":103,"kg":1300,"pp":329.95,"asp":"NA"},{"m":"Citroen","n":"GT by Citroen Gr.4","y":"","cat":"Gr.4","dt":"MR","hp":394,"kg":1300,"pp":653.21,"asp":"NA"},{"m":"Citroen","n":"GT by Citroen Race Car (Gr.3)","y":"","cat":"Gr.3","dt":"MR","hp":599,"kg":1200,"pp":741.06,"asp":"NA"},{"m":"Citroen","n":"GT by Citroen Road Car","y":"","cat":"Road","dt":"MR","hp":500,"kg":1450,"pp":600.15,"asp":"NA"},{"m":"Daihatsu","n":"Copen","y":"02","cat":"Road","dt":"FF","hp":62,"kg":830,"pp":292.04,"asp":"Turbo"},{"m":"Daihatsu","n":"COPEN RJ VGT","y":"","cat":"VGT","dt":"FF","hp":146,"kg":600,"pp":489.76,"asp":"Turbo"},{"m":"De Tomaso","n":"Mangusta","y":"69","cat":"Road","dt":"MR","hp":300,"kg":1185,"pp":485.05,"asp":"NA"},{"m":"De Tomaso","n":"Mangusta (Christian Dior)","y":"","cat":"Road","dt":"MR","hp":300,"kg":1185,"pp":485.05,"asp":"NA"},{"m":"De Tomaso","n":"Pantera","y":"71","cat":"Road","dt":"MR","hp":325,"kg":1420,"pp":471.41,"asp":"NA"},{"m":"DMC","n":"DeLorean S2","y":"04","cat":"Road","dt":"RR","hp":197,"kg":1288,"pp":449.82,"asp":"NA"},{"m":"Dodge","n":"Challenger R/T","y":"70","cat":"Road","dt":"FR","hp":425,"kg":1724,"pp":489.3,"asp":"NA"},{"m":"Dodge","n":"Challenger SRT Demon","y":"18","cat":"Road","dt":"FR","hp":840,"kg":1941,"pp":631.64,"asp":"SC"},{"m":"Dodge","n":"Charger R/T 426 Hemi","y":"68","cat":"Road","dt":"FR","hp":425,"kg":1805,"pp":488.45,"asp":"NA"},{"m":"Dodge","n":"Charger SRT Hellcat","y":"15","cat":"Road","dt":"FR","hp":707,"kg":1980,"pp":595.81,"asp":"SC"},{"m":"Dodge","n":"Charger SRT Hellcat Safety Car","y":"","cat":"Gr.X","dt":"FR","hp":707,"kg":1980,"pp":591.71,"asp":"SC"},{"m":"Dodge","n":"SRT Tomahawk GTS-R VGT","y":"","cat":"VGT","dt":"4WD","hp":1449,"kg":663,"pp":1196.75,"asp":"NA"},{"m":"Dodge","n":"SRT Tomahawk S VGT","y":"","cat":"VGT","dt":"4WD","hp":1006,"kg":921,"pp":977.55,"asp":"NA"},{"m":"Dodge","n":"SRT Tomahawk VGT (Gr.1)","y":"","cat":"Gr.1","dt":"MR","hp":693,"kg":950,"pp":887.62,"asp":"NA"},{"m":"Dodge","n":"SRT Tomahawk X VGT","y":"","cat":"VGT","dt":"4WD","hp":2586,"kg":749,"pp":1381.58,"asp":"NA"},{"m":"Dodge","n":"Super Bee","y":"70","cat":"Road","dt":"FR","hp":335,"kg":1533,"pp":452.63,"asp":"NA"},{"m":"Dodge","n":"Viper Gr.4","y":"","cat":"Gr.4","dt":"FR","hp":428,"kg":1400,"pp":644.69,"asp":"NA"},{"m":"Dodge","n":"Viper GTS","y":"02","cat":"Road","dt":"FR","hp":448,"kg":1569,"pp":561.26,"asp":"NA"},{"m":"Dodge","n":"Viper GTS","y":"13","cat":"Road","dt":"FR","hp":640,"kg":1556,"pp":605.33,"asp":"NA"},{"m":"Dodge","n":"Viper SRT GT3-R","y":"15","cat":"Gr.3","dt":"FR","hp":678,"kg":1290,"pp":742.54,"asp":"NA"},{"m":"Dodge","n":"Viper SRT10 Coupe","y":"06","cat":"Road","dt":"FR","hp":508,"kg":1565,"pp":582.46,"asp":"NA"},{"m":"DS AUTOMOBILES","n":"DS 3 Racing","y":"11","cat":"Road","dt":"FF","hp":203,"kg":1165,"pp":463.86,"asp":"Turbo"},{"m":"Eckert's Rod & Custom","n":"Mach Forty","y":"","cat":"Road","dt":"MR","hp":787,"kg":1588,"pp":639.22,"asp":"SC"},{"m":"Ferrari","n":"250 GT Berlinetta passo corto","y":"61","cat":"Road","dt":"FR","hp":275,"kg":960,"pp":484.11,"asp":"NA"},{"m":"Ferrari","n":"250 GTO","y":"62","cat":"Gr.X","dt":"FR","hp":295,"kg":880,"pp":541.72,"asp":"NA"},{"m":"Ferrari","n":"296 GT3","y":"23","cat":"Gr.3","dt":"MR","hp":599,"kg":1280,"pp":743.47,"asp":"Turbo"},{"m":"Ferrari","n":"296 GTB","y":"22","cat":"Road","dt":"MR","hp":818,"kg":1470,"pp":683.12,"asp":"Turbo"},{"m":"Ferrari","n":"308 GTB","y":"75","cat":"Road","dt":"MR","hp":251,"kg":1090,"pp":474.85,"asp":"NA"},{"m":"Ferrari","n":"330 P4","y":"67","cat":"Gr.X","dt":"MR","hp":448,"kg":792,"pp":696.43,"asp":"NA"},{"m":"Ferrari","n":"365 GTB4","y":"71","cat":"Road","dt":"FR","hp":347,"kg":1200,"pp":539.01,"asp":"NA"},{"m":"Ferrari","n":"430 Scuderia","y":"07","cat":"Road","dt":"MR","hp":502,"kg":1350,"pp":609.42,"asp":"NA"},{"m":"Ferrari","n":"458 Italia","y":"09","cat":"Road","dt":"MR","hp":563,"kg":1485,"pp":623.15,"asp":"NA"},{"m":"Ferrari","n":"458 Italia Gr.4","y":"","cat":"Gr.4","dt":"MR","hp":374,"kg":1350,"pp":638.06,"asp":"NA"},{"m":"Ferrari","n":"458 Italia GT3","y":"13","cat":"Gr.3","dt":"MR","hp":542,"kg":1215,"pp":731.36,"asp":"NA"},{"m":"Ferrari","n":"499P","y":"23","cat":"Gr.1","dt":"4WD","hp":670,"kg":1030,"pp":861.24,"asp":"Turbo"},{"m":"Ferrari","n":"500 Mondial Pinin Farina Coupe","y":"54","cat":"Road","dt":"FR","hp":168,"kg":720,"pp":492.51,"asp":"NA"},{"m":"Ferrari","n":"512 BB","y":"76","cat":"Road","dt":"MR","hp":354,"kg":1400,"pp":528.32,"asp":"NA"},{"m":"Ferrari","n":"812 Superfast","y":"17","cat":"Road","dt":"FR","hp":788,"kg":1525,"pp":688.85,"asp":"NA"},{"m":"Ferrari","n":"Dino 246 GT","y":"71","cat":"Road","dt":"MR","hp":191,"kg":1080,"pp":445.12,"asp":"NA"},{"m":"Ferrari","n":"Enzo Ferrari","y":"02","cat":"Road","dt":"MR","hp":658,"kg":1255,"pp":652.2,"asp":"NA"},{"m":"Ferrari","n":"F12berlinetta","y":"12","cat":"Road","dt":"FR","hp":730,"kg":1525,"pp":644.11,"asp":"NA"},{"m":"Ferrari","n":"F40","y":"92","cat":"Road","dt":"MR","hp":471,"kg":1100,"pp":615.17,"asp":"Turbo"},{"m":"Ferrari","n":"F430","y":"06","cat":"Road","dt":"MR","hp":495,"kg":1450,"pp":593.71,"asp":"NA"},{"m":"Ferrari","n":"F50","y":"95","cat":"Road","dt":"MR","hp":511,"kg":1230,"pp":616.13,"asp":"NA"},{"m":"Ferrari","n":"F8 Tributo","y":"19","cat":"Road","dt":"MR","hp":710,"kg":1330,"pp":691.48,"asp":"Turbo"},{"m":"Ferrari","n":"Ferrari Vision Gran Turismo","y":"","cat":"VGT","dt":"4WD","hp":1363,"kg":1250,"pp":938.42,"asp":"Turbo"},{"m":"Ferrari","n":"FXX K","y":"14","cat":"Road","dt":"MR","hp":1034,"kg":1165,"pp":780.99,"asp":"NA"},{"m":"Ferrari","n":"GTO","y":"84","cat":"Road","dt":"MR","hp":393,"kg":1160,"pp":556.4,"asp":"Turbo"},{"m":"Ferrari","n":"LaFerrari","y":"13","cat":"Road","dt":"MR","hp":949,"kg":1255,"pp":725.64,"asp":"NA"},{"m":"Ferrari","n":"Testarossa","y":"91","cat":"Road","dt":"MR","hp":384,"kg":1506,"pp":524.78,"asp":"NA"},{"m":"Fiat","n":"500 1.2 8V Lounge SS","y":"08","cat":"Road","dt":"FF","hp":65,"kg":1010,"pp":290.47,"asp":"NA"},{"m":"Fiat","n":"500 F","y":"68","cat":"Road","dt":"RR","hp":16,"kg":520,"pp":85.03,"asp":"NA"},{"m":"Fiat","n":"Panda 30 CL","y":"85","cat":"Road","dt":"FF","hp":29,"kg":650,"pp":147.8,"asp":"NA"},{"m":"Ford","n":"1932 Ford Roadster Hot Rod","y":"","cat":"Road","dt":"FR","hp":179,"kg":1115,"pp":412.51,"asp":"NA"},{"m":"Ford","n":"Escort RS Cosworth","y":"92","cat":"Road","dt":"4WD","hp":223,"kg":1275,"pp":482.45,"asp":"Turbo"},{"m":"Ford","n":"F-150 SVT Raptor","y":"11","cat":"Road","dt":"4WD","hp":411,"kg":2724,"pp":436.38,"asp":"NA"},{"m":"Ford","n":"Focus Gr.B Rally Car","y":"","cat":"Gr.B","dt":"4WD","hp":538,"kg":1260,"pp":660.04,"asp":"Turbo"},{"m":"Ford","n":"Focus RS","y":"18","cat":"Road","dt":"4WD","hp":350,"kg":1557,"pp":523.61,"asp":"Turbo"},{"m":"Ford","n":"Focus ST","y":"15","cat":"Road","dt":"FF","hp":250,"kg":1462,"pp":495.12,"asp":"Turbo"},{"m":"Ford","n":"Ford GT","y":"06","cat":"Road","dt":"MR","hp":550,"kg":1451,"pp":601.47,"asp":"SC"},{"m":"Ford","n":"Ford GT","y":"17","cat":"Road","dt":"MR","hp":646,"kg":1385,"pp":630.61,"asp":"Turbo"},{"m":"Ford","n":"Ford GT LM Race Car Spec II","y":"","cat":"Gr.3","dt":"MR","hp":606,"kg":1130,"pp":735.62,"asp":"SC"},{"m":"Ford","n":"Ford GT LM Spec II Test Car","y":"","cat":"Gr.3","dt":"MR","hp":590,"kg":1165,"pp":729.22,"asp":"SC"},{"m":"Ford","n":"Ford GT Race Car","y":"18","cat":"Gr.3","dt":"MR","hp":527,"kg":1200,"pp":723.02,"asp":"Turbo"},{"m":"Ford","n":"GT40 Mark I","y":"66","cat":"Road","dt":"MR","hp":354,"kg":1080,"pp":554.43,"asp":"NA"},{"m":"Ford","n":"Mark IV Race Car","y":"67","cat":"Gr.X","dt":"MR","hp":503,"kg":1000,"pp":674.71,"asp":"NA"},{"m":"Ford","n":"Mustang 2015 American Racer","y":"","cat":"Road","dt":"FR","hp":800,"kg":1451,"pp":736.02,"asp":"NA"},{"m":"Ford","n":"Mustang Boss 429","y":"69","cat":"Road","dt":"FR","hp":374,"kg":1614,"pp":500.42,"asp":"NA"},{"m":"Ford","n":"Mustang Gr.3","y":"","cat":"Gr.3","dt":"FR","hp":568,"kg":1300,"pp":716.44,"asp":"NA"},{"m":"Ford","n":"Mustang Gr.3 Road Car","y":"","cat":"Road","dt":"FR","hp":502,"kg":1500,"pp":572.51,"asp":"NA"},{"m":"Ford","n":"Mustang Gr.4","y":"","cat":"Gr.4","dt":"FR","hp":395,"kg":1400,"pp":632.77,"asp":"NA"},{"m":"Ford","n":"Mustang Gr.B Rally Car","y":"","cat":"Gr.B","dt":"4WD","hp":549,"kg":1380,"pp":653.9,"asp":"NA"},{"m":"Ford","n":"Mustang GT","y":"15","cat":"Road","dt":"FR","hp":434,"kg":1681,"pp":548.25,"asp":"NA"},{"m":"Ford","n":"Mustang Mach 1","y":"71","cat":"Road","dt":"FR","hp":302,"kg":1615,"pp":446.26,"asp":"NA"},{"m":"Ford","n":"Shelby GT350R","y":"16","cat":"Road","dt":"FR","hp":525,"kg":1658,"pp":575.47,"asp":"NA"},{"m":"Ford","n":"Sierra RS 500 Cosworth","y":"87","cat":"Road","dt":"FR","hp":223,"kg":1207,"pp":471.34,"asp":"Turbo"},{"m":"Garage RCR","n":"Civic","y":"","cat":"Gr.X","dt":"FF","hp":389,"kg":1014,"pp":609.34,"asp":"Turbo"},{"m":"Genesis","n":"G70 3.3T AWD Prestige Package","y":"22","cat":"Road","dt":"4WD","hp":366,"kg":1815,"pp":504.29,"asp":"Turbo"},{"m":"Genesis","n":"G70 GR4","y":"","cat":"Gr.4","dt":"4WD","hp":414,"kg":1400,"pp":641.19,"asp":"Turbo"},{"m":"Genesis","n":"Genesis X GR3","y":"","cat":"Gr.3","dt":"FR","hp":547,"kg":1280,"pp":726.09,"asp":"Turbo"},{"m":"Genesis","n":"Genesis X Gran Berlinetta VGT Concept","y":"","cat":"VGT","dt":"4WD","hp":869,"kg":1060,"pp":808.41,"asp":"Turbo"},{"m":"Genesis","n":"Genesis X Gran Racer Vision Gran Turismo Concept","y":"","cat":"Road","dt":"4WD","hp":869,"kg":1089,"pp":885.87,"asp":"Turbo"},{"m":"Gran Turismo","n":"F1500T-A","y":"","cat":"Gr.X","dt":"MR","hp":986,"kg":540,"pp":936.7,"asp":"Turbo"},{"m":"Gran Turismo","n":"F3500-A","y":"","cat":"Gr.X","dt":"MR","hp":773,"kg":505,"pp":984.06,"asp":"NA"},{"m":"Gran Turismo","n":"F3500-B","y":"","cat":"Gr.X","dt":"MR","hp":719,"kg":505,"pp":959.58,"asp":"NA"},{"m":"Gran Turismo","n":"Racing Kart 125 Shifter","y":"","cat":"Gr.X","dt":"MR","hp":49,"kg":105,"pp":561.31,"asp":"NA"},{"m":"Gran Turismo","n":"Red Bull X2014 Junior","y":"","cat":"Gr.X","dt":"MR","hp":246,"kg":550,"pp":714.0,"asp":"NA"},{"m":"Gran Turismo","n":"Red Bull X2014 Standard","y":"","cat":"Gr.X","dt":"MR","hp":798,"kg":650,"pp":1034.41,"asp":"Turbo"},{"m":"Gran Turismo","n":"Red Bull X2019 25th Anniversary","y":"","cat":"Gr.X","dt":"MR","hp":804,"kg":650,"pp":966.31,"asp":"NA"},{"m":"Gran Turismo","n":"Red Bull X2019 Competition","y":"","cat":"Gr.X","dt":"MR","hp":804,"kg":650,"pp":966.31,"asp":"NA"},{"m":"Greddy","n":"Greddy Fugu Z","y":"","cat":"Road","dt":"FR","hp":294,"kg":1100,"pp":548.81,"asp":"NA"},{"m":"Greening Auto Company","n":"Maverick","y":"","cat":"Road","dt":"FR","hp":1199,"kg":1633,"pp":681.15,"asp":"Turbo"},{"m":"Honda","n":"2&4 powered by RC213V","y":"","cat":"Gr.X","dt":"MR","hp":211,"kg":405,"pp":575.17,"asp":"NA"},{"m":"Honda","n":"Beat","y":"91","cat":"Road","dt":"MR","hp":63,"kg":760,"pp":316.17,"asp":"NA"},{"m":"Honda","n":"Civic Si Extra (EF)","y":"87","cat":"Road","dt":"FF","hp":128,"kg":910,"pp":393.51,"asp":"NA"},{"m":"Honda","n":"Civic SiR-II (EG)","y":"93","cat":"Road","dt":"FF","hp":167,"kg":1070,"pp":407.11,"asp":"NA"},{"m":"Honda","n":"Civic Type R (EK)","y":"98","cat":"Road","dt":"FF","hp":181,"kg":1050,"pp":445.59,"asp":"NA"},{"m":"Honda","n":"Civic Type R (EK)","y":"97","cat":"Road","dt":"FF","hp":176,"kg":1050,"pp":442.82,"asp":"NA"},{"m":"Honda","n":"Civic Type R (EK) Touring Car","y":"","cat":"Road","dt":"FF","hp":247,"kg":845,"pp":545.45,"asp":"NA"},{"m":"Honda","n":"Civic Type R (FK2)","y":"15","cat":"Road","dt":"FF","hp":305,"kg":1380,"pp":521.2,"asp":"Turbo"},{"m":"Honda","n":"Civic Type R (FL5)","y":"22","cat":"Road","dt":"FF","hp":325,"kg":1430,"pp":534.28,"asp":"Turbo"},{"m":"Honda","n":"Civic Type R Limited Edition (FK8)","y":"20","cat":"Road","dt":"FF","hp":315,"kg":1370,"pp":529.69,"asp":"Turbo"},{"m":"Honda","n":"CR-V e:HEV EX Black Edition","y":"21","cat":"Road","dt":"4WD","hp":181,"kg":1700,"pp":381.02,"asp":"NA"},{"m":"Honda","n":"Fit Hybrid","y":"14","cat":"Road","dt":"FF","hp":138,"kg":1080,"pp":345.7,"asp":"NA"},{"m":"Honda","n":"Honda Sports VGT","y":"","cat":"VGT","dt":"MR","hp":403,"kg":899,"pp":673.35,"asp":"Turbo"},{"m":"Honda","n":"Integra Type R (DC2)","y":"98","cat":"Road","dt":"FF","hp":198,"kg":1080,"pp":465.38,"asp":"NA"},{"m":"Honda","n":"Integra Type R (DC2)","y":"95","cat":"Road","dt":"FF","hp":197,"kg":1060,"pp":460.75,"asp":"NA"},{"m":"Honda","n":"N-ONE RS","y":"22","cat":"Road","dt":"FF","hp":63,"kg":840,"pp":302.12,"asp":"Turbo"},{"m":"Honda","n":"NSX","y":"17","cat":"Road","dt":"4WD","hp":570,"kg":1780,"pp":578.17,"asp":"Turbo"},{"m":"Honda","n":"NSX CONCEPT-GT","y":"16","cat":"Gr.2","dt":"MR","hp":603,"kg":1049,"pp":867.13,"asp":"Turbo"},{"m":"Honda","n":"NSX Gr.3","y":"","cat":"Gr.3","dt":"MR","hp":568,"kg":1300,"pp":718.94,"asp":"Turbo"},{"m":"Honda","n":"NSX Gr.4","y":"","cat":"Gr.4","dt":"MR","hp":394,"kg":1360,"pp":644.28,"asp":"Turbo"},{"m":"Honda","n":"NSX Gr.B Rally Car","y":"","cat":"Gr.B","dt":"4WD","hp":557,"kg":1300,"pp":668.96,"asp":"Turbo"},{"m":"Honda","n":"NSX GT500","y":"08","cat":"Gr.2","dt":"MR","hp":518,"kg":1150,"pp":809.29,"asp":"NA"},{"m":"Honda","n":"NSX GT500","y":"00","cat":"Gr.3","dt":"MR","hp":481,"kg":1150,"pp":706.71,"asp":"NA"},{"m":"Honda","n":"NSX Type R","y":"92","cat":"Road","dt":"MR","hp":284,"kg":1230,"pp":530.58,"asp":"NA"},{"m":"Honda","n":"NSX Type R","y":"02","cat":"Road","dt":"MR","hp":290,"kg":1270,"pp":536.0,"asp":"NA"},{"m":"Honda","n":"RA272","y":"65","cat":"Gr.X","dt":"MR","hp":228,"kg":498,"pp":632.53,"asp":"NA"},{"m":"Honda","n":"S2000","y":"99","cat":"Road","dt":"FR","hp":242,"kg":1240,"pp":482.22,"asp":"NA"},{"m":"Honda","n":"S660","y":"15","cat":"Road","dt":"MR","hp":63,"kg":830,"pp":348.14,"asp":"Turbo"},{"m":"Honda","n":"S800","y":"66","cat":"Road","dt":"FR","hp":68,"kg":720,"pp":272.18,"asp":"NA"},{"m":"Hyundai","n":"ELANTRA N","y":"23","cat":"Road","dt":"FF","hp":276,"kg":1450,"pp":500.55,"asp":"Turbo"},{"m":"Hyundai","n":"ELANTRA N TC","y":"24","cat":"Gr.4","dt":"FF","hp":350,"kg":1265,"pp":618.97,"asp":"Turbo"},{"m":"Hyundai","n":"Genesis Coupe 3.8","y":"13","cat":"Road","dt":"FR","hp":343,"kg":1557,"pp":525.16,"asp":"NA"},{"m":"Hyundai","n":"Genesis Gr.3","y":"","cat":"Gr.3","dt":"FR","hp":575,"kg":1250,"pp":725.27,"asp":"NA"},{"m":"Hyundai","n":"Genesis Gr.4","y":"","cat":"Gr.4","dt":"FR","hp":384,"kg":1350,"pp":627.74,"asp":"NA"},{"m":"Hyundai","n":"Genesis Gr.B Rally Car","y":"","cat":"Gr.B","dt":"4WD","hp":499,"kg":1250,"pp":654.51,"asp":"NA"},{"m":"Hyundai","n":"HYUNDAI N 2025 VGT","y":"","cat":"VGT","dt":"4WD","hp":870,"kg":972,"pp":926.55,"asp":"EV"},{"m":"Hyundai","n":"HYUNDAI N 2025 VGT (Gr.1)","y":"","cat":"Gr.1","dt":"4WD","hp":640,"kg":972,"pp":885.62,"asp":"NA"},{"m":"Hyundai","n":"IONIQ 5 N","y":"24","cat":"Road","dt":"4WD","hp":641,"kg":2210,"pp":568.72,"asp":"EV"},{"m":"Infiniti","n":"INFINITI CONCEPT VGT","y":"","cat":"VGT","dt":"FR","hp":535,"kg":1680,"pp":653.19,"asp":"NA"},{"m":"Italdesign","n":"Italdesign VGT Off-road Mode","y":"","cat":"VGT","dt":"4WD","hp":1219,"kg":1000,"pp":792.16,"asp":"NA"},{"m":"Italdesign","n":"Italdesign VGT Street Mode","y":"","cat":"VGT","dt":"4WD","hp":1219,"kg":1000,"pp":795.55,"asp":"NA"},{"m":"Jaguar","n":"D-type","y":"54","cat":"Gr.X","dt":"FR","hp":249,"kg":850,"pp":492.83,"asp":"NA"},{"m":"Jaguar","n":"E-type Coupe","y":"61","cat":"Road","dt":"FR","hp":264,"kg":1300,"pp":448.12,"asp":"NA"},{"m":"Jaguar","n":"F-type Gr.3","y":"","cat":"Gr.3","dt":"FR","hp":552,"kg":1250,"pp":727.11,"asp":"SC"},{"m":"Jaguar","n":"F-type Gr.4","y":"","cat":"Gr.4","dt":"FR","hp":399,"kg":1350,"pp":636.58,"asp":"SC"},{"m":"Jaguar","n":"F-type R","y":"14","cat":"Road","dt":"FR","hp":542,"kg":1650,"pp":583.95,"asp":"SC"},{"m":"Jaguar","n":"Jaguar VGT Coupe","y":"","cat":"VGT","dt":"4WD","hp":1004,"kg":1400,"pp":754.71,"asp":"EV"},{"m":"Jaguar","n":"Jaguar VGT Roadster","y":"","cat":"VGT","dt":"4WD","hp":1004,"kg":1400,"pp":748.4,"asp":"EV"},{"m":"Jaguar","n":"Jaguar VGT SV","y":"","cat":"VGT","dt":"4WD","hp":1876,"kg":1400,"pp":995.97,"asp":"EV"},{"m":"Jaguar","n":"XJ13","y":"66","cat":"Gr.X","dt":"MR","hp":510,"kg":998,"pp":673.36,"asp":"NA"},{"m":"Jaguar","n":"XJ220","y":"92","cat":"Road","dt":"MR","hp":515,"kg":1372,"pp":599.59,"asp":"Turbo"},{"m":"Jaguar","n":"XJR-9","y":"88","cat":"Gr.1","dt":"MR","hp":749,"kg":894,"pp":862.26,"asp":"NA"},{"m":"Jeep","n":"Willys MB","y":"45","cat":"Road","dt":"4WD","hp":60,"kg":1113,"pp":178.27,"asp":"NA"},{"m":"KTM","n":"X-BOW R","y":"12","cat":"Road","dt":"MR","hp":298,"kg":790,"pp":595.86,"asp":"Turbo"},{"m":"Lamborghini","n":"Aventador LP 700-4","y":"11","cat":"Road","dt":"4WD","hp":690,"kg":1575,"pp":622.92,"asp":"NA"},{"m":"Lamborghini","n":"Aventador LP 750-4 SV","y":"15","cat":"Road","dt":"4WD","hp":739,"kg":1525,"pp":665.86,"asp":"NA"},{"m":"Lamborghini","n":"Countach 25th Anniversary","y":"88","cat":"Road","dt":"MR","hp":449,"kg":1490,"pp":543.09,"asp":"NA"},{"m":"Lamborghini","n":"Countach LP400","y":"74","cat":"Road","dt":"MR","hp":373,"kg":1065,"pp":556.09,"asp":"NA"},{"m":"Lamborghini","n":"Diablo GT","y":"00","cat":"Road","dt":"MR","hp":571,"kg":1490,"pp":600.42,"asp":"NA"},{"m":"Lamborghini","n":"Gallardo LP 560-4","y":"08","cat":"Road","dt":"4WD","hp":552,"kg":1410,"pp":614.72,"asp":"NA"},{"m":"Lamborghini","n":"Huracan Gr.4","y":"","cat":"Gr.4","dt":"4WD","hp":404,"kg":1365,"pp":658.59,"asp":"NA"},{"m":"Lamborghini","n":"Huracan GT3","y":"15","cat":"Gr.3","dt":"MR","hp":576,"kg":1230,"pp":738.66,"asp":"NA"},{"m":"Lamborghini","n":"Huracan LP 610-4","y":"15","cat":"Road","dt":"4WD","hp":601,"kg":1422,"pp":627.52,"asp":"NA"},{"m":"Lamborghini","n":"Lambo V12 VGT","y":"","cat":"VGT","dt":"4WD","hp":774,"kg":819,"pp":806.39,"asp":"NA"},{"m":"Lamborghini","n":"Miura P400 Bertone Prototype","y":"67","cat":"Road","dt":"MR","hp":349,"kg":980,"pp":563.03,"asp":"NA"},{"m":"Lamborghini","n":"Murcielago LP 640","y":"09","cat":"Road","dt":"4WD","hp":631,"kg":1665,"pp":604.63,"asp":"NA"},{"m":"Lamborghini","n":"Urus","y":"18","cat":"Road","dt":"4WD","hp":641,"kg":2197,"pp":563.64,"asp":"Turbo"},{"m":"Lamborghini","n":"Veneno","y":"14","cat":"Road","dt":"4WD","hp":739,"kg":1450,"pp":697.99,"asp":"NA"},{"m":"Lancia","n":"Delta HF Integrale Evoluzione","y":"91","cat":"Road","dt":"4WD","hp":209,"kg":1350,"pp":418.24,"asp":"Turbo"},{"m":"Lancia","n":"Lancia Delta HF Integrale Rally Car","y":"92","cat":"Gr.B","dt":"4WD","hp":330,"kg":1100,"pp":605.44,"asp":"Turbo"},{"m":"Lancia","n":"Stratos","y":"73","cat":"Road","dt":"MR","hp":185,"kg":980,"pp":447.56,"asp":"NA"},{"m":"Lexus","n":"LC500","y":"17","cat":"Road","dt":"FR","hp":469,"kg":1940,"pp":552.09,"asp":"NA"},{"m":"Lexus","n":"LF-LC GT VGT","y":"","cat":"VGT","dt":"FR","hp":612,"kg":1075,"pp":851.58,"asp":"Turbo"},{"m":"Lexus","n":"LFA","y":"10","cat":"Road","dt":"FR","hp":552,"kg":1480,"pp":594.81,"asp":"NA"},{"m":"Lexus","n":"RC F","y":"14","cat":"Road","dt":"FR","hp":469,"kg":1790,"pp":557.38,"asp":"NA"},{"m":"Lexus","n":"RC F Gr.4","y":"","cat":"Gr.4","dt":"FR","hp":419,"kg":1400,"pp":632.21,"asp":"NA"},{"m":"Lexus","n":"RC F GT3","y":"17","cat":"Gr.3","dt":"FR","hp":535,"kg":1300,"pp":725.77,"asp":"NA"},{"m":"Lexus","n":"RC F GT3 prototype","y":"16","cat":"Gr.3","dt":"FR","hp":527,"kg":1300,"pp":719.53,"asp":"NA"},{"m":"Lexus","n":"RC F GT500","y":"16","cat":"Gr.2","dt":"FR","hp":614,"kg":1020,"pp":864.44,"asp":"Turbo"},{"m":"Lexus","n":"SC430 GT500","y":"08","cat":"Gr.2","dt":"FR","hp":516,"kg":1100,"pp":807.39,"asp":"NA"},{"m":"Maserati","n":"A6GCS/53 Spyder","y":"54","cat":"Gr.X","dt":"FR","hp":166,"kg":740,"pp":497.34,"asp":"NA"},{"m":"Maserati","n":"GranTurismo S","y":"08","cat":"Road","dt":"FR","hp":439,"kg":1780,"pp":543.25,"asp":"NA"},{"m":"Maserati","n":"MC20","y":"20","cat":"Road","dt":"MR","hp":621,"kg":1500,"pp":625.77,"asp":"Turbo"},{"m":"Maserati","n":"Merak SS","y":"80","cat":"Road","dt":"MR","hp":216,"kg":1420,"pp":419.75,"asp":"NA"},{"m":"Mazda","n":"787B","y":"91","cat":"Gr.1","dt":"MR","hp":690,"kg":830,"pp":839.74,"asp":"NA"},{"m":"Mazda","n":"Atenza Gr.3","y":"","cat":"Gr.3","dt":"FR","hp":567,"kg":1280,"pp":722.21,"asp":"Turbo"},{"m":"Mazda","n":"Atenza Gr.3 Road Car","y":"","cat":"Road","dt":"FR","hp":483,"kg":1450,"pp":574.69,"asp":"Turbo"},{"m":"Mazda","n":"Atenza Gr.4","y":"","cat":"Gr.4","dt":"4WD","hp":393,"kg":1380,"pp":619.3,"asp":"Turbo"},{"m":"Mazda","n":"Atenza Sedan XD L Package","y":"15","cat":"Road","dt":"4WD","hp":172,"kg":1600,"pp":376.23,"asp":"Turbo"},{"m":"Mazda","n":"CX-30 X Smart Edition","y":"21","cat":"Road","dt":"FF","hp":187,"kg":1490,"pp":400.53,"asp":"NA"},{"m":"Mazda","n":"Demio XD Touring","y":"15","cat":"Road","dt":"FF","hp":103,"kg":1080,"pp":334.99,"asp":"Turbo"},{"m":"Mazda","n":"efini RX-7 Type R (FD)","y":"91","cat":"Road","dt":"FR","hp":251,"kg":1260,"pp":493.78,"asp":"Turbo"},{"m":"Mazda","n":"Eunos Roadster (NA)","y":"89","cat":"Road","dt":"FR","hp":117,"kg":940,"pp":381.78,"asp":"NA"},{"m":"Mazda","n":"LM55 VGT","y":"","cat":"VGT","dt":"4WD","hp":null,"kg":null,"pp":917.39,"asp":"NA"},{"m":"Mazda","n":"LM55 VGT (Gr.1)","y":"","cat":"Gr.1","dt":"4WD","hp":641,"kg":880,"pp":880.58,"asp":"NA"},{"m":"Mazda","n":"MAZDA SPIRIT RACING ROADSTER 12R","y":"25","cat":"Road","dt":"FR","hp":null,"kg":null,"pp":481.72,"asp":"NA"},{"m":"Mazda","n":"Mazda3","y":"19","cat":"Road","dt":"4WD","hp":177,"kg":1480,"pp":422.45,"asp":"NA"},{"m":"Mazda","n":"MAZDA3 Gr.4","y":"","cat":"Gr.4","dt":"FF","hp":380,"kg":1200,"pp":636.81,"asp":"Turbo"},{"m":"Mazda","n":"Roadster NR-A (ND)","y":"22","cat":"Road","dt":"FR","hp":130,"kg":1010,"pp":425.0,"asp":"NA"},{"m":"Mazda","n":"Roadster S (ND)","y":"15","cat":"Road","dt":"FR","hp":128,"kg":990,"pp":420.97,"asp":"NA"},{"m":"Mazda","n":"Roadster Touring Car","y":"","cat":"Road","dt":"FR","hp":205,"kg":795,"pp":540.67,"asp":"NA"},{"m":"Mazda","n":"RX-7 GT-X (FC)","y":"90","cat":"Road","dt":"FR","hp":203,"kg":1250,"pp":461.93,"asp":"Turbo"},{"m":"Mazda","n":"RX-7 Spirit R Type A (FD)","y":"02","cat":"Road","dt":"FR","hp":292,"kg":1270,"pp":529.12,"asp":"Turbo"},{"m":"Mazda","n":"RX-8 Spirit R","y":"12","cat":"Road","dt":"FR","hp":230,"kg":1350,"pp":494.76,"asp":"NA"},{"m":"Mazda","n":"RX-VISION","y":"15","cat":"Road","dt":"FR","hp":517,"kg":1290,"pp":629.67,"asp":"NA"},{"m":"Mazda","n":"RX-VISION GT3 CONCEPT","y":"","cat":"Gr.3","dt":"FR","hp":562,"kg":1250,"pp":739.31,"asp":"NA"},{"m":"Mazda","n":"RX-VISION GT3 CONCEPT Stealth Model","y":"","cat":"Gr.3","dt":"FR","hp":562,"kg":1250,"pp":739.31,"asp":"NA"},{"m":"Mazda","n":"RX500","y":"70","cat":"Road","dt":"MR","hp":247,"kg":850,"pp":476.13,"asp":"NA"},{"m":"McLaren","n":"650S","y":"14","cat":"Road","dt":"MR","hp":641,"kg":1330,"pp":636.84,"asp":"Turbo"},{"m":"McLaren","n":"650S Gr.4","y":"","cat":"Gr.4","dt":"MR","hp":399,"kg":1300,"pp":634.86,"asp":"Turbo"},{"m":"McLaren","n":"650S GT3","y":"15","cat":"Gr.3","dt":"MR","hp":542,"kg":1240,"pp":725.53,"asp":"Turbo"},{"m":"McLaren","n":"McLaren F1","y":"94","cat":"Road","dt":"MR","hp":626,"kg":1140,"pp":643.44,"asp":"NA"},{"m":"McLaren","n":"McLaren F1 GTR - BMW","y":"95","cat":"Gr.3","dt":"MR","hp":600,"kg":1050,"pp":740.81,"asp":"NA"},{"m":"McLaren","n":"McLaren P1 GTR","y":"16","cat":"Road","dt":"MR","hp":986,"kg":1345,"pp":791.46,"asp":"Turbo"},{"m":"McLaren","n":"McLaren VGT","y":"","cat":"VGT","dt":"MR","hp":1134,"kg":900,"pp":909.7,"asp":"Turbo"},{"m":"McLaren","n":"McLaren VGT (Gr.1)","y":"","cat":"Gr.1","dt":"MR","hp":813,"kg":900,"pp":876.0,"asp":"Turbo"},{"m":"McLaren","n":"MP4-12C","y":"10","cat":"Road","dt":"MR","hp":600,"kg":1350,"pp":626.29,"asp":"Turbo"},{"m":"McLaren","n":"MP4/4","y":"88","cat":"Gr.X","dt":"MR","hp":675,"kg":540,"pp":891.04,"asp":"Turbo"},{"m":"Mercedes-Benz","n":"190 E 2.5-16 Evolution II","y":"91","cat":"Road","dt":"FR","hp":231,"kg":1340,"pp":462.11,"asp":"NA"},{"m":"Mercedes-Benz","n":"300 SL (W194)","y":"52","cat":"Gr.X","dt":"FR","hp":178,"kg":1080,"pp":438.43,"asp":"NA"},{"m":"Mercedes-Benz","n":"300 SL Coupe","y":"54","cat":"Road","dt":"FR","hp":212,"kg":1295,"pp":417.63,"asp":"NA"},{"m":"Mercedes-Benz","n":"CLK-LM","y":"98","cat":"Gr.2","dt":"MR","hp":599,"kg":940,"pp":795.73,"asp":"NA"},{"m":"Mercedes-Benz","n":"S Barker Tourer","y":"29","cat":"Road","dt":"FR","hp":177,"kg":1270,"pp":337.72,"asp":"SC"},{"m":"Mercedes-Benz","n":"Sauber Mercedes C9","y":"89","cat":"Gr.1","dt":"MR","hp":710,"kg":893,"pp":852.41,"asp":"Turbo"},{"m":"Mercedes-Benz","n":"SLR McLaren","y":"09","cat":"Road","dt":"FR","hp":616,"kg":1768,"pp":605.15,"asp":"SC"},{"m":"Mercedes-Benz","n":"Unimog Type 411","y":"62","cat":"Road","dt":"4WD","hp":29,"kg":1940,"pp":32.4,"asp":"NA"},{"m":"Mercedes-Benz","n":"W 196 R","y":"55","cat":"Gr.X","dt":"FR","hp":289,"kg":835,"pp":604.92,"asp":"NA"},{"m":"Mine's","n":"BNR34 GT-R N1 base","y":"","cat":"Road","dt":"4WD","hp":621,"kg":1350,"pp":643.59,"asp":"Turbo"},{"m":"MINI","n":"MINI Clubman VGT","y":"","cat":"VGT","dt":"4WD","hp":388,"kg":1050,"pp":652.75,"asp":"Turbo"},{"m":"MINI","n":"MINI Cooper S","y":"05","cat":"Road","dt":"FF","hp":167,"kg":1180,"pp":444.1,"asp":"SC"},{"m":"MINI","n":"Mini-Cooper 'S'","y":"65","cat":"Road","dt":"FF","hp":64,"kg":605,"pp":263.99,"asp":"NA"},{"m":"Mitsubishi","n":"Concept XR-PHEV EVOLUTION VGT","y":"","cat":"VGT","dt":"4WD","hp":502,"kg":1350,"pp":685.4,"asp":"Turbo"},{"m":"Mitsubishi","n":"FTO GP Version R","y":"97","cat":"Road","dt":"FF","hp":197,"kg":1150,"pp":450.4,"asp":"NA"},{"m":"Mitsubishi","n":"GTO Twin Turbo","y":"91","cat":"Road","dt":"4WD","hp":285,"kg":1700,"pp":475.04,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution Final","y":"15","cat":"Road","dt":"4WD","hp":309,"kg":1530,"pp":510.64,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution Final Gr.3","y":"","cat":"Gr.3","dt":"FR","hp":610,"kg":1290,"pp":729.27,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution Final Gr.4","y":"","cat":"Gr.4","dt":"4WD","hp":389,"kg":1330,"pp":625.15,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution Final Gr.B Rally Car","y":"","cat":"Gr.B","dt":"4WD","hp":521,"kg":1290,"pp":655.83,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution Final Gr.B Road Car","y":"","cat":"Road","dt":"4WD","hp":473,"kg":1425,"pp":564.87,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution III GSR","y":"95","cat":"Road","dt":"4WD","hp":264,"kg":1260,"pp":481.44,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution IV GSR","y":"96","cat":"Road","dt":"4WD","hp":273,"kg":1350,"pp":483.34,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution IX MR GSR","y":"06","cat":"Road","dt":"4WD","hp":277,"kg":1420,"pp":509.32,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution V GSR","y":"98","cat":"Road","dt":"4WD","hp":306,"kg":1360,"pp":504.15,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution VI GSR T.M. SCP","y":"99","cat":"Road","dt":"4WD","hp":311,"kg":1360,"pp":523.14,"asp":"Turbo"},{"m":"Mitsubishi","n":"Lancer Evolution VIII MR GSR","y":"04","cat":"Road","dt":"4WD","hp":276,"kg":1400,"pp":510.28,"asp":"Turbo"},{"m":"NISMO","n":"400R","y":"95","cat":"Road","dt":"4WD","hp":394,"kg":1550,"pp":545.74,"asp":"Turbo"},{"m":"NISMO","n":"R34 GT-R Z-tune","y":"05","cat":"Road","dt":"4WD","hp":493,"kg":1600,"pp":591.24,"asp":"Turbo"},{"m":"Nissan","n":"180SX Type X","y":"96","cat":"Road","dt":"FR","hp":203,"kg":1220,"pp":465.26,"asp":"Turbo"},{"m":"Nissan","n":"Fairlady 240ZG (HS30)","y":"71","cat":"Road","dt":"FR","hp":147,"kg":1010,"pp":407.06,"asp":"NA"},{"m":"Nissan","n":"Fairlady Z (Z34)","y":"08","cat":"Road","dt":"FR","hp":331,"kg":1530,"pp":526.66,"asp":"NA"},{"m":"Nissan","n":"Fairlady Z 300ZX TT 2seater","y":"89","cat":"Road","dt":"FR","hp":276,"kg":1510,"pp":480.87,"asp":"Turbo"},{"m":"Nissan","n":"Fairlady Z 432","y":"69","cat":"Road","dt":"FR","hp":157,"kg":1040,"pp":409.19,"asp":"NA"},{"m":"Nissan","n":"Fairlady Z Version S (Z33)","y":"07","cat":"Road","dt":"FR","hp":310,"kg":1480,"pp":522.86,"asp":"NA"},{"m":"Nissan","n":"GT-R","y":"17","cat":"Road","dt":"4WD","hp":564,"kg":1770,"pp":588.53,"asp":"Turbo"},{"m":"Nissan","n":"GT-R Gr.4","y":"","cat":"Gr.4","dt":"4WD","hp":428,"kg":1450,"pp":642.62,"asp":"Turbo"},{"m":"Nissan","n":"GT-R Gr.B Rally Car","y":"","cat":"Gr.B","dt":"4WD","hp":542,"kg":1350,"pp":658.04,"asp":"Turbo"},{"m":"Nissan","n":"GT-R GT500","y":"99","cat":"Gr.3","dt":"FR","hp":498,"kg":1200,"pp":703.18,"asp":"Turbo"},{"m":"Nissan","n":"GT-R GT500","y":"08","cat":"Gr.2","dt":"FR","hp":527,"kg":1100,"pp":810.34,"asp":"NA"},{"m":"Nissan","n":"GT-R LM NISMO","y":"15","cat":"Gr.1","dt":"4WD","hp":604,"kg":880,"pp":876.71,"asp":"Turbo"},{"m":"Nissan","n":"GT-R NISMO","y":"17","cat":"Road","dt":"4WD","hp":591,"kg":1740,"pp":629.01,"asp":"Turbo"},{"m":"Nissan","n":"GT-R NISMO (R32)","y":"90","cat":"Road","dt":"4WD","hp":306,"kg":1400,"pp":519.03,"asp":"Turbo"},{"m":"Nissan","n":"GT-R NISMO GT3","y":"13","cat":"Gr.3","dt":"FR","hp":591,"kg":1300,"pp":712.14,"asp":"Turbo"},{"m":"Nissan","n":"GT-R NISMO GT3","y":"18","cat":"Gr.3","dt":"FR","hp":576,"kg":1285,"pp":731.09,"asp":"Turbo"},{"m":"Nissan","n":"GT-R NISMO GT500","y":"16","cat":"Gr.2","dt":"FR","hp":612,"kg":1020,"pp":864.44,"asp":"Turbo"},{"m":"Nissan","n":"GT-R Premium edition T-spec","y":"24","cat":"Road","dt":"4WD","hp":562,"kg":1760,"pp":589.38,"asp":"Turbo"},{"m":"Nissan","n":"GT-R Safety Car","y":"","cat":"Gr.X","dt":"4WD","hp":564,"kg":1740,"pp":594.49,"asp":"Turbo"},{"m":"Nissan","n":"NISSAN CONCEPT 2020 VGT","y":"","cat":"VGT","dt":"4WD","hp":null,"kg":null,"pp":695.23,"asp":"Turbo"},{"m":"Nissan","n":"Qashqai Tekna 190 2wd e-Power","y":"22","cat":"Road","dt":"FF","hp":187,"kg":1624,"pp":420.67,"asp":"Turbo"},{"m":"Nissan","n":"R32 GT-R V-spec II","y":"94","cat":"Road","dt":"4WD","hp":306,"kg":1500,"pp":515.54,"asp":"Turbo"},{"m":"Nissan","n":"R33 GT-R V-spec","y":"97","cat":"Road","dt":"4WD","hp":319,"kg":1540,"pp":518.18,"asp":"Turbo"},{"m":"Nissan","n":"R34 GT-R V-spec II Nur","y":"02","cat":"Road","dt":"4WD","hp":336,"kg":1560,"pp":523.47,"asp":"Turbo"},{"m":"Nissan","n":"R92CP","y":"92","cat":"Gr.1","dt":"MR","hp":788,"kg":900,"pp":847.32,"asp":"Turbo"},{"m":"Nissan","n":"Sileighty","y":"98","cat":"Road","dt":"FR","hp":203,"kg":1170,"pp":470.49,"asp":"Turbo"},{"m":"Nissan","n":"Silvia K's Aero (S14)","y":"96","cat":"Road","dt":"FR","hp":216,"kg":1250,"pp":485.97,"asp":"Turbo"},{"m":"Nissan","n":"Silvia K's Dia Selection (S13)","y":"90","cat":"Road","dt":"FR","hp":171,"kg":1140,"pp":420.7,"asp":"Turbo"},{"m":"Nissan","n":"Silvia K's Type S (S14)","y":"94","cat":"Road","dt":"FR","hp":216,"kg":1220,"pp":491.61,"asp":"Turbo"},{"m":"Nissan","n":"Silvia Q's (S13)","y":"88","cat":"Road","dt":"FR","hp":132,"kg":1090,"pp":384.86,"asp":"NA"},{"m":"Nissan","n":"SILVIA spec-R Aero (S15)","y":"02","cat":"Road","dt":"FR","hp":246,"kg":1240,"pp":502.35,"asp":"Turbo"},{"m":"Nissan","n":"Silvia spec-R Aero (S15) Touring Car","y":"","cat":"Gr.4","dt":"FR","hp":355,"kg":1000,"pp":640.61,"asp":"Turbo"},{"m":"Nissan","n":"Skyline 2000GT-R (KPGC110)","y":"73","cat":"Road","dt":"FR","hp":157,"kg":1145,"pp":398.99,"asp":"NA"},{"m":"Nissan","n":"Skyline GT-R GP-Tuned (KPGC10)","y":"","cat":"Road","dt":"FR","hp":246,"kg":935,"pp":578.76,"asp":"NA"},{"m":"Nissan","n":"Skyline GTS-R (R31)","y":"87","cat":"Road","dt":"FR","hp":207,"kg":1340,"pp":450.16,"asp":"Turbo"},{"m":"Nissan","n":"Skyline Hard Top 2000GT-R (KPGC10)","y":"70","cat":"Road","dt":"FR","hp":157,"kg":1100,"pp":401.02,"asp":"NA"},{"m":"Nissan","n":"Skyline Super Silhouette Group 5","y":"84","cat":"Gr.3","dt":"FR","hp":561,"kg":1005,"pp":698.48,"asp":"Turbo"},{"m":"Nissan","n":"Z Performance","y":"23","cat":"Road","dt":"FR","hp":399,"kg":1543,"pp":547.11,"asp":"Turbo"},{"m":"Opel","n":"Corsa GSE Vision Gran Turismo","y":"","cat":"Road","dt":"4WD","hp":788,"kg":1170,"pp":871.44,"asp":"EV"},{"m":"Pagani","n":"Huayra","y":"13","cat":"Road","dt":"MR","hp":730,"kg":1350,"pp":680.58,"asp":"Turbo"},{"m":"Pagani","n":"Zonda R","y":"09","cat":"Gr.X","dt":"MR","hp":737,"kg":1070,"pp":772.24,"asp":"NA"},{"m":"Peugeot","n":"205 GTI","y":"88","cat":"Road","dt":"FF","hp":128,"kg":875,"pp":396.19,"asp":"NA"},{"m":"Peugeot","n":"205 Turbo 16 Evolution 2","y":"86","cat":"Gr.B","dt":"4WD","hp":448,"kg":910,"pp":660.97,"asp":"Turbo"},{"m":"Peugeot","n":"208 GTi by Peugeot Sport","y":"14","cat":"Road","dt":"FF","hp":204,"kg":1200,"pp":459.89,"asp":"Turbo"},{"m":"Peugeot","n":"908 HDi FAP","y":"10","cat":"Gr.1","dt":"MR","hp":700,"kg":930,"pp":887.54,"asp":"Turbo"},{"m":"Peugeot","n":"9X8","y":"25","cat":"Gr.1","dt":"4WD","hp":670,"kg":1030,"pp":855.34,"asp":"Turbo"},{"m":"Peugeot","n":"L500R HYbrid VGT 2017","y":"","cat":"VGT","dt":"4WD","hp":509,"kg":1000,"pp":640.36,"asp":"Turbo"},{"m":"Peugeot","n":"L750R HYbrid VGT 2017","y":"","cat":"Gr.1","dt":"4WD","hp":693,"kg":825,"pp":876.88,"asp":"Turbo"},{"m":"Peugeot","n":"PEUGEOT VGT","y":"","cat":"VGT","dt":"4WD","hp":873,"kg":875,"pp":773.11,"asp":"Turbo"},{"m":"Peugeot","n":"PEUGEOT VGT (Gr.3)","y":"","cat":"Gr.3","dt":"MR","hp":542,"kg":1250,"pp":714.61,"asp":"Turbo"},{"m":"Peugeot","n":"RCZ Gr.3","y":"","cat":"Gr.3","dt":"MR","hp":520,"kg":1200,"pp":710.5,"asp":"Turbo"},{"m":"Peugeot","n":"RCZ Gr.3 Road Car","y":"","cat":"Road","dt":"MR","hp":468,"kg":1400,"pp":562.41,"asp":"Turbo"},{"m":"Peugeot","n":"RCZ Gr.4","y":"","cat":"Gr.4","dt":"FF","hp":345,"kg":1225,"pp":621.36,"asp":"Turbo"},{"m":"Peugeot","n":"RCZ Gr.B Rally Car","y":"","cat":"Gr.B","dt":"4WD","hp":516,"kg":1200,"pp":660.77,"asp":"Turbo"},{"m":"Peugeot","n":"RCZ GT Line","y":"15","cat":"Road","dt":"FF","hp":152,"kg":1350,"pp":427.26,"asp":"Turbo"},{"m":"Peugeot","n":"SUV 2008 Allure","y":"21","cat":"Road","dt":"FF","hp":129,"kg":1192,"pp":367.32,"asp":"Turbo"},{"m":"Plymouth","n":"Superbird","y":"70","cat":"Road","dt":"FR","hp":425,"kg":1755,"pp":458.82,"asp":"NA"},{"m":"Plymouth","n":"XNR Ghia Roadster","y":"60","cat":"Road","dt":"FR","hp":250,"kg":1500,"pp":416.9,"asp":"NA"},{"m":"Polestar","n":"Polestar 5 Performance","y":"","cat":"Road","dt":"4WD","hp":871,"kg":2503,"pp":573.07,"asp":"EV"},{"m":"Pontiac","n":"Firebird Trans Am","y":"78","cat":"Road","dt":"FR","hp":219,"kg":1640,"pp":410.63,"asp":"NA"},{"m":"Pontiac","n":"GTO 'The Judge'","y":"69","cat":"Road","dt":"FR","hp":364,"kg":1610,"pp":464.59,"asp":"NA"},{"m":"Porsche","n":"356 A/1500 GS Carrera","y":"56","cat":"Road","dt":"RR","hp":97,"kg":840,"pp":361.76,"asp":"NA"},{"m":"Porsche","n":"356 A/1500 GS GT Carrera Speedster","y":"56","cat":"Road","dt":"RR","hp":107,"kg":840,"pp":378.47,"asp":"NA"},{"m":"Porsche","n":"911 Carrera RS (901)","y":"73","cat":"Road","dt":"RR","hp":206,"kg":1075,"pp":479.32,"asp":"NA"},{"m":"Porsche","n":"911 Carrera RS (964)","y":"92","cat":"Road","dt":"RR","hp":255,"kg":1230,"pp":514.89,"asp":"NA"},{"m":"Porsche","n":"911 Carrera RS (993)","y":"95","cat":"Road","dt":"RR","hp":295,"kg":1270,"pp":530.52,"asp":"NA"},{"m":"Porsche","n":"911 Carrera RS CS (993)","y":"95","cat":"Road","dt":"RR","hp":295,"kg":1235,"pp":531.08,"asp":"NA"},{"m":"Porsche","n":"911 GT1 Strassenversion","y":"97","cat":"Road","dt":"MR","hp":533,"kg":1200,"pp":636.49,"asp":"Turbo"},{"m":"Porsche","n":"911 GT3 (996)","y":"01","cat":"Road","dt":"RR","hp":354,"kg":1350,"pp":554.27,"asp":"NA"},{"m":"Porsche","n":"911 GT3 (997)","y":"09","cat":"Road","dt":"RR","hp":428,"kg":1395,"pp":576.76,"asp":"NA"},{"m":"Porsche","n":"911 GT3 R (992)","y":"22","cat":"Gr.3","dt":"RR","hp":557,"kg":1250,"pp":735.54,"asp":"NA"},{"m":"Porsche","n":"911 GT3 RS (991)","y":"16","cat":"Road","dt":"RR","hp":491,"kg":1420,"pp":647.5,"asp":"NA"},{"m":"Porsche","n":"911 GT3 RS (992)","y":"22","cat":"Road","dt":"RR","hp":517,"kg":1450,"pp":647.12,"asp":"NA"},{"m":"Porsche","n":"911 RSR (991)","y":"17","cat":"Gr.3","dt":"MR","hp":509,"kg":1243,"pp":720.74,"asp":"NA"},{"m":"Porsche","n":"911 Turbo (930)","y":"81","cat":"Road","dt":"RR","hp":295,"kg":1300,"pp":506.68,"asp":"Turbo"},{"m":"Porsche","n":"911 Turbo Rally (930)","y":"","cat":"Gr.X","dt":"RR","hp":246,"kg":1250,"pp":485.69,"asp":"Turbo"},{"m":"Porsche","n":"911 Turbo S (992)","y":"20","cat":"Road","dt":"4WD","hp":641,"kg":1640,"pp":621.4,"asp":"Turbo"},{"m":"Porsche","n":"911 Turbo S Leichtbau (964)","y":"93","cat":"Road","dt":"RR","hp":375,"kg":1290,"pp":567.75,"asp":"Turbo"},{"m":"Porsche","n":"911 Turbo S Safety Car (992)","y":"","cat":"Gr.X","dt":"4WD","hp":641,"kg":1640,"pp":620.74,"asp":"Turbo"},{"m":"Porsche","n":"917 LIVING LEGEND","y":"","cat":"Gr.X","dt":"MR","hp":976,"kg":1220,"pp":803.29,"asp":"Turbo"},{"m":"Porsche","n":"917K","y":"70","cat":"Gr.X","dt":"MR","hp":598,"kg":800,"pp":730.37,"asp":"NA"},{"m":"Porsche","n":"918 Spyder","y":"13","cat":"Road","dt":"4WD","hp":874,"kg":1674,"pp":694.05,"asp":"NA"},{"m":"Porsche","n":"919 Hybrid","y":"16","cat":"Gr.1","dt":"4WD","hp":499,"kg":875,"pp":871.17,"asp":"Turbo"},{"m":"Porsche","n":"959","y":"87","cat":"Road","dt":"4WD","hp":443,"kg":1450,"pp":569.17,"asp":"Turbo"},{"m":"Porsche","n":"962 C","y":"88","cat":"Gr.1","dt":"MR","hp":690,"kg":850,"pp":845.47,"asp":"Turbo"},{"m":"Porsche","n":"963","y":"24","cat":"Gr.1","dt":"MR","hp":670,"kg":1030,"pp":865.08,"asp":"Turbo"},{"m":"Porsche","n":"Carrera GT","y":"04","cat":"Road","dt":"MR","hp":603,"kg":1380,"pp":621.04,"asp":"NA"},{"m":"Porsche","n":"Carrera GTS (904)","y":"64","cat":"Road","dt":"MR","hp":179,"kg":650,"pp":508.18,"asp":"NA"},{"m":"Porsche","n":"Cayman GT4","y":"16","cat":"Road","dt":"MR","hp":379,"kg":1340,"pp":578.04,"asp":"NA"},{"m":"Porsche","n":"Cayman GT4 Clubsport","y":"16","cat":"Gr.4","dt":"MR","hp":379,"kg":1300,"pp":643.52,"asp":"NA"},{"m":"Porsche","n":"Mission X","y":"23","cat":"Gr.X","dt":"RR","hp":1341,"kg":1000,"pp":815.22,"asp":"EV"},{"m":"Porsche","n":"Porsche VGT","y":"","cat":"VGT","dt":"4WD","hp":1098,"kg":1390,"pp":792.26,"asp":"EV"},{"m":"Porsche","n":"Porsche VGT Spyder","y":"","cat":"VGT","dt":"4WD","hp":1098,"kg":1390,"pp":787.97,"asp":"EV"},{"m":"Porsche","n":"Spyder type 550/1500RS","y":"55","cat":"Gr.X","dt":"MR","hp":108,"kg":590,"pp":435.18,"asp":"NA"},{"m":"Porsche","n":"Taycan Turbo S","y":"19","cat":"Gr.X","dt":"4WD","hp":751,"kg":2295,"pp":602.71,"asp":"EV"},{"m":"Radical","n":"SR3 SL","y":"13","cat":"Road","dt":"MR","hp":239,"kg":775,"pp":545.44,"asp":"Turbo"},{"m":"RE Amemiya","n":"RE Amemiya FD3S RX-7","y":"","cat":"Road","dt":"FR","hp":366,"kg":1240,"pp":571.68,"asp":"Turbo"},{"m":"Renault","n":"Avantime 3.0 V6 24V","y":"02","cat":"Road","dt":"FF","hp":204,"kg":1741,"pp":377.18,"asp":"NA"},{"m":"Renault","n":"Captur S Edition TCe 140","y":"21","cat":"Road","dt":"FF","hp":138,"kg":1234,"pp":373.48,"asp":"Turbo"},{"m":"Renault","n":"Clio R.S. 220 Trophy","y":"15","cat":"Road","dt":"FF","hp":216,"kg":1179,"pp":478.53,"asp":"Turbo"},{"m":"Renault","n":"Clio R.S. 220 Trophy","y":"16","cat":"Road","dt":"FF","hp":216,"kg":1204,"pp":477.05,"asp":"Turbo"},{"m":"Renault","n":"Clio V6 24V","y":"00","cat":"Road","dt":"MR","hp":229,"kg":1335,"pp":469.36,"asp":"NA"},{"m":"Renault","n":"Espace F1","y":"95","cat":"Gr.X","dt":"MR","hp":799,"kg":1300,"pp":758.58,"asp":"NA"},{"m":"Renault","n":"Kangoo 1.4","y":"01","cat":"Road","dt":"FF","hp":73,"kg":1080,"pp":294.72,"asp":"NA"},{"m":"Renault","n":"Megane Gr.4","y":"","cat":"Gr.4","dt":"FF","hp":350,"kg":1100,"pp":642.45,"asp":"Turbo"},{"m":"Renault","n":"Megane R.S. Trophy","y":"11","cat":"Road","dt":"FF","hp":261,"kg":1387,"pp":501.68,"asp":"Turbo"},{"m":"Renault","n":"Megane R.S. Trophy Safety Car","y":"","cat":"Gr.X","dt":"FF","hp":261,"kg":1387,"pp":500.06,"asp":"Turbo"},{"m":"Renault","n":"Megane Trophy","y":"11","cat":"Gr.4","dt":"MR","hp":359,"kg":955,"pp":656.18,"asp":"NA"},{"m":"Renault","n":"R.S.01","y":"16","cat":"Gr.X","dt":"MR","hp":542,"kg":1144,"pp":731.98,"asp":"Turbo"},{"m":"Renault","n":"R.S.01 GT3","y":"16","cat":"Gr.3","dt":"MR","hp":534,"kg":1220,"pp":721.91,"asp":"Turbo"},{"m":"Renault","n":"R4 GTL","y":"85","cat":"Road","dt":"FF","hp":33,"kg":720,"pp":154.94,"asp":"NA"},{"m":"Renault","n":"R5 Turbo","y":"80","cat":"Road","dt":"MR","hp":159,"kg":970,"pp":410.69,"asp":"Turbo"},{"m":"Renault","n":"R8 Gordini","y":"66","cat":"Gr.X","dt":"RR","hp":101,"kg":850,"pp":355.18,"asp":"NA"},{"m":"Renault","n":"Twingo","y":"93","cat":"Road","dt":"FF","hp":54,"kg":790,"pp":284.47,"asp":"NA"},{"m":"Roadster Shop","n":"Roadster Shop Rampage","y":"","cat":"Road","dt":"FR","hp":748,"kg":1406,"pp":666.88,"asp":"NA"},{"m":"RUF","n":"CTR3","y":"07","cat":"Road","dt":"MR","hp":690,"kg":1400,"pp":667.19,"asp":"Turbo"},{"m":"RUF","n":"RGT 4.2","y":"16","cat":"Road","dt":"RR","hp":517,"kg":1400,"pp":650.78,"asp":"NA"},{"m":"Shelby","n":"Cobra 427","y":"66","cat":"Road","dt":"FR","hp":484,"kg":1068,"pp":584.01,"asp":"NA"},{"m":"Shelby","n":"Cobra Daytona Coupe","y":"64","cat":"Gr.X","dt":"FR","hp":384,"kg":1043,"pp":548.78,"asp":"NA"},{"m":"Shelby","n":"G.T.350","y":"65","cat":"Road","dt":"FR","hp":304,"kg":1270,"pp":476.82,"asp":"NA"},{"m":"Skoda","n":"SKODA Vision Gran Turismo","y":"","cat":"VGT","dt":"4WD","hp":1071,"kg":1300,"pp":850.71,"asp":"EV"},{"m":"Subaru","n":"BRZ Drift Car","y":"17","cat":"Gr.X","dt":"FR","hp":1037,"kg":1433,"pp":642.39,"asp":"Turbo"},{"m":"Subaru","n":"BRZ GT300","y":"21","cat":"Gr.3","dt":"FR","hp":478,"kg":1150,"pp":730.7,"asp":"Turbo"},{"m":"Subaru","n":"BRZ S","y":"15","cat":"Road","dt":"FR","hp":197,"kg":1230,"pp":454.54,"asp":"NA"},{"m":"Subaru","n":"BRZ S","y":"21","cat":"Road","dt":"FR","hp":231,"kg":1270,"pp":499.8,"asp":"NA"},{"m":"Subaru","n":"BRZ STI Sport","y":"18","cat":"Road","dt":"FR","hp":203,"kg":1250,"pp":472.57,"asp":"NA"},{"m":"Subaru","n":"Impreza 22B-STi","y":"98","cat":"Road","dt":"4WD","hp":289,"kg":1270,"pp":513.82,"asp":"Turbo"},{"m":"Subaru","n":"Impreza Coupe WRX Type R STi Ver.VI","y":"99","cat":"Road","dt":"4WD","hp":276,"kg":1260,"pp":487.1,"asp":"Turbo"},{"m":"Subaru","n":"Impreza Rally Car","y":"98","cat":"Gr.B","dt":"4WD","hp":299,"kg":1230,"pp":580.73,"asp":"Turbo"},{"m":"Subaru","n":"Impreza Sedan WRX STi","y":"04","cat":"Road","dt":"4WD","hp":286,"kg":1460,"pp":503.31,"asp":"Turbo"},{"m":"Subaru","n":"VIZIV GT VGT","y":"","cat":"VGT","dt":"4WD","hp":630,"kg":1380,"pp":707.56,"asp":"Turbo"},{"m":"Subaru","n":"WRX Gr.3","y":"","cat":"Gr.3","dt":"FR","hp":591,"kg":1280,"pp":727.65,"asp":"Turbo"},{"m":"Subaru","n":"WRX Gr.4","y":"","cat":"Gr.4","dt":"4WD","hp":377,"kg":1320,"pp":626.5,"asp":"Turbo"},{"m":"Subaru","n":"WRX Gr.B Rally Car","y":"","cat":"Gr.B","dt":"4WD","hp":521,"kg":1280,"pp":656.42,"asp":"Turbo"},{"m":"Subaru","n":"WRX Gr.B Road Car","y":"","cat":"Road","dt":"4WD","hp":473,"kg":1425,"pp":574.81,"asp":"Turbo"},{"m":"Subaru","n":"WRX STI Isle of Man","y":"16","cat":"Gr.X","dt":"4WD","hp":578,"kg":1140,"pp":680.25,"asp":"Turbo"},{"m":"Subaru","n":"WRX STI Type S","y":"14","cat":"Road","dt":"4WD","hp":302,"kg":1490,"pp":504.25,"asp":"Turbo"},{"m":"Super Formula (Dallara)","n":"SF19 Super Formula / Honda","y":"19","cat":"Gr.X","dt":"MR","hp":639,"kg":660,"pp":942.86,"asp":"Turbo"},{"m":"Super Formula (Dallara)","n":"SF19 Super Formula / Toyota","y":"19","cat":"Gr.X","dt":"MR","hp":639,"kg":660,"pp":942.86,"asp":"Turbo"},{"m":"Super Formula (Dallara)","n":"SF23 Super Formula / Honda","y":"23","cat":"Gr.X","dt":"MR","hp":625,"kg":670,"pp":941.19,"asp":"Turbo"},{"m":"Super Formula (Dallara)","n":"SF23 Super Formula / Toyota","y":"23","cat":"Gr.X","dt":"MR","hp":625,"kg":670,"pp":941.19,"asp":"Turbo"},{"m":"Suzuki","n":"Cappuccino (EA11R)","y":"91","cat":"Road","dt":"FR","hp":62,"kg":700,"pp":304.76,"asp":"Turbo"},{"m":"Suzuki","n":"Carry KC","y":"12","cat":"Road","dt":"FR","hp":47,"kg":710,"pp":233.26,"asp":"NA"},{"m":"Suzuki","n":"Jimny Sierra JC","y":"18","cat":"Road","dt":"4WD","hp":100,"kg":1070,"pp":342.52,"asp":"NA"},{"m":"Suzuki","n":"Jimny XC","y":"18","cat":"Road","dt":"4WD","hp":63,"kg":1030,"pp":269.56,"asp":"Turbo"},{"m":"Suzuki","n":"Suzuki Vision Gran Turismo","y":"","cat":"VGT","dt":"4WD","hp":426,"kg":970,"pp":658.19,"asp":"NA"},{"m":"Suzuki","n":"SUZUKI Vision Gran Turismo (Gr.3 Version)","y":"","cat":"Gr.3","dt":"FR","hp":577,"kg":1220,"pp":710.3,"asp":"Turbo"},{"m":"Suzuki","n":"Swift Sport","y":"07","cat":"Road","dt":"FF","hp":123,"kg":1060,"pp":405.13,"asp":"NA"},{"m":"Suzuki","n":"Swift Sport","y":"17","cat":"Road","dt":"FF","hp":137,"kg":970,"pp":435.05,"asp":"Turbo"},{"m":"Suzuki","n":"Swift Sport Gr.4","y":"","cat":"Gr.4","dt":"FF","hp":345,"kg":900,"pp":648.19,"asp":"Turbo"},{"m":"Suzuki","n":"V6 Escudo Pikes Peak Special spec.98","y":"","cat":"Gr.X","dt":"4WD","hp":981,"kg":800,"pp":793.58,"asp":"Turbo"},{"m":"Tesla","n":"Model 3 Performance","y":"23","cat":"Gr.X","dt":"4WD","hp":531,"kg":1836,"pp":581.29,"asp":"EV"},{"m":"Tesla","n":"Model S Signature Performance","y":"12","cat":"Gr.X","dt":"RR","hp":410,"kg":2018,"pp":534.74,"asp":"EV"},{"m":"Toyota","n":"2000GT","y":"67","cat":"Road","dt":"FR","hp":153,"kg":1120,"pp":405.8,"asp":"NA"},{"m":"Toyota","n":"86 Gr.4","y":"","cat":"Gr.4","dt":"FR","hp":358,"kg":1200,"pp":635.55,"asp":"NA"},{"m":"Toyota","n":"86 Gr.B Rally Car","y":"","cat":"Gr.B","dt":"4WD","hp":516,"kg":1180,"pp":665.42,"asp":"NA"},{"m":"Toyota","n":"86 GRMN","y":"16","cat":"Road","dt":"FR","hp":214,"kg":1220,"pp":475.55,"asp":"NA"},{"m":"Toyota","n":"86 GT","y":"15","cat":"Road","dt":"FR","hp":197,"kg":1230,"pp":454.47,"asp":"NA"},{"m":"Toyota","n":"86 GT 'Limited'","y":"16","cat":"Road","dt":"FR","hp":203,"kg":1240,"pp":457.36,"asp":"NA"},{"m":"Toyota","n":"AE86 Levin D-Tuned","y":"","cat":"Road","dt":"FR","hp":216,"kg":810,"pp":516.68,"asp":"NA"},{"m":"Toyota","n":"Alphard Executive Lounge","y":"18","cat":"Road","dt":"4WD","hp":296,"kg":2210,"pp":390.93,"asp":"NA"},{"m":"Toyota","n":"Ambulance Himedic","y":"21","cat":"Gr.X","dt":"4WD","hp":157,"kg":2860,"pp":230.97,"asp":"NA"},{"m":"Toyota","n":"Aqua S","y":"11","cat":"Road","dt":"FF","hp":109,"kg":1080,"pp":354.12,"asp":"NA"},{"m":"Toyota","n":"C-HR S","y":"18","cat":"Road","dt":"FF","hp":136,"kg":1440,"pp":356.4,"asp":"NA"},{"m":"Toyota","n":"Celica GT-Four (ST205)","y":"94","cat":"Road","dt":"4WD","hp":250,"kg":1380,"pp":467.35,"asp":"Turbo"},{"m":"Toyota","n":"Celica GT-FOUR Rally Car (ST205)","y":"95","cat":"Gr.B","dt":"4WD","hp":298,"kg":1200,"pp":582.35,"asp":"Turbo"},{"m":"Toyota","n":"Corolla Levin 1600GT APEX (AE86)","y":"83","cat":"Road","dt":"FR","hp":127,"kg":940,"pp":384.76,"asp":"NA"},{"m":"Toyota","n":"Crown Athlete G","y":"13","cat":"Road","dt":"FR","hp":309,"kg":1650,"pp":489.27,"asp":"NA"},{"m":"Toyota","n":"Crown Athlete G Safety Car","y":"","cat":"Gr.X","dt":"FR","hp":309,"kg":1650,"pp":484.02,"asp":"NA"},{"m":"Toyota","n":"FT-1","y":"","cat":"Gr.X","dt":"FR","hp":null,"kg":null,"pp":607.59,"asp":"Turbo"},{"m":"Toyota","n":"FT-1 VGT","y":"","cat":"VGT","dt":"FR","hp":null,"kg":null,"pp":767.15,"asp":"Turbo"},{"m":"Toyota","n":"FT-1 VGT (Gr.3)","y":"","cat":"Gr.3","dt":"FR","hp":544,"kg":1280,"pp":719.27,"asp":"Turbo"},{"m":"Toyota","n":"GR Corolla MORIZO Edition","y":"22","cat":"Road","dt":"4WD","hp":299,"kg":1445,"pp":522.78,"asp":"Turbo"},{"m":"Toyota","n":"GR Supra Race Car","y":"19","cat":"Gr.4","dt":"FR","hp":394,"kg":1380,"pp":641.68,"asp":"Turbo"},{"m":"Toyota","n":"GR Supra Racing Concept","y":"18","cat":"Gr.3","dt":"FR","hp":591,"kg":1243,"pp":741.16,"asp":"Turbo"},{"m":"Toyota","n":"GR Supra RZ","y":"19","cat":"Road","dt":"FR","hp":335,"kg":1520,"pp":545.87,"asp":"Turbo"},{"m":"Toyota","n":"GR Supra RZ","y":"20","cat":"Road","dt":"FR","hp":382,"kg":1530,"pp":554.92,"asp":"Turbo"},{"m":"Toyota","n":"GR Yaris RZ 'High performance'","y":"20","cat":"Road","dt":"4WD","hp":268,"kg":1290,"pp":522.22,"asp":"Turbo"},{"m":"Toyota","n":"GR010 HYBRID","y":"21","cat":"Gr.1","dt":"4WD","hp":670,"kg":1040,"pp":861.25,"asp":"Turbo"},{"m":"Toyota","n":"GR010 HYBRID (Olympic Esports Series)","y":"21","cat":"Gr.1","dt":"4WD","hp":670,"kg":1040,"pp":861.25,"asp":"Turbo"},{"m":"Toyota","n":"GR86 RZ","y":"21","cat":"Road","dt":"FR","hp":231,"kg":1270,"pp":500.51,"asp":"NA"},{"m":"Toyota","n":"GT-One (TS020)","y":"99","cat":"Gr.2","dt":"MR","hp":764,"kg":900,"pp":834.73,"asp":"Turbo"},{"m":"Toyota","n":"Hiace Van DX","y":"16","cat":"Road","dt":"FR","hp":134,"kg":1680,"pp":273.63,"asp":"NA"},{"m":"Toyota","n":"Land Cruiser FJ40V","y":"74","cat":"Road","dt":"4WD","hp":128,"kg":1610,"pp":305.78,"asp":"NA"},{"m":"Toyota","n":"MR2 GT-S","y":"97","cat":"Road","dt":"MR","hp":241,"kg":1270,"pp":487.1,"asp":"Turbo"},{"m":"Toyota","n":"Prius G","y":"09","cat":"Road","dt":"FF","hp":146,"kg":1350,"pp":374.51,"asp":"NA"},{"m":"Toyota","n":"RAV4 Adventure","y":"20","cat":"Road","dt":"4WD","hp":168,"kg":1630,"pp":372.01,"asp":"NA"},{"m":"Toyota","n":"S-FR","y":"15","cat":"Road","dt":"FR","hp":133,"kg":1050,"pp":423.36,"asp":"NA"},{"m":"Toyota","n":"S-FR Racing Concept","y":"16","cat":"Road","dt":"FR","hp":349,"kg":1150,"pp":569.47,"asp":"Turbo"},{"m":"Toyota","n":"Sports 800","y":"65","cat":"Road","dt":"FR","hp":43,"kg":580,"pp":238.36,"asp":"NA"},{"m":"Toyota","n":"Sprinter Trueno 1600GT APEX (AE86)","y":"83","cat":"Road","dt":"FR","hp":127,"kg":940,"pp":384.75,"asp":"NA"},{"m":"Toyota","n":"Sprinter Trueno 1600GT APEX (S.Shigeno Version)","y":"","cat":"Road","dt":"FR","hp":207,"kg":825,"pp":514.66,"asp":"NA"},{"m":"Toyota","n":"Supra 3.0GT Turbo A","y":"88","cat":"Road","dt":"FR","hp":266,"kg":1530,"pp":472.7,"asp":"Turbo"},{"m":"Toyota","n":"Supra GT Road Car (JZA80)","y":"","cat":"Road","dt":"FR","hp":493,"kg":1510,"pp":619.52,"asp":"Turbo"},{"m":"Toyota","n":"Supra GT500","y":"97","cat":"Gr.3","dt":"FR","hp":492,"kg":1150,"pp":706.79,"asp":"Turbo"},{"m":"Toyota","n":"Supra RZ","y":"97","cat":"Road","dt":"FR","hp":325,"kg":1510,"pp":525.02,"asp":"Turbo"},{"m":"Toyota","n":"TS030 Hybrid","y":"12","cat":"Gr.1","dt":"MR","hp":529,"kg":900,"pp":877.92,"asp":"NA"},{"m":"Toyota","n":"TS050 - Hybrid","y":"16","cat":"Gr.1","dt":"4WD","hp":493,"kg":875,"pp":865.39,"asp":"Turbo"},{"m":"Toyota","n":"Tundra TRD Pro","y":"19","cat":"Road","dt":"4WD","hp":379,"kg":2555,"pp":421.61,"asp":"NA"},{"m":"TVR","n":"Tuscan Speed 6","y":"00","cat":"Road","dt":"FR","hp":360,"kg":1100,"pp":574.3,"asp":"NA"},{"m":"Volkswagen","n":"Beetle 1966 Desert Racer","y":"","cat":"Road","dt":"RR","hp":150,"kg":980,"pp":453.7,"asp":"Turbo"},{"m":"Volkswagen","n":"Beetle Gr.3","y":"","cat":"Gr.3","dt":"FR","hp":591,"kg":1200,"pp":742.41,"asp":"Turbo"},{"m":"Volkswagen","n":"Golf I GTI","y":"83","cat":"Road","dt":"FF","hp":110,"kg":890,"pp":371.47,"asp":"NA"},{"m":"Volkswagen","n":"Golf VII GTI","y":"14","cat":"Road","dt":"FF","hp":216,"kg":1390,"pp":464.61,"asp":"Turbo"},{"m":"Volkswagen","n":"GTI Roadster VGT","y":"","cat":"VGT","dt":"4WD","hp":551,"kg":1200,"pp":702.61,"asp":"Turbo"},{"m":"Volkswagen","n":"GTI Supersport VGT","y":"","cat":"VGT","dt":"4WD","hp":551,"kg":1200,"pp":704.76,"asp":"Turbo"},{"m":"Volkswagen","n":"ID.R","y":"19","cat":"Gr.X","dt":"4WD","hp":670,"kg":1030,"pp":855.36,"asp":"EV"},{"m":"Volkswagen","n":"Polo GTI","y":"14","cat":"Road","dt":"FF","hp":189,"kg":1272,"pp":446.74,"asp":"Turbo"},{"m":"Volkswagen","n":"Sambabus Typ 2","y":"62","cat":"Road","dt":"RR","hp":33,"kg":1095,"pp":103.64,"asp":"NA"},{"m":"Volkswagen","n":"Scirocco Gr.4","y":"","cat":"Gr.4","dt":"FF","hp":358,"kg":1050,"pp":645.23,"asp":"Turbo"},{"m":"Volkswagen","n":"Scirocco R","y":"10","cat":"Road","dt":"FF","hp":252,"kg":1410,"pp":508.54,"asp":"Turbo"},{"m":"Volkswagen","n":"Volkswagen 1200","y":"66","cat":"Road","dt":"RR","hp":33,"kg":780,"pp":167.47,"asp":"NA"},{"m":"Volkswagen","n":"Volkswagen GTI VGT (Gr.3)","y":"","cat":"Gr.3","dt":"MR","hp":551,"kg":1260,"pp":695.04,"asp":"Turbo"},{"m":"Volvo","n":"240 SE Estate","y":"93","cat":"Road","dt":"FR","hp":109,"kg":1324,"pp":324.12,"asp":"NA"},{"m":"Volvo","n":"V40 T5 R-Design","y":"13","cat":"Road","dt":"FF","hp":210,"kg":1540,"pp":448.44,"asp":"Turbo"},{"m":"Wicked Fabrication","n":"Wicked Fabrication GT 51","y":"","cat":"Road","dt":"FR","hp":372,"kg":1338,"pp":528.03,"asp":"NA"},{"m":"Xiaomi","n":"SU7 Ultra","y":"25","cat":"Road","dt":"4WD","hp":1526,"kg":2360,"pp":703.82,"asp":"EV"},{"m":"Yangwang","n":"U9","y":"24","cat":"Road","dt":"4WD","hp":252,"kg":2380,"pp":685.13,"asp":"EV"},{"m":"Zagato","n":"IsoRivolta Zagato VGT","y":"","cat":"VGT","dt":"FR","hp":559,"kg":1150,"pp":676.87,"asp":"NA"}], TRACKS=[{"n":"Nürburgring GP","km":5.1,"c":17,"lap":"1:55-1:57","df":"Med-High","mech":"Med","wear":3,"brk":3,"axle":"Rear (traction)","pit":20,"t":"R"},{"n":"Nürburgring Nordschleife","km":20.8,"c":73,"lap":"6:20-6:30","df":"Med","mech":"High","wear":4,"brk":5,"axle":"Front-left","pit":7,"t":"R"},{"n":"Nürburgring 24h","km":25.4,"c":89,"lap":"7:50-8:00","df":"Med-High","mech":"High","wear":4,"brk":5,"axle":"Front-left","pit":5,"t":"R"},{"n":"Nürburgring Endurance","km":23.9,"c":85,"lap":"7:20-7:30","df":"Med-High","mech":"High","wear":4,"brk":5,"axle":"Front-left","pit":5,"t":"R"},{"n":"Spa-Francorchamps","km":7.0,"c":21,"lap":"2:16-2:19","df":"Med-Low","mech":"Low","wear":4,"brk":4,"axle":"Front-left","pit":22,"t":"R"},{"n":"Monza (Full)","km":5.8,"c":11,"lap":"1:47-1:50","df":"Low","mech":"High","wear":2,"brk":5,"axle":"Rear + front-right","pit":19,"t":"R"},{"n":"Monza (No Chicane)","km":5.8,"c":9,"lap":"1:41-1:44","df":"Low","mech":"Med","wear":2,"brk":3,"axle":"Front-right","pit":20,"t":"R"},{"n":"Suzuka","km":5.8,"c":20,"lap":"1:56-1:59","df":"High","mech":"Low","wear":5,"brk":4,"axle":"Front (both)","pit":19,"t":"R"},{"n":"Brands Hatch GP","km":3.9,"c":9,"lap":"1:22-1:24","df":"Med-High","mech":"Med","wear":4,"brk":4,"axle":"Front-left","pit":24,"t":"R"},{"n":"Brands Hatch Indy","km":1.9,"c":5,"lap":"0:44-0:46","df":"Med","mech":"Med-High","wear":5,"brk":4,"axle":"Front-left","pit":42,"t":"R"},{"n":"Interlagos","km":4.3,"c":15,"lap":"1:31-1:33","df":"Med","mech":"Med-High","wear":3,"brk":4,"axle":"Front-right","pit":22,"t":"R"},{"n":"Red Bull Ring","km":4.3,"c":10,"lap":"1:24-1:26","df":"Low","mech":"High","wear":3,"brk":4,"axle":"Rear + front-right","pit":23,"t":"R"},{"n":"Autopolis (Full)","km":4.7,"c":18,"lap":"1:41-1:44","df":"High","mech":"Low","wear":4,"brk":3,"axle":"Front (both)","pit":21,"t":"R"},{"n":"Fuji Speedway (Full)","km":4.6,"c":16,"lap":"1:33-1:36","df":"Med-Low","mech":"Med","wear":2,"brk":5,"axle":"Front-left","pit":24,"t":"R"},{"n":"Tsukuba","km":2.0,"c":8,"lap":"0:53-0:55","df":"Balance","mech":"High","wear":3,"brk":3,"axle":"Rear","pit":33,"t":"R"},{"n":"Watkins Glen Long","km":5.4,"c":11,"lap":"1:44-1:47","df":"Med-Low","mech":"Low","wear":3,"brk":4,"axle":"Front-left","pit":20,"t":"R"},{"n":"Watkins Glen Short","km":3.4,"c":8,"lap":"1:06-1:09","df":"Med-Low","mech":"Low","wear":3,"brk":4,"axle":"Front-left","pit":28,"t":"R"},{"n":"Daytona Road","km":5.7,"c":12,"lap":"1:44-1:47","df":"Low","mech":"Med","wear":4,"brk":4,"axle":"Right side","pit":28,"t":"R"},{"n":"Daytona Tri-Oval","km":4.0,"c":4,"lap":"0:47-0:50","df":"Min","mech":"n/a","wear":3,"brk":1,"axle":"Right side","pit":60,"t":"R"},{"n":"WeatherTech Laguna Seca","km":3.6,"c":11,"lap":"1:22-1:24","df":"Med-High","mech":"Med-High","wear":4,"brk":4,"axle":"Front-right","pit":23,"t":"R"},{"n":"Mount Panorama (Bathurst)","km":6.2,"c":23,"lap":"2:00-2:03","df":"Med","mech":"High","wear":4,"brk":5,"axle":"Front-left + rear","pit":24,"t":"R"},{"n":"Barcelona-Catalunya GP","km":4.7,"c":16,"lap":"1:41-1:44","df":"High","mech":"Low","wear":5,"brk":4,"axle":"Front-left (extreme)","pit":21,"t":"R"},{"n":"Barcelona No Chicane","km":4.7,"c":14,"lap":"1:39-1:42","df":"High","mech":"Low","wear":5,"brk":3,"axle":"Front-left (extreme)","pit":21,"t":"R"},{"n":"Circuit de la Sarthe (Le Mans)","km":13.6,"c":38,"lap":"3:28-3:34","df":"Low","mech":"Med","wear":3,"brk":5,"axle":"Front-left; fuel-limited","pit":15,"t":"R"},{"n":"Sarthe No Chicane","km":13.6,"c":32,"lap":"3:20-3:25","df":"Min","mech":"Med","wear":3,"brk":4,"axle":"Front-left; fuel-limited","pit":16,"t":"R"},{"n":"Willow Springs Big Willow","km":4.0,"c":10,"lap":"1:20-1:23","df":"Med-High","mech":"Low","wear":5,"brk":2,"axle":"Front-left","pit":22,"t":"R"},{"n":"Michelin Raceway Road Atlanta","km":4.1,"c":12,"lap":"1:20-1:23","df":"Med","mech":"Med","wear":3,"brk":4,"axle":"Front-left","pit":25,"t":"R"},{"n":"Goodwood Motor Circuit","km":3.8,"c":7,"lap":"1:16-1:19","df":"Med-Low","mech":"Low","wear":4,"brk":2,"axle":"Front-left","pit":23,"t":"R"},{"n":"Circuit Gilles-Villeneuve","km":4.4,"c":14,"lap":"1:41-1:44","df":"Low","mech":"High","wear":3,"brk":5,"axle":"Rear (traction)","pit":20,"t":"R"},{"n":"Yas Marina","km":5.3,"c":16,"lap":"1:52-1:56","df":"Med-High","mech":"Med-High","wear":3,"brk":5,"axle":"Rear (traction)","pit":19,"t":"R"},{"n":"Dragon Trail Seaside","km":5.2,"c":18,"lap":"1:50-1:53","df":"Med-Low","mech":"Med","wear":3,"brk":4,"axle":"Front + rear (balanced)","pit":19,"t":"O"},{"n":"Dragon Trail Gardens","km":4.4,"c":17,"lap":"1:36-1:39","df":"Med-High","mech":"Med-High","wear":4,"brk":3,"axle":"Front (both)","pit":21,"t":"O"},{"n":"Trial Mountain","km":5.4,"c":15,"lap":"1:47-1:50","df":"Med-High","mech":"Med","wear":3,"brk":4,"axle":"Front (both)","pit":20,"t":"O"},{"n":"Deep Forest","km":4.3,"c":18,"lap":"1:26-1:29","df":"Med-High","mech":"Med","wear":5,"brk":3,"axle":"Front (both)","pit":23,"t":"O"},{"n":"Grand Valley Highway 1","km":5.1,"c":18,"lap":"1:51-1:55","df":"Med","mech":"High","wear":4,"brk":4,"axle":"Front (both)","pit":19,"t":"O"},{"n":"Grand Valley South","km":3.1,"c":10,"lap":"1:07-1:10","df":"Med","mech":"High","wear":4,"brk":3,"axle":"Front (both)","pit":30,"t":"O"},{"n":"Alsace Village","km":5.4,"c":17,"lap":"2:07-2:12","df":"Med","mech":"High","wear":4,"brk":4,"axle":"Front (both)","pit":17,"t":"O"},{"n":"Broad Bean Raceway","km":1.7,"c":5,"lap":"0:45-0:50","df":"Balance","mech":"High","wear":3,"brk":2,"axle":"Rear","pit":35,"t":"O"},{"n":"Kyoto Driving Park Yamagiwa","km":4.9,"c":15,"lap":"1:47-1:51","df":"Med-High","mech":"Low","wear":4,"brk":3,"axle":"Front (both)","pit":20,"t":"O"},{"n":"Kyoto Driving Park Miyabi","km":2.0,"c":7,"lap":"0:58-1:03","df":"Balance","mech":"High","wear":3,"brk":2,"axle":"Rear","pit":30,"t":"O"},{"n":"Kyoto Yamagiwa+Miyabi","km":6.8,"c":19,"lap":"2:30-2:36","df":"Med-High","mech":"Med-High","wear":4,"brk":3,"axle":"Front + rear","pit":14,"t":"O"},{"n":"Tokyo Expressway East CW","km":7.3,"c":13,"lap":"2:23-2:28","df":"Low","mech":"Med (compliance)","wear":2,"brk":4,"axle":"Front (bump-driven)","pit":17,"t":"O"},{"n":"Tokyo Expressway Central CW","km":4.4,"c":13,"lap":"1:29-1:33","df":"Low","mech":"Med (compliance)","wear":2,"brk":4,"axle":"Front (bump-driven)","pit":26,"t":"O"},{"n":"Tokyo Expressway South CW","km":5.2,"c":17,"lap":"1:47-1:52","df":"Med-Low","mech":"Med (compliance)","wear":3,"brk":4,"axle":"Front (bump-driven)","pit":22,"t":"O"},{"n":"Special Stage Route X","km":30.3,"c":2,"lap":"6:45-7:15","df":"Min","mech":"n/a","wear":1,"brk":1,"axle":"One side only","pit":5,"t":"O"},{"n":"Blue Moon Bay Speedway","km":3.2,"c":3,"lap":"0:42-0:48","df":"Min","mech":"n/a","wear":2,"brk":1,"axle":"Right side","pit":50,"t":"O"},{"n":"Blue Moon Bay Infield A","km":3.4,"c":10,"lap":"1:15-1:20","df":"Low","mech":"Med","wear":3,"brk":3,"axle":"Right side","pit":28,"t":"O"},{"n":"Sardegna Road Track A","km":5.1,"c":15,"lap":"1:50-1:54","df":"Med","mech":"Med","wear":3,"brk":4,"axle":"Front (both)","pit":19,"t":"O"},{"n":"Eiger Nordwand","km":2.4,"c":11,"lap":"1:00-1:05","df":"Balance","mech":"High","wear":3,"brk":4,"axle":"Rear (traction)","pit":28,"t":"O"},{"n":"High Speed Ring","km":4.3,"c":6,"lap":"1:20-1:24","df":"Low","mech":"Low","wear":1,"brk":2,"axle":"Right side (mild)","pit":23,"t":"O"},{"n":"Autodrome Lago Maggiore Full","km":5.8,"c":17,"lap":"1:56-2:00","df":"Med-High","mech":"Med","wear":3,"brk":3,"axle":"Front (both)","pit":18,"t":"O"},{"n":"Lago Maggiore West End","km":2.4,"c":10,"lap":"0:52-0:57","df":"Med","mech":"Med-High","wear":3,"brk":3,"axle":"Front (both)","pit":35,"t":"O"},{"n":"Circuit de Sainte-Croix A","km":9.5,"c":19,"lap":"3:15-3:25","df":"Med-Low","mech":"Low","wear":3,"brk":4,"axle":"Front; fuel-relevant","pit":13,"t":"O"},{"n":"Circuit de Sainte-Croix B","km":7.1,"c":14,"lap":"2:25-2:35","df":"Med-Low","mech":"Low","wear":3,"brk":4,"axle":"Front","pit":17,"t":"O"},{"n":"Circuit de Sainte-Croix C","km":10.8,"c":24,"lap":"3:45-3:55","df":"Med","mech":"Med","wear":3,"brk":4,"axle":"Front","pit":11,"t":"O"}];
+const $=id=>document.getElementById(id);
+let car=null, trk=null;
+
+/* tabs */
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); $(b.dataset.t).classList.add('on');
+});
+
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');
+  setTimeout(()=>t.classList.remove('on'),1500);}
+
+/* ---- car picker ---- */
+const carLabel=c=>`${c.m} ${c.n}${c.y?" '"+c.y:''}`;
+function carSearch(q){
+  const cat=$('catf').value, s=q.trim().toLowerCase();
+  let list=CARS.filter(c=>!cat||c.cat===cat);
+  if(s) list=list.filter(c=>carLabel(c).toLowerCase().includes(s));
+  else if(!cat) list=[];
+  return list.slice(0,60);
+}
+function renderCars(){
+  const box=$('carr'), list=carSearch($('carq').value);
+  if(!list.length){ box.innerHTML='<div class="none">No match — check the category filter</div>'; box.classList.add('on'); return; }
+  box.innerHTML=list.map((c,i)=>
+    `<div data-i="${CARS.indexOf(c)}"><span>${carLabel(c)}</span>
+     <span class="meta">${c.cat} · ${c.dt||'?'} · ${c.hp??'?'}hp · ${c.kg??'?'}kg</span></div>`).join('');
+  box.classList.add('on');
+  box.querySelectorAll('div[data-i]').forEach(d=>d.onclick=()=>pickCar(CARS[+d.dataset.i]));
+}
+function pickCar(c){
+  car=c; $('carq').value=carLabel(c); $('carr').classList.remove('on');
+  const rr=c.dt==='RR', notes=[];
+  if(c.dt==='MR') notes.push('MR — entry-rotation prone; LSD braking sensitivity is the primary entry-stability lever');
+  if(rr) notes.push('RR — pendulum risk; highest LSD braking sensitivity of any layout');
+  if(c.dt==='FR') notes.push('FR — will not rotate for free; rotation must be manufactured. LSD accel higher (~25)');
+  if(c.dt==='FF') notes.push('FF — front-wear limited; keep LSD braking low or you add entry understeer');
+  if(c.dt==='4WD') notes.push('4WD — tune suspension before the diff; GT7 AWD defaults are strongly understeery');
+  if(c.kg&&c.kg>1500) notes.push('Heavy — more mass into braking zones and materially more tyre wear');
+  $('carspec').innerHTML=`<div class="t">${carLabel(c)}</div><div class="pills">
+    <span class="pill hi">${c.cat}</span>
+    <span class="pill"><b>${c.dt||'?'}</b> layout</span>
+    <span class="pill"><b>${c.hp??'?'}</b> bhp stock</span>
+    <span class="pill"><b>${c.kg??'?'}</b> kg stock</span>
+    <span class="pill"><b>${c.pp??'?'}</b> PP stock</span>
+    <span class="pill">${c.asp||'?'}</span>
+    ${c.hp&&c.kg?`<span class="pill"><b>${(c.kg/c.hp).toFixed(2)}</b> kg/hp</span>`:''}
+    </div>${notes.length?`<div class="note" style="margin-top:10px">${notes.join('<br>')}</div>`:''}`;
+  $('carspec').classList.add('on');
+  if(typeof rngAuto==='function') rngAuto(c);
+}
+$('carq').oninput=renderCars;
+$('carq').onfocus=renderCars;
+$('catf').onchange=()=>{$('carq').value='';$('carspec').classList.remove('on');car=null;renderCars();};
+
+/* ---- track picker ---- */
+function renderTrks(){
+  const s=$('trkq').value.trim().toLowerCase(), box=$('trkr');
+  const list=(s?TRACKS.filter(t=>t.n.toLowerCase().includes(s)):TRACKS).slice(0,60);
+  if(!list.length){box.innerHTML='<div class="none">No match</div>';box.classList.add('on');return;}
+  box.innerHTML=list.map(t=>`<div data-i="${TRACKS.indexOf(t)}"><span>${t.n}</span>
+    <span class="meta">${t.km}km · ${t.c} cnr · DF ${t.df}</span></div>`).join('');
+  box.classList.add('on');
+  box.querySelectorAll('div[data-i]').forEach(d=>d.onclick=()=>pickTrk(TRACKS[+d.dataset.i]));
+}
+function sev(n){return n>=5?'dg':n>=4?'wa':''}
+function pickTrk(t){
+  trk=t; $('trkq').value=t.n; $('trkr').classList.remove('on');
+  $('trkspec').innerHTML=`<div class="t">${t.n}</div><div class="pills">
+    <span class="pill"><b>${t.km}</b> km</span>
+    <span class="pill"><b>${t.c}</b> corners</span>
+    <span class="pill">Gr.3 lap <b>${t.lap}</b></span>
+    <span class="pill hi">Downforce <b>${t.df}</b></span>
+    <span class="pill">Mechanical grip <b>${t.mech}</b></span>
+    <span class="pill ${sev(t.wear)}">Wear <b>${t.wear}/5</b></span>
+    <span class="pill ${sev(t.brk)}">Braking <b>${t.brk}/5</b></span>
+    <span class="pill">Pit cost <b>~${t.pit}%</b> of a lap</span>
+    <span class="pill">Wears <b>${t.axle}</b></span></div>`;
+  $('trkspec').classList.add('on');
+}
+$('trkq').oninput=renderTrks;
+$('trkq').onfocus=renderTrks;
+
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.picker')) document.querySelectorAll('.results').forEach(r=>r.classList.remove('on'));
+});
+
+/* ---- symptoms ---- */
+const SYMS=[
+ ['Braking','Rear excited / sketchy under braking'],['Braking','Rear locking'],
+ ['Braking','Front locking'],['Braking','Braking distance inconsistent'],
+ ['Entry','Initial turn-in lazy'],['Entry','Entry understeer under trail braking'],
+ ['Entry','Rear steps out on entry'],['Entry','Rear floats / feels unsupported'],
+ ['Mid','Pushes wide mid-corner'],['Mid','Will not hold line on maintenance throttle'],
+ ['Mid','Nervous / darty mid-corner'],['Mid','Loses rear when I lift'],
+ ['Exit','Loose on throttle exit'],['Exit','Will not hook up under throttle'],
+ ['Exit','Will not rotate under throttle'],['Exit','Wheelspin in 2nd / 3rd'],
+ ['Surface','Undriveable over bumps'],['Surface','Skips or hops on kerbs'],
+ ['Surface','Bounces repeatedly after a kerb'],['Surface','Suddenly refuses to turn'],
+ ['Gearing','Gearbox too long'],['Gearing','Gearbox too short'],
+ ['Stint','Migrated to understeer late in stint'],['Stint','Rear gave up before the fronts'],
+ ['Stint','Front-left overloaded'],['Stint','Balance changed abruptly, not gradually'],
+ ['Overall','Fast but inconsistent'],['Overall','Stable but feels dead']
+];
+const groups={};SYMS.forEach(([g,s])=>{(groups[g]=groups[g]||[]).push(s)});
+$('symwrap').innerHTML=Object.entries(groups).map(([g,arr])=>
+  `<div><label>${g}</label>${arr.map(s=>
+   `<label class="chk" style="margin-bottom:6px"><input type="checkbox" value="${s}">${s}</label>`).join('')}</div>`).join('');
+$('symwrap').addEventListener('change',e=>{
+  if(e.target.type==='checkbox') e.target.closest('.chk').classList.toggle('on',e.target.checked);
+});
+
+function val(id){return $(id).value.trim()}
+
+/* ---- slider ranges ---- */
+const RNG=[
+ ['Suspension',[
+  ['rh_f','Ride height — front','mm',1,[50,90],[60,160],1],
+  ['rh_r','Ride height — rear','mm',1,[50,90],[60,160],1],
+  ['nf_f','Natural frequency — front','Hz',1,[2.00,5.00],[0.80,3.00],0.01],
+  ['nf_r','Natural frequency — rear','Hz',1,[2.00,5.00],[0.80,3.00],0.01],
+  ['arb_f','Anti-roll bar — front','',0,[1,10],[1,10],1],
+  ['arb_r','Anti-roll bar — rear','',0,[1,10],[1,10],1],
+  ['dc_f','Damper compression — front','%',0,[20,40],[20,40],1],
+  ['dc_r','Damper compression — rear','%',0,[20,40],[20,40],1],
+  ['de_f','Damper expansion — front','%',0,[30,50],[30,50],1],
+  ['de_r','Damper expansion — rear','%',0,[30,50],[30,50],1],
+  ['cam_f','Camber — front','°',1,[0.0,10.0],[0.0,10.0],0.1],
+  ['cam_r','Camber — rear','°',1,[0.0,10.0],[0.0,10.0],0.1],
+  ['toe_f','Toe — front','°',1,[-0.50,0.50],[-0.50,0.50],0.01],
+  ['toe_r','Toe — rear','°',1,[-0.50,0.50],[-0.50,0.50],0.01]
+ ]],
+ ['Differential',[
+  ['lsd_i','LSD initial torque','',0,[5,60],[5,60],1],
+  ['lsd_a','LSD acceleration sensitivity','',0,[5,60],[5,60],1],
+  ['lsd_b','LSD braking sensitivity','',0,[5,60],[5,60],1],
+  ['awd','Torque distribution (AWD, front %)','%',1,[null,null],[null,null],1]
+ ]],
+ ['Aero and brakes',[
+  ['df_f','Downforce — front','',1,[150,700],[0,150],1],
+  ['df_r','Downforce — rear','',1,[200,1100],[0,300],1],
+  ['bb','Brake balance','',0,[-5,5],[-5,5],1]
+ ]],
+ ['Transmission',[
+  ['top','Maximum speed (auto-set)','km/h',1,[150,450],[100,400],1],
+  ['fg','Final gear','',1,[2.000,5.000],[2.000,5.000],0.001]
+ ]]
+];
+const RNGI={}; RNG.forEach(([g,rows])=>rows.forEach(r=>RNGI[r[0]]=r));
+
+function rngDefaults(mode){
+  RNG.forEach(([g,rows])=>rows.forEach(r=>{
+    const [k,,,pc,race,road]=r;
+    const mn=$('rmin_'+k), mx=$('rmax_'+k);
+    if(mode==='blank'){mn.value='';mx.value='';return}
+    const pair = mode==='road'?road:race;
+    mn.value = pair[0]===null?'':pair[0];
+    mx.value = pair[1]===null?'':pair[1];
+  }));
+}
+$('rngwrap').innerHTML = RNG.map(([g,rows])=>
+ `<div class="rnggrp"><div class="rnghdr">${g}</div>
+  <div class="rngcap"><span></span><span>Min</span><span>Max</span><span></span></div>
+  ${rows.map(([k,n,u,pc])=>
+   `<div class="rngrow">
+      <div class="nm">${n}${pc?' <i class="pc">per-car</i>':' <i>universal</i>'}</div>
+      <input id="rmin_${k}" type="number" step="any" placeholder="min">
+      <input id="rmax_${k}" type="number" step="any" placeholder="max">
+      <div class="un">${u||''}</div>
+    </div>`).join('')}
+  </div>`).join('');
+
+/* Recorded ranges, per car. Read off the car's own settings screen and sent back
+   from the tool — these override the generic presets and are treated as hard limits.
+   Shape: "<car label>": {date:'YYYY-MM-DD', cat:'Gr.3', r:{key:[min,max], …}}   */
+const RANGELIB={
+ "Porsche 911 RSR (991) '17": {date:'2026-08-11', cat:'Gr.3', r:{
+   rh_f:[55,80],   rh_r:[60,90],
+   nf_f:[3,5],     nf_r:[3,5],
+   arb_f:[1,10],   arb_r:[1,10],
+   dc_f:[20,40],   dc_r:[20,40],
+   de_f:[30,50],   de_r:[30,50],
+   cam_f:[0,6],    cam_r:[0,6],
+   toe_f:[-1,1],   toe_r:[-1,1],
+   lsd_i:[5,60],   lsd_a:[5,60],  lsd_b:[5,60],
+   df_f:[350,450], df_r:[500,700],
+   bb:[-5,5],      top:[200,800], fg:[2,5]
+ }}
+};
+
+const rngMem={};
+let rngTouched=false, rngCarKey=null, rngSrc='def';
+
+function readRanges(){
+  const o={};
+  RNG.forEach(([g,rows])=>rows.forEach(r=>{
+    const k=r[0], a=val('rmin_'+k), b=val('rmax_'+k);
+    if(a!==''||b!=='') o[k]=[a===''?null:+a, b===''?null:+b];
+  }));
+  return o;
+}
+function writeRanges(o){
+  RNG.forEach(([g,rows])=>rows.forEach(r=>{
+    const k=r[0], v=o[k];
+    $('rmin_'+k).value = v&&v[0]!==null&&v[0]!==undefined ? v[0] : '';
+    $('rmax_'+k).value = v&&v[1]!==null&&v[1]!==undefined ? v[1] : '';
+  }));
+}
+function rngStat(kind,msg){
+  rngSrc=kind;
+  const b=$('rngstat');
+  b.className='note'+(kind==='lib'?'':kind==='mem'?' i':' w');
+  b.innerHTML=msg;
+}
+function stashRanges(){
+  if(rngCarKey) rngMem[rngCarKey]={r:readRanges(),touched:rngTouched,ver:$('rngver').checked,src:rngSrc};
+}
+
+$('rngwrap').addEventListener('input',()=>{
+  rngTouched=true;
+  if(rngSrc==='lib') rngStat('mem','Edited away from the recorded ranges for this car. Save them again when you\'re happy and I\'ll update the record.');
+  else if(rngSrc==='def') rngStat('mem','Your entries for this car. Save them to make them permanent.');
+});
+$('rngpre').onchange=()=>{rngDefaults($('rngpre').value);rngTouched=false;$('rngver').checked=false;
+  rngStat('def',$('rngpre').value==='blank'?'Cleared — enter this car\'s real limits.':'Generic preset windows, not verified for this car.');
+  toast($('rngpre').value==='blank'?'Ranges cleared':'Ranges reset to preset')};
+$('rngreset').onclick=()=>{rngDefaults($('rngpre').value);rngTouched=false;$('rngver').checked=false;
+  rngStat('def','Generic preset windows, not verified for this car.');toast('Ranges reset to preset')};
+rngDefaults('race');
+rngStat('def','Generic race-car windows. Pick a car — if its real limits are on file they load automatically.');
+
+function rngAuto(c){
+  if(!c) return;
+  const key=carLabel(c);
+  if(rngCarKey===key) return;
+  stashRanges();
+  rngCarKey=key;
+  const mem=rngMem[key];
+  if(mem){
+    writeRanges(mem.r); $('rngver').checked=mem.ver; rngTouched=mem.touched;
+    rngStat(mem.src||'mem', mem.src==='lib'
+      ? `<b>Recorded ranges for this car</b> — read off its own settings screen on ${RANGELIB[key].date}.`
+      : 'Your entries for this car from earlier in this session.');
+    return;
+  }
+  const lib=RANGELIB[key];
+  if(lib){
+    writeRanges(lib.r); $('rngver').checked=true; rngTouched=true;
+    rngStat('lib',`<b>Recorded ranges loaded for this car</b> — read off its own settings screen on ${lib.date}. Overwrite anything that has changed since.`);
+    return;
+  }
+  const want = c.cat==='Road'?'road':'race';
+  if($('rngpre').value!=='blank'){$('rngpre').value=want; rngDefaults(want);}
+  rngTouched=false; $('rngver').checked=false;
+  rngStat('def',`<b>Not on file for this car.</b> These are GT7 typical ${want==='road'?'road-car':'race-car'} windows — read the real limits off the car's settings screen and save them, and they'll load automatically next time.`);
+}
+
+$('rngsave').onclick=()=>{
+  const r=readRanges();
+  if(!Object.keys(r).length){toast('Nothing to save — the ranges are empty');return}
+  const key = car?carLabel(car):'UNIDENTIFIED CAR — name it before sending';
+  const d=new Date().toISOString().slice(0,10);
+  const L=[];
+  L.push(`# CAR SLIDER RANGES — ${key}`);
+  L.push('');
+  L.push(`Recorded ${d} · GT7 v1.70${car?` · ${car.cat}`:''} · ${$('rngver').checked?'read off the car\'s own settings screen':'**NOT verified in game** — these are still preset defaults'}`);
+  L.push('');
+  L.push('| Parameter | Min | Max |');
+  L.push('|---|---|---|');
+  rngRows().forEach(x=>L.push(`| ${x[0]} | ${x[1]} | ${x[2]} |`));
+  L.push('');
+  L.push('Add this to the range library in the GT7 Race Engineering tool and to `claude/gt7/11-car-slider-ranges.md`, so it loads automatically for this car from now on.');
+  L.push('');
+  L.push('```json');
+  const body=Object.keys(r).map(k=>`   ${JSON.stringify(k)}: [${r[k][0]}, ${r[k][1]}]`).join(',\n');
+  L.push('{');
+  L.push(` ${JSON.stringify(key)}: {`);
+  L.push(`  "date": ${JSON.stringify(d)}, "cat": ${JSON.stringify(car?car.cat:null)}, "verified": ${$('rngver').checked},`);
+  L.push('  "r": {');
+  L.push(body);
+  L.push('  }');
+  L.push(' }');
+  L.push('}');
+  L.push('```');
+  $('rngtxt').textContent=L.join('\n');
+  $('rngout').classList.add('on');
+  if(rngCarKey) rngMem[rngCarKey]={r:r,touched:true,ver:$('rngver').checked,src:rngSrc};
+  $('rngout').scrollIntoView({behavior:'smooth',block:'nearest'});
+  toast('Range record ready to copy');
+};
+$('cp3').onclick=()=>copy($('rngtxt').textContent);
+$('dl3').onclick=()=>dl($('rngtxt').textContent,
+  `gt7-ranges-${(car?car.n:'car').replace(/\W+/g,'-')}.md`.toLowerCase());
+
+function rngRows(){
+  const out=[];
+  RNG.forEach(([g,rows])=>rows.forEach(([k,n,u])=>{
+    const a=val('rmin_'+k), b=val('rmax_'+k);
+    if(a===''&&b==='') return;
+    out.push([n,(a===''?'—':a)+(u?' '+u:''),(b===''?'—':b)+(u?' '+u:'')]);
+  }));
+  return out;
+}
+
+/* ---- brief ---- */
+function buildBrief(){
+  if(!car){toast('Pick a car first');return null}
+  if(!trk){toast('Pick a circuit first');return null}
+  const bhp=val('bhp')||car.hp, wt=val('wt')||car.kg, pp=val('pp')||car.pp;
+  const dur=`${val('durval')||'?'} ${$('durmode').value.toLowerCase()}`;
+  const L=[];
+  L.push('# GT7 SETUP BRIEF');
+  L.push('');
+  L.push('Generate a **race setup sheet** and a **qualifying setup sheet** in GT7 in-game layout for the following. Use the driver profile and playbook in the project. Express per-car suspension values as **percent of slider range plus clicks from minimum**, since GT7 ranges are car-specific. Output must be manually enterable into Pit Crew.');
+  L.push('');
+  L.push('## Car');
+  L.push(`- **${carLabel(car)}** — ${car.cat}, ${car.dt||'?'}, ${car.asp||'?'}`);
+  L.push(`- As raced: **${bhp} bhp · ${wt} kg**${pp?` · PP ${pp}`:''}${val('ppcap')?` · PP cap ${val('ppcap')}`:''}`);
+  if(bhp&&wt) L.push(`- Power-to-weight: ${(wt/bhp).toFixed(2)} kg/hp`);
+  L.push(`- Stock reference: ${car.hp??'?'} bhp / ${car.kg??'?'} kg / PP ${car.pp??'?'}`);
+  L.push(`- Ballast: ${$('ball').value} · Restrictor/ECU: ${$('restr').value} · Adjustable aero: ${$('aero').value}`);
+  L.push('');
+  L.push('## Circuit');
+  L.push(`- **${trk.n}** — ${trk.km} km, ${trk.c} corners, Gr.3 reference lap ${trk.lap}`);
+  L.push(`- Downforce requirement **${trk.df}** · mechanical-grip priority **${trk.mech}**`);
+  L.push(`- Tyre wear severity **${trk.wear}/5** (wears ${trk.axle}) · braking severity **${trk.brk}/5**`);
+  L.push(`- Pit loss ≈ **${trk.pit}% of one lap**`);
+  L.push('');
+  L.push('## Event');
+  L.push(`- Format: **${$('fmt').value}** · Length: **${dur}**`);
+  L.push(`- Tyre wear **${$('tw').value}** · Fuel **${$('fu').value}** · Mandatory stops **${$('stops').value}**`);
+  L.push(`- Compounds available: ${$('comp').value}`);
+  L.push(`- Start: ${$('start').value} · Conditions: ${$('cond').value} · ${$('tod').value}`);
+  L.push(`- Priority this round: **${$('prio').value}**`);
+  L.push('');
+  const rr=rngRows();
+  if(rr.length){
+    L.push('## Slider ranges — this car');
+    L.push(rngSrc==='lib'
+      ? `_On file for this car — read off its own settings screen on ${RANGELIB[rngCarKey].date}. Treat as hard limits._`
+      : $('rngver').checked
+      ? '_Read off this car\'s own in-game sheet. Treat as hard limits._'
+      : `_Not verified on this car — GT7 typical ${$('rngpre').value==='road'?'road-car':'race-car'} windows. Flag any recommendation that lands within one or two clicks of a limit, and tell me which of these to check on the car's sheet before I enter the setup._`);
+    if(rngSrc!=='lib') L.push('');
+    if(rngSrc!=='lib') L.push('If I send these back to you confirmed, record them against this car so they are not re-entered next time.');
+    L.push('');
+    L.push('| Parameter | Min | Max |');
+    L.push('|---|---|---|');
+    rr.forEach(r=>L.push(`| ${r[0]} | ${r[1]} | ${r[2]} |`));
+    L.push('');
+    L.push('**Every recommended value must fall inside these ranges.** Give each suspension value as absolute number + clicks from minimum + % of range, so it survives if the real range differs. Do not recommend a value at a hard limit unless you say why the limit is the right answer.');
+    L.push('');
+  }
+  L.push('## Assists / hardware');
+  L.push(`- ABS **${$('abs').value}** · TCS quali **${$('tcsq').value}** / race **${$('tcsr').value}** · Countersteer assist ${$('csa').value}`);
+  L.push('- Rig: Fanatec DD Extreme 18 Nm · ClubSport V3, load-cell brake, hydraulic throttle damper · GT7 sensitivity 10');
+  L.push('');
+  L.push('## Context');
+  L.push(`- Previous setup: ${$('prev').value}`);
+  L.push(val('notes')?`- Notes: ${val('notes')}`:'- Notes: none');
+  L.push('');
+  L.push('## Required output');
+  L.push('1. **Race sheet** and **Qualifying sheet**, side by side, GT7 in-game order and naming.');
+  L.push('2. A short **why** for every value that deviates from the baseline sheet.');
+  L.push('3. **Gearing** built from the actual longest straight and slowest corner at this circuit, not a target top speed.');
+  L.push('4. **Strategy note**: expected stint length, stop window, fuel map, and the in-race brake-balance / TCS migration plan.');
+  L.push('5. **Three things to test first** if the car is not right, in priority order.');
+  if(rr.length) L.push('6. A **range check** — confirm every value on both sheets sits inside the slider ranges above, and list anything you had to clamp.');
+  L.push('');
+  L.push('---');
+  L.push(`*Generated ${new Date().toISOString().slice(0,10)} · GT7 v1.70 baseline · no BoP, open tuning*`);
+  return L.join('\n');
+}
+$('gen').onclick=()=>{const b=buildBrief();if(!b)return;
+  $('brieftxt').textContent=b;$('briefout').classList.add('on');
+  $('briefout').scrollIntoView({behavior:'smooth',block:'start'});};
+$('clr').onclick=()=>{if(confirm('Reset the whole form?'))location.reload()};
+
+/* ---- driver feedback ---- */
+const SESSN={practice:'Practice / shakedown',quali:'Qualifying run',tt:'Time trial',race:'Race — completed'};
+
+function applySess(){
+  const v=$('fsess').value;
+  document.querySelectorAll('#log [data-s]').forEach(el=>{
+    el.style.display = el.dataset.s.split(' ').includes(v) ? '' : 'none';
+  });
+}
+$('fsess').onchange=applySess;
+
+function refreshWorst(){
+  const on=[...document.querySelectorAll('#symwrap input:checked')].map(i=>i.value);
+  const cur=$('fworst').value;
+  $('fworst').innerHTML = on.length
+    ? '<option value="">— none stands out —</option>'+on.map(v=>`<option>${v}</option>`).join('')
+    : '<option value="">— tick symptoms above first —</option>';
+  if(on.includes(cur)) $('fworst').value=cur;
+}
+$('symwrap').addEventListener('change',refreshWorst);
+
+$('fpcuse').onchange=()=>{$('lpc').style.display=$('fpcuse').checked?'':'none'};
+
+/* carry car / circuit / event across from the brief tab */
+function carryOver(){
+  const box=$('fcarry');
+  if(!car&&!trk){box.style.display='none';return}
+  if(car&&!val('lcar')) $('lcar').value=carLabel(car);
+  if(trk&&!val('ltrk')) $('ltrk').value=trk.n;
+  const bits=[];
+  if(car) bits.push(`<b>${carLabel(car)}</b>`);
+  if(trk) bits.push(`<b>${trk.n}</b>`);
+  bits.push(`${$('fmt').value} · ${val('durval')||'?'} ${$('durmode').value.toLowerCase()}`);
+  bits.push(`tyre wear ${$('tw').value} · fuel ${$('fu').value}`);
+  box.innerHTML='<b>Carried from the setup brief:</b> '+bits.join(' · ')+
+    '. Event format, multipliers, assists and slider ranges are attached to the prompt automatically.';
+  box.style.display='';
+}
+document.querySelectorAll('nav button').forEach(b=>{
+  if(b.dataset.t==='log') b.addEventListener('click',carryOver);
+});
+
+function eventContext(){
+  const L=[];
+  L.push(`- Format: **${$('fmt').value}** · Length **${val('durval')||'?'} ${$('durmode').value.toLowerCase()}**`);
+  L.push(`- Tyre wear **${$('tw').value}** · Fuel **${$('fu').value}** · Mandatory stops **${$('stops').value}**`);
+  L.push(`- Compounds available: ${$('comp').value}`);
+  L.push(`- Start: ${$('start').value} · Conditions: ${$('cond').value} · ${$('tod').value}`);
+  L.push(`- ABS **${$('abs').value}** · TCS quali **${$('tcsq').value}** / race **${$('tcsr').value}** · Countersteer ${$('csa').value}`);
+  if(trk) L.push(`- Circuit reference: downforce **${trk.df}**, mechanical grip **${trk.mech}**, tyre wear **${trk.wear}/5** (wears ${trk.axle}), braking **${trk.brk}/5**, pit loss ≈ **${trk.pit}%** of a lap`);
+  if(car) L.push(`- Car reference: ${car.cat}, ${car.dt||'?'} layout, ${car.asp||'?'} · as-raced **${val('bhp')||car.hp} bhp / ${val('wt')||car.kg} kg**${val('pp')||car.pp?` · PP ${val('pp')||car.pp}`:''}`);
+  return L;
+}
+
+function buildLog(){
+  const sess=$('fsess').value, sName=SESSN[sess];
+  const pre = sess!=='race';
+  const carName = val('lcar') || (car?carLabel(car):'—');
+  const trkName = val('ltrk') || (trk?trk.n:'—');
+  const syms=[...document.querySelectorAll('#symwrap input:checked')].map(i=>i.value);
+  const pc = $('fpcuse').checked ? val('lpc') : '';
+  const L=[];
+
+  L.push('# GT7 DRIVER FEEDBACK — SETUP REFINEMENT REQUEST');
+  L.push('');
+  L.push(`**${carName} @ ${trkName}** · ${sName} · ${val('ldate')||new Date().toISOString().slice(0,10)}`);
+  L.push('');
+  L.push(pre
+    ? 'I have run the setup you issued for this combination. Diagnose what the car did and reissue the sheet for the race. Work from the driver profile, playbook and change hierarchy in the project. The driver report below is primary evidence — read it literally rather than smoothing it into generic symptoms.'
+    : 'The event is complete. Diagnose the setup against what the car actually did, reissue the sheets for the next running of this combination, and update the knowledge base. The driver report below is primary evidence — read it literally rather than smoothing it into generic symptoms.');
+  L.push('');
+
+  L.push('## Session');
+  L.push(`- Type: **${sName}** · laps run **${val('flaps')||'—'}** · compound **${$('fcomp').value||'—'}**`);
+  L.push(`- Track conditions: ${$('fcond2').value}`);
+  L.push(`- Revision priority: **${$('fpri').value}**`);
+  L.push('');
+
+  L.push('## Event context');
+  eventContext().forEach(l=>L.push(l));
+  L.push('');
+
+  L.push('## Setup as run');
+  L.push(`- Sheet in the car: **${$('fsheet').value}**`);
+  L.push(`- Driver changes away from it: ${val('fchanges')||'none'}`);
+  if(val('fsetup')){
+    L.push('');
+    L.push('```');
+    L.push(val('fsetup'));
+    L.push('```');
+  } else {
+    L.push('- Full sheet not pasted — use the sheet you issued for this combination and say which version you are working from.');
+  }
+  L.push('');
+
+  L.push('## What the car did');
+  L.push(syms.length?syms.map(s=>`- ${s}`).join('\n'):'- Nothing flagged from the symptom list');
+  if(val('fworst')) L.push(`- **Biggest single limitation: ${val('fworst')}**`);
+  if($('fwhere').value) L.push(`- Costs me most: ${$('fwhere').value}`);
+  L.push('');
+
+  L.push('## Pace, tyres and fuel');
+  if(pre){
+    L.push(`- Best lap **${val('fbest')||'—'}** · repeatable lap **${val('fcons')||'—'}** · gap to target **${val('fgap')||'—'}**`);
+  } else {
+    L.push(`- Best quali **${val('lq')||'—'}** · best race **${val('lr')||'—'}** · average race **${val('la')||'—'}**`);
+    L.push(`- Result: ${val('lres')||'—'}`);
+  }
+  if(sess==='practice'||sess==='race'){
+    L.push(`- Stint achieved: ${val('lstint')||'—'} · first tyre to go: ${$('lwear').value||'—'} · fuel: ${$('lfuel').value||'—'}`);
+  }
+  L.push(`- Balance over the run: ${$('fdrift').value||'—'} · tyre state at the end: ${$('ftyre').value||'—'}`);
+  L.push('');
+
+  const rr=rngRows();
+  if(rr.length){
+    L.push('## Slider ranges — this car');
+    L.push(rngSrc==='lib'
+      ? `_On file for this car — recorded ${RANGELIB[rngCarKey].date}. Treat as hard limits._`
+      : $('rngver').checked
+      ? '_Read off this car\'s own in-game sheet. Treat as hard limits — and record them against this car._'
+      : '_GT7 typical windows, not verified on this car. Flag anything landing within a click or two of a limit._');
+    L.push('');
+    L.push('| Parameter | Min | Max |');
+    L.push('|---|---|---|');
+    rr.forEach(r=>L.push(`| ${r[0]} | ${r[1]} | ${r[2]} |`));
+    L.push('');
+    L.push('Every revised value must fall inside these ranges.');
+    L.push('');
+  }
+
+  L.push('## Pit Crew data');
+  if(pc){
+    L.push('Telemetry channel for this session:');
+    L.push('');
+    L.push('```');
+    L.push(pc);
+    L.push('```');
+    L.push('');
+    L.push('Where the Pit Crew data and my report disagree, say so explicitly, say which you are trusting, and why. Do not quietly average them.');
+  } else {
+    L.push('**Not used this session.** Diagnose from the driver report alone. Where a call genuinely needs data I have not given you, say what to measure next time rather than guessing — and flag how confident you are in each change.');
+  }
+  L.push('');
+
+  L.push('## Driver notes — verbatim');
+  L.push(val('lnotes')||'_none_');
+  L.push('');
+
+  L.push('## What I need back');
+  if(pre){
+    L.push('1. **Diagnosis** — map each symptom to a cause, ranked by how much it is costing, and name the corner phase each belongs to. Say which symptoms are one problem wearing two faces.');
+    L.push('2. **Revised race sheet** in full GT7 in-game layout, ready to enter by hand.');
+    L.push('3. **Qualifying sheet** — reissue it only if the diagnosis moves it, and say so either way.');
+    L.push('4. **Delta table**: parameter · as run · revised · why. Nothing changes without a reason.');
+    L.push('5. **What each change should feel like**, so one run tells me whether it worked.');
+    L.push('6. **What you deliberately left alone**, and why — the things that were working.');
+    L.push('7. **Three things to try next**, in order, if the first revision is still not right.');
+  } else {
+    L.push('1. **Post-mortem diagnosis** — what the setup cost me over the event, ranked, mapped to corner phase.');
+    L.push('2. **Revised race and qualifying sheets** in full GT7 in-game layout.');
+    L.push('3. **Delta table**: parameter · as run · revised · why.');
+    L.push('4. **Strategy review** — stint length, stop window, fuel map, and the in-race brake-balance / TCS migration plan against what actually happened.');
+    L.push('5. **Knowledge-base update** — what should persist about this car, this circuit and this combination. State explicitly what you are adding or changing and why.');
+  }
+  L.push('');
+  L.push('Respect the change hierarchy — change the fewest things that will fix it, and where two changes are coupled, say so rather than shipping both silently.');
+  L.push('');
+  L.push('---');
+  L.push(`*Generated ${new Date().toISOString().slice(0,10)} · GT7 v1.70 baseline*`);
+  return L.join('\n');
+}
+$('genlog').onclick=()=>{$('logtxt').textContent=buildLog();
+  $('logout').classList.add('on');$('logout').scrollIntoView({behavior:'smooth',block:'start'});};
+$('clrfb').onclick=()=>{
+  if(!confirm('Clear the driver feedback form?')) return;
+  ['lcar','ltrk','flaps','fchanges','fsetup','fbest','fcons','fgap','lq','lr','la','lres',
+   'lstint','lpc','lnotes'].forEach(id=>$(id).value='');
+  document.querySelectorAll('#symwrap input:checked').forEach(i=>{
+    i.checked=false;i.closest('.chk').classList.remove('on')});
+  refreshWorst(); $('logout').classList.remove('on');
+  ['lwear','lfuel','fwhere','fdrift','ftyre'].forEach(id=>$(id).value='');
+  $('fpcuse').checked=false; $('lpc').style.display='none';
+  carryOver(); toast('Feedback form cleared');
+};
+applySess(); refreshWorst();
+
+/* ---- copy / download ---- */
+function copy(t){navigator.clipboard.writeText(t).then(()=>toast('Copied to clipboard'),
+  ()=>{const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);
+  a.select();document.execCommand('copy');a.remove();toast('Copied')});}
+function dl(t,n){const b=new Blob([t],{type:'text/markdown'}),u=URL.createObjectURL(b),
+  a=document.createElement('a');a.href=u;a.download=n;a.click();URL.revokeObjectURL(u);}
+$('cp1').onclick=()=>copy($('brieftxt').textContent);
+$('cp2').onclick=()=>copy($('logtxt').textContent);
+$('dl1').onclick=()=>dl($('brieftxt').textContent,
+  `gt7-brief-${(car?car.n:'car').replace(/\W+/g,'-')}-${(trk?trk.n:'track').replace(/\W+/g,'-')}.md`.toLowerCase());
+$('dl2').onclick=()=>dl($('logtxt').textContent,
+  `gt7-feedback-${(car?car.n:(($('lcar').value)||'car')).replace(/\W+/g,'-')}-${new Date().toISOString().slice(0,10)}.md`.toLowerCase());
+
+$('ldate').value=new Date().toISOString().slice(0,10);
+</script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "note": "Which GT7 circuits and layouts can produce rain. GT7 broadcasts no weather channel in any packet format, so this is the one strategy input that cannot be measured or checked from the stream. It is the DEFAULT answer for the event page's 'rain possible' question; a driver answer overrides it, and an in-game confirmation is recorded under `confirmed` and outranks everything.",
+  "source": "Gran Turismo Wiki, Gran Turismo 7/Track List — https://gran-turismo.fandom.com/wiki/Gran_Turismo_7/Track_List",
+  "sourceRead": "2026-08-13",
+  "why": "It is complete rather than partial (41 tracks, 84 layouts, including everything added since 2022), it is per LAYOUT rather than per track, and it agrees with the two independent August 2022 community lists on all 11 circuits those covered. Layout granularity is the part the older lists got wrong: Dragon Trail Gardens rains and Seaside does not; Tokyo Expressway Central and East rain and South does not.",
+  "completeness": "This list is complete for the 41 tracks it covers, so a track present here with no rain layout genuinely cannot rain. A track absent from it entirely — a circuit added after this was read — is UNKNOWN, not dry.",
+  "rainByTrack": {
+    "24 Heures du Mans Racing Circuit": ["Full Course", "No Chicane"],
+    "Autopolis International Racing Course": ["Full Course", "Shortcut Course"],
+    "Circuit de Spa-Francorchamps": ["Full Course", "24h Layout"],
+    "Dragon Trail": ["Gardens"],
+    "Fuji International Speedway": ["Full Course", "Short Course"],
+    "High Speed Ring": ["Full Course"],
+    "Nürburgring": ["Nordschleife", "Nordschleife Tourist", "24h", "Grand Prix",
+                    "Endurance", "Sprint"],
+    "Red Bull Ring": ["Full Course", "Short Track"],
+    "Suzuka Circuit": ["Full Course", "East Course"],
+    "Tokyo Expressway": ["Central Clockwise", "East Clockwise",
+                         "Central Counterclockwise", "East Counterclockwise"],
+    "Tsukuba Circuit": ["Full Course"]
+  },
+  "noRain": [
+    "Alsace", "Autodrome Lago Maggiore", "Autódromo de Interlagos",
+    "Autodromo Nazionale Monza", "Blue Moon Bay Speedway", "Brands Hatch",
+    "Broad Bean Raceway", "Circuit de Barcelona-Catalunya",
+    "Circuit de Sainte-Croix", "Circuit Gilles-Villeneuve", "Colorado Springs",
+    "Daytona International Speedway", "Deep Forest Raceway", "Eiger Nordwand",
+    "Fishermans Ranch", "Goodwood Motor Circuit", "Grand Valley",
+    "Kyoto Driving Park", "Lake Louise", "Michelin Raceway Road Atlanta",
+    "Mount Panorama Circuit", "Northern Isle Speedway",
+    "Sardegna - Road Track", "Sardegna - Windmills", "Special Stage Route X",
+    "Trial Mountain Circuit", "Watkins Glen International",
+    "WeatherTech Raceway Laguna Seca",
+    "Willow Springs International Raceway", "Yas Marina Circuit"
+  ],
+  "confirmed": {
+    "Autodromo Nazionale Monza": {
+      "rain": false,
+      "by": "driver, checked in game",
+      "date": "2026-08-13"
+    }
+  }
+}

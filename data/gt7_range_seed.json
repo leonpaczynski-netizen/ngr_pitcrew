@@ -1,0 +1,100 @@
+{
+ "note": "Lifted from reference/gt7-race-engineering.html by tools/extract_reference.py. Static GT7 reference data: the app reads it and never writes it. Do not hand-edit — re-run the tool.",
+ "records": [
+  {
+   "car": "Porsche 911 RSR (991) '17",
+   "measuredDate": "2026-08-11",
+   "verified": true,
+   "r": {
+    "rh_f": [
+     55,
+     80
+    ],
+    "rh_r": [
+     60,
+     90
+    ],
+    "nf_f": [
+     3,
+     5
+    ],
+    "nf_r": [
+     3,
+     5
+    ],
+    "arb_f": [
+     1,
+     10
+    ],
+    "arb_r": [
+     1,
+     10
+    ],
+    "dc_f": [
+     20,
+     40
+    ],
+    "dc_r": [
+     20,
+     40
+    ],
+    "de_f": [
+     30,
+     50
+    ],
+    "de_r": [
+     30,
+     50
+    ],
+    "cam_f": [
+     0,
+     6
+    ],
+    "cam_r": [
+     0,
+     6
+    ],
+    "toe_f": [
+     -1,
+     1
+    ],
+    "toe_r": [
+     -1,
+     1
+    ],
+    "lsd_i": [
+     5,
+     60
+    ],
+    "lsd_a": [
+     5,
+     60
+    ],
+    "lsd_b": [
+     5,
+     60
+    ],
+    "df_f": [
+     350,
+     450
+    ],
+    "df_r": [
+     500,
+     700
+    ],
+    "bb": [
+     -5,
+     5
+    ],
+    "top": [
+     200,
+     800
+    ],
+    "fg": [
+     2,
+     5
+    ]
+   }
+  }
+ ]
+}

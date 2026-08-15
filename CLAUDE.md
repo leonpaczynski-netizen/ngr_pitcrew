@@ -1,0 +1,296 @@
+# Pit Crew — project instructions
+
+**Read this before writing any code.** It is the whole brief: what the app is for,
+what the game will and will not give you, and the rules the output has to obey.
+This file is the contract with the wider programme; `EXPORT-CONTRACT.md` is the
+contract with the tool that consumes our output.
+
+Written 11 Aug 2026 · GT7 v1.70 · rebuild of an existing codebase.
+
+---
+
+## 1. What this app is
+
+Pit Crew is a **local race-engineering companion for Gran Turismo 7**, run on a PC
+alongside a PS5. One driver, one league. It does four jobs, in this order of
+maturity:
+
+1. **Capture.** Read GT7's UDP telemetry stream and record it.
+2. **Record practice sessions.** Persist runs, aggregate them per lap and per
+   corner, keep the setup that was in the car at the time.
+3. **Export for setup refinement.** Emit a `gt7-pitcrew/1.1` JSON payload that the
+   driver pastes into an external HTML tool (the "GT7 Race Engineering" artifact).
+   That tool wraps it in a prompt and sends it to a race-engineering knowledge base,
+   which returns revised setup sheets. **`EXPORT-CONTRACT.md` defines this payload
+   exactly. It is the app's most important output — treat the schema as an API.**
+4. **Race strategy.** Compute a stint and fuel plan before the race, then talk the
+   driver through it live and adapt it as the race actually unfolds.
+
+Jobs 1–3 are the loop that makes the car faster. Job 4 is the one used under
+pressure, so it has the strictest correctness bar.
+
+## 2. Who it is for
+
+A single driver on a Fanatec DD Extreme (18 Nm), ClubSport V3 pedals with a load-cell
+brake, PS5, sometimes PSVR2. He races a custom league with **no BoP and open garage
+tuning**, mixed sprint and multi-stop formats. He trail-brakes deep by design and
+runs low or no assists. This matters for job 4: during a race he is wearing a wheel
+and possibly a headset, so **live strategy output must be usable without reading a
+screen** — audio, or a single large number, not a dashboard.
+
+---
+
+## 3. Hard facts about the GT7 telemetry feed
+
+These bound what is buildable. Do not design around channels that do not exist.
+
+### 3.1 Transport
+
+- **Encrypted UDP, Salsa20.** The key is a fixed ASCII string used by every public
+  parser; the IV comes from the packet.
+- **60 Hz.** A 12-lap run is roughly half a million samples.
+- **Heartbeat-driven.** The console only streams to an address that has sent it a
+  heartbeat byte, and it stops when heartbeats stop. Re-send on a timer.
+- **Four packet formats,** selected by which heartbeat character you send:
+
+  | Heartbeat | Size | Adds |
+  |---|---|---|
+  | `A` | 296 B | base set |
+  | `B` | 316 B | wheel rotation, sway, heave, surge |
+  | `~` | 344 B | per-wheel surface type, steering angles, wheelbase, filtered pedals, torque vectors, energy recovery |
+  | `C` | 368 B | current-lap time in ms, car category |
+
+  **Request `C`.** It is a superset and it is the only format that carries
+  **current-lap time in milliseconds**, which live strategy needs. Fall back to `A`
+  only if `C` fails to decode, and record which format was used — the export has to
+  declare it (`meta.packet`) so that absent channels read as *not available* rather
+  than *not measured*.
+- **⚠️ VERIFY BEFORE BUILDING:** the send/receive port pair. The widely used pair is
+  **send heartbeat to PS5 UDP 33739, receive on 33740**, but port assignment for the
+  extended formats is not consistently documented across parsers. Confirm against
+  whichever reference parser you vendor, and write a connection self-test that fails
+  loudly rather than silently returning zeros. Same for heartbeat interval —
+  published implementations range from every 100 packets (~1.7 s) to every 1000
+  (~16 s). Treat >1 s of stream silence as a dropped connection and re-heartbeat.
+
+### 3.2 What the feed gives you
+
+Position, world velocity, rotation, angular velocity, body height, engine RPM, fuel
+level and capacity, speed, boost, oil pressure, oil and water temperature, per-wheel
+tyre surface temperature, wheel RPS, tyre radius, per-wheel suspension height, gear
+and suggested gear, throttle, brake, clutch, gear ratios, lap count, best and last
+lap time, day progression — and in the extended packets, per-wheel surface type,
+steering angle, sway/heave/surge, per-wheel torque vectors, filtered throttle and
+brake, energy recovery, current lap time.
+
+### 3.3 What the feed does NOT give you — the four that shape the architecture
+
+**1. There is no tyre wear channel. None. In any packet format.**
+This is the single most consequential fact in this document. Job 4 exists to plan
+around tyre life, and the game will not tell you what the tyre life is. Wear must be
+**modelled and corroborated**, from three sources:
+  - the driver reading the in-game HUD gauge and entering it (most reliable, coarse);
+  - lap-time degradation against a fresh-tyre reference;
+  - tyre surface temperature trend and front/rear asymmetry.
+
+Never present modelled wear as measured. Every wear number the app displays carries
+its source. See §5.
+
+**2. There is no track ID.** The feed does not say which circuit you are on.
+Circuit is **driver-selected**, and corner identification comes from the app's own
+track model, not from the game. Two viable approaches, and the export must say which
+was used:
+  - **`track-map`** — a stored per-circuit corner definition (lap-distance windows,
+    or world-coordinate gates). Stable corner IDs across sessions. Preferred.
+  - **`auto-segment`** — derive corners from speed minima and steering activity,
+    numbered in order around the lap. Works day one, but corner IDs are only
+    comparable within a session unless you anchor them.
+
+Corner aggregates are worthless if `T3` means a different corner next week. Whatever
+you choose, **corner identity must be stable and the export must declare its source.**
+
+**3. Suspension is reported as height in metres, not travel remaining.**
+The v1.0 spec asked for "travel remaining, zero means bottomed." That is not
+directly measurable. You get an absolute per-wheel height. Bottoming must be
+inferred: capture a static/steady-state reference per car per setup, then flag
+sustained excursions toward the observed minimum. Export the raw minimum height
+**and** the reference used, never a bare "travel remaining" that implies a
+measurement you did not make.
+
+**4. Oil temperature is pinned at ~110 °C and water at ~85 °C.** They are constants.
+They carry no information. Do not capture, store, display, or export them.
+
+### 3.4 Units — convert once, at the parser boundary
+
+| Channel | Feed gives | Store and export as |
+|---|---|---|
+| Speed | m/s | km/h |
+| Throttle, brake | 0–255 | percent, 0–100 |
+| Steering (`wheelRotation`, `wheelSteeringAngle`) | radians | degrees, and also keep normalised −1…1 |
+| Suspension height, body height | metres | millimetres |
+| Wheel rotation rate | RPS / rad·s⁻¹ | keep native; use with tyre radius for slip |
+| Lap and sector times | milliseconds | milliseconds, integer — never a formatted string |
+| Fuel | litres | litres |
+| Tyre temperature | °C | °C |
+
+Fuel capacity is **100 L for almost every car, 5 L for karts, 0 L for electric**.
+A capacity of 0 is a real value, not an error — guard the divide.
+
+Surface type is a character per wheel: `T` tarmac, `C` kerb, `D` dirt, `G` grass,
+`S` sand, `s` snow. Richer than a boolean off-track; keep the distinction.
+
+---
+
+## 4. Standing rules inherited from the race-engineering programme
+
+These are not style preferences. They come from the knowledge base this app feeds,
+and output that violates them will be discarded on arrival.
+
+1. **The driver's report is primary evidence. Telemetry is corroboration.** Never
+   structure output so that data appears to overrule what the driver felt. Where the
+   two disagree, that disagreement is the finding — surface it, do not average it.
+2. **Aggregates, not raw samples.** Raw 60 Hz traces stay in the app. The export is
+   per-lap and per-corner summary only.
+3. **Missing is `null`, never `0`.** A zero that means "not measured" gets diagnosed
+   as a real value. This rule is absolute and applies at every layer.
+4. **Every aggregate carries its sample count.** A corner metric from two laps and
+   one from eleven are not the same claim.
+5. **Nothing derived is presented as measured.** Anything the app computes — slip
+   ratio, understeer index, countersteer events, wear, bottoming — goes under a
+   `derived` heading with its threshold or model stated.
+6. **Reason in percent of slider range, not absolute values.** GT7's tuning ranges
+   are per-car and derived from chassis data. "3.5 Hz" is meaningless across cars.
+   Wherever the app stores or shows a setup value, store the car's slider min/max
+   with it.
+7. **Any GT7 tuning logic published before August 2024 is void; before February 2025
+   is suspect.** Update 1.49 rewrote the physics, tyre wear and geometry model; 1.55
+   did a second pass. If you find yourself importing a heuristic from a guide, check
+   its date first.
+8. **GT7 has no tyre pressure, no caster, no brake pressure, and no high/low-speed
+   damper split.** If any of these appear in the UI, the model, or a comment, the
+   logic was pattern-matched from another sim and is wrong throughout.
+
+---
+
+## 5. Job 4 — the race strategy engine
+
+The hardest part of the app, and the part most likely to be built on sand. Build it
+as an explicit model with stated assumptions, not as a pile of heuristics.
+
+### 5.1 The wear model is piecewise, not linear
+
+GT7's post-1.49 degradation has three phases:
+
+- **0 → ~50% worn:** near-flat. Losses in tenths. Do not pit here.
+- **~50 → ~90%:** progressive, roughly 0.5–1.5 s/lap cumulative. **Balance shifts
+  before the stopwatch does** — front-limited entry understeer appears first on most
+  Gr.3 cars.
+- **>~90%:** cliff. Traction effectively gone, car undriveable rather than merely slow.
+
+**Do not fit a linear model.** The optimisation is not "integrate pace over the
+stint," it is **"how long can I run without entering phase 3."** Because onset is
+sharp, overshooting costs far more than undershooting — build one lap of margin into
+every recommendation and say that you did.
+
+### 5.2 Stint length
+
+    L = 0.85 / w        where w = wear fraction consumed per lap
+
+Use 0.85, not 1.0, so the stint ends before the cliff. `w` must be **measured at the
+multiplier actually being raced**, from a run at genuine race pace from a full tank.
+
+**Multiplier linearity is ASSUMED, not proven.** The common claim is that multipliers
+are pure linear rate scalars, so a stint measured at one converts exactly to another.
+The evidence is two informal forum statements plus a calibration method that assumes
+linearity rather than demonstrating it. The app may offer a conversion, but it must
+label the result `[ASSUMED]` and prompt for a calibration at the target multiplier.
+**Never silently convert from a high multiplier down to a race multiplier.**
+
+### 5.3 Fuel
+
+- Six-level fuel map on the MFD. **Level 1 = richest, most power, most consumption.
+  Level 6 = leanest.** Third-party sources that say 1–5, or that invert the
+  direction, are wrong.
+- Roughly **−4% power and −8% consumption per step**, except step 6, which is
+  anomalous: about **50% consumption for about 80% power**. Model step 6 separately.
+- Fuel weight: a full 100 L tank is ~73 kg. Working figure ~0.003 s/L/lap on a
+  ~90 s circuit. **This is derived, not measured** — flag it, and let the driver
+  overwrite it with a measured value.
+- **Fuel-saving in a slipstream is nearly free** and is the highest-value live call
+  the app can make. If it can detect a tow (closing speed plus proximity is not in
+  the feed — this may need driver input or a manual toggle), prompt for map 5–6.
+- Short-shifting saves ~20% fuel for ~0.5 s/lap **and** reduces rear tyre wear.
+
+### 5.4 Pit stops
+
+- Pit time loss is a **track constant**, not a car variable. Measure once per circuit
+  and store it. The only meaningful variable is fuel taken, at roughly
+  **0.5–1.0 s per 10% of tank**.
+- There is a 5–10 s dead time at the start of every stop before refuelling begins.
+- **No partial tyre changes. No split compounds front/rear.** Axle-asymmetric wear
+  cannot be solved with strategy — only with brake balance (adjustable mid-race via
+  the MFD) and setup.
+- **The undercut is weak in GT7** — cold out-lap penalty of 0.5–1.5 s plus a long pit
+  delta. The overcut is comparatively strong. Do not import F1 instincts.
+- Take fuel only to the in-game diamond marker plus one lap of margin. The diamond is
+  accurate.
+
+### 5.5 What a live call must look like
+
+Under a helmet, at racing speed. One thing at a time, stated as an instruction, with
+the reason second and short:
+
+    "Box this lap or next. Fuel is the constraint — you're 1.2 laps short."
+    "Map 3 down the back straight. You're a lap light on fuel."
+    "Brake balance one click rearward. Fronts are going first."
+
+Not a table. Not three options. If the app is not confident, it says so in the call
+itself — "unconfirmed" is a word the driver can act on. Every live call must be
+derived from a stated model with a stated confidence, and the post-session export
+must contain the calls it made and the assumptions behind them, so they can be
+audited afterwards against what actually happened.
+
+---
+
+## 6. Architecture notes
+
+- **Capture, aggregation, strategy and UI are four separable layers.** The parser
+  must be swappable; packet formats have changed across GT7 versions and will again.
+- **Persist the raw stream to disk during a session,** then aggregate. Re-aggregating
+  a stored session after fixing a corner-detection bug is the difference between one
+  evening of work and re-running every test.
+- **The setup as run is app state, not telemetry.** It requires no capture code at
+  all and it is the single highest-value section of the export, because it removes
+  all ambiguity about which version of a sheet produced these symptoms. **Build it
+  first.**
+- **Slider ranges are measured once per car and never re-entered.** Store them
+  keyed by car in the vocabulary given in `EXPORT-CONTRACT.md` §6 — the consuming
+  tool uses those exact keys, so a range record round-trips with no translation.
+- Recommended build order, highest return per hour first:
+  1. `setup` + `rangeRecord` — pure app state, no telemetry needed
+  2. `corners` with min speed, consistency and flags — the diagnostic core
+  3. `laps` with tyre temperatures and fuel — feeds strategy and wear
+  4. `session` aggregates — cheap once the rest exists
+  5. `strategy` — the plan and its assumptions
+  6. `derived` — last, and only after the thresholds have been sanity-checked
+     against a session where the driver's account is already known to be right
+
+## 7. Testing
+
+- **A recorded session file is the test fixture.** Capture one real practice run
+  early and check it in. Every aggregation change gets re-run against it.
+- **The connection must fail loudly.** A decrypt failure, a wrong port, or a stopped
+  heartbeat must not degrade into a stream of zeros. Zeros are the one failure mode
+  that survives all the way into a setup recommendation.
+- **Validate the export against `EXPORT-CONTRACT.md` before writing it out.** A
+  malformed payload is pasted into a prompt and silently misread. Schema-validate,
+  and refuse to export rather than export something wrong.
+- Round-trip test: export → parse → confirm every non-null field has a unit and a
+  sample count, and every null is genuinely unmeasured rather than defaulted.
+
+## 8. Out of scope
+
+Do not build: raw trace export, GPS position arrays, engine RPM series, oil and water
+temperature anything, boost logging, replay-derived data, live leaderboards, or
+anything that reads or writes GT7 game state. The app observes and advises. It never
+drives.

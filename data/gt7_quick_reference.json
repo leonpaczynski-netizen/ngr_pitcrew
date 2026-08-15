@@ -1,0 +1,72 @@
+{
+ "note": "The Quick Reference tab of reference/gt7-race-engineering.html, transcribed verbatim. READ-ONLY TEXT. The app displays this and nothing else does anything with it: it is never consulted when composing a prompt, never used to validate a setup, and never restated anywhere else in the app. The app composes prompts; it does not give setup advice. Everything here is the knowledge base's, not the app's — the knowledge base owns it and this copy follows it.",
+ "source": "reference/gt7-race-engineering.html, tab 3",
+ "baseline": "GT7 v1.70 physics baseline. Any GT7 setup published before Aug 2024 is void; before Feb 2025 is suspect.",
+ "sections": [
+  {
+   "title": "Preferred change hierarchy",
+   "hint": "When several controls could fix the same symptom, work down this list.",
+   "columns": ["", "Control", "Why there"],
+   "rows": [
+    ["1", "Hardware / calibration", "Bad data makes a good chassis look wrong"],
+    ["2", "Brake stability / rear support", "The whole style depends on trail braking"],
+    ["3", "Mechanical front grip / ARB / geometry", "Front response is the primary performance language"],
+    ["4", "LSD axis targeted to symptom", "Large diff changes flip the balance fast"],
+    ["5", "Ride height / rake", "Useful, but brings brake and aero side effects"],
+    ["6", "Aero balance", "Powerful at speed; respect drag and fuel economics"],
+    ["7", "Brake bias", "Fine trim only, after the mechanics are right"]
+   ]
+  },
+  {
+   "title": "Rear stability stack — the alternative to front brake bias",
+   "hint": "GT7 has no engine-braking map, so LSD braking sensitivity IS the off-throttle rear toolkit.",
+   "columns": ["Priority", "Lever", "Direction", "Note"],
+   "rows": [
+    ["1", "LSD braking sensitivity", "Higher, +2 at a time", "Stop when turn-in starts to dull"],
+    ["2", "Rear expansion damping", "Lower −2 to −4", "A rear that extends fast on lift unloads abruptly"],
+    ["3", "Rear toe-in", "+0.05 to +0.10", "Costs top speed and tyre life — trim, not foundation"],
+    ["4", "Front compression damping", "Higher +2 to +4", "Conflicts with turn-in bite. Take stability from 1–3 first"],
+    ["5", "Reduce rake", "−2 to −3 mm", "Positive rake promotes entry rotation"],
+    ["6", "Rear ARB softer", "−1", "More rear grip mid-corner"],
+    ["7", "Brake bias forward — ruled out", "—", "Ruled out as a permanent answer"]
+   ]
+  },
+  {
+   "title": "The GT7 traps",
+   "hint": "",
+   "columns": ["", ""],
+   "rows": [
+    ["Camber ≠ turn-in", "In GT7 camber acts mid-corner and costs braking and traction immediately. Start 1.0–1.5°, not 3.0."],
+    ["Turn-in is owned by", "Front compression damping (lower), front ARB, front toe, brake balance. Not camber."],
+    ["Front toe is contested", "May be inverted vs real life. A/B −0.05 / 0.00 / +0.05 per car. Never run toe-in at the front."],
+    ["Wheelspin is a gearbox problem", "Lengthening 1st/2nd/3rd is the top-ranked GT7 traction fix, ahead of every diff and spring change."],
+    ["Max Speed slider wipes ratios", "It's a generator, not a trim. Set it first, then final drive, then individual gears. Never touch it again."],
+    ["Kerbs = ride height", "Post-1.49, raise ride height 3–5 mm first. A car that suddenly won't turn is arch rub, not balance."],
+    ["Brake balance sign", "negative = FRONT, positive = REAR. It's a delta from each car's own factory bias."],
+    ["Chassis tuning is free", "Suspension, gears and LSD values cost zero PP. Fitting the parts costs PP. Aero is not free."],
+    ["Aero ≠ lap time", "~1,300 lb of downforce measured at ~0.1 s/lap. Use aero for balance, not for grip."],
+    ["Discard any guide mentioning", "Tyre pressure, caster, brake pressure, high/low-speed damper split. None exist in GT7."]
+   ]
+  },
+  {
+   "title": "Baseline starting sheet",
+   "hint": "Where a new car begins, before car-specific work. Percent-of-range where GT7's ranges are per-car.",
+   "columns": ["Parameter", "Start", "Why"],
+   "rows": [
+    ["Ride height F / R", "+3–5 / +5–8 clicks above min", "Never minimum. Mild positive rake."],
+    ["Natural frequency", "70–80% of range, rear ≥ front", "Softer front, stiffer rear = rotation on a stable platform"],
+    ["ARB F / R", "MR 6/3–4 · FR 6/4", "Soften front one step when you want more front bite"],
+    ["Damper compression F / R", "28 / 30", "Front low for turn-in bite"],
+    ["Damper expansion F / R", "40 / 38", "Rear low-ish for lift-off stability; expansion > compression"],
+    ["Camber F / R", "1.2 / 1.2", "Low. Camber taxes braking and traction."],
+    ["Toe F", "0.00, then A/B ±0.05", "Never toe-in at the front"],
+    ["Toe R", "+0.05 to +0.10", "Keep it small — wear and drag"],
+    ["LSD initial", "5–8", "High preload is a silent cause of mid-corner push"],
+    ["LSD acceleration", "MR 15 · FR 25", "Low, and prove you need more"],
+    ["LSD braking", "MR 20 · FR 10, walk up +2", "The primary rear-stability axis"],
+    ["Brake balance", "0", "Trim, applied last"],
+    ["Downforce", "Max front, trim rear to balance", "Never trim rear first for top speed"]
+   ]
+  }
+ ]
+}

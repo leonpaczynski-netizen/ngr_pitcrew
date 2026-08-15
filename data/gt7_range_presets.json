@@ -1,0 +1,275 @@
+{
+ "note": "Lifted from reference/gt7-race-engineering.html by tools/extract_reference.py. Static GT7 reference data: the app reads it and never writes it. Do not hand-edit — re-run the tool. These are GT7 typical windows, NOT this car's limits. Anything built on them is estimated and must say so.",
+ "perCar": [
+  "rh_f",
+  "rh_r",
+  "nf_f",
+  "nf_r",
+  "cam_f",
+  "cam_r",
+  "toe_f",
+  "toe_r",
+  "awd",
+  "df_f",
+  "df_r",
+  "top",
+  "fg"
+ ],
+ "steps": {
+  "rh_f": 1,
+  "rh_r": 1,
+  "nf_f": 0.01,
+  "nf_r": 0.01,
+  "arb_f": 1,
+  "arb_r": 1,
+  "dc_f": 1,
+  "dc_r": 1,
+  "de_f": 1,
+  "de_r": 1,
+  "cam_f": 0.1,
+  "cam_r": 0.1,
+  "toe_f": 0.01,
+  "toe_r": 0.01,
+  "lsd_i": 1,
+  "lsd_a": 1,
+  "lsd_b": 1,
+  "awd": 1,
+  "df_f": 1,
+  "df_r": 1,
+  "bb": 1,
+  "top": 1,
+  "fg": 0.001
+ },
+ "labels": {
+  "rh_f": "Ride height — front",
+  "rh_r": "Ride height — rear",
+  "nf_f": "Natural frequency — front",
+  "nf_r": "Natural frequency — rear",
+  "arb_f": "Anti-roll bar — front",
+  "arb_r": "Anti-roll bar — rear",
+  "dc_f": "Damper compression — front",
+  "dc_r": "Damper compression — rear",
+  "de_f": "Damper expansion — front",
+  "de_r": "Damper expansion — rear",
+  "cam_f": "Camber — front",
+  "cam_r": "Camber — rear",
+  "toe_f": "Toe — front",
+  "toe_r": "Toe — rear",
+  "lsd_i": "LSD initial torque",
+  "lsd_a": "LSD acceleration sensitivity",
+  "lsd_b": "LSD braking sensitivity",
+  "awd": "Torque distribution (AWD, front %)",
+  "df_f": "Downforce — front",
+  "df_r": "Downforce — rear",
+  "bb": "Brake balance",
+  "top": "Maximum speed (auto-set)",
+  "fg": "Final gear"
+ },
+ "units": {
+  "rh_f": "mm",
+  "rh_r": "mm",
+  "nf_f": "Hz",
+  "nf_r": "Hz",
+  "arb_f": "",
+  "arb_r": "",
+  "dc_f": "%",
+  "dc_r": "%",
+  "de_f": "%",
+  "de_r": "%",
+  "cam_f": "°",
+  "cam_r": "°",
+  "toe_f": "°",
+  "toe_r": "°",
+  "lsd_i": "",
+  "lsd_a": "",
+  "lsd_b": "",
+  "awd": "%",
+  "df_f": "",
+  "df_r": "",
+  "bb": "",
+  "top": "km/h",
+  "fg": ""
+ },
+ "presets": {
+  "race": {
+   "rh_f": [
+    50,
+    90
+   ],
+   "rh_r": [
+    50,
+    90
+   ],
+   "nf_f": [
+    2.0,
+    5.0
+   ],
+   "nf_r": [
+    2.0,
+    5.0
+   ],
+   "arb_f": [
+    1,
+    10
+   ],
+   "arb_r": [
+    1,
+    10
+   ],
+   "dc_f": [
+    20,
+    40
+   ],
+   "dc_r": [
+    20,
+    40
+   ],
+   "de_f": [
+    30,
+    50
+   ],
+   "de_r": [
+    30,
+    50
+   ],
+   "cam_f": [
+    0.0,
+    10.0
+   ],
+   "cam_r": [
+    0.0,
+    10.0
+   ],
+   "toe_f": [
+    -0.5,
+    0.5
+   ],
+   "toe_r": [
+    -0.5,
+    0.5
+   ],
+   "lsd_i": [
+    5,
+    60
+   ],
+   "lsd_a": [
+    5,
+    60
+   ],
+   "lsd_b": [
+    5,
+    60
+   ],
+   "df_f": [
+    150,
+    700
+   ],
+   "df_r": [
+    200,
+    1100
+   ],
+   "bb": [
+    -5,
+    5
+   ],
+   "top": [
+    150,
+    450
+   ],
+   "fg": [
+    2.0,
+    5.0
+   ]
+  },
+  "road": {
+   "rh_f": [
+    60,
+    160
+   ],
+   "rh_r": [
+    60,
+    160
+   ],
+   "nf_f": [
+    0.8,
+    3.0
+   ],
+   "nf_r": [
+    0.8,
+    3.0
+   ],
+   "arb_f": [
+    1,
+    10
+   ],
+   "arb_r": [
+    1,
+    10
+   ],
+   "dc_f": [
+    20,
+    40
+   ],
+   "dc_r": [
+    20,
+    40
+   ],
+   "de_f": [
+    30,
+    50
+   ],
+   "de_r": [
+    30,
+    50
+   ],
+   "cam_f": [
+    0.0,
+    10.0
+   ],
+   "cam_r": [
+    0.0,
+    10.0
+   ],
+   "toe_f": [
+    -0.5,
+    0.5
+   ],
+   "toe_r": [
+    -0.5,
+    0.5
+   ],
+   "lsd_i": [
+    5,
+    60
+   ],
+   "lsd_a": [
+    5,
+    60
+   ],
+   "lsd_b": [
+    5,
+    60
+   ],
+   "df_f": [
+    0,
+    150
+   ],
+   "df_r": [
+    0,
+    300
+   ],
+   "bb": [
+    -5,
+    5
+   ],
+   "top": [
+    100,
+    400
+   ],
+   "fg": [
+    2.0,
+    5.0
+   ]
+  }
+ }
+}

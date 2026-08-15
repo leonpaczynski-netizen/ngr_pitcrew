@@ -1,0 +1,938 @@
+{
+ "note": "Lifted from reference/gt7-race-engineering.html by tools/extract_reference.py. Static GT7 reference data: the app reads it and never writes it. Do not hand-edit — re-run the tool.",
+ "circuits": [
+  {
+   "name": "Nürburgring GP",
+   "lengthKm": 5.1,
+   "corners": 17,
+   "gr3ReferenceLap": "1:55-1:57",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 3,
+   "wearAxle": "Rear (traction)",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 20,
+   "kind": "real",
+   "aliases": [
+    "Nürburgring GP",
+    "Nürburgring – GP"
+   ]
+  },
+  {
+   "name": "Nürburgring Nordschleife",
+   "lengthKm": 20.8,
+   "corners": 73,
+   "gr3ReferenceLap": "6:20-6:30",
+   "downforce": "Med",
+   "mechanicalGrip": "High",
+   "wearSeverity": 4,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 5,
+   "pitLossPctOfLap": 7,
+   "kind": "real",
+   "aliases": [
+    "Nürburgring Nordschleife",
+    "Nürburgring – Nordschleife",
+    "Nürburgring – Nordschleife Tourist"
+   ]
+  },
+  {
+   "name": "Nürburgring 24h",
+   "lengthKm": 25.4,
+   "corners": 89,
+   "gr3ReferenceLap": "7:50-8:00",
+   "downforce": "Med-High",
+   "mechanicalGrip": "High",
+   "wearSeverity": 4,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 5,
+   "pitLossPctOfLap": 5,
+   "kind": "real",
+   "aliases": [
+    "Nürburgring 24h",
+    "Nürburgring – 24h"
+   ]
+  },
+  {
+   "name": "Nürburgring Endurance",
+   "lengthKm": 23.9,
+   "corners": 85,
+   "gr3ReferenceLap": "7:20-7:30",
+   "downforce": "Med-High",
+   "mechanicalGrip": "High",
+   "wearSeverity": 4,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 5,
+   "pitLossPctOfLap": 5,
+   "kind": "real",
+   "aliases": [
+    "Nürburgring Endurance",
+    "Nürburgring – Endurance"
+   ]
+  },
+  {
+   "name": "Spa-Francorchamps",
+   "lengthKm": 7.0,
+   "corners": 21,
+   "gr3ReferenceLap": "2:16-2:19",
+   "downforce": "Med-Low",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 4,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 22,
+   "kind": "real",
+   "aliases": [
+    "Circuit de Spa-Francorchamps",
+    "Spa-Francorchamps"
+   ]
+  },
+  {
+   "name": "Monza (Full)",
+   "lengthKm": 5.8,
+   "corners": 11,
+   "gr3ReferenceLap": "1:47-1:50",
+   "downforce": "Low",
+   "mechanicalGrip": "High",
+   "wearSeverity": 2,
+   "wearAxle": "Rear + front-right",
+   "brakingSeverity": 5,
+   "pitLossPctOfLap": 19,
+   "kind": "real",
+   "aliases": [
+    "Autodromo Nazionale Monza",
+    "Monza (Full)"
+   ]
+  },
+  {
+   "name": "Monza (No Chicane)",
+   "lengthKm": 5.8,
+   "corners": 9,
+   "gr3ReferenceLap": "1:41-1:44",
+   "downforce": "Low",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 2,
+   "wearAxle": "Front-right",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 20,
+   "kind": "real",
+   "aliases": [
+    "Autodromo Nazionale Monza – No Chicane",
+    "Monza (No Chicane)"
+   ]
+  },
+  {
+   "name": "Suzuka",
+   "lengthKm": 5.8,
+   "corners": 20,
+   "gr3ReferenceLap": "1:56-1:59",
+   "downforce": "High",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 5,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 19,
+   "kind": "real",
+   "aliases": [
+    "Suzuka",
+    "Suzuka Circuit"
+   ]
+  },
+  {
+   "name": "Brands Hatch GP",
+   "lengthKm": 3.9,
+   "corners": 9,
+   "gr3ReferenceLap": "1:22-1:24",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 4,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 24,
+   "kind": "real",
+   "aliases": [
+    "Brands Hatch GP",
+    "Brands Hatch Grand Prix Circuit",
+    "Brands Hatch – Grand Prix Circuit"
+   ]
+  },
+  {
+   "name": "Brands Hatch Indy",
+   "lengthKm": 1.9,
+   "corners": 5,
+   "gr3ReferenceLap": "0:44-0:46",
+   "downforce": "Med",
+   "mechanicalGrip": "Med-High",
+   "wearSeverity": 5,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 42,
+   "kind": "real",
+   "aliases": [
+    "Brands Hatch Indy",
+    "Brands Hatch Indy Circuit",
+    "Brands Hatch – Indy Circuit"
+   ]
+  },
+  {
+   "name": "Interlagos",
+   "lengthKm": 4.3,
+   "corners": 15,
+   "gr3ReferenceLap": "1:31-1:33",
+   "downforce": "Med",
+   "mechanicalGrip": "Med-High",
+   "wearSeverity": 3,
+   "wearAxle": "Front-right",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 22,
+   "kind": "real",
+   "aliases": [
+    "Autodromo Jose Carlos Pace",
+    "Autódromo de Interlagos",
+    "Interlagos"
+   ]
+  },
+  {
+   "name": "Red Bull Ring",
+   "lengthKm": 4.3,
+   "corners": 10,
+   "gr3ReferenceLap": "1:24-1:26",
+   "downforce": "Low",
+   "mechanicalGrip": "High",
+   "wearSeverity": 3,
+   "wearAxle": "Rear + front-right",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 23,
+   "kind": "real",
+   "aliases": [
+    "Red Bull Ring"
+   ]
+  },
+  {
+   "name": "Autopolis (Full)",
+   "lengthKm": 4.7,
+   "corners": 18,
+   "gr3ReferenceLap": "1:41-1:44",
+   "downforce": "High",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 4,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 21,
+   "kind": "real",
+   "aliases": [
+    "Autopolis (Full)",
+    "Autopolis International Racing Course"
+   ]
+  },
+  {
+   "name": "Fuji Speedway (Full)",
+   "lengthKm": 4.6,
+   "corners": 16,
+   "gr3ReferenceLap": "1:33-1:36",
+   "downforce": "Med-Low",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 2,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 5,
+   "pitLossPctOfLap": 24,
+   "kind": "real",
+   "aliases": [
+    "Fuji International Speedway",
+    "Fuji Speedway (Full)"
+   ]
+  },
+  {
+   "name": "Tsukuba",
+   "lengthKm": 2.0,
+   "corners": 8,
+   "gr3ReferenceLap": "0:53-0:55",
+   "downforce": "Balance",
+   "mechanicalGrip": "High",
+   "wearSeverity": 3,
+   "wearAxle": "Rear",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 33,
+   "kind": "real",
+   "aliases": [
+    "Tsukuba",
+    "Tsukuba Circuit"
+   ]
+  },
+  {
+   "name": "Watkins Glen Long",
+   "lengthKm": 5.4,
+   "corners": 11,
+   "gr3ReferenceLap": "1:44-1:47",
+   "downforce": "Med-Low",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 3,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 20,
+   "kind": "real",
+   "aliases": [
+    "Watkins Glen International – Long Course",
+    "Watkins Glen Long"
+   ]
+  },
+  {
+   "name": "Watkins Glen Short",
+   "lengthKm": 3.4,
+   "corners": 8,
+   "gr3ReferenceLap": "1:06-1:09",
+   "downforce": "Med-Low",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 3,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 28,
+   "kind": "real",
+   "aliases": [
+    "Watkins Glen International – Short Course",
+    "Watkins Glen Short"
+   ]
+  },
+  {
+   "name": "Daytona Road",
+   "lengthKm": 5.7,
+   "corners": 12,
+   "gr3ReferenceLap": "1:44-1:47",
+   "downforce": "Low",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 4,
+   "wearAxle": "Right side",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 28,
+   "kind": "real",
+   "aliases": [
+    "Daytona International Speedway – Road Course",
+    "Daytona Road"
+   ]
+  },
+  {
+   "name": "Daytona Tri-Oval",
+   "lengthKm": 4.0,
+   "corners": 4,
+   "gr3ReferenceLap": "0:47-0:50",
+   "downforce": "Min",
+   "mechanicalGrip": "n/a",
+   "wearSeverity": 3,
+   "wearAxle": "Right side",
+   "brakingSeverity": 1,
+   "pitLossPctOfLap": 60,
+   "kind": "real",
+   "aliases": [
+    "Daytona International Speedway – Tri-Oval",
+    "Daytona Tri-Oval"
+   ]
+  },
+  {
+   "name": "WeatherTech Laguna Seca",
+   "lengthKm": 3.6,
+   "corners": 11,
+   "gr3ReferenceLap": "1:22-1:24",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Med-High",
+   "wearSeverity": 4,
+   "wearAxle": "Front-right",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 23,
+   "kind": "real",
+   "aliases": [
+    "WeatherTech Laguna Seca",
+    "WeatherTech Raceway Laguna Seca"
+   ]
+  },
+  {
+   "name": "Mount Panorama (Bathurst)",
+   "lengthKm": 6.2,
+   "corners": 23,
+   "gr3ReferenceLap": "2:00-2:03",
+   "downforce": "Med",
+   "mechanicalGrip": "High",
+   "wearSeverity": 4,
+   "wearAxle": "Front-left + rear",
+   "brakingSeverity": 5,
+   "pitLossPctOfLap": 24,
+   "kind": "real",
+   "aliases": [
+    "Mount Panorama (Bathurst)",
+    "Mount Panorama Motor Racing Circuit"
+   ]
+  },
+  {
+   "name": "Barcelona-Catalunya GP",
+   "lengthKm": 4.7,
+   "corners": 16,
+   "gr3ReferenceLap": "1:41-1:44",
+   "downforce": "High",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 5,
+   "wearAxle": "Front-left (extreme)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 21,
+   "kind": "real",
+   "aliases": [
+    "Barcelona-Catalunya GP",
+    "Circuit de Barcelona-Catalunya – Grand Prix Layout"
+   ]
+  },
+  {
+   "name": "Barcelona No Chicane",
+   "lengthKm": 4.7,
+   "corners": 14,
+   "gr3ReferenceLap": "1:39-1:42",
+   "downforce": "High",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 5,
+   "wearAxle": "Front-left (extreme)",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 21,
+   "kind": "real",
+   "aliases": [
+    "Barcelona No Chicane",
+    "Circuit de Barcelona-Catalunya – Grand Prix Layout No Chicane"
+   ]
+  },
+  {
+   "name": "Circuit de la Sarthe (Le Mans)",
+   "lengthKm": 13.6,
+   "corners": 38,
+   "gr3ReferenceLap": "3:28-3:34",
+   "downforce": "Low",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 3,
+   "wearAxle": "Front-left; fuel-limited",
+   "brakingSeverity": 5,
+   "pitLossPctOfLap": 15,
+   "kind": "real",
+   "aliases": [
+    "24 Heures du Mans Racing Circuit",
+    "Circuit de la Sarthe (Le Mans)"
+   ]
+  },
+  {
+   "name": "Sarthe No Chicane",
+   "lengthKm": 13.6,
+   "corners": 32,
+   "gr3ReferenceLap": "3:20-3:25",
+   "downforce": "Min",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 3,
+   "wearAxle": "Front-left; fuel-limited",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 16,
+   "kind": "real",
+   "aliases": [
+    "24 Heures du Mans Racing Circuit – No Chicane",
+    "Sarthe No Chicane"
+   ]
+  },
+  {
+   "name": "Willow Springs Big Willow",
+   "lengthKm": 4.0,
+   "corners": 10,
+   "gr3ReferenceLap": "1:20-1:23",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 5,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 2,
+   "pitLossPctOfLap": 22,
+   "kind": "real",
+   "aliases": [
+    "Willow Springs Big Willow",
+    "Willow Springs International Raceway – Big Willow"
+   ]
+  },
+  {
+   "name": "Michelin Raceway Road Atlanta",
+   "lengthKm": 4.1,
+   "corners": 12,
+   "gr3ReferenceLap": "1:20-1:23",
+   "downforce": "Med",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 3,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 25,
+   "kind": "real",
+   "aliases": [
+    "Michelin Raceway Road Atlanta"
+   ]
+  },
+  {
+   "name": "Goodwood Motor Circuit",
+   "lengthKm": 3.8,
+   "corners": 7,
+   "gr3ReferenceLap": "1:16-1:19",
+   "downforce": "Med-Low",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 4,
+   "wearAxle": "Front-left",
+   "brakingSeverity": 2,
+   "pitLossPctOfLap": 23,
+   "kind": "real",
+   "aliases": [
+    "Goodwood Motor Circuit"
+   ]
+  },
+  {
+   "name": "Circuit Gilles-Villeneuve",
+   "lengthKm": 4.4,
+   "corners": 14,
+   "gr3ReferenceLap": "1:41-1:44",
+   "downforce": "Low",
+   "mechanicalGrip": "High",
+   "wearSeverity": 3,
+   "wearAxle": "Rear (traction)",
+   "brakingSeverity": 5,
+   "pitLossPctOfLap": 20,
+   "kind": "real",
+   "aliases": [
+    "Circuit Gilles Villeneuve",
+    "Circuit Gilles-Villeneuve"
+   ]
+  },
+  {
+   "name": "Yas Marina",
+   "lengthKm": 5.3,
+   "corners": 16,
+   "gr3ReferenceLap": "1:52-1:56",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Med-High",
+   "wearSeverity": 3,
+   "wearAxle": "Rear (traction)",
+   "brakingSeverity": 5,
+   "pitLossPctOfLap": 19,
+   "kind": "real",
+   "aliases": [
+    "Yas Marina",
+    "Yas Marina Circuit"
+   ]
+  },
+  {
+   "name": "Dragon Trail Seaside",
+   "lengthKm": 5.2,
+   "corners": 18,
+   "gr3ReferenceLap": "1:50-1:53",
+   "downforce": "Med-Low",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 3,
+   "wearAxle": "Front + rear (balanced)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 19,
+   "kind": "original",
+   "aliases": [
+    "Dragon Trail Seaside",
+    "Dragon Trail – Seaside"
+   ]
+  },
+  {
+   "name": "Dragon Trail Gardens",
+   "lengthKm": 4.4,
+   "corners": 17,
+   "gr3ReferenceLap": "1:36-1:39",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Med-High",
+   "wearSeverity": 4,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 21,
+   "kind": "original",
+   "aliases": [
+    "Dragon Trail Gardens",
+    "Dragon Trail – Gardens"
+   ]
+  },
+  {
+   "name": "Trial Mountain",
+   "lengthKm": 5.4,
+   "corners": 15,
+   "gr3ReferenceLap": "1:47-1:50",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 3,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 20,
+   "kind": "original",
+   "aliases": [
+    "Trial Mountain",
+    "Trial Mountain Circuit"
+   ]
+  },
+  {
+   "name": "Deep Forest",
+   "lengthKm": 4.3,
+   "corners": 18,
+   "gr3ReferenceLap": "1:26-1:29",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 5,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 23,
+   "kind": "original",
+   "aliases": [
+    "Deep Forest",
+    "Deep Forest Raceway"
+   ]
+  },
+  {
+   "name": "Grand Valley Highway 1",
+   "lengthKm": 5.1,
+   "corners": 18,
+   "gr3ReferenceLap": "1:51-1:55",
+   "downforce": "Med",
+   "mechanicalGrip": "High",
+   "wearSeverity": 4,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 19,
+   "kind": "original",
+   "aliases": [
+    "Grand Valley",
+    "Grand Valley Highway 1",
+    "Grand Valley – Highway 1"
+   ]
+  },
+  {
+   "name": "Grand Valley South",
+   "lengthKm": 3.1,
+   "corners": 10,
+   "gr3ReferenceLap": "1:07-1:10",
+   "downforce": "Med",
+   "mechanicalGrip": "High",
+   "wearSeverity": 4,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 30,
+   "kind": "original",
+   "aliases": [
+    "Grand Valley South",
+    "Grand Valley – South"
+   ]
+  },
+  {
+   "name": "Alsace Village",
+   "lengthKm": 5.4,
+   "corners": 17,
+   "gr3ReferenceLap": "2:07-2:12",
+   "downforce": "Med",
+   "mechanicalGrip": "High",
+   "wearSeverity": 4,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 17,
+   "kind": "original",
+   "aliases": [
+    "Alsace Village",
+    "Alsace – Village"
+   ]
+  },
+  {
+   "name": "Broad Bean Raceway",
+   "lengthKm": 1.7,
+   "corners": 5,
+   "gr3ReferenceLap": "0:45-0:50",
+   "downforce": "Balance",
+   "mechanicalGrip": "High",
+   "wearSeverity": 3,
+   "wearAxle": "Rear",
+   "brakingSeverity": 2,
+   "pitLossPctOfLap": 35,
+   "kind": "original",
+   "aliases": [
+    "Broad Bean Raceway"
+   ]
+  },
+  {
+   "name": "Kyoto Driving Park Yamagiwa",
+   "lengthKm": 4.9,
+   "corners": 15,
+   "gr3ReferenceLap": "1:47-1:51",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 4,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 20,
+   "kind": "original",
+   "aliases": [
+    "Kyoto Driving Park Yamagiwa",
+    "Kyoto Driving Park – Yamagiwa"
+   ]
+  },
+  {
+   "name": "Kyoto Driving Park Miyabi",
+   "lengthKm": 2.0,
+   "corners": 7,
+   "gr3ReferenceLap": "0:58-1:03",
+   "downforce": "Balance",
+   "mechanicalGrip": "High",
+   "wearSeverity": 3,
+   "wearAxle": "Rear",
+   "brakingSeverity": 2,
+   "pitLossPctOfLap": 30,
+   "kind": "original",
+   "aliases": [
+    "Kyoto Driving Park Miyabi",
+    "Kyoto Driving Park – Miyabi"
+   ]
+  },
+  {
+   "name": "Kyoto Yamagiwa+Miyabi",
+   "lengthKm": 6.8,
+   "corners": 19,
+   "gr3ReferenceLap": "2:30-2:36",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Med-High",
+   "wearSeverity": 4,
+   "wearAxle": "Front + rear",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 14,
+   "kind": "original",
+   "aliases": [
+    "Kyoto Driving Park – Yamagiwa + Miyabi",
+    "Kyoto Yamagiwa+Miyabi"
+   ]
+  },
+  {
+   "name": "Tokyo Expressway East CW",
+   "lengthKm": 7.3,
+   "corners": 13,
+   "gr3ReferenceLap": "2:23-2:28",
+   "downforce": "Low",
+   "mechanicalGrip": "Med (compliance)",
+   "wearSeverity": 2,
+   "wearAxle": "Front (bump-driven)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 17,
+   "kind": "original",
+   "aliases": [
+    "Tokyo Expressway East CW",
+    "Tokyo Expressway – East Clockwise"
+   ]
+  },
+  {
+   "name": "Tokyo Expressway Central CW",
+   "lengthKm": 4.4,
+   "corners": 13,
+   "gr3ReferenceLap": "1:29-1:33",
+   "downforce": "Low",
+   "mechanicalGrip": "Med (compliance)",
+   "wearSeverity": 2,
+   "wearAxle": "Front (bump-driven)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 26,
+   "kind": "original",
+   "aliases": [
+    "Tokyo Expressway Central CW",
+    "Tokyo Expressway – Central Clockwise"
+   ]
+  },
+  {
+   "name": "Tokyo Expressway South CW",
+   "lengthKm": 5.2,
+   "corners": 17,
+   "gr3ReferenceLap": "1:47-1:52",
+   "downforce": "Med-Low",
+   "mechanicalGrip": "Med (compliance)",
+   "wearSeverity": 3,
+   "wearAxle": "Front (bump-driven)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 22,
+   "kind": "original",
+   "aliases": [
+    "Tokyo Expressway South CW",
+    "Tokyo Expressway – South Clockwise"
+   ]
+  },
+  {
+   "name": "Special Stage Route X",
+   "lengthKm": 30.3,
+   "corners": 2,
+   "gr3ReferenceLap": "6:45-7:15",
+   "downforce": "Min",
+   "mechanicalGrip": "n/a",
+   "wearSeverity": 1,
+   "wearAxle": "One side only",
+   "brakingSeverity": 1,
+   "pitLossPctOfLap": 5,
+   "kind": "original",
+   "aliases": [
+    "Special Stage Route X"
+   ]
+  },
+  {
+   "name": "Blue Moon Bay Speedway",
+   "lengthKm": 3.2,
+   "corners": 3,
+   "gr3ReferenceLap": "0:42-0:48",
+   "downforce": "Min",
+   "mechanicalGrip": "n/a",
+   "wearSeverity": 2,
+   "wearAxle": "Right side",
+   "brakingSeverity": 1,
+   "pitLossPctOfLap": 50,
+   "kind": "original",
+   "aliases": [
+    "Blue Moon Bay Speedway"
+   ]
+  },
+  {
+   "name": "Blue Moon Bay Infield A",
+   "lengthKm": 3.4,
+   "corners": 10,
+   "gr3ReferenceLap": "1:15-1:20",
+   "downforce": "Low",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 3,
+   "wearAxle": "Right side",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 28,
+   "kind": "original",
+   "aliases": [
+    "Blue Moon Bay Infield A",
+    "Blue Moon Bay Speedway – Infield A"
+   ]
+  },
+  {
+   "name": "Sardegna Road Track A",
+   "lengthKm": 5.1,
+   "corners": 15,
+   "gr3ReferenceLap": "1:50-1:54",
+   "downforce": "Med",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 3,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 19,
+   "kind": "original",
+   "aliases": [
+    "Sardegna Road Track A",
+    "Sardegna – Road Track"
+   ]
+  },
+  {
+   "name": "Eiger Nordwand",
+   "lengthKm": 2.4,
+   "corners": 11,
+   "gr3ReferenceLap": "1:00-1:05",
+   "downforce": "Balance",
+   "mechanicalGrip": "High",
+   "wearSeverity": 3,
+   "wearAxle": "Rear (traction)",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 28,
+   "kind": "original",
+   "aliases": [
+    "Eiger Nordwand",
+    "Eiger Norwand"
+   ]
+  },
+  {
+   "name": "High Speed Ring",
+   "lengthKm": 4.3,
+   "corners": 6,
+   "gr3ReferenceLap": "1:20-1:24",
+   "downforce": "Low",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 1,
+   "wearAxle": "Right side (mild)",
+   "brakingSeverity": 2,
+   "pitLossPctOfLap": 23,
+   "kind": "original",
+   "aliases": [
+    "High Speed Ring"
+   ]
+  },
+  {
+   "name": "Autodrome Lago Maggiore Full",
+   "lengthKm": 5.8,
+   "corners": 17,
+   "gr3ReferenceLap": "1:56-2:00",
+   "downforce": "Med-High",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 3,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 18,
+   "kind": "original",
+   "aliases": [
+    "Autodrome Lago Maggiore Full",
+    "Autodrome Lago Maggiore – Full Course"
+   ]
+  },
+  {
+   "name": "Lago Maggiore West End",
+   "lengthKm": 2.4,
+   "corners": 10,
+   "gr3ReferenceLap": "0:52-0:57",
+   "downforce": "Med",
+   "mechanicalGrip": "Med-High",
+   "wearSeverity": 3,
+   "wearAxle": "Front (both)",
+   "brakingSeverity": 3,
+   "pitLossPctOfLap": 35,
+   "kind": "original",
+   "aliases": [
+    "Autodrome Lago Maggiore – West End",
+    "Lago Maggiore West End"
+   ]
+  },
+  {
+   "name": "Circuit de Sainte-Croix A",
+   "lengthKm": 9.5,
+   "corners": 19,
+   "gr3ReferenceLap": "3:15-3:25",
+   "downforce": "Med-Low",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 3,
+   "wearAxle": "Front; fuel-relevant",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 13,
+   "kind": "original",
+   "aliases": [
+    "Circuit de Sainte-Croix",
+    "Circuit de Sainte-Croix A"
+   ]
+  },
+  {
+   "name": "Circuit de Sainte-Croix B",
+   "lengthKm": 7.1,
+   "corners": 14,
+   "gr3ReferenceLap": "2:25-2:35",
+   "downforce": "Med-Low",
+   "mechanicalGrip": "Low",
+   "wearSeverity": 3,
+   "wearAxle": "Front",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 17,
+   "kind": "original",
+   "aliases": [
+    "Circuit de Sainte-Croix B",
+    "Circuit de Sainte-Croix – Layout B"
+   ]
+  },
+  {
+   "name": "Circuit de Sainte-Croix C",
+   "lengthKm": 10.8,
+   "corners": 24,
+   "gr3ReferenceLap": "3:45-3:55",
+   "downforce": "Med",
+   "mechanicalGrip": "Med",
+   "wearSeverity": 3,
+   "wearAxle": "Front",
+   "brakingSeverity": 4,
+   "pitLossPctOfLap": 11,
+   "kind": "original",
+   "aliases": [
+    "Circuit de Sainte-Croix C",
+    "Circuit de Sainte-Croix – Layout C"
+   ]
+  }
+ ]
+}

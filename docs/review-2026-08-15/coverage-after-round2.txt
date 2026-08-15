@@ -1,0 +1,26 @@
+66 modules, 41 touched, 25 still zero (6217 LOC)
+  580  pitcrew/store/schema.py
+  572  pitcrew/telemetry/packet.py
+  530  pitcrew/ui/settings_screen.py
+  454  pitcrew/engineer/voice.py
+  446  pitcrew/store/catalogs.py
+  445  pitcrew/ui/theme.py
+  334  pitcrew/telemetry/pit_detect.py
+  305  pitcrew/analysis/gearing.py
+  300  pitcrew/analysis/incidents.py
+  232  pitcrew/engineer/phrase_manifest.py
+  215  pitcrew/telemetry/pit_state.py
+  211  pitcrew/analysis/recency.py
+  188  pitcrew/setup/sheet.py
+  176  pitcrew/ui/reference_screen.py
+  167  pitcrew/analysis/weather.py
+  163  pitcrew/engineer/gate.py
+  147  pitcrew/ui/banner.py
+  141  pitcrew/engineer/shift_beep.py
+  137  pitcrew/telemetry/capture.py
+  123  pitcrew/analysis/thresholds.py
+   89  pitcrew/setup/vocabulary.py
+   85  pitcrew/race/outcome.py
+   67  pitcrew/prompts/report.py
+   61  pitcrew/analysis/resolve.py
+   49  pitcrew/prompts/templates.py
