@@ -45,17 +45,70 @@ from pitcrew.diagnostics import log
 _OUTPUT: object | None = None
 _INPUT: object | None = None
 
+# "No device argument was given", which is not the same as `None` - `None` is
+# a real choice meaning PortAudio's own default. Without a distinct sentinel
+# a caller could not ask for the system default on a card other than the
+# engineer's, and `device=None` would silently mean "the engineer's".
+_DEFAULT = object()
+
 # `_terminate()`/`_initialize()` tears down every PortAudio handle in the
 # process, so it must not run while another thread is opening a stream.
 _ENUMERATE_LOCK = threading.RLock()
 
-# **One lock across everything in this app that opens an audio stream.**
-# Overlapping PortAudio streams crash the host rather than mixing, and there
-# are two independent sources of sound - the engineer's voice and the shift
-# beep - that can fire on different threads in the same corner. It lives here
-# rather than in `voice` because the beep is not part of the voice and must
-# still not overlap it.
-PLAY_LOCK = threading.Lock()
+# **One lock per card, not one across the process.**
+#
+# It began as a single global, on the belief that overlapping PortAudio
+# streams crash the host rather than mixing. That is true of two streams on
+# **the same device** - PortAudio's own documentation says a device may be
+# used by at most one stream - and it was the right fix for the two sources of
+# sound that existed then, the engineer's voice and the shift beep, which
+# share one output and can fire on different threads in the same corner.
+#
+# It is not true across devices. Measured on this machine, 15 Aug 2026: two
+# concurrent WASAPI streams on two different cards ran for two seconds and
+# delivered 205 and 132 callbacks with no status flags between them.
+#
+# The distinction matters now because the tactile transducer is a second card
+# that has to hold a stream open while the engineer is talking into the first.
+# A process-wide lock would have made the two mutually exclusive, so the
+# haptics would have stopped dead every time a call was made - during exactly
+# the moments the driver most wants both.
+_DEVICE_LOCKS: dict[str, threading.Lock] = {}
+_DEVICE_LOCKS_GUARD = threading.Lock()
+
+
+def lock_for(device: object | None) -> threading.Lock:
+    """The lock covering one card. Two names for one card share one lock."""
+    key = endpoint_key(device) if isinstance(device, str) else repr(device)
+    with _DEVICE_LOCKS_GUARD:
+        return _DEVICE_LOCKS.setdefault(key, threading.Lock())
+
+
+# Streams that outlive the sound they are making. A spoken line opens a stream
+# and closes it a second later, so re-enumerating between lines costs nothing;
+# a transducer holds one open for the whole session, and re-enumerating under
+# it is a silent stop. Anything registered here is suspended and resumed
+# around a rebuild - see `_reinitialise`.
+_SUSTAINED: list = []
+_SUSTAINED_GUARD = threading.Lock()
+
+
+def register_sustained(holder) -> None:
+    """Declare a stream that must survive the device list being rebuilt.
+
+    `holder` needs `suspend()` and `resume()`. It is on the holder to reopen
+    against whatever the machine looks like afterwards, because the card it
+    was using may be the one that just went away.
+    """
+    with _SUSTAINED_GUARD:
+        if holder not in _SUSTAINED:
+            _SUSTAINED.append(holder)
+
+
+def unregister_sustained(holder) -> None:
+    with _SUSTAINED_GUARD:
+        if holder in _SUSTAINED:
+            _SUSTAINED.remove(holder)
 
 # Which route to a card to try first. A headset is reachable through several
 # host APIs and they are **not** equivalent. Measured on this machine against
@@ -251,13 +304,38 @@ def _resolve(sd, device: object | None, kind: str):
 
 
 def _reinitialise(sd) -> None:
-    """Make PortAudio look at Windows again.
+    """Make PortAudio look at Windows again, without killing what is playing.
 
     The device list is built at import and never refreshed, so a headset
     connected after launch does not exist as far as the process is concerned.
-    This is the only way to rebuild it.
+    `_terminate()`/`_initialize()` is the only way to rebuild it.
+
+    **And it closes every open stream in the process while doing so.**
+    PortAudio says as much - "the final matching call to Pa_Terminate() will
+    automatically close any PortAudio streams that are still open" - and it
+    was measured here on 15 Aug 2026: two streams open, terminate, re-init,
+    and both went to **zero callbacks with nothing raised**. Reading `.active`
+    afterwards gave `PortAudioError -9988, invalid stream pointer`, which is
+    the first moment anything says a word about it.
+
+    That was survivable while every stream in the app lived for the length of
+    one spoken line. It is not survivable for a tactile transducer, which
+    holds one stream open for the whole session: the driver would open the
+    settings screen, the picker would enumerate, and the haptics would stop
+    for the rest of the race with nothing logged and no exception raised.
+
+    So sustained streams are suspended around the rebuild and resumed after,
+    rather than silently destroyed by it. Everything short-lived is unchanged.
     """
     _WORKING.clear()
+    with _SUSTAINED_GUARD:
+        holders = list(_SUSTAINED)
+    for holder in holders:
+        try:
+            holder.suspend()
+        except Exception as exc:                # noqa: BLE001
+            log("audio").warning("could not suspend %s before re-enumerating: "
+                                 "%s", holder, exc)
     try:
         sd._terminate()
         sd._initialize()
@@ -266,18 +344,49 @@ def _reinitialise(sd) -> None:
         # leaves the old device list, which is what we already had.
         log("audio").warning("could not re-enumerate audio devices: %s: %s",
                              type(exc).__name__, exc)
+    finally:
+        # In a `finally` on purpose. A rebuild that raised half-way would
+        # otherwise leave the transducer suspended for the rest of the
+        # session - the exact silent-stop this whole mechanism exists to
+        # prevent, arrived at by a different route.
+        for holder in holders:
+            try:
+                holder.resume()
+            except Exception as exc:            # noqa: BLE001
+                log("audio").error(
+                    "%s did not come back after re-enumerating audio devices: "
+                    "%s. It is stopped until it is restarted.", holder, exc)
 
 
-def open_output(samplerate: int, *, channels: int = 1, dtype: str = "int16"):
-    """A started output stream on the chosen device, retried once."""
+def open_output(samplerate: int, *, channels: int = 1, dtype: str = "int16",
+                device: object | None = _DEFAULT, blocksize: int = 0,
+                callback=None, finished_callback=None,
+                extra_settings=None):
+    """A started output stream, retried once.
+
+    `device` names a card explicitly; omitting it uses the one the driver
+    chose for the engineer. That distinction is the whole point of the
+    parameter: this module used to read a single module-level global and had
+    no way to express "the other card", so the transducer and the engineer's
+    voice could not both be open. They are different hardware doing different
+    jobs and neither should wait for the other.
+
+    `callback` opens a stream PortAudio pulls from on its own thread rather
+    than one written to by the caller - which is how a continuous signal is
+    generated without a Python thread trying to keep up with the card.
+    """
     import sounddevice as sd
+
+    chosen = _OUTPUT if device is _DEFAULT else device
 
     def attempt():
         return _open_first_that_works(
-            sd, _OUTPUT, "output",
-            lambda device: sd.OutputStream(
+            sd, chosen, "output",
+            lambda resolved: sd.OutputStream(
                 samplerate=samplerate, channels=channels, dtype=dtype,
-                device=device))
+                device=resolved, blocksize=blocksize, callback=callback,
+                finished_callback=finished_callback,
+                extra_settings=extra_settings))
 
     return _retry_once(sd, attempt, "output")
 

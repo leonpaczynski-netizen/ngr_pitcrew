@@ -30,16 +30,23 @@ from pitcrew.diagnostics import log
 from pitcrew.engineer import audio_devices
 from pitcrew.engineer.audio_devices import open_output
 
-# One lock across every engine that opens an audio stream, not one per class.
-# Overlapping PortAudio streams crash the host rather than mixing, and the
-# voice pack and live synthesis are two engines that can both be asked to play
-# - a per-class lock would let them overlap, which is the crash this prevents.
+# One lock across every engine that opens an audio stream **on this card**,
+# not one per class. Overlapping PortAudio streams on one device crash the
+# host rather than mixing, and the voice pack and live synthesis are two
+# engines that can both be asked to play - a per-class lock would let them
+# overlap, which is the crash this prevents.
 #
-# It now lives in `audio_devices` and is merely aliased here, because the
-# shift beep opens a stream too and is not part of the voice. A lock private
-# to this module left the one pair of sounds most likely to coincide - a call
-# on the voice thread and a beep on the telemetry thread - free to overlap.
-_PLAY_LOCK = audio_devices.PLAY_LOCK
+# It lives in `audio_devices` because the shift beep opens a stream too and is
+# not part of the voice: a lock private to this module left the one pair of
+# sounds most likely to coincide - a call on the voice thread and a beep on
+# the telemetry thread - free to overlap.
+#
+# Resolved per call rather than held as a module constant, because the card
+# can change under us when the driver picks a different one, and because the
+# lock is now per-device: a transducer on its own card must not be blocked by
+# the engineer talking into a headset.
+def _play_lock():
+    return audio_devices.lock_for(audio_devices.output_device())
 
 PACK_ROOT = Path(__file__).resolve().parent / "voice_pack"
 PACK_MANIFEST = "manifest.json"
@@ -321,7 +328,7 @@ class PiperEngine:
                    chunk.sample_rate)
 
     def speak(self, text: str) -> None:
-        with _PLAY_LOCK:
+        with _play_lock():
             stream = None
             try:
                 for samples, rate in self.synthesise(text):
@@ -436,7 +443,7 @@ class VoicePackEngine:
         self._fallback.speak(text)
 
     def _play(self, segments) -> None:
-        with _PLAY_LOCK:
+        with _play_lock():
             stream = None
             try:
                 for name in segments:

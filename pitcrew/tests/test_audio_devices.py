@@ -192,3 +192,131 @@ class _Stream:
 
     def start(self):
         self.started = True
+
+
+# ------------------------------------------------- surviving a device rebuild
+
+class _Sustained:
+    """A stream that lives for the session, like the transducer's will."""
+
+    def __init__(self, *, fails_to_resume: bool = False) -> None:
+        self.suspended = 0
+        self.resumed = 0
+        self.running = True
+        self._fails = fails_to_resume
+
+    def suspend(self) -> None:
+        self.suspended += 1
+        self.running = False
+
+    def resume(self) -> None:
+        self.resumed += 1
+        if self._fails:
+            raise RuntimeError("the card it was using has gone")
+        self.running = True
+
+
+def test_a_sustained_stream_survives_the_device_list_being_rebuilt():
+    """`sd._terminate()` closes every open stream in the process, and says
+    nothing: measured, two streams went to zero callbacks with no exception,
+    and only `.active` afterwards raised -9988.
+
+    A spoken line does not care - it opens and closes within the second. A
+    transducer holds one stream for the whole race, so the driver opening the
+    settings screen would have stopped the haptics for the rest of it.
+    """
+    held = _Sustained()
+    audio_devices.register_sustained(held)
+    try:
+        audio_devices._reinitialise(_machine())
+        assert held.suspended == 1, "it was not taken out of the way"
+        assert held.resumed == 1, "it was never brought back"
+        assert held.running is True
+    finally:
+        audio_devices.unregister_sustained(held)
+
+
+def test_a_rebuild_that_fails_still_brings_the_stream_back():
+    """The resume is in a `finally` for this: a rebuild that raised half-way
+    would otherwise leave the transducer suspended for the rest of the
+    session - the same silent stop, reached another way."""
+    exploding = _machine()
+
+    def boom():
+        raise RuntimeError("PortAudio is unwell")
+
+    exploding._terminate = boom
+
+    held = _Sustained()
+    audio_devices.register_sustained(held)
+    try:
+        audio_devices._reinitialise(exploding)
+        assert held.resumed == 1
+        assert held.running is True
+    finally:
+        audio_devices.unregister_sustained(held)
+
+
+def test_a_stream_that_cannot_come_back_is_reported_not_swallowed():
+    """The card it was using may be the one that just went away. That is a
+    real outcome and it has to be loud, because the driver cannot see it."""
+    held = _Sustained(fails_to_resume=True)
+    audio_devices.register_sustained(held)
+    try:
+        audio_devices._reinitialise(_machine())
+        assert held.resumed == 1
+        assert held.running is False
+    finally:
+        audio_devices.unregister_sustained(held)
+
+
+def test_unregistering_takes_a_stream_out_of_the_rebuild():
+    held = _Sustained()
+    audio_devices.register_sustained(held)
+    audio_devices.unregister_sustained(held)
+    audio_devices._reinitialise(_machine())
+    assert held.suspended == 0
+
+
+def test_registering_twice_does_not_suspend_twice():
+    held = _Sustained()
+    audio_devices.register_sustained(held)
+    audio_devices.register_sustained(held)
+    try:
+        audio_devices._reinitialise(_machine())
+        assert held.suspended == 1
+    finally:
+        audio_devices.unregister_sustained(held)
+
+
+# ------------------------------------------------------------ per-card locks
+
+def test_two_cards_do_not_block_each_other():
+    """Measured: two concurrent WASAPI streams on two different devices ran
+    for two seconds and delivered 205 and 132 callbacks, no status flags.
+
+    A process-wide lock would make the transducer and the engineer's voice
+    mutually exclusive - so the haptics would stop dead every time a call was
+    made, during exactly the moments the driver most wants both.
+    """
+    headset = audio_devices.lock_for("Headphones (JBL Endurance Run 3C)")
+    shaker = audio_devices.lock_for("Speakers (ButtKicker PRO)")
+    assert headset is not shaker
+    assert headset.acquire(blocking=False)
+    try:
+        assert shaker.acquire(blocking=False), "one card blocked another"
+        shaker.release()
+    finally:
+        headset.release()
+
+
+def test_one_card_reached_by_two_names_is_one_lock():
+    """MME truncates names at 31 characters, so the same headset is spelled
+    two ways. Two locks for one card is the crash the lock exists to stop."""
+    full = audio_devices.lock_for("Headphones (JBL Endurance Run 3C)")
+    mme = audio_devices.lock_for("Headphones (JBL Endurance Run 3")
+    assert full is mme
+
+
+def test_the_default_device_has_a_lock_of_its_own():
+    assert audio_devices.lock_for(None) is audio_devices.lock_for(None)

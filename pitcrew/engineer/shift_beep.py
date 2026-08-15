@@ -214,7 +214,7 @@ class _TonePlayer:
         # The same lock the engineer's voice holds: overlapping PortAudio
         # streams crash the host rather than mixing, and a beep landing on top
         # of a call is exactly when that would happen.
-        with audio_devices.PLAY_LOCK:
+        with audio_devices.lock_for(audio_devices.output_device()):
             stream = audio_devices.open_output(self._rate)
             try:
                 stream.write(self._samples)
