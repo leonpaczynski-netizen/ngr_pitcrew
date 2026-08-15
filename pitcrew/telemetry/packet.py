@@ -85,12 +85,23 @@ _IV_MASK_OLD = 0xDEADBEAF   # pre-2024 (kept for fallback)
 #   364  car category        'GR3\0'.
 #
 # Also moving but not yet needed: 300/304/308/312 (sway, heave, surge and one
-# more, all exactly zero while parked), 340, and 352/356 - the latter pair
-# ranging about +-0.4 rad, which is the road-wheel steering angle rather than
-# the driver's wheel.
+# more, all exactly zero while parked) and 340.
+#
+# 316-336 read EXACTLY ZERO through a whole run at racing speed, measured
+# against a live stream on 15 Aug 2026. Four consecutive zeroed floats sit
+# where the per-wheel torque vectors would be, so that channel is not
+# populated on this car and nothing should be built on it.
 STEERING_TAIL_OFFSET: int | None = 296
 SURFACE_TAIL_OFFSET: int | None = 344
 CURRENT_LAP_TAIL_OFFSET: int | None = 348
+# The front road wheels, one float each, ranging about +-0.4 rad - which is a
+# road-wheel angle and not the driver's wheel at 296. The distinction matters
+# to anything doing vehicle dynamics: 296 saturates at +-pi at full lock, so
+# feeding it to a bicycle model overstates the steering by the whole steering
+# ratio. Measured: 0.023 rad at 296 on a car running nearly straight at
+# 215 km/h implied 0.55 rad/s of yaw, which is a hairpin.
+ROAD_WHEEL_L_TAIL_OFFSET: int | None = 352
+ROAD_WHEEL_R_TAIL_OFFSET: int | None = 356
 WHEELBASE_TAIL_OFFSET: int | None = 360
 CAR_CATEGORY_TAIL_OFFSET: int | None = 364
 
@@ -331,6 +342,22 @@ class GT7Packet:
         if radians is None:
             return None
         return max(-1.0, min(1.0, radians / STEERING_FULL_LOCK_RAD))
+
+    @property
+    def road_wheel_angle(self) -> float | None:
+        """Where the front wheels are actually pointing, in radians.
+
+        The mean of the two fronts, which differ slightly by Ackermann. This
+        is the angle a bicycle model wants; `steering` is the in-game rim and
+        is a different quantity by the whole steering ratio.
+        """
+        if ROAD_WHEEL_L_TAIL_OFFSET is None or ROAD_WHEEL_R_TAIL_OFFSET is None:
+            return None
+        left = self.tail_float(ROAD_WHEEL_L_TAIL_OFFSET)
+        right = self.tail_float(ROAD_WHEEL_R_TAIL_OFFSET)
+        if left is None or right is None:
+            return None
+        return (left + right) / 2.0
 
     @property
     def wheelbase_m(self) -> float | None:
