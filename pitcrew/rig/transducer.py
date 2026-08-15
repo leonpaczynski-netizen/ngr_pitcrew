@@ -60,6 +60,62 @@ BAND_LOW_HZ = 25.0
 BAND_HIGH_HZ = 160.0
 AMP_HIGH_CUT_HZ = 160.0
 
+# **The rig's actual response, measured 16 Aug 2026.** Nine equal-amplitude
+# tones at -18 dBFS, one per run, rated 0-3 by the driver in the seat. The
+# endpoint metered exactly 0.125 for every one, so the digital side was
+# identical and every difference below is the rig.
+#
+#     30 Hz  2      70 Hz  1   <- null
+#     40 Hz  3      85 Hz  2
+#     50 Hz  3     100 Hz  2
+#     60 Hz  2     120 Hz  1
+#                  140 Hz  0.5
+#
+# This is a resonance structure, not a rolloff: two usable regions, 40-55 Hz
+# and 85-105 Hz, separated by a dead spot at 70 and falling away above 120.
+# It is the seat, the mounts and the chassis as much as the transducer.
+#
+# **It also refutes the model every earlier decision here was built on.** That
+# model was "felt output falls as 1/f-squared", extrapolated from a single
+# measured pair - 20 Hz felt as nothing, 40 Hz felt as strong - which the
+# model itself contradicts, because 1/f-squared predicts 20 Hz should be the
+# most felt frequency of all. Three rounds of trims were sized against it and
+# each one moved an effect the wrong way or not far enough.
+#
+# And it makes the driver's SimHub gains legible at last. His highest gain is
+# wheel-spin at 82-108 Hz (70.0) and his lowest is RPM at 34-42 Hz (9.5): he
+# turned up what sat in a weak region and turned down what sat on a peak. The
+# gains are a compensation curve for THIS response, arrived at by feel over
+# eight days - which is why a systematic 1/f-squared weighting on top of them
+# was rightly rejected, though not for the reason given at the time.
+FELT_RESPONSE = ((30.0, 2.0), (40.0, 3.0), (50.0, 3.0), (60.0, 2.0),
+                 (70.0, 1.0), (85.0, 2.0), (100.0, 2.0), (120.0, 1.0),
+                 (140.0, 0.5))
+# Where the rig actually delivers. Anything an effect needs felt belongs in
+# one of these; anything placed between them is spent for nothing.
+FELT_PEAK_LOW = (40.0, 55.0)
+FELT_PEAK_HIGH = (85.0, 105.0)
+FELT_NULL_HZ = 70.0
+
+
+def felt_response(frequency: float) -> float:
+    """How well this rig delivers a given frequency, 0-3, by interpolation.
+
+    Measured, not modelled - see `FELT_RESPONSE`. Use it to place an effect,
+    not to scale one: the driver's gains already carry his own compensation
+    and multiplying by this as well would count it twice.
+    """
+    points = FELT_RESPONSE
+    if frequency <= points[0][0]:
+        return points[0][1]
+    if frequency >= points[-1][0]:
+        return points[-1][1]
+    for (low_hz, low), (high_hz, high) in zip(points, points[1:]):
+        if low_hz <= frequency <= high_hz:
+            span = high_hz - low_hz
+            return low + (high - low) * (frequency - low_hz) / span
+    return points[-1][1]
+
 # **The reference.** 40 Hz at -6 dBFS, with the amp at 50 - which is its
 # maximum - was reported very strong and did not knock the piston. That fixes
 # what "full" means: every effect gain below is a fraction of a level someone

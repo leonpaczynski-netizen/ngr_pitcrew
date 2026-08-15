@@ -88,23 +88,21 @@ class EffectSpec:
     min_force: float = 0.0
     gamma: float = 1.0
     input_gain: float = 100.0
-    # **A correction for frequency, kept separate from his gain on purpose.**
+    # **A correction for where an effect sits in the rig's response.**
     #
-    # SimHub's gains are not comparable across frequencies, and reading them
-    # as though they were is what made gear shifts rattle the whole rig and
-    # trip the amplifier's protection at a master of 1 with the amp at 35.
-    #
-    # Piston excursion falls as 1/f-squared above resonance, so the same
-    # amplitude at 48 Hz moves the transducer far further than at the ~116 Hz
-    # the road bed actually runs at. (An earlier note here said 132 Hz, the
-    # band's declared top - which the mix cannot reach at a master of 1, and
-    # sizing the first trim against it is why that trim was too timid.) A
-    # large low-frequency excursion is also precisely what an amplifier goes
-    # into protection over.
+    # SimHub's gains are not comparable across frequencies, because this rig
+    # does not deliver them equally - see `transducer.FELT_RESPONSE`, measured
+    # in the seat. An effect on the 40-55 Hz peak carries much further than the
+    # same amplitude in the 70 Hz null.
     #
     # His gain stays exactly as he tuned it - that is the provenance and it is
     # worth keeping visible - and this carries the correction, so "gear is too
     # strong" has one number to change and it is obvious which.
+    #
+    # Three earlier trims were sized against a 1/f-squared model that the
+    # measurement has since refuted, which is why gear went from too strong to
+    # imperceptible without passing through right. Size these against the
+    # curve now, not against arithmetic.
     felt_trim: float = 1.0
     # A transient may use the headroom above the sustained ceiling. That
     # reserve is what makes a gear shift read as an event over the road bed
@@ -171,15 +169,34 @@ PORSCHE_RSR_17 = (
     #
     # Parity with the bed would be 0.065. A transient should stand above the
     # bed rather than sit level with it, so this leaves it about 1.5x.
-    EffectSpec("gear", 39.87, 48.0, transient=True, felt_trim=0.10),
-    EffectSpec("wheels_rumble", 37.62, 112.0, 152.0, noise=12.0,
+    # 48 Hz is the single most efficient frequency this rig has - measured 3.0
+    # of 3 - which is why it kept coming back too strong however it was
+    # trimmed. 0.25 was too strong and 0.10 could not be felt at all, so the
+    # answer is between: this sits nearer the quiet end, because a thump on
+    # the peak carries further than the arithmetic suggests.
+    EffectSpec("gear", 39.87, 48.0, transient=True, felt_trim=0.16),
+    # **Moved off the null.** His band was 112-152 Hz, which on the measured
+    # response is 0.9 of 3 - the dead spot. The road bed is the thing he feels
+    # most of the time and it was landing where this rig cannot deliver, which
+    # is why the kerb boost riding on it vanished too. 86-104 puts it on the
+    # upper peak and keeps it clear of wheel-spin above it.
+    EffectSpec("wheels_rumble", 37.62, 86.0, 104.0, noise=12.0,
                threshold=8.0, min_force=28.0, gamma=1.60),
     # His `TractionLossContainer`, renamed to what it actually carries. The
     # gain, band, noise and filter are all still his; only the input changed,
     # from a saturating yaw-error model to lateral g.
-    EffectSpec("lateral_load", 35.19, 52.0, 70.0, noise=6.0,
+    # **Narrowed so it cannot climb into the null.** His 52-70 band ends
+    # exactly on the dead spot, so as he loaded the car harder the effect rose
+    # in amplitude and fell in delivery - the signal partly cancelling itself
+    # at the very moment it mattered. 44-56 keeps the whole range on the lower
+    # peak, so more load is more felt all the way up.
+    EffectSpec("lateral_load", 35.19, 44.0, 56.0, noise=6.0,
                threshold=9.0, min_force=12.0, gamma=1.40),
-    EffectSpec("wheels_impact", 12.31, 28.0, 38.0, noise=3.0, transient=True,
+    # Raised off the bottom. 28-38 Hz measures 2.0-2.5 of 3, which is not bad
+    # - but the kerb thump living here was a third the amplitude of the test
+    # tone and could not be felt, and 40-52 is the strongest region this rig
+    # has. Impacts are rare and want authority; kerbs want to be sharp.
+    EffectSpec("wheels_impact", 12.31, 40.0, 52.0, noise=3.0, transient=True,
                threshold=55.0, min_force=20.0, gamma=1.20),
     # The RPM curve is drawn by hand in `effects.RPM_CURVE` and arrives here
     # already shaped, so it takes no gamma of its own.

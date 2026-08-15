@@ -47,14 +47,57 @@ def test_the_six_effects_are_the_ones_he_actually_had_on():
         "wheels_impact", "rpm"}
 
 
-def test_his_tuned_gains_and_bands_came_across_unchanged():
-    """Eight days of tuning, in his numbers rather than in defaults."""
+def test_his_tuned_gains_came_across_unchanged():
+    """Eight days of tuning, in his numbers rather than in defaults.
+
+    The GAINS are his and stay his. The BANDS have moved, because the rig's
+    response was measured afterwards and two of them were sitting where it
+    cannot deliver - see the next test.
+    """
     by_name = {s.name: s for s in PORSCHE_RSR_17}
     assert by_name["wheels_spin_lock"].gain == 70.00
-    assert (by_name["wheels_rumble"].freq_lo,
-            by_name["wheels_rumble"].freq_hi) == (112.0, 152.0)
-    assert by_name["gear"].freq_lo == 48.0
+    assert by_name["wheels_rumble"].gain == 37.62
+    assert by_name["lateral_load"].gain == 35.19
+    assert by_name["gear"].gain == 39.87
+    assert by_name["wheels_impact"].gain == 12.31
+    assert by_name["rpm"].gain == 9.52
     assert by_name["gear"].freq_hi == 0.0, "the gear thump is a single tone"
+
+
+def test_every_effect_sits_where_the_rig_can_deliver_it():
+    """The response was measured in the seat: nine equal-amplitude tones, one
+    per run, rated 0-3. It is a resonance structure, not a rolloff - peaks at
+    40-55 and 85-105 Hz with a NULL at 70 and a fall above 120.
+
+    His road rumble was at 112-152, which measures 0.9 of 3. The road bed - the
+    thing he feels most of the time - was landing in the dead spot, and the
+    kerb boost that rides on it went with it. Reported as "kerb strikes not
+    felt" and "ripple strips not felt" in the same breath.
+
+    His lateral load ran 52-70, ending exactly on the null, so loading the car
+    harder raised the amplitude and lowered the delivery - the signal partly
+    cancelling itself at the moment it mattered most.
+    """
+    mix = HapticMix(block=BLOCK)
+    for spec in PORSCHE_RSR_17:
+        amplitude = float(mix._scale[mix.names.index(spec.name)])
+        top = spec.freq_lo + (spec.freq_hi - spec.freq_lo) * min(1.0, amplitude)
+        operating = top if spec.freq_hi else spec.freq_lo
+        response = transducer.felt_response(operating)
+        assert response >= 1.9, (
+            f"{spec.name} runs at {operating:.0f} Hz where this rig delivers "
+            f"{response:.1f} of 3 - that is the null, and no gain fixes it")
+
+
+def test_nothing_is_placed_in_the_null():
+    """70 Hz measured 1 of 3 with 50 and 85 either side measuring 3 and 2."""
+    assert transducer.felt_response(transducer.FELT_NULL_HZ) < 1.5
+    for spec in PORSCHE_RSR_17:
+        top = spec.freq_hi or spec.freq_lo
+        straddles = spec.freq_lo < transducer.FELT_NULL_HZ < top
+        assert not straddles, (
+            f"{spec.name} spans {spec.freq_lo:.0f}-{top:.0f} Hz, across the "
+            f"null - it would fade as it got louder")
 
 
 def test_every_effect_fits_inside_what_this_amplifier_passes():

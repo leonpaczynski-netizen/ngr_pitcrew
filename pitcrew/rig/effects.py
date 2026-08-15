@@ -93,22 +93,19 @@ TEXTURE_FULL_SPEED_KPH = 130.0
 KERB_BOOST = 0.70
 OFF_SURFACE_BOOST = 0.30
 
-# **A kerb also gets a low thump, and here is why it needs one.**
+# **A kerb also gets a thump, separate from the rattle.**
 #
-# The rumble effect's frequency follows its intensity - 112 Hz at rest, 152 Hz
-# flat out - so a kerb, being the loudest input, drives the HIGHEST frequency
-# in the band. Piston excursion falls as 1/f-squared above resonance, so the
-# harder the hit the less of it is felt: measured, an ordinary road lands at
-# 135 Hz and a kerb at 149 Hz, where the same drive moves the piston about
-# four-fifths as far. The kerb gets buzzier rather than sharper, which is
-# precisely how it was reported from the seat.
+# A real ripple strip is a thud with a rattle on top. The rattle rides on the
+# rumble effect; this is the thud - a short pulse into `wheels_impact`, fired
+# on the EDGE of touching the kerb rather than for as long as the wheel is on
+# it, because the edge is what reads as sharp. Sitting on a kerb through a
+# chicane stays a texture.
 #
-# A real ripple strip is a low thud with a rattle on top. We had only the
-# rattle. This is the thud - a short pulse into `wheels_impact`, which sits at
-# 28-38 Hz where the piston can actually move, fired on the EDGE of touching
-# the kerb rather than for as long as the wheel is on it, because it is the
-# edge that reads as sharp.
-KERB_THUMP = 0.75
+# It was first placed at 28-38 Hz on the reasoning that lower is more felt.
+# The measured response says otherwise - see `transducer.FELT_RESPONSE` - so
+# `wheels_impact` now sits at 40-52 Hz, the strongest region this rig has, and
+# the thump is felt as a thump rather than as a distant thud.
+KERB_THUMP = 0.85
 KERB_THUMP_DECAY_S = 0.12
 
 # **Lateral acceleration, in g.** Speed times yaw rate over 9.81 - the
