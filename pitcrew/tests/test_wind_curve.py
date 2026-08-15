@@ -259,26 +259,25 @@ def test_a_session_boundary_clears_the_smoothing():
     assert bridge.wind_curve.level == 0.0
 
 
-def test_the_fans_are_held_below_full_because_they_cut_out_there():
-    """Observed: the wind died on the main straight every lap, and the
-    instrumentation ruled the software out - frames at the full send rate,
-    zero resyncs, zero failures, connection healthy, level reading 0.93. The
-    device was acknowledging every command while the fans were dead.
+def test_flat_out_asks_for_everything_the_fans_have():
+    """The 0.80 cap is gone, and the history is the point.
 
-    Comms healthy plus fans dead plus correlated with maximum duty reads as
-    power rather than protocol. UNVERIFIED as to cause, but the mitigation is
-    cheap and 80% of a blower already at full noise is not what makes a
-    straight feel fast.
+    It was added while the fans were stopping mid-lap, on the theory that two
+    4000 RPM blowers at full were browning out the supply or cooking the
+    shield's drivers. Wrong theory: they stopped at 33 seconds at 100% duty
+    and at 33 seconds again at 80%, and identical timing under two different
+    loads cannot be thermal or current, because both scale with load. It was
+    the packet id wrapping at frame 128.
+
+    With that fixed the cap protects against nothing, so top speed gets the
+    top of the range.
     """
     curve = WindCurve()
-    flat_out = settled(curve, at(299.0), racing=True)
-    assert flat_out <= round(curve.profile.max_duty * 255) + 1
-    assert flat_out < 255, "still asking for the duty the fans stop at"
+    assert settled(curve, at(299.0), racing=True) == 255
 
 
-def test_the_cap_does_not_flatten_the_curve_below_it():
-    """Only the top is held back - everything under it still tracks speed."""
-    curve = WindCurve()
-    speeds = [curve.target(at(v), racing=True) for v in (80, 140, 200)]
-    assert speeds == sorted(speeds)
-    assert max(speeds) < curve.profile.max_duty
+def test_a_smaller_rig_can_still_be_given_a_ceiling():
+    """The field stays even though this rig does not need it - a supply that
+    genuinely cannot do both fans at full should not mean editing the curve."""
+    curve = WindCurve(WindProfile(max_duty=0.5))
+    assert settled(curve, at(299.0), racing=True) <= 128

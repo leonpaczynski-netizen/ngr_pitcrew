@@ -71,24 +71,21 @@ class WindProfile:
     max_gain: float = DEFAULT_MAX_GAIN
     gamma: float = DEFAULT_GAMMA
     static_gain: float = DEFAULT_STATIC_GAIN
-    # **A ceiling below full, because the fans stop when they reach it.**
+    # **Full, and the history is worth keeping.**
     #
-    # Observed: the wind cut out on the main straight every lap, and the
-    # instrumentation ruled the software out - frames flowing at the full send
-    # rate, zero resyncs, zero failures, connection healthy, level correctly
-    # reading 0.93. The device was acknowledging every command while the fans
-    # were dead.
+    # This was capped at 0.80 while the fans were stopping mid-lap, on the
+    # theory that two 4000 RPM blowers at full were browning out the supply or
+    # cooking the shield's drivers. It was the wrong theory. The fans stopped
+    # at 33 seconds at 100% duty and at 33 seconds again at 80% - identical
+    # timing under two different loads, which cannot be thermal and cannot be
+    # current, because both scale with load. It was a count: frame 128, where
+    # the ARQ packet id wrapped and the firmware began treating every frame as
+    # one it had already seen.
     #
-    # Comms healthy plus fans dead plus correlated with maximum duty is a
-    # power symptom rather than a protocol one: two 4000 RPM blowers at 93%
-    # draw their peak current, and if the supply sags the motor shield's
-    # drivers drop out while the ATmega and its CH340 carry on quite happily
-    # on USB 5V, still answering. UNVERIFIED as to cause - confirming it needs
-    # a meter on the supply, not another session - but the mitigation is
-    # cheap, reversible, and costs almost nothing that can be felt: the
-    # difference between 80% and 100% of a blower already at full noise is
-    # not what makes a straight feel fast.
-    max_duty: float = 0.80
+    # With that fixed the cap protects against nothing, so it is gone. The
+    # field stays, because a rig with a smaller supply may genuinely need one
+    # and finding that out should not mean editing the curve.
+    max_duty: float = 1.0
     # `EnableInRace: false` in his config. Static wind is a constant baseline
     # for menus and replays; on track the dynamic curve is the whole story.
     static_in_race: bool = False
