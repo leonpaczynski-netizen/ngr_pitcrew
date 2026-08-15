@@ -59,7 +59,11 @@ def _tone(freq: float, seconds: float, amplitude: float,
     return block
 
 
-def _play(block: np.ndarray, *, exclusive: bool = True) -> str:
+def _play(block: np.ndarray, *, exclusive: bool = False) -> str:
+    # Shared by default since 15 Aug 2026: exclusive mode opens on this
+    # transducer, reports 21.3 ms, and renders nothing. Opting in is still
+    # possible - `exclusive` - because the next device may be different, but
+    # it is no longer what happens by accident.
     """Write a block to the transducer. Returns how it was opened."""
     import sounddevice as sd
 
@@ -222,14 +226,16 @@ def cmd_calibrate(args) -> int:
     tomorrow.
     """
     print(f"Reference tone: {args.freq:.0f} Hz at "
-          f"{20 * np.log10(args.amplitude):.0f} dBFS, {args.seconds:.0f}s.")
+          f"{20 * np.log10(args.amplitude):.0f} dBFS for {args.seconds:.0f}s.")
     print("This is the loudest sustained output the app will ever produce.")
-    print("Raise the amp until it is strong but does not knock, then back off")
-    print("one step and note the number on the display.\n")
+    print("Every effect gain is a fraction of it, so once the amp is set")
+    print("against this the mix means the same thing tomorrow.\n")
+    print("TURN THE AMP DOWN FIRST, then bring it up while this plays:")
+    print("  strong, but the piston must not knock. Back off one step.")
+    print("  Then note the number on the amp's display.\n")
     block = _tone(args.freq, args.seconds, args.amplitude,
                   left=True, right=True)
-    how = _play(block)
-    print(f"  played ({how}).")
+    print(f"  {_play_metered(block)}")
     return 0
 
 
