@@ -39,7 +39,16 @@ def _open_link() -> wind.WindLink | None:
     try:
         link.open()
     except Exception as exc:                                # noqa: BLE001
-        print(f"could not open {port}: {exc}")
+        if "Access is denied" in str(exc) or "PermissionError" in str(exc):
+            # One process owns a serial port. Pit Crew holds this one for the
+            # length of a session, so the bench tool and the app cannot both
+            # have it - which is worth saying rather than handing back a bare
+            # PermissionError and letting somebody hunt a cable.
+            print(f"{port} is held by another process - almost certainly Pit "
+                  f"Crew itself.\nClose the app (or stop the session) and run "
+                  f"this again.")
+        else:
+            print(f"could not open {port}: {exc}")
         return None
     return link
 
@@ -139,6 +148,47 @@ def cmd_channel(args) -> int:
         print("stopped.")
 
 
+def cmd_stress(args) -> int:
+    """Both fans, flat out, for as long as you like - and say when they stop.
+
+    One fan at 255 ran for ninety seconds without complaint, which rules out a
+    weak motor and a supply too small for a single channel. The condition that
+    actually occurs on a straight is both at once, which is twice the current
+    through one shield off one supply, and that is the thing left to test.
+
+    Prints elapsed seconds as it goes so the moment of a cut-out is a number
+    rather than an impression.
+    """
+    link = _open_link()
+    if link is None:
+        return 1
+    try:
+        if not link.handshake():
+            print("no handshake - not driving anything")
+            return 1
+        values = [0] * wind.CHANNELS
+        values[wind.CHANNEL_LEFT] = args.duty
+        values[wind.CHANNEL_RIGHT] = args.duty
+        print(f"BOTH fans at {args.duty}/255 for {args.seconds:.0f}s.")
+        print("Say the second they stop, and whether they come back.\n")
+        started = time.monotonic()
+        marked = 0
+        while True:
+            elapsed = time.monotonic() - started
+            if elapsed >= args.seconds:
+                break
+            link.send(tuple(values))
+            if int(elapsed) >= marked + 10:
+                marked = int(elapsed)
+                print(f"  {marked:>3}s", flush=True)
+            time.sleep(wind.SEND_INTERVAL_S)
+        print(f"\nfinished {args.seconds:.0f}s. Did they run the whole time?")
+        return 0
+    finally:
+        link.close()
+        print("stopped.")
+
+
 def cmd_ramp(args) -> int:
     """Find the duty a stopped fan starts at, and the duty a moving fan stops
     at. They differ - the hysteresis is real, and both are needed before any
@@ -207,6 +257,11 @@ def main() -> int:
     channel.add_argument("--duty", type=int, default=120)
     channel.add_argument("--seconds", type=float, default=3.0)
     channel.set_defaults(run=cmd_channel)
+
+    stress = subs.add_parser("stress", help="both fans flat out, timed")
+    stress.add_argument("--duty", type=int, default=255)
+    stress.add_argument("--seconds", type=float, default=120.0)
+    stress.set_defaults(run=cmd_stress)
 
     ramp = subs.add_parser("ramp", help="find start and stop duty")
     ramp.add_argument("--channel", type=int, default=0,

@@ -462,10 +462,32 @@ class WindSim:
         self._thread.start()
 
     def shutdown(self) -> None:
+        """Stop the thread and let go of the port.
+
+        The join is generous because the worker can be a couple of seconds
+        into opening a link when it is asked to stop - a 1.6 s settle plus a
+        handshake - and abandoning it there is what leaves COM5 held.
+
+        **Observed: the port stayed locked with no session running**, so the
+        bench tool could not be used without closing the whole app. One
+        process owns a serial port; if this one keeps it after the session
+        that wanted it has ended, nothing else can talk to the device. A
+        thread that will not stop is now said out loud rather than left to be
+        discovered as a permission error somewhere else.
+        """
         self._stop.set()
         thread, self._thread = self._thread, None
-        if thread is not None:
-            thread.join(timeout=3.0)
+        if thread is None:
+            return
+        thread.join(timeout=6.0)
+        if thread.is_alive():
+            log("wind").error(
+                "the wind thread did not stop within 6s, so %s is still held. "
+                "Nothing else can open it until this app exits.",
+                self.state.port or "the serial port")
+        else:
+            log("wind").info("wind simulator released %s",
+                             self.state.port or "the serial port")
 
     # -------------------------------------------------------------- thread
 
