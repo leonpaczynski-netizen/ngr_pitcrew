@@ -870,10 +870,31 @@ class PracticeScreen(QWidget):
         return list(self._rows)
 
     def _rebuild_rack(self) -> None:
+        # **`rack_empty` is not the rack's to delete.** It is built once and
+        # kept, and the previous rebuild put it into this layout when there
+        # were no laps - so a blanket `deleteLater()` over everything in the
+        # layout destroys the C++ object behind it while this class goes on
+        # holding the Python wrapper. The next line to touch it raises
+        # "wrapped C/C++ object of type EmptyState has been deleted".
+        #
+        # Which is worse than it sounds, because of where it is reached from:
+        # `start_practice` opens the session in the store first and paints the
+        # rack second, so the throw left a session running in the database
+        # with a button still reading "Start session" and no way to stop it.
+        # Recovering meant restarting the app.
+        #
+        # Taken out of the layout and hidden rather than reparented: clearing
+        # a layout with `setParent(None)` flashes a native top-level window on
+        # Windows, which this project has met before.
         while self.rack_layout.count():
             item = self.rack_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget is None:
+                continue
+            if widget is self.rack_empty:
+                widget.hide()
+            else:
+                widget.deleteLater()
         self._row_widgets.clear()
 
         best = self._best_ms()

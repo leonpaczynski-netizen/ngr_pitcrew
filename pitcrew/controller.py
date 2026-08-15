@@ -1234,10 +1234,35 @@ class PitCrewController(QObject):
     # -------------------------------------------------------------- practice
 
     def _on_recording_toggled(self, wanted: bool) -> None:
-        if wanted:
-            self.start_practice()
-        else:
+        if not wanted:
             self.stop_practice()
+            return
+        try:
+            self.start_practice()
+        except Exception as exc:                            # noqa: BLE001
+            # **Because the store is written before the screen is painted.**
+            # `open_practice_session` opens the session in the database and
+            # then paints the rack, so anything that throws in the painting
+            # left a session running with a button still reading "Start
+            # session" and no way to stop it - the driver's only recovery was
+            # to restart the app, mid-lobby. It happened for real: a deleted
+            # `EmptyState` widget in `_rebuild_rack`.
+            #
+            # Caught broadly on purpose. The specific fault is fixed, but the
+            # shape of it - a UI failure orphaning a session in the store - is
+            # worth closing off rather than waiting to meet again. Rolled back
+            # so the screen and the database agree, and re-raised into the log
+            # so it is still a bug and not a shrug.
+            log("session").error(
+                "starting practice failed and was rolled back: %s: %s",
+                type(exc).__name__, exc, exc_info=True)
+            try:
+                self.stop_practice()
+            finally:
+                self.practice.set_recording(False)
+                self.practice.set_status(
+                    f"Could not start: {type(exc).__name__}. Nothing is "
+                    f"recording - the log has the detail.", warn=True)
 
     def open_practice_session(self) -> int | None:
         """Start a practice session without touching the network.

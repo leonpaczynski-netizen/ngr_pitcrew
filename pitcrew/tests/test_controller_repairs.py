@@ -166,3 +166,53 @@ def test_reference_data_is_found_from_any_working_directory(tmp_path, monkeypatc
     monkeypatch.chdir(tmp_path)
     assert len(catalogs.track_names()) > 100
     assert len(catalogs.car_names()) > 100
+
+
+# ------------------------------------------------- the rack that ate itself
+
+def test_an_empty_rack_can_be_rebuilt_more_than_once():
+    """`_rebuild_rack` cleared its layout with a blanket `deleteLater()`, and
+    the previous empty rebuild had put `rack_empty` into that layout - so the
+    second rebuild destroyed the C++ object while the screen went on holding
+    the Python wrapper, and the next line to touch it raised.
+
+    Met in a lobby, on the way into a session: `start_practice` opens the
+    session in the store and paints the rack afterwards, so the throw left a
+    session running with a button still reading "Start session" and no way to
+    stop it.
+    """
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    from pitcrew.ui.practice_screen import PracticeScreen
+
+    QApplication.instance() or QApplication([])
+    screen = PracticeScreen()
+    for _ in range(3):
+        screen.set_laps([])
+    assert screen.rack_empty.isVisible() is False or True  # it survived
+
+
+def test_a_screen_that_throws_does_not_leave_a_session_running(qt_app, store):
+    """The store is written before the screen is painted, so a UI fault used
+    to orphan a session - and the only recovery was restarting the app."""
+    from pitcrew.controller import PitCrewController
+    from pitcrew.ui.event_screen import EventScreen
+    from pitcrew.ui.practice_screen import PracticeScreen
+
+    practice = PracticeScreen()
+    controller = PitCrewController(store, EventScreen(), practice)
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("a widget went away")
+
+    practice.set_laps = explode
+    controller._on_recording_toggled(True)
+
+    try:
+        assert controller.session_id is None, "a session was left open"
+        assert controller.listener is None, "a listener was left running"
+    finally:
+        controller.shutdown()
