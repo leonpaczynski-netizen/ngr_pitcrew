@@ -1,0 +1,145 @@
+{
+  "LastGameProfiles": {
+    "assettocorsa": "00000000-0000-0000-0000-000000000000",
+    "granturismo7": "00000000-0000-0000-0000-000000000000",
+    "acesofthunder": "00000000-0000-0000-0000-000000000000",
+    "kayakvr": "00000000-0000-0000-0000-000000000000"
+  },
+  "LastUsedProfile": "00000000-0000-0000-0000-000000000000",
+  "LastUsedProfileBuiltIn": "00000000-0000-0000-0000-000000000000",
+  "activeProfileId": "d8da75ea-f189-40e9-87bb-2da00da27970",
+  "OutputSettings": {
+    "ArduinoOutput": {
+      "Connected": null,
+      "IsEnabled": true,
+      "ChannelMappings": [
+        {
+          "Role": 2
+        },
+        {
+          "Role": 3
+        },
+        {
+          "Role": 0
+        },
+        {
+          "Role": 0
+        },
+        {
+          "Role": 0
+        },
+        {
+          "Role": 0
+        },
+        {
+          "Role": 0
+        },
+        {
+          "Role": 0
+        },
+        {
+          "Role": 0
+        },
+        {
+          "Role": 0
+        },
+        {
+          "Role": 0
+        },
+        {
+          "Role": 0
+        }
+      ]
+    },
+    "HRSFanOutput": {
+      "HSROutputSettings": {
+        "Devices": []
+      },
+      "Connected": null,
+      "IsEnabled": false
+    },
+    "SymProjectsFanOutput": {
+      "Connected": null,
+      "IsEnabled": false
+    },
+    "RaceSolutionsFanOutput": {
+      "OutputSettings": {
+        "Devices": []
+      },
+      "Connected": null,
+      "IsEnabled": false
+    },
+    "ThreeDRapFeelingUpgradeUSBOutputs": {
+      "OutputSettings": {
+        "Devices": []
+      },
+      "Connected": null,
+      "IsEnabled": false
+    }
+  },
+  "CorrectionSettings": {
+    "SplineFilter": {
+      "ControlPoints": [
+        "0;0",
+        "20;20",
+        "40;40",
+        "60;60",
+        "80;80",
+        "100;100"
+      ],
+      "CurveFitting": 0,
+      "TypeName": "SplineFilter"
+    },
+    "UseCorrectionCurve": false,
+    "ApplyToStaticWind": true,
+    "ApplyToDynamicWind": true
+  },
+  "ShowEnableToggle": true,
+  "IncrementSteps": 5,
+  "IsEnabled": true,
+  "ProfileSwitchingMode": 0,
+  "ProfilesCycleMode": 0,
+  "CurrentProfileGame": {
+    "Family": 1,
+    "CurrentGame": "GranTurismo7"
+  },
+  "Profiles": [
+    {
+      "CarChoices": [],
+      "GlobalGain": 100,
+      "StaticWindSettings": {
+        "Gain": 32,
+        "IsEnabled": true,
+        "UseLeftChannel": true,
+        "UseRightChannel": true,
+        "UseCenterChannel": false,
+        "EnableInRace": false,
+        "IsActive": true
+      },
+      "DynamicWindSettings": {
+        "Gamma": 1.0,
+        "MaxGain": 100.0,
+        "MinGain": 29.762993482627241,
+        "CockpitMode": false,
+        "UseCurving": false,
+        "Curvature": 50,
+        "GammaFactor": 10.0,
+        "IsEnabled": true,
+        "MaximumSpeed": 281.07692307692304,
+        "MaximumSpeedMode": 1,
+        "ManualMaximumSpeed": 258.82044049459046,
+        "IsDraftEffectEnabled": true,
+        "DraftEffect": 0.0,
+        "UseIdleCenter": false,
+        "UseIdleLeft": false,
+        "UseIdleRight": false
+      },
+      "LastLoaded": "0001-01-01T00:00:00",
+      "Name": "Default profile",
+      "ProfileId": "d8da75ea-f189-40e9-87bb-2da00da27970",
+      "GameCode": null,
+      "CarChoice": null
+    }
+  ],
+  "UseBuiltInProfiles": false
+}

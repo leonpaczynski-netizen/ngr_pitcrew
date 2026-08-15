@@ -382,3 +382,46 @@ def test_a_stationary_v1_lap_gets_no_yaw_at_all():
     assert all(frame["yaw_rate"] is None for frame in frames)
     assert all(frame["lat_g"] is None for frame in frames)
     assert all(frame["slip_fl"] is None for frame in frames)
+
+
+# ------------------------------------------------------- feed health
+
+def test_a_gap_in_the_packet_id_is_counted_not_just_absorbed():
+    """CLAUDE.md 7: the connection must fail loudly.
+
+    The distance arithmetic handles a gap correctly - it steps by the gap so
+    the loss is paid for once rather than displacing everything after it -
+    and that is exactly why it needed counting separately. A lap that lost
+    half a second of stream came out looking clean, while lap distance, which
+    corner windows are keyed on, had integrated across the hole.
+    """
+    recorder = LapRecorder()
+    recorder.record_frame(make_packet(packet_id=100, speed_ms=50.0))
+    recorder.record_frame(make_packet(packet_id=101, speed_ms=50.0))
+    # Ids 102-130 never arrived: twenty-nine packets, half a second of feed.
+    recorder.record_frame(make_packet(packet_id=131, speed_ms=50.0))
+
+    assert recorder.stream_gaps == 1
+    assert recorder.lost_packets == 29
+
+
+def test_a_clean_stream_reports_no_loss():
+    recorder = LapRecorder()
+    for packet_id in range(100, 110):
+        recorder.record_frame(make_packet(packet_id=packet_id, speed_ms=50.0))
+    assert recorder.stream_gaps == 0
+    assert recorder.lost_packets == 0
+
+
+def test_time_in_the_menus_is_not_reported_as_a_dropped_feed():
+    """The off-track skip closes its own packet-id gap deliberately. Counting
+    that as stream loss would report every garage visit as a broken network."""
+    recorder = LapRecorder()
+    recorder.record_frame(make_packet(packet_id=100, speed_ms=50.0))
+    for packet_id in range(101, 141):
+        recorder.record_frame(
+            make_packet(packet_id=packet_id, on_track=False))
+    recorder.record_frame(make_packet(packet_id=141, speed_ms=50.0))
+
+    assert recorder.stream_gaps == 0
+    assert recorder.lost_packets == 0

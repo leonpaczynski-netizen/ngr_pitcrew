@@ -138,18 +138,25 @@ class SettingsScreen(QWidget):
         page.addWidget(self._footer())
 
     def _feed_plate(self) -> Plate:
-        """Where the telemetry arrives.
+        """Where the telemetry comes from.
 
-        Pit Crew is a receiver. SimHub decrypts GT7's stream and relays it
-        here, so there is no console address to enter for the app to *hear*
-        anything - it binds a port and listens. The source address below is a
-        filter, not a destination.
+        Two sources, and the difference is who does the asking. Direct sends
+        GT7's heartbeat to the console itself, because the console streams
+        only to an address that has asked it to. The relay leaves that to
+        SimHub and this app just binds a port and listens.
+
+        Decryption is this app's either way - SimHub forwards the encrypted
+        bytes, it does not decode them - so direct mode loses nothing.
+
+        The source address at the bottom is a filter on what arrives, not a
+        destination, which is why setting it never made a console start
+        streaming.
         """
         plate = Plate("Telemetry feed")
         plate.body.addWidget(BodyLabel(
-            "SimHub decrypts GT7's stream and relays it here. This is the "
-            "port it relays to — change it if you change SimHub, or if "
-            "something else on this machine takes the port.",
+            "Direct asks the console itself and needs nothing else running. "
+            "The relay takes SimHub's forwarded copy instead. Either way the "
+            "decryption happens here.",
             size=13, colour=theme.STENCIL_DIM))
 
         # Which of the two sources. Direct removes SimHub from the chain
@@ -179,9 +186,8 @@ class SettingsScreen(QWidget):
         block_wheel(self.udp_port)
         plate.body.addWidget(Field(
             "Port", self.udp_port,
-            hint=f"SimHub's relay is {DEFAULT_UDP_PORT}. GT7's own pair is "
-                 f"33739 out, 33740 back — those are SimHub's business, not "
-                 f"this app's."))
+            hint=f"SimHub's relay is {DEFAULT_UDP_PORT}. Ignored in direct "
+                 f"mode, which uses GT7's own pair — 33739 out, 33740 back."))
 
         self.udp_source_ip = QLineEdit()
         self.udp_source_ip.setPlaceholderText("any address")

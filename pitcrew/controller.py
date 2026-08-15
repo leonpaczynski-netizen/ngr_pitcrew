@@ -38,7 +38,7 @@ from pitcrew.engineer.ptt import (
     best_semantic_matcher,
 )
 from pitcrew.engineer.shift_beep import ShiftBeep
-from pitcrew.engineer import audio_devices
+from pitcrew.engineer import audio_devices, endpoint_meter
 from pitcrew.engineer.voice import Voice
 from pitcrew.export.build import _rows_to_laps, build_event_export
 from pitcrew.export.payload import APP_VERSION, ExportRefused, to_json
@@ -61,7 +61,7 @@ from pitcrew.telemetry.listener import (
     probe_port,
 )
 from pitcrew.telemetry.capture import CaptureWriter
-from pitcrew.telemetry.recorder import FRAME_FIELDS
+from pitcrew.telemetry.recorder import FRAME_FIELDS, SAMPLE_HZ
 from pitcrew.telemetry.packet import packet_format_for, parse_packet
 from pitcrew.telemetry.recorder import LapRecorder
 from pitcrew.telemetry.session_state import (
@@ -81,6 +81,10 @@ EXPORT_DIR = Path("exports")
 # against re-driving it.
 CAPTURE_DIR = Path("captures")
 STALE_AFTER_S = 3.0
+# How many lost packets a session may absorb before the rack says so. Two
+# frames is a hiccup that costs a few centimetres of integrated lap distance;
+# a whole second of stream is a corner window in the wrong place.
+_LOST_PACKET_BUDGET = 30
 
 
 class TelemetryBridge(QObject):
@@ -99,11 +103,11 @@ class TelemetryBridge(QObject):
         self.recorder = LapRecorder()
         self._announced = False
         # A raw capture sink, off unless the driver turned it on. It is a tee
-        # on this callback rather than a second socket on purpose: SimHub
-        # relays and this app never heartbeats the console, so the packet
-        # format is whatever SimHub asked for. A capture tool that opened its
-        # own socket and heartbeated would latch a different format and take
-        # the stream away from the app it is meant to be observing.
+        # on this callback rather than a second socket on purpose, and the
+        # reason got stronger when the app started asking the console itself:
+        # GT7 streams to whichever address last heartbeated it, so a capture
+        # tool that opened its own socket would not merely latch a different
+        # format, it would take the stream away from the app entirely.
         self.capture = None
         self.capture_formats: set[str] = set()
         self.capture_unparsed = 0
@@ -131,8 +135,14 @@ class TelemetryBridge(QObject):
         self.recorder.discard()
         self._announced = False
 
-    def on_packet(self, data: bytes) -> None:
-        """Called on the UDP thread for every datagram."""
+    def on_packet(self, data: bytes) -> bool:
+        """Called on the UDP thread for every datagram.
+
+        Returns whether the datagram decoded. The listener counts that to
+        decide whether asking for format `C` is getting anywhere, which it
+        cannot tell from arrival alone - bytes landing on GT7's port are not
+        the same claim as telemetry landing on GT7's port.
+        """
         if self.capture is not None:
             # Before parsing, so a datagram this build cannot decode is still
             # on disk for one that can. A capture that only kept what today's
@@ -151,7 +161,7 @@ class TelemetryBridge(QObject):
             # reported, because zeros survive all the way into a setup
             # recommendation.
             self.parse_failed.emit()
-            return
+            return False
 
         if not self._announced:
             self._announced = True
@@ -189,6 +199,7 @@ class TelemetryBridge(QObject):
                 rows = self.recorder.take_rows()
                 self.lap_completed.emit(event.data["lap"], rows)
             self.session_event.emit(event)
+        return True
 
 
 class PitCrewController(QObject):
@@ -217,6 +228,12 @@ class PitCrewController(QObject):
         # The streams are opened deep inside two engines that must not know
         # what a settings object is, so the choice is pushed down instead.
         self._apply_audio_devices(self.settings)
+        # How the test buttons find out whether the sound card really played
+        # what the app sent it. Injectable because the real one reads a
+        # Windows peak meter and answers about the machine it is running on:
+        # a test that stubs the tone is asking a different question, and a
+        # test on a build agent with no audio hardware is asking none at all.
+        self._confirm_audio = endpoint_meter.confirm_reached_endpoint
         # The screen-filling notice, anchored to whichever screen the practice
         # page is on. None where there is no Qt widget to anchor to, which is
         # every controller test and every capture replay - the recording path
@@ -655,8 +672,15 @@ class PitCrewController(QObject):
             return
 
         rebind = new.ptt_key != self.settings.ptt_key
+        # Everything that decides where the stream comes from. Port and
+        # filter were the only two checked, so switching between SimHub and
+        # the console mid-session - or correcting a mistyped console address,
+        # which is exactly when someone is anxious about it - said "Saved."
+        # and left the listener on the old feed for the rest of the session.
         feed_moved = (new.udp_port != self.settings.udp_port
-                      or new.udp_source_ip != self.settings.udp_source_ip)
+                      or new.udp_source_ip != self.settings.udp_source_ip
+                      or new.feed_source != self.settings.feed_source
+                      or new.ps5_ip.strip() != self.settings.ps5_ip.strip())
         self.settings = new
         self._apply_audio_devices(new)
         if self._port_override is None:
@@ -677,10 +701,13 @@ class PitCrewController(QObject):
             # under a running session would drop packets mid-lap, so it is
             # left alone and the change is announced instead.
             if feed_moved and self.listener is not None:
+                now_on = (f"the console at {self.listener.heartbeat_to}"
+                          if self.listener.heartbeat_to
+                          else f"SimHub on {self.listener.port}")
                 self.settings_screen.note(
-                    f"Saved. The feed is still on {self.listener._port} for "
-                    f"this session - stop and restart it to move to "
-                    f"{new.udp_port}.", warn=True)
+                    f"Saved. The feed is still coming from {now_on} for this "
+                    f"session - stop and restart it to move to "
+                    f"{self._feed_description(new)}.", warn=True)
             else:
                 self.settings_screen.note("Saved.")
             self.settings_screen.show_capabilities(
@@ -796,11 +823,26 @@ class PitCrewController(QObject):
         if self.settings_screen is None:
             return False
         wanted = self.settings_screen.values()
-        if self.listener is not None and wanted.udp_port == self.listener._port:
+        direct = (wanted.feed_source == FEED_PS5
+                  and bool(wanted.ps5_ip.strip()))
+
+        # **Compare against the port that would actually be bound.** Direct
+        # mode ignores the configured port and uses GT7's own, so comparing
+        # `udp_port` to the live listener never matched: the test then tried
+        # to bind 33740 out from under the app's own listener, could not,
+        # and reported "another program is holding it" while the feed was
+        # working perfectly. The self-test called the healthy case a fault.
+        would_bind = GT7_STREAM_PORT if direct else wanted.udp_port
+        if self.listener is not None and would_bind == self.listener.port:
+            seen = self.listener.total_received
+            decoded = self.listener.decoded
+            rate = self.listener.packet_rate
+            detail = (f"{decoded} of {seen} packets decoded"
+                      + (f", {rate:.0f} Hz" if rate else ""))
             self.settings_screen.note_feed(
-                f"Port {wanted.udp_port} is in use by this session's own "
-                f"listener, which is the answer you want. "
-                f"{self.listener.total_received} packets so far.")
+                f"Port {would_bind} is in use by this session's own "
+                f"listener, which is the answer you want. {detail}.",
+                warn=bool(seen and not decoded))
             return True
 
         # **Not a port probe.** A free port proves nothing: a wrong port
@@ -808,8 +850,6 @@ class PitCrewController(QObject):
         # menus all bind cleanly and deliver nothing. This opens the
         # socket, sends real heartbeats where they are required, and says
         # what decoded - CLAUDE.md 7, the connection fails loudly.
-        direct = (wanted.feed_source == FEED_PS5
-                  and bool(wanted.ps5_ip.strip()))
         if wanted.feed_source == FEED_PS5 and not wanted.ps5_ip.strip():
             self.settings_screen.note_feed(
                 "Direct mode needs the console's address. Without it "
@@ -837,18 +877,39 @@ class PitCrewController(QObject):
         self.settings_screen.note_feed(report.as_text(), warn=not report.ok)
         return report.ok
 
+    def _chosen_output(self) -> str:
+        return self.settings.audio_output_device or ""
+
+    def _where_he_listens(self) -> str:
+        return self._chosen_output() or "the system default output"
+
     def test_beep(self) -> bool:
-        """Sound the beep now. The only way to know it carries over the engine."""
+        """Sound the beep now. The only way to know it carries over the engine.
+
+        Played and then **verified against the sound card's own peak meter**.
+        Returning from `play_now` only proves the app got as far as writing
+        samples, and a card that has stopped rendering accepts those without
+        complaining - see `endpoint_meter` for the measurement that proved it.
+        """
         if self.settings_screen is None:
             return False
         beep = self.bridge.shift_beep
-        played = beep.play_now()
-        self.settings_screen.note_beep(
-            f"Beeped at the current threshold, {round(beep.rpm)} rpm."
-            if played else
-            "No beep - this machine has no tone device. Check the log.",
-            warn=not played)
-        return played
+        outcome: dict[str, bool] = {}
+
+        def play() -> None:
+            outcome["played"] = beep.play_now()
+
+        heard, detail = self._confirm_audio(
+            play, device=self._chosen_output() or None)
+        played = outcome.get("played", False)
+        note, warn = self._audio_verdict(
+            acted=played,
+            failed=(f"No beep - {beep.last_error}" if beep.last_error else
+                    "No beep - this machine has no tone device"),
+            worked=f"Beeped at the current threshold, {round(beep.rpm)} rpm",
+            heard=heard, detail=detail)
+        self.settings_screen.note_beep(note, warn=warn)
+        return played and heard is not False
 
     def test_voice(self) -> None:
         if self.settings_screen is None:
@@ -858,12 +919,45 @@ class PitCrewController(QObject):
         # Synchronously, and report what happened rather than that it was
         # queued: this button exists because he is in a headset and cannot see
         # whether a sound came out, which is exactly the case where a false
-        # success is worst.
-        spoke, why = self.voice.say_now(line)
-        self.settings_screen.note_beep(
-            f"Said it through {self.voice.engine_name}: “{line}”" if spoke else
-            f"Nothing came out - {why}. Check the output device and the log.",
-            warn=not spoke)
+        # success is worst. Speaking is still not the same as being heard, so
+        # the endpoint meter answers the second half of the question.
+        outcome: dict[str, object] = {}
+
+        def play() -> None:
+            outcome["spoke"], outcome["why"] = self.voice.say_now(line)
+
+        heard, detail = self._confirm_audio(
+            play, device=self._chosen_output() or None)
+        spoke = bool(outcome.get("spoke", False))
+        note, warn = self._audio_verdict(
+            acted=spoke,
+            failed=f"Nothing came out - {outcome.get('why', '')}. "
+                   f"Check the output device and the log",
+            worked=f"Said it through {self.voice.engine_name}: “{line}”",
+            heard=heard, detail=detail)
+        self.settings_screen.note_beep(note, warn=warn)
+
+    def _audio_verdict(self, *, acted: bool, failed: str, worked: str,
+                       heard: bool | None, detail: str) -> tuple[str, bool]:
+        """What to tell the driver, given what the app did and what the card
+        actually rendered.
+
+        Three outcomes, not two, and the third is the point of the whole
+        exercise: **the app played it and the card did not**. That is what a
+        dead endpoint looks like from in here, and it used to read as success
+        in green. `heard is None` is a fourth state - unmeasurable - and is
+        deliberately not reported as either, because claiming a measurement
+        that was not taken is how this class of fault hides.
+        """
+        if not acted:
+            return f"{failed}.", True
+        if heard is False:
+            return (f"{worked}, but no audio reached "
+                    f"{self._where_he_listens()} - {detail}. The device is "
+                    f"accepting sound and dropping it; choose another.", True)
+        if heard is None:
+            return f"{worked}. Could not verify it reached the sound card.", False
+        return f"{worked} - {detail}.", False
 
     def probe_button(self, listening: bool) -> None:
         """Watch for the configured key and say when it is pressed.
@@ -1120,6 +1214,16 @@ class PitCrewController(QObject):
         # body of evidence about one car.
         self.practice.set_laps(self._rows_for_event(event["id"]))
         return self.session_id
+
+    @staticmethod
+    def _feed_description(values) -> str:
+        """Where a given settings object would take telemetry from."""
+        if values.feed_source == FEED_PS5 and values.ps5_ip.strip():
+            return (f"the console at {values.ps5_ip.strip()} "
+                    f"on {GT7_STREAM_PORT}")
+        if values.feed_source == FEED_PS5:
+            return "the console - but no address has been entered"
+        return f"SimHub on {values.udp_port}"
 
     @property
     def direct(self) -> bool:
@@ -1471,26 +1575,78 @@ class PitCrewController(QObject):
         """
         if self.listener is None:
             return
+        # The port the listener is actually on. `self.port` is the configured
+        # relay port and is not what direct mode binds, so printing it sent
+        # him to check a number nothing was listening on.
+        port = self.listener.port
+        direct = self.listener.heartbeat_to is not None
+        upstream = ("the console" if direct else "SimHub")
+
         if self.listener.bind_error:
             self.practice.set_status(
-                f"Port {self.port} could not be opened: "
+                f"Port {port} could not be opened: "
                 f"{self.listener.bind_error}. Nothing will arrive until that "
                 f"is fixed - change the port on the Settings screen, or close "
                 f"whatever else is holding it.", warn=True)
+        elif self.listener.send_error:
+            # Only reachable in direct mode, and it is a different failure
+            # from silence: the console was never asked, so of course it is
+            # not streaming. Without this the driver was told to check GT7.
+            self.practice.set_status(
+                f"Could not reach the console at {self.listener.heartbeat_to}: "
+                f"{self.listener.send_error}. GT7 streams only to an address "
+                f"that has asked it to, so nothing will arrive until this is "
+                f"fixed - check the address on the Settings screen and that "
+                f"the PS5 is awake.", warn=True)
         elif self.listener.foreign_dropped and not self.listener.total_received:
             self.practice.set_status(
                 f"{self.listener.foreign_dropped} packets arrived on "
-                f"{self.port} and every one was refused: they are not from "
+                f"{port} and every one was refused: they are not from "
                 f"{self.listener.source_ip}. Clear the source address on the "
                 f"Settings screen if the console moved.", warn=True)
         elif not self.listener.connected:
+            if direct:
+                why = (f"The console has been asked "
+                       f"{self.listener.heartbeats_sent} times and has not "
+                       f"answered. Is GT7 running and out of the menus?")
+            else:
+                why = "Is GT7 running and SimHub relaying?"
+            self.practice.set_status(f"No telemetry on {port}. {why}",
+                                     warn=True)
+        elif self.listener.total_received and not self.listener.decoded:
+            # Bytes are arriving and none of them are telemetry. Distinct
+            # from silence, and it means something else is on this port.
             self.practice.set_status(
-                f"No telemetry on {self.port}. Is GT7 running and SimHub "
-                "relaying?", warn=True)
+                f"{self.listener.total_received} packets arrived on {port} "
+                f"and none decoded. Something other than GT7 is talking on "
+                f"this port.", warn=True)
         elif self._parse_errors:
             self.practice.set_status(
-                f"{self._parse_errors} packets failed to decode. Check the "
-                "SimHub relay.", warn=True)
+                f"{self._parse_errors} packets failed to decode. Check "
+                f"{upstream}.", warn=True)
+        elif self.bridge.recorder.lost_packets > _LOST_PACKET_BUDGET:
+            # Lap distance is INTEGRATED, so a gap is paid for by every metre
+            # after it, and corner windows are keyed on lap distance. A lap
+            # that lost packets still looks clean on the rack, which is the
+            # reason to say so here rather than let it through quietly.
+            lost = self.bridge.recorder.lost_packets
+            gaps = self.bridge.recorder.stream_gaps
+            self.practice.set_status(
+                f"The feed has dropped {lost} packets in {gaps} "
+                f"break{'' if gaps == 1 else 's'}. Lap distance is integrated "
+                f"from the packet clock, so corner positions drift by roughly "
+                f"{lost / SAMPLE_HZ:.1f} s of driving.", warn=True)
+        elif self.listener.packet_rate and self.listener.packet_rate < 45.0:
+            # CLAUDE.md 7: the connection must fail loudly. A feed limping at
+            # 20 Hz used to report as healthy - and the recorder converts
+            # packet-id deltas into METRES at an assumed flat 60 Hz, so a
+            # degraded rate silently skews lap distance and every corner
+            # window derived from it.
+            self.practice.set_status(
+                f"Telemetry is arriving at {self.listener.packet_rate:.0f} Hz, "
+                f"not 60. Lap distance is derived from the packet clock, so "
+                f"corner positions will be off until this is fixed.",
+                warn=True)
 
     # -------------------------------------------------------------- strategy
 

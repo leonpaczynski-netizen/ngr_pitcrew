@@ -17,7 +17,10 @@ Three of them cost real sessions to learn:
 """
 from __future__ import annotations
 
+import threading
+
 from pitcrew.diagnostics import log
+from pitcrew.engineer import audio_devices
 
 # How long a downshift suppresses the beep, to swallow the blip.
 DOWNSHIFT_MUTE_S = 0.3
@@ -117,15 +120,29 @@ class ShiftBeep:
         return True whenever a tone function existed, and `_play` swallows the
         exception - so the one control that exists to prove the beep works
         reported success for a beep that raised.
-        """
-        return self._play()
 
-    def _play(self) -> bool:
-        """Sound the tone. False when it did not, for whatever reason."""
+        Played **on this thread**, unlike the in-race path: a button that
+        reports what happened cannot report on a beep that has not been
+        attempted yet.
+        """
+        return self._play(blocking=True)
+
+    def _play(self, *, blocking: bool = False) -> bool:
+        """Sound the tone. False when it did not, for whatever reason.
+
+        The in-race caller is the telemetry thread and must not wait on
+        PortAudio - opening a stream costs over a second on some host APIs,
+        which is packets on the floor. So the default is fire-and-forget and
+        the test button asks for the blocking form.
+        """
         if self._tone is None:
             return False
         try:
-            self._tone()
+            # A test double is a bare callable with no blocking form; that is
+            # the seam the beep tests drive, so fall back to calling it.
+            play = (getattr(self._tone, "play_blocking", self._tone)
+                    if blocking else self._tone)
+            play()
         except Exception as exc:                # noqa: BLE001
             # A failed beep must never take the telemetry thread down - but
             # the caller is told, so a test button can say so.
@@ -136,16 +153,103 @@ class ShiftBeep:
         return True
 
 
+class _TonePlayer:
+    """A short beep on the card the driver chose.
+
+    This used to be `winsound.Beep`, which is a one-liner and was wrong in a
+    way that only shows up at the rig: it plays through whatever Windows calls
+    the default output and has no way to be pointed anywhere else. Every other
+    sound this app makes follows the Settings screen's device; the beep did
+    not, so "Test beep" proved a device the driver had not chosen. It looked
+    correct for as long as his headset happened to also be the default.
+
+    Two consequences of making it a real audio stream:
+
+    * **It is played off the caller's thread.** `winsound.Beep` blocks for the
+      length of the beep and nothing else; opening a PortAudio stream can cost
+      over a second, and the in-race caller is the telemetry thread.
+    * **A beep that arrives while one is still playing is dropped, not
+      queued.** Two beeps a corner apart are information; a backlog of them is
+      noise, and the hysteresis in `should_beep` already exists to stop the
+      limiter firing sixty a second.
+    """
+
+    def __init__(self, *, freq: float = 1800.0, ms: int = 60,
+                 rate: int = 44100) -> None:
+        self._rate = rate
+        self._samples = _square_wave(freq, ms, rate)
+        # Held for the duration of a beep. Non-blocking acquisition is what
+        # makes an overlapping beep a drop rather than a queue.
+        self._busy = threading.Lock()
+
+    def __call__(self) -> None:
+        """Fire and forget, for the telemetry thread."""
+        if not self._busy.acquire(blocking=False):
+            return
+        threading.Thread(target=self._play_and_release, name="PitCrewBeep",
+                         daemon=True).start()
+
+    def play_blocking(self) -> None:
+        """Play it here and now, raising if it did not sound.
+
+        The test button's whole purpose is to be able to answer no, which it
+        cannot do about a beep still queued on another thread.
+        """
+        with self._busy:
+            self._render()
+
+    def _play_and_release(self) -> None:
+        try:
+            self._render()
+        except Exception as exc:                # noqa: BLE001
+            # Nothing is waiting on this thread, so the log is the only place
+            # it can be said. The test button uses the blocking path, which
+            # raises properly.
+            log("beep").warning("beep failed: %s: %s",
+                                type(exc).__name__, exc)
+        finally:
+            self._busy.release()
+
+    def _render(self) -> None:
+        # The same lock the engineer's voice holds: overlapping PortAudio
+        # streams crash the host rather than mixing, and a beep landing on top
+        # of a call is exactly when that would happen.
+        with audio_devices.PLAY_LOCK:
+            stream = audio_devices.open_output(self._rate)
+            try:
+                stream.write(self._samples)
+            finally:
+                stream.stop()
+                stream.close()
+
+
+def _square_wave(freq: float, ms: int, rate: int):
+    """The beep itself: a square wave, as `winsound.Beep` produced.
+
+    Ramped in and out over a millisecond because a square wave that starts at
+    full amplitude clicks, and a click in a headset at racing speed reads as a
+    fault in the audio rather than as the beep.
+    """
+    import numpy as np
+
+    samples = int(rate * ms / 1000)
+    t = np.arange(samples) / rate
+    wave = np.sign(np.sin(2 * np.pi * freq * t))
+    ramp = max(1, int(rate * 0.001))
+    envelope = np.ones(samples)
+    envelope[:ramp] = np.linspace(0.0, 1.0, ramp)
+    envelope[-ramp:] = np.linspace(1.0, 0.0, ramp)
+    return (wave * envelope * 16000).astype(np.int16)
+
+
 def _default_tone():
-    """A short square beep, or None where audio is unavailable."""
+    """A short square beep on the chosen card, or None where audio is not
+    available at all - which is what `ShiftBeep` reports as "this machine has
+    no tone device"."""
     try:
-        import winsound
-    except ImportError:
+        import numpy  # noqa: F401 - required to build the wave
+        import sounddevice  # noqa: F401 - required to play it
+    except ImportError as exc:
+        log("beep").warning("no beep on this machine: %s", exc)
         return None
-
-    def tone() -> None:
-        # Non-blocking would be better, but winsound.Beep is short enough that
-        # the alternative (a thread per beep) costs more than it saves.
-        winsound.Beep(1800, 60)
-
-    return tone
+    return _TonePlayer()

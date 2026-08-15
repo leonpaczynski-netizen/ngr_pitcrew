@@ -451,11 +451,28 @@ class LapRecorder:
         # from `elapsed` so a lap's clock measures time on track rather than
         # time since the lap's first frame.
         self._dropped_packets = 0
+        # Packets the stream never delivered, counted from breaks in GT7's
+        # own packet id. Session-cumulative and deliberately NOT reset per
+        # lap: this is a health measure of the feed, not a property of a lap.
+        self._stream_gaps = 0
+        self._lost_packets = 0
 
     @property
     def frame_count(self) -> int:
         with self._lock:
             return len(self._rows)
+
+    @property
+    def stream_gaps(self) -> int:
+        """How many breaks appeared in GT7's packet id this session."""
+        with self._lock:
+            return self._stream_gaps
+
+    @property
+    def lost_packets(self) -> int:
+        """How many packets those breaks account for."""
+        with self._lock:
+            return self._lost_packets
 
     def record_frame(self, packet: GT7Packet) -> None:
         """Called from the UDP thread for every packet."""
@@ -503,6 +520,18 @@ class LapRecorder:
             # its own distance rather than shifting everything after it.
             step = 1 if self._last_packet_id is None else max(
                 1, packet.packet_id - self._last_packet_id)
+            # **A gap here is the stream losing packets, and it is counted.**
+            # The arithmetic above absorbs it correctly, which is exactly the
+            # problem: distance is integrated across the gap at the speed on
+            # the far side of it, and the result is a lap that looks clean.
+            # CLAUDE.md 7 wants the connection to fail loudly, so the loss is
+            # recorded rather than silently smoothed over. Not counted for
+            # the first frame of a session, where there is nothing to compare
+            # against, nor for the deliberate skips above, which are the
+            # driver being in the menus rather than the network dropping.
+            if step > 1:
+                self._stream_gaps += 1
+                self._lost_packets += step - 1
             self._last_packet_id = packet.packet_id
             self._distance_m += packet.speed_ms * step / SAMPLE_HZ
 

@@ -248,3 +248,155 @@ def test_bytes_that_will_not_decrypt_are_never_reported_as_a_feed():
     finally:
         thread.join(timeout=2.0)
         noise.close()
+
+
+# --------------------------------------------------------------- port pair
+
+# CLAUDE.md 3.1 marks GT7's send/receive port pair "verify before building",
+# and the tests above cannot: they monkeypatch the heartbeat port to an
+# ephemeral one so two of them can run at once, which means the numbers that
+# actually go over the wire in a race were the one thing never asserted.
+#
+# Measured against a live PS5 running GT7 v1.70 on 15 Aug 2026: a heartbeat of
+# b"C" to 33739 produced 1,199 datagrams of 368 bytes on 33740 in 20 s, all
+# decrypting, none lost. These pin the numbers that test proved.
+
+
+@pytest.fixture()
+def controller_direct():
+    """The controller's own feed properties, read off real settings.
+
+    Deliberately NOT a constructed `PitCrewController`: building one here
+    brings up two Qt screens, and tearing those down mid-file segfaults on
+    Windows/Py3.14 - a teardown-order crash in PyQt, nothing to do with the
+    feed. The three properties under test read only `settings` and `port`, so
+    they are invoked as the unbound descriptors they are. That runs the
+    shipped implementation rather than a paraphrase of it.
+    """
+    import dataclasses
+    from types import SimpleNamespace
+
+    from pitcrew import settings as settings_mod
+    from pitcrew.controller import PitCrewController
+
+    def build(*, feed_source: str = "ps5", ps5_ip: str = "192.168.1.20",
+              udp_port: int = 33741):
+        values = dataclasses.replace(
+            settings_mod.Settings(), feed_source=feed_source, ps5_ip=ps5_ip,
+            udp_port=udp_port)
+        stand_in = SimpleNamespace(settings=values, port=udp_port)
+        # `feed_port` and `heartbeat_target` both read `self.direct`, so it is
+        # resolved first and pinned onto the stand-in - which also means this
+        # asserts the three agree with each other rather than in isolation.
+        stand_in.direct = PitCrewController.direct.fget(stand_in)
+        return SimpleNamespace(
+            direct=stand_in.direct,
+            feed_port=PitCrewController.feed_port.fget(stand_in),
+            heartbeat_target=PitCrewController.heartbeat_target.fget(stand_in),
+        )
+
+    return build
+
+
+def test_gt7_speaks_on_33739_out_and_33740_back():
+    """Measured against the console, not copied from a parser."""
+    from pitcrew.telemetry.listener import GT7_STREAM_PORT
+
+    assert GT7_HEARTBEAT_PORT == 33739
+    assert GT7_STREAM_PORT == 33740
+
+
+def test_direct_mode_binds_gt7s_port_and_not_the_relays(controller_direct):
+    """The configured port is SimHub's. Binding it in direct mode would wait
+    on a port the console never sends to - so direct must override it."""
+    from pitcrew.telemetry.listener import GT7_STREAM_PORT
+
+    app = controller_direct(ps5_ip="172.16.10.36", udp_port=33741)
+    assert app.direct is True
+    assert app.feed_port == GT7_STREAM_PORT
+    assert app.heartbeat_target == "172.16.10.36"
+
+
+def test_relay_mode_binds_the_configured_port_and_asks_nobody(
+        controller_direct):
+    app = controller_direct(feed_source="simhub", udp_port=33741)
+    assert app.direct is False
+    assert app.feed_port == 33741
+    assert app.heartbeat_target is None
+
+
+def test_direct_without_an_address_is_not_direct(controller_direct):
+    """Half-configured must not silently bind GT7's port and heartbeat
+    nowhere - that looks exactly like a console that is switched off."""
+    app = controller_direct(ps5_ip="   ", udp_port=33741)
+    assert app.direct is False
+    assert app.feed_port == 33741
+    assert app.heartbeat_target is None
+
+
+# --------------------------------------------------- the format fallback
+
+def test_noise_on_the_port_does_not_suppress_the_format_fallback(monkeypatch):
+    """The fallback used to trigger on "nothing ARRIVED", not "nothing
+    DECODED".
+
+    GT7's stream port is a well-known number and this app has never been the
+    only thing able to bind it. One stray datagram from anything else made the
+    arrival counter non-zero and pinned the listener to format `C` for the
+    whole session - so a console that only speaks `A` sat silent while the log
+    insisted packets were coming in. They were. None of them were telemetry.
+    """
+    from pitcrew.telemetry import listener as listener_mod
+
+    monkeypatch.setattr(listener_mod, "FORMAT_PATIENCE_S", 0.3)
+    port = free_port()
+    monkeypatch.setattr(listener_mod, "GT7_HEARTBEAT_PORT", free_port())
+
+    feed = UDPListener("0.0.0.0", port, lambda data: False,
+                       heartbeat_to="127.0.0.1")
+    feed.start()
+    noise = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            noise.sendto(b"not telemetry", ("127.0.0.1", port))
+            time.sleep(0.05)
+            if feed.heartbeat_format == "A":
+                break
+
+        assert feed.total_received > 0, "the noise never landed"
+        assert feed.decoded == 0
+        assert feed.heartbeat_format == "A", (
+            "arrival was mistaken for a working feed, so C was never "
+            "given up on")
+    finally:
+        noise.close()
+        feed.stop()
+        feed.join(timeout=2.0)
+
+
+def test_a_decoding_feed_is_left_on_format_c(monkeypatch):
+    """The other half of the same rule: do not throw away current-lap-ms
+    because the patience window happened to elapse."""
+    from pitcrew.telemetry import listener as listener_mod
+
+    monkeypatch.setattr(listener_mod, "FORMAT_PATIENCE_S", 0.3)
+    port = free_port()
+    monkeypatch.setattr(listener_mod, "GT7_HEARTBEAT_PORT", free_port())
+
+    feed = UDPListener("0.0.0.0", port, lambda data: True,
+                       heartbeat_to="127.0.0.1")
+    feed.start()
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            sender.sendto(b"telemetry", ("127.0.0.1", port))
+            time.sleep(0.05)
+
+        assert feed.decoded > 0
+        assert feed.heartbeat_format == "C"
+    finally:
+        sender.close()
+        feed.stop()
+        feed.join(timeout=2.0)

@@ -96,7 +96,8 @@ def probe_port(port: int) -> str | None:
 class UDPListener(threading.Thread):
     """Daemon thread that reads UDP packets and calls `callback(data: bytes)`."""
 
-    def __init__(self, host: str, port: int, callback: Callable[[bytes], None],
+    def __init__(self, host: str, port: int,
+                 callback: Callable[[bytes], bool | None],
                  *, source_ip: str | None = None,
                  heartbeat_to: str | None = None) -> None:
         super().__init__(daemon=True, name="UDPListener")
@@ -116,6 +117,11 @@ class UDPListener(threading.Thread):
         self._stop_event = threading.Event()
         self._packet_timestamps: deque[float] = deque(maxlen=120)
         self._total_received = 0
+        # Datagrams the callback actually decoded, which is not the same
+        # question as how many arrived. The format fallback below turns on
+        # this distinction: anything else talking on GT7's port makes
+        # `_total_received` non-zero while nothing whatsoever is decoding.
+        self._decoded = 0
         self._parse_errors = 0
         self._foreign_dropped = 0
         self._connected = False
@@ -132,8 +138,28 @@ class UDPListener(threading.Thread):
         return (len(ts) - 1) / (ts[-1] - ts[0])
 
     @property
+    def port(self) -> int:
+        """The port actually bound.
+
+        Direct mode does not bind the configured port - GT7 chooses it - so
+        anything reporting a problem has to name this one rather than the
+        setting, or it sends the driver to check a number nothing is on.
+        """
+        return self._port
+
+    @property
+    def heartbeat_to(self) -> str | None:
+        """The console being asked, or None when something else is asking."""
+        return self._heartbeat_to
+
+    @property
     def total_received(self) -> int:
         return self._total_received
+
+    @property
+    def decoded(self) -> int:
+        """Datagrams that came out of the callback as real telemetry."""
+        return self._decoded
 
     @property
     def connected(self) -> bool:
@@ -246,10 +272,18 @@ class UDPListener(threading.Thread):
                 if due or (silent > SILENCE_S and self._total_received):
                     self._send_heartbeat(sock)
                     last_heartbeat = now
-                # Nothing at all under `C` for a few seconds means this
+                # Nothing DECODED under `C` for a few seconds means this
                 # console will not speak it. Fall back once, loudly, and
                 # let the export declare the format it actually got.
-                if (not switched_format and not self._total_received
+                #
+                # On `_decoded`, not `_total_received`: GT7's stream port is
+                # a well-known number and this app is not the only thing that
+                # has ever bound it. One stray datagram from anything else
+                # made `_total_received` non-zero and suppressed this fallback
+                # permanently, so a console that only speaks `A` sat silent
+                # for the whole session with the log insisting packets were
+                # arriving - which they were, and none of them decoded.
+                if (not switched_format and not self._decoded
                         and now - started > FORMAT_PATIENCE_S):
                     switched_format = True
                     self._heartbeat = HEARTBEAT_A
@@ -310,7 +344,13 @@ class UDPListener(threading.Thread):
             self._recv_error = None
 
             try:
-                self._callback(data)
+                # The callback reports whether the datagram was telemetry.
+                # `True` is the only answer that counts as a decode, so a
+                # handler that returns nothing leaves the format fallback
+                # free to fire - which is the safe direction: it costs one
+                # switch to `A`, where the alternative is a silent session.
+                if self._callback(data) is True:
+                    self._decoded += 1
             except Exception as exc:
                 log("udp").error("packet handler raised: %s: %s",
                                  type(exc).__name__, exc, exc_info=True)

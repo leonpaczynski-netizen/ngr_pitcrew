@@ -225,10 +225,28 @@ def test_turning_the_beep_off_keeps_it_off_when_the_stream_arrives(wired):
     assert controller.bridge.shift_beep.enabled is False
 
 
+def _heard(peak: float = 0.8):
+    """A verifier standing in for the sound card, saying it played."""
+    return lambda play, **_: (play(), (True, f"peaked at {peak:.3f}"))[1]
+
+
+def _not_heard(play=None, **_):
+    """The sound card accepting audio and playing none of it - the fault that
+    reads as success everywhere else in the app."""
+    play()
+    return False, "the endpoint metered 0.0000 for the whole call"
+
+
+def _unmeasurable(play=None, **_):
+    play()
+    return None, "no peak meter for this device on this machine"
+
+
 def test_the_beep_can_be_sounded_on_demand(wired):
     controller, screen, _store = wired
     played = []
     controller.bridge.shift_beep._tone = lambda: played.append(1)
+    controller._confirm_audio = _heard()
     assert controller.test_beep() is True
     assert played == [1]
     assert "Beeped" in screen.beep_note.text()
@@ -237,8 +255,52 @@ def test_the_beep_can_be_sounded_on_demand(wired):
 def test_a_machine_with_no_tone_device_says_so_rather_than_claiming_a_beep(wired):
     controller, screen, _store = wired
     controller.bridge.shift_beep._tone = None
+    controller._confirm_audio = _heard()
     assert controller.test_beep() is False
     assert "No beep" in screen.beep_note.text()
+
+
+def test_a_beep_the_sound_card_never_played_is_not_reported_as_a_beep(wired):
+    """The fault this whole check exists for.
+
+    A device that has stopped rendering still accepts everything written to
+    it. `play_now` returns True, the samples are gone, and the man in the
+    headset hears nothing - measured on a USB headset that Windows reported
+    active, default, unmuted and at 97%. Reporting that in green is how it
+    survived a whole session.
+    """
+    controller, screen, _store = wired
+    controller.bridge.shift_beep._tone = lambda: None
+    controller._confirm_audio = _not_heard
+    assert controller.test_beep() is False
+    note = screen.beep_note.text()
+    assert "no audio reached" in note
+    assert "accepting sound and dropping it" in note
+
+
+def test_a_beep_that_cannot_be_verified_is_not_called_silent(wired):
+    """Unmeasurable is a third answer, not a failure.
+
+    There is no endpoint meter off Windows and none on a machine with no
+    `comtypes`, and claiming silence there would send him hunting a fault
+    that is not present.
+    """
+    controller, screen, _store = wired
+    controller.bridge.shift_beep._tone = lambda: None
+    controller._confirm_audio = _unmeasurable
+    assert controller.test_beep() is True
+    note = screen.beep_note.text()
+    assert "Beeped" in note and "Could not verify" in note
+
+
+def test_a_line_the_sound_card_never_played_is_not_reported_as_spoken(wired):
+    """The same fault on the voice path, which is the one he races on."""
+    controller, screen, _store = wired
+    controller._confirm_audio = _not_heard
+    controller.test_voice()
+    note = screen.beep_note.text()
+    assert "no audio reached" in note
+    assert "accepting sound and dropping it" in note
 
 
 # -------------------------------------------------------------- the button

@@ -27,13 +27,19 @@ import wave
 from pathlib import Path
 
 from pitcrew.diagnostics import log
+from pitcrew.engineer import audio_devices
 from pitcrew.engineer.audio_devices import open_output
 
 # One lock across every engine that opens an audio stream, not one per class.
 # Overlapping PortAudio streams crash the host rather than mixing, and the
 # voice pack and live synthesis are two engines that can both be asked to play
 # - a per-class lock would let them overlap, which is the crash this prevents.
-_PLAY_LOCK = threading.Lock()
+#
+# It now lives in `audio_devices` and is merely aliased here, because the
+# shift beep opens a stream too and is not part of the voice. A lock private
+# to this module left the one pair of sounds most likely to coincide - a call
+# on the voice thread and a beep on the telemetry thread - free to overlap.
+_PLAY_LOCK = audio_devices.PLAY_LOCK
 
 PACK_ROOT = Path(__file__).resolve().parent / "voice_pack"
 PACK_MANIFEST = "manifest.json"
@@ -499,6 +505,16 @@ class Sapi5Engine:
     COM must be initialised on the thread that uses it, which is why this
     initialises inside `speak` rather than at construction - the object is
     built on the Qt thread and used on the voice thread.
+
+    **SAPI has its own idea of the output device and does not consult ours.**
+    Every other sound this app makes goes through `audio_devices`; this engine
+    went to whatever Windows called the default, so the one setting on the
+    Settings screen that says where the engineer speaks did not apply to the
+    fallback engine. On the machine where the chosen headset is not the
+    default that is silence, and it is silence that no counter here can see,
+    because SAPI reports success either way. `_route_to_chosen_device` closes
+    that: it picks the SAPI audio-output token whose description matches the
+    card the driver chose.
     """
 
     name = "sapi5"
@@ -506,6 +522,9 @@ class Sapi5Engine:
     def __init__(self) -> None:
         import win32com.client  # noqa: F401 - probe that it imports
         self._voice = None
+        # Which device the token was last selected for, so the lookup runs
+        # when the driver changes cards rather than on every line.
+        self._routed_to: object = object()
 
     def speak(self, text: str) -> None:
         import pythoncom
@@ -514,7 +533,41 @@ class Sapi5Engine:
         if self._voice is None:
             pythoncom.CoInitialize()
             self._voice = win32com.client.Dispatch("SAPI.SpVoice")
+        self._route_to_chosen_device()
         self._voice.Speak(text)
+
+    def _route_to_chosen_device(self) -> None:
+        """Point SAPI at the card the driver chose, if it can be found.
+
+        Matched on the first 31 characters because that is where MME truncates
+        device names, and the name stored by the Settings screen may have come
+        from either spelling. A device SAPI does not offer leaves the default
+        in place and says so once - the wrong speaker beats no call at all.
+        """
+        chosen = audio_devices.output_device()
+        if chosen == self._routed_to:
+            return
+        self._routed_to = chosen
+        if not isinstance(chosen, str) or not chosen:
+            return
+        wanted = audio_devices.endpoint_key(chosen)
+        try:
+            outputs = self._voice.GetAudioOutputs()
+            for index in range(outputs.Count):
+                token = outputs.Item(index)
+                if audio_devices.endpoint_key(token.GetDescription()) == wanted:
+                    self._voice.AudioOutput = token
+                    log("voice").info("SAPI speaking into %r", chosen)
+                    return
+        except Exception as exc:                # noqa: BLE001
+            # Routing is an improvement on the default, not a precondition for
+            # speaking: a COM failure here must not cost the driver the call.
+            log("voice").warning("could not point SAPI at %r: %s: %s",
+                                 chosen, type(exc).__name__, exc)
+            return
+        log("voice").warning(
+            "SAPI does not offer %r - speaking into the system default",
+            chosen)
 
 
 def _best_engine():
