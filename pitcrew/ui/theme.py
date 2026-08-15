@@ -171,11 +171,11 @@ def contrast_ratio(one: QColor, two: QColor) -> float:
     return (high + 0.05) / (low + 0.05)
 
 
-def band_ink(code: str | None) -> QColor:
-    """Legible ink for the code stencilled on a band.
+def band_ink_for(band: QColor) -> QColor:
+    """Legible ink for a code stencilled on the colour ACTUALLY painted.
 
-    Whichever of the two inks actually contrasts better, measured - not
-    whichever side of a brightness threshold the band falls on.
+    Whichever of the two inks contrasts better against that colour, measured -
+    not whichever side of a brightness threshold it falls on.
 
     The threshold version used NTSC coefficients against a fixed 0.55, and it
     got six of the eleven compounds wrong: Intermediate green took warm white
@@ -185,11 +185,24 @@ def band_ink(code: str | None) -> QColor:
     classification for a viewer who cannot separate the hues. A code nobody
     can read leaves colour as the only channel, which is the one outcome the
     band exists to prevent.
+
+    The argument is a colour and not a compound code because a band is not
+    always painted in its own colour: an excluded lap's band is desaturated
+    toward grey, and choosing the ink from the code would choose it against a
+    colour that is no longer on the screen.
     """
-    band = band_colour(code)
     dark, light = QColor(RUBBER), QColor(STENCIL)
     return dark if contrast_ratio(dark, band) >= contrast_ratio(light, band) \
         else light
+
+
+def band_ink(code: str | None) -> QColor:
+    """Legible ink for a compound's code on that compound's own band.
+
+    The undesaturated case of `band_ink_for`, and defined in terms of it so
+    the two cannot answer differently for the same painted colour.
+    """
+    return band_ink_for(band_colour(code))
 
 
 # ------------------------------------------------------------------ lettering

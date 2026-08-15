@@ -190,23 +190,27 @@ def _find_apexes(distances: list[float], speeds: list[float]) -> list[int]:
         clustered.append(index)
 
     # A minimum is a corner only if the car accelerates away from it on both
-    # sides. This is what separates a corner from a lift or a bumpy straight.
+    # sides **before reaching the next minimum**. Searching to the ends of the
+    # lap instead made the main straight satisfy every candidate, so the test
+    # was a near no-op and the two halves of a complex came out as two corners,
+    # renumbering everything after them. `_corner_bounds` below already bounds
+    # its search the same way.
     prominent = []
-    for index in clustered:
+    for position, index in enumerate(clustered):
         floor = speeds[index] + thresholds.CORNER_PROMINENCE_KPH
-        if _rises_to(speeds, index, floor, step=-1) and \
-           _rises_to(speeds, index, floor, step=1):
+        left = clustered[position - 1] if position > 0 else 0
+        right = (clustered[position + 1] if position + 1 < len(clustered)
+                 else len(speeds) - 1)
+        if _rises_to(speeds, index, left, floor) and \
+           _rises_to(speeds, index, right, floor):
             prominent.append(index)
     return prominent
 
 
-def _rises_to(speeds: list[float], start: int, floor: float, step: int) -> bool:
-    i = start
-    while 0 <= i < len(speeds):
-        if speeds[i] >= floor:
-            return True
-        i += step
-    return False
+def _rises_to(speeds: list[float], start: int, limit: int, floor: float) -> bool:
+    """Whether speed reaches `floor` between `start` and `limit`, inclusive."""
+    lo, hi = (limit, start) if limit < start else (start, limit)
+    return any(speeds[i] >= floor for i in range(lo, hi + 1))
 
 
 def _corner_bounds(speeds: list[float], apex: int,

@@ -21,6 +21,8 @@ from pitcrew.setup.vocabulary import (
     MAX_GEARS,
     RANGE_KEY_NAMES,
     SETUP_KEY_NAMES,
+    describe,
+    unenterable_values,
     unknown_keys,
 )
 
@@ -66,6 +68,17 @@ class SetupSheet:
         for key, value in self.values.items():
             if value is not None and not isinstance(value, (int, float)):
                 raise SetupError(f"{key} must be a number or None, got {value!r}")
+
+        # Refused rather than stored. The sheet as run is the section the tune
+        # builder trusts most, because nothing in the telemetry can contradict
+        # it - so a value the driver could not have entered has to stop here,
+        # where the sign is still attached to something a person typed.
+        unenterable = unenterable_values(self.values)
+        if unenterable:
+            raise SetupError(
+                "GT7 enters these as a magnitude and will not take a negative: "
+                + ", ".join(f"{describe(k).label.lower()} ({k}) {v:g}"
+                            for k, v in unenterable))
 
         if len(self.gears) > MAX_GEARS:
             raise SetupError(f"{len(self.gears)} gears is more than GT7 allows")

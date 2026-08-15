@@ -91,9 +91,16 @@ def test_a_long_excursion_is_an_incident():
 
 def test_a_spin_that_never_left_the_tarmac_is_an_incident():
     """Session 9 lap 6: 0.2 s off-track in the whole lap, and a 14 s loss.
-    The surface channel cannot see it; the rotation can."""
+    The surface channel cannot see it; the rotation can.
+
+    2.5 rad/s, not the 1.7 this fixture used to carry. The detector ran on the
+    roll axis, so the number never had to be a plausible yaw rate. Against a
+    reconstructed yaw channel session 9 lap 6 sustains 2.48 rad/s and the 113
+    laps that lost no time top out at 1.83, which is why the threshold moved
+    into the band between them.
+    """
     spun = frames(speeds=with_span([180.0] * 6000, 40.0, 40.0, 1.0),
-                  yaws=with_span([0.05] * 6000, 1.7, 40.0, 1.0))
+                  yaws=with_span([0.05] * 6000, 2.5, 40.0, 1.0))
     found = judge(a_stint([109_000, 109_000, 109_000, 123_300, 109_000],
                           {4: spun}))
     assert SPIN in found[4].signals
@@ -181,3 +188,35 @@ def test_the_evidence_is_reported_whether_or_not_it_crossed_a_threshold():
     seen = read_evidence(off)
     assert seen.off_track_s == pytest.approx(1.2, abs=0.05)
     assert seen.signals == ()
+
+
+def test_no_surface_channel_reads_as_not_available_never_as_no_excursions():
+    """Surface type arrives only in the `~` and `C` packets, and the listener
+    falls back to `A` after `FORMAT_PATIENCE_S` without a decode. Every lap of
+    that session then computed `off_track_s` as 0.0 and stored and exported it
+    as a measurement that the car never left the road — which is the exact
+    confusion `meta.packet` exists to prevent (§3.1).
+    """
+    blind = [{"speed_kph": 180.0, "yaw_rate": 0.05} for _ in range(6000)]
+    seen = read_evidence(blind)
+    assert seen.off_track_s is None
+    assert seen.crawl_s == 0.0          # the speed channel was there
+    assert seen.signals == ()
+
+
+def test_stored_evidence_keeps_each_columns_own_null():
+    """And the lap rack's rows have no `frames` attribute at all — a lap with
+    null evidence used to raise `AttributeError` inside `load_active_event`,
+    which is the app dying on launch rather than a bad number."""
+    from pitcrew.analysis.incidents import stored_or_read
+
+    class Row:
+        crawl_s, off_track_s, spin_s = 0.4, None, 0.0
+
+    seen = stored_or_read(Row())
+    assert (seen.crawl_s, seen.off_track_s, seen.spin_s) == (0.4, None, 0.0)
+
+    class Blank:
+        crawl_s = off_track_s = spin_s = None
+
+    assert stored_or_read(Blank()) == Evidence()

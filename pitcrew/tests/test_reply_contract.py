@@ -36,14 +36,14 @@ def a_reply(**overrides) -> str:
             {
                 "purpose": "race",
                 "sheetName": "Monza race v3",
-                "values": {"rh_f": 60, "rh_r": 65, "cam_f": -3.2},
+                "values": {"rh_f": 60, "rh_r": 65, "cam_f": 3.2},
                 "gears": [3.10, 2.28, 1.79],
                 "why": {"cam_f": "front-limited entry on the long corners"},
             },
             {
                 "purpose": "qualifying",
                 "sheetName": "Monza quali v3",
-                "values": {"rh_f": 55, "rh_r": 60, "cam_f": -3.6},
+                "values": {"rh_f": 55, "rh_r": 60, "cam_f": 3.6},
             },
         ],
         "clamped": ["arb_r: hit the maximum, the car wants more than GT7 gives"],
@@ -59,8 +59,8 @@ def test_both_sheets_come_back_separately():
     reply = parse_reply(a_reply())
     assert reply.race.sheet_name == "Monza race v3"
     assert reply.qualifying.sheet_name == "Monza quali v3"
-    assert reply.race.values["cam_f"] == -3.2
-    assert reply.qualifying.values["cam_f"] == -3.6
+    assert reply.race.values["cam_f"] == 3.2
+    assert reply.qualifying.values["cam_f"] == 3.6
 
 
 def test_the_gearbox_survives():
@@ -113,9 +113,11 @@ def test_an_untagged_sheet_is_filed_as_the_race_sheet():
 def test_a_reply_that_ignored_the_contract_is_still_read():
     """A driver pasting something is a driver trying to record a setup, and
     refusing on a formatting technicality helps nobody."""
-    reply = parse_reply("Ride Height (Front): 60\nCamber Front: -3.2")
+    reply = parse_reply("Ride Height (Front): 60\nToe Front: -0.05")
     assert reply.race.values["rh_f"] == 60.0
-    assert reply.race.values["cam_f"] == -3.2
+    # Toe is one of the three settings GT7 does let go negative, so this also
+    # covers the line reader keeping a sign it should keep.
+    assert reply.race.values["toe_f"] == -0.05
 
 
 def test_a_bare_setup_block_still_parses_as_it_always_did():
@@ -156,7 +158,7 @@ WHOLE_REPLY = """Here is the revised setup for Monza.
 | Parameter | Value | Clicks from min | % of range |
 |---|---|---|---|
 | Ride height front | 62 mm | 7 | 28% |
-| Camber front | -3.2 | 16 | 53% |
+| Camber front | 3.2 | 16 | 53% |
 
 The front ride height comes up to settle the entry understeer.
 
@@ -169,9 +171,9 @@ Same as race with a softer rear bar.
   "contract": "gt7-pitcrew-reply/1.0",
   "sheets": [
     {"purpose": "race", "sheetName": "Monza race v4",
-     "values": {"rh_f": 62, "cam_f": -3.2}, "gears": [3.10, 2.28]},
+     "values": {"rh_f": 62, "cam_f": 3.2}, "gears": [3.10, 2.28]},
     {"purpose": "qualifying", "sheetName": "Monza quali v4",
-     "values": {"rh_f": 58, "cam_f": -3.5}}
+     "values": {"rh_f": 58, "cam_f": 3.5}}
   ],
   "clamped": [],
   "testFirst": ["rear ARB one softer if it is still loose on exit"]
@@ -184,8 +186,8 @@ Let me know how it feels."""
 def test_the_whole_reply_pasted_finds_both_sheets():
     reply = parse_reply(WHOLE_REPLY)
     assert set(reply.sheets) == {RACE, QUALIFYING}
-    assert reply.race.values == {"rh_f": 62.0, "cam_f": -3.2}
-    assert reply.qualifying.values == {"rh_f": 58.0, "cam_f": -3.5}
+    assert reply.race.values == {"rh_f": 62.0, "cam_f": 3.2}
+    assert reply.qualifying.values == {"rh_f": 58.0, "cam_f": 3.5}
     assert reply.race.gears == [3.10, 2.28]
     assert reply.test_first
 
@@ -219,8 +221,8 @@ def test_prose_with_no_block_at_all_still_falls_back_to_reading_it():
     """A reply that ignored the contract is still a reply. Refusing on a
     formatting technicality helps nobody."""
     reply = parse_reply(
-        "## Race sheet\n\nRide Height (Front): 62\nCamber Front: -3.2\n")
-    assert reply.race.values == {"rh_f": 62.0, "cam_f": -3.2}
+        "## Race sheet\n\nRide Height (Front): 62\nCamber Front: 3.2\n")
+    assert reply.race.values == {"rh_f": 62.0, "cam_f": 3.2}
 
 
 def test_the_shape_the_prompt_prints_is_the_shape_the_parser_reads():

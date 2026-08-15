@@ -14,6 +14,7 @@ from pitcrew.analysis.corners import (
     CountedLap,
     aggregate_corners,
     bottoming_reference,
+    observed_minimum,
 )
 from pitcrew.analysis.gearing import gearing_export
 from pitcrew.analysis.resolve import resolve_corner_model
@@ -210,6 +211,17 @@ def _sheet_final_gear(sheet) -> float | None:
         return None
 
 
+def _counted_lap(lap: LapInput) -> CountedLap:
+    """A lap in the shape the corner aggregates read.
+
+    **The sheet id travels with it.** Ride height and spring rate are setup
+    values, so the height a wheel bottoms at is a property of the sheet rather
+    than of the event, and the bottoming reference is keyed on it.
+    """
+    return CountedLap(lap.lap_num, lap.frames,
+                      setup_sheet_id=lap.setup_sheet_id)
+
+
 def _reference_frames(laps: list[LapInput]) -> list[dict] | None:
     """The fastest counted lap that has frames — the corner model's reference."""
     candidates = [lap for lap in counted_laps(laps) if lap.frames]
@@ -265,17 +277,73 @@ def _merged_session(sessions: list[dict]) -> dict:
     """
     ordered = sorted(sessions, key=lambda s: (s["started_at"], s["id"]))
     merged = dict(ordered[0])
-    for key in ("packet_format", "car_category", "fuel_capacity_l",
+    for key in ("packet_format", "car_category",
                 "setup_sheet_id", "practice_intent", "practice_mode"):
         merged[key] = next(
             (s[key] for s in ordered if s[key] is not None), None)
+    # Fuel capacity is merged on plausibility, not on presence. GT7 reports a
+    # 0 L tank for an electric car *and* for a packet that arrived before the
+    # car had loaded, and event 3's first session opened on the second: its
+    # 0.0 beat the 100.0 four later sessions measured, asserting an electric
+    # car whose own laps burned 7.28 L each. A tank that was seen filling is
+    # the stronger evidence whichever run saw it.
+    merged["fuel_capacity_l"] = next(
+        (s["fuel_capacity_l"] for s in ordered
+         if s["fuel_capacity_l"] is not None and s["fuel_capacity_l"] > 0),
+        next((s["fuel_capacity_l"] for s in ordered
+              if s["fuel_capacity_l"] is not None), None))
     return merged
+
+
+# GT7's own token against the contract's vocabulary. The stream reports the
+# N-class as a group rather than as a number, so `GRN` cannot become `N500`
+# here - the PP that would decide it is not in the packet.
+CAR_CATEGORIES = {
+    "GR1": "Gr.1", "GR2": "Gr.2", "GR3": "Gr.3", "GR4": "Gr.4",
+    "GRB": "Gr.B", "GRX": "Gr.X", "GRN": "Gr.N",
+}
+
+
+def _car_category(token: str | None) -> str | None:
+    """`GR3` -> `Gr.3`. Converted here, at the boundary, and nowhere else.
+
+    The raw token is what the stream says and is what the store keeps; the
+    contract's §2 vocabulary is what the consumer reads. A token it does not
+    know reads as a car class that does not exist, so an unmapped one is
+    passed through unchanged and refused by the validator rather than
+    silently renamed into something plausible.
+    """
+    if not token:
+        return None
+    return CAR_CATEGORIES.get(token.strip().upper(), token)
+
+
+def _fuel_capacity(session) -> tuple[float | None, str]:
+    """The tank, and what to say about it when it could not be read.
+
+    A stored 0 is not an electric declaration. It is what the packet carries
+    before the car has loaded as well as what it carries for a car with no
+    tank, and the two are indistinguishable in the feed. Exporting the zero
+    switches the 1.4 lap-validity gate off for the whole event
+    (`fuel_implausible_laps` skips a capacity of 0) and removes the fuel
+    constraint from every race plan, with nothing in the payload saying so -
+    so it goes out as not measured, and says which.
+    """
+    capacity = _session_field(session, "fuel_capacity_l")
+    if capacity is None or capacity > 0:
+        return capacity, ""
+    return None, (
+        "Fuel capacity read 0 L on every run of this event. GT7 reports 0 both "
+        "for a car with no tank and for a packet that arrived before the car "
+        "loaded, so this is exported as not measured rather than as an "
+        "electric car - a zero would have switched the fuel plausibility "
+        "check off for every lap here.")
 
 
 def _build(store, session: dict, laps: list[LapInput], *, notes: str,
            game_version: str | None = None,
            calibrated_at_race_multiplier: bool) -> dict:
-    """Assemble the `gt7-pitcrew/1.4` payload."""
+    """Assemble the `gt7-pitcrew/1.5` payload."""
     event = store.get_event(session["event_id"])
     if event is None:
         raise ValueError("session has no event")
@@ -290,7 +358,8 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     # classify: running the classifier twice rewrites `exclusionReason` in
     # place and the driver's own words - "spun at T4" - do not survive it.
     laps, incidents = mark_incidents(laps)
-    laps = classify_exclusions(laps, session["fuel_capacity_l"])
+    fuel_capacity_l, capacity_note = _fuel_capacity(session)
+    laps = classify_exclusions(laps, fuel_capacity_l)
     counted = counted_laps(laps)
     diagnostic = diagnostic_laps(laps)
     runs = split_runs(laps)
@@ -298,12 +367,20 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     codes = _compounds_run(runs)
     single = _compound_full_name(codes[0]) if len(codes) == 1 else None
     meta = Meta(
-        car=event["car_name"] or "unknown",
+        # No placeholders on any of the three. The event screen already blocks
+        # a save without a car or a track, so a fallback here only defeats the
+        # validator's own refusal: "unknown" is not a GT7 car, and `"A"` is a
+        # positive, well-formed claim that the 296-byte base format was
+        # captured. Per contract §2 that claim is what tells a reader whether
+        # an absent extended channel was not measured or not offered, so a
+        # session GT7 never streamed to would have declared every one of them
+        # physically unavailable.
+        car=event["car_name"],
         circuit=_circuit_name(event),
         date=(session["started_at"] or "")[:10],
         session_type=session["kind"],
-        packet=session["packet_format"] or "A",
-        car_category=session["car_category"],
+        packet=session["packet_format"],
+        car_category=_car_category(session["car_category"]),
         # The event's own version where it has one - a measurement taken
         # under a version that is no longer installed keeps the version it was
         # taken under - and the app's otherwise.
@@ -332,12 +409,35 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     # The **diagnostic** set, not the counted one. A lap with a spin in it is
     # out of the pace and fuel numbers and stays in the corner aggregates,
     # because the car is what spun.
-    counted_with_frames = [CountedLap(lap.lap_num, lap.frames)
-                           for lap in diagnostic if lap.frames]
+    counted_with_frames = [_counted_lap(lap) for lap in diagnostic if lap.frames]
+    # **The reference comes off the counted laps only**, even though the
+    # aggregates span the diagnostic set. The reference is the floor every
+    # `bottoming` flag is judged against, and an off or a spin compresses the
+    # suspension below anything a clean lap reaches - so one incident lap
+    # silently lowered the floor for the whole session and the flag stopped
+    # firing on the laps it was meant to describe. On the Monza event laps 26,
+    # 74 and 79 were setting it.
+    reference_laps = [_counted_lap(lap) for lap in counted if lap.frames]
     bottoming_ref = None
+    bottoming_ref_source = None
+    observed_min = None
     if model is not None and counted_with_frames:
         meta.corner_model = model.as_meta()
-        bottoming_ref = bottoming_reference(counted_with_frames)
+        bottoming_ref = bottoming_reference(reference_laps, model)
+        observed_min = observed_minimum(reference_laps)
+        if bottoming_ref is not None:
+            sheets = {lap.setup_sheet_id for lap in reference_laps}
+            bottoming_ref_source = (
+                f"steady-state minimum: lowest suspension height per wheel "
+                f"over the straight-line frames of the {len(reference_laps)} "
+                f"counted lap{'' if len(reference_laps) == 1 else 's'} that "
+                f"carried them, keyed on the setup sheet each lap ran "
+                f"({len(sheets)} sheet{'' if len(sheets) == 1 else 's'}). "
+                f"Laps with an off or a spin are held out - they reach "
+                f"heights no clean lap does and would set the floor every "
+                f"bottoming flag is judged against. observedMinHeightMm is "
+                f"the raw minimum, which is a measurement rather than this "
+                f"inference")
         corners = aggregate_corners(model, counted_with_frames, bottoming_ref)
 
     setup = None
@@ -363,7 +463,8 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         if record is not None:
             range_record = record.as_export()
 
-    all_notes = " ".join(part for part in (exclusion_note(laps), notes) if part)
+    all_notes = " ".join(part for part in (exclusion_note(laps),
+                                           capacity_note, notes) if part)
 
     wear = wear_export(
         laps, calibrated_at_race_multiplier=calibrated_at_race_multiplier,
@@ -374,7 +475,7 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         setup=setup,
         driver_changes=driver_changes,
         range_record=range_record,
-        session=session_export(laps, fuel_capacity_l=session["fuel_capacity_l"]),
+        session=session_export(laps, fuel_capacity_l=fuel_capacity_l),
         laps=[lap_export(lap) for lap in laps],
         runs=runs_export(runs),
         corners=corners,
@@ -384,6 +485,8 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         derived=Derived(
             {**thresholds.as_export(), **incident_thresholds()},
             bottoming_ref_mm=bottoming_ref,
+            bottoming_ref_source=bottoming_ref_source,
+            observed_min_height_mm=observed_min,
             # Named, with what was seen on each. A lap dropped from the pace
             # numbers with no reason attached is indistinguishable from one
             # that was never driven, and the reader has to be able to tell an
@@ -413,7 +516,16 @@ def _strategy_section(store, event_id: int) -> dict | None:
     if event is not None:
         # Required: at 1 L/s against a 2.5 default this is the number that
         # decides the race, and a default standing in its place is unreadable.
-        assumptions["refuelRateLps"] = event["refuel_rate_lps"]
+        #
+        # **What the plan was costed with wins.** The event column used to be
+        # written over the top of it unconditionally, so a plan whose every
+        # stop was costed at a measured 3.0 L/s exported the driver's typed
+        # 1.0 beside it and the reader re-derived a 100 s stop for a plan that
+        # assumed 33 s. The column is the fallback, not the answer, and it
+        # says which of the two it is.
+        rate, source = _refuel_rate(assumptions.get("refuelRateLps"), event)
+        assumptions["refuelRateLps"] = rate
+        assumptions["refuelRateSource"] = source
         assumptions["mandatoryStops"] = event["mandatory_stops"]
 
     calls = _calls_made(store, event_id)
@@ -424,6 +536,30 @@ def _strategy_section(store, event_id: int) -> dict | None:
     if outcome:
         section["outcome"] = outcome
     return section
+
+
+# The value `events.refuel_rate_lps` is created with. The column is
+# `NOT NULL DEFAULT 2.5`, so it is never absent - which is why the validator's
+# None test could never fire. Equal to it is not proof the driver never looked,
+# but it is the state the app ships in, and it is the state that must not pass
+# for a measurement.
+REFUEL_RATE_DEFAULT = 2.5
+
+PLAN_REFUEL_SOURCE = "as the plan was costed"
+DECLARED_REFUEL_SOURCE = "driver-declared on the event page"
+DEFAULT_REFUEL_SOURCE = "still the app default - not confirmed"
+MISSING_REFUEL_SOURCE = "not entered"
+
+
+def _refuel_rate(planned: float | None, event) -> tuple[float | None, str]:
+    """The rate the stops were actually costed at, and where it came from."""
+    if planned is not None:
+        return planned, PLAN_REFUEL_SOURCE
+    rate = event["refuel_rate_lps"]
+    if rate is None:
+        return None, MISSING_REFUEL_SOURCE
+    return rate, (DEFAULT_REFUEL_SOURCE if rate == REFUEL_RATE_DEFAULT
+                  else DECLARED_REFUEL_SOURCE)
 
 
 def _outcome(store, event_id: int, section: dict) -> str:
@@ -471,6 +607,6 @@ def _compound_full_name(code: str | None) -> str | None:
 
 
 def _circuit_name(event: dict) -> str:
-    track = event["track"] or "unknown"
+    track = event["track"] or ""
     layout = event["layout"]
     return f"{track} ({layout})" if layout else track

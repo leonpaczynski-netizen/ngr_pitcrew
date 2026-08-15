@@ -354,6 +354,16 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # indistinguishable from one he entered, and the app would overwrite
         # his own declaration the next time it went out.
         ("clock_source", "TEXT"),
+        # `refuel_rate_lps` and `pit_loss_secs` are declared NOT NULL with the
+        # app's own defaults, so the column cannot say "he never entered one" -
+        # 2.5 L/s and 20 s look exactly like figures he typed, and the export
+        # was labelling the pit loss `measured-this-track` on that basis.  These
+        # two carry the provenance instead: NULL means untouched, and no reader
+        # may treat the value as declared without one.  Making the value columns
+        # nullable would mean rebuilding `events`, and four tables cascade off
+        # it, so the fact lives beside the number rather than in it.
+        ("refuel_rate_source", "TEXT"),
+        ("pit_loss_source", "TEXT"),
     ),
     "laps": (
         ("gear_ratios", "TEXT"),

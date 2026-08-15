@@ -44,6 +44,12 @@ _RECORD = struct.Struct("<dH")
 
 # A GT7 datagram is 296-368 bytes. Anything wildly outside that is a truncated
 # file or a different protocol, and reading on would produce plausible garbage.
+#
+# **The receiving socket must ask for more than this**, or the refusal in
+# `write` is unreachable: `recvfrom(MAX_DATAGRAM)` truncates an oversize
+# datagram to exactly the limit, so `len(data) > MAX_DATAGRAM` never holds and
+# the truncated bytes go into the capture file as though they were whole. See
+# `listener.RECV_BUFFER`.
 MAX_DATAGRAM = 4096
 
 

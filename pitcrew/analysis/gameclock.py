@@ -231,18 +231,34 @@ def race_span(reading: ClockReading | None, minutes: float | None,
               ) -> tuple[float, float] | None:
     """The game hours a race actually passes through.
 
-    Measured values win over declared ones, and the circuit's own ceiling wins
-    over both: a race cannot run into conditions the circuit's clock will not
-    reach. That is the difference between planning five hours of an evening
-    and planning the ninety minutes the track will actually give.
+    **The driver's declaration is primary and the measurement corroborates it**
+    (`CLAUDE.md` §4.1). This used to be the other way round, and the reading is
+    taken off *practice* — which this module's own docstring says is frequently
+    not run at the race's clock, and which `practice_clock_warning` exists to
+    report. A frozen practice session measures 0.0, which is not None, so it
+    won: a race declared 18:00 ×6 for 50 minutes came back as the span
+    (15:00, 15:00), `raceSpanHours: 0.0`, `covered: true`, on a race that
+    actually runs 18:00 to 23:00 with none of it driven. The quieter case is
+    practice at ×1 against a declared ×6, which reported 0.83 h of a 5 h race.
+
+    So a measurement only fills a gap the driver left. A **stopped** practice
+    clock never fills it at all: 0.0 is a fact about that lobby, not about the
+    race, and there is no reading of it that says how fast the race's clock
+    will run.
+
+    The circuit's own ceiling still wins over both, because it is a property
+    of the track rather than of the session: a race cannot run into conditions
+    the circuit's clock will not reach. That is the difference between
+    planning five hours of an evening and planning the ninety minutes the
+    track will actually give.
     """
     start = declared_start
     multiplier = declared_multiplier
     ceiling = None
     if reading is not None:
-        if reading.start_hour is not None:
+        if start is None:
             start = reading.start_hour
-        if reading.multiplier is not None:
+        if multiplier is None and reading.multiplier:
             multiplier = reading.multiplier
         ceiling = reading.stopped_at_hour
 

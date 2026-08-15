@@ -164,6 +164,103 @@ def test_a_spec_line_carries_provenance_per_entry(qt_app):
                                             theme.DERIVED}
 
 
+def test_every_unanswered_perception_combo_reads_struck(qt_app):
+    """The Race Engineer's left column IS the driver's report.
+
+    All seven combos painted their unanswered "—" in crayon - the register
+    that means he entered it - because `mark_unset` was never called on a bare
+    QComboBox and `QPalette.ButtonText` is crayon. Measured, not read off the
+    stylesheet: there is no `color` rule on QComboBox at all, so reading the
+    cascade would have found nothing either way.
+    """
+    from pitcrew.ui.engineer_screen import EngineerScreen
+
+    screen = EngineerScreen()
+    combos = (screen.costs_most, screen.balance_drift, screen.tyre_state,
+              screen.priority, screen.conditions, screen.clean_air,
+              screen.worst)
+    for combo in combos:
+        assert nearest_register(ink_of(combo)) == "struck", \
+            f"{combo.currentText()!r} reads as a declaration"
+
+    screen.costs_most.setCurrentIndex(1)
+    assert nearest_register(ink_of(screen.costs_most)) == "declared"
+
+
+def test_the_biggest_limitation_re_inks_after_a_silent_rebuild(qt_app):
+    """`_refresh_worst` clears and refills inside `blockSignals(True)`, so the
+    signal `mark_unset` wires itself to cannot fire - the ink has to be
+    re-asked for by hand or it describes the list the combo used to hold."""
+    from pitcrew.ui.engineer_screen import EngineerScreen
+
+    screen = EngineerScreen()
+    screen._symptom_boxes[0].setChecked(True)
+    screen.worst.setCurrentIndex(1)
+    assert nearest_register(ink_of(screen.worst)) == "declared"
+
+    screen._symptom_boxes[0].setChecked(False)
+    assert screen.worst.currentData() is None
+    assert nearest_register(ink_of(screen.worst)) == "struck"
+
+
+def test_an_event_with_no_stop_costs_entered_paints_them_struck(qt_app):
+    """Refuel rate and pit loss shipped holding 2.5 and 20.0 in crayon, so the
+    evidence column swore he had entered two app defaults. Pit loss sets what
+    a stop costs and refuel rate sets the stop count."""
+    from pitcrew.ui.event_screen import EventScreen
+
+    screen = EventScreen()
+    for box in (screen.refuel_rate, screen.pit_loss):
+        assert nearest_register(ink_of(box.lineEdit())) == "struck"
+    assert screen.values()["refuel_rate_lps"] is None
+    assert screen.values()["pit_loss_secs"] is None
+
+    screen.pit_loss.setValue(18.5)
+    assert nearest_register(ink_of(screen.pit_loss.lineEdit())) == "declared"
+    assert screen.values()["pit_loss_secs"] == 18.5
+
+
+def test_laps_of_fuel_is_not_painted_as_a_measurement(qt_app):
+    """`fuel_l / fuel_per_lap_l`, where the rate is the *planned* burn until
+    three laps are in. One spec line was carrying a model output and a stream
+    reading in the same ink, on the surface read at racing speed."""
+    from pitcrew.ui.race_screen import RaceScreen
+    from pitcrew.ui.widgets import Derived
+
+    screen = RaceScreen()
+    screen.show_snapshot({"lap": 12, "lapsTotal": 30, "lapsOfFuel": 8.3,
+                          "lapsToStop": 3, "nextCompound": "RM"})
+    by_label = {label.text(): reading
+                for label, reading in screen.spec._entries}
+    for name in ("Fuel", "Box in", "Then"):
+        assert isinstance(by_label[name], Derived), f"{name} claims measured"
+
+
+def test_the_fresh_set_picker_fits_its_longest_state(qt_app):
+    """`W_SET_ON` was 118 with a 74px edit field against an 84px "Carried
+    over", so the picker rendered "Carried o..." - the truncation its own
+    comment claimed it prevented, on the control that decides whether the wear
+    rate is measured or assumed."""
+    from PyQt6.QtWidgets import QStyle, QStyleOptionComboBox
+
+    from pitcrew.ui.practice_screen import SET_CARRIED, LapRow, RackRow
+
+    if not _fonts_are_real():
+        pytest.skip("this platform resolves none of the app's faces, so every "
+                    "text metric taken off it is measuring the platform")
+
+    row = RackRow(LapRow(1, 1, 94_000, 3.4, compound="RM"), 94_000,
+                  run_start=True)
+    combo = row.set_picker
+    option = QStyleOptionComboBox()
+    combo.initStyleOption(option)
+    field = combo.style().subControlRect(
+        QStyle.ComplexControl.CC_ComboBox, option,
+        QStyle.SubControl.SC_ComboBoxEditField, combo)
+    assert combo.fontMetrics().elidedText(
+        SET_CARRIED, Qt.TextElideMode.ElideRight, field.width()) == SET_CARRIED
+
+
 def test_derived_is_not_struck(qt_app):
     """It used to be. Struck means "removed from the count", so a modelled
     stint length wore the ink for something that does not count."""
@@ -323,6 +420,43 @@ def test_band_ink_picks_the_better_of_the_two_inks():
                  == theme.RUBBER.upper() else QColor(theme.RUBBER))
         assert theme.contrast_ratio(chosen, band) >= \
             theme.contrast_ratio(other, band), f"{code} picked the worse ink"
+
+
+def test_a_painted_band_actually_draws_its_code(qt_app):
+    """The gap that shipped a P1.
+
+    Both tests above call `theme.band_ink` directly, and nothing in the suite
+    ever painted a band - so when `paintEvent` was changed to call a function
+    nobody had written, every test still passed while the two-letter code was
+    silently absent from every band and chip in the app. A raising paintEvent
+    is not a crash under the app's own excepthook; it is a blank band and a
+    CRITICAL traceback per repaint. Only a pixel catches it.
+    """
+    from PyQt6.QtGui import QColor
+
+    from pitcrew.ui.widgets import CompoundBand, _desaturate
+
+    for code, value in theme.COMPOUND_BANDS.items():
+        for struck in (False, True):
+            band = CompoundBand(code, animate=False)
+            band.setStruck(struck)
+            band.resize(CompoundBand.WIDTH, 34)
+            band.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            band.show()
+            QApplication.processEvents()
+            image: QImage = band.grab().toImage()
+
+            painted = _desaturate(QColor(value)) if struck else QColor(value)
+            ink = theme.band_ink_for(painted)
+            on_ink = sum(
+                1
+                for y in range(image.height())
+                for x in range(image.width())
+                if theme.contrast_ratio(image.pixelColor(x, y), painted) >= 3.0
+                and theme.contrast_ratio(image.pixelColor(x, y), ink) < 1.4)
+            assert on_ink > 20, (
+                f"{code} band ({'struck' if struck else 'plain'}) painted no "
+                f"legible code - colour is the only channel left")
 
 
 # ------------------------------------------------------- keyboard and empties

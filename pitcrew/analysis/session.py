@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from statistics import mean, median, pstdev
 
 from pitcrew.analysis import thresholds
+from pitcrew.analysis.recency import Weighting, weighted
 
 # Tyres are freshest at the start of a stint, so the degradation reference is
 # taken from the earliest counted laps rather than from the session's best lap,
@@ -233,12 +234,48 @@ def diagnostic_laps(laps: list[LapInput]) -> list[LapInput]:
 
 
 def green_lap_reference_ms(laps: list[LapInput]) -> int | None:
-    """The fresh-tyre lap any degradation figure is measured against."""
+    """The fresh-tyre lap any degradation figure is measured against.
+
+    **A degradation reference, not a pace reference.** It is the best of the
+    first three counted laps, which across a merged event is the *oldest*
+    session's opening laps - the point being that they were run on the
+    freshest rubber, not that they represent how the car goes now. Read as
+    the pace a plan is built on it is the wrong number twice over: unweighted,
+    and taken from the run furthest from today. Use `reference_pace_ms` for
+    that.
+    """
     counted = counted_laps(laps)
     if not counted:
         return None
     window = counted[:GREEN_LAP_WINDOW]
     return min(lap.lap_time_ms for lap in window)
+
+
+def reference_pace_ms(laps: list[LapInput], *,
+                      current_sheet_id: int | None = None
+                      ) -> tuple[int | None, Weighting]:
+    """The pace a plan is built on, weighted, with the weighting that made it.
+
+    Split from `green_lap_reference_ms` because the two answer different
+    questions and only one of them was being asked. The green reference is the
+    session's opening laps and belongs to the degradation model; this is what
+    the car does now, and it sets the stop lap and - for a timed race - the
+    divisor that decides how far the race goes at all.
+
+    Weighted for the same reason the fuel burn is, and `analysis/recency` sets
+    out the measurement: across the Monza set the pooled median is 109.43 s
+    and the latest session alone 109.06. A reference slow by a third of a
+    second is about ten seconds over a 50-minute race, and because a stint
+    ends where degradation crosses a threshold it moves the stop lap too. The
+    module's own worked example was always the pace, and the pace was the one
+    figure not going through it.
+    """
+    weighted_ms, weighting = weighted(
+        counted_laps(laps),
+        lambda lap: lap.lap_time_ms if lap.lap_time_ms > 0 else None,
+        current_sheet_id=current_sheet_id,
+        applies_to=("referenceLapMs",))
+    return (None if weighted_ms is None else round(weighted_ms)), weighting
 
 
 def session_export(laps: list[LapInput],

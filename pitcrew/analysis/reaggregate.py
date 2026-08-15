@@ -58,16 +58,19 @@ class LapFinding:
         return out
 
     def describe(self) -> str:
-        if self.is_pit_lap:
-            what = []
-            if self.fuel_added_l:
-                what.append(f"+{self.fuel_added_l:.1f} L")
-            if self.tyres_changed:
-                what.append("tyres")
-            return (f"s{self.session_id} lap {self.lap_num}: pit lap, "
-                    f"{self.stop_s:.0f} s stationary"
-                    f"{' (' + ', '.join(what) + ')' if what else ''}")
-        return f"s{self.session_id} lap {self.lap_num}: out-lap"
+        where = f"s{self.session_id} lap {self.lap_num}: "
+        if not self.is_pit_lap:
+            return where + "out-lap"
+        what = []
+        if self.fuel_added_l:
+            what.append(f"+{self.fuel_added_l:.1f} L")
+        if self.tyres_changed:
+            what.append("tyres")
+        # A lap can be both: he came out of one stop and back into the next.
+        return (where + ("out-lap and pit lap, " if self.is_out_lap
+                         else "pit lap, ")
+                + f"{self.stop_s:.0f} s stationary"
+                + (f" ({', '.join(what)})" if what else ""))
 
 
 def samples_from(frames: list[dict], sample_hz: float) -> list[Sample]:
@@ -117,12 +120,11 @@ def read_session(laps: list[dict], frames_for) -> list[LapFinding]:
                     in find_stops(samples_from(frames, lap.get("sample_hz", 60.0)))
                     if stop.serviced]
 
-        if pit_before:
-            findings.append(LapFinding(
-                lap_id=lap["id"], session_id=lap["session_id"],
-                lap_num=lap["lap_num"], is_out_lap=True,
-                note="the lap after a stop"))
-
+        # **One finding per lap, never two.** A lap can be the out-lap of one
+        # stop and the in-lap of the next, and two findings for it write two
+        # sets of flags: `changes` always carries both columns, so applying
+        # them in order put `is_out_lap = 0` back over the out-lap finding
+        # that had just set it.
         if serviced:
             # More than one serviced stop inside a single lap is not a thing a
             # driver does; if it ever happens the fuel is summed and the tyre
@@ -131,10 +133,18 @@ def read_session(laps: list[dict], frames_for) -> list[LapFinding]:
             findings.append(LapFinding(
                 lap_id=lap["id"], session_id=lap["session_id"],
                 lap_num=lap["lap_num"], is_pit_lap=True,
+                is_out_lap=pit_before,
                 tyres_changed=any(s.changed_tyres for s in serviced),
                 fuel_added_l=round(sum(s.fuel_added_l for s in serviced), 2),
                 stop_s=sum(s.duration_s for s in serviced),
-                note="stop found in this lap's frames"))
+                note=("a stop found in this lap's frames, and it follows a "
+                      "stop" if pit_before
+                      else "stop found in this lap's frames")))
+        elif pit_before:
+            findings.append(LapFinding(
+                lap_id=lap["id"], session_id=lap["session_id"],
+                lap_num=lap["lap_num"], is_out_lap=True,
+                note="the lap after a stop"))
         pit_before = bool(serviced)
 
     return findings

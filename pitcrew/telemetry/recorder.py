@@ -27,6 +27,24 @@ SAMPLE_HZ = 60.0
 MS_PER_PACKET = 1000.0 / SAMPLE_HZ
 BLOB_FORMAT = "pitcrew.frames.v1"
 
+# **What the numbers mean**, versioned separately from where they sit.
+# `decode_frames` maps values by the blob's own stored `fields` list, so the
+# column layout is already safe against change; what it could not express was a
+# channel whose *values* were wrong at the source. Two were:
+#
+#   v1 - `yaw_rate` held the roll rate (`angvel_z`), and the four slip channels
+#        were 2pi too large.
+#   v2 - `yaw_rate` is the yaw rate (`angvel_y`), slip is a true ratio, and the
+#        slip channels are null rather than a synthetic 1.0 below walking pace.
+#
+# A blob with no version stamp is v1 and is upgraded on read by
+# `repair_frames`, so the laps already on disk are repaired rather than lost.
+FRAME_SCHEMA_VERSION = 2
+
+# Where `decode_frames` hands the blob's version to `repair_frames`, which
+# strips it again. Nothing downstream of the repair ever sees this key.
+_VERSION_KEY = "_v"
+
 # Column order is part of the on-disk format.  Append only — never reorder, or
 # previously stored laps decode into the wrong channels.
 #
@@ -54,7 +72,17 @@ FRAME_FIELDS: tuple[str, ...] = (
     "steering_norm",     # -1..1 fraction of full lock, null likewise
     "gear",
     "rpm",               # captured for short-shift analysis; never exported
-    "yaw_rate",          # rad/s, + = turning left
+    # Rotation about the **vertical** axis, rad/s, from `angvel_y`.
+    # **Not `angvel_z`**, which is what this column held in every v1 blob:
+    # `road_plane_y` - the road normal's Y component - runs 0.987 to 1.0 across
+    # all 918,673 captured frames, so up is world +Y and yaw is rotation about
+    # Y. `angvel_z` correlates +0.62 with the derivative of suspension roll
+    # asymmetry and -0.04 with ground-track yaw, and integrates to -1.6 deg
+    # over a closed lap where yaw must integrate to -360. It is the roll rate,
+    # and spin detection had never once fired on it.
+    "yaw_rate",
+    # speed * yaw rate / g. The expression was always right; the rate it was
+    # handed was not, which is what put a peak of 8.46 g on a Gr.3 car.
     "lat_g",
     "pos_x", "pos_y", "pos_z",
     "slip_fl", "slip_fr", "slip_rl", "slip_rr",   # wheel surface speed / car speed
@@ -102,6 +130,17 @@ _TWO_PI = 2.0 * math.pi
 # Below this the wheel-speed ratio is numerically meaningless (standing start,
 # stopped in the pit box) and would report enormous slip.
 _MIN_SPEED_FOR_SLIP_MS = 2.0
+
+_SLIP_FIELDS = ("slip_fl", "slip_fr", "slip_rl", "slip_rr")
+
+# Half-width of the stencil the yaw repair takes a heading over, in seconds.
+# `pos_x`/`pos_z` are stored at 1 cm and the car covers ~1.3 m per frame at
+# racing speed, so a heading measured across +-0.1 s spans ~16 m and carries
+# about 0.6 mrad of rounding noise. Differencing two of those over the same
+# span keeps the reconstructed rate inside 0.01 rad/s - 2-4% of the cornering
+# signal, against corner windows that are seconds long and keyed on lap
+# distance rather than on this.
+_YAW_STENCIL_S = 0.1
 
 
 # Index of `time_of_day_ms` in a frame row, so the clock span can be lifted
@@ -155,26 +194,47 @@ class LapFrames:
         return len(self.blob)
 
 
-def _slip_ratios(p: GT7Packet) -> tuple[float, float, float, float]:
+def _round(value: float | None, places: int) -> float | None:
+    """Round, but leave `None` alone. Missing is null, never zero."""
+    return None if value is None else round(value, places)
+
+
+def _slip_ratios(p: GT7Packet) -> tuple[float | None, ...]:
     """Wheel surface speed / car speed per corner.
 
     1.0 = rolling true, > 1.0 = spinning up, < 1.0 = locking.  This is the only
     way to get slip out of GT7, which sends wheel rotation and tyre radius but
     no slip channel.
+
+    **The per-wheel channel is rad/s, not rev/s**, so surface speed is
+    `omega * radius` and nothing more.  Multiplying by 2pi as well made every
+    reading 6.2832 times too large, and the flags built on it were noise:
+    `wheelspin` true on 99.7% of throttle-on frames, `lockup` on 0.2% of
+    braking ones - so a driver whose whole technique is trail-braking deep had
+    never once been shown a lockup.  The declared 8% wheelspin trip was really
+    17.2% and the declared 15% lockup was really an 86.5% lock.  Sanity check
+    on the observed top speed: 282.66 km/h on a 0.355 m tyre is 221 rad/s,
+    which is 2,110 rpm; rev/s would make it 13,300.
+
+    Below `_MIN_SPEED_FOR_SLIP_MS` the ratio is arithmetic on a divisor that
+    means nothing, so it is `None`.  It used to be a hard 1.0, which is this
+    channel's zero - exactly "rolling true", the most benign real reading it
+    has, written with nothing to mark it unmeasured.
     """
     if p.speed_ms < _MIN_SPEED_FOR_SLIP_MS:
-        return (1.0, 1.0, 1.0, 1.0)
+        return (None, None, None, None)
     rps = (p.wheel_rps_fl, p.wheel_rps_fr, p.wheel_rps_rl, p.wheel_rps_rr)
     radius = (p.tyre_radius_fl, p.tyre_radius_fr, p.tyre_radius_rl, p.tyre_radius_rr)
     out = []
     for i in range(4):
-        surface_ms = abs(rps[i]) * radius[i] * _TWO_PI
+        surface_ms = abs(rps[i]) * radius[i]
         out.append(surface_ms / p.speed_ms)
     return (out[0], out[1], out[2], out[3])
 
 
 def encode_frames(rows: list[list]) -> bytes:
-    payload = {"format": BLOB_FORMAT, "fields": list(FRAME_FIELDS), "rows": rows}
+    payload = {"format": BLOB_FORMAT, "v": FRAME_SCHEMA_VERSION,
+               "fields": list(FRAME_FIELDS), "rows": rows}
     return zlib.compress(json.dumps(payload, separators=(",", ":")).encode("utf-8"), 6)
 
 
@@ -206,23 +266,27 @@ def standing_start_ms(rows: list[list], sample_hz: float = SAMPLE_HZ) -> int | N
 
 
 def decode_frames(blob: bytes) -> list[dict]:
-    """Inverse of `encode_frames`, as a list of per-frame dicts."""
+    """Inverse of `encode_frames`, as a list of per-frame dicts.
+
+    Each frame carries the blob's schema version under `_VERSION_KEY`, which is
+    how `repair_frames` tells a lap recorded before the yaw and slip fixes from
+    one recorded after. It strips the key again, so nothing downstream of the
+    repair sees it.
+    """
     payload = json.loads(zlib.decompress(blob).decode("utf-8"))
     fields = payload["fields"]
-    return [dict(zip(fields, row)) for row in payload["rows"]]
+    version = int(payload.get("v", 1))
+    return [dict(zip(fields, row), **{_VERSION_KEY: version})
+            for row in payload["rows"]]
 
 
-def repair_frames(frames: list[dict],
-                  sample_hz: float = SAMPLE_HZ) -> list[dict]:
-    """Give laps recorded before this a lap distance and a working clock.
-
-    Two channels were wrong in every lap captured up to now, and both are
-    recoverable from what *was* stored:
+def _repair_distance_and_clock(frames: list[dict], rate: float) -> list[dict]:
+    """Integrate a lap distance and re-derive `t_ms` from the frame index.
 
     * **`lap_distance_m` did not exist.** What was recorded as distance was the
       road plane's fourth coefficient. Speed integrated at the known sample
-      rate lands within a percent of the circuit's published length and does so
-      consistently lap to lap, which is what corner windows need.
+      rate lands within a percent or two of the circuit's published length and
+      does so consistently lap to lap, which is what corner windows need.
     * **`t_ms` was GT7's in-game clock.** Frozen in a fixed-time event and
       running at many times real speed in a day-to-night one, so laps came out
       spanning 0 s or 970 s where the lap took 110 s. Every corner metric timed
@@ -235,11 +299,10 @@ def repair_frames(frames: list[dict],
     distance stays absent and the corner model reports no corners, which is
     honest.
     """
-    if not frames or frames[0].get("lap_distance_m") is not None:
+    if frames[0].get("lap_distance_m") is not None:
         return frames
     if all(frame.get("speed_kph") is None for frame in frames):
         return frames
-    rate = sample_hz or SAMPLE_HZ
     distance = 0.0
     out = []
     for index, frame in enumerate(frames):
@@ -250,6 +313,124 @@ def repair_frames(frames: list[dict],
                     "lap_distance_m": round(distance, 2),
                     "t_ms": int(round(index * 1000.0 / rate))})
     return out
+
+
+def ground_track_yaw(frames: list[dict], rate: float = SAMPLE_HZ) -> list[float | None]:
+    """Yaw rate reconstructed from the stored path, rad/s, one per frame.
+
+    **This is ground-track yaw, not body yaw.** The two differ by the rate of
+    change of chassis sideslip: second order for corner metrics and the
+    understeer flag, and emphatically not second order for a sideslip channel.
+    Nothing that needs body attitude may be built on a column repaired from
+    this.
+
+    **Sign.** This is the *y component of angular velocity*, which in a
+    right-handed frame is the negative of the heading rate: for planar motion
+    `r x v` has j-component `-R^2 * dtheta/dt` where `theta = atan2(z, x)`.
+    That is also what the capture set demands - it integrates to -360.3 deg per
+    lap here, and all three circuits in it are clockwise.
+
+    Whether GT7's own `angvel_y` carries the same sign is **not yet verified**:
+    thirty seconds of live capture settles it, and until then a v1 lap repaired
+    here and a v2 lap recorded from the packet agree in magnitude but only
+    presumptively in sign. Every consumer today takes `abs()`.
+
+    **Heading is undefined when the car is not moving.** Below the displacement
+    a car at `_MOVING_KPH` covers over the stencil, the direction of travel is
+    1 cm of position rounding and the honest answer is `None` - never a
+    carried-forward heading and never 0.0, which reads downstream as "not
+    rotating any harder" and quietly satisfies the understeer detector.
+    """
+    half = max(1, int(round(_YAW_STENCIL_S * rate)))
+    # The displacement a car at walking pace covers over the full stencil. At
+    # the ends of the lap the stencil narrows and this floor is stricter than
+    # it needs to be, which is the safe direction to be wrong in.
+    floor_m = (_MOVING_KPH / 3.6) * (2 * half / rate)
+    count = len(frames)
+    xs = [frame.get("pos_x") for frame in frames]
+    zs = [frame.get("pos_z") for frame in frames]
+
+    headings: list[float | None] = []
+    for index in range(count):
+        first, last = max(0, index - half), min(count - 1, index + half)
+        x0, z0, x1, z1 = xs[first], zs[first], xs[last], zs[last]
+        if x0 is None or z0 is None or x1 is None or z1 is None:
+            headings.append(None)
+            continue
+        dx, dz = x1 - x0, z1 - z0
+        headings.append(math.atan2(dz, dx)
+                        if math.hypot(dx, dz) >= floor_m else None)
+
+    out: list[float | None] = []
+    for index in range(count):
+        first, last = max(0, index - half), min(count - 1, index + half)
+        before, after = headings[first], headings[last]
+        if before is None or after is None or last == first:
+            out.append(None)
+            continue
+        turned = (after - before + math.pi) % _TWO_PI - math.pi
+        out.append(-turned / ((last - first) / rate))
+    return out
+
+
+def _repair_rotation_and_slip(frames: list[dict], rate: float) -> list[dict]:
+    """Put yaw, lateral g and slip back on a v1 lap.
+
+    Yaw and `lat_g` are recovered from the path rather than re-captured - see
+    `ground_track_yaw` for what that costs and what it cannot be used for.
+    Slip is recovered arithmetically, by dividing out the 2pi that should never
+    have been there, so no information is lost at all.
+
+    The slip channels below `_MIN_SPEED_FOR_SLIP_MS` become `None`. v1 wrote a
+    synthetic 1.0 there, and the 2pi error was the only thing making that
+    fabrication detectable - a genuine rolling-true reading stored as 6.283, so
+    an exact 1.0 could only be the placeholder. Dividing by 2pi without also
+    nulling the floor would hide it for good.
+    """
+    yaw_rates = ground_track_yaw(frames, rate)
+    out = []
+    for frame, yaw_rate in zip(frames, yaw_rates):
+        speed = frame.get("speed_kph")
+        repaired = {
+            **frame,
+            "yaw_rate": _round(yaw_rate, 4),
+            "lat_g": (None if yaw_rate is None or speed is None else
+                      round(abs(speed / 3.6 * yaw_rate) / 9.81, 3)),
+        }
+        unmeasurable = speed is not None and speed / 3.6 < _MIN_SPEED_FOR_SLIP_MS
+        for corner in _SLIP_FIELDS:
+            value = frame.get(corner)
+            repaired[corner] = (None if unmeasurable or value is None
+                                else round(value / _TWO_PI, 4))
+        out.append(repaired)
+    return out
+
+
+def repair_frames(frames: list[dict],
+                  sample_hz: float = SAMPLE_HZ) -> list[dict]:
+    """Bring a stored lap up to the current schema, on read.
+
+    Four channels were wrong in laps captured before now, and every one of them
+    is recoverable from what *was* stored - which is why 132 recorded laps are
+    repaired here rather than thrown away and re-driven. `lap_distance_m` and
+    `t_ms` are rebuilt for any lap that lacks a distance channel; `yaw_rate`,
+    `lat_g` and the four slip channels are rebuilt for any blob stamped below
+    `FRAME_SCHEMA_VERSION`.
+
+    Frames that did not come out of `decode_frames` carry no version stamp and
+    are assumed current: a caller holding hand-built frames is holding
+    already-correct ones, and dividing their slip by 2pi would invent a defect.
+    """
+    if not frames:
+        return frames
+    rate = sample_hz or SAMPLE_HZ
+    version = frames[0].get(_VERSION_KEY, FRAME_SCHEMA_VERSION)
+    frames = _repair_distance_and_clock(frames, rate)
+    if version < FRAME_SCHEMA_VERSION:
+        frames = _repair_rotation_and_slip(frames, rate)
+    for frame in frames:
+        frame.pop(_VERSION_KEY, None)
+    return frames
 
 
 class LapRecorder:
@@ -266,6 +447,10 @@ class LapRecorder:
         self._last_packet_id: int | None = None
         self._distance_m = 0.0
         self._dropped_off_track = 0
+        # Packets seen but not recorded, in packet-counter units. Subtracted
+        # from `elapsed` so a lap's clock measures time on track rather than
+        # time since the lap's first frame.
+        self._dropped_packets = 0
 
     @property
     def frame_count(self) -> int:
@@ -280,6 +465,19 @@ class LapRecorder:
                 return
             if not packet.car_on_track or packet.paused or packet.loading:
                 self._dropped_off_track += 1
+                # **The excursion is charged to neither counter.** Both are
+                # measured against the packet id, so a frame that is dropped
+                # still has to close its own gap or the next recorded frame
+                # pays for the whole thing: 30 s paused mid-lap integrated the
+                # resume speed across 1,800 packets and recorded 1,600 m of
+                # lap distance for 100 m driven, and reported `t_ms` 32,000
+                # for 2,000 ms of driving. Corner windows are keyed on lap
+                # distance, so one such lap renumbers every corner at that
+                # circuit.
+                if self._last_packet_id is not None:
+                    self._dropped_packets += max(
+                        0, packet.packet_id - self._last_packet_id)
+                self._last_packet_id = packet.packet_id
                 return
 
             # The clock is the packet counter, not GT7's time of day.
@@ -291,8 +489,12 @@ class LapRecorder:
             # use. The counter ticks once per packet at a known 60 Hz.
             if self._lap_start_packet is None:
                 self._lap_start_packet = packet.packet_id
+                # Anything dropped before the lap's first recorded frame is
+                # not part of this lap's clock at all.
+                self._dropped_packets = 0
             elapsed = max(0, int(round(
-                (packet.packet_id - self._lap_start_packet) * MS_PER_PACKET)))
+                (packet.packet_id - self._lap_start_packet
+                 - self._dropped_packets) * MS_PER_PACKET)))
 
             # Distance around the lap, integrated from speed. GT7 broadcasts
             # no lap-distance channel at all, and corner identity is a window
@@ -305,7 +507,10 @@ class LapRecorder:
             self._distance_m += packet.speed_ms * step / SAMPLE_HZ
 
             slip = _slip_ratios(packet)
-            lat_g = abs(packet.speed_ms * packet.angvel_z) / 9.81
+            # Yaw is rotation about the vertical axis, and up is world +Y.
+            # See the `yaw_rate` entry in FRAME_FIELDS for the three proofs.
+            yaw_rate = packet.angvel_y
+            lat_g = abs(packet.speed_ms * yaw_rate) / 9.81
             steer_rad = packet.steering
             steer_deg = None if steer_rad is None else round(math.degrees(steer_rad), 2)
             steer_norm = packet.steering_norm
@@ -322,10 +527,11 @@ class LapRecorder:
                 steer_norm,
                 packet.current_gear,
                 round(packet.engine_rpm, 0),
-                round(packet.angvel_z, 4),
+                round(yaw_rate, 4),
                 round(lat_g, 3),
                 round(packet.pos_x, 2), round(packet.pos_y, 2), round(packet.pos_z, 2),
-                round(slip[0], 4), round(slip[1], 4), round(slip[2], 4), round(slip[3], 4),
+                _round(slip[0], 4), _round(slip[1], 4),
+                _round(slip[2], 4), _round(slip[3], 4),
                 round(packet.suspension_fl * 1000.0, 2),
                 round(packet.suspension_fr * 1000.0, 2),
                 round(packet.suspension_rl * 1000.0, 2),
@@ -358,6 +564,7 @@ class LapRecorder:
             self._last_packet_id = None
             self._distance_m = 0.0
             self._dropped_off_track = 0
+            self._dropped_packets = 0
         return rows
 
     def encode(self, rows: list[list]) -> LapFrames | None:
@@ -385,3 +592,4 @@ class LapRecorder:
             self._lap_start_packet = None
             self._last_packet_id = None
             self._distance_m = 0.0
+            self._dropped_packets = 0

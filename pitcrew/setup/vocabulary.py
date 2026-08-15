@@ -26,6 +26,14 @@ class SetupKey:
     group: str
     decimals: int = 2
     note: str = ""
+    # **Whether GT7's own screen lets this value go below zero.** Only three
+    # do. Everything else is entered as a magnitude, so a negative is a sign
+    # convention imported from somewhere that is not GT7 - camber in
+    # particular, which every other sim writes negative and GT7 writes
+    # positive. It is not an opinion about setup; it is what the game will
+    # accept, and a value the driver cannot enter is worth catching where it
+    # arrives rather than at the car.
+    signed: bool = False
 
 
 # Order is display order.
@@ -43,9 +51,9 @@ SETUP_KEYS: tuple[SetupKey, ...] = (
     SetupKey("cam_f", "Camber front", "deg", "Geometry", 1),
     SetupKey("cam_r", "Camber rear", "deg", "Geometry", 1),
     SetupKey("toe_f", "Toe front", "deg", "Geometry", 2,
-             "+ is toe-in, - is toe-out"),
+             "+ is toe-in, - is toe-out", signed=True),
     SetupKey("toe_r", "Toe rear", "deg", "Geometry", 2,
-             "+ is toe-in, - is toe-out"),
+             "+ is toe-in, - is toe-out", signed=True),
     SetupKey("lsd_i", "LSD initial torque", "", "Differential", 0),
     SetupKey("lsd_a", "LSD acceleration sensitivity", "", "Differential", 0),
     SetupKey("lsd_b", "LSD braking sensitivity", "", "Differential", 0),
@@ -54,7 +62,8 @@ SETUP_KEYS: tuple[SetupKey, ...] = (
     SetupKey("df_f", "Downforce front", "", "Aero", 0),
     SetupKey("df_r", "Downforce rear", "", "Aero", 0),
     SetupKey("bb", "Brake balance", "", "Brakes", 0,
-             "delta from the car's factory bias; - front, + rear"),
+             "delta from the car's factory bias; - front, + rear",
+             signed=True),
     SetupKey("top", "Top speed", "km/h", "Gearing", 0),
     SetupKey("fg", "Final gear", "", "Gearing", 3),
 )
@@ -87,3 +96,26 @@ def unknown_keys(values: dict) -> tuple[str, ...]:
     silently ignore.
     """
     return tuple(sorted(set(values) - set(SETUP_KEY_NAMES)))
+
+
+def unenterable_values(values: dict) -> tuple[tuple[str, float], ...]:
+    """Values GT7's own settings screen will not accept, as (key, value).
+
+    Only the sign is checked, because only the sign is knowable without the
+    car's own slider limits - and the sign is where the mistakes come from.
+    The tune builder's return-shape example asked for `cam_f: -3.2` for two
+    versions, which reads as -32 clicks on a slider whose minimum is 0.0: a
+    position the driver cannot enter, arriving in the one section of the
+    payload that has no telemetry behind it to contradict it.
+
+    The per-car range check is `RangeRecord.fraction_of_range`; this is the
+    part that holds where no record has been measured.
+    """
+    out = []
+    for key, value in values.items():
+        described = _BY_KEY.get(key)
+        if described is None or described.signed:
+            continue
+        if isinstance(value, (int, float)) and value < 0:
+            out.append((key, float(value)))
+    return tuple(sorted(out))

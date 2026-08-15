@@ -71,7 +71,12 @@ W_MARKER = 84
 W_COMPOUND = 104
 # Wide enough for "Carried over" without clipping - a picker that silently
 # truncates its longest option is how a driver ends up reading the wrong state.
-W_SET_ON = 118
+# **Measured, because 118 was not.** At 118 the edit field is 74px against an
+# 84px "Carried over", so it rendered "Carried o..." - the exact truncation
+# this comment claimed it prevented, on the control that decides whether the
+# wear rate is measured or assumed. The combo's own sizeHint is 128, and the
+# row's hint is 988 at 1280 wide, so the 10px cannot overflow.
+W_SET_ON = 128
 W_WEAR = TyreGauge.WIDTH * 2 + 4      # two gauges wide, plus the gap between
 W_ACTION = 104
 HEAD_HEIGHT = 30
@@ -147,7 +152,18 @@ class LapRow:
 
     @property
     def counted(self) -> bool:
-        return not (self.excluded or self.is_out_lap or self.is_pit_lap)
+        """The same set the export counts, or the rack is quoting a session
+        the payload does not describe.
+
+        `incident` was here as a field, set by the rack's own classifier, and
+        never read - so a 122 s spin stayed in the count while
+        `LapInput.counted` (analysis/session.py:107) struck it. On a stored
+        ten-lap event the rack read "Counted 9/10, Best 92.100" against the
+        export's `lapsCounted 7, bestLapMs 94000`: a session best 1.9 s
+        quicker than the payload's, on the screen every session is judged by.
+        """
+        return not (self.excluded or self.is_out_lap or self.is_pit_lap
+                    or self.incident)
 
     def structural_reason(self) -> str | None:
         if self.is_out_lap:
@@ -542,6 +558,10 @@ class RackRow(QWidget):
         # than being crossed out - which is what he asked for, and the reason
         # he was crossing them out by hand in the first place.
         struck = self.row.excluded and not self.row.structural_reason()
+        # Reads `counted`, which now includes the incident laps - so a lap
+        # whose Strike button is hidden because `structural_reason()` calls it
+        # an incident is dimmed like the out-laps beside it. It was neither
+        # dimmed nor strikeable before: uncountable, and looking counted.
         uncounted = not self.row.counted
         self.frame.setStruck(struck)
         self.band.setStruck(uncounted)

@@ -48,6 +48,32 @@ def test_a_lap_is_placed_by_its_own_frames():
     assert lap_hour(a_lap(1, 14.0)) == 14.0
 
 
+def test_a_lap_is_placed_by_the_stamps_stored_on_the_row():
+    """Every lap carries `tod_start_ms`/`tod_end_ms` precisely so the clock
+    can be read without decoding a frame blob.
+
+    Reading only the frames meant a lap could be placed solely when something
+    else had chosen to decode it, and `strategy/evidence` hydrates a handful
+    per *tagged compound* - so a session of untagged laps produced no hours at
+    all and the app said "no lap on record carries a time of day, run a
+    practice session to put evidence on the map" right after he ran one.
+    """
+    stamped = LapInput(lap_num=1, lap_time_ms=94_000, fuel_start=90.0,
+                       fuel_end=86.0,
+                       tod_start_ms=int(15.0 * HOUR_MS),
+                       tod_end_ms=int(15.5 * HOUR_MS))
+    assert lap_hour(stamped) == 15.25
+    assert covered_hours([stamped]) == [15.25]
+
+
+def test_a_lap_over_midnight_is_not_averaged_into_noon():
+    crossing = LapInput(lap_num=1, lap_time_ms=94_000, fuel_start=90.0,
+                        fuel_end=86.0,
+                        tod_start_ms=int(23.8 * HOUR_MS),
+                        tod_end_ms=int(0.2 * HOUR_MS))
+    assert lap_hour(crossing) == 0.0
+
+
 def test_a_lap_recorded_before_the_clock_was_captured_has_no_hour():
     """Every lap up to now. They cannot be placed in the day, and saying so
     is different from saying they were driven at midnight."""

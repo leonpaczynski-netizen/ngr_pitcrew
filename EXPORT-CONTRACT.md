@@ -1,4 +1,4 @@
-# Pit Crew export contract — `gt7-pitcrew/1.4`
+# Pit Crew export contract — `gt7-pitcrew/1.5`
 
 **What this is.** The exact payload Pit Crew emits after a session. The driver copies
 it and pastes it into the **Pit Crew data** box on the Driver Feedback tab of the GT7
@@ -15,7 +15,7 @@ Two consequences, and they drive every decision below:
    setup decision and nothing else.
 
 Supersedes `gt7-pitcrew/1.0`. Changes and their justification are in §15 (through
-1.1) and §16 (1.2, 1.3 and 1.4). **Every version bump lands with its change table in
+1.1) and §16 (1.2, 1.3, 1.4 and 1.5). **Every version bump lands with its change table in
 the same commit** — without one the consumer cannot tell an added field from a
 renamed one, and has to read every unfamiliar field conservatively.
 
@@ -30,7 +30,7 @@ section full of zeros is not.
 
 ```json
 {
-  "format": "gt7-pitcrew/1.4",
+  "format": "gt7-pitcrew/1.5",
   "meta":        { },
   "setup":       { },
   "rangeRecord": { },
@@ -69,7 +69,7 @@ section full of zeros is not.
 | Field | Type | Notes |
 |---|---|---|
 | `car` | string | Full GT7 name including year, exactly as the game writes it |
-| `carCategory` | string | `Gr.1`…`Gr.4`, `Gr.B`, `N100`…`N1000`, or `null` |
+| `carCategory` | string | `Gr.1`…`Gr.4`, `Gr.B`, `Gr.X`, `Gr.N`, `N100`…`N1000`, or `null`. **The contract's spelling, not GT7's token** — the stream says `GR3` and it is mapped at the export boundary. Validated since 1.5 |
 | `circuit` | string | Full GT7 name including layout variant |
 | `date` | string | `YYYY-MM-DD` |
 | `sessionType` | enum | `practice` \| `quali` \| `tt` \| `race` — must match the Driver Feedback tab so the two halves line up |
@@ -200,7 +200,11 @@ lines and it keeps the register in sync automatically.
 - `greenLapRefMs` — the fresh-tyre reference lap the degradation model is measured
   against. Needed to interpret `wear.byLapTime`.
 - `fuelCapacityL` is 100 for almost every car, 5 for karts, **0 for electric**. Zero
-  is a real value.
+  is a real value — but it is never *inferred*. GT7 reports 0 both for a car with
+  no tank and for a packet that arrived before the car loaded, so the event takes
+  the first **plausible** capacity across its runs, and where every run read 0 the
+  field is `null` and `notes` says so. A zero that is really the second case
+  switches the plausibility gate below off for the whole event.
 - Track temperature is **not exposed by GT7**. There is no field for it. Do not
   invent a proxy.
 
@@ -660,6 +664,8 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
   "assumptions": {
     "pitLossS": 19.5,
     "pitLossSource": "measured-this-track",
+    "refuelRateLps": 1.0,
+    "refuelRateSource": "as the plan was costed",
     "fuelPerLapL": 3.42,
     "fuelWeightSPerLPerLap": 0.003,
     "fuelWeightSource": "derived-not-measured",
@@ -775,9 +781,11 @@ compromise, and `lapsSampled` carries it so the cap is never silent.
     "apexDefinition": "minimum speed point within the corner window"
   },
   "steerSource": "wheelRotation",
-  "steerRotationDeg": 1080,
+  "steerRotationDeg": 180,
+  "steerRotationSource": "full lock of the exported channel, from centre - wheelRotation saturates at +-pi whatever rotation the rim is set to, so steerPeakDeg divided by this is steerPeakNorm. Not the driver's physical wheel rotation setting.",
   "bottomingRefMm": { "fl": 31, "fr": 31, "rl": 38, "rr": 38 },
   "bottomingRefSource": "steady-state minimum observed, laps 3-9",
+  "observedMinHeightMm": { "fl": 28, "fr": 29, "rl": 35, "rr": 36 },
   "understeerIndexByCorner": { "T1": 0.12, "T3": 0.31 },
   "balanceDriftPerLap": "+0.4 understeer index over 9 laps"
 },
@@ -945,3 +953,44 @@ integrated from the stored speed channel and the clock rebuilt from the frame in
 so a session captured last week yields corners without being run again. The integrated
 distance lands within about a percent of the circuit's published length and does so
 consistently lap to lap, which is what corner windows need.
+
+### 16.4 → `1.5`
+
+**This is the version where the validator caught up with the contract.** The
+audit that produced it found 37 constraints this document states and the
+validator did not check, and 15 keys the app was shipping that the document did
+not define. A constraint nobody enforces is a comment, and an undeclared key
+has to be read conservatively by a consumer who cannot tell an addition from a
+rename — which is what §1 says this format exists to prevent.
+
+| # | Change | Reason |
+|---|---|---|
+| 1 | **No field may fall back to a placeholder.** `meta.packet` no longer defaults to `"A"`, and `meta.car` / `meta.circuit` no longer to `"unknown"`. Where the app has no value the field is `null` and the export refuses | `"A"` is a positive, well-formed claim that the 296-byte base set was captured, and it satisfied the validator's own enum check — so every absent extended channel read as *physically unavailable* rather than *not measured*, which is the exact ambiguity §2 exists to remove. Press Record with GT7 not streaming and that was the payload. `"unknown"` is at least visibly not a car name; both defeated the refusal gate they were sitting behind |
+| 2 | **`session.fuelCapacityL` is the first *plausible* capacity across the event's runs, never the first present one.** A `0` is emitted only where a car genuinely has no tank; where every run read 0 it is `null` and `notes` says why | GT7 reports 0 both for an electric car and for a packet that arrived before the car had loaded. A session that opened on the second stored 0.0 and beat the 100.0 four later runs measured, so the payload asserted an electric car whose own `laps[]` burned 7.28 L each — **and silently switched the 1.4 lap-validity gate off for the whole event**, since fuel plausibility is skipped on a capacity of 0. It also removed the fuel constraint from every race plan, so `bindingConstraint` could never be `fuel`. Zero stays a real value; what changed is that it is no longer *inferred* from a zero |
+| 3 | `meta.carCategory` is the contract's vocabulary (`Gr.3`), mapped from GT7's raw token (`GR3`) at the export boundary, and the validator checks it. `Gr.X` and `Gr.N` join the enum | The consuming tool's per-car library is keyed on `Gr.3`. `GR3` is not a car class it knows, and nothing checked. The stream reports the N-class as a group rather than as a number, so `Gr.N` cannot become `N500` here — the PP that would decide it is not in the packet |
+| 4 | **`derived.steerRotationDeg` is the full lock of the exported channel — 180° — not the driver's 1080° rim setting**, and new `derived.steerRotationSource` says so | `wheelRotation` is GT7's in-game wheel and saturates at ±π whatever the rim is set to. A reader given `steerPeakDeg: -67.47` against 1080 computes 12.5% of lock; `steerPeakNorm: -0.375` says 37.5%. §7 pairs the two fields precisely so degrees can be scaled, and this was the wrong scale by a factor of three. Nothing ever assigned it |
+| 5 | **New `derived.observedMinHeightMm`**, beside `bottomingRefMm`, and `bottomingRefSource` now names the set the reference came from | `CLAUDE.md` 3.3 fact 3 asks for two quantities — a steady-state reference *and* excursions toward the observed minimum — and the app published one. The source string also said "counted laps" while the reference was built from the diagnostic set, counted **plus incidents**: an off compresses the suspension below anything a clean lap reaches, so one incident lap set the floor every `bottoming` flag was judged against. It is now the counted laps only, keyed per setup sheet, with the incident laps held out |
+| 6 | **`strategy.assumptions.refuelRateLps` is what the plan was costed with**, and new **`refuelRateSource`** says whether it was measured, declared, or still the app default. A race export is refused on an unconfirmed default | The event column was written over the top of the plan's own figure, so a plan whose every stop was costed at a measured 3.0 L/s exported the driver's typed 1.0 beside it, and a reader re-derived a 100 s stop for a plan that assumed 33 s. The 1.2 refusal for a missing rate could never fire — the column is `NOT NULL DEFAULT 2.5` — so the case it was written for, the app's own default standing in for a measurement, shipped in silence. At ~1 L/s measured against 2.5 that is a 2.5x error in the stop count |
+| 7 | **New `wear.modelledStintCompound`**, required whenever `byCompound` names more than one | `modelledStintLaps` was whichever run happened to be last, with no compound attached: **26 laps** off a Racing Hard rate on a session whose Racing Soft rate gives 4. A driver planning 26 laps who fits softs runs six times past the cliff, which §5.1 of `CLAUDE.md` calls the expensive direction |
+| 8 | **`wear.byRun[].confidence: "measured"` is refused where `method` names the temperature-observed fresh set** | §6.1 makes `measured` conditional on two gauge readings inside one run, or on the driver's own declaration, and on nothing else. A set called fresh because its opening temperatures fell in a band the app chose is an app-side heuristic: four of six runs on the 11 Aug Monza data carried `measured` on exactly that, which promoted the whole payload to `modelConfidence: "measured"` |
+| 9 | **New `wear.byTemp.samples`** | Standing rule 4. The trend shipped with no sample count at all |
+| 10 | **New `wear.byLapTime.estimatedFractionSource`**, required beside `estimatedFractionAtEnd` | `phase` and `estimatedFractionAtEnd` are the driver's last gauge reading from anywhere in the session, published under `source: "lap-time-model"` — where they read as an output of the fit |
+| 11 | **New per-metric sample counts on `corners[]`**: `brakePointSamples`, `trailBrakeSamples`, `steerPeakSamples`, `throttleOnSamples`, `upshiftRpmSamples` | `samples` counts the laps that reached the corner; a mean is only over the laps that carried the channel. The shipped export carried `upshiftRpm: 7787` under `samples: 23` beside `shiftsInCorner: 0.09` — two laps' evidence presented as twenty-three, and §7 asks the reader to compare that figure against `gearing.limiterRpm` to judge short-shifting |
+| 12 | **The keys the app was already shipping are specified rather than dropped**: `meta.practiceIntent` / `.practiceMode` / `.rehearsal`, `setup.purpose`, `runs[].tyresChangedAtStop`, `wear.byRun[].wearPerLapUnavailable`, `wear.byCompound[].wearPerLapUnavailable`, `wear.byLapTime.fuelNettedNote` / `.degradationUnavailable` / `.runsDisagree`, `derived.incidents` and `derived.thresholds.incident*`, `strategy.assumptions.mandatoryStops`, `strategy.raceLength.startHour` / `.timeMultiplier`, `strategy.compoundProfiles[].paceBasis` | Several are genuinely useful; the defect was that they shipped undeclared. `wearPerLapUnavailable` in particular is the sentence §8 requires beside a null rate |
+| 13 | **The validator refuses an undefined key at any depth** | The fifteen above arrived one at a time and none announced itself. This is what stops the sixteenth |
+| 14 | **§13's prohibitions are all walked, not just `"tow"`**: `oilTemp`, `waterTemp`, `boost`, `tyrePressure`, `caster`, `brakePressure`, a high/low-speed damper split, GPS, and any key naming an rpm or trace **series** | The middle four are what `CLAUDE.md` §4.8 names as proof a heuristic was pattern-matched from a simulator that is not GT7, so they are the ones most worth refusing automatically. The rpm prohibition is on the shape, not the word: the three named rpm scalars are still exported |
+| 15 | **The `session` section is validated for the first time.** Required keys; `lapsRun` and `lapsCounted` cross-checked against `laps[]`; `lapsExcluded` against the laps marked invalid; `bestLapMs` must be the time of a counted lap; `lapsExcludedDetail[].reason` / `.source` enums | Nothing here was checked at all, which is how a lap boundary inside a pit transition became `bestLapMs` 1.9 s clear of the fastest real lap, and how a `fuelCapacityL` of 0 sailed through above laps burning 7.28 L each. The two sections are built by different code and agree only by accident unless something says they must |
+| 16 | **The `gearing` section is validated for the first time**: every source string must agree with the field it describes, `matchesSheetCovers` is required beside `matchesSheet`, `limiterRpmSource` must match the presence of `limiterRpm`, `gearingConstantSource` must begin `computed:` or `extrapolated:` | The section audited clean field by field and was checked by nothing. `matchesSheet: true` beside a contradictory `fittedFinalGear` was defect 1.4/10 and the validator could not see it |
+| 17 | `strategy.raceLength.finishAtS <= maxDurationS` is enforced; `plan.stintLaps` must sum to `plan.laps`, and the stint count must match the stop count | **The one invariant §10.0 exists to state**, and it was not checked. A plan past `maxDurationS` is not a slow plan, it is an impossible one |
+| 18 | `runs[]` must be contiguous, not merely non-overlapping | Only the overlap was refused, so a lap belonging to no run passed — and every rate in `wear.byRun` is computed inside a run, so those are laps nothing can be measured over |
+| 19 | Further enforced: `wear.byRun[].method` / `.confidence` enums, `assumesFreshAtLap` where the rate rests on an assumed fresh set, a null `wearPerLap` needing its reason, `runId`s pointing at runs that exist, `stintsMeasured <= stints`, `byLapTime.samples >= 5` with a named `fittedRunId`, `byLapTime.phase` enum, `compoundProfiles[].source` enum | Each is a sentence this document already contained and nothing tested |
+
+**Setup values are refused where GT7 could not accept them.** Not a payload
+change — a change in what reaches the payload. Camber, ride height, natural
+frequency, ARB, dampers, LSD, downforce, top speed and final gear are entered
+in GT7 as magnitudes; only `toe_f`, `toe_r` and `bb` take a sign. The prompt's
+own return-shape example asked for `cam_f: -3.2` for two versions, which is
+−32 clicks on a slider whose minimum is 0.0 — a position the driver cannot
+enter, arriving in the one section of the payload that has no telemetry behind
+it to contradict it. `SetupSheet.validate()` now refuses it and the prompt no
+longer asks for it.

@@ -30,6 +30,7 @@ from pitcrew.analysis.tyre_window import qualification, window_by_compound
 from pitcrew.strategy.model import (
     FUEL_WEIGHT_S_PER_L_PER_LAP,
     PIT_DEAD_TIME_S,
+    PIT_LOSS_DECLARED,
     SOURCE_DECLARED,
     SOURCE_MEASURED,
     CompoundProfile,
@@ -63,6 +64,26 @@ class Evidence:
 WINDOW_SAMPLE_LAPS = 6
 
 
+def _refuelled(row) -> bool:
+    """Whether this lap's tank ended fuller than it started.
+
+    The one cheap, exact test for a lap that carries a fill, and it reads off
+    the lap row rather than the frames - which is the point, because deciding
+    which laps to decode is what starved the measurement in the first place.
+
+    **It does not consult `is_pit_lap`.** On the owner's database that flag is
+    0 on every lap ever recorded, refuel laps included, so anything gated on
+    it measures nothing.
+    """
+    keys = row.keys() if hasattr(row, "keys") else ()
+    added = row["fuel_added_l"] if "fuel_added_l" in keys else None
+    if added:
+        return True
+    start = row["fuel_start"] if "fuel_start" in keys else None
+    end = row["fuel_end"] if "fuel_end" in keys else None
+    return start is not None and end is not None and end > start
+
+
 def _lap_inputs(store, event_id: int) -> list[LapInput]:
     """Every practice lap, with frames on only the laps that need them.
 
@@ -74,10 +95,12 @@ def _lap_inputs(store, event_id: int) -> list[LapInput]:
     depends on it entirely, because two compounds run on two evenings compare
     the evenings.
 
-    Frames are decoded for the temperature window and nothing else here, so
-    only the laps that window looks at are hydrated - the most recent few on
-    each compound, which are also the most representative: latest setup, track
-    at its most rubbered in.
+    Two things need frames, and they need **different laps**. The temperature
+    window wants the most recent few on each compound. The refuel rate wants
+    the lap the car took fuel on - and that lap fails every test the window
+    applies, which is how `analysis/refuel.py` came to be structurally
+    guaranteed to receive no frames on the only lap that carries what it
+    measures.
     """
     from pitcrew.export.build import evidence_lap_inputs
 
@@ -98,13 +121,30 @@ def _fuel_capacity(store, event_id: int) -> float | None:
 
 
 def _laps_to_hydrate(rows) -> set[int]:
-    """Lap ids worth decoding: the last few counted laps on each compound."""
+    """Lap ids worth decoding: the temperature window's, and every refuel.
+
+    The window's three filters - counted, compound-tagged, last few per
+    compound - were written for the window and then used as the *only*
+    hydration for the whole strategy path. **All three exclude a refuel lap.**
+    It is a pit lap by definition, it is often untagged, and even where it
+    survives both it is an early lap in the session and the last-six cap drops
+    it: on the owner's own 26-lap rehearsal the fill is lap 14 and the cap
+    keeps 21 to 26. So the rate came back `declared` forever, every stop was
+    costed at the typed figure, and that figure decides the stop count.
+
+    The window keeps its cap - a lap's blob is ~1.6 MiB and ~65 ms to decode,
+    and mean surface temperature barely moves lap to lap. A fill is rare and
+    is found from the lap row's own fuel columns, so this adds a decode per
+    stop and not per lap.
+    """
     by_compound: dict[str, list[int]] = {}
+    wanted: set[int] = set()
     for row in rows:
         counted = not (row["excluded"] or row["is_out_lap"] or row["is_pit_lap"])
         if row["compound"] and counted:
             by_compound.setdefault(row["compound"], []).append(row["id"])
-    wanted: set[int] = set()
+        if _refuelled(row):
+            wanted.add(row["id"])
     for lap_ids in by_compound.values():
         wanted.update(lap_ids[-WINDOW_SAMPLE_LAPS:])
     return wanted
@@ -491,10 +531,17 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     daylight["sessionsToRun"] = sessions_to_run(daylight, preset=preset)
     # Practice run with the clock stopped keeps the lobby light and produces
     # plenty of laps in conditions the race will not have.
+    #
+    # **Against the race's declared multiplier, not practice's own.** This
+    # passed the pooled practice reading whenever practice had one, so the
+    # comparison was practice against itself: every session matched, nothing
+    # was ever reported, and the one case the check exists for - practice run
+    # with the clock frozen for a race that sweeps through the evening - was
+    # the case it could not see. With no declared multiplier there is nothing
+    # to compare against and the warning is withheld rather than invented.
     daylight["practiceClock"] = practice_clock_warning(
         [read_clock(list(run.laps)) for run in split_runs(laps)],
-        (reading.multiplier if reading.measured
-         else _event_float(event, "time_multiplier")))
+        _event_float(event, "time_multiplier"))
 
     # Can it rain here at all? Declared, never measured - GT7 broadcasts no
     # weather channel in any packet format.
@@ -522,6 +569,10 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         fuel_capacity_l=capacity,
         refuel_rate_lps=refuel["rateLps"] or event["refuel_rate_lps"],
         pit_loss_s=event["pit_loss_secs"],
+        # Typed on the event page, so the payload says so. The evidence row
+        # below has always called it declared; the export used to assert it
+        # was measured at this track.
+        pit_loss_source=PIT_LOSS_DECLARED,
         wear_per_lap=wear,
         mandatory_stops=event["mandatory_stops"] or 0,
         available_compounds=tuple(event["available_compounds"]),

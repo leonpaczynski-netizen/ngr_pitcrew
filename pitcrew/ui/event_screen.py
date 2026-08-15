@@ -326,7 +326,18 @@ class EventScreen(QWidget):
         # Unsaved work is not thrown away on one click of a dropdown, and it
         # is not defended with a modal either - the second choice is the
         # confirmation. Nothing here is destructive until it is repeated.
-        if self.is_dirty() and self._pending_switch is not target:
+        # **By value, not by identity.** `itemData` round-trips through a C++
+        # QVariant and hands back a fresh Python int every call, so `is not`
+        # held only while CPython's small-int cache made two 2s the same
+        # object. Above id 256 the guard never released: every click re-armed
+        # it, the picker snapped back, and an event with unsaved edits on
+        # screen could not be reached at all. Event ids are sqlite rowids and
+        # are never reused, so this arrives after 256 events over the app's
+        # life. `_UNSET` stays a sentinel compared by identity - `None` is a
+        # real target here.
+        armed = (self._pending_switch is not _UNSET
+                 and self._pending_switch == target)
+        if self.is_dirty() and not armed:
             self._pending_switch = target
             here = self.name_edit.text().strip() or "this event"
             self.note(f"Unsaved changes to {here}. Save them first, or pick "
@@ -564,15 +575,26 @@ class EventScreen(QWidget):
         self.fuel_mult.addItems(MULTIPLIERS)
         self.fuel_mult.setCurrentText("2x")
 
+        # **Both empty until he says otherwise.** They shipped holding 2.5 L/s
+        # and 20 s, painted in crayon, and reached `evidence.py` as DECLARED -
+        # so the one surface whose whole job is separating measurements from
+        # guesses captioned two app defaults "entered". Refuel rate decides
+        # the stop count and pit loss decides what a stop costs; on the
+        # measured Monza figure of ~1 L/s the 2.5 default is a 2.5x error.
+        # Every other optional box on this screen already reads as absent.
         self.refuel_rate = QDoubleSpinBox()
-        self.refuel_rate.setRange(0.1, 20.0)
+        self.refuel_rate.setRange(EMPTY, 20.0)
         self.refuel_rate.setSingleStep(0.1)
-        self.refuel_rate.setValue(2.5)
+        self.refuel_rate.setSpecialValueText("—")
+        self.refuel_rate.setValue(EMPTY)
+        struck_when_empty(self.refuel_rate)
 
         self.pit_loss = QDoubleSpinBox()
-        self.pit_loss.setRange(0.0, 120.0)
+        self.pit_loss.setRange(EMPTY, 120.0)
         self.pit_loss.setSingleStep(0.5)
-        self.pit_loss.setValue(20.0)
+        self.pit_loss.setSpecialValueText("—")
+        self.pit_loss.setValue(EMPTY)
+        struck_when_empty(self.pit_loss)
 
         self.mandatory_stops = QSpinBox()
         self.mandatory_stops.setRange(0, 10)
@@ -942,8 +964,8 @@ class EventScreen(QWidget):
 
         self.tyre_mult.setCurrentText("4x")
         self.fuel_mult.setCurrentText("2x")
-        self.refuel_rate.setValue(2.5)
-        self.pit_loss.setValue(20.0)
+        self.refuel_rate.setValue(EMPTY)
+        self.pit_loss.setValue(EMPTY)
         self.mandatory_stops.setValue(0)
         self.abs_setting.setCurrentText("Weak")
         self.tcs.setValue(0)
@@ -991,8 +1013,10 @@ class EventScreen(QWidget):
             self.weather.setCurrentText((event.get("weather") or "dry").title())
             self.tyre_mult.setCurrentText(event.get("tyre_wear_mult") or "Off")
             self.fuel_mult.setCurrentText(event.get("fuel_mult") or "Off")
-            self.refuel_rate.setValue(float(event.get("refuel_rate_lps") or 2.5))
-            self.pit_loss.setValue(float(event.get("pit_loss_secs") or 20.0))
+            for widget, key in ((self.refuel_rate, "refuel_rate_lps"),
+                                (self.pit_loss, "pit_loss_secs")):
+                stored = event.get(key)
+                widget.setValue(EMPTY if stored is None else float(stored))
             self.mandatory_stops.setValue(int(event.get("mandatory_stops") or 0))
             if event.get("abs_setting"):
                 self.abs_setting.setCurrentText(event["abs_setting"])
@@ -1026,6 +1050,16 @@ class EventScreen(QWidget):
 
         if sheet is not None:
             self.sheet_name.setText(sheet.sheet_name)
+            # **What the sheet says it is for, not what the picker happens to
+            # show.** `_reset` leaves the picker on Race, and `values()` reads
+            # the picker - so a qualifying sheet loaded under a Race label was
+            # rewritten as the race sheet by the next save, and the qualifying
+            # one ceased to exist. Index 0 only where `sheet.purpose` is None:
+            # a sheet stored before the question existed has not answered it
+            # (setup/sheet.py:41-50), and answering it for him would file a
+            # guess as a declaration.
+            index = self.sheet_purpose.findData(sheet.purpose)
+            self.sheet_purpose.setCurrentIndex(index if index >= 0 else 0)
             for key, editor in self._setup_editors.items():
                 value = sheet.values.get(key)
                 editor.setValue(EMPTY if value is None else float(value))
@@ -1072,8 +1106,13 @@ class EventScreen(QWidget):
             "weather": self.weather.currentText().lower(),
             "tyre_wear_mult": self.tyre_mult.currentText(),
             "fuel_mult": self.fuel_mult.currentText(),
-            "refuel_rate_lps": self.refuel_rate.value(),
-            "pit_loss_secs": self.pit_loss.value(),
+            # Null, never a plausible-looking number. Both of these are what
+            # a stop costs, and a guess wearing the shape of a measurement is
+            # how the stop count comes out wrong with nothing saying so.
+            "refuel_rate_lps": (None if self.refuel_rate.value() <= EMPTY
+                                else self.refuel_rate.value()),
+            "pit_loss_secs": (None if self.pit_loss.value() <= EMPTY
+                              else self.pit_loss.value()),
             "mandatory_stops": self.mandatory_stops.value(),
             "abs_setting": self.abs_setting.currentText(),
             "tcs": self.tcs.value(),

@@ -75,6 +75,26 @@ def test_a_tyres_only_stop_is_a_pit_lap_with_no_fuel():
     assert found[0].fuel_added_l == 0.0
 
 
+def test_a_lap_that_is_both_an_out_lap_and_a_pit_lap_is_one_finding():
+    """Two findings for one lap write two sets of flags.
+
+    `changes` always carries both columns, so applying them in order put
+    `is_out_lap = 0` straight back over the out-lap finding that had just set
+    it — and a lap he came out of one stop on and back into the next stopped
+    being an out-lap at all.
+    """
+    found = findings_for(green(100),
+                         green(50) + a_stop(litres=30),
+                         green(50) + a_stop(litres=30),
+                         green(100))
+    assert [(f.lap_num, f.is_pit_lap, f.is_out_lap) for f in found] == [
+        (2, True, False), (3, True, True), (4, False, True)]
+    both = found[1]
+    assert both.changes["is_pit_lap"] == 1
+    assert both.changes["is_out_lap"] == 1
+    assert "out-lap and pit lap" in both.describe()
+
+
 def test_a_clean_session_is_left_completely_alone():
     assert findings_for(green(100), green(100), green(100)) == []
 

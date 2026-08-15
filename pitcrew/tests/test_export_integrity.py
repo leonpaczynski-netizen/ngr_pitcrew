@@ -275,11 +275,22 @@ def test_the_roll_up_names_what_it_does_not_cover():
 
 
 def test_the_multiplier_the_rate_was_measured_at_travels_with_it():
-    """Multiplier linearity is assumed and has never been demonstrated."""
-    wear = wear_export(a_run(1, 6, compound="RH", final_wear=0.42),
-                       race_multiplier="8x")
-    assert wear["wearMeasuredAtRaceMultiplier"] is True
+    """Multiplier linearity is assumed and has never been demonstrated.
+
+    The multiplier travels with the rate. Whether it is the *race's*
+    multiplier is a separate claim, and nothing on record can make it: the
+    setting is declared against the event and no session stores the one it
+    ran at. It used to default to `true`, so every export ever written
+    asserted a calibration nobody had done.
+    """
+    laps = a_run(1, 6, compound="RH", final_wear=0.42)
+    wear = wear_export(laps, race_multiplier="8x")
     assert wear["wearMultiplier"] == "8x"
+    assert wear["wearMeasuredAtRaceMultiplier"] is None
+
+    told = wear_export(laps, race_multiplier="8x",
+                       calibrated_at_race_multiplier=True)
+    assert told["wearMeasuredAtRaceMultiplier"] is True
 
 
 # ------------------------------------------------------- P7 exclusion reasons
@@ -411,3 +422,142 @@ def test_no_key_anywhere_may_claim_a_tow():
     payload = build_payload(a_meta(), runs=[
         {"id": 1, "firstLap": 1, "lastLap": 4, "towDetected": True}])
     assert any("tow" in problem for problem in validate(payload))
+
+
+# ------------------------------------------ the 1.5 validator, section by section
+
+def test_the_prohibitions_of_section_13_are_all_walked():
+    """Only "tow" was ever refused, so seven others shipped unremarked.
+
+    The last four are what CLAUDE.md 4.8 names as proof a heuristic was
+    pattern-matched from a simulator that is not GT7.
+    """
+    for key in ("oilTempC", "waterTempC", "boostBar", "tyrePressureF",
+                "caster", "brakePressurePct", "damperHighSpeedF"):
+        payload = build_payload(a_meta(), runs=[
+            {"id": 1, "firstLap": 1, "lastLap": 4, key: 1.0}])
+        assert any(key in problem for problem in validate(payload)), key
+
+
+def test_an_rpm_series_is_refused_where_an_rpm_scalar_is_not():
+    """The prohibition is on the shape, not on the word: three named rpm
+    scalars are exported and a 60 Hz trace is still refused."""
+    series = build_payload(a_meta(), gearing={
+        "samples": 3, "limiterRpm": None,
+        "limiterRpmSource": "limiter never fired in this session",
+        "rpmSamples": [7100, 7400, 7800]})
+    assert any("series" in problem for problem in validate(series))
+
+
+def test_an_undeclared_key_is_refused_rather_than_shipped():
+    payload = build_payload(a_meta(), session={
+        "lapsRun": 0, "lapsCounted": 0, "lapsExcluded": [],
+        "trackTempProxyC": 24.0})
+    assert any("trackTempProxyC" in problem for problem in validate(payload))
+
+
+def test_the_best_lap_must_belong_to_a_counted_lap():
+    """A lap boundary inside a pit transition became bestLapMs, 1.9 s clear of
+    the fastest real lap. Nothing in `session` was checked at all."""
+    payload = build_payload(
+        a_meta(),
+        laps=[{"lap": 1, "timeMs": 94_000, "valid": True},
+              {"lap": 2, "timeMs": 42_000, "valid": False}],
+        session={"lapsRun": 2, "lapsCounted": 1, "lapsExcluded": [2],
+                 "bestLapMs": 42_000})
+    assert any("not the time of any counted lap" in problem
+               for problem in validate(payload))
+
+
+def test_the_counted_laps_of_the_two_sections_must_agree():
+    payload = build_payload(
+        a_meta(),
+        laps=[{"lap": 1, "timeMs": 94_000, "valid": True},
+              {"lap": 2, "timeMs": 93_000, "valid": False}],
+        session={"lapsRun": 2, "lapsCounted": 2, "lapsExcluded": [2]})
+    assert any("laps marked valid" in problem for problem in validate(payload))
+
+
+def test_a_lap_belonging_to_no_run_is_refused():
+    """Only the overlap was refused, so a gap passed - and every wear rate is
+    computed inside a run."""
+    payload = build_payload(a_meta(), runs=[
+        {"id": 1, "firstLap": 1, "lastLap": 4},
+        {"id": 2, "firstLap": 7, "lastLap": 10}])
+    assert any("belong to no run" in problem for problem in validate(payload))
+
+
+def test_a_plan_cannot_finish_after_the_race_can_end():
+    """Section 10.0's one invariant, and it was never checked."""
+    payload = build_payload(a_meta(), strategy={
+        "assumptions": {"refuelRateLps": 1.0, "refuelRateSource": "measured"},
+        "raceLength": {"type": "time", "minutes": 50,
+                       "maxDurationS": 3108.0, "finishAtS": 3140.0}})
+    assert any("cannot happen" in problem for problem in validate(payload))
+
+
+def test_the_stints_and_the_distance_must_agree():
+    payload = build_payload(a_meta(), strategy={
+        "assumptions": {"refuelRateLps": 1.0, "refuelRateSource": "measured"},
+        "plan": {"stops": 1, "laps": 27, "stintLaps": [13, 13],
+                 "compounds": ["RH", "RH"]}})
+    assert any("stints and the distance disagree" in problem
+               for problem in validate(payload))
+
+
+def test_a_race_costed_on_the_untouched_refuel_default_is_refused():
+    """The refusal that could never fire: the column is NOT NULL DEFAULT 2.5,
+    so the None test was unreachable and the app default shipped silently."""
+    payload = build_payload(a_meta(session_type="race"), strategy={
+        "assumptions": {"refuelRateLps": 2.5,
+                        "refuelRateSource": "still the app default - not confirmed"}})
+    assert any("still the app default" in problem
+               for problem in validate(payload))
+
+
+def test_a_rate_measured_by_temperature_may_not_call_itself_measured():
+    """`measured` is conditional on two readings or the driver's own word.
+    A set called fresh by an app-side temperature band is neither."""
+    payload = build_payload(a_meta(), runs=[{"id": 1, "firstLap": 1, "lastLap": 4}],
+                            wear={
+        "channelAvailable": False,
+        "byRun": [{"runId": 1, "wearPerLap": 0.05,
+                   "method": ("one gauge reading, over a set whose opening "
+                              "temperatures are those of a set as fitted"),
+                   "confidence": "measured"}]})
+    assert any("app-side band" in problem for problem in validate(payload))
+
+
+def test_a_stint_length_over_several_compounds_must_name_the_one_it_is_for():
+    """26 laps was exported off a Racing Hard rate while Racing Soft was 4."""
+    payload = build_payload(a_meta(compounds_run=["Racing Soft", "Racing Hard"]),
+                            wear={
+        "channelAvailable": False,
+        "modelledStintLaps": 26,
+        "byCompound": {
+            "RS": {"compound": "Racing Soft", "wearPerLap": 0.17},
+            "RH": {"compound": "Racing Hard", "wearPerLap": 0.03}}})
+    assert any("modelledStintCompound" in problem for problem in validate(payload))
+
+
+def test_a_temperature_trend_carries_its_sample_count():
+    payload = build_payload(a_meta(), wear={
+        "channelAvailable": False,
+        "byTemp": {"trendCPerLap": 1.2, "source": "tyre-temp-trend"}})
+    assert any("sample count" in problem for problem in validate(payload))
+
+
+def test_a_gauge_reading_under_the_lap_time_model_carries_its_own_source():
+    payload = build_payload(a_meta(), wear={
+        "channelAvailable": False,
+        "byLapTime": {"source": "lap-time-model", "estimatedFractionAtEnd": 0.74,
+                      "phase": "linear"}})
+    assert any("estimatedFractionSource" in problem
+               for problem in validate(payload))
+
+
+def test_gt7s_own_car_class_token_is_not_the_contracts_vocabulary():
+    assert any("carCategory" in problem
+               for problem in validate(build_payload(a_meta(car_category="GR3"))))
+    assert not any("carCategory" in problem
+                   for problem in validate(build_payload(a_meta(car_category="Gr.3"))))

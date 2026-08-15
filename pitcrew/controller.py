@@ -89,6 +89,8 @@ class TelemetryBridge(QObject):
     session_event = pyqtSignal(object)           # every event, for the race
     stream_seen = pyqtSignal(object)             # first packet's fixed facts
     parse_failed = pyqtSignal()
+    ptt_answered = pyqtSignal(str, str)      # heard, said - off the hook thread
+    button_probed = pyqtSignal(str)          # probe note - off the hook thread
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -231,20 +233,30 @@ class PitCrewController(QObject):
         # a race so nothing that speaks for another reason is silenced by it.
         self._engineer_speaks = True
         self._button_probe = None
+        # Build the recogniser first, then ask *it* what it is. The gate used to
+        # be chosen from the configured backend, but `best_recogniser_for` falls
+        # back across that very boundary: with the shipped default of SAPI, and
+        # SAPI failing to come up on this machine, the app ran Moonshine free
+        # dictation with `matcher=None` - and `gate.judge` short-circuits when
+        # there is no distance, so the whole five-stage gate was skipped on the
+        # one path that needs it. Only free dictation needs it; SAPI's closed
+        # grammar is exact by construction.
+        recogniser = best_recogniser_for(self.settings.speech_backend)
+        free_dictation = getattr(recogniser, "name", "") == "moonshine"
         self.ptt = PushToTalk(
             snapshot=self._ptt_snapshot,
             speak=self.voice.say,
-            recogniser=best_recogniser_for(self.settings.speech_backend),
+            recogniser=recogniser,
             listener=best_listener(self.settings.ptt_key),
             on_answer=self._on_ptt_answer,
-            # Only Moonshine returns free dictation, so only Moonshine needs
-            # the semantic gate. SAPI's closed grammar is exact already.
-            matcher=(best_semantic_matcher()
-                     if self.settings.speech_backend == settings.SPEECH_MOONSHINE
-                     else None),
+            matcher=best_semantic_matcher() if free_dictation else None,
             sensitivity=self.settings.speech_sensitivity)
         self._plans: list = []
         self._inputs = None
+        self._plans_event_id: int | None = None
+        # What the open session is, so handlers that write "to the open
+        # session" can tell a practice run from a race.
+        self.session_kind: str | None = None
 
         self.bridge = TelemetryBridge(self)
         self.listener: UDPListener | None = None
@@ -255,6 +267,8 @@ class PitCrewController(QObject):
         self.bridge.lap_completed.connect(self._on_lap_completed)
         self.bridge.stream_seen.connect(self._on_stream_seen)
         self.bridge.parse_failed.connect(self._on_parse_failed)
+        self.bridge.ptt_answered.connect(self._show_ptt_answer)
+        self.bridge.button_probed.connect(self._note_button_probe)
         self.bridge.session_event.connect(self._on_race_event)
 
         self.event_screen.saved.connect(self._on_event_saved)
@@ -351,6 +365,10 @@ class PitCrewController(QObject):
 
     def load_active_event(self) -> None:
         event = self.active_event()
+        # Plans describe one event's evidence. Re-saving the event they were
+        # built for keeps them; moving to another event drops them.
+        if self._plans and self._plans_event_id != (event["id"] if event else None):
+            self._forget_plans()
         # The picker is refreshed either way: with no active event it is the
         # only route back to one that does exist.
         self.event_screen.set_events(self.store.list_events(),
@@ -368,10 +386,17 @@ class PitCrewController(QObject):
             self._refresh_race_options(None)
             return
 
-        sheet = None
-        sheets = self.store.list_setup_sheets(event["car_name"] or "")
-        if sheets:
-            sheet = sheets[0]
+        # The race sheet, by purpose - not whichever row sorted first.
+        # `list_setup_sheets` orders by `updated_at DESC, id DESC`, and a pasted
+        # race+qualifying pair is written inside the same second, so the
+        # qualifying sheet came back on top.  `EventScreen.load` then showed it
+        # under the Race label and one Save rewrote it as the race sheet, which
+        # left the car with two race sheets and no qualifying one.
+        car = event["car_name"] or ""
+        sheet = self.store.sheet_for(car, "race")
+        if sheet is None:
+            sheets = self.store.list_setup_sheets(car)
+            sheet = sheets[0] if sheets else None
         self.event_screen.load(event, sheet)
         self.practice.set_laps(self._rows_for_event(event["id"]))
         self.practice.set_status(self._idle_status(event))
@@ -397,6 +422,7 @@ class PitCrewController(QObject):
             # on the screen, which is the one mistake this feature exists to
             # prevent.
             self.store.set_state("active_event_id", None)
+            self._forget_plans()
             self.event_screen.set_events(self.store.list_events(), None)
             self.event_screen.clear()
             self.practice.set_laps([])
@@ -815,12 +841,15 @@ class PitCrewController(QObject):
             return
         self.voice.warm()
         line = "Radio check. Box this lap or next."
-        self.voice.say(line)
+        # Synchronously, and report what happened rather than that it was
+        # queued: this button exists because he is in a headset and cannot see
+        # whether a sound came out, which is exactly the case where a false
+        # success is worst.
+        spoke, why = self.voice.say_now(line)
         self.settings_screen.note_beep(
-            f"Said it through {self.voice.engine_name}: “{line}”"
-            if self.voice.enabled else
-            "No speech engine loaded on this machine - check the log.",
-            warn=not self.voice.enabled)
+            f"Said it through {self.voice.engine_name}: “{line}”" if spoke else
+            f"Nothing came out - {why}. Check the output device and the log.",
+            warn=not spoke)
 
     def probe_button(self, listening: bool) -> None:
         """Watch for the configured key and say when it is pressed.
@@ -847,9 +876,13 @@ class PitCrewController(QObject):
                 "read at all. Check the log.", warn=True)
             return
 
+        # Through the bridge, not straight into the label: pynput dispatches
+        # these on its own daemon thread, and `note_ptt` calls setText and
+        # setStyleSheet. That is the cross-thread widget write this controller
+        # already documents fixing one method along, left behind on this path.
         probe.start(
-            lambda: self.settings_screen.note_ptt(f"{key} down - held."),
-            lambda: self.settings_screen.note_ptt(
+            lambda: self.bridge.button_probed.emit(f"{key} down - held."),
+            lambda: self.bridge.button_probed.emit(
                 f"{key} released. That is the button."))
         self._button_probe = probe
         self.settings_screen.set_listening(True)
@@ -1067,6 +1100,7 @@ class PitCrewController(QObject):
             event["id"], "practice", setup_sheet_id=sheet_id,
             practice_mode=self.practice.practice_mode(),
             practice_intent=intent)
+        self.session_kind = "practice"
         # The rack is NOT cleared. Going out again adds to the session's
         # evidence; it does not replace it. Three runs at one circuit are one
         # body of evidence about one car.
@@ -1094,6 +1128,16 @@ class PitCrewController(QObject):
         return self.settings.ps5_ip.strip() if self.direct else None
 
     def start_practice(self) -> None:
+        # Starting one session over another left the first with no `ended_at`
+        # and its listener running: SO_REUSEADDR lets the second UDP bind
+        # succeed, and on Windows the *first* socket keeps the datagrams, so
+        # the new session went deaf while the orphan fed the bridge.
+        if self.session_id is not None:
+            self.practice.set_status(
+                "A session is already open. Stop it before starting another.",
+                warn=True)
+            self.practice.set_recording(False)
+            return
         if self.open_practice_session() is None:
             self.practice.set_status(
                 "Create an event before recording - laps have to belong to "
@@ -1136,6 +1180,7 @@ class PitCrewController(QObject):
             self.store.end_session(self.session_id)
             log("session").info("practice session %s closed", self.session_id)
             self.session_id = None
+            self.session_kind = None
 
         self.practice.set_recording(False)
         event = self.active_event()
@@ -1238,6 +1283,13 @@ class PitCrewController(QObject):
                 warn=True)
             return
         self.refresh_nav_state()
+        # Race laps belong to the race session, not to the practice rack.
+        # They were pushed on here numbered as a continuation of the practice
+        # laps, then vanished on the next rebuild because `_rows_for_event`
+        # filters on kind - and in between, `_on_lap_changed` ran
+        # `carry_compound` across a rack holding both.
+        if self.session_kind != "practice":
+            return
         self.practice.add_lap(LapRow(
             lap_id=lap_id,
             lap_num=len(self.practice.rows()) + 1,
@@ -1424,6 +1476,7 @@ class PitCrewController(QObject):
             return []
 
         self._plans = plans
+        self._plans_event_id = event["id"]
         approved = self.store.get_approved_strategy(event["id"])
         approved_index = None
         if approved:
@@ -1459,6 +1512,41 @@ class PitCrewController(QObject):
             self.strategy.note("Every input measured.")
         return plans
 
+    def _forget_plans(self) -> None:
+        """Drop plans built for the event we are leaving.
+
+        `self._plans` was only ever written by `build_strategy`, and nothing
+        cleared it, so switching events left the previous event's cards on the
+        Strategy screen with Approve still enabled.  Approve reads the plan out
+        of `_plans` but takes the event and the guard context from
+        `active_event()` - so it filed one event's stints, pit laps and payload
+        against another, stamped with the new event's car and track, and the
+        race-day guard then agreed with itself and passed.
+        """
+        self._plans = []
+        self._inputs = None
+        self._plans_event_id = None
+        if self.strategy is not None:
+            self.strategy.show_plans([], [], timed=False)
+            self.strategy.set_status("Build a plan for this event.")
+
+    def _race_context(self, event) -> PlanContext:
+        """What this race actually is, in the units the race layer expects.
+
+        `events.race_laps` holds **minutes** when the format is timed - the
+        spin box is relabelled and saved into the same column - so reading it
+        as a distance raced a 45-minute Monza as a 45-lap one: "40 to go" with
+        19 left, and a fuel call short by the difference. The strategy path
+        already made this distinction; the live path did not.
+        """
+        timed = (event["race_type"] or "") == "time"
+        figure = float(event["race_laps"] or 0)
+        return PlanContext(
+            car=event["car_name"] or "", track=event["track"] or "",
+            layout=event["layout"],
+            race_laps=0 if timed else int(figure),
+            race_minutes=figure if timed else None)
+
     def approve_strategy(self, index: int) -> int | None:
         if self.strategy is None or not self._plans:
             return None
@@ -1471,11 +1559,13 @@ class PitCrewController(QObject):
         payload["export"] = plan.as_export(self._inputs)
         # What the plan was built for. Without this the race-day guard
         # has nothing to check against and silently always passes.
+        context = self._race_context(event)
         payload["context"] = {
-            "car": event["car_name"] or "",
-            "track": event["track"] or "",
-            "layout": event["layout"],
-            "race_laps": int(event["race_laps"] or 0),
+            "car": context.car,
+            "track": context.track,
+            "layout": context.layout,
+            "race_laps": context.race_laps,
+            "race_minutes": context.race_minutes,
         }
         strategy_id = self.store.save_strategy(
             event["id"], payload, label=plan.label(),
@@ -1526,9 +1616,7 @@ class PitCrewController(QObject):
             wear_per_lap=inputs.wear_per_lap if inputs else None,
             fuel_capacity_l=inputs.fuel_capacity_l if inputs else None)
 
-        actual = PlanContext(
-            car=event["car_name"] or "", track=event["track"] or "",
-            layout=event["layout"], race_laps=int(event["race_laps"] or 0))
+        actual = self._race_context(event)
         stored = (plan or {}).get("context")
         planned = PlanContext(**stored) if stored else None
         if not self.race.arm(planned, actual):
@@ -1540,6 +1628,7 @@ class PitCrewController(QObject):
         self.bridge.reset(race=True)
         self.session_id = self.store.start_session(
             event["id"], "race", rehearsal=rehearsal)
+        self.session_kind = "race"
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
 
@@ -1585,9 +1674,24 @@ class PitCrewController(QObject):
         self._health.stop()
         if self.session_id is not None:
             self.store.end_session(self.session_id)
+            self.session_kind = None
+            # `stop_practice` clears this and `stop_race` did not, so the
+            # Practice screen's pickers went on writing `practice_mode` onto
+            # the closed race session - which `list_evidence_laps` reads back
+            # for a rehearsal, and `auto_out_laps` acts on.
+            self.session_id = None
         if self.race_run_id is not None:
             self.store.finish_race_run(self.race_run_id)
+            self.race_run_id = None
         self.race = None
+        # An offer outlives the race that raised it: the buttons stayed live
+        # and connected, and Accept then dereferenced `self.race`, which this
+        # method had just set to None - straight out of a Qt slot, which aborts
+        # the process, immediately after a race and before the export.
+        self._pending_replan = None
+        self.ptt.pending_replan = None
+        if self.race_screen is not None:
+            self.race_screen.hide_offer()
         self.ptt.stop()
         if self.race_screen is not None:
             self.race_screen.set_armed(False)
@@ -1644,8 +1748,19 @@ class PitCrewController(QObject):
         CLAUDE.md gives the strictest correctness bar. Everything else in this
         app is routed through the bridge's signals; this was the one path that
         went straight across.
+
+        `QTimer.singleShot` was not the hop it looked like.  The no-receiver
+        overload builds its dispatch object on the *calling* thread and posts
+        to that thread's event loop, and pynput's hook thread has none - so the
+        callback never ran at all.  Measured: posted from a worker it never
+        fires; the same call on the Qt thread does.  So the driver said
+        "accept", heard "Copy, changing the plan", and the plan did not change:
+        `_resolve_replan` never ran, `_pending_replan` stayed set, and
+        `_check_replan` returns early while it is, so no further offer could
+        ever be made either.  A queued signal is delivered to the receiver's
+        thread whether or not the emitting thread has a loop.
         """
-        QTimer.singleShot(0, lambda: self._show_ptt_answer(heard, said))
+        self.bridge.ptt_answered.emit(heard, said)
 
     def _show_ptt_answer(self, heard: str, said: str) -> None:
         if self.race_screen is not None:
@@ -1655,6 +1770,10 @@ class PitCrewController(QObject):
             intent = match_intent(heard)
             if intent in (ACCEPT, KEEP):
                 self._resolve_replan(accepted=intent == ACCEPT)
+
+    def _note_button_probe(self, text: str) -> None:
+        if self.settings_screen is not None:
+            self.settings_screen.note_ptt(text)
 
     def _resolve_replan(self, *, accepted: bool) -> None:
         """Record what the driver did with the offer, and act on it."""
@@ -1666,7 +1785,7 @@ class PitCrewController(QObject):
         self.store.append_revision(
             self.race_run_id, self.race.state.lap if self.race else 0,
             offer.call() or offer.reason, offer.as_plan(), accepted=accepted)
-        if accepted and offer.stint_laps:
+        if accepted and offer.stint_laps and self.race is not None:
             self.race.adopt(offer.stint_laps)
         # The question is answered, so it stops being asked.
         if self.race_screen is not None:

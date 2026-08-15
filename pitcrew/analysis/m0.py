@@ -293,22 +293,37 @@ def _pit_loss(samples: list[Sample], stop: Stop,
 
 
 def _green_lap_s(samples: list[Sample], stops: list[Stop]) -> float | None:
-    """Median duration of the laps that had no stop in them or after them."""
+    """Median duration of the laps that had no stop in them or after them.
+
+    The capture's **first and last lap** go, because the recorder was switched
+    on and off mid-lap and their durations measure when the button was pressed
+    rather than how long a lap takes. This used to sort the durations and drop
+    `clean[1:-1]` — the shortest and the longest — which is a different set:
+    both partial end-laps are short, so at most one of them went and the
+    genuinely slowest clean lap was thrown out in its place, leaving a
+    survivor that biases the green reference low and the `pitLaneDeltaS`
+    written into the constants file high.
+    """
     touched = set()
     for stop in stops:
         touched.update((stop.lap, stop.lap + 1))
     laps: dict[int, list[float]] = {}
     for s in samples:
         laps.setdefault(s.lap, []).append(s.t_s)
-    clean = sorted(times[-1] - times[0]
-                   for lap, times in laps.items()
-                   if lap not in touched and len(times) > 1)
-    # Drop the first and last: the capture starts and ends mid-lap, so their
-    # durations are artefacts of when the recorder was switched on.
-    interior = clean[1:-1] if len(clean) > 3 else clean
-    if not interior:
+    if not laps:
         return None
-    return interior[len(interior) // 2]
+
+    edges = {min(laps), max(laps)}
+    def durations(skip_edges: bool) -> list[float]:
+        return sorted(times[-1] - times[0]
+                      for lap, times in laps.items()
+                      if lap not in touched and len(times) > 1
+                      and not (skip_edges and lap in edges))
+
+    clean = durations(True) or durations(False)
+    if not clean:
+        return None
+    return clean[len(clean) // 2]
 
 
 # --------------------------------------------------------------- the verdict

@@ -12,8 +12,13 @@ converse is not free either - a driver with his hands full can say "yes" in a
 second, where repeating a question costs him a corner. So the middle band
 **confirms rather than rejects**.
 
-Five stages, cheapest first, each rejecting for a different reason:
+Six stages, cheapest first, each rejecting for a different reason - and each
+reason is **spoken in its own words** (see `SPOKEN`), because the driver cannot
+see a screen and "say again" is the same answer for all six.
 
+0. **Audio present.** Did the capture device deliver anything at all? Not the
+   same question as the next one: a device that is not there opens without
+   error and delivers nothing, and telling him to speak up will not fix it.
 1. **Speech present.** Was there any speech in the capture at all, or did the
    button get brushed? This is the stage that matters most: a recogniser given
    silence does not return silence, it hallucinates a plausible sentence, and
@@ -30,7 +35,7 @@ Five stages, cheapest first, each rejecting for a different reason:
    the engineer can actually answer. This is the stage doing the work the
    closed grammar used to do.
 
-Stages 1-4 are pure functions of numbers and take no model, which is why they
+Stages 0-4 are pure functions of numbers and take no model, which is why they
 are here and not inside the recogniser: they are exhaustively testable, and
 they are the stages that keep a fabricated answer out of the driver's ear.
 """
@@ -47,13 +52,43 @@ REJECT = "reject"           # say again
 
 # Why it was rejected. Reported, never guessed at - a driver who is told
 # "I didn't hear you" learns to press the button properly; one who is told
-# nothing learns the app is unreliable.
+# nothing learns the app is unreliable. Every one of these now has a line in
+# SPOKEN below, because for two years they were computed, stored and read by
+# nobody: all five spoke "Say again.", which is the one thing that tells him
+# nothing about which of them happened.
+NO_INPUT = "the microphone delivered no audio"
+NO_DEVICE = "the microphone did not open"
 NO_SPEECH = "no speech in the capture"
 TOO_SHORT = "too short to be a question"
 TOO_LONG = "longer than the capture limit"
 NOTHING_HEARD = "nothing transcribed"
 REPEAT_LOOP = "the recogniser lost its place"
 NOT_UNDERSTOOD = "no phrase close enough in meaning"
+FAILED = "push to talk failed"
+
+# What the driver hears for each. §5.5 form: the instruction he can act on
+# first, the reason second and short. The first two are the ones that were
+# indistinguishable from "you did not speak" and are the reason this table
+# exists - a dead microphone is not something he can fix by asking again, and
+# telling him to ask again is worse than useless.
+SPOKEN: dict[str, str] = {
+    NO_INPUT: "No audio from your microphone. Check the device.",
+    NO_DEVICE: "Your microphone didn't open. Check the device.",
+    NO_SPEECH: "I didn't hear you. Hold the button and say again.",
+    TOO_SHORT: "Too short. Say again.",
+    TOO_LONG: "That ran long. Say again, shorter.",
+    NOTHING_HEARD: "I didn't catch that. Say again.",
+    REPEAT_LOOP: "I didn't catch that. Say again.",
+    NOT_UNDERSTOOD: "Say again.",
+    FAILED: "Push to talk failed. Check the log.",
+}
+
+# Every reason, in the order the stages produce them. For the phrase pack,
+# which renders `SPOKEN[reason]` for each one.
+ALL_REASONS: tuple[str, ...] = (
+    NO_INPUT, NO_DEVICE, NO_SPEECH, TOO_SHORT, TOO_LONG, NOTHING_HEARD,
+    REPEAT_LOOP, NOT_UNDERSTOOD, FAILED,
+)
 
 # Under this much detected speech, treat the capture as a brushed button.
 MIN_SPEECH_S = 0.30
@@ -109,14 +144,30 @@ def bands(sensitivity: str) -> tuple[float, float]:
     return SENSITIVITIES.get(sensitivity, SENSITIVITIES[DEFAULT_SENSITIVITY])
 
 
+def spoken_reason(reason: str | None) -> str:
+    """What to say about a rejection. Unknown reasons fall back to "say again",
+    which is the honest answer when we cannot name what went wrong."""
+    return SPOKEN.get(reason or "", SPOKEN[NOT_UNDERSTOOD])
+
+
 def check_audio(*, duration_s: float, speech_s: float,
                 max_capture_s: float) -> str | None:
-    """Stages 1 and 2. The reason to reject, or None to carry on.
+    """Stages 0, 1 and 2. The reason to reject, or None to carry on.
 
     Speech is checked before duration on purpose: a two-second capture of
     engine noise is long enough to pass a duration test and is exactly the
     input that produces a confident hallucination.
+
+    Stage 0 is newer and is about the device rather than the driver. A capture
+    of exactly nothing is not a quiet capture, it is a microphone that
+    delivered no audio at all: measured on this machine, the disconnected
+    Bluetooth earbud that is the default input opens without error and
+    delivers **zero** callbacks over a three-second hold, where the built-in
+    array delivers nineteen to seventy-five. Reporting that as "no speech in
+    the capture" tells him to speak up at a device that is not there.
     """
+    if duration_s <= 0.0:
+        return NO_INPUT
     if speech_s < MIN_SPEECH_S:
         return NO_SPEECH
     if duration_s < MIN_DURATION_S:

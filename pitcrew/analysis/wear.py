@@ -91,8 +91,14 @@ class RunWear:
     reading: float | None
     reading_lap: int | None
     reading_corner: str | None
+    # Every corner of the closing reading, in `CORNERS` order. Kept beside
+    # the worst-corner scalar because a rate has to be taken corner against
+    # corner, and `worst` at one lap and `worst` at another need not name the
+    # same tyre - see `rate`.
+    reading_by_corner: tuple[float | None, ...]
     start_reading: float | None
     start_reading_lap: int | None
+    start_reading_by_corner: tuple[float | None, ...]
     tyres_fresh: bool | None
     # How that was established. The rate rests on it, so it travels with the
     # rate rather than being left in `runs` for the reader to join up.
@@ -101,20 +107,64 @@ class RunWear:
     degradation_samples: int
 
     @property
-    def _has_delta(self) -> bool:
-        return (self.start_reading is not None
-                and self.start_reading_lap is not None
-                and self.reading is not None
+    def _spans_laps(self) -> bool:
+        return (self.start_reading_lap is not None
                 and self.reading_lap is not None
                 and self.reading_lap > self.start_reading_lap)
+
+    @property
+    def _shared_corners(self) -> tuple[int, ...]:
+        """Positions in `CORNERS` the driver read at **both** ends of the run.
+
+        A partial read is a designed input, not an accident: the gauge lets
+        him clear a corner and the contract says an unread corner stays null.
+        So the two readings routinely name different tyres, and only the
+        corners present in both can be subtracted.
+        """
+        return tuple(index for index in range(len(CORNERS))
+                     if self.start_reading_by_corner[index] is not None
+                     and self.reading_by_corner[index] is not None)
+
+    @property
+    def _has_delta(self) -> bool:
+        """Two readings, laps apart, sharing at least one corner."""
+        return self._spans_laps and bool(self._shared_corners)
+
+    @property
+    def _delta_rate(self) -> float | None:
+        """The fastest-wearing corner's own rate, corner against corner.
+
+        **Never `max(later) - max(earlier)`.** Both ends are the worst corner
+        of whatever the driver happened to read on that lap, so the
+        subtraction can span two different tyres: lap 8 read all four with the
+        front-left worst at 0.30 and lap 18 read only the rears with the
+        right-rear at 0.45 gave 0.015 a lap - and a 56-lap stint, on a set the
+        front-left had finished by lap 22.
+        Even with four corners read at both ends the identity
+        `max(later) - max(earlier) <= max(per-corner delta)` holds, so the
+        old arithmetic could only ever understate the rate when the limiting
+        corner changed identity - always toward a longer stint, which
+        `CLAUDE.md` §5.1 calls the expensive direction.
+
+        `None` where every shared corner read no higher than it did before.
+        That is a gauge going backwards, which is a tyre change inside what
+        the fuel channel called one run or a mistyped reading; either way
+        there is no rate through it, and `unavailable_reason` says which.
+        """
+        gap = self.reading_lap - self.start_reading_lap
+        worst = max((self.reading_by_corner[index]
+                     - self.start_reading_by_corner[index]) / gap
+                    for index in self._shared_corners)
+        return round(worst, 5) if worst > 0 else None
 
     @property
     def rate(self) -> float | None:
         """Fraction of the worst corner consumed per lap, inside this run."""
         if self._has_delta:
-            gap = self.reading_lap - self.start_reading_lap
-            rate = (self.reading - self.start_reading) / gap
-            return round(rate, 5) if rate > 0 else None
+            return self._delta_rate
+        # Two readings that share no corner are not a delta at all. Falling
+        # through here uses the later one against the run's first lap rather
+        # than discarding a reading that is perfectly usable on its own.
         if self.reading is None or self.reading_lap is None:
             return None
         laps = self.reading_lap - self.first_lap + 1
@@ -136,10 +186,20 @@ class RunWear:
 
     @property
     def confidence(self) -> str | None:
-        """`measured` only where nothing had to be assumed to get the rate."""
+        """`measured` only where nothing had to be assumed to get the rate.
+
+        Two readings assume nothing, and the driver's own declaration that the
+        set went on fresh is primary evidence. **`tyres_fresh` is neither.**
+        It falls back to `fresh_by_temperature`, an app-side reading of an
+        opening temperature band the app itself chose - and four of six Monza
+        runs carried `confidence: measured` on it, which promoted the whole
+        payload to `modelConfidence: measured`. Contract §6.1 and §8 make
+        `measured` conditional on two readings or his declaration, and on
+        nothing else.
+        """
         if self.rate is None:
             return None
-        if self._has_delta or self.tyres_fresh is True:
+        if self._has_delta or self.tyres_fresh_declared is True:
             return CONFIDENCE_MEASURED
         return CONFIDENCE_ASSUMED
 
@@ -149,6 +209,14 @@ class RunWear:
             return None
         if self.reading is None:
             return "no gauge reading was taken on this run"
+        # Separated from the sentence below, which used to be given for this
+        # case too - "the readings do not span any laps" about two readings
+        # ten laps apart.
+        if self._has_delta:
+            shared = ", ".join(CORNERS[index] for index in self._shared_corners)
+            return (f"the gauge read no higher at lap {self.reading_lap} than "
+                    f"at lap {self.start_reading_lap} on {shared}, so there is "
+                    f"no wear across this run to take a rate from")
         if self.reading <= 0:
             return (f"the gauge read {self.reading:.0%} consumed, which gives "
                     f"no rate to plan a stint against")
@@ -170,9 +238,10 @@ class RunWear:
         }
         # Only where it really was assumed. Where the driver declared the set
         # fresh there is nothing to assume, and a field saying otherwise would
-        # understate evidence he actually gave.
-        if (self.method == METHOD_FRESH_AT_RUN_START
-                and self.confidence != CONFIDENCE_MEASURED):
+        # understate evidence he actually gave. The temperature path assumes
+        # exactly as much as the silent one does - it is the app's own reading
+        # of an opening band, not his word - so it says so too.
+        if self.method in (METHOD_FRESH_AT_RUN_START, METHOD_FRESH_OBSERVED):
             payload["assumesFreshAtLap"] = self.first_lap
         if self.unavailable_reason:
             payload["wearPerLapUnavailable"] = self.unavailable_reason
@@ -182,6 +251,14 @@ class RunWear:
         payload["degradationMsPerLap"] = self.degradation_ms_per_lap
         payload["degradationSamples"] = self.degradation_samples
         return payload
+
+
+def _by_corner(lap: LapInput | None) -> tuple[float | None, ...]:
+    """One lap's gauge reading in `CORNERS` order, unread corners left null."""
+    if lap is None:
+        return (None,) * len(CORNERS)
+    read = lap.wear_by_corner
+    return tuple(read[corner] for corner in CORNERS)
 
 
 def run_wear(laps: list[LapInput]) -> list[RunWear]:
@@ -199,8 +276,10 @@ def run_wear(laps: list[LapInput]) -> list[RunWear]:
             reading=last.worst_wear if last else None,
             reading_lap=last.lap_num if last else None,
             reading_corner=last.worst_corner if last else None,
+            reading_by_corner=_by_corner(last),
             start_reading=first.worst_wear if first else None,
             start_reading_lap=first.lap_num if first else None,
+            start_reading_by_corner=_by_corner(first),
             tyres_fresh=run.tyres_fresh,
             tyres_fresh_declared=run.tyres_fresh_declared,
             degradation_ms_per_lap=_run_slope(run),
@@ -321,8 +400,9 @@ def pinned_gauge_note(laps: list[LapInput]) -> str | None:
     return None
 
 
-def wear_per_lap(laps: list[LapInput]) -> float | None:
-    """Fraction consumed per lap, from the driver's readings only.
+def headline_wear(laps: list[LapInput], *,
+                  compound: str | None = None) -> dict:
+    """The one rate a stint is planned against, and which set it came from.
 
     Uses the **worst single corner**, not the worst axle and certainly not an
     average: the stint ends when one tyre is done, and three healthy corners do
@@ -335,11 +415,76 @@ def wear_per_lap(laps: list[LapInput]) -> float | None:
     number: a reading of 60% at lap 20 is a very different rate depending on
     whether the tyres went on at lap 1 or at lap 12.
 
-    Returns None without at least one usable reading. This figure drives every
-    stint recommendation and must never be invented.
+    **It names its compound or it refuses.** This was `rates[-1]` — whichever
+    run happened to be last, unfiltered by compound and with no count of what
+    it discarded. On the 91-lap Monza set that exported `modelledStintLaps: 26`
+    off a Racing Hard rate while the Racing Soft rate says four laps: a driver
+    planning 26 who fits softs runs six times past the cliff. A rate measured
+    on one compound describes that compound and no other, so where two of them
+    both produced one there is no headline to give — `byCompound` is the
+    section that answers the question and this one says so.
+
+    Where a compound is named the figure is the mean of that compound's rated
+    runs, which is `wear_rate_by_compound`'s own arithmetic: one tyre must not
+    have two figures inside one payload computed two different ways.
+
+    Where the laps carry **no** compound tag at all there is nothing to name,
+    and the runs are still separate sets. The latest run that produced a rate
+    is the freshest evidence about the car as it is now — the same reasoning
+    `analysis/recency` applies to pace — so that one is used and it is named.
+
+    Always returns a record. `wearPerLap` is None with `unavailable` saying
+    why: this figure drives every stint recommendation and must never be
+    invented.
     """
-    rates = [record.rate for record in run_wear(laps) if record.rate]
-    return rates[-1] if rates else None
+    records = run_wear(laps)
+    rated = [record for record in records if record.rate]
+    blank = {"wearPerLap": None, "compound": None, "runIds": [],
+             "runsMeasured": len(rated), "runs": len(records),
+             "source": "driver-gauge", "unavailable": None}
+
+    if not rated:
+        return {**blank,
+                "unavailable": "no run carried a usable gauge reading"}
+
+    if compound is not None:
+        on_compound = [record for record in rated
+                       if record.compound == compound]
+        if not on_compound:
+            return {**blank, "unavailable": (
+                f"no run on {compound} carried a usable gauge reading, and a "
+                f"rate from another compound does not describe it")}
+        return _headline(on_compound, compound, blank)
+
+    tagged = {record.compound for record in rated}
+    if len(tagged) > 1:
+        named = sorted(code for code in tagged if code)
+        parts = named + (["untagged runs"] if None in tagged else [])
+        return {**blank,
+                "runIds": [record.run_id for record in rated],
+                "unavailable": (
+                    f"{' and '.join(parts)} each produced a rate and they are "
+                    f"not one set of tyres, so no single figure heads this "
+                    f"section - see byCompound, and name the compound the "
+                    f"plan is built on")}
+
+    code = tagged.pop()
+    if code is None:
+        return _headline([rated[-1]], None, blank)
+    return _headline(rated, code, blank)
+
+
+def _headline(used: list[RunWear], compound: str | None, blank: dict) -> dict:
+    return {**blank,
+            "wearPerLap": round(mean([record.rate for record in used]), 5),
+            "compound": compound,
+            "runIds": [record.run_id for record in used]}
+
+
+def wear_per_lap(laps: list[LapInput], *,
+                 compound: str | None = None) -> float | None:
+    """`headline_wear`'s rate alone, for callers that want the number."""
+    return headline_wear(laps, compound=compound)["wearPerLap"]
 
 
 def axle_bias(laps: list[LapInput]) -> dict | None:
@@ -377,8 +522,9 @@ def axle_bias(laps: list[LapInput]) -> dict | None:
     }
 
 
-def modelled_stint_laps(laps: list[LapInput]) -> int | None:
-    per_lap = wear_per_lap(laps)
+def modelled_stint_laps(laps: list[LapInput], *,
+                        compound: str | None = None) -> int | None:
+    per_lap = wear_per_lap(laps, compound=compound)
     if not per_lap:
         return None
     return int(STINT_SAFETY_FACTOR / per_lap)
@@ -503,10 +649,10 @@ def trend_slope(points: list[tuple[int, int]]) -> float | None:
     return median(slopes) if slopes else None
 
 
-def temperature_trend(laps: list[LapInput]) -> dict | None:
-    """Front/rear asymmetry and drift per lap, degrees C."""
-    per_lap = []
-    for lap in counted_laps(laps):
+def _front_rear_per_lap(laps: list[LapInput]) -> list[tuple[int, float, float]]:
+    """Mean front and mean rear temperature per lap, for laps carrying frames."""
+    out = []
+    for lap in laps:
         if not lap.frames:
             continue
         fronts, rears = [], []
@@ -517,23 +663,51 @@ def temperature_trend(laps: list[LapInput]) -> dict | None:
                 if value is not None:
                     bucket.append(value)
         if fronts and rears:
-            per_lap.append((lap.lap_num, mean(fronts), mean(rears)))
+            out.append((lap.lap_num, mean(fronts), mean(rears)))
+    return out
+
+
+def temperature_trend(laps: list[LapInput]) -> dict | None:
+    """Front/rear asymmetry and front-temperature drift, **inside one run**.
+
+    Contract §6.1's rule applies here exactly as it applies to lap time:
+    nothing may be fitted across a refuel. This used to be fitted over the
+    whole session - on the Monza set that was 74 laps spanning eight runs,
+    three compounds and eight sets of tyres, reported as one number about the
+    tyre. So both figures come from the longest clean run and `samples` is
+    that run's lap count.
+
+    The trend is Theil-Sen, the same estimator `degradation` uses. It replaced
+    a half-mean difference that divided the gap between two half-centroids by
+    the **full** span of the window - the centroids are only half a span
+    apart, so every figure came out at about half the truth: ten laps rising
+    exactly 1.0 C a lap were reported as 0.56.
+
+    Where no run is long enough to fit, the asymmetry is still worth having -
+    it is a standing property of the car rather than a trend - so it is taken
+    over every counted lap carrying the channel and `trendCPerLap` is null.
+    """
+    best = _longest_clean_run(laps)
+    inside = _front_rear_per_lap(best[1]) if best else []
+    if len(inside) >= MIN_DEGRADATION_LAPS:
+        slope = trend_slope([(lap_num, front) for lap_num, front, _ in inside])
+        return {
+            "frontRearAsymmetryC": round(
+                mean([front - rear for _, front, rear in inside]), 1),
+            "trendCPerLap": None if slope is None else round(slope, 2),
+            "samples": len(inside),
+            "source": "tyre-temp-trend",
+            "confidence": "low",
+        }
+
+    per_lap = _front_rear_per_lap(counted_laps(laps))
     if not per_lap:
         return None
-
-    asymmetry = mean([front - rear for _, front, rear in per_lap])
-    trend = None
-    if len(per_lap) >= 3:
-        half = len(per_lap) // 2
-        early = mean([front for _, front, _ in per_lap[:half]])
-        late = mean([front for _, front, _ in per_lap[half:]])
-        span = per_lap[-1][0] - per_lap[0][0]
-        if span > 0:
-            trend = round((late - early) / span, 2)
-
     return {
-        "frontRearAsymmetryC": round(asymmetry, 1),
-        "trendCPerLap": trend,
+        "frontRearAsymmetryC": round(
+            mean([front - rear for _, front, rear in per_lap]), 1),
+        "trendCPerLap": None,
+        "samples": len(per_lap),
         "source": "tyre-temp-trend",
         "confidence": "low",
     }
@@ -573,18 +747,29 @@ def roll_up_confidence(constituents: list[tuple[str, str | None]]) -> tuple[str,
 
 
 def wear_export(laps: list[LapInput], *,
-                calibrated_at_race_multiplier: bool = True,
-                race_multiplier: str | None = None) -> dict:
+                calibrated_at_race_multiplier: bool | None = None,
+                race_multiplier: str | None = None,
+                compound: str | None = None) -> dict:
     """The `wear` object.
 
     `calibrated_at_race_multiplier` is False when the numbers came from a run at
-    a different tyre-wear multiplier. Multiplier linearity is assumed and has
-    never been demonstrated, so a converted figure is labelled `converted` and
-    must never be presented as measured.
+    a different tyre-wear multiplier, True where the caller can show they did
+    not, and **None where nothing on record can say** - which is the default,
+    because the multiplier is an event-level declaration and no session records
+    the one it actually ran at. It used to default to True, so every export
+    ever made asserted that its wear rate was taken at the race's setting.
+    Multiplier linearity is assumed and has never been demonstrated, so a
+    converted figure is labelled `converted` and must never be presented as
+    measured.
+
+    `compound` is the tyre the plan is being built on. Naming it picks the
+    rate out of `byCompound` rather than leaving `headline_wear` to refuse a
+    session that ran three of them.
     """
     readings = gauge_readings(laps)
-    per_lap = wear_per_lap(laps)
-    stint_laps = modelled_stint_laps(laps)
+    headline = headline_wear(laps, compound=compound)
+    per_lap = headline["wearPerLap"]
+    stint_laps = modelled_stint_laps(laps, compound=compound)
     by_run = [record.as_export() for record in run_wear(laps)]
 
     payload: dict = {
@@ -595,9 +780,13 @@ def wear_export(laps: list[LapInput], *,
         # Multiplier linearity has never been demonstrated, so the multiplier
         # the rate was measured at travels with the rate. Without it a figure
         # taken at 8x reads as one taken at the race setting.
-        "wearMeasuredAtRaceMultiplier": bool(calibrated_at_race_multiplier),
+        "wearMeasuredAtRaceMultiplier": calibrated_at_race_multiplier,
         "wearMultiplier": race_multiplier,
     }
+    if stint_laps is not None:
+        # Which rubber the stint length is for. Without it 26 laps off a
+        # Racing Hard rate reads as 26 laps on whatever is fitted.
+        payload["modelledStintCompound"] = headline["compound"]
 
     bias = axle_bias(laps)
     if bias is not None:
@@ -610,12 +799,18 @@ def wear_export(laps: list[LapInput], *,
     reference = green_lap_reference_ms(laps)
     fitted = degradation(laps)
     if fitted is not None:
-        final_fraction = readings[-1]["worst"] if readings else None
+        final_fraction = _fraction_at_fit_end(
+            readings, fitted["fittedRunId"], fitted["fittedOverLaps"])
         payload["byLapTime"] = {
             "refLapMs": reference,
             **fitted,
             "phase": phase_for(final_fraction),
             "estimatedFractionAtEnd": final_fraction,
+            # Named, because the fraction is the driver's gauge and everything
+            # else in this block is the lap-time model. A `source` covering
+            # both would put his reading under a model that did not produce it.
+            "estimatedFractionSource": (
+                "driver-gauge" if final_fraction is not None else None),
             "source": "lap-time-model",
             "confidence": "low",
         }
@@ -639,24 +834,57 @@ def wear_export(laps: list[LapInput], *,
     if pinned:
         payload["gaugePinned"] = pinned
 
-    if per_lap is None:
-        payload["modelBasis"] = "no gauge reading entered; stint length unknown"
-    elif calibrated_at_race_multiplier:
-        payload["modelBasis"] = (
-            f"{STINT_SAFETY_FACTOR} / w, w from the driver's gauge at this "
-            f"multiplier")
-    else:
-        payload["modelBasis"] = (
-            f"{STINT_SAFETY_FACTOR} / w, w scaled from a different multiplier "
-            "[ASSUMED - multiplier linearity is not demonstrated]")
-
+    payload["modelBasis"] = _model_basis(headline,
+                                         calibrated_at_race_multiplier)
     payload["modelConfidence"], payload["modelConfidenceBasis"] = \
         _model_confidence(payload, per_lap, calibrated_at_race_multiplier)
     return payload
 
 
+def _fraction_at_fit_end(readings: list[dict], run_id: int | None,
+                         window: list[int]) -> float | None:
+    """The gauge reading that belongs to the run the slope was fitted on.
+
+    It used to be `readings[-1]` - the driver's last reading from anywhere in
+    the session, published beside a slope fitted on a different run under
+    `source: "lap-time-model"`. Two runs are two sets, and how worn one of
+    them was says nothing about the phase the other was fitted in.
+    """
+    inside = [entry for entry in readings
+              if entry.get("runId") == run_id
+              and window[0] <= entry["lap"] <= window[1]]
+    return inside[-1]["worst"] if inside else None
+
+
+def _model_basis(headline: dict, calibrated: bool | None) -> str:
+    """`0.85 / w`, and which set of tyres `w` actually came from.
+
+    The compound is in the sentence because the number is worthless without
+    it: `modelledStintLaps: 26` off a Racing Hard rate is six times the Racing
+    Soft answer from the same session, and the payload used to name neither.
+    """
+    if headline["wearPerLap"] is None:
+        return f"no stint length: {headline['unavailable']}"
+
+    runs = ", ".join(str(run_id) for run_id in headline["runIds"])
+    whose = (f"{headline['compound']} over run{'s' if len(headline['runIds']) > 1 else ''} {runs}"
+             if headline["compound"]
+             else f"run {runs}, which carries no compound tag")
+    counted = (f"{len(headline['runIds'])} of {headline['runs']} runs, "
+               f"{headline['runsMeasured']} of which produced a rate")
+    multiplier = {
+        True: "at this multiplier",
+        False: ("scaled from a different multiplier [ASSUMED - multiplier "
+                "linearity is not demonstrated]"),
+        None: ("at a multiplier that is not on record for the session it was "
+               "measured in"),
+    }[calibrated]
+    return (f"{STINT_SAFETY_FACTOR} / w, w from the driver's gauge on "
+            f"{whose} ({counted}), {multiplier}")
+
+
 def _model_confidence(payload: dict, per_lap: float | None,
-                      calibrated: bool) -> tuple[str, str]:
+                      calibrated: bool | None) -> tuple[str, str]:
     """Computed, never declared — the weakest of everything beneath it."""
     if per_lap is None:
         return CONFIDENCE_ASSUMED, "no gauge reading, so nothing is measured"
@@ -668,7 +896,11 @@ def _model_confidence(payload: dict, per_lap: float | None,
         if record.get("confidence"):
             constituents.append((f"byRun[{record['runId']}]",
                                  record["confidence"]))
-    if not calibrated:
+    # `None` is not `False`. A rate scaled from another multiplier is
+    # `converted`; a rate whose multiplier is simply not on record has not
+    # been converted at all, and `wearMeasuredAtRaceMultiplier` is the field
+    # that carries that gap rather than this one.
+    if calibrated is False:
         constituents.append(("multiplier conversion", CONFIDENCE_CONVERTED))
     if payload.get("gaugePinned"):
         constituents.append(("byDriverGauge", "low"))

@@ -81,7 +81,7 @@ class NavRail(QWidget):
         self.select(0)
 
     def select(self, index: int) -> None:
-        if not 0 <= index < self.stack.count():
+        if not 0 <= index < self._stack.count():
             # Four rail items over a two-screen stack: the last two were
             # silent no-ops.
             return

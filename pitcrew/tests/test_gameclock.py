@@ -113,10 +113,41 @@ def test_a_24_hour_circuit_runs_the_whole_span():
     assert (end - start) == pytest.approx(24.0)
 
 
-def test_a_measurement_beats_the_typed_figures():
+def test_the_declaration_beats_a_measurement_taken_off_practice():
+    """His word is primary evidence; the reading corroborates it (§4.1).
+
+    The reading comes from *practice*, and practice is frequently not run at
+    the race's clock - which is what `practice_clock_warning` in this same
+    module exists to report. It used to overwrite the declaration, so a race
+    declared 18:00 x6 was planned against whatever the practice lobby was set
+    to.
+    """
+    measured = ClockReading(1.0, 15.0, None, None, 9, "")
+    start, end = race_span(measured, minutes=50.0, declared_start=18.0,
+                           declared_multiplier=6.0)
+    assert start == 18.0
+    assert end == pytest.approx(23.0)
+
+
+def test_a_frozen_practice_clock_never_becomes_the_races():
+    """0.0 is a fact about that lobby and says nothing about the race.
+
+    It is not None, so it won: a 50-minute race declared 18:00 x6 came back as
+    the span (15:00, 15:00) - `raceSpanHours: 0.0`, `covered: true` - on a race
+    that runs 18:00 to 23:00 with none of it driven.
+    """
+    frozen = ClockReading(0.0, 15.0, 15.0, None, 9, "")
+    start, end = race_span(frozen, minutes=50.0, declared_start=18.0,
+                           declared_multiplier=6.0)
+    assert (start, end) == (18.0, pytest.approx(23.0))
+    # And with nothing declared it fills nothing: no span at all beats a span
+    # of zero hours reported as covered.
+    assert race_span(frozen, minutes=50.0) is None
+
+
+def test_a_measurement_fills_the_gap_the_driver_left():
     measured = ClockReading(6.0, 18.0, None, None, 9, "")
-    start, end = race_span(measured, minutes=60.0, declared_start=9.0,
-                           declared_multiplier=1.0)
+    start, end = race_span(measured, minutes=60.0)
     assert start == 18.0
     assert end == pytest.approx(24.0)
 

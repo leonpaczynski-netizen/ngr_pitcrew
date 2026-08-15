@@ -111,7 +111,8 @@ def test_meta_comes_from_event_and_stream(store: Store, recorded):
     assert meta["circuit"] == "Fuji Speedway (Full)"
     assert meta["sessionType"] == "practice"
     assert meta["packet"] == "C"
-    assert meta["carCategory"] == "GR3"
+    # Mapped to the contract's vocabulary at the export boundary.
+    assert meta["carCategory"] == "Gr.3"
     assert meta["multipliers"]["tyreWear"] == "4x"
     assert meta["assists"]["abs"] == "Weak"
 
@@ -223,11 +224,23 @@ def test_unknown_session_is_refused(store: Store):
         build_session_export(store, 999)
 
 
-def test_packet_format_defaults_to_the_base_set(store: Store, recorded):
-    """Never null: the contract requires it, and 'A' is the honest floor."""
+def test_an_unstreamed_session_declares_no_packet_format_and_is_refused(
+        store: Store, recorded):
+    """`A` was a fabrication, not an honest floor.
+
+    Contract 2 gives `packet` one job: to say whether a null channel was not
+    captured or not offered by the format. Falling back to the literal `A`
+    is a positive claim that the 296-byte base set was received, it satisfies
+    the validator's own enum check, and it makes every absent extended channel
+    read as physically unavailable. Press Record with GT7 not streaming and
+    this is the state you are in.
+    """
     bare = store.start_session(recorded["event_id"], "practice")
     store.add_lap(bare, a_stored_lap(1))
-    assert build_session_export(store, bare)["meta"]["packet"] == "A"
+    payload = build_session_export(store, bare)
+    assert payload["meta"]["packet"] is None
+    assert any("meta.packet is required" in problem
+               for problem in validate(payload))
 
 
 # ------------------------------------------------------------- multipliers
@@ -291,7 +304,7 @@ def test_stream_facts_survive_a_later_run_that_saw_none(store, recorded):
 
     payload = build_event_export(store, event_id)
     assert payload["meta"]["packet"] == "C"
-    assert payload["meta"]["carCategory"] == "GR3"
+    assert payload["meta"]["carCategory"] == "Gr.3"
     assert payload["session"]["fuelCapacityL"] == 100.0
 
 

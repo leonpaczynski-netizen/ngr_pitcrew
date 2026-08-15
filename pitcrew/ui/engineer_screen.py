@@ -42,6 +42,7 @@ from pitcrew.ui.widgets import (
     Plate,
     StencilLabel,
     block_wheel,
+    mark_unset,
 )
 
 # When each prompt is written, in the driver's terms rather than the code's.
@@ -234,6 +235,10 @@ class EngineerScreen(QWidget):
         plate.body.addLayout(grid)
 
         self.worst = _narrow_combo()
+        # Held rather than discarded: `_refresh_worst` rebuilds the rows
+        # inside `blockSignals(True)`, so the signal this wires itself to
+        # cannot fire and the ink has to be re-asked for by hand.
+        self._sync_worst_ink = mark_unset(self.worst)
         plate.body.addWidget(Field(
             "Biggest single limitation", self.worst,
             hint="Pick from what you ticked above."))
@@ -311,6 +316,12 @@ class EngineerScreen(QWidget):
         combo = _narrow_combo()
         for option in options:
             combo.addItem(option or "—", option or None)
+        # **Unanswered is not a declaration.** With no `color` rule on
+        # QComboBox the text takes `QPalette.ButtonText`, which is crayon, so
+        # all seven of these painted their leading "—" in the ink that means
+        # the driver entered it - on the one screen whose entire left column
+        # IS the driver's report.
+        mark_unset(combo)
         return combo
 
     # ---------------------------------------------------------- right column
@@ -442,6 +453,7 @@ class EngineerScreen(QWidget):
         if current in ticked:
             self.worst.setCurrentIndex(ticked.index(current) + 1)
         self.worst.blockSignals(False)
+        self._sync_worst_ink()
 
     def clear_report(self) -> None:
         """Empty the perception fields for a new session.

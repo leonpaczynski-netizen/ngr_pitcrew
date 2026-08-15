@@ -27,6 +27,7 @@ import threading
 
 from pitcrew.diagnostics import log
 from pitcrew.engineer import gate
+from pitcrew.engineer.audio_devices import open_input
 from pitcrew.engineer.intents import (
     PHRASES,
     UNKNOWN,
@@ -36,6 +37,10 @@ from pitcrew.engineer.intents import (
 )
 
 # How long the driver can hold the button before we stop listening anyway.
+# This is a real cap: the capture stops feeding the decoder and the stream
+# stops itself at the limit, so a stuck button costs the tail of the question
+# rather than the whole of it. It used to be applied only afterwards, in
+# `gate.check_audio`, which threw away the entire transcript for being long.
 MAX_CAPTURE_S = 6.0
 SAMPLE_RATE = 16_000
 
@@ -68,6 +73,10 @@ class PushToTalk:
         self.pending_confirmation: str | None = None
         self.transcript: list[tuple[str, str]] = []   # (heard, said)
         self.last_verdict: gate.Verdict | None = None
+        # Why the last press produced no question. One of `gate`'s reasons,
+        # and now spoken rather than only stored.
+        self.last_reason: str | None = None
+        self._listening = False
 
     @property
     def available(self) -> bool:
@@ -78,32 +87,89 @@ class PushToTalk:
         """Whether the button can be read at all on this machine."""
         return self._listener is not None
 
+    @property
+    def listening(self) -> bool:
+        """Whether the hook is actually running, which is not the same thing
+        as one existing - rebinding the key used to leave the second true and
+        the first false, with the UI reporting the second."""
+        return self._listening and self._listener is not None
+
     def set_listener(self, listener) -> None:
-        """Swap the button. The old hook is stopped first, or it keeps firing
-        on the key the driver just changed away from."""
+        """Swap the button.
+
+        The old hook is stopped first, or it keeps firing on the key the driver
+        just changed away from - and the new one is started if the old one was
+        running, or rebinding mid-session kills the button on both keys while
+        `has_listener` goes on reporting it loaded.
+        """
+        was_listening = self.listening
         if self._listener is not None:
             self._listener.stop()
         self._listener = listener
+        self._listening = False
+        if was_listening:
+            self.start()
 
     def start(self) -> None:
         if self._listener is not None:
             self._listener.start(self.begin, self.end)
+            self._listening = True
 
     def stop(self) -> None:
         if self._listener is not None:
             self._listener.stop()
+        self._listening = False
 
     # ------------------------------------------------------------- the cycle
+    #
+    # `begin` and `end` are the OUTERMOST FRAME on pynput's hook thread, and
+    # pynput does not treat an escaping exception as an error to report: its
+    # `_emitter.inner` catches it, queues the exc_info, calls `self.stop()` and
+    # re-raises into `ListenerMixin._run`, which swallows it in a bare
+    # `except:`. The listener is then stopped for good, surfaced only through
+    # `join()`, which nothing here calls - so an unguarded raise means the
+    # button goes dead for the rest of the race while `has_listener` still
+    # reports the hook loaded. `sd.InputStream` is a genuine raiser (no device,
+    # device claimed, device removed) and none of that is detectable when the
+    # recogniser is constructed. Note the contrast the code already showed: the
+    # audio callback INSIDE `begin` was carefully guarded and the frame that
+    # owns it was not.
 
     def begin(self) -> None:
         """Button down."""
-        if self._recogniser is not None:
+        self.last_reason = None
+        if self._recogniser is None:
+            return
+        try:
             self._recogniser.begin()
+        except Exception as exc:                # noqa: BLE001 - see above
+            self.last_reason = gate.NO_DEVICE
+            log("ptt").error("could not open the microphone: %s: %s",
+                             type(exc).__name__, exc, exc_info=True)
 
     def end(self) -> None:
         """Button up: recognise what was said and answer it."""
+        try:
+            self._end()
+        except Exception as exc:                # noqa: BLE001 - see above
+            log("ptt").error("push to talk failed: %s: %s",
+                             type(exc).__name__, exc, exc_info=True)
+            try:
+                self.rejected(gate.FAILED)
+            except Exception:                   # noqa: BLE001
+                # Speaking about the failure failed too. Nothing left to try,
+                # and taking the hook thread down would cost him the button.
+                log("ptt").error("could not report the failure either",
+                                 exc_info=True)
+
+    def _end(self) -> None:
         if self._recogniser is None:
             self._reply("Speech isn't available on this machine.", "")
+            return
+        if self.last_reason == gate.NO_DEVICE:
+            # The stream never opened, so there is nothing to close and
+            # nothing to transcribe. Say which of the two it was.
+            self.rejected(gate.NO_DEVICE)
             return
         # One question at a time; a second press while answering is ignored
         # rather than queued, because the answer to the first is already stale.
@@ -111,9 +177,29 @@ class PushToTalk:
             return
         try:
             heard = self._recogniser.end() or ""
+            reason = getattr(self._recogniser, "last_reason", None)
+            if not heard and reason:
+                self.rejected(reason)
+                return
             self.ask(heard)
         finally:
             self._busy.release()
+
+    def rejected(self, reason: str) -> str:
+        """Say why there was no question, in that reason's own words.
+
+        The five gate reasons were computed, stored in `last_reason` and read
+        nowhere: all of them arrived as "Say again.", which is the one reply
+        that cannot distinguish a brushed button from a microphone that is not
+        plugged in. `gate.py`'s own rationale is that a driver told "I didn't
+        hear you" learns to press the button properly while one told nothing
+        learns the app is unreliable.
+        """
+        self.last_reason = reason
+        self.last_verdict = gate.Verdict(gate.REJECT, UNKNOWN, "", reason)
+        text = gate.spoken_reason(reason)
+        self._reply(text, "")
+        return text
 
     def ask(self, heard: str) -> str:
         """Answer a question already turned into text. The testable seam.
@@ -332,7 +418,12 @@ class MoonshineRecogniser:
         self._stream = None
         self._speech_blocks = 0
         self._total_blocks = 0
+        self._truncated = False
         self.last_reason: str | None = None
+
+    @property
+    def _max_blocks(self) -> int:
+        return max(1, int(self._max_capture_s * self.SAMPLE_RATE / self.BLOCK))
 
     def begin(self) -> None:
         """Button down: open the mic and start feeding the decoder."""
@@ -341,12 +432,21 @@ class MoonshineRecogniser:
 
         self._speech_blocks = 0
         self._total_blocks = 0
+        self._truncated = False
         self.last_reason = None
         self._transcriber.start()
 
         def on_audio(indata, _frames, _time, status) -> None:
             if status:
                 log("ptt").debug("capture status: %s", status)
+            if self._total_blocks >= self._max_blocks:
+                # The cap, applied where it can still keep the question: the
+                # first MAX_CAPTURE_S of audio is transcribed and the tail is
+                # dropped. CallbackStop is PortAudio's own way to end a stream
+                # from inside its callback; stopping it any other way from here
+                # deadlocks the host.
+                self._truncated = True
+                raise sd.CallbackStop
             block = np.asarray(indata, dtype=np.float32).reshape(-1)
             self._total_blocks += 1
             if float(np.sqrt(np.mean(block * block))) >= self._silence_rms:
@@ -359,10 +459,9 @@ class MoonshineRecogniser:
                 log("ptt").warning("add_audio raised: %s: %s",
                                    type(exc).__name__, exc)
 
-        self._stream = sd.InputStream(
-            samplerate=self.SAMPLE_RATE, channels=1, dtype="float32",
+        self._stream = open_input(
+            self.SAMPLE_RATE, channels=1, dtype="float32",
             blocksize=self.BLOCK, callback=on_audio)
-        self._stream.start()
 
     def end(self) -> str:
         """Button up: close the mic and return what was said, or nothing.
@@ -378,8 +477,15 @@ class MoonshineRecogniser:
             finally:
                 self._stream = None
 
+        if self._truncated:
+            log("ptt").info("capture reached the %.0fs limit - transcribing "
+                            "what was said up to it", self._max_capture_s)
+
         seconds = self._total_blocks * self.BLOCK / self.SAMPLE_RATE
         speech = self._speech_blocks * self.BLOCK / self.SAMPLE_RATE
+        # `seconds` cannot now exceed the limit, so TOO_LONG will not fire from
+        # this recogniser. The check stays: it is the backstop for any other
+        # capture source, and it is the stage that decides what to say.
         reason = gate.check_audio(duration_s=seconds, speech_s=speech,
                                   max_capture_s=self._max_capture_s)
         if reason is not None:
@@ -500,6 +606,31 @@ def best_semantic_matcher():
     """A semantic matcher, or None where the model is not available."""
     matcher = SemanticMatcher()
     return matcher if matcher.available else None
+
+
+# Recognisers that cannot return a phrase outside the list they were built
+# with. Exact by construction, so they need no semantic gate - and every other
+# recogniser does, including any added later, which is why this is a list of
+# the exceptions rather than a list of the engines that need one.
+CLOSED_GRAMMAR = (SapiGrammarRecogniser.name,)
+
+
+def matcher_for(recogniser):
+    """The semantic gate the recogniser that was actually BUILT needs.
+
+    Not the one the setting asked for. The chain falls back - SAPI is the
+    shipped default and it genuinely fails on this machine, timing out after
+    five seconds - so choosing the matcher from `settings.speech_backend`
+    means the app runs Moonshine free dictation with `matcher=None`, and
+    `gate.judge` short-circuits on `distance is None` straight to ACT, past
+    all five stages. The recogniser knows what it is: both classes carry
+    `name`. Ask it.
+    """
+    if recogniser is None:
+        return None
+    if getattr(recogniser, "name", "") in CLOSED_GRAMMAR:
+        return None
+    return best_semantic_matcher()
 
 
 # How long a recogniser gets to come up before the app gives up on it.

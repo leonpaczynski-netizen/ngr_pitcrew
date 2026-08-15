@@ -82,6 +82,8 @@ class ShiftBeep:
         self._shift_above = False
         self._muted_until = 0.0
         self.beeps = 0
+        # Why the last beep did not sound, for the settings screen to report.
+        self.last_error: str | None = None
 
     def update(self, packet, now: float) -> bool:
         if not driving_gate(packet.car_on_track, packet.paused, packet.loading):
@@ -105,25 +107,33 @@ class ShiftBeep:
         return beep
 
     def play_now(self) -> bool:
-        """Sound it once regardless of gate or threshold.
+        """Sound it once regardless of gate or threshold. True if it sounded.
 
         For the settings screen: he is in a headset while driving and cannot
         see whether the beep fired, so the only way to know it is audible over
         the engine is to press a button and listen.
+
+        Which is exactly why the answer has to be able to be no. This used to
+        return True whenever a tone function existed, and `_play` swallows the
+        exception - so the one control that exists to prove the beep works
+        reported success for a beep that raised.
         """
+        return self._play()
+
+    def _play(self) -> bool:
+        """Sound the tone. False when it did not, for whatever reason."""
         if self._tone is None:
             return False
-        self._play()
-        return True
-
-    def _play(self) -> None:
-        if self._tone is None:
-            return
         try:
             self._tone()
         except Exception as exc:                # noqa: BLE001
-            # A failed beep must never take the telemetry thread down.
+            # A failed beep must never take the telemetry thread down - but
+            # the caller is told, so a test button can say so.
             log("beep").warning("%s: %s", type(exc).__name__, exc)
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return False
+        self.last_error = None
+        return True
 
 
 def _default_tone():

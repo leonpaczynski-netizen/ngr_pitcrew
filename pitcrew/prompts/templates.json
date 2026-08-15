@@ -1,6 +1,6 @@
 {
   "note": "The prose of the three race-engineering prompts. DATA, NOT CODE: edit the wording here without touching pitcrew/prompts/build.py, and bump `version` when you do. The version travels in every generated footer and is stored with every issued prompt, so a returned setup sheet is traceable to the template that asked for it. Prompts A and B are ports of buildBrief() and buildLog() in reference/gt7-race-engineering.html and their wording is tuned for the knowledge base that reads them — it is not to be 'improved'. Only where the values come from changed. {braces} are filled by the builder.",
-  "version": "pitcrew-prompts/1.1",
+  "version": "pitcrew-prompts/1.2",
   "gt7Baseline": "GT7 v1.70 baseline",
   "shared": {
     "rigLine": "- Rig: Fanatec DD Extreme 18 Nm · ClubSport V3, load-cell brake, hydraulic throttle damper · GT7 sensitivity 10",
@@ -30,7 +30,7 @@
       "    {",
       "      \"purpose\": \"race\",",
       "      \"sheetName\": \"<short name I can pick out of a list>\",",
-      "      \"values\": { \"rh_f\": 60, \"cam_f\": -3.2 },",
+      "      \"values\": { \"rh_f\": 60, \"cam_f\": 3.2 },",
       "      \"gears\": [3.10, 2.40, 1.90],",
       "      \"why\": { \"rh_f\": \"...\", \"cam_f\": \"...\" }",
       "    },",
@@ -48,6 +48,7 @@
       "- **Every setting on the sheet, every time.** This is the first sheet for this combination, so there is no previous one to fall back on and a key you leave out is a value Pit Crew has nothing to enter. Send `null` for a setting the car does not have; send the number for everything it does, including the ones you are leaving at the baseline.",
       "- `values` keys are the vocabulary below and nothing else.",
       "- Numbers as numbers. No units, no `+`, no quotes: `-2.4`, not `\"-2.4 deg\"`.",
+      "- **Camber is a positive magnitude in GT7**, unlike every other sim: the in-game slider runs from 0.0 upward and the app refuses a negative one, because it is a slider position I cannot enter. Only toe and brake balance take a sign.",
       "- `null` for a setting this car does not have. Never `0` - zero is a real value on camber, toe and ballast, and a null read as zero is a setup change nobody asked for.",
       "- `gears` is 1st..nth in order. The final drive is `fg` in `values` like any other setting, not a field of its own - one place per number, or a reply can say two different things at once.",
       "- `why` is keyed the same as `values`, one short line each. It is what makes the change auditable a month later; a sheet with no reasons is a sheet nobody can argue with.",
@@ -58,6 +59,7 @@
       "- Omit a setting you are not changing rather than repeating the current value - an omitted key means *leave it alone*, and a repeated one means *I have checked this and it stays*, which are different instructions. Pit Crew already holds the sheet as run, so an omission is safe here in a way it is not on a first sheet.",
       "- `values` keys are the vocabulary below and nothing else.",
       "- Numbers as numbers. No units, no `+`, no quotes: `-2.4`, not `\"-2.4 deg\"`.",
+      "- **Camber is a positive magnitude in GT7**, unlike every other sim: the in-game slider runs from 0.0 upward and the app refuses a negative one, because it is a slider position I cannot enter. Only toe and brake balance take a sign.",
       "- `null` for a setting this car does not have. Never `0` - zero is a real value on camber, toe and ballast, and a null read as zero is a setup change nobody asked for.",
       "- `gears` is 1st..nth in order. The final drive is `fg` in `values` like any other setting, not a field of its own - one place per number, or a reply can say two different things at once.",
       "- `why` is keyed the same as `values`, one short line each. It is what makes the change auditable a month later; a sheet with no reasons is a sheet nobody can argue with.",

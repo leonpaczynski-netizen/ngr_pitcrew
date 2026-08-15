@@ -36,6 +36,7 @@ from pitcrew.telemetry.listener import (
     GT7_HEARTBEAT_PORT,
     HEARTBEAT_A,
     HEARTBEAT_C,
+    RECV_BUFFER,
 )
 from pitcrew.telemetry.packet import parse_packet
 
@@ -65,10 +66,16 @@ class FeedReport:
     packet_bytes: int | None = None
     on_track: bool = False
     samples: dict = field(default_factory=dict)
+    # How long this check actually listened for. Not `LISTEN_S`: the caller
+    # chooses the window, and dividing by the module default reported a healthy
+    # 60 Hz feed as "30 Hz" on a two-second check - in the one headline the
+    # driver reads as proof the feed is working.
+    listened_s: float = LISTEN_S
 
     @property
     def rate_hz(self) -> float:
-        return self.decoded / LISTEN_S if self.decoded else 0.0
+        window = self.listened_s or LISTEN_S
+        return self.decoded / window if self.decoded else 0.0
 
     def as_text(self) -> str:
         return f"{self.headline} {self.detail}".strip()
@@ -83,13 +90,16 @@ def check_feed(*, port: int, heartbeat_to: str | None = None,
     has already left.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # No SO_REUSEADDR: with it, a port another copy of Pit Crew is already
+    # holding binds without complaint and the first copy keeps the packets, so
+    # the headline below - the one diagnosis this branch exists to give - could
+    # never be reached. See `listener.UDPListener.run`.
     try:
         sock.bind(("0.0.0.0", port))
     except OSError as exc:
         sock.close()
         return FeedReport(
-            ok=False, port=port, heartbeat_to=heartbeat_to,
+            ok=False, port=port, heartbeat_to=heartbeat_to, listened_s=listen_s,
             headline=f"Port {port} will not open.",
             detail=(f"{exc}. Nothing would ever arrive on it — another copy "
                     f"of Pit Crew, or another program, is holding it."))
@@ -102,7 +112,7 @@ def check_feed(*, port: int, heartbeat_to: str | None = None,
 
 def _listen(sock, port, heartbeat_to, source_ip, listen_s) -> FeedReport:
     report = FeedReport(ok=False, headline="", port=port,
-                        heartbeat_to=heartbeat_to)
+                        heartbeat_to=heartbeat_to, listened_s=listen_s)
     filter_ip = (source_ip or "").strip() or None
     deadline = time.monotonic() + listen_s
     # Half the window on the preferred format, then the fallback. A console
@@ -126,6 +136,7 @@ def _listen(sock, port, heartbeat_to, source_ip, listen_s) -> FeedReport:
                 except OSError as exc:
                     return FeedReport(
                         ok=False, port=port, heartbeat_to=heartbeat_to,
+                        listened_s=listen_s,
                         headline=f"Cannot reach the PS5 at {heartbeat_to}.",
                         detail=(f"{exc}. The console streams only to an "
                                 f"address that has asked it to, so nothing "
@@ -133,7 +144,7 @@ def _listen(sock, port, heartbeat_to, source_ip, listen_s) -> FeedReport:
                 last_heartbeat = now
 
         try:
-            data, sender = sock.recvfrom(4096)
+            data, sender = sock.recvfrom(RECV_BUFFER)
         except socket.timeout:
             continue
         except OSError:

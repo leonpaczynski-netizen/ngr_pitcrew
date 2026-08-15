@@ -99,7 +99,10 @@ class PromptContext:
     # range - all of which is setup information before it is strategy.
     clock_note: str | None = None
     payload_refusal: str | None = None
+    # Set only where exactly one compound ran, so the prose can say what the
+    # payload says. `compounds_run` carries the rest, in order.
     compound: str | None = None
+    compounds_run: list[str] = field(default_factory=list)
     # Off the stream, on the last recorded race lap. None when the race was
     # not recorded or the stream never reported a position.
     finish_position: int | None = None
@@ -309,7 +312,8 @@ def gather(store, *, event_id: int | None = None, kind: str = "brief",
 
     context.session_totals = session_export(
         context.laps, fuel_capacity_l=capacity)
-    context.compound = _dominant_compound(context.laps)
+    context.compound = _single_compound(context.laps)
+    context.compounds_run = compounds_run(context.laps)
 
     if session_kind == "race":
         context.finish_position = _finish_position(store, event["id"])
@@ -346,8 +350,19 @@ def _latest_sheet(store, car: str | None) -> SetupSheet | None:
 
 
 def _fuel_capacity(store, event_id: int, kind: str) -> float | None:
-    for session in store.list_sessions(event_id, kind):
-        if session["fuel_capacity_l"] is not None:
+    """The first **plausible** tank, matching `export/build.py`.
+
+    A stored 0 is not an electric declaration - GT7 reports 0 both for a car
+    with no tank and for a packet that arrived before the car loaded, and
+    taking the first non-None handed the second one to `classify_exclusions`,
+    which skips the fuel-plausibility gate on a capacity of 0. The prompt and
+    the payload have to count the same laps or the prose contradicts the JSON
+    beneath it.
+    """
+    sessions = list(store.list_sessions(event_id, kind))
+    for session in sessions:
+        if session["fuel_capacity_l"] is not None \
+                and session["fuel_capacity_l"] > 0:
             return session["fuel_capacity_l"]
     return None
 
@@ -366,11 +381,32 @@ def _finish_position(store, event_id: int) -> int | None:
     return None
 
 
-def _dominant_compound(laps: list[LapInput]) -> str | None:
-    tags = [lap.compound for lap in counted_laps(laps) if lap.compound]
-    if not tags:
-        return None
-    return max(set(tags), key=tags.count)
+def compounds_run(laps: list[LapInput]) -> list[str]:
+    """Every compound the counted laps ran, in the order they ran them.
+
+    **Never a vote.** This is the export's own rule (`export/build.py`), which
+    was applied there and missed here: the prompt printed
+    `compound **RM**` by majority over a payload in the same document that
+    correctly omitted `meta.compound` and listed both. Prose and JSON stated
+    mutually exclusive things about which rubber ran, and the prose is what
+    gets read.
+
+    The vote was also non-deterministic. `max(set(tags), key=tags.count)`
+    iterates a set of strings, so `PYTHONHASHSEED` decided a tie - six fresh
+    processes over five RM and five RS laps returned RM RS RM RS RS RS - and
+    a tie is the normal shape of a comparison test.
+    """
+    seen: list[str] = []
+    for lap in counted_laps(laps):
+        if lap.compound and lap.compound not in seen:
+            seen.append(lap.compound)
+    return seen
+
+
+def _single_compound(laps: list[LapInput]) -> str | None:
+    """The compound, only where the session ran exactly one."""
+    codes = compounds_run(laps)
+    return codes[0] if len(codes) == 1 else None
 
 
 def _circuit_name(event: dict) -> str:

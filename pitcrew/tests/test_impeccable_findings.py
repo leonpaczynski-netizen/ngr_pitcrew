@@ -283,9 +283,9 @@ def test_a_paste_replaces_the_sheet_rather_than_merging_into_it(qt_app):
 
     screen = EventScreen()
     screen.paste_box.setPlainText(json.dumps(
-        {"sheets": [{"purpose": "race", "values": {"rh_f": 62, "cam_f": -3.2}}]}))
+        {"sheets": [{"purpose": "race", "values": {"rh_f": 62, "cam_f": 3.2}}]}))
     screen._on_read_sheet()
-    assert screen.values()["setup_values"]["cam_f"] == -3.2
+    assert screen.values()["setup_values"]["cam_f"] == 3.2
 
     screen.paste_box.setPlainText(json.dumps(
         {"sheets": [{"purpose": "race", "values": {"rh_f": 70}}]}))
@@ -293,3 +293,145 @@ def test_a_paste_replaces_the_sheet_rather_than_merging_into_it(qt_app):
     values = screen.values()["setup_values"]
     assert values["rh_f"] == 70
     assert values.get("cam_f") is None, "the old sheet's value survived a paste"
+
+
+# ------------------------------------------------- the pre-UAT gap sweep, UI
+
+def test_changing_the_track_does_not_leak_its_layout_into_the_next_one(qt_app):
+    """`Picker.set_groups` restored the previous selection with
+    `setCurrentText`, which ADDS when `findData` misses - so Le Mans / Full
+    Course, switched to Alsace, left the layout reading Full Course and put
+    Full Course in Alsace's dropdown. 31 circuits have more than one layout,
+    and layout is what the track model and the rain list key on."""
+    from pitcrew.ui.event_screen import EventScreen
+
+    screen = EventScreen()
+    screen.track_edit.setCurrentText("24 Heures du Mans Racing Circuit")
+    screen.layout_edit.setCurrentText("No Chicane")
+    assert screen.layout_edit.currentText() == "No Chicane"
+
+    screen.track_edit.setCurrentText("Alsace")
+    assert "No Chicane" not in screen.layout_edit.items()
+    assert screen.values()["layout"] is None
+
+
+def test_the_switch_guard_releases_on_an_event_id_above_the_int_cache(qt_app):
+    """`itemData` round-trips through a QVariant and returns a fresh int, so
+    an `is not` comparison held only while CPython's small-int cache made two
+    900s the same object. Above 256 the guard never released and an event with
+    unsaved edits on screen could never be reached."""
+    from pitcrew.ui.event_screen import EventScreen
+
+    screen = EventScreen()
+    screen.set_events([{"id": 900, "name": "Round 9"},
+                       {"id": 901, "name": "Round 10"}])
+    screen.load({"id": 900, "name": "Round 9"}, None)
+    screen.name_edit.setText("Round 9 - edited")
+    assert screen.is_dirty()
+
+    targets = []
+    screen.switched.connect(targets.append)
+    index = screen.event_picker.findData(901)
+    screen._on_picker_activated(index)
+    assert targets == [], "the first click must arm, not switch"
+    screen._on_picker_activated(index)
+    assert targets == [901], "the second click must switch"
+
+
+def test_a_refused_rebuild_takes_the_old_plan_off_the_spec_line(qt_app):
+    """The controller catches `StrategyImpossible`, calls `show_plans([], ...)`
+    and returns before it reaches `note()` - and every `spec.add` sat inside
+    `if plans:`. The two largest pieces of text on the screen went on
+    describing a plan the app had just refused to make."""
+    from pitcrew.strategy.model import Plan, Stint
+    from pitcrew.ui.strategy_screen import StrategyScreen
+
+    plan = Plan(stints=[Stint(15, "RM", 45.0, 1), Stint(15, "RM", 45.0, 16)],
+                total_time_s=2892.0, binding_constraint="tyres",
+                notes=["measured"])
+
+    screen = StrategyScreen()
+    screen.show_plans([plan], [])
+    screen.note("Every input measured.")
+    assert screen.spec._entries
+
+    screen.show_plans([], [])
+    assert screen.spec._entries == []
+    assert screen.footer_note.text() == ""
+
+
+def test_a_range_whose_max_is_below_its_min_is_refused(qt_app):
+    """This screen exists to copy 22 pairs of numbers off the car's own
+    settings screen by hand, and what it writes is a hard slider limit.
+    `fraction_of_range` guards only `high == low`, so 200/50 makes every
+    percentage quoted against that key negative (CLAUDE.md 4.6)."""
+    from pitcrew.ui.car_screen import CarScreen
+
+    screen = CarScreen()
+    screen._min_editors["rh_f"].setValue(200.0)
+    screen._max_editors["rh_f"].setValue(50.0)
+    screen._min_editors["rh_r"].setValue(50.0)
+    screen._max_editors["rh_r"].setValue(200.0)
+
+    assert "rh_f" not in screen.read_ranges()
+    assert screen.read_ranges()["rh_r"] == [50.0, 200.0]
+    assert screen.inverted_ranges()
+
+    saved = []
+    screen.saved.connect(lambda *a: saved.append(a))
+    screen.car_edit.setCurrentText(screen.car_edit.items()[0])
+    screen._on_save()
+    assert saved == [], "an inverted pair reached the store as a slider limit"
+    assert "below min" in screen.footer_note.text()
+
+
+def test_a_picker_takes_focus_when_it_is_told_to(qt_app):
+    """`Picker` is a plain QWidget wrapping the combo, so its focus policy is
+    NoFocus and the save message's "and go there" did nothing for Track and
+    Car - the two fields it names most often."""
+    from PyQt6.QtCore import Qt
+    from pitcrew.ui.event_screen import EventScreen
+
+    screen = EventScreen()
+    screen.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    screen.show()
+    screen.name_edit.setText("Round 8")
+    screen._on_save()
+    assert screen.focusWidget() is screen.track_edit.combo
+
+
+def test_an_incident_lap_is_out_of_the_rack_count_too(qt_app):
+    """`LapRow.counted` omitted `incident`, which `LapInput.counted` includes -
+    so a 122 s spin stayed in the rack's count and its best. On a stored
+    ten-lap event the rack read "Counted 9/10, Best 92.100" against the
+    export's `lapsCounted 7, bestLapMs 94000`."""
+    from pitcrew.ui.practice_screen import LapRow, RackRow
+
+    spun = LapRow(9, 9, 122_000, 3.4, compound="RM", incident=True,
+                  incident_note="spin")
+    clean = LapRow(2, 2, 94_000, 3.4, compound="RM")
+    assert clean.counted
+    assert not spun.counted, "an incident lap is not a pace sample"
+
+    widget = RackRow(spun, 94_000)
+    assert widget.band._struck, "neither dimmed nor strikeable"
+    assert not widget.exclude_button.isVisibleTo(widget)
+
+
+def test_the_screenshot_harness_starts(qt_app):
+    """It is the harness that would have caught a paintEvent calling a
+    function nobody wrote. `NavRail.select` read `self.stack`; `__init__`
+    assigns `self._stack`, so it died on construction in both modes."""
+    from PyQt6.QtWidgets import QStackedWidget, QWidget
+
+    from pitcrew.ui.preview import NavRail
+
+    stack = QStackedWidget()
+    for _ in range(2):
+        stack.addWidget(QWidget())
+    rail = NavRail(stack, ["Event", "Practice", "Strategy", "Race"])
+    rail.select(1)
+    assert stack.currentIndex() == 1
+    rail.select(3)                      # past the end of a two-screen stack
+    assert stack.currentIndex() == 1
+

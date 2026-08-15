@@ -45,8 +45,24 @@ def hour_of(time_of_day_ms: float | None) -> float | None:
 
 
 def lap_hour(lap: LapInput) -> float | None:
-    """When this lap was driven, in game time. None on laps recorded before
-    the clock was captured."""
+    """When this lap was driven, in game time.
+
+    The stored `tod_start_ms`/`tod_end_ms` pair first, because every lap
+    carries it and that is what it is on the row for. Reading only the frames
+    meant a lap could be placed in the day solely when something else had
+    already chosen to decode it — and `strategy/evidence` hydrates frames for
+    a handful of laps per *tagged compound*, so a session with untagged laps
+    produced no hours at all and the app told the driver "no lap on record
+    carries a time of day, run a practice session" straight after he ran one.
+
+    None on laps recorded before the clock was captured.
+    """
+    start, end = lap.tod_start_ms, lap.tod_end_ms
+    if start is not None and end is not None:
+        # Unwrapped, so a lap that crosses midnight is not averaged into noon.
+        return hour_of((start + (end if end >= start else end + DAY_MS)) / 2.0)
+    if start is not None or end is not None:
+        return hour_of(start if start is not None else end)
     stamps = [frame.get("time_of_day_ms") for frame in (lap.frames or ())
               if frame.get("time_of_day_ms") is not None]
     return hour_of(mean(stamps)) if stamps else None

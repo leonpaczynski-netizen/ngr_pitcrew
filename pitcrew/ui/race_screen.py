@@ -343,7 +343,13 @@ class RaceScreen(QWidget):
             self.spec.add("Position", f"P{snapshot['position']}")
         fuel = snapshot.get("lapsOfFuel")
         if fuel is not None:
-            self.spec.add("Fuel", f"{fuel:.1f} laps")
+            # **Derived, like the Box-in beside it.** Litres in the tank is
+            # measured; laps of fuel is `fuel_l / fuel_per_lap_l`, and that
+            # rate is the *planned* burn until three laps are in and the
+            # median of observed burns after. One spec line was carrying a
+            # model output and a stream reading in the same ink, on the
+            # surface used at racing speed.
+            self.spec.add("Fuel", f"{fuel:.1f} laps", derived=True)
         to_stop = snapshot.get("lapsToStop")
         if to_stop is not None:
             # The model worked this out. It is the highest-consequence
@@ -351,5 +357,7 @@ class RaceScreen(QWidget):
             # "the driver typed this".
             self.spec.add("Box in", f"{max(0, to_stop)}", derived=True)
         if snapshot.get("nextCompound"):
-            self.spec.add("Then", snapshot["nextCompound"])
+            # The plan's next stint, not the stream's - nothing has gone on
+            # the car yet.
+            self.spec.add("Then", snapshot["nextCompound"], derived=True)
         self.spec.finish()

@@ -35,10 +35,14 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from pitcrew.analysis.refuel import MAX_PLAUSIBLE_LPS
 from pitcrew.telemetry.packet import GT7Packet
+from pitcrew.telemetry.recorder import SAMPLE_HZ
 
 # Speed below which a fuel increase means the pit lane rather than a physics
 # quirk.  GT7 pit limiters sit at 60-80 km/h; 120 leaves generous margin.
+# This is the gate the car has to clear to be *leaving*; the fill itself is
+# measured at a standstill -- see `_refuelling`.
 PIT_MAX_SPEED_KMH = 120.0
 
 # **Fuel has to be measured across a window, never between two frames.**
@@ -53,6 +57,16 @@ PIT_MAX_SPEED_KMH = 120.0
 # and a fifth of what the slowest observed fill delivers in that time.
 REFUEL_WINDOW_S = 2.0
 REFUEL_WINDOW_L = 0.30
+
+# **And a ceiling, because a tank can also be replaced rather than filled.**
+# The floor above says "the level is rising"; nothing said how fast, so a
+# single-frame garage reset satisfied it. Real: session 16 lap 1 steps
+# 96.192 -> 100.000 between one packet and the next at 0.00 km/h, which is
+# 228 L/s where GT7 fills at about one. The offline twin `pit_detect.find_stops`
+# never fell for it because it measures the rise from inside a stationary
+# window; this is the live half of the same rule, bounded by the figure
+# `analysis/refuel.py` already uses to reject an implausible rate.
+MAX_REFUEL_LPS = MAX_PLAUSIBLE_LPS
 
 # **A tyre change is a step, not a cooling curve.**  GT7 does not let the
 # rubber cool -- it replaces all four surface temperatures with one identical
@@ -219,6 +233,13 @@ class SessionState:
     def update(self, packet: GT7Packet) -> list[SessionEvent]:
         """Feed one packet.  Returns the events it produced, oldest first."""
         if packet.paused or packet.loading:
+            # **The fuel window cannot survive the gap.**  A pause or a load
+            # screen is a hole in the stream of unbounded length, and a reading
+            # from before it compared against the first one after it is not a
+            # measurement of anything.  Reproduced: the first packet after a
+            # paused race restart raised PIT_ENTRY with 40 litres, with the car
+            # on track throughout.
+            self._fuel_window.clear()
             self._prev = packet
             return []
 
@@ -287,20 +308,48 @@ class SessionState:
         })]
 
     def _refuelling(self, p: GT7Packet, now: float) -> bool:
-        """Is the tank going up, measured across a window rather than a frame?
+        """Is the tank going up, at a rate a fuel rig can actually deliver?
 
         At 60 Hz a 1 L/s fill moves the gauge 0.0167 L between packets, which
         is why the frame-to-frame test this replaced could never see a stop.
-        The window is trimmed to `REFUEL_WINDOW_S` and always keeps at least
-        two readings, so the comparison survives a stream that drops packets.
+        So the rise is measured across `REFUEL_WINDOW_S`, and three things have
+        to hold at once:
+
+        * **the car is stationary**, as it is in the box -- matching the
+          offline twin `pit_detect.find_stops`, and not merely under the
+          pit-lane speed, which the whole of a slow corner also satisfies;
+        * **the rise clears `REFUEL_WINDOW_L`**, the floor that makes a real
+          fill visible against a channel reported in litres;
+        * **the rise is no faster than `MAX_REFUEL_LPS`**, which is what tells
+          a fill from a tank being handed back full.
+
+        The window is trimmed strictly by age.  It used to keep a minimum of
+        two readings whatever their age, so one reading from before a pause or
+        a load screen always survived and could be compared against the first
+        one after it.  A stream that drops packets still delivers a hundred
+        readings inside two seconds; a stream that stops delivers none, and the
+        honest answer while it is rebuilding is "cannot tell".
         """
         self._fuel_window.append((now, p.fuel_level))
-        while len(self._fuel_window) > 2 and self._fuel_window[0][0] < now - REFUEL_WINDOW_S:
+        while self._fuel_window and self._fuel_window[0][0] < now - REFUEL_WINDOW_S:
             self._fuel_window.popleft()
-        if p.speed_kmh >= PIT_MAX_SPEED_KMH:
+        if p.speed_kmh > TYRE_SWAP_MAX_SPEED_KPH or len(self._fuel_window) < 2:
             return False
-        floor = min(litres for _, litres in self._fuel_window)
-        return p.fuel_level - floor >= REFUEL_WINDOW_L
+
+        levels = [litres for _, litres in self._fuel_window]
+        floor = min(levels)
+        if p.fuel_level - floor < REFUEL_WINDOW_L:
+            return False
+        # Time the rise from the *last* reading at the floor, not the first.
+        # A car that has been sitting there with a constant tank fills the
+        # window with the floor value, and measuring from the oldest of them
+        # would divide a one-frame jump by the whole two seconds and call
+        # 228 L/s a plausible 1.9.
+        started = len(levels) - 1 - levels[::-1].index(floor)
+        span_s = (len(levels) - 1 - started) / SAMPLE_HZ
+        if span_s <= 0:
+            return False
+        return (p.fuel_level - floor) / span_s <= MAX_REFUEL_LPS
 
     def _tyres_swapped(self, p: GT7Packet) -> bool:
         """Did all four corners step to one value in this single frame?
@@ -322,7 +371,18 @@ class SessionState:
         Either signal opens a stop on its own.  That is the point: a stop for
         tyres only puts nothing into the tank, and a splash of fuel changes no
         tyre, so requiring both would miss whichever kind of stop was made.
+
+        **Neither signal means anything with the car off track.**  Returning to
+        the garage refills the tank and refits the tyres, which is both
+        signatures at once, and the stop that fabricates carries a measured
+        litre figure and a tyre change into the lap row, the export's
+        `fuelAddedL`, and -- in a race -- the coordinator's stint plan.  The
+        offline twin `pit_detect` has required `on_track` from the start.
         """
+        if not p.car_on_track:
+            self._fuel_window.clear()
+            return []
+
         if self._prev is None:
             self._fuel_window.append((now, p.fuel_level))
             return []

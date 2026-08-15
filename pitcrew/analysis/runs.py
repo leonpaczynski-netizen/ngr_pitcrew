@@ -463,12 +463,37 @@ def auto_out_laps(laps: list[LapInput]) -> set[int]:
     errors — a struck lap is visible on the rack and can be restored, a
     counted out-lap is invisible and moves every aggregate — and it is what
     the app did before the exception existed.
+
+    **The exception belongs to the first lap of a session, not to `runs[0]`.**
+    `practice_mode` is per session and an event export concatenates every
+    practice session it has, each opening a new run — so applying it to
+    `runs[0]` alone struck the opening lap of the second and third time trial
+    of the day, usually the fastest lap each of them had. It is not applied to
+    every run either: a mid-session refuel opens a genuine out-lap whatever
+    mode the session is in. Where the car started the session is the whole of
+    what the exception is about.
     """
     runs = split_runs(laps)
     out = {run.first_lap for run in runs}
-    if runs and runs[0].practice_mode == TIME_TRIAL:
-        out.discard(runs[0].first_lap)
+    session_openers = _session_opening_laps(laps)
+    for run in runs:
+        if run.practice_mode == TIME_TRIAL and run.first_lap in session_openers:
+            out.discard(run.first_lap)
     return out
+
+
+def _session_opening_laps(laps: list[LapInput]) -> set[int]:
+    """The lap number each recording session opened with.
+
+    Keyed on `session_id`, and `None` is a key like any other: a lap list
+    built by hand carries no session and its first lap is still the first lap
+    of what there is.
+    """
+    opening: dict[int | None, int] = {}
+    for lap in laps:
+        if lap.session_id not in opening:
+            opening[lap.session_id] = lap.lap_num
+    return set(opening.values())
 
 
 # The vocabulary the export uses for why a lap does not count. `manual` is the

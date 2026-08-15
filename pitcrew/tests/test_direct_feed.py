@@ -25,8 +25,9 @@ from pitcrew.telemetry.listener import (
     GT7_HEARTBEAT_PORT,
     HEARTBEAT_C,
     UDPListener,
+    probe_port,
 )
-from pitcrew.telemetry.selftest import check_feed
+from pitcrew.telemetry.selftest import FeedReport, check_feed
 
 from .conftest import raw_packet
 
@@ -190,6 +191,40 @@ def test_the_self_test_refuses_a_port_it_cannot_open():
         assert "will not open" in report.headline
     finally:
         holder.close()
+
+
+def test_a_second_copy_of_the_app_cannot_quietly_take_the_port():
+    """SO_REUSEADDR made the "already running" diagnostic unreachable.
+
+    Measured on Windows: two sockets that both set it bind the same UDP port
+    without complaint and the *first* keeps every datagram, so a second copy of
+    Pit Crew started cleanly and sat there receiving nothing -- which is the
+    one failure CLAUDE.md 7 says must never be allowed to look like a console
+    that is not streaming.  UDP has no TIME_WAIT, so the option bought nothing
+    in exchange.
+    """
+    port = free_port()
+    first = UDPListener("0.0.0.0", port, lambda data: None)
+    first.start()
+    try:
+        time.sleep(0.3)
+        assert first.bind_error is None
+
+        second = UDPListener("0.0.0.0", port, lambda data: None)
+        second.start()
+        second.join(timeout=2.0)
+        assert second.bind_error is not None
+        assert probe_port(port) is not None
+    finally:
+        first.stop()
+        first.join(timeout=2.0)
+
+
+def test_the_rate_is_measured_over_the_window_actually_listened_for():
+    """`listen_s=2.0` used to report a healthy 60 Hz feed as 30 Hz, in the one
+    headline the driver reads as proof the feed is working."""
+    assert FeedReport(ok=True, headline="", decoded=120,
+                      listened_s=2.0).rate_hz == 60.0
 
 
 def test_bytes_that_will_not_decrypt_are_never_reported_as_a_feed():

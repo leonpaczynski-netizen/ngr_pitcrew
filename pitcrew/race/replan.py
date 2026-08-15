@@ -155,9 +155,18 @@ def assess(*, laps_done: int, laps_total: int | None,
     if current is not None and gain <= WORTH_CHANGING_S:
         return Replan(NONE, f"{'; '.join(reasons)}, but the plan still wins")
 
+    if current is None:
+        # Nothing runnable at the stop count he is on, so there is no gain to
+        # quote. Saying "0 seconds in it" put a measured-sounding nothing
+        # against a plan that cannot be finished.
+        detail = (f"{'; '.join(reasons)}; the {current_stops}-stop plan is no "
+                  f"longer runnable")
+    else:
+        detail = f"{'; '.join(reasons)}; {gain:.0f} seconds in it"
+
     return Replan(
         RECOMMENDED,
-        f"{'; '.join(reasons)}; {gain:.0f} seconds in it",
+        detail,
         stops=best.stops,
         stint_laps=tuple(stint.laps for stint in best.stints),
         gain_s=gain,
@@ -172,12 +181,25 @@ def _remaining_race(inputs: RaceInputs, laps_left: int,
     Re-planning the whole race would recommend a stop already taken. What is
     left is a shorter race starting now, on the fuel rate this race is actually
     showing rather than the one practice suggested.
+
+    **A timed race has to have its clock shortened too.** `race_minutes` was
+    left at the full limit while the lap count came down, so the model planned
+    another whole race inside the remainder of this one: ten laps left came
+    back as stints of 14 and 11. Adopted, that put the next stop on lap 29 of
+    a 24-lap race and no box call was ever made again. The clock left is the
+    laps left at the reference pace - still a timed problem, because a stop in
+    one is paid for in laps and not in seconds.
     """
     from dataclasses import replace
+
+    minutes = None
+    if inputs.is_timed and inputs.lap_time_ms > 0:
+        minutes = laps_left * (inputs.lap_time_ms / 1000.0) / 60.0
 
     return replace(
         inputs,
         race_laps=laps_left,
+        race_minutes=minutes,
         fuel_per_lap_l=observed_fuel or inputs.fuel_per_lap_l,
         fuel_capacity_l=fuel_capacity_l or inputs.fuel_capacity_l,
         mandatory_stops=0,      # already satisfied, or not reachable now

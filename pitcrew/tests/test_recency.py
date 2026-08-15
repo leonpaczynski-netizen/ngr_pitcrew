@@ -23,12 +23,16 @@ from pitcrew.analysis.recency import (
     weighted,
     weighted_median,
 )
-from pitcrew.analysis.session import LapInput
+from pitcrew.analysis.session import (
+    LapInput,
+    green_lap_reference_ms,
+    reference_pace_ms,
+)
 
 
 def a_lap(lap_num: int, *, session_id: int, burn: float = 6.0,
-          sheet_id: int | None = None) -> LapInput:
-    return LapInput(lap_num=lap_num, lap_time_ms=109_000,
+          sheet_id: int | None = None, lap_ms: int = 109_000) -> LapInput:
+    return LapInput(lap_num=lap_num, lap_time_ms=lap_ms,
                     fuel_start=100.0, fuel_end=100.0 - burn,
                     compound="RH", session_id=session_id,
                     setup_sheet_id=sheet_id)
@@ -154,3 +158,35 @@ def test_the_weighting_declares_what_it_does_not_touch():
     assert any("wear" in line for line in payload["excludes"])
     assert any("bestLapMs" in line for line in payload["excludes"])
     assert payload["source"] == "derived"
+
+
+def test_appliesto_names_what_was_weighted_and_nothing_else():
+    """It was a fixed `["referenceLapMs", "fuelPerLapL"]` while `weighted` was
+    called for the fuel burn and nothing else — the reference pace came
+    straight out of an unweighted `green_lap_reference_ms`. A claim about
+    provenance that nothing computes is the one kind this app must not make.
+    """
+    _, fuel_only = weighted([a_lap(1, session_id=1)], burn_of)
+    assert fuel_only.as_export()["appliesTo"] == ["fuelPerLapL"]
+
+    _, both = weighted([a_lap(1, session_id=1)], burn_of,
+                       applies_to=("referenceLapMs", "fuelPerLapL"))
+    assert both.as_export()["appliesTo"] == ["referenceLapMs", "fuelPerLapL"]
+
+
+def test_the_reference_pace_goes_through_the_weighting_too():
+    """The module's own worked example is the pace — 0.37 s a lap, about ten
+    seconds over a 50-minute race, and it moves the stop lap — and the pace
+    was the one figure not going through it.
+
+    `green_lap_reference_ms` cannot do this job: it is the best of the first
+    three counted laps, which across a merged event is the *oldest* session's
+    opening laps.
+    """
+    old = [a_lap(n, session_id=1, lap_ms=112_000) for n in range(1, 6)]
+    new = [a_lap(n, session_id=2, lap_ms=109_000) for n in range(6, 11)]
+
+    assert green_lap_reference_ms(old + new) == 112_000
+    pace, weighting = reference_pace_ms(old + new)
+    assert pace == 109_000
+    assert weighting.as_export()["appliesTo"] == ["referenceLapMs"]

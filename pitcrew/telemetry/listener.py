@@ -28,6 +28,7 @@ from collections import deque
 from typing import Callable
 
 from pitcrew.diagnostics import log
+from pitcrew.telemetry.capture import MAX_DATAGRAM
 
 # GT7's own pair. The console listens for heartbeats on 33739 and streams to
 # whichever address and port asked. **Unverified against hardware** -
@@ -53,6 +54,14 @@ SILENCE_S = 1.0
 # and trying the other.
 FORMAT_PATIENCE_S = 4.0
 
+# One byte more than a capture file will accept. `capture.CaptureWriter` exists
+# to refuse a datagram that is not GT7 telemetry, and it cannot: receiving into
+# exactly `MAX_DATAGRAM` truncates an oversize datagram to the limit, so the
+# guard never sees one and the truncated bytes are written to the capture as
+# though they were whole - the plausible garbage the guard was written to
+# refuse. Asking for one byte more is what makes the refusal reachable.
+RECV_BUFFER = MAX_DATAGRAM + 1
+
 
 class BindFailed(OSError):
     """The port could not be opened, so nothing will ever arrive on it.
@@ -68,36 +77,19 @@ def probe_port(port: int) -> str | None:
 
     A dry run for the Settings screen, so a port that is already taken is
     found while he is looking at the setting rather than when he goes out.
+
+    **No SO_REUSEADDR**, for the same reason `UDPListener.run` does not set it:
+    with it two copies of Pit Crew bind the same UDP port happily and the first
+    one keeps every packet, so the question this function is asked - is anything
+    already holding the port - could only ever be answered "no".
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.bind(("0.0.0.0", port))
     except OSError as exc:
         return str(exc)
     finally:
         sock.close()
-
-    def _send_heartbeat(self, sock: socket.socket) -> None:
-        """Ask the console to keep streaming, from the receiving socket.
-
-        Deliberately the same socket. GT7 streams back to whatever address
-        and port asked it to, so a heartbeat sent from a second socket
-        produces a console streaming faithfully to a port nothing is bound
-        to - which looks, from here, exactly like a console switched off.
-        """
-        try:
-            sock.sendto(self._heartbeat,
-                        (self._heartbeat_to, GT7_HEARTBEAT_PORT))
-            self._heartbeats_sent += 1
-            self._send_error = None
-        except OSError as exc:
-            if self._send_error is None:
-                log("udp").error(
-                    "heartbeat to %s:%s failed: %s - the console will not "
-                    "stream to an address that has not asked it to.",
-                    self._heartbeat_to, GT7_HEARTBEAT_PORT, exc)
-            self._send_error = str(exc)
     return None
 
 
@@ -129,6 +121,7 @@ class UDPListener(threading.Thread):
         self._connected = False
         self._bind_error: str | None = None
         self._send_error: str | None = None
+        self._recv_error: str | None = None
 
     @property
     def packet_rate(self) -> float:
@@ -185,6 +178,18 @@ class UDPListener(threading.Thread):
         return self._send_error
 
     @property
+    def recv_error(self) -> str | None:
+        """Why the socket stopped delivering, if it did.
+
+        A listener whose receive loop ended receives nothing, which looks
+        exactly like a console that is not streaming - and used to be reported
+        as "no telemetry, is SimHub relaying?", which is the wrong thing to go
+        and check. Set rather than swallowed so the health report can say what
+        actually happened.
+        """
+        return self._recv_error
+
+    @property
     def bind_error(self) -> str | None:
         """Why the port could not be opened, if it could not.
 
@@ -199,7 +204,13 @@ class UDPListener(threading.Thread):
 
     def run(self) -> None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # **No SO_REUSEADDR.** UDP has no TIME_WAIT, so it buys nothing here
+        # and it costs the diagnostic below: measured on this machine, two
+        # sockets that both set it bind the same UDP port without complaint and
+        # the *first* one keeps receiving every datagram. A second copy of Pit
+        # Crew would therefore start cleanly, report a healthy bind, and sit
+        # there receiving nothing - which is the failure this whole module is
+        # written to make impossible.
         try:
             # Bind to INADDR_ANY so we receive regardless of which interface SimHub uses
             sock.bind(("0.0.0.0", self._port))
@@ -210,6 +221,17 @@ class UDPListener(threading.Thread):
             self._bind_error = str(e)
             return
         sock.settimeout(0.5)
+        # Windows reports an ICMP port-unreachable by raising WSAECONNRESET
+        # (10054) on the *next* recvfrom of a connectionless socket. Direct
+        # mode asks a console that may be asleep once a second, which is
+        # exactly how that gets provoked - and it arrives as an OSError, not a
+        # timeout, so the loop below used to break and end the thread with no
+        # flag set at all. Clearing SIO_UDP_CONNRESET stops the kernel raising
+        # it; the handler is kept for the case where it cannot be cleared.
+        try:
+            sock.ioctl(socket.SIO_UDP_CONNRESET, False)
+        except (AttributeError, OSError):
+            pass                      # not Windows, or the stack refuses it
 
         started = last_packet_time = time.monotonic()
         last_heartbeat = 0.0
@@ -240,12 +262,31 @@ class UDPListener(threading.Thread):
                         GT7_HEARTBEAT_PORT)
 
             try:
-                data, sender = sock.recvfrom(4096)
+                data, sender = sock.recvfrom(RECV_BUFFER)
             except socket.timeout:
                 if time.monotonic() - last_packet_time > 3.0:
                     self._connected = False
                 continue
-            except OSError:
+            except ConnectionResetError as exc:
+                # Only reachable where SIO_UDP_CONNRESET could not be cleared.
+                # One datagram being rejected says nothing about the next, so
+                # keep listening - but say so, because a console that refuses
+                # every datagram is asleep and no amount of waiting fixes it.
+                if self._recv_error is None:
+                    log("udp").warning(
+                        "the console at %s refused a datagram (%s). It is "
+                        "most likely asleep or not running GT7.",
+                        self._heartbeat_to, exc)
+                self._recv_error = str(exc)
+                self._connected = False
+                continue
+            except OSError as exc:
+                log("udp").error(
+                    "receive failed on port %s: %s - the listener is stopping, "
+                    "and nothing will arrive until it is started again.",
+                    self._port, exc)
+                self._recv_error = str(exc)
+                self._connected = False
                 break
 
             if self._source_ip and sender[0] != self._source_ip:
@@ -263,6 +304,10 @@ class UDPListener(threading.Thread):
             self._packet_timestamps.append(now)
             self._total_received += 1
             self._connected = True
+            # A refusal that a later datagram contradicts was transient, and
+            # reporting it afterwards would send him to check a console that
+            # is plainly working. Same convention as `_send_error`.
+            self._recv_error = None
 
             try:
                 self._callback(data)

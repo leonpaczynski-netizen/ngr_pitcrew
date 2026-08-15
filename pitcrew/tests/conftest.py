@@ -53,8 +53,15 @@ def make_packet(*, extended: bool = False, on_track: bool = True, **overrides) -
 
 
 def rolling_wheel_rps(speed_ms: float, radius: float = 0.35) -> float:
-    """Wheel rotation that corresponds to rolling without slip."""
-    return speed_ms / (radius * 2.0 * 3.141592653589793)
+    """Wheel rotation that corresponds to rolling without slip.
+
+    **GT7's per-wheel channel is rad/s**, so this is `v / r` and nothing else.
+    It used to synthesise rev/s, which is the same mistake the recorder made
+    reading it -- so the fixture cancelled the defect out and
+    `test_rolling_wheels_give_unit_slip` asserted 1.0 against an input built to
+    produce it. On the real stream the median was 6.2832.
+    """
+    return speed_ms / radius
 
 
 @pytest.fixture()

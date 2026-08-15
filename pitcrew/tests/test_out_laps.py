@@ -9,7 +9,12 @@ on record the opening lap is the quickest lap of the session.
 """
 from __future__ import annotations
 
-from pitcrew.analysis.runs import LOBBY, TIME_TRIAL, auto_out_laps
+from pitcrew.analysis.runs import (
+    LOBBY,
+    TIME_TRIAL,
+    auto_out_laps,
+    split_runs,
+)
 from pitcrew.analysis.session import LapInput
 
 
@@ -73,5 +78,30 @@ def test_going_back_to_the_garage_opens_a_run():
     either side are not one continuous stint."""
     first = a_stint(1, 3, practice_mode=TIME_TRIAL)
     second = [a_lap(n, fuel_start=100.0, fuel_end=93.5, session_id=2,
-                    practice_mode=TIME_TRIAL) for n in (4,)]
+                    practice_mode=LOBBY) for n in (4,)]
+    assert [run.first_lap for run in split_runs(first + second)] == [1, 4]
     assert auto_out_laps(first + second) == {4}
+
+
+def test_every_time_trial_of_the_day_keeps_its_opening_lap():
+    """The exception used to be applied to `runs[0]` alone.
+
+    `practice_mode` is per session and an event export concatenates them all,
+    so the second and third time trial of the day each lost their opening lap
+    - the fastest lap of the session in six of the eight on record - and
+    `_rows_for_event` re-struck it on every rebuild, so it could not be put
+    back by hand either.
+    """
+    first = a_stint(1, 3, practice_mode=TIME_TRIAL)
+    second = [a_lap(n, fuel_start=100.0 - 6.5 * (n - 4),
+                    fuel_end=100.0 - 6.5 * (n - 3), session_id=2,
+                    practice_mode=TIME_TRIAL) for n in (4, 5, 6)]
+    assert auto_out_laps(first + second) == set()
+
+
+def test_a_refuel_inside_a_time_trial_still_opens_an_out_lap():
+    """The exception is about where the car starts the *session*. A run that
+    opens mid-session opens in the box like any other."""
+    laps = (a_stint(1, 3, practice_mode=TIME_TRIAL)
+            + a_stint(4, 3, practice_mode=TIME_TRIAL))
+    assert auto_out_laps(laps) == {4}

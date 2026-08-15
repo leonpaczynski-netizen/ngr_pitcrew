@@ -13,7 +13,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-DATA_DIR = Path("data")
+from pitcrew.paths import DATA_DIR
 # The complete circuit and layout catalogue, off GT7's own track list. The
 # string list in gt7_extra.json is the fallback for a checkout without it, and
 # it is incomplete - see `track_layouts`.

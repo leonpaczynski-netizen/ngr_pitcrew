@@ -14,6 +14,13 @@ from __future__ import annotations
 
 import pytest
 
+from pitcrew.race.calls import STATUS, RaceState, next_call
+from pitcrew.race.coordinator import (
+    RaceCoordinator,
+    context_from_event,
+    context_from_stored,
+)
+from pitcrew.race.replan import _remaining_race, assess
 from pitcrew.strategy.model import (
     CONSTRAINT_EVIDENCE,
     SOURCE_MEASURED,
@@ -24,6 +31,7 @@ from pitcrew.strategy.model import (
     recommend,
     stint_limit,
 )
+from pitcrew.telemetry.session_state import EventKind, SessionEvent
 
 # The event as run: 50 minutes, 180 s of extra time, a 108 s lap.
 LAP_MS = 108_000
@@ -256,3 +264,152 @@ def test_no_crossover_is_offered_without_a_measured_pace():
         "RH": CompoundProfile("RH", 0.0, 0.0577, SOURCE_MEASURED),
         "RS": CompoundProfile("RS", -0.85, 0.1725, SOURCE_MEASURED)})
     assert crossover_table(bare) == []
+
+
+# --------------------------------------------------- the live race, not the plan
+#
+# Regression for S3. `events.race_laps` holds MINUTES when `race_type` is
+# `time` - the spin box is relabelled and saved to the same column, and
+# `race_minutes` is never written. The strategy path compensates on read; the
+# live race path took the figure as a lap count, so a 45-minute Monza was
+# raced as a 45-lap one: "40 to go" with 19 left, and a fuel shortfall to
+# match. GT7 cannot rescue it either - it sends `laps_in_race = -1` for a
+# timed race and `session_state` clamps that to 0.
+
+def a_timed_event(**overrides) -> dict:
+    fields = dict(car_name="Porsche 911 RSR", track="Monza", layout="Full",
+                  race_type="time", race_laps=45)
+    fields.update(overrides)
+    return fields
+
+
+def a_timed_plan() -> dict:
+    return {"stints": [
+        {"laps": 12, "compound": "RH", "fuel_l": 80.0, "start_lap": 1},
+        {"laps": 12, "compound": "RH", "fuel_l": 80.0, "start_lap": 13},
+    ]}
+
+
+def test_a_timed_events_minutes_are_not_read_as_laps():
+    context = context_from_event(a_timed_event())
+    assert context.is_timed
+    assert context.race_minutes == 45.0
+    assert context.race_laps == 0
+
+
+def test_a_lap_event_is_unchanged():
+    context = context_from_event(a_timed_event(race_type="laps", race_laps=20))
+    assert context.is_timed is False
+    assert context.race_laps == 20
+    assert context.race_minutes is None
+
+
+def test_a_timed_race_counts_down_the_plans_distance_not_the_minutes():
+    race = RaceCoordinator(a_timed_plan())
+    context = context_from_event(a_timed_event())
+    assert race.arm(context, context) is True
+    assert race.state.laps_total == 24          # the plan's distance, not 45
+
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 0}))
+    assert race.state.laps_total == 24
+    assert race.snapshot()["raceMinutes"] == 45.0
+
+
+def test_a_timed_race_says_its_lap_count_is_an_estimate():
+    """The distance follows from the stops, so it is spoken as 'about'."""
+    state = RaceState(lap=5, laps_total=24, race_minutes=45.0, position=3)
+    call = next_call(state)
+    assert call.kind == STATUS
+    assert call.call == "P3. about 19 to go."
+
+
+def test_a_timed_race_with_no_plan_counts_down_nothing():
+    """No plan is no estimate. A minutes figure read as laps is worse."""
+    race = RaceCoordinator(None)
+    context = context_from_event(a_timed_event())
+    assert race.arm(context, context) is True
+    assert race.state.laps_total is None
+    assert race.snapshot()["lapsRemaining"] is None
+
+
+def test_a_timed_plan_is_refused_for_a_race_of_a_different_length():
+    planned = context_from_event(a_timed_event(race_laps=45))
+    actual = context_from_event(a_timed_event(race_laps=50))
+    ok, why = planned.matches(actual)
+    assert ok is False
+    assert "45 minutes" in why
+
+
+def test_a_timed_plan_is_refused_for_a_lap_race():
+    planned = context_from_event(a_timed_event(race_laps=45))
+    actual = context_from_event(a_timed_event(race_type="laps", race_laps=45))
+    ok, why = planned.matches(actual)
+    assert ok is False
+    assert "timed race" in why
+
+
+# ------------------------------------------- re-planning one mid-race (S6)
+
+def test_the_rest_of_a_timed_race_is_a_shorter_timed_race():
+    """`race_minutes` was left at the full limit while the laps came down, so
+    the model planned another whole race inside the remainder of this one: ten
+    laps left came back as stints of 14 and 11, and adopting that put the next
+    stop on lap 29 of a 24-lap race - no box call was ever made again."""
+    rest = _remaining_race(an_input(), 10, 6.6, 100.0)
+    assert rest.race_laps == 10
+    assert rest.is_timed                       # still paid for in laps
+    # Ten laps of a 108 s circuit is 18 minutes, not the 50 it started with.
+    assert rest.race_minutes == pytest.approx(18.0)
+    assert sum(stint.laps for stint in recommend(rest)[0].stints) <= 11
+
+
+def test_a_mid_race_replan_never_plans_past_the_flag():
+    replan = assess(laps_done=18, laps_total=28, fuel_l=60.0,
+                    planned_fuel_per_lap=6.6, observed_fuel_per_lap_l=7.6,
+                    lap_time_ms=LAP_MS, planned_lap_time_ms=LAP_MS,
+                    current_stops=1, inputs=an_input(), fuel_capacity_l=100.0)
+    assert sum(replan.stint_laps) <= 11
+
+
+def test_no_gain_is_not_reported_as_zero_seconds():
+    """`current` is None when nothing runnable has his stop count, and the
+    gain then fell through as 0.0 - a measured-sounding nothing."""
+    replan = assess(laps_done=18, laps_total=28, fuel_l=60.0,
+                    planned_fuel_per_lap=6.6, observed_fuel_per_lap_l=7.6,
+                    lap_time_ms=LAP_MS, planned_lap_time_ms=LAP_MS,
+                    current_stops=9, inputs=an_input(), fuel_capacity_l=100.0)
+    assert "0 seconds in it" not in replan.reason
+    assert "no longer runnable" in replan.reason
+
+
+def test_a_plan_approved_before_the_minutes_were_told_apart_still_arms():
+    """Saved contexts carry the minutes in `race_laps`, exactly as the column
+    does. Read literally they would refuse every timed plan ever approved -
+    on race day, the one moment a refusal cannot be worked around."""
+    event = a_timed_event()
+    stored = {"car": event["car_name"], "track": event["track"],
+              "layout": event["layout"], "race_laps": 45}
+    planned = context_from_stored(stored, event)
+    assert planned.race_minutes == 45.0
+    ok, why = planned.matches(context_from_event(event))
+    assert ok, why
+
+
+def test_a_context_that_already_knows_its_minutes_is_read_as_written():
+    event = a_timed_event()
+    stored = {"car": event["car_name"], "track": event["track"],
+              "layout": event["layout"], "race_laps": 0, "race_minutes": 45.0}
+    assert context_from_stored(stored, event).race_minutes == 45.0
+
+
+def test_adopting_a_re_plan_moves_a_timed_races_distance_with_it():
+    """The distance is an output of the plan, so a new plan is a new one."""
+    race = RaceCoordinator(a_timed_plan())
+    context = context_from_event(a_timed_event())
+    race.arm(context, context)
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 0}))
+    assert race.state.laps_total == 24
+
+    race.state.lap = 10
+    race.adopt((8, 8))
+    assert race.state.laps_total == 26

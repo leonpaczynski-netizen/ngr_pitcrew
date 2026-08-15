@@ -19,13 +19,36 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from pitcrew.diagnostics import log
+from pitcrew.paths import DATA_DIR
 from pitcrew.store.schema import ADDED_COLUMNS, DDL, MIGRATIONS, SCHEMA_VERSION
 
-DEFAULT_DB_PATH = Path("data/pitcrew.db")
+DEFAULT_DB_PATH = DATA_DIR / "pitcrew.db"
 
 
 def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+# The two event constants the driver types, and the column that says whether he
+# did.  Both value columns are NOT NULL with an app default, so `None` from the
+# form cannot be stored as itself; it is recorded as an absent provenance and
+# the value column keeps whatever it held.  Nothing may read the number as his
+# without checking the source first.
+_DECLARED_CONSTANTS = {
+    "refuel_rate_lps": "refuel_rate_source",
+    "pit_loss_secs": "pit_loss_source",
+}
+
+
+def _record_declared_constants(fields: dict) -> None:
+    for value_key, source_key in _DECLARED_CONSTANTS.items():
+        if value_key not in fields:
+            continue
+        if fields[value_key] is None:
+            del fields[value_key]
+            fields.setdefault(source_key, None)
+        else:
+            fields.setdefault(source_key, "declared")
 
 
 class Store:
@@ -134,6 +157,7 @@ class Store:
 
     def create_event(self, **fields) -> int:
         fields.setdefault("created_at", _now())
+        _record_declared_constants(fields)
         fields["updated_at"] = _now()
         for key in ("available_compounds", "required_compounds"):
             if isinstance(fields.get(key), (list, tuple)):
@@ -148,6 +172,21 @@ class Store:
     def update_event(self, event_id: int, **fields) -> None:
         if not fields:
             return
+        _record_declared_constants(fields)
+        if not fields:
+            return
+        # `record_measured_clock` refuses to write over a typed figure, but nothing
+        # ever moved `clock_source` back off "measured" - so once the app had measured
+        # the clock once, the driver's later correction was stored and then quietly
+        # replaced by the next session's reading.  Writing either half of the pair from
+        # the form re-declares it.  Only an actual change counts: a no-op re-save of a
+        # measured event must not throw the measurement away.
+        clock = ("start_hour", "time_multiplier")
+        if any(key in fields for key in clock):
+            current = self.get_event(event_id)
+            if current is not None and "clock_source" in current and any(
+                    fields[key] != current[key] for key in clock if key in fields):
+                fields.setdefault("clock_source", "typed")
         fields["updated_at"] = _now()
         for key in ("available_compounds", "required_compounds"):
             if isinstance(fields.get(key), (list, tuple)):

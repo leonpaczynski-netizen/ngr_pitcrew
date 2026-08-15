@@ -155,30 +155,81 @@ def test_race_finishes_on_final_lap():
 
 
 # ----------------------------------------------------------------------- pit
+#
+# The fills below are written at GT7's real rate rather than as a single jump.
+# A jump is not a shortcut for a fill: an instantaneous tank is the signature
+# of the garage handing the car back, and `_refuelling` now refuses it.
+
+def filling(from_l: float, seconds: float, speed_ms: float = 0.0):
+    """Packets covering a fill at GT7's measured ~1 L/s, 60 Hz."""
+    return [make_packet(speed_ms=speed_ms,
+                        fuel_level=from_l + n * REAL_FILL_L_PER_FRAME)
+            for n in range(int(seconds * 60))]
+
 
 def test_pit_entry_and_exit_from_refuelling():
     state = SessionState(SessionKind.PRACTICE)
-    events = feed(state, [
-        make_packet(speed_ms=30.0, fuel_level=10.0),
-        make_packet(speed_ms=5.0, fuel_level=10.0),      # crawling in the box
-        make_packet(speed_ms=0.0, fuel_level=25.0),      # refuelling
-        make_packet(speed_ms=0.0, fuel_level=45.0),
-        make_packet(speed_ms=40.0, fuel_level=45.0),     # away
-    ])
+    packets = [make_packet(speed_ms=30.0, fuel_level=10.0),
+               make_packet(speed_ms=5.0, fuel_level=10.0)]   # crawling in
+    packets += filling(10.0, seconds=20.0)
+    packets.append(make_packet(speed_ms=40.0, fuel_level=30.0))   # away
+    events = feed(state, packets)
     assert kinds(events) == [EventKind.PIT_ENTRY, EventKind.PIT_EXIT]
-    assert events[1].data["fuel_added"] == 35.0
+    assert events[1].data["fuel_added"] == pytest.approx(20.0, abs=0.5)
 
 
 def test_lap_after_a_pit_stop_is_flagged():
     state = SessionState(SessionKind.PRACTICE)
-    feed(state, [
-        make_packet(speed_ms=5.0, fuel_level=10.0),
-        make_packet(speed_ms=0.0, fuel_level=40.0),      # pit entry
-        make_packet(speed_ms=40.0, fuel_level=40.0),     # pit exit
-        make_packet(speed_ms=40.0, fuel_level=38.0, last_lap_ms=120_000),
-    ])
+    packets = [make_packet(speed_ms=5.0, fuel_level=10.0)]
+    packets += filling(10.0, seconds=10.0)
+    packets.append(make_packet(speed_ms=40.0, fuel_level=20.0))
+    packets.append(make_packet(speed_ms=40.0, fuel_level=18.0,
+                               last_lap_ms=120_000))
+    feed(state, packets)
     assert state.laps[0].is_pit_lap is True
     assert state.laps[0].is_out_lap is True
+
+
+def test_a_tank_handed_back_full_in_one_frame_is_not_a_refuel():
+    """Session 16 lap 1: 96.192 -> 100.000 between two packets at 0.00 km/h.
+
+    That is 228 L/s against a rig that delivers about one, and it is what a
+    garage return looks like from here.  Taken as a stop it marked a 113 s lap
+    the driver actually drove as a pit lap with 3.47 L added, dropped it and
+    the lap after it from the counted set, and reported a stop that never
+    happened.
+    """
+    state = SessionState(SessionKind.PRACTICE)
+    packets = [make_packet(speed_ms=0.0, fuel_level=96.192) for _ in range(120)]
+    packets.append(make_packet(speed_ms=0.0, fuel_level=100.0))
+    assert EventKind.PIT_ENTRY not in kinds(feed(state, packets))
+
+
+def test_a_stop_is_never_inferred_with_the_car_off_track():
+    """Returning to the garage refills the tank and refits the tyres -- both
+    signatures at once, and neither of them a pit stop."""
+    state = SessionState(SessionKind.PRACTICE)
+    feed(state, [make_packet(speed_ms=30.0, fuel_level=40.0)])
+    garage = [make_packet(speed_ms=0.0, fuel_level=40.0, on_track=False)]
+    garage += [make_packet(speed_ms=0.0, fuel_level=40.0 + n * 1.0,
+                           on_track=False,
+                           tyre_temp_fl=60.0, tyre_temp_fr=60.0,
+                           tyre_temp_rl=60.0, tyre_temp_rr=60.0)
+               for n in range(1, 61)]
+    assert EventKind.PIT_ENTRY not in kinds(feed(state, garage))
+
+
+def test_the_fuel_window_does_not_survive_a_pause():
+    """A reading from before a load screen against the first one after it is
+    not a measurement of anything -- and it fired PIT_ENTRY with 40 litres on
+    the first packet of a restarted race, with the car on track throughout."""
+    state = SessionState(SessionKind.PRACTICE)
+    feed(state, [make_packet(speed_ms=0.0, fuel_level=40.0) for _ in range(60)])
+    events = feed(state, [
+        make_packet(speed_ms=0.0, fuel_level=40.0, flags_raw=0x0003),  # paused
+        make_packet(speed_ms=0.0, fuel_level=100.0),
+    ])
+    assert EventKind.PIT_ENTRY not in kinds(events)
 
 
 def test_fuel_rising_at_speed_is_not_a_pit_stop():

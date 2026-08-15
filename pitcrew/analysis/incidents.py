@@ -76,7 +76,20 @@ OFF_TRACK_MIN_S = 2.5
 # fast direction change. Brief by nature — a spin is over in a moment, and the
 # car being sideways for a tenth of a second at 80 km/h is not something that
 # happens on a clean lap.
-SPIN_YAW_RAD_S = 1.2
+#
+# **Measured against a real yaw channel, which this detector never had.** It
+# ran on `angvel_z`, the roll axis, whose correlation with actual heading rate
+# is 0.027 — so `spin` reached its 0.08 s minimum on exactly one of the 132
+# recorded laps and every incident the detector reported came from `crawl` or
+# `off-track`. Reconstructing yaw from `pos_x`/`pos_z` across all 132 laps and
+# taking each lap's strongest sustained 5-frame excursion below
+# `SPIN_MAX_SPEED_KPH`: the 113 laps within 3 s of their session median top out
+# at 1.83 rad/s (median 0.82, and a slow hairpin alone is worth 0.9), while the
+# laps that lost time sit at 2.22 and above. 1.2 sat inside normal driving and
+# fired on 6 of those 113; 2.0 is the middle of the empty band between them and
+# fires on none, while still catching 8 of the 17 laps that lost time — the
+# rest lost it to a crawl or an off, which are the other two signals.
+SPIN_YAW_RAD_S = 2.0
 SPIN_MAX_SPEED_KPH = 120.0
 SPIN_MIN_S = 0.08
 
@@ -89,19 +102,28 @@ REASON_INCIDENT = "incident"
 
 @dataclass(frozen=True)
 class Evidence:
-    """What one lap's frames show, before any judgement is made."""
-    crawl_s: float = 0.0
-    off_track_s: float = 0.0
-    spin_s: float = 0.0
+    """What one lap's frames show, before any judgement is made.
+
+    Any of the three may be `None`, meaning **the channel it comes from was
+    not in the packet**. `off_track_s` is the one that actually happens:
+    surface type arrives only in the `~` and `C` formats, and the listener
+    falls back to `A` after `FORMAT_PATIENCE_S` without a decode. Every lap of
+    that session then has no surface channel at all, and a 0.0 there is stored
+    and exported as a measurement that the car never left the road — which is
+    exactly what `meta.packet` exists to prevent (`CLAUDE.md` §3.1).
+    """
+    crawl_s: float | None = 0.0
+    off_track_s: float | None = 0.0
+    spin_s: float | None = 0.0
 
     @property
     def signals(self) -> tuple[str, ...]:
         found = []
-        if self.crawl_s >= CRAWL_MIN_S:
+        if self.crawl_s is not None and self.crawl_s >= CRAWL_MIN_S:
             found.append(CRAWL)
-        if self.off_track_s >= OFF_TRACK_MIN_S:
+        if self.off_track_s is not None and self.off_track_s >= OFF_TRACK_MIN_S:
             found.append(OFF_TRACK)
-        if self.spin_s >= SPIN_MIN_S:
+        if self.spin_s is not None and self.spin_s >= SPIN_MIN_S:
             found.append(SPIN)
         return tuple(found)
 
@@ -130,11 +152,16 @@ class Incident:
             "lap": self.lap_num,
             "lostS": round(self.lost_s, 2),
             "signals": list(self.signals),
-            "crawlS": round(self.evidence.crawl_s, 2),
-            "offTrackS": round(self.evidence.off_track_s, 2),
-            "spinS": round(self.evidence.spin_s, 2),
+            "crawlS": _seconds(self.evidence.crawl_s),
+            "offTrackS": _seconds(self.evidence.off_track_s),
+            "spinS": _seconds(self.evidence.spin_s),
             "note": self.describe(),
         }
+
+
+def _seconds(value: float | None) -> float | None:
+    """Null where the channel was not in the packet, never a rounded zero."""
+    return None if value is None else round(value, 2)
 
 
 def _longest_run_s(flags: list[bool], sample_hz: float) -> float:
@@ -183,6 +210,13 @@ def read_evidence(frames: list[dict] | None,
     speeds = speeds[launched:]
     crawling = [speed < CRAWL_KPH for speed in speeds]
 
+    # Surface type arrives only in the extended packet formats. Where none of
+    # the frames carry it there were no excursions *that anything could see*,
+    # which is a different claim from none having happened - and a stored 0.0
+    # is read downstream as a measurement.
+    surfaced = any(frame.get(f"surf_{corner}") is not None
+                   for frame in running
+                   for corner in ("fl", "fr", "rl", "rr"))
     off = []
     for frame in running:
         surfaces = [frame.get(f"surf_{corner}")
@@ -202,7 +236,7 @@ def read_evidence(frames: list[dict] | None,
 
     return Evidence(
         crawl_s=_longest_run_s(crawling, sample_hz),
-        off_track_s=_longest_run_s(off, sample_hz),
+        off_track_s=_longest_run_s(off, sample_hz) if surfaced else None,
         spin_s=_longest_run_s(spinning, sample_hz),
     )
 
@@ -218,8 +252,11 @@ def evidence_of(lap) -> Evidence | None:
     values = (lap.crawl_s, lap.off_track_s, lap.spin_s)
     if all(value is None for value in values):
         return None
-    return Evidence(crawl_s=values[0] or 0.0, off_track_s=values[1] or 0.0,
-                    spin_s=values[2] or 0.0)
+    # Each column keeps its own null. A session recorded on packet format A
+    # has no surface channel and stores NULL for `off_track_s` alone; filling
+    # it with 0.0 here would turn "not offered by this packet" back into "the
+    # car never left the road".
+    return Evidence(crawl_s=values[0], off_track_s=values[1], spin_s=values[2])
 
 
 def stored_or_read(lap) -> Evidence:
@@ -227,11 +264,17 @@ def stored_or_read(lap) -> Evidence:
 
     The fallback covers laps recorded before the columns existed and any path
     that builds a `LapInput` by hand.
+
+    `getattr`, because the lap rack's row objects carry the three evidence
+    columns and no frames at all — a `LapRow` with null evidence used to raise
+    `AttributeError` here, inside `load_active_event`, which is the app dying
+    on launch rather than a bad number.
     """
     stored = evidence_of(lap)
     if stored is not None:
         return stored
-    return read_evidence(lap.frames) if lap.frames else Evidence()
+    frames = getattr(lap, "frames", None)
+    return read_evidence(frames) if frames else Evidence()
 
 
 def find_incidents(laps, evidence_for) -> dict[int, Incident]:

@@ -43,7 +43,14 @@ def race_outcome(laps: list[LapInput], *, planned_stops: int | None = None,
         parts.append(
             f"the plan called for {planned_stops} "
             f"stop{'' if planned_stops == 1 else 's'}")
-    elif planned_pit_laps and stops and planned_pit_laps[:len(stops)] != stops:
+    elif (planned_pit_laps and stops
+          # **An incomplete plan cannot assert a deviation.** The plan used to
+          # travel as a single `pitLap`, so a two-stop race run exactly to its
+          # plan compared [11, 22] against [11] and reported the driver off
+          # it. Where fewer planned laps are known than stops were made, there
+          # is nothing to compare and silence is the honest output.
+          and len(planned_pit_laps) >= len(stops)
+          and planned_pit_laps[:len(stops)] != stops):
         parts.append(
             "stopped on "
             + ", ".join(f"lap {lap}" for lap in stops)

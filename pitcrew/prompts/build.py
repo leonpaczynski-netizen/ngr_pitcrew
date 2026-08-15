@@ -609,8 +609,14 @@ def _session_line(context: ctx.PromptContext) -> str:
         parts.append(f"laps run **{totals['lapsRun']}**")
     if totals.get("lapsCounted") is not None:
         parts.append(f"laps counted **{totals['lapsCounted']}**")
+    # One compound only where one ran. A session that ran three is not a
+    # session with a compound, and the payload attached to this same prompt
+    # says so - it omits `meta.compound` and lists `compoundsRun`.
     if context.compound:
         parts.append(f"compound **{context.compound}**")
+    elif context.compounds_run:
+        parts.append("compounds run **"
+                     + " / ".join(context.compounds_run) + "**")
     return " · ".join(parts)
 
 
@@ -968,12 +974,21 @@ def _strategy_section(lines: Lines, context: ctx.PromptContext,
             window = profile.get("tyreWindow") or {}
             temperature = ""
             if window.get("meanC") is not None:
-                low, high = window.get("windowC") or (None, None)
+                # **The measured half only.** The band and the window beside it
+                # were never measured in GT7 - `analysis/tyre_window.py`
+                # retracted that verdict and stamps every window
+                # `windowMeasured: false` - and printing them as a completed
+                # comparison put "0/6 laps in it" over a payload reading
+                # `inWindow: null`. The reader concluded the compound never
+                # reached its window, which is the exact false finding the
+                # module was rewritten to stop emitting.
                 temperature = (
-                    f", ran at {window['meanC']} C against a {low}-{high} C "
-                    f"window [{window.get('band')}, "
-                    f"{window.get('lapsInWindow')}/{window.get('lapsSampled')} "
-                    f"laps in it]")
+                    f", ran at {window['meanC']} C over "
+                    f"{window.get('lapsSampled')} laps")
+                if window.get("windowMeasured") is not True:
+                    temperature += (
+                        " (no GT7 working range has been measured for this "
+                        "compound, so there is nothing to judge that against)")
             lines.add(
                 f"- **{profile['compound']}**: "
                 f"{_number(profile.get('paceDeltaSPerLap'), 3)} s/lap against "

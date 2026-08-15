@@ -41,8 +41,14 @@ def a_race(*, laps: int = 30, rh_wear: float = 0.026,
         available_compounds=("RS", "RH"), evidence_compound="RS",
         wear_per_lap=rs_wear,
         compound_profiles={
-            "RS": CompoundProfile("RS", 0.0, rs_wear, SOURCE_MEASURED, 12, 1),
-            "RH": CompoundProfile("RH", rh_delta, rh_wear, SOURCE_MEASURED, 11, 1),
+            # `pace_known` spelled out: these two are declared measured and
+            # carry a real delta, and the export now emits null for a gap
+            # nothing has established. A fixture that leaves it False is
+            # describing a comparison that was never made.
+            "RS": CompoundProfile("RS", 0.0, rs_wear, SOURCE_MEASURED, 12, 1,
+                                  pace_known=True),
+            "RH": CompoundProfile("RH", rh_delta, rh_wear, SOURCE_MEASURED, 11,
+                                  1, pace_known=True),
         })
     fields.update(overrides)
     return RaceInputs(**fields)

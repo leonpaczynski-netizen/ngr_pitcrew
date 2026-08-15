@@ -373,13 +373,37 @@ class CarScreen(QWidget):
 
     def read_ranges(self) -> dict[str, list[float]]:
         """Only rows with both bounds. A half-entered range is not a range."""
+        return self._pairs()[0]
+
+    def inverted_ranges(self) -> list[str]:
+        """Rows where the max is below the min, in the driver's own labels."""
+        return self._pairs()[1]
+
+    def _pairs(self) -> tuple[dict[str, list[float]], list[str]]:
+        """Split the entered rows into usable ranges and transposed ones.
+
+        **A max below its min is refused, not stored.** This screen exists to
+        copy 22 pairs of numbers off the car's own settings screen by hand,
+        which is exactly the place a pair gets transposed - and the record it
+        writes is a hard slider limit. `fraction_of_range` (setup/sheet.py:173)
+        and `prompts/build.py:113` both divide by `high - low` and both guard
+        only `high == low`, so 200/50 makes every percentage quoted against
+        that key come out negative, on the axis the whole programme reasons in
+        (CLAUDE.md §4.6). Equal bounds are kept: a setting with one legal value
+        is a real range, and both consumers already return "—" for it.
+        """
         out: dict[str, list[float]] = {}
+        inverted: list[str] = []
         for key in RANGE_KEY_NAMES:
             low = self._min_editors[key].value()
             high = self._max_editors[key].value()
-            if low > EMPTY and high > EMPTY:
-                out[key] = [low, high]
-        return out
+            if not (low > EMPTY and high > EMPTY):
+                continue
+            if high < low:
+                inverted.append(catalogs.range_label(key) or key)
+                continue
+            out[key] = [low, high]
+        return out, inverted
 
     def note(self, text: str, *, warn: bool = False) -> None:
         self.state_note.setText(text)
@@ -399,7 +423,16 @@ class CarScreen(QWidget):
             self.footer("Pick a car first — a range record is about one car.",
                         warn=True)
             return
-        ranges = self.read_ranges()
+        ranges, inverted = self._pairs()
+        if inverted:
+            # Named rather than silently dropped: he read them off the car and
+            # they are on the screen, so "nothing saved" with no reason is the
+            # one response that looks like the app losing his work.
+            self.footer(
+                f"Max is below min on {', '.join(inverted)}. Swap them — a "
+                f"range that runs backwards makes every percentage quoted "
+                f"against it negative.", warn=True)
+            return
         if not ranges:
             self.footer("Nothing to save — no row has both a min and a max.",
                         warn=True)

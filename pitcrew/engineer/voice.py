@@ -12,6 +12,11 @@ learned the hard way and this one inherits:
 * **Failure is silent, never fatal.** No voice is a degraded race; a crash is a
   lost one. Every engine failure falls through to the next, and if none work
   the call still reaches the screen and the call log.
+* **Silence is counted, not just logged.** The driver cannot see the log and
+  cannot see the screen either, so "the engineer has said nothing for three
+  calls" has to be a number something can display. `silent_calls` is it.
+  An engine that produced no sound raises rather than returning quietly -
+  see `VoicePackEngine.speak` for why that was not always true.
 """
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ import wave
 from pathlib import Path
 
 from pitcrew.diagnostics import log
+from pitcrew.engineer.audio_devices import open_output
 
 # One lock across every engine that opens an audio stream, not one per class.
 # Overlapping PortAudio streams crash the host rather than mixing, and the
@@ -51,6 +57,16 @@ MAX_QUEUED = 3
 AUTO = object()
 
 
+class NotSpoken(RuntimeError):
+    """Raised when a line reached an engine and produced no sound.
+
+    The one failure mode that used to be invisible: a `VoicePackEngine` with
+    no live engine under it returned normally for every line it did not
+    carry, so nothing raised, nothing was logged above INFO, and `enabled`
+    still said True.
+    """
+
+
 class Voice:
     """Speaks queued lines on a background thread.
 
@@ -60,7 +76,12 @@ class Voice:
 
     def __init__(self, engine=AUTO, *, enabled: bool = True) -> None:
         self._engine = _best_engine() if engine is AUTO else engine
-        self.enabled = enabled and self._engine is not None
+        self.enabled = enabled and can_speak(self._engine)
+        # Consecutive calls that reached the engine and made no sound. The
+        # driver is in a headset with no screen, so this is the only way the
+        # app can tell him it has gone quiet - see `health()`.
+        self._failures = 0
+        self.last_error: str | None = None
         self.spoken: list[str] = []
         self._queue: queue.Queue = queue.Queue()
         self._stop = threading.Event()
@@ -108,6 +129,24 @@ class Voice:
             return "none"
         return getattr(self._engine, "name", type(self._engine).__name__)
 
+    @property
+    def silent_calls(self) -> int:
+        """How many calls in a row reached the engine and made no sound."""
+        return self._failures
+
+    def health(self) -> str | None:
+        """What is wrong with the audio right now, or None if nothing is.
+
+        Phrased as the driver would experience it - a count of calls he did
+        not hear - rather than as the exception, which is in the log for
+        afterwards. None means the last call played, not that every call did.
+        """
+        if not self._failures:
+            return None
+        calls = "call" if self._failures == 1 else "calls"
+        return (f"The engineer has said nothing for {self._failures} "
+                f"{calls}: {self.last_error}")
+
     def say(self, text: str) -> None:
         if not text:
             return
@@ -121,6 +160,28 @@ class Voice:
             except queue.Empty:
                 break
         self._queue.put((_now(), text))
+
+    def say_now(self, text: str) -> tuple[bool, str]:
+        """Speak on the calling thread and report what actually happened.
+
+        `say` is a queue put: it returns before the voice thread has picked the
+        line up, let alone synthesised or played it, so a caller that reports
+        success off the back of it is reporting that a string was enqueued.
+        The Settings self-test used to do exactly that, keyed on `enabled` -
+        which is only "an engine object exists" - so it printed "Said it
+        through ..." with the audio endpoint gone, a pack with no fallback
+        under it, or no output device at all. The one control whose whole
+        purpose is proving the voice works could not fail.
+        """
+        if self._engine is None:
+            return False, "no speech engine loaded on this machine"
+        try:
+            self._engine.speak(text)
+        except Exception as exc:                      # noqa: BLE001 - reported
+            log("voice").error("say_now failed: %s", exc)
+            return False, str(exc)
+        self.spoken.append(text)
+        return True, ""
 
     def stop(self) -> None:
         self._stop.set()
@@ -141,8 +202,17 @@ class Voice:
                 # Deliberately broad: a synthesis failure mid-race must not
                 # take the app with it, and the driver still has the screen
                 # and the call log. Reported, never swallowed silently.
-                log("voice").error("%s: %s", type(exc).__name__, exc,
+                self._failures += 1
+                self.last_error = f"{type(exc).__name__}: {exc}"
+                log("voice").error("%s (nothing said for %d call(s))",
+                                   self.last_error, self._failures,
                                    exc_info=True)
+            else:
+                if self._failures:
+                    log("voice").info("voice recovered after %d silent call(s)",
+                                      self._failures)
+                self._failures = 0
+                self.last_error = None
 
 
 def _now() -> float:
@@ -245,16 +315,12 @@ class PiperEngine:
                    chunk.sample_rate)
 
     def speak(self, text: str) -> None:
-        import sounddevice as sd
-
         with _PLAY_LOCK:
             stream = None
             try:
                 for samples, rate in self.synthesise(text):
                     if stream is None:
-                        stream = sd.OutputStream(samplerate=rate, channels=1,
-                                                 dtype="int16")
-                        stream.start()
+                        stream = open_output(rate)
                     stream.write(samples)
             finally:
                 if stream is not None:
@@ -277,6 +343,18 @@ class VoicePackEngine:
     failure: the pack is an optimisation, and an optimisation that can silence
     the engineer is a bug. **Every miss is logged with the exact string**,
     because the miss log is how the manifest gets finished.
+
+    Two consequences of taking that last sentence seriously:
+
+    * **A playback failure is not a miss.** It used to fall through into the
+      miss counter and the miss log, so a dead audio device wrote "not in the
+      manifest" against lines that were in it, and `hits`/`misses` stopped
+      measuring coverage at all. A device fault is logged as one.
+    * **With no live engine underneath, an uncovered line raises.** It used to
+      return, having played nothing and said nothing about it, which is how a
+      pack with `fallback=None` could present itself as a working voice.
+      `_best_engine` no longer builds that object, and if something else does,
+      `NotSpoken` says so out loud.
     """
 
     name = "voice-pack"
@@ -287,6 +365,15 @@ class VoicePackEngine:
         self._fallback = fallback
         self.hits = 0
         self.misses = 0
+
+    @property
+    def has_live_engine(self) -> bool:
+        """Whether there is anything behind the pack for a line it lacks.
+
+        A pack covers most of what the engineer says, never all of it, so this
+        is the difference between a voice and a voice-shaped object.
+        """
+        return self._fallback is not None
 
     @property
     def voice_id(self) -> str:
@@ -318,37 +405,43 @@ class VoicePackEngine:
                 return
             except Exception as exc:             # noqa: BLE001
                 # A pack that cannot play must not cost the driver the call.
+                # Logged as the device fault it is and NOT counted as a miss:
+                # the miss log is the list of lines still to render, and a
+                # dead output device puts covered lines on it.
                 log("voice").warning(
                     "voice pack playback failed for %r (%s: %s) - "
                     "synthesising instead", text, type(exc).__name__, exc)
+                if self._fallback is None:
+                    raise NotSpoken(
+                        f"the pack could not play {text!r} and there is no "
+                        f"live engine behind it") from exc
+                self._fallback.speak(text)
+                return
 
         self.misses += 1
         reason = uncovered_reason(text)
         log("voice").info(
             "voice pack miss: %r%s", text,
             f" - {reason}" if reason else " - not in the manifest")
-        if self._fallback is not None:
-            self._fallback.speak(text)
+        if self._fallback is None:
+            raise NotSpoken(
+                f"{text!r} is not in the pack and there is no live engine "
+                f"behind it, so nothing was said")
+        self._fallback.speak(text)
 
     def _play(self, segments) -> None:
-        import numpy as np
-        import sounddevice as sd
-
         with _PLAY_LOCK:
             stream = None
             try:
                 for name in segments:
                     samples, rate = self._read(self._clips[name]["file"])
                     if stream is None:
-                        stream = sd.OutputStream(samplerate=rate, channels=1,
-                                                 dtype="int16")
-                        stream.start()
+                        stream = open_output(rate)
                     stream.write(samples)
             finally:
                 if stream is not None:
                     stream.stop()
                     stream.close()
-        del np
 
     def _read(self, filename: str):
         import numpy as np
@@ -435,6 +528,14 @@ def _best_engine():
     The pack wraps whatever is underneath rather than replacing it, so the
     chain still degrades pack -> Piper -> SAPI -> silent, and a machine with
     no pack behaves exactly as it did before there was one.
+
+    **A pack with nothing underneath is not the bottom of that chain, it is
+    off the end of it.** The models and the rendered pack are gitignored
+    independently, so "pack on disk, no Piper model" is a state a real machine
+    reaches - and the object it used to produce answered `speak()` for every
+    line, played about nine in ten of them, and was silent for the rest
+    without raising. Returning None instead means the app says "no speech
+    engine on this machine", which is true and which the driver can act on.
     """
     live = None
     for factory in (PiperEngine, Sapi5Engine):
@@ -446,7 +547,29 @@ def _best_engine():
                               type(exc).__name__, exc)
 
     pack = load_voice_pack(live)
+    if live is None:
+        if pack is not None:
+            log("voice").error(
+                "a rendered voice pack is on disk but no live speech engine "
+                "loaded, so the pack is not used: it would be silent for "
+                "every line it does not carry and could not say so. Install a "
+                "Piper voice model to bring both back.")
+        return None
     return pack or live
+
+
+def can_speak(engine) -> bool:
+    """Whether this object can actually make a sound, rather than merely exist.
+
+    `enabled` used to be `engine is not None`, which is a test that an object
+    was constructed - and the one engine that can be constructed while being
+    unable to speak is exactly the one that gets built when speech is broken.
+    """
+    if engine is None or not callable(getattr(engine, "speak", None)):
+        return False
+    # Duck-typed: only the voice pack knows it can be hollow, and a test
+    # double or a future engine that does not answer is assumed to work.
+    return getattr(engine, "has_live_engine", True) is not False
 
 
 def available_engine_name() -> str:

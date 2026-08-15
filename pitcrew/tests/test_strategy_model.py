@@ -12,7 +12,13 @@ from pitcrew.strategy.model import (
     FUEL_MAP_POWER,
     PHASE_CLIFF_FROM,
     PHASE_FLAT_UNTIL,
+    PIT_LOSS_DECLARED,
+    PIT_LOSS_MEASURED,
+    SOURCE_ASSUMED,
+    SOURCE_DECLARED,
+    SOURCE_MEASURED,
     STINT_SAFETY_FACTOR,
+    CompoundProfile,
     Plan,
     RaceInputs,
     StrategyImpossible,
@@ -430,3 +436,122 @@ def test_a_tank_too_small_for_the_reserve_is_zero_not_one():
     assert fuel_limited_laps(5.0, 4.0) == 0
     assert fuel_limited_laps(0.0, 4.0) is None      # electric, not missing
     assert fuel_limited_laps(100.0, None) is None
+
+
+# ------------------------------------- an unmeasured wear rate is not a free one
+#
+# Regression for S4. `_stint_seconds`'s guard is `if wear:`, and a profile
+# built from real evidence carries `wear_per_lap=None` for a compound run in
+# practice but never gauge-read. None added no degradation at all, so the tyre
+# nobody had measured paid nothing while every measured one paid - and it
+# ranked first. Two identical profiles came out 4.9 s apart.
+
+def a_pair(**overrides) -> RaceInputs:
+    fields = dict(
+        race_laps=20, lap_time_ms=100_000, fuel_per_lap_l=3.0,
+        fuel_capacity_l=100.0, wear_per_lap=0.04,
+        available_compounds=("RH", "RM"), evidence_compound="RM",
+        compound_profiles={
+            "RM": CompoundProfile("RM", 0.0, 0.04, SOURCE_MEASURED, 10, 1,
+                                  longest_stint_laps=20),
+            # Same compound in every respect except the gauge reading.
+            "RH": CompoundProfile("RH", 0.0, None, SOURCE_DECLARED, 10, 1,
+                                  longest_stint_laps=20),
+        })
+    fields.update(overrides)
+    return RaceInputs(**fields)
+
+
+def test_a_compound_with_no_gauge_reading_inherits_the_reference_rate():
+    profile = a_pair().profile_for("RH")
+    assert profile.wear_per_lap == 0.04
+    assert profile.source == SOURCE_ASSUMED      # inherited, never measured
+    assert profile.is_measured is False
+
+
+def test_the_unmeasured_compound_no_longer_costs_less_than_the_measured_one():
+    inputs = a_pair()
+    unread = build_plan(inputs, 0, ["RH"])
+    measured = build_plan(inputs, 0, ["RM"])
+    assert unread.total_time_s == pytest.approx(measured.total_time_s)
+
+
+def test_the_assumption_is_stated_in_the_plans_notes():
+    """The caveat required `profile.wear_per_lap` truthy, so it never fired
+    for exactly the compounds it was written about."""
+    plan = build_plan(a_pair(), 0, ["RH"])
+    assert any("no measured rate" in note for note in plan.notes)
+    assert any("assumption, not a measurement" in note for note in plan.notes)
+
+
+def test_the_card_does_not_say_tyre_limited_and_fuel_limited_at_once():
+    """`worst_fraction` was None for a plan of unread compounds, so the notes
+    said "fuel-limited only" under a card headed "Limited by tyre"."""
+    plan = build_plan(a_pair(), 0, ["RH"])
+    assert not any("fuel-limited only" in note for note in plan.notes)
+    assert any("worn" in note for note in plan.notes)
+
+
+# ------------------------------------------------- provenance in the payload
+
+def test_the_pit_loss_is_exported_as_declared_not_measured():
+    """It is a spin box with a schema default of 20 s. Nothing measures it,
+    and the Strategy screen's own evidence row has always said so."""
+    plan = build_plan(inputs(), stops=1)
+    payload = plan.as_export(inputs())
+    assert payload["assumptions"]["pitLossSource"] == PIT_LOSS_DECLARED
+    assert payload["assumptions"]["pitLossSource"] != PIT_LOSS_MEASURED
+
+
+def test_a_measured_pit_loss_would_say_so():
+    measured = inputs(pit_loss_source=PIT_LOSS_MEASURED)
+    payload = build_plan(measured, stops=1).as_export(measured)
+    assert payload["assumptions"]["pitLossSource"] == PIT_LOSS_MEASURED
+
+
+def test_an_unmeasurable_compound_delta_is_null_not_zero():
+    """The same payload emits `paceDeltaSPerLap: null` per compound and used
+    to emit a confident 0.0 here - which reads as "these are exactly level",
+    a finding off a comparison `comparable_pace` refused to make."""
+    unmeasured = inputs(
+        available_compounds=("RM", "RH"), evidence_compound="RM",
+        compound_profiles={
+            "RH": CompoundProfile("RH", 0.0, 0.05, SOURCE_MEASURED, 8, 1,
+                                  longest_stint_laps=20)})
+    payload = build_plan(unmeasured, 0, ["RH"]).as_export(unmeasured)
+    assert payload["assumptions"]["compoundDeltaSPerLap"] is None
+
+
+def test_a_plan_on_the_reference_alone_still_reports_zero():
+    """The reference against itself is 0.0 by construction, not by
+    measurement, and refusing that would over-refuse."""
+    payload = build_plan(inputs(evidence_compound="RM"), 0,
+                         ["RM"]).as_export(inputs(evidence_compound="RM"))
+    assert payload["assumptions"]["compoundDeltaSPerLap"] == 0.0
+
+
+def test_a_measured_gap_is_still_a_number():
+    measured = inputs(
+        available_compounds=("RM", "RH"), evidence_compound="RM",
+        compound_profiles={
+            "RM": CompoundProfile("RM", 0.0, 0.05, SOURCE_MEASURED, 8, 1,
+                                  longest_stint_laps=20, pace_known=True),
+            "RH": CompoundProfile("RH", 0.4, 0.04, SOURCE_MEASURED, 8, 1,
+                                  longest_stint_laps=20, pace_known=True)})
+    payload = build_plan(measured, 0, ["RH"]).as_export(measured)
+    assert payload["assumptions"]["compoundDeltaSPerLap"] == 0.4
+
+
+# --------------------------------------------------- the payload validates
+
+def test_both_race_shapes_pass_the_contracts_key_check():
+    """`raceLength.laps` was not a documented key, so `to_json` refused every
+    lap race's payload outright - the export failing closed on the common
+    case. The distance for a lap race is `plan.laps`."""
+    from pitcrew.export.payload import _validate_known_keys
+
+    lap_race = inputs()
+    timed = inputs(race_minutes=45.0, extra_time_s=180.0)
+    for shape in (lap_race, timed):
+        payload = {"strategy": build_plan(shape, stops=1).as_export(shape)}
+        assert _validate_known_keys(payload) == []

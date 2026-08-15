@@ -368,9 +368,16 @@ class StrategyScreen(QWidget):
         self._sync_selection()
         self.approve_button.setEnabled(bool(plans))
 
+        # **Cleared whether or not there is anything to put back.** Both the
+        # clear and every `add` sat inside `if plans:`, so a refused rebuild -
+        # `StrategyImpossible`, caught in the controller, which calls
+        # `show_plans([], ...)` and returns - left the previous plan's race
+        # time and stop count on the line at DATA_LARGE_PX above a plate
+        # reading "No plans yet". The two largest pieces of text on the screen
+        # described a plan the app had just refused to make.
+        self.spec.clear()
         if plans:
             best = plans[0]
-            self.spec.clear()
             # **Every figure on this line is derived.** The race has not been
             # run: these are the stint model's outputs, against a wear rate
             # that may itself be assumed. They wore stencil white - the ink
@@ -401,6 +408,9 @@ class StrategyScreen(QWidget):
             self.crossover_band.show_crossover(best.crossover)
         else:
             self.crossover_band.show_crossover(None)
+            # The footer belongs to the last plan too. "Every input measured"
+            # under a refusal reads as a verdict on the refusal.
+            self.footer_note.setText("")
 
     def _show_evidence(self, evidence) -> None:
         self._clear(self.evidence_layout)

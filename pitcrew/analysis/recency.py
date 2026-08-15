@@ -96,6 +96,13 @@ class Weighting:
     sessions: int
     rehearsal_laps: int
     current_sheet_id: int | None
+    # **What was actually weighted**, supplied by the caller. It was a fixed
+    # `["referenceLapMs", "fuelPerLapL"]` while `weighted` was called for the
+    # fuel burn and nothing else, so the block claimed the reference pace had
+    # been weighted when it came straight out of an unweighted
+    # `green_lap_reference_ms`. A claim about provenance that nothing computes
+    # is the one kind of claim this app must not make.
+    applies_to: tuple[str, ...] = ("fuelPerLapL",)
 
     def as_export(self) -> dict:
         return {
@@ -105,7 +112,7 @@ class Weighting:
             "sessionsWeighted": self.sessions,
             "rehearsalLaps": self.rehearsal_laps,
             "currentSheetId": self.current_sheet_id,
-            "appliesTo": ["referenceLapMs", "fuelPerLapL"],
+            "appliesTo": list(self.applies_to),
             "excludes": [
                 "wear - read off the in-game gauge rather than fitted, so "
                 "reweighting it would reweight a measurement",
@@ -184,13 +191,19 @@ def weighted_median(pairs: list[tuple[float, float]]) -> float | None:
     return usable[-1][0]
 
 
-def weighted(laps, value_of, *, current_sheet_id: int | None = None
+def weighted(laps, value_of, *, current_sheet_id: int | None = None,
+             applies_to: tuple[str, ...] = ("fuelPerLapL",)
              ) -> tuple[float | None, Weighting]:
     """The weighted median of `value_of` across these laps, and the weighting.
 
     Returns `(None, weighting)` where no lap yields a value — never zero. A
     figure that could not be computed and a figure that came out at zero are
     different claims and only one of them is evidence.
+
+    `applies_to` names the payload fields this call produced, and it is the
+    caller's to state because only the caller knows what it asked for. Every
+    name in it has to be a key the payload actually carries, or the block
+    documents a field nobody can look up.
     """
     ages = session_order(laps)
     pairs = []
@@ -207,5 +220,6 @@ def weighted(laps, value_of, *, current_sheet_id: int | None = None
         sessions=len(ages),
         rehearsal_laps=sum(1 for lap in laps
                            if getattr(lap, "rehearsal", False)),
-        current_sheet_id=current_sheet_id)
+        current_sheet_id=current_sheet_id,
+        applies_to=tuple(applies_to))
     return weighted_median(pairs), weighting

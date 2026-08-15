@@ -598,7 +598,7 @@ class Field(QWidget):
         self.editor = editor
 
 
-def mark_unset(combo, *, unset=None, unset_index: int | None = None) -> None:
+def mark_unset(combo, *, unset=None, unset_index: int | None = None):
     """Paint a combo struck while it holds nothing, crayon once it does.
 
     `Picker` has done this since it was written; every *bare* `QComboBox` in
@@ -612,6 +612,10 @@ def mark_unset(combo, *, unset=None, unset_index: int | None = None) -> None:
 
     `unset_index` is for combos built with `addItems`, which carry no item
     data at all - there the sentinel is the row's position, not its value.
+
+    Returns the sync, for the one caller that rebuilds its combo's rows inside
+    `blockSignals(True)`: the signal cannot fire there, so the ink would be
+    left describing the list the combo used to hold.
     """
     def sync() -> None:
         chosen = (combo.currentIndex() != unset_index
@@ -625,6 +629,7 @@ def mark_unset(combo, *, unset=None, unset_index: int | None = None) -> None:
 
     combo.currentIndexChanged.connect(sync)
     sync()
+    return sync
 
 
 class Picker(QWidget):
@@ -664,6 +669,12 @@ class Picker(QWidget):
         # circuits become indistinguishable in the one place it matters.
         self.combo.view().setTextElideMode(Qt.TextElideMode.ElideNone)
         block_wheel(self.combo)
+        # A `Picker` is a plain QWidget wrapping the combo, so its focus policy
+        # is NoFocus and `setFocus()` on it did nothing at all - which made the
+        # save message's "and go there" a no-op for Track and Car, the two it
+        # names most often. Tab reaches the combo either way; this makes the
+        # programmatic half work too.
+        self.setFocusProxy(self.combo)
         self.combo.currentIndexChanged.connect(self._on_index_changed)
         if groups is not None:
             self.set_groups(groups)
@@ -702,8 +713,18 @@ class Picker(QWidget):
         self.combo.view().setMinimumWidth(
             metrics.horizontalAdvance(widest) + 44)
 
+        # **Restoring may not add.** This used to go through `setCurrentText`,
+        # which appends the name when `findData` misses - so changing the track
+        # kept the old track's layout AND injected it into the new track's
+        # list: Le Mans / Full Course, switch to Alsace, and Alsace offers
+        # Full Course. 31 circuits have more than one layout, and layout is
+        # what the track model, the station map and the rain list key on.
+        # A selection the new list does not contain has stopped existing;
+        # the placeholder is the honest answer, and the caller decides what
+        # to put there.
         if current:
-            self.setCurrentText(current)
+            index = self.combo.findData(current)
+            self.combo.setCurrentIndex(index if index >= 0 else 0)
         self._sync_ink()
 
     def _disable_last_item(self) -> None:
@@ -734,6 +755,15 @@ class Picker(QWidget):
         return self.combo.currentData() or ""
 
     def setCurrentText(self, text: str) -> None:  # noqa: N802 - Qt naming
+        """Select a name, adding it if the catalogue does not carry it.
+
+        The add is for *stored* values only - an event saved against a circuit
+        the catalogue has since renamed must still show what it was raced on,
+        and blanking it would throw the fact away on the next save. Nothing
+        the driver can reach calls this with a name he typed, and `set_groups`
+        deliberately does not use it: an add there is a leak from one track's
+        list into another's.
+        """
         if not text:
             self.combo.setCurrentIndex(0)
             return

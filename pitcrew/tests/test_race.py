@@ -16,8 +16,11 @@ from pitcrew.race.calls import (
     TYRE,
     Call,
     RaceState,
+    _fuel,
+    _fuel_gap,
     _fuel_instruction,
     clear_stint,
+    fuel_map_for,
     next_call,
 )
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator, RacePhase
@@ -215,9 +218,32 @@ def test_green_is_called_at_the_start():
 
 def test_a_stop_lets_the_next_stint_speak_freshly():
     state = a_state(lap=10, said=[BOX_NOW, FUEL_SHORT], laps_since_stop=10)
-    clear_stint(state)
+    clear_stint(state, tyres_changed=True)
     assert BOX_NOW not in state.said
     assert state.laps_since_stop == 0
+
+
+def test_a_fuel_only_stop_does_not_reset_the_tyre_model():
+    """GT7 lets you take fuel without taking tyres.
+
+    Treating every stop as a fresh set silenced the end-of-window call for a
+    whole further stint - and the driver reads silence as nothing to report.
+    """
+    state = a_state(lap=10, said=[BOX_NOW], laps_since_stop=10)
+    clear_stint(state, tyres_changed=False)
+    assert BOX_NOW not in state.said            # the stint still speaks freshly
+    assert state.laps_since_stop == 10          # but the set is the same set
+
+
+def test_a_stop_that_says_nothing_about_the_tyres_says_so_out_loud():
+    state = a_state(lap=18, laps_since_stop=18, wear_per_lap=0.05,
+                    stint_ends_on_lap=None, fuel_l=40.0)
+    clear_stint(state)
+    assert state.laps_since_stop == 18
+    call = next_call(state)
+    assert call.kind == TYRE
+    assert "may have changed" in call.reason
+    assert "Unconfirmed." in call.spoken()
 
 
 # --------------------------------------------------------------- coordinator
@@ -298,13 +324,31 @@ def test_a_stop_advances_to_the_next_stint():
 
     race.handle(SessionEvent(EventKind.PIT_ENTRY, {}))
     assert race.state.in_pit is True
-    race.handle(SessionEvent(EventKind.PIT_EXIT, {"fuel_added": 37.0}))
+    # Shaped like the real event: `session_state` always says whether the
+    # tyres came off, and the coordinator used to throw that away.
+    race.handle(SessionEvent(EventKind.PIT_EXIT,
+                             {"fuel_added": 37.0, "tyres_changed": True}))
 
     assert race.state.in_pit is False
     assert race.state.stint_index == 1
     assert race.state.laps_since_stop == 0
     # The last stint runs to the flag, so there is no further stop.
     assert race.state.stint_ends_on_lap is None
+
+
+def test_a_fuel_only_stop_keeps_the_tyre_count_running():
+    race = RaceCoordinator(a_plan(), fuel_per_lap_l=3.4, wear_per_lap=0.05)
+    race.arm(a_context(), a_context())
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    for lap_num in range(1, 11):
+        race.handle(lap_event(lap_num))
+
+    race.handle(SessionEvent(EventKind.PIT_ENTRY, {}))
+    race.handle(SessionEvent(EventKind.PIT_EXIT,
+                             {"fuel_added": 37.0, "tyres_changed": False}))
+
+    assert race.state.stint_index == 1          # the plan still advances
+    assert race.state.laps_since_stop == 10     # the rubber did not
 
 
 def test_the_snapshot_is_what_the_pit_wall_shows():
@@ -423,16 +467,19 @@ def test_accepting_an_extra_stop_adds_one():
 # call, under a helmet.
 
 def test_the_fuel_call_is_clamped_to_the_tank():
+    """A 15-lap stint at 10 L a lap does not fit a 100 L tank."""
     state = RaceState(lap=5, laps_total=60, fuel_l=40.0, fuel_per_lap_l=10.0,
-                      stint_ends_on_lap=10, fuel_capacity_l=100.0)
+                      stint_ends_on_lap=10, next_stint_laps=15,
+                      fuel_capacity_l=100.0)
     said = _fuel_instruction(state)
     assert "510" not in said                      # what it used to say
-    assert said == "Fuel to full. Still 41.0 laps short."
+    assert said == "Fuel to full. Still 6.0 laps short."
 
 
 def test_a_normal_fill_is_still_a_number_of_litres():
     state = RaceState(lap=5, laps_total=20, fuel_l=40.0, fuel_per_lap_l=5.0,
-                      stint_ends_on_lap=10, fuel_capacity_l=100.0)
+                      stint_ends_on_lap=10, next_stint_laps=10,
+                      fuel_capacity_l=100.0)
     assert _fuel_instruction(state) == "Fuel to 55 litres."
 
 
@@ -441,14 +488,20 @@ def test_the_shortfall_is_the_call_when_the_clamp_binds():
 
     "Fuel to 510 litres" is not: the driver acts on it, finds the fill stops
     early, and has to work out the shortfall himself at pit-exit speed.
+
+    The target is **the stint after the stop**. This test used to spell out
+    the fill-to-the-flag arithmetic - 25 laps of race after a stop on lap 5 -
+    and assert it, which is defect S1 rather than the clamp the test was
+    written for.
     """
-    state = RaceState(lap=1, laps_total=30, fuel_l=50.0, fuel_per_lap_l=6.0,
-                      stint_ends_on_lap=5, fuel_capacity_l=100.0)
+    state = RaceState(lap=1, laps_total=60, fuel_l=50.0, fuel_per_lap_l=6.0,
+                      stint_ends_on_lap=20, next_stint_laps=20,
+                      fuel_capacity_l=100.0)
     said = _fuel_instruction(state)
     assert "short" in said
-    # 25 laps after the stop, +1 reserve = 156 L wanted from a 100 L tank,
-    # so 56 L over, which is 9.3 laps at 6 L a lap.
-    assert "9.3 laps short" in said
+    # 20 laps in the next stint, +1 reserve = 126 L wanted from a 100 L tank,
+    # so 26 L over, which is 4.3 laps at 6 L a lap.
+    assert "4.3 laps short" in said
 
 
 def test_an_unknown_capacity_does_not_invent_a_clamp():
@@ -472,3 +525,131 @@ def test_no_box_now_call_ever_asks_for_more_than_the_tank():
                 continue
             asked = float(said.split("Fuel to ")[1].split(" litres")[0])
             assert asked <= capacity, f"{said} into a {capacity:.0f} L tank"
+
+
+# --------------------------------------------- the fill is for the next stint
+#
+# Regression for S1. `_fuel_instruction` computed the fill as everything from
+# the stop to the flag, so at stop 1 of a two-stop the driver was told to take
+# fuel for the whole rest of the race - and where the tank could not hold it,
+# was told he was short of a target nobody was aiming at.
+
+def test_the_stop_fills_for_the_next_stint_not_for_the_rest_of_the_race():
+    """Three stints of 10 laps at 3.4 L: stop 1 takes 37 L, not 71."""
+    state = RaceState(lap=10, laps_total=30, fuel_l=1.0, fuel_per_lap_l=3.4,
+                      stint_ends_on_lap=10, next_stint_laps=10,
+                      fuel_capacity_l=100.0)
+    assert _fuel_instruction(state) == "Fuel to 37 litres."
+
+
+def test_the_fill_uses_the_races_own_burn_and_not_the_planned_litres():
+    """The plan says 34 L; this race is burning 4.6 a lap, so it is 50."""
+    state = RaceState(lap=10, laps_total=30, fuel_l=1.0, fuel_per_lap_l=4.6,
+                      stint_ends_on_lap=10, next_stint_laps=10,
+                      fuel_capacity_l=100.0)
+    assert _fuel_instruction(state) == "Fuel to 51 litres."
+
+
+def test_the_plan_carries_the_next_stints_length_into_the_call():
+    race = RaceCoordinator(a_plan(), fuel_per_lap_l=3.4)
+    race.arm(a_context(), a_context())
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    assert race.state.next_stint_laps == 10
+    race.handle(SessionEvent(EventKind.PIT_EXIT,
+                             {"fuel_added": 37.0, "tyres_changed": True}))
+    # The last stint runs to the flag; there is no stop after it to fuel for.
+    assert race.state.next_stint_laps is None
+
+
+# ------------------------------------------------- overdue is not fuel in hand
+#
+# Regression for S2, the most dangerous sentence the app can say.
+
+def test_a_stop_is_never_a_negative_number_of_laps_away():
+    state = a_state(lap=13, stint_ends_on_lap=10)
+    assert state.laps_to_stop() == 0
+    assert state.past_box_lap is True
+
+
+def test_overdue_laps_are_not_counted_as_fuel_in_hand():
+    """Box was lap 10 and it is lap 13 with 3 litres left.
+
+    `laps_to_stop` returned -3, and -3 came off the fuel gap as three laps of
+    surplus: "You can push. 2.9 laps of fuel in hand." at HIGH confidence with
+    0.88 laps aboard. Flooring at zero alone does not fix it - a target of
+    zero makes the gap the whole tank and the same call fires harder.
+    """
+    state = a_state(lap=13, fuel_l=3.0, stint_ends_on_lap=10,
+                    laps_since_stop=13)
+    assert _fuel_gap(state) == pytest.approx(3.0 / 3.4 - 7)
+    assert _fuel(state).kind == FUEL_SHORT
+    assert next_call(state).kind == BOX_NOW      # boxing outranks the fuel call
+
+
+# ------------------------------------------------------ the map is not fixed
+#
+# Regression for S9. Map 3 is 0.85 on the measured table, so it answers a
+# shortfall of 15% of the remaining distance and nothing larger.
+
+def test_the_map_follows_from_the_shortfall():
+    assert fuel_map_for(8.5, 10.0) == (3, 0.0)     # exactly map 3's 0.85
+    assert fuel_map_for(8.4, 10.0)[0] == 4         # a tenth more and 3 will not do
+    assert fuel_map_for(7.2, 10.0)[0] == 5
+    assert fuel_map_for(10.0, 10.0)[0] == 1        # nothing to save: stay rich
+
+
+def test_a_shortfall_no_map_can_recover_says_what_is_left():
+    """Map 6 is the leanest there is. Below that it is a stop, not a map."""
+    level, still = fuel_map_for(4.0, 10.0)
+    assert level == 6
+    assert still == pytest.approx(2.0)             # 4 L of laps at half rate is 8
+
+
+def test_a_large_shortfall_is_not_answered_with_map_3():
+    state = a_state(lap=5, fuel_l=6.8, stint_ends_on_lap=15, laps_since_stop=5)
+    call = _fuel(state)
+    assert call.kind == FUEL_SHORT
+    assert call.call == "Map 6 down the straights."
+    assert "still leaves" in call.reason
+
+
+# ------------------------------------------------- a worsening call is repeated
+#
+# Regression for S5. `next_call`'s docstring has always promised re-issue
+# "unless it has become more urgent" and nothing implemented it: a shortfall
+# warned at 3.8 laps was met with silence at 4.9, 5.9 and 7.0.
+
+def test_a_worsening_fuel_shortfall_is_said_again():
+    state = a_state(lap=6, fuel_l=10.0, stint_ends_on_lap=12,
+                    laps_since_stop=6)
+    first = next_call(state)
+    assert first.kind == FUEL_SHORT
+    state.record(first)
+
+    assert next_call(state) is None          # nothing has changed: say nothing
+
+    state.fuel_l = 2.0                       # another lap and a half missing
+    again = next_call(state)
+    assert again.kind == FUEL_SHORT
+    assert again.severity > first.severity
+
+
+def test_a_shortfall_that_barely_moves_is_not_repeated():
+    state = a_state(lap=6, fuel_l=10.0, stint_ends_on_lap=12,
+                    laps_since_stop=6)
+    state.record(next_call(state))
+    state.fuel_l = 9.5                       # 0.15 of a lap: not worth saying
+    assert next_call(state) is None
+
+
+def test_the_status_call_comes_round_more_than_once():
+    """`STATUS_EVERY_LAPS` is this call's rate limiter, and it could only
+    ever match once while the kind was suppressed for the whole stint."""
+    state = a_state(lap=5, fuel_l=15 * 3.4 + 1.0, stint_ends_on_lap=None)
+    first = next_call(state)
+    assert first.kind == STATUS
+    state.record(first)
+
+    state.lap = 10
+    state.fuel_l = 10 * 3.4 + 1.0
+    assert next_call(state).kind == STATUS

@@ -22,7 +22,7 @@ direction, are wrong.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from itertools import product
 
@@ -71,6 +71,15 @@ CONSTRAINT_UNKNOWN = "unknown"
 SOURCE_MEASURED = "measured"    # run in practice, gauge read, rate computed
 SOURCE_DECLARED = "declared"    # the driver's own estimate
 SOURCE_ASSUMED = "assumed"      # the reference compound's rate, reused
+
+# Where the pit-loss figure came from. **Nothing in the app measures it yet**:
+# it is a spin box on the event page with a schema default of 20 s, and the
+# Strategy screen's own evidence row has always called it declared. The export
+# asserted "measured-this-track" for every event regardless - two paths
+# claiming different provenance for one number, and the export claiming the
+# stronger one.
+PIT_LOSS_MEASURED = "measured-this-track"
+PIT_LOSS_DECLARED = "declared-on-the-event-page"
 
 # How many compound assignments the search will enumerate before it gives up
 # on being exhaustive. Five stints across four compounds is 1024 candidates,
@@ -175,6 +184,10 @@ class RaceInputs:
     fuel_capacity_l: float | None = None
     refuel_rate_lps: float = 2.5
     pit_loss_s: float = 20.0
+    # Declared until something times a stop at this circuit. Carried rather
+    # than asserted at the export boundary so the payload and the screen
+    # cannot disagree about it.
+    pit_loss_source: str = PIT_LOSS_DECLARED
     pit_dead_time_s: float = PIT_DEAD_TIME_S
     wear_per_lap: float | None = None
     wear_measured_at_race_multiplier: bool = True
@@ -204,9 +217,21 @@ class RaceInputs:
         labelled `assumed`, never `measured`. That is the difference between
         "this stint is planned" and "this stint is guessed", and every plan
         built on one carries a note saying which.
+
+        **A profile with no wear rate inherits it too.** That case is not the
+        same as having no profile: a compound run in practice and never
+        gauge-read has a pace we know and a wear rate we do not, and it was
+        being costed at *zero* degradation - so the tyre nobody had measured
+        paid nothing while every measured one paid, and it won the plan. Two
+        identical profiles, one with `wear_per_lap=None`, came out 4.9 s apart
+        with the unmeasured one first.
         """
         if compound and compound in self.compound_profiles:
-            return self.compound_profiles[compound]
+            profile = self.compound_profiles[compound]
+            if profile.wear_per_lap is None and self.wear_per_lap:
+                return replace(profile, wear_per_lap=self.wear_per_lap,
+                               source=SOURCE_ASSUMED)
+            return profile
         return CompoundProfile(
             code=compound or (self.evidence_compound or "unknown"),
             pace_delta_s=0.0,
@@ -346,6 +371,13 @@ class Plan:
                 "laps": self.laps_completed,
                 "stintLaps": [stint.laps for stint in self.stints],
                 "compounds": [stint.compound for stint in self.stints],
+                # **Only the first stop travels.** A two-stop plan therefore
+                # reads as a one-stop here, and the outcome line compared two
+                # real stops against that single lap and called a correctly
+                # executed plan a deviation. `race_outcome` now refuses that
+                # comparison rather than making it wrongly; emitting the whole
+                # list needs `pitLaps` adding to the contract's key
+                # allow-list first, or `to_json` refuses the payload outright.
                 "pitLap": self.pit_laps[0] if self.pit_laps else None,
             },
             "bindingConstraint": self.binding_constraint,
@@ -354,14 +386,14 @@ class Plan:
                                  for profile in self.profiles.values()],
             "assumptions": {
                 "pitLossS": inputs.pit_loss_s,
-                "pitLossSource": "measured-this-track",
+                "pitLossSource": inputs.pit_loss_source,
                 "fuelPerLapL": inputs.fuel_per_lap_l,
                 "fuelWeightSPerLPerLap": inputs.fuel_weight_s_per_l_per_lap,
                 "fuelWeightSource": "derived-not-measured",
-                # Now a real figure rather than a placeholder: the pace this
-                # plan's compounds carry against the one practice ran on,
-                # averaged over the race distance.
-                "compoundDeltaSPerLap": round(mean_deficit(self, inputs), 3),
+                # The pace this plan's compounds carry against the one
+                # practice ran on, averaged over the race distance - or null
+                # where no compound in it has a pace that was ever comparable.
+                "compoundDeltaSPerLap": measured_deficit(self, inputs),
             },
         }
         # A timed race is a different object from a lap race and the payload
@@ -387,7 +419,12 @@ class Plan:
                     "can possibly last; a plan past it is impossible, not slow."),
             }
         else:
-            payload["raceLength"] = {"type": "laps", "laps": inputs.race_laps}
+            # Type only. The contract documents nothing else under
+            # `raceLength` for a lap race - the distance is `plan.laps` - and
+            # an undocumented `laps` here made `to_json` refuse **every lap
+            # race's payload**, which is the export failing closed on the
+            # common case.
+            payload["raceLength"] = {"type": "laps"}
         return payload
 
     def as_dict(self) -> dict:
@@ -1187,6 +1224,29 @@ def mean_deficit(plan: Plan, inputs: RaceInputs) -> float:
     weighted = sum(stint.laps * inputs.profile_for(stint.compound).pace_delta_s
                    for stint in plan.stints)
     return weighted / total_laps
+
+
+def measured_deficit(plan: Plan, inputs: RaceInputs) -> float | None:
+    """`mean_deficit`, but **null where nothing in it was measured**.
+
+    An unmeasured pace delta is stored as 0.0 and `pace_known` is what tells
+    it apart from a real nothing. The same payload emits `paceDeltaSPerLap:
+    null` per compound and then a confident 0.0 here, which reads as "these
+    compounds are exactly level" - a finding, off a comparison
+    `comparable_pace` refused to make.
+
+    It does not refuse as far as `crossover_lap` does. A plan whose every
+    stint runs the compound the evidence came from carries no gap at all: the
+    reference against itself is 0.0 by construction, not by measurement, and
+    that is a true 0.0 whether or not any comparison ever qualified.
+    """
+    pairs = [(stint.compound, inputs.profile_for(stint.compound))
+             for stint in plan.stints]
+    if any(profile.pace_known for _, profile in pairs):
+        return round(mean_deficit(plan, inputs), 3)
+    if all(code in (None, inputs.evidence_compound) for code, _ in pairs):
+        return 0.0
+    return None
 
 
 def _why_nothing_fits(plans: list[Plan]) -> str:

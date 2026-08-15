@@ -13,9 +13,12 @@ from pitcrew.analysis.corner_model import (
 )
 from pitcrew.analysis.corners import (
     CountedLap,
+    _frames_for_ms,
     aggregate_corners,
     bottoming_inferable,
     bottoming_reference,
+    bottoming_references,
+    observed_minimum,
 )
 
 INTERVAL_MS = 16.67
@@ -89,6 +92,13 @@ def a_model(corners=None) -> CornerModel:
     return CornerModel("test-track", 1, SOURCE_AUTO_SEGMENT, 2000.0, tuple(corners))
 
 
+def one_corner(frames, corner=None, **kwargs) -> dict:
+    """The aggregate for a single-corner model over a single lap."""
+    corner = corner or Corner("T1", "Turn 1", 480, 600, 720)
+    return aggregate_corners(a_model([corner]), [CountedLap(1, frames)],
+                             **kwargs)[0]
+
+
 # ------------------------------------------------------------------ detection
 
 def test_detects_each_corner_once():
@@ -127,6 +137,30 @@ def test_a_shallow_lift_is_not_a_corner():
     shallow = synthetic_lap(apex_positions=(600.0,), straight_kph=240.0,
                             apex_kph=235.0)
     assert detect_corners(shallow, "test-track") is None
+
+
+def test_prominence_is_measured_against_the_neighbouring_apexes():
+    """A minimum the car never accelerates away from is one corner, not two.
+
+    The test used to scan to the ends of the lap, so the main straight
+    satisfied every candidate and the filter was a near no-op: the second half
+    of a complex came out as its own corner and renumbered everything after it.
+    """
+    def speed_at(distance: float) -> float:
+        for lo, hi, a, b in ((0.0, 400.0, 240.0, 240.0),
+                             (400.0, 500.0, 240.0, 90.0),     # into the corner
+                             (500.0, 700.0, 90.0, 110.0),     # a partial pickup
+                             (700.0, 800.0, 110.0, 110.0),    # never a straight
+                             (800.0, 1000.0, 110.0, 98.0),    # second minimum
+                             (1000.0, 1200.0, 98.0, 240.0),   # and away
+                             (1200.0, 2000.0, 240.0, 240.0)):
+            if lo <= distance <= hi:
+                return a + (b - a) * (distance - lo) / (hi - lo)
+        return 240.0
+
+    frames = [frame(d * 2.0, speed_at(d * 2.0), d) for d in range(1000)]
+    model = detect_corners(frames, "test-track")
+    assert [c.id for c in model.corners] == ["T1"]
 
 
 def test_a_flat_out_lap_yields_no_model():
@@ -229,6 +263,34 @@ def test_a_corner_taken_without_braking_reports_null_not_zero():
     assert corner["brakePointM"] is None
 
 
+def test_the_previous_corner_braking_is_not_this_corner_brake_point():
+    """The shipped export said he brakes 560 m before T3 beside a peak brake of
+    2.8% - a corner he takes flat, wearing the braking for the corner before
+    it. A corner taken without braking is a finding, and reads null."""
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        if 200.0 <= f["lap_distance_m"] <= 260.0:
+            f["brake_pct"] = 95.0
+    corner = one_corner(frames)
+    assert corner["brakePointM"] is None
+    assert corner["brakePointSamples"] == 0
+
+
+def test_a_sparse_mean_carries_its_own_sample_count():
+    """`upshiftRpm 7787` shipped under `samples: 23` was a two-lap figure."""
+    braked = synthetic_lap(apex_positions=(600.0,))
+    for f in braked:
+        if 500.0 <= f["lap_distance_m"] <= 600.0:
+            f["brake_pct"] = 90.0
+    laps = [CountedLap(1, braked),
+            CountedLap(2, synthetic_lap(apex_positions=(600.0,)))]
+    corner = aggregate_corners(
+        a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]
+    assert corner["samples"] == 2
+    assert corner["brakePointSamples"] == 1
+    assert corner["brakePointM"] is not None
+
+
 def test_trail_brake_is_null_when_steering_is_unavailable():
     """Zero would read as 'he does not trail brake'."""
     frames = synthetic_lap(apex_positions=(600.0,),
@@ -299,6 +361,25 @@ def test_wheelspin_needs_throttle():
     assert "wheelspin" not in flags_for(throttle_pct=0.0, slip_rr=1.2)
 
 
+def test_wheelspin_is_tested_on_the_driven_wheels():
+    """Contract 7.1 says driven wheels. A front wheel light over a kerb under
+    throttle is not a rear-driven car spinning up."""
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        if 550.0 <= f["lap_distance_m"] <= 650.0:
+            f["throttle_pct"] = 80.0
+            f["slip_fl"] = 1.2
+    assert "wheelspin" not in one_corner(frames, drivetrain="rwd")["flags"]
+    # GT7 broadcasts no drivetrain channel, so with nothing declared the
+    # detector keeps the all-wheel test - and says so in `derived.thresholds`.
+    assert "wheelspin" in one_corner(frames)["flags"]
+
+
+def test_an_undeclared_drivetrain_is_declared_as_such():
+    assert "all four" in thresholds.as_export()["wheelspinWheels"]
+    assert "rwd" in thresholds.as_export("rwd")["wheelspinWheels"]
+
+
 def test_lockup_needs_brake():
     assert "lockup" in flags_for(brake_pct=90.0, slip_fl=0.6)
     assert "lockup" not in flags_for(brake_pct=0.0, slip_fl=0.6)
@@ -329,6 +410,32 @@ def test_countersteer_needs_a_sign_reversal():
     assert "countersteer" in corner["flags"]
 
 
+def test_a_chicane_direction_change_is_not_a_countersteer():
+    """An auto-segmented corner is one speed minimum, so a chicane is one
+    window and its left-right transition clears 10 deg by construction. On the
+    owner's Monza laps the bare reversal test marked all three chicanes and
+    almost nothing else."""
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        distance = f["lap_distance_m"]
+        if 500.0 <= distance <= 600.0:
+            f["steering_deg"], f["steering_norm"] = 60.0, 0.33
+        elif 600.0 < distance <= 720.0:
+            f["steering_deg"], f["steering_norm"] = -55.0, -0.31
+    assert "countersteer" not in one_corner(frames)["flags"]
+
+
+def test_a_dab_of_opposite_lock_is_a_countersteer():
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        distance = f["lap_distance_m"]
+        if 500.0 <= distance <= 700.0:
+            f["steering_deg"], f["steering_norm"] = 60.0, 0.33
+        if 610.0 <= distance <= 620.0:
+            f["steering_deg"], f["steering_norm"] = -20.0, -0.11
+    assert "countersteer" in one_corner(frames)["flags"]
+
+
 def test_trail_brake_instability_is_countersteer_under_brake():
     frames = synthetic_lap(apex_positions=(600.0,))
     for i, f in enumerate(frames):
@@ -336,9 +443,61 @@ def test_trail_brake_instability_is_countersteer_under_brake():
             f["steering_deg"] = 40.0 if i % 4 < 2 else -40.0
             f["steering_norm"] = 0.4 if i % 4 < 2 else -0.4
             f["brake_pct"] = 40.0
-    laps = [CountedLap(1, frames)]
-    flags = aggregate_corners(a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]["flags"]
-    assert "trail-brake-instability" in flags
+    assert "trail-brake-instability" in one_corner(frames)["flags"]
+
+
+def test_trail_brake_instability_needs_the_two_to_coincide():
+    """A correction on the exit and a trail-brake on the entry are not one
+    event. ANDing two whole-window tests made the flag an alias for
+    `countersteer` on a driver whose whole technique is trail-braking deep."""
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        distance = f["lap_distance_m"]
+        if 500.0 <= distance <= 700.0:
+            f["steering_deg"], f["steering_norm"] = 40.0, 0.4
+        if 500.0 <= distance <= 560.0:                 # trail braking, no dab
+            f["brake_pct"] = 40.0
+        if 640.0 <= distance <= 660.0:                 # the dab, off the brakes
+            f["steering_deg"], f["steering_norm"] = -40.0, -0.4
+    flags = one_corner(frames)["flags"]
+    assert "countersteer" in flags
+    assert "trail-brake-instability" not in flags
+
+
+def rising_lock(yaw_rate, *, rise_deg_per_frame: float = 0.5) -> list[dict]:
+    """A corner taken on an ever-increasing steering angle."""
+    frames = synthetic_lap(apex_positions=(600.0,))
+    lock = 20.0
+    for f in frames:
+        if 500.0 <= f["lap_distance_m"] <= 700.0:
+            lock += rise_deg_per_frame
+            f["steering_deg"] = lock
+            f["steering_norm"] = lock / 180.0
+            f["yaw_rate"] = yaw_rate
+    return frames
+
+
+def test_understeer_needs_the_car_to_be_short_of_the_rotation_the_lock_implies():
+    assert "understeer-mid" in one_corner(rising_lock(0.05))["flags"]
+
+
+def test_adding_lock_alone_is_not_understeer():
+    """The v2 detector had a magnitude on neither side, so the steering term
+    could not fail: it fired on 49% of the owner's real corner windows and on
+    every corner object in the export."""
+    assert "understeer-mid" not in one_corner(rising_lock(2.0))["flags"]
+
+
+def test_a_slow_steering_input_is_not_understeer():
+    assert "understeer-mid" not in one_corner(
+        rising_lock(0.05, rise_deg_per_frame=0.05))["flags"]
+
+
+def test_an_unmeasurable_yaw_is_not_understeer():
+    """Heading is undefined when the car is not moving. Reading that as
+    'not rotating any harder' makes a standstill the strongest understeer
+    signal the detector has."""
+    assert "understeer-mid" not in one_corner(rising_lock(None))["flags"]
 
 
 def test_flags_are_null_safe_without_steering_or_surface():
@@ -365,12 +524,44 @@ def test_surface_mix_is_a_fraction_per_character():
 
 # --------------------------------------------------------------- bottoming
 
-def test_bottoming_reference_is_the_observed_minimum():
+def test_bottoming_reference_is_the_straight_line_minimum():
     frames = synthetic_lap(apex_positions=(600.0,))
-    frames[100]["susp_mm_fl"] = 31.0
+    frames[100]["susp_mm_fl"] = 31.0        # lap distance 200 m, on the straight
     reference = bottoming_reference([CountedLap(1, frames)])
     assert reference["fl"] == 31.0
     assert reference["rl"] == 65.0
+
+
+def test_the_reference_is_held_out_of_the_corner_windows():
+    """A corner cannot define the floor it is then judged against.
+
+    The reference used to be the observed minimum of the very frames the flag
+    is tested against, so the deepest corner of the session reported bottoming
+    by construction and every other corner was measured against its floor.
+    """
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        if 560.0 <= f["lap_distance_m"] <= 640.0:
+            f["susp_mm_fl"] = 45.0
+    laps = [CountedLap(1, frames)]
+    model = a_model([Corner("T1", "Turn 1", 480, 600, 720)])
+    assert bottoming_reference(laps, model)["fl"] == 60.0
+    # The excursion is still exported - separately, and as a measurement.
+    assert observed_minimum(laps)["fl"] == 45.0
+
+
+def test_each_setup_sheet_gets_its_own_reference():
+    """Ride height and spring rate are setup values, so the height a wheel
+    bottoms at belongs to the sheet, not to the event."""
+    laps = [
+        CountedLap(1, synthetic_lap(apex_positions=(600.0,), susp_mm_fl=40.0),
+                   setup_sheet_id=1),
+        CountedLap(2, synthetic_lap(apex_positions=(600.0,), susp_mm_fl=60.0),
+                   setup_sheet_id=3),
+    ]
+    references = bottoming_references(laps)
+    assert references[1]["fl"] == 40.0
+    assert references[3]["fl"] == 60.0
 
 
 def test_bottoming_reference_is_none_without_suspension_data():
@@ -398,14 +589,27 @@ def test_a_wheel_that_moves_is_inferable():
 
 
 def test_sustained_time_at_the_reference_flags_bottoming():
+    """Reaching in a corner the depth the car only reaches on the straight."""
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
+        # The straight-line floor: the dive under braking, outside the window.
+        if 100.0 <= f["lap_distance_m"] <= 140.0:
+            f["susp_mm_fl"] = 30.0
         if 595.0 <= f["lap_distance_m"] <= 610.0:
             f["susp_mm_fl"] = 30.0
-    laps = [CountedLap(1, frames)]
-    corner = aggregate_corners(a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]
+    corner = one_corner(frames)
     assert "bottoming" in corner["flags"]
     assert corner["suspHeightMinMm"]["fl"] == 30.0
+
+
+def test_a_corner_above_the_straight_line_floor_does_not_flag():
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        if 100.0 <= f["lap_distance_m"] <= 140.0:
+            f["susp_mm_fl"] = 30.0
+        if 595.0 <= f["lap_distance_m"] <= 610.0:
+            f["susp_mm_fl"] = 50.0
+    assert "bottoming" not in one_corner(frames)["flags"]
 
 
 # ----------------------------------------------------------------- contract
@@ -416,6 +620,32 @@ def test_thresholds_export_matches_the_contract_keys():
                 "trailBrakeSteerPct", "kerbStrikeMm", "apexDefinition"):
         assert key in payload
     assert payload["apexDefinition"] == thresholds.APEX_DEFINITION
+
+
+def test_every_constant_that_gates_a_flag_is_exported():
+    """Twelve were missing, including the whole bottoming rule and an
+    understeer rule that was hardcoded in the detector and did not exist in
+    `thresholds` at all - so it could never be declared."""
+    payload = thresholds.as_export()
+    for key in ("bottomingMinMs", "bottomingBandMm", "bottomingRefMaxSteerPct",
+                "countersteerWindowMs", "countersteerReturnFraction",
+                "kerbStrikeWindowMs", "trailBrakeMinBrakePct",
+                "throttleOnPct", "brakeOnPct", "onTrackSurfaces",
+                "understeerYawGain", "understeerYawDeficit",
+                "understeerSteerRiseDegS", "understeerMinMs",
+                "understeerWheelbaseM", "wheelspinWheels", "brakeLookbackM"):
+        assert key in payload, key
+    assert payload["detectorVersion"] == thresholds.DETECTOR_VERSION
+
+
+def test_ms_windows_round_up_and_come_from_the_lap_sample_rate():
+    """`int(50 / 16.67)` truncated a 50 ms rule to 33 ms, and re-deriving the
+    interval per window from `t_ms` gave 2 frames on 254 windows of one session
+    and 3 on 495 - two corners of a circuit under different rules."""
+    assert _frames_for_ms(50, 1000.0 / 60.0) == 3
+    assert _frames_for_ms(300, 1000.0 / 60.0) == 18
+    assert CountedLap(1, [], sample_hz=60.0).interval_ms == 1000.0 / 60.0
+    assert CountedLap(1, []).interval_ms == 1000.0 / 60.0
 
 
 def test_corner_object_has_every_contract_field():

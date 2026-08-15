@@ -38,7 +38,7 @@ This is the system. Everything else serves it.
 | Crayon | `#A3E635` NGR lime | **Declared** — the driver entered it | Every editor, compound tags, wear gauge |
 | Derived | `#B08BD8` timing-screen purple | **Derived** — the app worked it out | Box-in call, modelled stint, assumed inputs |
 | Chalk | `#7FC7D9` | Provisional annotation, hints, parse results | Status lines |
-| Struck | `#6B6459` | Removed from the count, disabled, placeholder | Excluded laps, empty fields |
+| Struck | `#807870` | Removed from the count, disabled, placeholder | Excluded laps, empty fields |
 
 **There were three registers and there should always have been four.** Measured
 had an ink and declared had an ink, so everything the app *computed* borrowed

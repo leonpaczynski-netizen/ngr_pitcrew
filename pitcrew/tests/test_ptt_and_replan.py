@@ -42,7 +42,11 @@ from .test_controller import qt_app  # noqa: F401
 def a_snapshot(**overrides) -> dict:
     base = {"lap": 8, "lapsTotal": 20, "lapsRemaining": 12, "position": 3,
             "fuelL": 40.0, "lapsOfFuel": 11.8, "lapsToStop": 2,
-            "nextCompound": "RS", "stopFuelL": 37.0, "inPit": False}
+            "nextCompound": "RS", "stopFuelL": 37.0, "inPit": False,
+            # The coordinator's snapshot says whether there is a plan at all,
+            # because "no stop planned, running to the flag" and "there is no
+            # plan" both arrive as `lapsToStop is None`.
+            "hasPlan": True}
     base.update(overrides)
     return base
 
@@ -76,6 +80,35 @@ def test_nonsense_is_unknown_rather_than_the_nearest_guess():
     assert match_intent("") == UNKNOWN
 
 
+@pytest.mark.parametrize("heard", [
+    "the front is pushing on entry",       # matched "p" -> position
+    "i have no grip at the rear",          # matched "no" -> keep
+    "blah blah nonsense",                  # matched "no" inside "nonsense"
+    "what is the tyre temperature",        # matched "p" in "temperature"
+    "not yet",                             # matched "no" inside "not"
+])
+def test_free_dictation_that_means_nothing_is_unknown(heard):
+    """Matching was `if phrase in text`, a substring test, with `"p"` and
+    `"no"` in the phrase list. Every one of these came back as a confident
+    answer, and one of them - "no" as KEEP - silently declined a re-plan the
+    driver never said a word about. UNKNOWN has to be reachable or "say
+    again" is dead and the refusal `intents` calls a real outcome is a lie."""
+    assert match_intent(heard) == UNKNOWN
+
+
+def test_a_phrase_only_matches_as_whole_words():
+    assert match_intent("keeping it steady") == UNKNOWN     # not "keep"
+    assert match_intent("keep the plan") == KEEP
+    assert match_intent("strategic") == UNKNOWN             # not "strategy"
+
+
+def test_nothing_shorter_than_three_letters_is_a_phrase():
+    """One- and two-letter phrases cannot be heard reliably and cannot fail to
+    match something. They are what made UNKNOWN unreachable."""
+    for phrase in known_phrases():
+        assert len(phrase) >= 3, phrase
+
+
 def test_an_unknown_question_asks_him_to_repeat():
     reply = answer(UNKNOWN, a_snapshot())
     assert reply.text == "Say again."
@@ -107,9 +140,35 @@ def test_the_box_call_is_answered():
 
 
 def test_no_stop_planned_is_said_plainly():
+    """The last stint of a real plan. There IS a plan and it runs to the end."""
     reply = answer(BOX_WHEN, a_snapshot(lapsToStop=None))
     assert "flag" in reply.text
     assert reply.answered is True
+
+
+def test_no_plan_at_all_is_refused_rather_than_asserted():
+    """The other state `lapsToStop is None` covers, and a supported one -
+    a race can be armed with no plan, for fuel calls only. Saying "running to
+    the flag" there asserts a plan that does not exist."""
+    reply = answer(BOX_WHEN, a_snapshot(lapsToStop=None, hasPlan=False))
+    assert reply.answered is False
+    assert "flag" not in reply.text
+    assert "don't have a plan" in reply.text
+
+
+def test_a_snapshot_that_does_not_say_is_treated_as_no_plan():
+    """Missing is missing (CLAUDE.md §4.3). An empty snapshot is what the
+    controller returns before a race is armed at all."""
+    assert answer(BOX_WHEN, {}).answered is False
+    assert answer(BOX_WHAT, {}).answered is False
+    assert answer(PLAN, {}).answered is False
+
+
+def test_the_compound_and_the_plan_refuse_the_same_way():
+    assert answer(BOX_WHAT, a_snapshot(nextCompound=None)).answered is True
+    assert answer(BOX_WHAT, a_snapshot(nextCompound=None,
+                                       hasPlan=False)).answered is False
+    assert answer(PLAN, a_snapshot(hasPlan=False)).answered is False
 
 
 def test_the_compound_is_answered():
@@ -252,6 +311,33 @@ def test_a_failing_tone_does_not_stop_the_telemetry_thread():
     beeper.update(make_packet(gear_raw=0x13, engine_rpm=6000.0), now=1.0)
     assert beeper.update(make_packet(gear_raw=0x13, engine_rpm=7200.0),
                          now=1.1) is True
+
+
+def test_the_test_button_reports_a_beep_that_did_not_sound():
+    """The control exists to prove the beep is audible over the engine, so it
+    has to be able to say no. `_play` swallows the exception and `play_now`
+    returned True regardless, so a beep into a dead device reported success."""
+    def explode():
+        raise RuntimeError("no audio device")
+
+    beeper = ShiftBeep(rpm=7000, tone=explode)
+    assert beeper.play_now() is False
+    assert "no audio device" in beeper.last_error
+
+
+def test_the_test_button_still_reports_a_beep_that_did_sound():
+    tones = []
+    beeper = ShiftBeep(rpm=7000, tone=lambda: tones.append(1))
+    assert beeper.play_now() is True
+    assert tones == [1] and beeper.last_error is None
+
+
+def test_no_tone_device_at_all_is_still_a_no():
+    """`tone=None` means "find the default"; a machine with no tone device is
+    the one where that search comes back empty."""
+    beeper = ShiftBeep(rpm=7000, tone=lambda: None)
+    beeper._tone = None
+    assert beeper.play_now() is False
 
 
 # ------------------------------------------------------------------ replan
@@ -444,3 +530,24 @@ def test_the_outcome_states_fuel_left_but_not_tyre_margin():
     note = fuel_left_note(laps)
     assert "litres" in note
     assert "tyre" not in note.lower()
+
+
+def test_a_two_stop_run_to_the_plan_is_not_reported_as_a_deviation():
+    """`Plan.as_export` carries only the FIRST pit lap, so the comparison had
+    [11, 22] against [11] and called a correctly executed plan a deviation.
+    An incomplete plan cannot assert one."""
+    from pitcrew.race.outcome import race_outcome
+    laps = [a_race_lap(n) for n in range(1, 31)]
+    laps[10] = a_race_lap(11, is_pit_lap=True)
+    laps[21] = a_race_lap(22, is_pit_lap=True)
+    text = race_outcome(laps, planned_stops=2, planned_pit_laps=[11])
+    assert "against a planned" not in text
+
+
+def test_a_real_deviation_is_still_said():
+    from pitcrew.race.outcome import race_outcome
+    laps = [a_race_lap(n) for n in range(1, 31)]
+    laps[12] = a_race_lap(13, is_pit_lap=True)
+    laps[23] = a_race_lap(24, is_pit_lap=True)
+    text = race_outcome(laps, planned_stops=2, planned_pit_laps=[11, 22])
+    assert "against a planned lap 11, lap 22" in text

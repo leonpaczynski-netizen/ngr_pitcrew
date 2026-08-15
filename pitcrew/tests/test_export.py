@@ -38,7 +38,7 @@ def a_meta(**overrides) -> Meta:
         date="2026-08-11",
         session_type="practice",
         packet="C",
-        car_category="GR3",
+        car_category="Gr.3",
         game_version="1.70",
         compound_front="Racing Medium",
         compound_rear="Racing Medium",
@@ -114,7 +114,9 @@ def test_meta_carries_compound_assists_and_multipliers():
     assert meta["compound"]["front"] == "Racing Medium"
     assert meta["assists"]["abs"] == "Weak"
     assert meta["multipliers"]["tyreWear"] == "4x"
-    assert meta["carCategory"] == "GR3"
+    # The contract's vocabulary, not GT7's raw token - the consuming tool's
+    # per-car library is keyed on `Gr.3`, and `GR3` is not a car class it knows.
+    assert meta["carCategory"] == "Gr.3"
 
 
 def test_driver_changes_ride_with_the_setup_section():
@@ -130,7 +132,11 @@ def test_derived_restates_the_thresholds():
     payload = build_payload(a_meta(), derived=Derived(thresholds.as_export()))
     assert payload["derived"]["thresholds"]["lockupPct"] == thresholds.LOCKUP_PCT
     assert payload["derived"]["steerSource"] == "wheelRotation"
-    assert payload["derived"]["steerRotationDeg"] == 1080.0
+    # The full lock of the channel that is exported, not the driver's rim
+    # setting: `wheelRotation` saturates at +-pi, so steerPeakDeg divided by
+    # this is steerPeakNorm. At 1080 the two fields were a factor of three apart.
+    assert payload["derived"]["steerRotationDeg"] == 180.0
+    assert "wheelRotation" in payload["derived"]["steerRotationSource"]
 
 
 def test_bottoming_reference_travels_with_its_source():

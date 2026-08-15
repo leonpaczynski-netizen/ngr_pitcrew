@@ -25,6 +25,25 @@ from pitcrew.engineer.ptt import PushToTalk
 MAX_CAPTURE = 6.0
 
 
+# ------------------------------------------- stage 0: did the device deliver
+
+def test_a_capture_of_nothing_at_all_is_the_device_not_the_driver():
+    """Measured on this machine: the default input is a Bluetooth earbud that
+    is not connected. `InputStream` opens without error and delivers zero
+    callbacks over six consecutive three-second holds, where the built-in
+    array delivers 19-75. Reported as "no speech in the capture", it told the
+    driver to speak up at a microphone that was not there."""
+    assert gate.check_audio(duration_s=0.0, speech_s=0.0,
+                            max_capture_s=MAX_CAPTURE) == gate.NO_INPUT
+
+
+def test_a_quiet_capture_is_still_a_quiet_capture():
+    """Stage 0 must not swallow stage 1: some audio arrived, he just did not
+    speak into it."""
+    assert gate.check_audio(duration_s=2.0, speech_s=0.0,
+                            max_capture_s=MAX_CAPTURE) == gate.NO_SPEECH
+
+
 # --------------------------------------------------- stage 1: was there speech
 
 def test_silence_is_rejected_before_anything_is_transcribed():
@@ -242,6 +261,237 @@ def test_the_verdict_is_kept_for_the_log():
     ptt.ask("how much fuel")
     assert ptt.last_verdict.intent == FUEL
     assert ptt.last_verdict.distance == 0.12
+
+
+# ------------------------------------------- the reasons reach the driver
+#
+# All five were computed, stored in `last_reason` and read nowhere: every one
+# of them spoke "Say again." `gate.py`'s own rationale is that a driver told
+# "I didn't hear you" learns to press the button properly while one told
+# nothing learns the app is unreliable - and he is in a headset, so the log
+# these were written to is a channel he does not have.
+
+def test_every_rejection_reason_has_its_own_words():
+    spoken = [gate.spoken_reason(reason) for reason in gate.ALL_REASONS]
+    assert all(spoken)
+    # The two that matter most are the two that used to be indistinguishable
+    # from each other and from a driver who simply said nothing.
+    assert (gate.spoken_reason(gate.NO_INPUT)
+            != gate.spoken_reason(gate.NO_SPEECH))
+    assert "microphone" in gate.spoken_reason(gate.NO_INPUT)
+    assert "microphone" in gate.spoken_reason(gate.NO_DEVICE)
+
+
+def test_an_unnamed_reason_still_says_something_honest():
+    assert gate.spoken_reason(None) == gate.SPOKEN[gate.NOT_UNDERSTOOD]
+    assert gate.spoken_reason("something new") == gate.SPOKEN[
+        gate.NOT_UNDERSTOOD]
+
+
+class Recogniser:
+    """A recogniser that returns what it is told to, and why."""
+
+    name = "fake"
+
+    def __init__(self, heard="", reason=None, on_begin=None):
+        self.heard = heard
+        self.last_reason = reason
+        self.began = 0
+        self._on_begin = on_begin
+
+    def begin(self):
+        self.began += 1
+        if self._on_begin is not None:
+            self._on_begin()
+
+    def end(self):
+        return self.heard
+
+
+def test_a_dead_microphone_is_said_in_its_own_words():
+    said = []
+    talk = PushToTalk(snapshot=dict, speak=said.append,
+                      recogniser=Recogniser(reason=gate.NO_INPUT))
+    talk.end()
+    assert said == [gate.spoken_reason(gate.NO_INPUT)]
+    assert talk.last_reason == gate.NO_INPUT
+    assert "Say again." not in said
+
+
+@pytest.mark.parametrize("reason", [
+    gate.NO_SPEECH, gate.TOO_SHORT, gate.TOO_LONG, gate.NOTHING_HEARD,
+    gate.REPEAT_LOOP,
+])
+def test_each_gate_reason_reaches_him_as_itself(reason):
+    said = []
+    talk = PushToTalk(snapshot=dict, speak=said.append,
+                      recogniser=Recogniser(reason=reason))
+    talk.end()
+    assert said == [gate.spoken_reason(reason)]
+
+
+def test_a_real_question_still_takes_the_normal_path():
+    said = []
+    talk = PushToTalk(snapshot=lambda: {"lapsToStop": 3, "hasPlan": True},
+                      speak=said.append,
+                      recogniser=Recogniser(heard="when do i box"))
+    talk.end()
+    assert said == ["Box in 3 laps."]
+
+
+# ------------------------------------------- the hook thread's outermost frame
+#
+# pynput turns an escaping exception into a permanently stopped listener,
+# re-raised only from `join()`, which nothing calls. So the button goes dead
+# for the rest of the race and `has_listener` goes on reporting it loaded.
+
+def test_a_microphone_that_will_not_open_does_not_kill_the_button():
+    def explode():
+        raise OSError("PortAudioError: device unavailable")
+
+    said = []
+    talk = PushToTalk(snapshot=dict, speak=said.append,
+                      recogniser=Recogniser(on_begin=explode))
+    talk.begin()                    # must not raise
+    talk.end()
+    assert said == [gate.spoken_reason(gate.NO_DEVICE)]
+
+
+def test_a_failure_anywhere_in_the_answer_is_caught_and_said():
+    class Exploding:
+        name = "fake"
+
+        def begin(self):
+            pass
+
+        def end(self):
+            raise RuntimeError("the transcriber died")
+
+    said = []
+    talk = PushToTalk(snapshot=dict, speak=said.append,
+                      recogniser=Exploding())
+    talk.begin()
+    talk.end()                      # must not raise
+    assert said == [gate.spoken_reason(gate.FAILED)]
+
+
+def test_the_lock_is_released_even_when_the_recogniser_raises():
+    """Or the button answers exactly once for the rest of the race."""
+    class Exploding:
+        name = "fake"
+
+        def __init__(self):
+            self.calls = 0
+
+        def begin(self):
+            pass
+
+        def end(self):
+            self.calls += 1
+            raise RuntimeError("boom")
+
+    engine = Exploding()
+    talk = PushToTalk(snapshot=dict, speak=lambda _t: None,
+                      recogniser=engine)
+    talk.begin(); talk.end()
+    talk.begin(); talk.end()
+    assert engine.calls == 2
+
+
+# ------------------------------------------------------------ rebinding the key
+
+class Hook:
+    def __init__(self):
+        self.running = False
+
+    def start(self, _press, _release):
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+
+def test_rebinding_the_key_mid_session_leaves_the_button_working():
+    """`set_listener` stopped the old hook and never started the new one, so
+    rebinding during a live session killed the button on both keys while
+    `has_listener` - which only tests `is not None` - went on saying the hook
+    was loaded."""
+    old, new = Hook(), Hook()
+    talk = PushToTalk(snapshot=dict, speak=lambda _t: None, listener=old)
+    talk.start()
+    assert old.running is True
+
+    talk.set_listener(new)
+    assert old.running is False
+    assert new.running is True
+    assert talk.listening is True
+
+
+def test_rebinding_before_the_session_does_not_start_listening_early():
+    """The common order is rebind-then-start, and that must stay a no-op."""
+    old, new = Hook(), Hook()
+    talk = PushToTalk(snapshot=dict, speak=lambda _t: None, listener=old)
+    talk.set_listener(new)
+    assert new.running is False
+    assert talk.listening is False
+    talk.start()
+    assert new.running is True
+
+
+def test_stopping_is_reported_as_not_listening():
+    hook = Hook()
+    talk = PushToTalk(snapshot=dict, speak=lambda _t: None, listener=hook)
+    talk.start()
+    talk.stop()
+    assert talk.listening is False
+    assert talk.has_listener is True         # it exists; it is not running
+
+
+# ------------------------------------------------ the gate is wired to the
+# recogniser that was built, not the one that was configured
+
+def test_the_matcher_follows_the_recogniser_not_the_setting(monkeypatch):
+    """SAPI is the shipped default and it times out on this machine, so the
+    app runs Moonshine free dictation. Choosing the matcher from the SETTING
+    then leaves `matcher=None`, and `gate.judge` short-circuits on
+    `distance is None` straight to ACT - past all five stages."""
+    built = object()
+    monkeypatch.setattr(ptt, "best_semantic_matcher", lambda: built)
+
+    class Free:
+        name = ptt.MoonshineRecogniser.name
+
+    class Closed:
+        name = ptt.SapiGrammarRecogniser.name
+
+    assert ptt.matcher_for(Free()) is built
+    assert ptt.matcher_for(Closed()) is None
+    assert ptt.matcher_for(None) is None
+
+
+def test_an_unrecognised_recogniser_gets_the_gate(monkeypatch):
+    """The list is of the exceptions - closed grammars - so anything added
+    later is gated rather than silently trusted."""
+    built = object()
+    monkeypatch.setattr(ptt, "best_semantic_matcher", lambda: built)
+
+    class Future:
+        name = "something-new"
+
+    assert ptt.matcher_for(Future()) is built
+
+
+# ------------------------------------------------------------ the capture cap
+
+def test_the_capture_limit_is_a_cap_and_not_a_verdict():
+    """MAX_CAPTURE_S was documented as "how long he can hold the button before
+    we stop listening anyway" and nothing truncated anything: the limit was
+    applied afterwards, in `check_audio`, which returned TOO_LONG and threw
+    away the ENTIRE transcript rather than its tail."""
+    blocks = ptt.MoonshineRecogniser.SAMPLE_RATE / ptt.MoonshineRecogniser.BLOCK
+    recogniser = ptt.MoonshineRecogniser.__new__(ptt.MoonshineRecogniser)
+    recogniser._max_capture_s = 6.0
+    assert recogniser._max_blocks == int(6.0 * blocks)
 
 
 # ------------------------------------------------- a machine with no speech

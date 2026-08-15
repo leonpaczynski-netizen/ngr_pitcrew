@@ -24,9 +24,9 @@ BOTH_SHEETS = json.dumps({
     "contract": "gt7-pitcrew-reply/1.0",
     "sheets": [
         {"purpose": "race", "sheetName": "Monza race v3",
-         "values": {"rh_f": 60, "cam_f": -3.2}, "gears": [3.10, 2.28]},
+         "values": {"rh_f": 60, "cam_f": 3.2}, "gears": [3.10, 2.28]},
         {"purpose": "qualifying", "sheetName": "Monza quali v3",
-         "values": {"rh_f": 55, "cam_f": -3.6}},
+         "values": {"rh_f": 55, "cam_f": 3.6}},
     ],
 })
 
@@ -63,6 +63,36 @@ def test_changing_the_picker_with_nothing_pasted_does_not_wipe_his_typing(qt_app
     screen.sheet_purpose.setCurrentIndex(
         screen.sheet_purpose.findData(FOR_QUALIFYING))
     assert screen.sheet_name.text() == "hand-typed quali"
+
+
+def test_loading_a_sheet_sets_the_picker_from_the_sheet(qt_app):
+    """Otherwise the label lies and one save makes it true.
+
+    `_reset` leaves the picker on Race and `values()` reads the picker, so a
+    qualifying sheet displayed under a Race label was written back as the race
+    sheet - and the qualifying one stopped existing.
+    """
+    from pitcrew.setup.sheet import SetupSheet
+
+    screen = EventScreen()
+    screen.load({"id": 1, "name": "Round 8"},
+                SetupSheet(car_name="Porsche 911 RSR (991) '17",
+                           sheet_name="Monza quali v3",
+                           values={"rh_f": 55.0},
+                           purpose=FOR_QUALIFYING))
+    assert screen.sheet_purpose.currentData() == FOR_QUALIFYING
+    assert screen.values()["sheet_purpose"] == FOR_QUALIFYING
+
+
+def test_a_sheet_that_never_answered_the_question_loads_as_race(qt_app):
+    """`purpose` is None where the sheet predates the question. Falling back
+    to index 0 there is the only place a fallback is honest."""
+    from pitcrew.setup.sheet import SetupSheet
+
+    screen = EventScreen()
+    screen.load({"id": 1}, SetupSheet(car_name="X", sheet_name="old",
+                                      values={"rh_f": 55.0}))
+    assert screen.sheet_purpose.currentData() == FOR_RACE
 
 
 def test_a_reply_with_one_sheet_still_loads(qt_app):

@@ -22,7 +22,12 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from pitcrew.setup.vocabulary import SETUP_KEYS, SETUP_KEY_NAMES
+from pitcrew.setup.vocabulary import (
+    SETUP_KEYS,
+    SETUP_KEY_NAMES,
+    describe,
+    unenterable_values,
+)
 
 # Human spellings the tune builder or GT7's own screens might use. Keys are
 # matched case-insensitively with punctuation stripped, so "Ride Height (Front)"
@@ -72,6 +77,17 @@ class ParsedSheet:
     def matched_count(self) -> int:
         return len(self.values)
 
+    def unenterable(self) -> tuple[tuple[str, float], ...]:
+        """Values GT7 will not accept, as (key, value).
+
+        The reply is read verbatim, so a sign convention borrowed from another
+        sim - a negative camber, which every other simulator writes and GT7
+        does not - arrives as a number and is stored as one. It is caught here
+        so the screen can say which value it was, and again in
+        `SetupSheet.validate()` so it cannot be saved past the warning.
+        """
+        return unenterable_values(self.values)
+
     def summary(self) -> str:
         parts = [f"{len(self.values)} of {len(SETUP_KEY_NAMES)} settings"]
         if self.gears:
@@ -80,6 +96,10 @@ class ParsedSheet:
             count = len(self.unmatched)
             parts.append(
                 f"{count} line{'' if count == 1 else 's'} not recognised")
+        for key, value in self.unenterable():
+            parts.append(
+                f"{describe(key).label.lower()} {value:g} is not enterable in "
+                f"GT7, which takes a magnitude")
         return ", ".join(parts)
 
 

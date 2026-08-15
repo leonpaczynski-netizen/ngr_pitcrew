@@ -9,6 +9,7 @@ from pitcrew.strategy.evidence import (
     DECLARED,
     MEASURED,
     MISSING,
+    _laps_to_hydrate,
     build_inputs,
 )
 from pitcrew.telemetry.session_state import Lap
@@ -272,3 +273,145 @@ def test_one_measured_compound_hides_nothing_but_claims_nothing(planned):
     if band.isVisibleTo(strategy):
         # Shown only to say the comparison has not been earned yet.
         assert "not a comparison yet" in band.verdict.text()
+
+
+# ------------------------------------------------- the refuel lap is decoded
+#
+# Regression for SM1. `_laps_to_hydrate` was written for the tyre-temperature
+# window - counted laps, compound-tagged, the last few per compound - and then
+# used as the ONLY hydration for the whole strategy path. All three filters
+# exclude a refuel lap, so `analysis/refuel.py` was structurally guaranteed to
+# receive no frames on the only lap that carries what it measures, and the
+# rate came back "declared" forever. On a 100 L tank that is a 100 s stop
+# costed against a real 33 s, which decides the stop count.
+
+def a_lap_row(lap_id: int, **overrides) -> dict:
+    row = dict(id=lap_id, compound="RH", excluded=0, is_out_lap=0,
+               is_pit_lap=0, fuel_start=100.0 - lap_id * 6.0,
+               fuel_end=100.0 - (lap_id + 1) * 6.0, fuel_added_l=None)
+    row.update(overrides)
+    return row
+
+
+def test_the_refuel_lap_is_hydrated_even_though_the_window_drops_it():
+    """Shaped like the owner's own rehearsal: 26 laps, the fill on lap 14,
+    `is_pit_lap` 0 on every one of them."""
+    rows = [a_lap_row(n) for n in range(1, 27)]
+    rows[13]["fuel_end"] = rows[13]["fuel_start"] + 50.0     # the tank climbed
+    wanted = _laps_to_hydrate(rows)
+
+    assert 14 in wanted                       # the lap that carries the rate
+    assert {21, 22, 23, 24, 25, 26} <= wanted  # the window's last six
+    assert len(wanted) == 7                    # and nothing else
+
+
+def test_a_refuel_survives_every_one_of_the_windows_three_filters():
+    rows = [a_lap_row(n) for n in range(1, 27)]
+    rows[13].update(is_pit_lap=1, excluded=1, compound=None,
+                    fuel_end=rows[13]["fuel_start"] + 50.0)
+    assert 14 in _laps_to_hydrate(rows)
+
+
+def test_a_recorded_fill_is_taken_from_the_flag_too():
+    rows = [a_lap_row(n) for n in range(1, 10)]
+    rows[4]["fuel_added_l"] = 50.0
+    assert 5 in _laps_to_hydrate(rows)
+
+
+def test_a_session_with_no_stop_hydrates_only_the_window():
+    rows = [a_lap_row(n) for n in range(1, 27)]
+    assert _laps_to_hydrate(rows) == {21, 22, 23, 24, 25, 26}
+
+
+def test_the_rate_reaches_the_plan_as_measured(qt_app, store):  # noqa: F811
+    """End to end: a stop recorded in practice, and a plan costed on it."""
+    from pitcrew.telemetry.recorder import FRAME_FIELDS, LapFrames, encode_frames
+
+    controller = PitCrewController(store, EventScreen(), PracticeScreen(),
+                                   StrategyScreen())
+    controller._on_event_saved(an_event(race_laps=20))
+    event_id = store.active_event_id()
+    session_id = controller.open_practice_session()
+    store.note_stream_facts(session_id, packet_format="C",
+                            car_category="GR3", fuel_capacity_l=100.0)
+
+    fuel_index = FRAME_FIELDS.index("fuel_l")
+    time_index = FRAME_FIELDS.index("t_ms")
+
+    def frames_for(series: list[float]) -> LapFrames:
+        rows = []
+        for index, litres in enumerate(series):
+            row = [None] * len(FRAME_FIELDS)
+            row[time_index] = int(round(index * 1000.0 / 60.0))
+            row[fuel_index] = litres
+            rows.append(row)
+        return LapFrames(frame_count=len(rows), sample_hz=60.0,
+                         blob=encode_frames(rows))
+
+    for lap_num in range(1, 9):
+        # Lap 4 is the stop: 60 L taken at 3 L/s, and nothing marks it a pit
+        # lap because nothing in this database ever does.
+        if lap_num == 4:
+            series = ([20.0] * 60
+                      + [20.0 + (n + 1) * 3.0 / 60.0 for n in range(1200)]
+                      + [80.0] * 60)
+        else:
+            series = [90.0 - 3.4 * n / 60.0 for n in range(60)]
+        lap = Lap(lap_num=lap_num, lap_time_ms=94_000, best_lap_ms=94_000,
+                  delta_ms=0, fuel_start=series[0], fuel_end=series[-1],
+                  fuel_used=max(0.0, series[0] - series[-1]), position=1,
+                  is_pit_lap=False, is_out_lap=lap_num == 1)
+        lap_id = store.add_lap(session_id, lap, frames_for(series))
+        store.set_lap_compound(lap_id, "RM")
+
+    inputs, evidence = build_inputs(store, event_id)
+    row = next(item for item in evidence if item.label == "Refuel rate")
+    assert row.source == MEASURED
+    assert inputs.refuel_rate_lps == pytest.approx(3.0, abs=0.05)
+    controller.shutdown()
+
+
+def test_practice_is_checked_against_the_races_clock_and_not_its_own(
+        qt_app, store):  # noqa: F811
+    """`practice_clock_warning` was handed the pooled practice reading
+    whenever practice had one, so it compared practice against itself: every
+    session matched and the check could never fire. The case it exists for -
+    practice run in daylight for a race that sweeps into the dark - was the
+    case it could not see."""
+    from pitcrew.telemetry.recorder import FRAME_FIELDS, LapFrames, encode_frames
+
+    controller = PitCrewController(store, EventScreen(), PracticeScreen(),
+                                   StrategyScreen())
+    controller._on_event_saved(an_event(race_laps=20, time_multiplier=6.0,
+                                        start_hour=18.0))
+    event_id = store.active_event_id()
+    session_id = controller.open_practice_session()
+
+    time_index = FRAME_FIELDS.index("t_ms")
+    clock_index = FRAME_FIELDS.index("time_of_day_ms")
+    hour_ms = 3_600_000
+
+    for lap_num in range(1, 6):
+        rows = []
+        for index in range(60):
+            row = [None] * len(FRAME_FIELDS)
+            row[time_index] = int(round(index * 94_000 / 60))
+            # The lobby clock runs at x1: 94 s of game time in a 94 s lap.
+            row[clock_index] = int(12.0 * hour_ms
+                                   + (lap_num - 1) * 94_000
+                                   + index * 94_000 / 60)
+            rows.append(row)
+        lap = Lap(lap_num=lap_num, lap_time_ms=94_000, best_lap_ms=94_000,
+                  delta_ms=0, fuel_start=92.0 - (lap_num - 1) * 3.4,
+                  fuel_end=92.0 - lap_num * 3.4, fuel_used=3.4, position=1,
+                  is_pit_lap=False, is_out_lap=lap_num == 1)
+        lap_id = store.add_lap(session_id, lap,
+                               LapFrames(frame_count=len(rows), sample_hz=60.0,
+                                         blob=encode_frames(rows)))
+        store.set_lap_compound(lap_id, "RM")
+
+    _, evidence = build_inputs(store, event_id)
+    note = next(item for item in evidence if item.label == "Time of day").note
+    assert "Practice was not run at the race's clock" in note
+    assert "against the race's x6" in note
+    controller.shutdown()
