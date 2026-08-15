@@ -111,10 +111,40 @@ OFF_SURFACE_BOOST = 0.30
 KERB_THUMP = 0.75
 KERB_THUMP_DECAY_S = 0.12
 
-# Oversteer and understeer, as the gap between the yaw the car is doing and
-# the yaw the steering asked for. Radians per second.
-YAW_ERROR_ONSET = 0.05
-YAW_ERROR_FULL = 0.45
+# **Lateral acceleration, in g.** Speed times yaw rate over 9.81 - the
+# standard derivation, and the same one `recorder.py` already computes for the
+# export, so the two agree by construction.
+#
+# This replaced a neutral-steer yaw-error model, and the reason is worth
+# keeping. That model compared the yaw the car was doing against the yaw
+# `speed * steering / wheelbase` predicted, which is only valid while the
+# tyres are in their linear range. Measured over a real lap: it correlated
+# **0.991 with steering angle times speed** - it was a steering meter - and
+# over-predicted the real yaw rate by 3.67x, reaching 2.87 rad/s on a car
+# whose yaw never exceeded 0.70. It therefore sat at FULL SCALE for 34-53% of
+# every lap.
+#
+# The driver found it valuable anyway, because cornering load is worth
+# feeling, and said he wanted to use it to judge how much speed he could carry
+# before the tyres let go. That is exactly what a saturating signal cannot do:
+# it reads maximum in a corner taken well within the limit and feels identical
+# to one on the edge.
+#
+# Lateral g does the job it was being trusted with. It has resolution all the
+# way to the limit, and it means something absolute - 1.2 g is 1.2 g in every
+# corner and every car, so what he learns in one place transfers.
+#
+# Two further gains, both accidental and both real: it takes `abs()`, so it
+# does not depend on the sign of `angvel_y` - which `recorder.py:333-336`
+# records as still unverified - and it needs no steering angle, so unlike the
+# model it replaces it keeps working on packet formats A and B.
+#
+# The range is a claim about the car, not about the signal. A GT3 on slicks
+# holds somewhere near 2 g sustained; a measured lap ran a median of 1.05 g
+# and a 90th percentile of 2.04 g. The ceiling sits above that so the top of
+# the scale still has resolution where it matters - at the limit.
+LAT_G_ONSET = 0.20
+LAT_G_FULL = 2.20
 
 # An impact is a step in world velocity that no engine could produce. Metres
 # per second per frame - at 60 Hz, 1.5 m/s in one frame is 90 m/s^2.
@@ -155,7 +185,7 @@ class EffectDeriver:
     allocates one small array. Order matches `synth.PORSCHE_RSR_17`.
     """
 
-    NAMES = ("wheels_spin_lock", "gear", "wheels_rumble", "traction_loss",
+    NAMES = ("wheels_spin_lock", "gear", "wheels_rumble", "lateral_load",
              "wheels_impact", "rpm")
 
     def __init__(self) -> None:
@@ -196,7 +226,7 @@ class EffectDeriver:
         out[0] = self._spin_lock(packet, dt)
         out[1] = self._gear(packet, dt)
         out[2] = self._rumble(packet, dt)
-        out[3] = self._traction_loss(packet)
+        out[3] = self._lateral_load(packet)
         out[4] = max(self._impact(packet, dt), self._kerb_thump(packet, dt))
         out[5] = self._rpm(packet)
         return out
@@ -276,28 +306,27 @@ class EffectDeriver:
 
     # --------------------------------------------------------------- chassis
 
-    def _traction_loss(self, p: GT7Packet) -> float:
-        """The gap between the yaw the car is doing and the yaw asked for.
+    def _lateral_load(self, p: GT7Packet) -> float:
+        """How hard the car is leaning on its tyres, in g.
 
-        Neutral-steer yaw is `speed * steer / wheelbase`, using the real
-        wheelbase GT7 reports for this car rather than a constant - 2.516 m
-        for the RSR, measured off the stream. Excess yaw is oversteer and a
-        deficit is understeer; on one transducer they cannot be told apart, so
-        this is the magnitude of either.
+        `speed * yaw_rate / 9.81` - the standard derivation, and the one
+        `recorder._slip_ratios`' neighbour already uses for the export, so the
+        haptic and the recorded figure cannot disagree.
 
-        **`road_wheel_angle`, not `steering`.** The first version used the
-        in-game rim, which saturates at +-pi at full lock, and so overstated
-        the steering by the whole steering ratio: 0.023 rad of rim on a car
-        running nearly straight at 215 km/h came out as 0.55 rad/s of implied
-        yaw, and this effect read full scale down a straight.
+        **This is load, not grip, and the distinction is the point.** It says
+        how hard the tyres are working, which is what a driver judging corner
+        entry speed wants; it does not say how much is left. Nothing in GT7's
+        feed says how much is left - there is no slip-angle channel and no
+        grip channel - so a cue claiming to would be inventing one.
+
+        What makes it usable where the model it replaced was not: it does not
+        saturate. A corner taken at 1.2 g feels different from the same corner
+        at 1.9 g, and the difference is the information.
         """
-        steer = p.road_wheel_angle
-        if steer is None or p.speed_ms < SLIP_MIN_SPEED_MS:
+        if p.speed_ms < SLIP_MIN_SPEED_MS:
             return 0.0
-        wheelbase = p.wheelbase_m or 2.5
-        neutral = p.speed_ms * steer / wheelbase
-        return _ramp(abs(p.angvel_y - neutral), YAW_ERROR_ONSET,
-                     YAW_ERROR_FULL)
+        lateral_g = abs(p.speed_ms * p.angvel_y) / 9.81
+        return _ramp(lateral_g, LAT_G_ONSET, LAT_G_FULL)
 
     def _impact(self, p: GT7Packet, dt: float) -> float:
         """A step in world velocity no engine or brake could have produced.

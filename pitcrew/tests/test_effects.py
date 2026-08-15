@@ -66,23 +66,69 @@ def one(deriver: EffectDeriver, packet, name: str) -> float:
 
 # ------------------------------------------------------- the straight line
 
-def test_a_car_going_straight_reports_no_traction_loss():
-    """The regression this module was built wrong for first.
+def test_a_car_going_straight_reports_no_load():
+    """Lateral g is speed times yaw rate. Straight means no yaw means no load,
+    whatever the steering is doing."""
+    packet = rolling(road_wheel=0.0016, angvel_y=0.0)
+    assert one(EffectDeriver(), packet, "lateral_load") == 0.0
 
-    `steering` is the in-game rim and saturates at +-pi at full lock, so
-    feeding it to a bicycle model overstates the angle by the whole steering
-    ratio. Measured on a real packet: 0.023 rad of rim at 215 km/h implied
-    0.55 rad/s of yaw - a hairpin - and this effect read 1.0 down a straight.
-    The road-wheel angle for the same frame was 0.0016 rad.
+
+def test_load_rises_with_how_hard_the_car_is_actually_cornering():
+    """The point of the change: resolution all the way to the limit.
+
+    The model this replaced was `speed * steering / wheelbase` against yaw,
+    which correlated 0.991 with steering times speed and sat at FULL SCALE for
+    34-53% of a real lap. It could not tell a corner taken well within the
+    limit from one on the edge, which is precisely what the driver wanted to
+    use it for.
     """
-    packet = rolling(road_wheel=0.0016, angvel_y=0.0249)
-    assert one(EffectDeriver(), packet, "traction_loss") == 0.0
+    def load(g: float) -> float:
+        # speed 59.7 m/s, so yaw rate for a given lateral g is g*9.81/v.
+        return one(EffectDeriver(),
+                   rolling(angvel_y=g * 9.81 / 59.7), "lateral_load")
+
+    gentle, committed, limit = load(0.5), load(1.2), load(2.0)
+    assert 0.0 < gentle < committed < limit
+    assert limit < 1.0, "no resolution left at the limit, which is the point"
 
 
-def test_a_car_being_thrown_sideways_does_report_it():
-    """The other half: the effect has to fire when it should."""
-    packet = rolling(road_wheel=0.0, angvel_y=0.6)
-    assert one(EffectDeriver(), packet, "traction_loss") > 0.8
+def test_the_scale_is_in_g_so_it_means_the_same_in_every_car():
+    """1.2 g is 1.2 g at any speed, in any car. That is what makes it worth
+    learning from - a number he can carry between corners and cars."""
+    slow = one(EffectDeriver(),
+               rolling(speed_ms=30.0, angvel_y=1.2 * 9.81 / 30.0),
+               "lateral_load")
+    fast = one(EffectDeriver(),
+               rolling(speed_ms=70.0, angvel_y=1.2 * 9.81 / 70.0),
+               "lateral_load")
+    assert abs(slow - fast) < 1e-6
+
+
+def test_it_does_not_depend_on_the_sign_of_a_channel_nobody_has_verified():
+    """`recorder.py` records that `angvel_y`'s sign is unverified against the
+    packet. Taking the magnitude means this effect cannot be wrong about it -
+    unlike the sideslip cue that was proposed and rejected for exactly that.
+    """
+    left = one(EffectDeriver(), rolling(angvel_y=0.35), "lateral_load")
+    right = one(EffectDeriver(), rolling(angvel_y=-0.35), "lateral_load")
+    assert left == right > 0.0
+
+
+def test_it_survives_a_packet_format_without_the_extended_tail():
+    """The model it replaced needed the road-wheel angle, which lives in the
+    tail - so on format A or B it silently returned zero. Lateral g needs only
+    speed and yaw, both of which are in the base packet."""
+    from .conftest import make_packet
+
+    base = make_packet(extended=False, speed_ms=59.7, angvel_y=0.30)
+    assert float(EffectDeriver().update(base)[3]) > 0.0
+
+
+def test_a_stationary_car_is_not_loaded_however_it_is_spinning():
+    """Below walking pace the arithmetic means nothing, and a car being
+    rotated in a garage is not cornering."""
+    assert one(EffectDeriver(), racing(speed_ms=1.0, angvel_y=2.0),
+               "lateral_load") == 0.0
 
 
 def test_rolling_wheels_are_not_spinning_or_locking():

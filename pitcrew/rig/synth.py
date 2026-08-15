@@ -174,7 +174,10 @@ PORSCHE_RSR_17 = (
     EffectSpec("gear", 39.87, 48.0, transient=True, felt_trim=0.10),
     EffectSpec("wheels_rumble", 37.62, 112.0, 152.0, noise=12.0,
                threshold=8.0, min_force=28.0, gamma=1.60),
-    EffectSpec("traction_loss", 35.19, 52.0, 70.0, noise=6.0,
+    # His `TractionLossContainer`, renamed to what it actually carries. The
+    # gain, band, noise and filter are all still his; only the input changed,
+    # from a saturating yaw-error model to lateral g.
+    EffectSpec("lateral_load", 35.19, 52.0, 70.0, noise=6.0,
                threshold=9.0, min_force=12.0, gamma=1.40),
     EffectSpec("wheels_impact", 12.31, 28.0, 38.0, noise=3.0, transient=True,
                threshold=55.0, min_force=20.0, gamma=1.20),

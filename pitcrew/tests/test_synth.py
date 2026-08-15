@@ -43,7 +43,7 @@ def test_the_six_effects_are_the_ones_he_actually_had_on():
     be inventing a preference he never expressed."""
     assert len(PORSCHE_RSR_17) == 6
     assert {s.name for s in PORSCHE_RSR_17} == {
-        "wheels_spin_lock", "gear", "wheels_rumble", "traction_loss",
+        "wheels_spin_lock", "gear", "wheels_rumble", "lateral_load",
         "wheels_impact", "rpm"}
 
 
