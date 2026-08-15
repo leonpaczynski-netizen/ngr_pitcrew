@@ -130,6 +130,17 @@ class Settings:
     # high - acts readily, asks rarely
     speech_sensitivity: str = "medium"
 
+    # --- the rig
+    # **Off by default, deliberately.** This drives a 150 W amplifier into a
+    # piston under the driver's seat, and an output that starts making itself
+    # felt because the app was updated is not a pleasant surprise. He turns it
+    # on once.
+    haptics_enabled: bool = False
+    # Empty means the transducer this rig was measured against. A name rather
+    # than an index for the same reason as the engineer's card: indices are
+    # renumbered whenever a device appears or goes.
+    haptics_device: str = ""
+
     # --- shift beep
     beep_enabled: bool = True
     beep_rpm_source: str = RPM_FROM_GT7

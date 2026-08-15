@@ -38,6 +38,9 @@ from pitcrew.engineer.ptt import (
     best_semantic_matcher,
 )
 from pitcrew.engineer.shift_beep import ShiftBeep
+from pitcrew.rig import transducer
+from pitcrew.rig.effects import EffectDeriver
+from pitcrew.rig.haptics import HapticsEngine
 from pitcrew.engineer import audio_devices, endpoint_meter
 from pitcrew.engineer.voice import Voice
 from pitcrew.export.build import _rows_to_laps, build_event_export
@@ -114,6 +117,12 @@ class TelemetryBridge(QObject):
         # On the telemetry thread on purpose: a shift beep routed through
         # the Qt event loop arrives after the corner it was for.
         self.shift_beep = ShiftBeep(enabled=False)
+        # The transducer. `effects` turns each packet into six intensities and
+        # `haptics` renders them on PortAudio's own thread, so what happens
+        # here is one array write - see `on_packet`. Both are None until the
+        # driver switches it on, because this drives 150 W into his seat.
+        self.effects = EffectDeriver()
+        self.haptics = None
         # Whether the first packet is allowed to set the threshold. Off means
         # the driver picked a number, and the game must not overwrite it.
         self.beep_from_game = True
@@ -134,6 +143,10 @@ class TelemetryBridge(QObject):
             SessionKind.RACE if race else SessionKind.PRACTICE)
         self.recorder.discard()
         self._announced = False
+        # Velocity and suspension carried across a session boundary are a
+        # collision that never happened, at full scale, the instant he
+        # rejoins somewhere else on the map.
+        self.effects.reset()
 
     def on_packet(self, data: bytes) -> bool:
         """Called on the UDP thread for every datagram.
@@ -199,6 +212,27 @@ class TelemetryBridge(QObject):
                 rows = self.recorder.take_rows()
                 self.lap_completed.emit(event.data["lap"], rows)
             self.session_event.emit(event)
+
+        # **Last, and unable to hurt anything above it.** This is an output,
+        # and CLAUDE.md is clear that the app observes and advises - so a
+        # transducer must never be able to cost the driver a recorded session.
+        # It is appended after every stage that carries state because lap
+        # distance is INTEGRATED: a consumer that raised here, or that ran
+        # before the recorder, would move every corner window at this circuit.
+        #
+        # It also does no work worth speaking of. `update` is arithmetic on
+        # six numbers and `set_intensities` is one array write; the rendering
+        # happens on PortAudio's thread. Nothing here waits on a sound card,
+        # which is what the shift beep used to do to this loop.
+        if self.haptics is not None:
+            try:
+                self.haptics.set_intensities(self.effects.update(packet))
+            except Exception as exc:                        # noqa: BLE001
+                log("haptics").error(
+                    "the transducer path raised on the telemetry thread and "
+                    "has been stopped for this session: %s: %s",
+                    type(exc).__name__, exc, exc_info=True)
+                self.haptics = None
         return True
 
 
@@ -1215,6 +1249,30 @@ class PitCrewController(QObject):
         self.practice.set_laps(self._rows_for_event(event["id"]))
         return self.session_id
 
+    def start_haptics(self) -> bool:
+        """Open the transducer for this session, if the driver wants it.
+
+        Returns whether anything is now running. A False is not a failure the
+        session cares about: an output must never be able to stop the app
+        recording, so this reports and the run goes on either way.
+        """
+        if not self.settings.haptics_enabled or self.bridge.haptics is not None:
+            return self.bridge.haptics is not None
+        engine = HapticsEngine(
+            device=self.settings.haptics_device or transducer.DEVICE_NAME)
+        if not engine.start():
+            log("haptics").warning(
+                "no haptics this session: %s", engine.error)
+            return False
+        self.bridge.effects.reset()
+        self.bridge.haptics = engine
+        return True
+
+    def stop_haptics(self) -> None:
+        engine, self.bridge.haptics = self.bridge.haptics, None
+        if engine is not None:
+            engine.stop()
+
     @staticmethod
     def _feed_description(values) -> str:
         """Where a given settings object would take telemetry from."""
@@ -1272,6 +1330,7 @@ class PitCrewController(QObject):
         self._parse_errors = 0
         self._store_errors = 0
         self._health.start()
+        self.start_haptics()
         # Off by default: the engineer only answers during a race. On, it is
         # how the button gets tested without committing to a race.
         if self.settings.ptt_enabled and self.settings.ptt_in_practice:
@@ -1289,6 +1348,7 @@ class PitCrewController(QObject):
         self.announce("Recording", "Go out when you are ready.")
 
     def stop_practice(self) -> None:
+        self.stop_haptics()
         if self.listener is not None:
             self.listener.stop()
             self.listener = None
@@ -1835,6 +1895,7 @@ class PitCrewController(QObject):
             heartbeat_to=self.heartbeat_target)
         self.listener.start()
         self._health.start()
+        self.start_haptics()
 
         # Silent means silent, not idle: the calls are still computed, still
         # shown on the screen and still written into the outcome export. What
@@ -1865,6 +1926,7 @@ class PitCrewController(QObject):
         return True
 
     def stop_race(self) -> None:
+        self.stop_haptics()
         if self.listener is not None:
             self.listener.stop()
             self.listener = None
@@ -2075,6 +2137,7 @@ class PitCrewController(QObject):
             log("session").info("session %s closed on shutdown",
                                 self.session_id)
             self.session_id = None
+        self.stop_haptics()
         if self.listener is not None:
             self.listener.stop()
         if self._button_probe is not None:

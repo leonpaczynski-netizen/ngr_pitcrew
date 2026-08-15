@@ -223,3 +223,113 @@ def test_a_device_that_will_not_open_is_reported_not_raised():
     assert engine.start() is False
     assert engine.error is not None
     assert engine.running is False
+
+
+# ------------------------------------------------ wired into the packet path
+
+def _bridge():
+    from pitcrew.controller import TelemetryBridge
+    return TelemetryBridge()
+
+
+def _encoded(**overrides) -> bytes:
+    """A real encrypted packet, so the bridge does its real parse."""
+    from .conftest import make_packet
+    from .test_direct_feed import a_car_on_track, encrypted
+    del make_packet, overrides
+    return encrypted(a_car_on_track())
+
+
+def test_the_transducer_is_off_until_it_is_switched_on():
+    """It drives 150 W into a piston under the seat. An output that starts
+    making itself felt because the app was updated is not a pleasant
+    surprise."""
+    from pitcrew.settings import Settings
+
+    assert Settings().haptics_enabled is False
+
+
+def test_a_packet_reaches_the_transducer():
+    bridge = _bridge()
+    seen = []
+
+    class Sink:
+        def set_intensities(self, values):
+            seen.append(np.asarray(values).copy())
+
+    bridge.haptics = Sink()
+    assert bridge.on_packet(_encoded()) is True
+    assert len(seen) == 1
+    assert len(seen[0]) == len(bridge.effects.NAMES)
+
+
+def test_a_transducer_that_raises_cannot_cost_him_the_session():
+    """CLAUDE.md: the app observes and advises. An output must never be able
+    to stop a lap being recorded - so it is dropped for the session and the
+    packet still counts as decoded."""
+    bridge = _bridge()
+
+    class Broken:
+        def set_intensities(self, values):
+            raise RuntimeError("the card went away mid-corner")
+
+    bridge.haptics = Broken()
+    assert bridge.on_packet(_encoded()) is True
+    assert bridge.haptics is None, "a broken output stayed wired in"
+    # And the recorder still got the frame.
+    assert bridge.recorder.frame_count >= 1
+
+
+def test_an_undecodable_packet_never_reaches_the_transducer():
+    """`on_packet` returns early on a parse failure, so this consumer is
+    skipped - which is correct, and is why it has to tolerate being skipped."""
+    bridge = _bridge()
+    seen = []
+
+    class Sink:
+        def set_intensities(self, values):
+            seen.append(1)
+
+    bridge.haptics = Sink()
+    assert bridge.on_packet(b"not telemetry") is False
+    assert seen == []
+
+
+def test_the_transducer_runs_after_everything_that_carries_state():
+    """Lap distance is INTEGRATED from the packet clock, and corner windows
+    are keyed on it. A consumer that ran before the recorder - or that threw
+    where the recorder could see it - would move every corner at the
+    circuit."""
+    bridge = _bridge()
+    order = []
+
+    real_record = bridge.recorder.record_frame
+    bridge.recorder.record_frame = lambda p: (order.append("recorder"),
+                                              real_record(p))[1]
+
+    class Sink:
+        def set_intensities(self, values):
+            order.append("haptics")
+
+    bridge.haptics = Sink()
+    bridge.on_packet(_encoded())
+    assert order == ["recorder", "haptics"]
+
+
+def test_a_session_boundary_clears_the_state_behind_the_effects():
+    """Velocity carried across a garage visit is a collision that never
+    happened, at full scale, the instant he rejoins."""
+    bridge = _bridge()
+
+    class Sink:
+        def set_intensities(self, values):
+            pass
+
+    # A sink is needed: the deriver only runs when something is listening,
+    # which is deliberate - there is no point computing six intensities that
+    # nobody consumes on every packet of every session.
+    bridge.haptics = Sink()
+    bridge.on_packet(_encoded())
+    assert bridge.effects._prev_velocity is not None
+    bridge.reset()
+    assert bridge.effects._prev_velocity is None
