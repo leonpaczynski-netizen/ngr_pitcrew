@@ -90,8 +90,26 @@ TEXTURE_FULL_SPEED_KPH = 130.0
 # a character per wheel - the one channel here that is genuinely measured
 # rather than modelled, and the one SimHub's GT7 support cannot see at all,
 # because it reads the base packet format only.
-KERB_BOOST = 0.55
+KERB_BOOST = 0.70
 OFF_SURFACE_BOOST = 0.30
+
+# **A kerb also gets a low thump, and here is why it needs one.**
+#
+# The rumble effect's frequency follows its intensity - 112 Hz at rest, 152 Hz
+# flat out - so a kerb, being the loudest input, drives the HIGHEST frequency
+# in the band. Piston excursion falls as 1/f-squared above resonance, so the
+# harder the hit the less of it is felt: measured, an ordinary road lands at
+# 135 Hz and a kerb at 149 Hz, where the same drive moves the piston about
+# four-fifths as far. The kerb gets buzzier rather than sharper, which is
+# precisely how it was reported from the seat.
+#
+# A real ripple strip is a low thud with a rattle on top. We had only the
+# rattle. This is the thud - a short pulse into `wheels_impact`, which sits at
+# 28-38 Hz where the piston can actually move, fired on the EDGE of touching
+# the kerb rather than for as long as the wheel is on it, because it is the
+# edge that reads as sharp.
+KERB_THUMP = 0.75
+KERB_THUMP_DECAY_S = 0.12
 
 # Oversteer and understeer, as the gap between the yaw the car is doing and
 # the yaw the steering asked for. Radians per second.
@@ -148,6 +166,8 @@ class EffectDeriver:
         self._gear_pulse = 0.0
         self._impact_pulse = 0.0
         self._lock_level = 0.0
+        self._prev_surfaces: tuple[str, ...] | None = None
+        self._kerb_pulse = 0.0
 
     def reset(self) -> None:
         """Between sessions. Stale state across a garage visit is a phantom
@@ -158,6 +178,8 @@ class EffectDeriver:
         self._gear_pulse = 0.0
         self._impact_pulse = 0.0
         self._lock_level = 0.0
+        self._prev_surfaces = None
+        self._kerb_pulse = 0.0
 
     def update(self, packet: GT7Packet, dt: float = FRAME_S) -> np.ndarray:
         """The six intensities for this frame."""
@@ -175,7 +197,7 @@ class EffectDeriver:
         out[1] = self._gear(packet, dt)
         out[2] = self._rumble(packet, dt)
         out[3] = self._traction_loss(packet)
-        out[4] = self._impact(packet, dt)
+        out[4] = max(self._impact(packet, dt), self._kerb_thump(packet, dt))
         out[5] = self._rpm(packet)
         return out
 
@@ -228,20 +250,29 @@ class EffectDeriver:
         speed = sum(abs(h - q) for h, q in zip(heights, previous)) / (4.0 * dt)
         texture = _ramp(speed, 0.0, TEXTURE_FULL_MS)
 
+        # **The speed scaling belongs to the texture, not to the surface.**
+        #
+        # His SimHub rumble had `MaxEffectSpeed 130`, and a bump at 40 km/h
+        # genuinely is not the bump it is at 130 - the suspension is moving
+        # less. But a kerb is a kerb: the wheel is on a different surface, and
+        # scaling that down because the corner happens to be slow is what made
+        # ripple strips feel soft. Reported from the seat as "not sharp enough
+        # or strong enough", and the hairpins are exactly where kerbs matter
+        # most.
+        texture *= min(1.0, p.speed_kmh / TEXTURE_FULL_SPEED_KPH)
+
         # Surface type is the one input here that is measured rather than
         # modelled. SimHub's GT7 support cannot see it - it reads the base
         # packet only - which is why its kerb effects have to be inferred from
-        # suspension and ours do not.
+        # suspension and ours do not. Added after the speed scaling so it
+        # arrives at full strength wherever it happens.
         surfaces = p.surface_types
         if surfaces:
             if any(s == "C" for s in surfaces):
                 texture = min(1.0, texture + KERB_BOOST)
             elif any(s in ("D", "G", "S", "s") for s in surfaces):
                 texture = min(1.0, texture + OFF_SURFACE_BOOST)
-
-        # Scaled by speed, as his `MaxEffectSpeed 130` did: the same bump at
-        # 40 km/h is not the same event.
-        return texture * min(1.0, p.speed_kmh / TEXTURE_FULL_SPEED_KPH)
+        return texture
 
     # --------------------------------------------------------------- chassis
 
@@ -286,6 +317,24 @@ class EffectDeriver:
             hit = _ramp(step, IMPACT_ONSET_MS, IMPACT_FULL_MS)
             self._impact_pulse = max(self._impact_pulse, hit)
         return self._impact_pulse
+
+    def _kerb_thump(self, p: GT7Packet, dt: float) -> float:
+        """The low half of a ripple strip, fired on the edge of touching it.
+
+        Deliberately an onset rather than a state. A wheel sitting on a kerb
+        through a whole chicane is a texture, which the rumble effect already
+        carries; what makes a kerb feel sharp is the moment of arriving on it.
+        """
+        surfaces = p.surface_types
+        previous, self._prev_surfaces = self._prev_surfaces, surfaces
+        self._kerb_pulse *= float(np.exp(-dt / KERB_THUMP_DECAY_S))
+        if not surfaces or not previous:
+            return self._kerb_pulse
+        arrived = any(now == "C" and was != "C"
+                      for now, was in zip(surfaces, previous))
+        if arrived:
+            self._kerb_pulse = max(self._kerb_pulse, KERB_THUMP)
+        return self._kerb_pulse
 
     # ---------------------------------------------------------------- engine
 

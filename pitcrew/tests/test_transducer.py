@@ -66,8 +66,13 @@ def test_the_reference_is_a_level_someone_actually_felt():
     assert t.SUSTAINED_CEILING == t.CALIBRATION_AMPLITUDE
 
 
-def test_the_amp_has_no_room_left_to_turn_up():
-    """It calibrated at its maximum. Anything needing to be stronger has to
-    come out of the 6 dB above the reference, and after that the answer is a
-    different balance rather than more gain."""
-    assert t.AMP_AT_MAXIMUM is True
+def test_the_amp_is_no_longer_pinned_at_its_maximum():
+    """It calibrated at 50 - the maximum - and racing moved it.
+
+    A master gain of 2 tripped the amplifier's protection and needed a full PC
+    restart to clear. The settled operating point is amp 35 with a master of
+    1, which leaves headroom on the knob for the first time and means "make it
+    stronger" has somewhere to come from other than the limiter.
+    """
+    assert t.AMP_VOLUME_AT_CALIBRATION < t.AMP_VOLUME_MAX
+    assert t.AMP_AT_MAXIMUM is False

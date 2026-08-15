@@ -70,7 +70,17 @@ AMP_HIGH_CUT_HZ = 160.0
 CALIBRATION_FREQ_HZ = 40.0
 CALIBRATION_DBFS = -6.0
 CALIBRATION_AMPLITUDE = 0.5
-AMP_VOLUME_AT_CALIBRATION = 50
+# **The bench calibration put this at 50, which is the amplifier's maximum,
+# and racing has since moved it.** Driving at a master gain of 2 tripped the
+# amp's protection and needed a full PC restart to clear; the settled
+# operating point is amp 35 with a master of 1, which leaves real headroom on
+# the knob for the first time.
+#
+# Kept as a record rather than a target. Every effect gain is a fraction of
+# the digital reference above, which has not moved - this is here so that "the
+# haptics feel weak" can be answered by asking whether the knob is where it
+# was.
+AMP_VOLUME_AT_CALIBRATION = 35
 AMP_VOLUME_MAX = 50
 
 # What is left above the reference, and it is deliberate rather than spare.

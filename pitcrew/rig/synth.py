@@ -323,11 +323,24 @@ class HapticMix:
         # the amplifier was actually calibrated against. His loudest is
         # wheelspin at 70; that one now reaches the ceiling and everything
         # else sits below it in the proportions he chose.
+        # **One ceiling for every effect, and the headroom is the limiter's
+        # business alone.**
+        #
+        # This used to scale transients by `TRANSIENT_CEILING` and everything
+        # else by `SUSTAINED_CEILING`, which quietly rewrote the driver's
+        # balance: his gear effect is 39.87 and his road rumble 37.62 - within
+        # 6% of each other - and the split ceilings turned that into 0.404
+        # against 0.269, half again as loud. Reported from the seat as "gear
+        # changes still feel overpowered", which is exactly right and was not
+        # a taste question at all.
+        #
+        # The headroom above the sustained ceiling still exists and transients
+        # still reach into it, but by being brief and landing on top of the
+        # bed rather than by carrying a larger gain. That is the difference
+        # between a peak that stands out and an effect that is simply louder.
         loudest = max(spec.gain for spec in self.specs) or 100.0
         self._scale = np.array(
-            [spec.gain / loudest * (transducer.TRANSIENT_CEILING
-                                    if spec.transient
-                                    else transducer.SUSTAINED_CEILING)
+            [spec.gain / loudest * transducer.SUSTAINED_CEILING
              for spec in self.specs], dtype=np.float32)
         self._dc_y = 0.0
         # Held rather than rebuilt: the DC correction is ramped across each

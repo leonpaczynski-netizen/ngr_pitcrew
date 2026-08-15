@@ -140,13 +140,69 @@ def test_grass_and_dirt_are_felt_but_less_than_a_kerb():
     assert 0.0 < grass < kerb
 
 
+def _over_bumps(speed_ms: float) -> float:
+    """Rumble from a road that is actually moving the suspension."""
+    deriver = EffectDeriver()
+    value = 0.0
+    for frame in range(12):
+        height = 0.08 + (0.006 if frame % 2 else -0.006)
+        value = float(deriver.update(rolling(
+            speed_ms=speed_ms,
+            suspension_fl=height, suspension_fr=height,
+            suspension_rl=height, suspension_rr=height))[2])
+    return value
+
+
 def test_the_same_bump_matters_less_at_walking_pace():
-    """His SimHub rumble scaled to `MaxEffectSpeed 130`."""
+    """His SimHub rumble scaled to `MaxEffectSpeed 130`.
+
+    Tested on tarmac with the suspension genuinely moving, because the speed
+    scaling now applies to the TEXTURE only. A kerb is deliberately exempt -
+    see below.
+    """
+    assert _over_bumps(40.0) > _over_bumps(5.0)
+
+
+def test_a_kerb_is_not_scaled_down_just_because_the_corner_is_slow():
+    """The change that came out of "ripple strips don't feel sharp enough".
+
+    A bump at 40 km/h genuinely is not the bump it is at 130 - the suspension
+    moves less. But a kerb is a kerb: the wheel is on a different surface, and
+    hairpins are exactly where kerbs matter most.
+    """
     fast = one(EffectDeriver(), rolling(speed_ms=40.0, surfaces="CCCC"),
                "wheels_rumble")
     slow = one(EffectDeriver(), rolling(speed_ms=5.0, surfaces="CCCC"),
                "wheels_rumble")
-    assert fast > slow
+    assert fast == slow
+    # float32, so a hair under the constant.
+    assert slow >= effects.KERB_BOOST - 1e-6
+
+
+def test_arriving_on_a_kerb_fires_a_low_thump():
+    """The rumble band's frequency follows its intensity, so a kerb drives the
+    HIGHEST frequency in it - and piston excursion falls as 1/f-squared, so
+    the hardest hit is the least felt. Measured: ordinary road 135 Hz, kerb
+    149 Hz, four-fifths the excursion. It gets buzzier, not sharper.
+
+    A real ripple strip is a thud with a rattle on top. This is the thud.
+    """
+    deriver = EffectDeriver()
+    for _ in range(4):
+        deriver.update(rolling(surfaces="TTTT"))
+    on_kerb = float(deriver.update(rolling(surfaces="TTCC"))[4])
+    assert on_kerb >= effects.KERB_THUMP
+
+
+def test_sitting_on_a_kerb_is_a_texture_rather_than_a_repeated_thump():
+    """It is the EDGE that reads as sharp. A wheel resting on a kerb through
+    a whole chicane is what the rumble effect is for."""
+    deriver = EffectDeriver()
+    deriver.update(rolling(surfaces="TTTT"))
+    first = float(deriver.update(rolling(surfaces="TTCC"))[4])
+    for _ in range(30):
+        later = float(deriver.update(rolling(surfaces="TTCC"))[4])
+    assert later < first * 0.2, "it kept thumping while the wheel sat there"
 
 
 def test_texture_comes_from_suspension_movement_not_its_position():
