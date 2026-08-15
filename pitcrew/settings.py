@@ -136,6 +136,9 @@ class Settings:
     # felt because the app was updated is not a pleasant surprise. He turns it
     # on once.
     haptics_enabled: bool = False
+    # The fans. Off by default for the same reason, though the consequence of
+    # a surprise here is startling rather than physical.
+    wind_enabled: bool = False
     # Empty means the transducer this rig was measured against. A name rather
     # than an index for the same reason as the engineer's card: indices are
     # renumbered whenever a device appears or goes.

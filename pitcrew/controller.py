@@ -41,6 +41,8 @@ from pitcrew.engineer.shift_beep import ShiftBeep
 from pitcrew.rig import transducer
 from pitcrew.rig.effects import EffectDeriver
 from pitcrew.rig.haptics import HapticsEngine
+from pitcrew.rig.wind import WindSim
+from pitcrew.rig.wind_curve import WindCurve
 from pitcrew.engineer import audio_devices, endpoint_meter
 from pitcrew.engineer.voice import Voice
 from pitcrew.export.build import _rows_to_laps, build_event_export
@@ -88,6 +90,10 @@ STALE_AFTER_S = 3.0
 # frames is a hiccup that costs a few centimetres of integrated lap distance;
 # a whole second of stream is a corner window in the wrong place.
 _LOST_PACKET_BUDGET = 30
+# One GT7 frame. The rig outputs are slew-limited in real time rather than in
+# packets, so they need a duration; the stream's own 59.88 Hz is close enough
+# to nominal that using the constant costs nothing a fan could express.
+_FRAME_S = 1.0 / SAMPLE_HZ
 
 
 class TelemetryBridge(QObject):
@@ -123,6 +129,13 @@ class TelemetryBridge(QObject):
         # driver switches it on, because this drives 150 W into his seat.
         self.effects = EffectDeriver()
         self.haptics = None
+        # The wind simulator, the same shape: a curve that turns speed into
+        # fan duty here, and a worker thread that does the talking. `set_output`
+        # is one array write; the serial write happens elsewhere, because a
+        # stalled USB port must not reach the packet handler.
+        self.wind_curve = WindCurve()
+        self.wind = None
+        self.racing = False
         # Whether the first packet is allowed to set the threshold. Off means
         # the driver picked a number, and the game must not overwrite it.
         self.beep_from_game = True
@@ -147,6 +160,10 @@ class TelemetryBridge(QObject):
         # collision that never happened, at full scale, the instant he
         # rejoins somewhere else on the map.
         self.effects.reset()
+        self.wind_curve.reset()
+        # Which the wind curve needs, because his static-wind floor is set to
+        # be suppressed in a race and not in practice.
+        self.racing = race
 
     def on_packet(self, data: bytes) -> bool:
         """Called on the UDP thread for every datagram.
@@ -233,6 +250,16 @@ class TelemetryBridge(QObject):
                     "has been stopped for this session: %s: %s",
                     type(exc).__name__, exc, exc_info=True)
                 self.haptics = None
+        if self.wind is not None:
+            try:
+                self.wind.set_output(self.wind_curve.update(
+                    packet, _FRAME_S, racing=self.racing))
+            except Exception as exc:                        # noqa: BLE001
+                log("wind").error(
+                    "the wind path raised on the telemetry thread and has "
+                    "been stopped for this session: %s: %s",
+                    type(exc).__name__, exc, exc_info=True)
+                self.wind = None
         return True
 
 
@@ -1273,6 +1300,30 @@ class PitCrewController(QObject):
         if engine is not None:
             engine.stop()
 
+    def start_wind(self) -> bool:
+        """Bring the fans up for this session, if the driver wants them.
+
+        The worker thread finds the device itself and keeps trying, so a wind
+        sim that is switched on halfway through a session joins in rather than
+        staying dark until the next one.
+        """
+        if not self.settings.wind_enabled or self.bridge.wind is not None:
+            return self.bridge.wind is not None
+        sim = WindSim()
+        sim.start()
+        self.bridge.wind_curve.reset()
+        self.bridge.wind = sim
+        return True
+
+    def stop_wind(self) -> None:
+        sim, self.bridge.wind = self.bridge.wind, None
+        if sim is not None:
+            # Zero before letting go. The firmware's deadman would catch it a
+            # second later, but a second of wind after the session ended is a
+            # second of wondering whether it is stuck.
+            sim.stop_fans()
+            sim.shutdown()
+
     @staticmethod
     def _feed_description(values) -> str:
         """Where a given settings object would take telemetry from."""
@@ -1331,6 +1382,7 @@ class PitCrewController(QObject):
         self._store_errors = 0
         self._health.start()
         self.start_haptics()
+        self.start_wind()
         # Off by default: the engineer only answers during a race. On, it is
         # how the button gets tested without committing to a race.
         if self.settings.ptt_enabled and self.settings.ptt_in_practice:
@@ -1349,6 +1401,7 @@ class PitCrewController(QObject):
 
     def stop_practice(self) -> None:
         self.stop_haptics()
+        self.stop_wind()
         if self.listener is not None:
             self.listener.stop()
             self.listener = None
@@ -1896,6 +1949,7 @@ class PitCrewController(QObject):
         self.listener.start()
         self._health.start()
         self.start_haptics()
+        self.start_wind()
 
         # Silent means silent, not idle: the calls are still computed, still
         # shown on the screen and still written into the outcome export. What
@@ -1927,6 +1981,7 @@ class PitCrewController(QObject):
 
     def stop_race(self) -> None:
         self.stop_haptics()
+        self.stop_wind()
         if self.listener is not None:
             self.listener.stop()
             self.listener = None
@@ -2138,6 +2193,7 @@ class PitCrewController(QObject):
                                 self.session_id)
             self.session_id = None
         self.stop_haptics()
+        self.stop_wind()
         if self.listener is not None:
             self.listener.stop()
         if self._button_probe is not None:
