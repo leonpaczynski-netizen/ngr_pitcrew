@@ -301,17 +301,26 @@ def test_gamma_lifts_the_small_end_without_moving_the_top():
     assert sensitive.shape(1.0) == pytest.approx(flat.shape(1.0))
 
 
-def test_gains_are_relative_to_the_loudest_effect_not_to_an_abstract_full():
+def test_no_effect_is_louder_than_the_level_he_calibrated_against():
     """SimHub's gains are weights inside its own chain - his sat under a
     profile gain of 49.8. Read as fractions of full scale, even the strongest
-    effect peaked at 0.35 against a reference of 0.5 he called very strong."""
+    effect peaked at 0.35 against a reference of 0.5 he called very strong, so
+    they are normalised by the largest gain instead.
+
+    The largest no longer lands exactly on the ceiling, because wheel-spin now
+    carries a trim of its own: replayed over eight of his laps it was the only
+    effect reaching 0.5000, on 9% of the lap, and he reported it strong. What
+    still has to hold is that nothing goes ABOVE the level the amplifier was
+    calibrated at - the headroom over it belongs to the limiter and to brief
+    transients, not to a sustained effect.
+    """
     mix = HapticMix(block=BLOCK)
-    loudest = max(s.gain for s in mix.specs)
-    strongest = mix.specs[[s.gain for s in mix.specs].index(loudest)]
-    index = mix.names.index(strongest.name)
-    ceiling = (transducer.TRANSIENT_CEILING if strongest.transient
-               else transducer.SUSTAINED_CEILING)
-    assert mix._scale[index] == pytest.approx(ceiling)
+    for spec, scale in zip(mix.specs, mix._scale):
+        ceiling = (transducer.TRANSIENT_CEILING if spec.transient
+                   else transducer.SUSTAINED_CEILING)
+        assert float(scale) <= ceiling + 1e-6, (
+            f"{spec.name} peaks at {float(scale):.4f}, above the {ceiling} "
+            f"this rig was calibrated against")
 
 
 def test_the_balance_between_effects_is_still_his():
@@ -376,51 +385,75 @@ def test_compression_is_counted_so_a_squashed_mix_can_be_seen():
     assert calm.limited_blocks == 0
 
 
-def test_the_gear_thump_is_trimmed_against_the_road_he_is_actually_on():
-    """Reported three times as too strong, and the first trim under-did it
-    because it was sized against the wrong comparison.
+def test_a_thump_stands_above_the_bed_it_lands_on():
+    """Reported four times, in both directions, and every trim before this one
+    was sized against a model that has since been measured and refuted.
 
-    Two mistakes, both in the reference:
+    The old test compared `amplitude / frequency**2`, on the belief that felt
+    output falls as the square of frequency. The sweep says otherwise: this
+    rig is a resonance structure with peaks at 40-55 and 85-105 Hz and a null
+    at 70, so 48 Hz is not "more felt because it is lower", it is more felt
+    because it happens to sit on a peak. Comparing the two the old way made a
+    shift look 8.6x the road when the measured response makes it 2.6x.
 
-    * **Band centre, not the real operating frequency.** Frequency is
-      interpolated from the post-gain amplitude, which tops out well below
-      1.0, so no effect reaches its declared `freq_hi`. The road bed's centre
-      is 132 Hz; it actually runs at about 116 Hz, and the mix cannot produce
-      132 below a master of 2.
-    * **Peak against peak.** A gear shift always reaches its own peak. The
-      road bed almost never does - measured over a real lap it sits near 0.107
-      while its peak is 0.269. Comparing peaks flattered gear by a factor of
-      two and a half.
-
-    Measured against the bed present at each of thirty shifts on a real lap,
-    gear was 3.9x more felt. Parity would be a trim of 0.065; a transient
-    should stand above the bed rather than sit level with it, so this checks
-    it lands somewhere useful above 1x and well under the 3.9x he complained
-    about.
+    Numbers below are from `tools/rig_levels.py` over eight of his own laps -
+    the bed present at the moment a shift actually fires, ducked as the mix
+    ducks it, not the bed's peak. A shift always reaches its own peak; the
+    road almost never does, which is what flattered gear by two and a half in
+    the first place.
     """
-    # Measured on `fixtures/watkins_glen_lap.bin`: the road bed's live median
-    # amplitude and the frequency it actually runs at, rather than its
-    # declared band.
-    ROAD_LIVE_AMPLITUDE = 0.1065
-    ROAD_LIVE_HZ = 116.0
-    GEAR_HZ = 48.0
+    BED_HZ = 95.0            # where the rumble runs, mid-band
+    BED_AT_A_SHIFT = 0.0896  # ducked, median over every shift in eight laps
 
     gear = {s.name: s for s in PORSCHE_RSR_17}["gear"]
     assert gear.gain == 39.87, "his own number must stay visible"
-    assert gear.felt_trim < 1.0, "the correction belongs in the trim"
+    assert gear.transient, "the duck is keyed off this"
 
     mix = HapticMix(block=BLOCK)
-    gear_amplitude = float(mix._scale[mix.names.index("gear")])
-    felt_gear = gear_amplitude / GEAR_HZ ** 2
-    felt_road = ROAD_LIVE_AMPLITUDE / ROAD_LIVE_HZ ** 2
-    ratio = felt_gear / felt_road
+    thump = float(mix._scale[mix.names.index("gear")])
+    felt_thump = thump * transducer.felt_response(gear.freq_lo)
+    felt_bed = BED_AT_A_SHIFT * transducer.felt_response(BED_HZ)
+    ratio = felt_thump / felt_bed
 
-    assert ratio > 1.0, (
-        f"a shift is felt {ratio:.2f}x the road he is on - it should still "
-        f"stand out as an event")
-    assert ratio < 2.5, (
-        f"a shift is felt {ratio:.2f}x the road he is on - he called 3.9x "
-        f"overpowered and rattling the rig")
+    assert ratio > 1.5, (
+        f"a shift is felt {ratio:.2f}x the road under it - at 0.9x he said it "
+        f"could not be felt at all")
+    assert ratio < 4.0, (
+        f"a shift is felt {ratio:.2f}x the road under it - he called it "
+        f"overpowered and rattling the rig when it was higher")
+
+
+def test_the_bed_gets_out_of_the_way_for_an_event():
+    """The only way an event stays legible on one piston.
+
+    Six effects, one transducer, two usable regions of response - so frequency
+    separates nothing, and the kerb thump shares its twelve hertz with lateral
+    load. Measured, it fired 11.3 dB BELOW the road bed and 7.6 dB below
+    lateral load. "Kerb thump I can't feel" was not a gain problem; it was a
+    contrast problem, and gain alone cannot fix it because raising everything
+    raises what it has to beat.
+    """
+    mix = HapticMix(block=BLOCK)
+    quiet = np.zeros(len(mix.names), dtype=np.float32)
+    quiet[mix.names.index("wheels_rumble")] = 1.0
+
+    for _ in range(20):
+        mix.render(quiet, BLOCK)
+    undisturbed = mix._duck
+    assert undisturbed > 0.98, "nothing is firing, so nothing should duck"
+
+    firing = quiet.copy()
+    firing[mix.names.index("wheels_impact")] = 1.0
+    for _ in range(20):
+        mix.render(firing, BLOCK)
+    assert mix._duck < 0.45, (
+        f"the bed only ducked to {mix._duck:.2f} under a full-scale kerb "
+        f"strike - not enough to hear the strike over it")
+
+    for _ in range(200):
+        mix.render(quiet, BLOCK)
+    assert mix._duck > 0.95, "the bed never came back"
+
 
 
 def test_an_impossible_trim_is_refused():

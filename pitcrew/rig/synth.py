@@ -152,12 +152,27 @@ class EffectSpec:
         return minimum + (1.0 - minimum) * value
 
 
+# How far the sustained bed ducks under a full-scale transient, and how
+# quickly it gets there and back. 0.70 is about 10 dB at full - and a kerb
+# thump does not shape to full, so the bed measured over his laps drops by
+# nearer 7, which is what turns a gear shift from 8.5 dB under the road into
+# 4 above it.
+DUCK_DEPTH = 0.70
+DUCK_ATTACK_S = 0.02
+DUCK_RELEASE_S = 0.18
+
 # The six the driver had enabled, with his gains and bands. Twenty more exist
 # in SimHub and were all off; porting them would be inventing a preference he
 # did not express.
 PORSCHE_RSR_17 = (
+    # **-2.5 dB.** "Rear tyre traction loss on acceleration a little strong",
+    # and the replay agrees: it is the only effect that reaches the sustained
+    # ceiling, peaking at 0.5000 on 9% of the lap. It stays the loudest thing
+    # in the mix - it should be, it is the one that says the car is sliding -
+    # but it no longer sets the ceiling on its own.
     EffectSpec("wheels_spin_lock", 70.00, 82.0, 108.0, noise=9.0,
-               threshold=14.0, min_force=28.0, gamma=1.60, input_gain=115.0),
+               threshold=14.0, min_force=28.0, gamma=1.60, input_gain=115.0,
+               felt_trim=0.75),
     # -20 dB of felt trim, and the number was arrived at twice.
     #
     # The first attempt compared gear's PEAK against the road's PEAK and
@@ -174,14 +189,30 @@ PORSCHE_RSR_17 = (
     # trimmed. 0.25 was too strong and 0.10 could not be felt at all, so the
     # answer is between: this sits nearer the quiet end, because a thump on
     # the peak carries further than the arithmetic suggests.
-    EffectSpec("gear", 39.87, 48.0, transient=True, felt_trim=0.16),
+    # **+11 dB, from 0.16.** Every previous trim here was fitted against a
+    # model that has since been measured and refuted, at an amplifier setting
+    # he has since moved, with the road bed sitting in the null where it could
+    # not compete. All three changed. Replayed over eight real laps, gear
+    # fired at -26.8 dBFS, 8.5 dB BELOW the road bed - "gear shift can't
+    # feel", and arithmetic rather than taste.
+    #
+    # 0.55 puts it 2.5 dB above the bed, and the ducking above gives it
+    # another 7 for the length of the thump. It reached 1.5x the bed at 0.25
+    # once and was called overpowered, which is why this is not simply set
+    # back there: the contrast now comes from the bed getting out of the way,
+    # not from the thump being large.
+    EffectSpec("gear", 39.87, 48.0, transient=True, felt_trim=0.55),
     # **Moved off the null.** His band was 112-152 Hz, which on the measured
     # response is 0.9 of 3 - the dead spot. The road bed is the thing he feels
     # most of the time and it was landing where this rig cannot deliver, which
     # is why the kerb boost riding on it vanished too. 86-104 puts it on the
     # upper peak and keeps it clear of wheel-spin above it.
+    # **-2 dB, because it is a different effect now.** Rescaling the texture
+    # curve took this from silent-or-full - on for 24% of the lap and pinned
+    # whenever it was - to a bed that is live for 95% and varies. Same peak,
+    # far more of it, so the same trim would be a louder rig overall.
     EffectSpec("wheels_rumble", 37.62, 86.0, 104.0, noise=12.0,
-               threshold=8.0, min_force=28.0, gamma=1.60),
+               threshold=8.0, min_force=28.0, gamma=1.60, felt_trim=0.80),
     # His `TractionLossContainer`, renamed to what it actually carries. The
     # gain, band, noise and filter are all still his; only the input changed,
     # from a saturating yaw-error model to lateral g.
@@ -190,17 +221,39 @@ PORSCHE_RSR_17 = (
     # in amplitude and fell in delivery - the signal partly cancelling itself
     # at the very moment it mattered. 44-56 keeps the whole range on the lower
     # peak, so more load is more felt all the way up.
+    # **-3 dB.** "A little strong", and it is live for 43% of the lap - more
+    # than anything else except the engine bed. It is also sitting on the
+    # strongest region this rig has, which the placement change handed it for
+    # free. Quieter, still the second loudest thing, and now getting out of
+    # the way when a kerb arrives.
     EffectSpec("lateral_load", 35.19, 44.0, 56.0, noise=6.0,
-               threshold=9.0, min_force=12.0, gamma=1.40),
+               threshold=9.0, min_force=12.0, gamma=1.40, felt_trim=0.70),
     # Raised off the bottom. 28-38 Hz measures 2.0-2.5 of 3, which is not bad
     # - but the kerb thump living here was a third the amplitude of the test
     # tone and could not be felt, and 40-52 is the strongest region this rig
     # has. Impacts are rare and want authority; kerbs want to be sharp.
+    # **+7 dB.** The kerb thump is the whole of this channel in practice, and
+    # it fired at -23.4 dBFS: 11.3 dB under the road bed and 7.6 dB under
+    # lateral load, which shares its region of the response. Two effects at
+    # once burying it, on one piston, in the same twelve hertz - "kerb thump I
+    # can't feel". His gain of 12.31 was set for genuine impacts, which are
+    # rare; the kerb strike is not rare and it is the one he wants.
     EffectSpec("wheels_impact", 12.31, 40.0, 52.0, noise=3.0, transient=True,
-               threshold=55.0, min_force=20.0, gamma=1.20),
+               threshold=55.0, min_force=20.0, gamma=1.20, felt_trim=2.20),
     # The RPM curve is drawn by hand in `effects.RPM_CURVE` and arrives here
     # already shaped, so it takes no gamma of its own.
-    EffectSpec("rpm", 9.52, 34.0, 42.0, noise=3.0),
+    #
+    # **+8 dB, and it is still the quietest thing in the mix.** Reported weak
+    # twice. Replayed, it sat at -27.4 dBFS for the whole lap - his own gain
+    # of 9.52 against wheel-spin's 70, faithfully carried over, and inaudible
+    # under everything else once the rest of the mix was working.
+    #
+    # Worth knowing before asking for more: his curve spans 36.91 to 63.06
+    # across the revs actually used, so this channel has only **4.6 dB of
+    # range in a whole lap** however loud it is made. It is a bed that firms
+    # up with revs, not a tachometer. Making it one means redrawing the curve,
+    # which is his to draw.
+    EffectSpec("rpm", 9.52, 34.0, 42.0, noise=3.0, felt_trim=2.50),
 )
 
 
@@ -417,6 +470,24 @@ class HapticMix:
             [spec.gain / loudest * transducer.SUSTAINED_CEILING
              * spec.felt_trim
              for spec in self.specs], dtype=np.float32)
+        # **How far the bed gets out of the way when an event fires.**
+        #
+        # With one piston every effect sums into one signal, so an event is
+        # only legible if it stands above whatever else is playing. Measured
+        # over eight of his laps, it did the opposite: the kerb thump fired
+        # 11.3 dB BELOW the road bed and 7.6 dB below lateral load - which
+        # occupies the same region of the response - and the gear thump 8.5 dB
+        # below the bed. Reported as "kerb thump I can't feel" and "gear shift
+        # can't feel", and no amount of gain on the events alone fixes it,
+        # because raising them raises what they have to beat as well when the
+        # limiter closes.
+        #
+        # So the sustained effects duck. Fast enough to be out of the way
+        # before a 90 ms thump has peaked, slow enough coming back that the
+        # recovery is not itself an event.
+        self._duck = 1.0
+        self._transient = np.array([spec.transient for spec in self.specs],
+                                   dtype=bool)
         self._dc_y = 0.0
         # Held rather than rebuilt: the DC correction is ramped across each
         # block, and `linspace` in a callback allocates.
@@ -437,10 +508,24 @@ class HapticMix:
         it has to outlive the call."""
         out = self._out[:n]
         out[:] = 0.0
+        shaped = np.array([voice.spec.shape(float(intensities[index]))
+                           for index, voice in enumerate(self._voices)],
+                          dtype=np.float32)
+
+        # The loudest transient asking to be heard, and how far the bed steps
+        # aside for it. One duck for the whole bed rather than one per pair:
+        # the driver feels the sum, not the effects.
+        event = float(shaped[self._transient].max()) if self._transient.any() else 0.0
+        aim = 1.0 - DUCK_DEPTH * event
+        seconds = n / float(self._rate)
+        tau = DUCK_ATTACK_S if aim < self._duck else DUCK_RELEASE_S
+        self._duck += (aim - self._duck) * min(1.0, seconds / tau)
+
         for index, voice in enumerate(self._voices):
-            shaped = voice.spec.shape(float(intensities[index]))
-            voice.render(out, shaped * self._scale[index] * self.master,
-                         shaped, n)
+            level = float(shaped[index]) * self._scale[index] * self.master
+            if not self._transient[index]:
+                level *= self._duck
+            voice.render(out, level, float(shaped[index]), n)
         self._block_dc(out, n)
         self._limit(out, n)
         if n:

@@ -80,7 +80,25 @@ PEDAL_ON = 0.02
 # Road texture, from how fast the suspension is moving rather than where it
 # is. Height alone is ride height plus load transfer; its rate of change is
 # the surface. Metres per second, per wheel, averaged.
-TEXTURE_FULL_MS = 0.35
+#
+# **Both numbers are measured** - 54,733 frames over eight of his own laps,
+# replayed by `tools/rig_levels.py`:
+#
+#     p10 0.0065   p50 0.0152   p90 0.0534   p99 0.3274
+#     p25 0.0096   p75 0.0273   p95 0.1061
+#
+# Full was 0.35 m/s, which is above the 99th percentile - so real tarmac
+# texture never registered at all, and the channel only ever spoke when the
+# kerb boost below pushed it over the threshold in one step. Measured, it was
+# silent for 76% of the lap and at FULL SCALE for the rest: p99 and peak were
+# the same number to four places. Reported from the seat as "road rumble, not
+# sure what this is showing" - it was showing kerbs, in binary.
+#
+# Onset at roughly the 20th percentile and full at the 91st gives a median of
+# 0.14 and a p90 of 0.87: quiet on a smooth surface, varying across most of
+# the lap, saturating on the 9% that genuinely is rough.
+TEXTURE_ONSET_MS = 0.008
+TEXTURE_FULL_MS = 0.060
 # His SimHub rumble had `MaxEffectSpeed 130`, so the effect reaches full
 # authority at 130 km/h and is scaled below it: the same bump at 40 km/h is
 # not the same event.
@@ -90,8 +108,13 @@ TEXTURE_FULL_SPEED_KPH = 130.0
 # a character per wheel - the one channel here that is genuinely measured
 # rather than modelled, and the one SimHub's GT7 support cannot see at all,
 # because it reads the base packet format only.
-KERB_BOOST = 0.70
-OFF_SURFACE_BOOST = 0.30
+# Lowered with the scale above. A kerb already reads 1.00 on its own once the
+# texture curve is set where the suspension actually moves - median velocity
+# on a kerb is 0.0856 m/s against 0.0152 on the road - so a boost of 0.70 was
+# not making kerbs strong, it was pinning the channel and throwing away the
+# difference between clipping one and climbing one.
+KERB_BOOST = 0.30
+OFF_SURFACE_BOOST = 0.20
 
 # **A kerb also gets a thump, separate from the rattle.**
 #
@@ -275,7 +298,7 @@ class EffectDeriver:
         if previous is None or dt <= 0:
             return 0.0
         speed = sum(abs(h - q) for h, q in zip(heights, previous)) / (4.0 * dt)
-        texture = _ramp(speed, 0.0, TEXTURE_FULL_MS)
+        texture = _ramp(speed, TEXTURE_ONSET_MS, TEXTURE_FULL_MS)
 
         # **The speed scaling belongs to the texture, not to the surface.**
         #
