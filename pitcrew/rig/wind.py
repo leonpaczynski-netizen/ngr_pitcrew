@@ -271,12 +271,36 @@ class WindLink:
     # ------------------------------------------------------------ protocol
 
     def _write(self, payload: bytes) -> None:
-        """One framed payload. Raises on a dead link; never closes the port."""
+        """One framed payload. Raises on a dead link; never closes the port.
+
+        **Always the broadcast id, and this is the fix for the fans stopping.**
+
+        Measured, and it is worth writing down because it was hunted across
+        four sessions and three wrong diagnoses. Sending sequential ids, the
+        fans stopped at frame 128 - which at four frames a second is 33.0
+        seconds, and the driver reported 33 seconds at 100% duty and 33
+        seconds again at 80%. Identical timing under different loads is not a
+        thermal limit and not a supply limit; it is a count.
+
+        Frame 128 is where the sequence wraps from 127 back to 0. The device
+        went on ACKNOWLEDGING every frame afterwards - zero resyncs, zero
+        unanswered - while the motors stayed dead, so the ARQ layer is
+        evidently treating a wrapped id as a packet it has already seen: it
+        acknowledges the duplicate and never hands the payload to the motors
+        handler. `lastRead` then stops advancing and the firmware's own
+        1000 ms deadman zeroes the channels. Permanently, because every frame
+        after the wrap looks just as old.
+
+        Id 255 is the broadcast the firmware accepts whatever it was
+        expecting - the resync escape hatch - so using it for every frame
+        sidesteps the sequence entirely. Nothing is lost by it: a fan value is
+        idempotent and superseded a quarter of a second later, so there is
+        nothing to retransmit and nothing worth de-duplicating.
+        """
         if self._serial is None:
             raise OSError("the port is not open")
-        frame = arq.build_frame(self._packet_id, payload, self.crc)
+        frame = arq.build_frame(arq.BROADCAST_ID, payload, self.crc)
         self._serial.write(frame)
-        self._packet_id = arq.next_id(self._packet_id)
 
     def _read_reply(self) -> arq.Reply | None:
         """One reply, read to its own length and no further.
@@ -333,7 +357,6 @@ class WindLink:
         """
         for variant in arq.CRC_VARIANTS:
             self.crc = variant
-            self._packet_id = arq.BROADCAST_ID
             try:
                 self._write(arq.hello_payload())
             except Exception as exc:                        # noqa: BLE001
@@ -407,9 +430,12 @@ class WindLink:
             return True
         # Rejected. Resynchronise on the broadcast id rather than carrying a
         # disagreement about sequence for the rest of the session.
+        # Every frame already goes out on the broadcast id, so there is no
+        # sequence left to resynchronise - a rejection here is a checksum or a
+        # length fault rather than a lost place. Counted and reported, because
+        # a link that keeps being rejected is not a healthy one.
         self.resyncs += 1
-        self._packet_id = arq.BROADCAST_ID
-        log("wind").info("%s %s - resynchronising", self.port, reply.describe())
+        log("wind").info("%s %s", self.port, reply.describe())
         return True
 
 

@@ -373,3 +373,43 @@ def test_the_deadband_applies_on_the_way_in():
 def test_the_measured_floor_is_far_below_what_simhub_was_set_to():
     """SimHub's MinGain was 29.76%. The fan starts at about 1.2%."""
     assert wind.MIN_MOVING_DUTY / 255 * 100 < 2.0
+
+
+# ------------------------------------------------ the frame that stopped them
+
+def test_every_frame_goes_out_on_the_broadcast_id():
+    """The fix for the fans stopping, and it took four sessions to find.
+
+    On sequential ids the fans died at frame 128 - which at four frames a
+    second is 33.0 seconds, and the driver reported 33 seconds at 100% duty
+    and 33 seconds again at 80%. Identical timing under two different loads is
+    not thermal and not a supply limit; it is a count. Frame 128 is where the
+    sequence wraps from 127 back to 0.
+
+    The device kept ACKNOWLEDGING after the wrap - zero resyncs, zero
+    unanswered - while the motors stayed dead, so the ARQ layer evidently
+    reads a wrapped id as a packet it has already seen: it acknowledges the
+    duplicate and never passes the payload to the motors handler. `lastRead`
+    stops advancing and the firmware's own deadman zeroes the channels.
+
+    Id 255 is the broadcast the firmware accepts whatever it expected. A fan
+    value is idempotent and superseded a quarter second later, so there is
+    nothing to retransmit and nothing worth de-duplicating.
+    """
+    fake = FakeSerial(speaks=arq.DEFAULT_CRC)
+    link = link_onto(fake)
+    for _ in range(200):
+        link.send((100, 100, 0, 0))
+    ids = {frame[2] for frame in fake.written}
+    assert ids == {arq.BROADCAST_ID}, (
+        f"the sequence is still being walked: saw ids {sorted(ids)[:8]}...")
+
+
+def test_the_sequence_never_wraps_because_it_is_never_used():
+    """Two hundred frames is well past where 128 would have bitten."""
+    fake = FakeSerial(speaks=arq.DEFAULT_CRC)
+    link = link_onto(fake)
+    for _ in range(200):
+        link.send((80, 80, 0, 0))
+    assert len(fake.written) == 200
+    assert all(frame[2] == arq.BROADCAST_ID for frame in fake.written)

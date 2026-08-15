@@ -171,18 +171,45 @@ def cmd_stress(args) -> int:
         values[wind.CHANNEL_RIGHT] = args.duty
         print(f"BOTH fans at {args.duty}/255 for {args.seconds:.0f}s.")
         print("Say the second they stop, and whether they come back.\n")
+        # **A timeline, because the number that matters is a frame, not a
+        # stopwatch reading.** Both fans stopped at 33 s at 100% duty and at
+        # 33 s again at 80% - and a thermal or current limit scales with load,
+        # so an identical duration at two different loads is not a load limit
+        # at all. Thirty-three seconds at this send rate is about 132 frames,
+        # which is close enough to the packet id wrapping at 128 to want the
+        # frame number and the device's own answers side by side.
         started = time.monotonic()
         marked = 0
+        timeline = []
+        frames = 0
         while True:
             elapsed = time.monotonic() - started
             if elapsed >= args.seconds:
                 break
+            before_resync = link.resyncs
+            before_unanswered = link.unanswered
             link.send(tuple(values))
-            if int(elapsed) >= marked + 10:
+            frames += 1
+            if (link.resyncs != before_resync
+                    or link.unanswered != before_unanswered
+                    or frames in (126, 127, 128, 129, 130, 131, 132, 133)):
+                timeline.append(
+                    f"    frame {frames:>4} at {elapsed:>6.1f}s  id "
+                    f"{link._packet_id:>3}  resyncs {link.resyncs}  "
+                    f"unanswered {link.unanswered}  stale {link.stale_bytes}")
+            if int(elapsed) >= marked + 5:
                 marked = int(elapsed)
-                print(f"  {marked:>3}s", flush=True)
+                print(f"  {marked:>3}s  frame {frames:>4}  "
+                      f"id {link._packet_id:>3}  resyncs {link.resyncs}  "
+                      f"unanswered {link.unanswered}", flush=True)
             time.sleep(wind.SEND_INTERVAL_S)
-        print(f"\nfinished {args.seconds:.0f}s. Did they run the whole time?")
+        print(f"\nfinished {args.seconds:.0f}s, {frames} frames.")
+        if timeline:
+            print("  events and the wrap window:")
+            for line in timeline:
+                print(line)
+        else:
+            print("  the device answered every single frame.")
         return 0
     finally:
         link.close()
