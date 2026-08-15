@@ -97,6 +97,25 @@ CHANNELS = 4
 CHANNEL_LEFT = 0
 CHANNEL_RIGHT = 1
 
+# The lowest duty that actually turns a fan, measured on this rig the same
+# way: 0 stopped it, 1 and 2 did nothing, 3 moved it. About 1.2% - some 25
+# times lower than the 29.76% `MinGain` SimHub was configured with, which was
+# therefore a comfort setting and not a physical floor.
+#
+# **1 and 2 are worse than useless, and that is why this is a deadband rather
+# than a floor.** The firmware runs `RELEASE` on zero and `FORWARD` on
+# anything else, so a duty of 1 energises a motor that cannot overcome its own
+# stiction: current, heat, no air. Values below the threshold snap to off
+# rather than being passed through or quietly raised to something audible the
+# driver did not ask for.
+MIN_MOVING_DUTY = 3
+
+
+def snap_duty(value: int) -> int:
+    """A duty the fan can act on: off, or moving. Never stalled."""
+    value = max(0, min(255, int(value)))
+    return 0 if value < MIN_MOVING_DUTY else value
+
 
 @dataclass
 class WindState:
@@ -314,8 +333,7 @@ class WindSim:
         seconds ago describes a corner the driver has already left, and
         replaying it faithfully is worse than skipping it.
         """
-        clamped = tuple(
-            max(0, min(255, int(v))) for v in values[:self._channels])
+        clamped = tuple(snap_duty(v) for v in values[:self._channels])
         padded = clamped + tuple([0] * (self._channels - len(clamped)))
         with self._lock:
             self._wanted = padded

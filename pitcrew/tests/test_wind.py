@@ -344,3 +344,32 @@ def test_channel_zero_is_the_left_fan_and_one_is_the_right():
 
 def test_a_missing_device_is_backed_off_rather_than_polled_all_session():
     assert wind.RECONNECT_MAX_S > wind.RECONNECT_S
+
+
+def test_a_duty_below_the_start_threshold_is_off_rather_than_stalled():
+    """Measured on the rig: 0 stopped the fan, 1 and 2 did nothing, 3 moved
+    it. The firmware runs RELEASE on zero and FORWARD on anything else, so a
+    duty of 1 energises a motor that cannot turn - current and heat, no air.
+    """
+    assert wind.snap_duty(0) == 0
+    assert wind.snap_duty(1) == 0
+    assert wind.snap_duty(2) == 0
+    assert wind.snap_duty(wind.MIN_MOVING_DUTY) == wind.MIN_MOVING_DUTY
+    assert wind.snap_duty(200) == 200
+
+
+def test_the_deadband_never_raises_a_value_the_driver_did_not_ask_for():
+    """Snapping up to the threshold would be wind he did not request. Off is
+    the honest answer to "less than this fan can do"."""
+    assert wind.snap_duty(2) != wind.MIN_MOVING_DUTY
+
+
+def test_the_deadband_applies_on_the_way_in():
+    sim = wind.WindSim()
+    sim.set_output((2, 200, 0, 0))
+    assert sim._wanted == (0, 200, 0, 0)
+
+
+def test_the_measured_floor_is_far_below_what_simhub_was_set_to():
+    """SimHub's MinGain was 29.76%. The fan starts at about 1.2%."""
+    assert wind.MIN_MOVING_DUTY / 255 * 100 < 2.0
