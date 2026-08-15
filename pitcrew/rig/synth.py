@@ -335,6 +335,10 @@ class HapticMix:
         self._ramp01 = np.linspace(0.0, 1.0, block, dtype=np.float32)
         self._corr = np.zeros(block, dtype=np.float32)
         self.limited_blocks = 0
+        # The loudest sample rendered since anyone last asked. Read and reset
+        # by the health check, which needs to know whether we were producing
+        # anything before it can call the card silent.
+        self._recent_peak = 0.0
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -350,7 +354,15 @@ class HapticMix:
             voice.render(out, shaped * self._scale[index] * self.master, n)
         self._block_dc(out, n)
         self._limit(out, n)
+        if n:
+            self._recent_peak = max(self._recent_peak,
+                                    float(np.max(np.abs(out[:n]))))
         return out
+
+    def take_recent_peak(self) -> float:
+        """The loudest thing rendered since this was last called."""
+        peak, self._recent_peak = self._recent_peak, 0.0
+        return peak
 
     def _block_dc(self, out: np.ndarray, n: int) -> None:
         """Remove any standing offset. A sustained one is excursion that never

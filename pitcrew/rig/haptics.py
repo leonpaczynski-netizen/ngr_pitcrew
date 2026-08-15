@@ -103,6 +103,16 @@ class HapticsEngine:
         """
         self._mix.master = max(0.0, min(4.0, float(gain)))
 
+    def take_recent_peak(self) -> float:
+        """The loudest sample rendered since this was last asked.
+
+        Half of the only question worth asking about a transducer: did WE
+        produce a signal? The other half - did the card render it - is
+        `endpoint_meter`, and the two together are what separate a quiet lap
+        from a dead device.
+        """
+        return self._mix.take_recent_peak()
+
     def silence(self) -> None:
         self._wanted[:] = 0.0
         self._generation += 1

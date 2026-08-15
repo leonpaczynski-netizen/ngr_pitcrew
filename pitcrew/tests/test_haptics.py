@@ -333,3 +333,30 @@ def test_a_session_boundary_clears_the_state_behind_the_effects():
     assert bridge.effects._prev_velocity is not None
     bridge.reset()
     assert bridge.effects._prev_velocity is None
+
+
+# ------------------------------------------- noticing a card that plays none
+
+def test_the_mix_reports_what_it_actually_rendered():
+    """Half of the only question worth asking about a transducer. The other
+    half is the endpoint's own meter, and the two together are what separate
+    a quiet lap from a dead device."""
+    engine = _engine()
+    assert engine.take_recent_peak() == 0.0
+    _pump_live(engine, 40)
+    peak = engine.take_recent_peak()
+    assert peak > 0.01, "it rendered nothing to report"
+    assert engine.take_recent_peak() == 0.0, "the peak was not reset"
+
+
+def test_a_silent_lap_is_not_mistaken_for_a_dead_transducer():
+    """A driver crawling out of the pits produces almost nothing. Asking the
+    card whether it played that would prove nothing either way, so the check
+    only fires when we know we were loud."""
+    from pitcrew.controller import PitCrewController
+
+    engine = _engine()
+    for _ in range(40):
+        engine.set_intensities([0.0] * len(engine._specs))
+        _pump(engine, 1)
+    assert engine.take_recent_peak() < PitCrewController._AUDIBLE_PEAK

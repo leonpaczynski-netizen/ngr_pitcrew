@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import sqlite3
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -1752,6 +1753,63 @@ class PitCrewController(QObject):
                 return float(capacity)
         return None
 
+    # A rendered peak below this is a quiet moment, not a signal, and asking
+    # the card whether it played it would prove nothing either way.
+    _AUDIBLE_PEAK = 0.02
+
+    def _check_transducer_is_heard(self, haptics) -> None:
+        """Did the card play what we rendered, or only accept it?
+
+        **This session is why.** The log read `blocks 10767 · fades 0 ·
+        running True` for a whole lap while the transducer produced nothing at
+        all - the app synthesised, the card took every sample, and the driver
+        felt none of it. Windows reported the device present, allowed,
+        unmuted, at volume 50, and its own test tone was silent on it too, so
+        the fault was the hardware. But nothing in here said so: every
+        indicator was green for a device rendering silence.
+
+        That is precisely the failure `endpoint_meter` exists to catch, and it
+        was only ever wired to the settings-screen test button - the one place
+        the driver is not looking while racing.
+
+        Two halves make the claim: `take_recent_peak` says whether WE produced
+        a signal, and the endpoint's own meter says whether the card rendered
+        one. Loud in and nothing out is a dead transducer, and nothing else
+        looks like that.
+
+        Runs on its own thread. The meter needs a few hundred milliseconds to
+        say anything, and spending that on the Qt thread would be a visible
+        stutter every ten seconds of a race.
+        """
+        produced = haptics.take_recent_peak()
+        if produced < self._AUDIBLE_PEAK:
+            return
+        device = self.settings.haptics_device or transducer.DEVICE_NAME
+
+        def ask() -> None:
+            from pitcrew.engineer import endpoint_meter
+
+            try:
+                heard = endpoint_meter.poll_briefly(device, seconds=0.4)
+            except Exception as exc:                        # noqa: BLE001
+                log("haptics").debug("could not read the endpoint: %s", exc)
+                return
+            if heard > endpoint_meter.SILENT_PEAK:
+                return
+            # Deliberately an error rather than a warning. The driver cannot
+            # see this screen, and a transducer that is accepting audio and
+            # playing none of it is indistinguishable from a working one by
+            # every other measure the app has.
+            log("haptics").error(
+                "the transducer rendered a peak of %.3f here and %s metered "
+                "nothing - it is accepting the audio and playing none of it. "
+                "Check the amplifier is on and out of protection; Windows "
+                "will still report the device as healthy.",
+                produced, device)
+
+        threading.Thread(target=ask, name="PitCrewHapticsMeter",
+                         daemon=True).start()
+
     def _report_rig(self) -> None:
         """Write down what the outputs are actually doing, once every so often.
 
@@ -1771,6 +1829,7 @@ class PitCrewController(QObject):
                 "blocks %d · fades %d · limited %d · running %s",
                 haptics.callbacks, haptics.faded_out,
                 haptics._mix.limited_blocks, haptics.running)
+            self._check_transducer_is_heard(haptics)
         wind = self.bridge.wind
         if wind is not None and getattr(wind, "state", None) is not None:
             state = wind.state
