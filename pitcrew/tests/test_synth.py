@@ -298,3 +298,37 @@ def test_compression_is_counted_so_a_squashed_mix_can_be_seen():
         calm.render(_full(calm, 0.3), BLOCK)
     assert hot.limited_blocks > calm.limited_blocks
     assert calm.limited_blocks == 0
+
+
+def test_the_gear_thump_is_trimmed_for_its_frequency():
+    """Reported twice from the seat as far too strong, and once as tripping
+    the amplifier's protection at a master of 1 with the amp at 35.
+
+    His gains are not comparable across frequencies and I read them as though
+    they were. Piston excursion falls as 1/f-squared above resonance, so the
+    same amplitude at 48 Hz moves the transducer far further than at 132 Hz:
+    measured, the gear thump was felt 8.3 times more strongly than the road
+    rumble while sitting at almost identical amplitude. A large low-frequency
+    excursion is also what an amplifier goes into protection over.
+    """
+    gear = {s.name: s for s in PORSCHE_RSR_17}["gear"]
+    assert gear.gain == 39.87, "his own number must stay visible"
+    assert gear.felt_trim < 1.0, "the correction belongs in the trim"
+
+    mix = HapticMix(block=BLOCK)
+    def felt(name: str) -> float:
+        spec = {s.name: s for s in mix.specs}[name]
+        centre = spec.freq_lo if not spec.freq_hi else (
+            spec.freq_lo + spec.freq_hi) / 2
+        return float(mix._scale[mix.names.index(name)]) / centre ** 2
+
+    ratio = felt("gear") / felt("wheels_rumble")
+    assert ratio < 3.0, (
+        f"a gear shift is still felt {ratio:.1f}x the road - it rattles the "
+        f"rig and trips the amp")
+    assert ratio > 1.0, "a shift should still stand out over the road"
+
+
+def test_an_impossible_trim_is_refused():
+    with pytest.raises(ValueError, match="felt trim"):
+        EffectSpec("bad", 50.0, 40.0, 60.0, felt_trim=0.0)

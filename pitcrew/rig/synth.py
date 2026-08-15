@@ -88,6 +88,23 @@ class EffectSpec:
     min_force: float = 0.0
     gamma: float = 1.0
     input_gain: float = 100.0
+    # **A correction for frequency, kept separate from his gain on purpose.**
+    #
+    # SimHub's gains are not comparable across frequencies, and reading them
+    # as though they were is what made gear shifts rattle the whole rig and
+    # trip the amplifier's protection at a master of 1 with the amp at 35.
+    #
+    # Piston excursion falls as 1/f-squared above resonance, so the same
+    # amplitude at 48 Hz moves the transducer far further than at 132 Hz.
+    # Measured on this profile: the gear thump is felt 8.3 times more strongly
+    # than the road rumble despite sitting at almost identical amplitude. A
+    # large low-frequency excursion is also precisely what an amplifier goes
+    # into protection over.
+    #
+    # His gain stays exactly as he tuned it - that is the provenance and it is
+    # worth keeping visible - and this carries the correction, so "gear is too
+    # strong" has one number to change and it is obvious which.
+    felt_trim: float = 1.0
     # A transient may use the headroom above the sustained ceiling. That
     # reserve is what makes a gear shift read as an event over the road bed
     # rather than as the bed briefly getting louder - on one piston, with
@@ -111,6 +128,9 @@ class EffectSpec:
         if not 0.0 <= self.min_force <= 100.0:
             raise ValueError(
                 f"{self.name}: minimum force {self.min_force} is not 0-100")
+        if not 0.0 < self.felt_trim <= 4.0:
+            raise ValueError(
+                f"{self.name}: felt trim {self.felt_trim} is not 0-4")
 
     def shape(self, intensity: float) -> float:
         """The driver's own gain chain: threshold, gamma, then minimum force.
@@ -139,7 +159,11 @@ class EffectSpec:
 PORSCHE_RSR_17 = (
     EffectSpec("wheels_spin_lock", 70.00, 82.0, 108.0, noise=9.0,
                threshold=14.0, min_force=28.0, gamma=1.60, input_gain=115.0),
-    EffectSpec("gear", 39.87, 48.0, transient=True),
+    # -12 dB of felt trim. At 48 Hz this thump was 8.3 times more felt than
+    # the road rumble at nearly the same amplitude, reported twice from the
+    # seat as far too strong and once as tripping the amp's protection. His
+    # 39.87 is untouched; the trim carries the correction.
+    EffectSpec("gear", 39.87, 48.0, transient=True, felt_trim=0.25),
     EffectSpec("wheels_rumble", 37.62, 112.0, 152.0, noise=12.0,
                threshold=8.0, min_force=28.0, gamma=1.60),
     EffectSpec("traction_loss", 35.19, 52.0, 70.0, noise=6.0,
@@ -341,6 +365,7 @@ class HapticMix:
         loudest = max(spec.gain for spec in self.specs) or 100.0
         self._scale = np.array(
             [spec.gain / loudest * transducer.SUSTAINED_CEILING
+             * spec.felt_trim
              for spec in self.specs], dtype=np.float32)
         self._dc_y = 0.0
         # Held rather than rebuilt: the DC correction is ramped across each
