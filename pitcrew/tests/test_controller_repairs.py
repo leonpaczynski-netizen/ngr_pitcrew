@@ -216,3 +216,34 @@ def test_a_screen_that_throws_does_not_leave_a_session_running(qt_app, store):
         assert controller.listener is None, "a listener was left running"
     finally:
         controller.shutdown()
+
+
+# ------------------------------------------------- the lap that never happened
+
+def test_a_fragment_is_not_recorded_as_a_lap(qt_app, store):
+    """Two laps driven, three recorded.
+
+    The third carried 192 frames - 3.2 seconds - while claiming lap two's time
+    of 110,174 ms, and its end-of-lap clock was EARLIER than its start. GT7's
+    `last_lap_ms` still held the previous lap when the boundary fired on the
+    way out of the session, so a fragment inherited a whole lap's time.
+
+    A phantom lap lands on the rack, in the best-lap comparison, in the
+    degradation fit and in the stint count, and looks exactly like a real lap
+    that happened to match the one before it. Excluded rather than dropped,
+    because doubtful evidence is quarantined and labelled, never deleted.
+    """
+    from pitcrew.controller import _LAP_FRAGMENT_FRACTION
+
+    # 3.2 s of frames against a claimed 110 s is 2.9% - far under the bar.
+    assert 192 / 60.0 < 110.174 * _LAP_FRAGMENT_FRACTION
+    # A real lap that lost some frames to a stream gap still clears it.
+    assert 6610 / 60.0 > 110.174 * _LAP_FRAGMENT_FRACTION
+
+
+def test_the_bar_is_generous_enough_for_a_lap_that_lost_packets(qt_app):
+    """A genuine lap can lose frames to a stream gap and still be worth
+    keeping. Only a fragment inheriting another lap's time comes in low."""
+    from pitcrew.controller import _LAP_FRAGMENT_FRACTION
+
+    assert 0.2 <= _LAP_FRAGMENT_FRACTION <= 0.8

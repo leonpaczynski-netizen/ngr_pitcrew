@@ -92,6 +92,11 @@ STALE_AFTER_S = 3.0
 # frames is a hiccup that costs a few centimetres of integrated lap distance;
 # a whole second of stream is a corner window in the wrong place.
 _LOST_PACKET_BUDGET = 30
+# How much of its claimed duration a lap must actually carry in frames before
+# it is believed. Generous, because a genuine lap can lose frames to a stream
+# gap and still be worth keeping; a fragment inheriting the previous lap's
+# time comes in at a few per cent.
+_LAP_FRAGMENT_FRACTION = 0.5
 # One GT7 frame. The rig outputs are slew-limited in real time rather than in
 # packets, so they need a duration; the stream's own 59.88 Hz is close enough
 # to nominal that using the constant costs nothing a fan could express.
@@ -1565,6 +1570,35 @@ class PitCrewController(QObject):
         if self.session_id is None:
             return
         frames = self.bridge.recorder.encode(rows)
+
+        # **A lap has to have been driven for as long as it says it was.**
+        #
+        # Observed: two laps driven, three recorded. The third carried 192
+        # frames - 3.2 seconds - while claiming lap two's time of 110,174 ms,
+        # and its end-of-lap clock was EARLIER than its start. GT7's
+        # `last_lap_ms` still held the previous lap when the boundary fired on
+        # the way out of the session, so a fragment inherited a whole lap's
+        # time.
+        #
+        # A phantom lap is not a cosmetic problem. It lands on the rack, in
+        # the best-lap comparison, in the degradation fit and in the stint
+        # count, and it looks exactly like a real lap that happened to match
+        # the one before it.
+        #
+        # Excluded rather than dropped: CLAUDE.md's rule throughout is that
+        # doubtful evidence is quarantined and labelled, never deleted, so the
+        # frames stay on disk and the reason is on the record.
+        fragment = False
+        if frames is not None and lap.lap_time_ms:
+            recorded_s = frames.frame_count / max(1.0, frames.sample_hz)
+            claimed_s = lap.lap_time_ms / 1000.0
+            fragment = recorded_s < claimed_s * _LAP_FRAGMENT_FRACTION
+            if fragment:
+                log("session").warning(
+                    "lap %s carries %.1fs of frames against a claimed %.1fs - "
+                    "recording it as a fragment rather than a lap",
+                    lap.lap_num, recorded_s, claimed_s)
+
         if frames is not None:
             # Taken while the rows are still uncompressed and in hand. The
             # alternative is decoding the blob back out every time the rack
@@ -1589,6 +1623,11 @@ class PitCrewController(QObject):
                 f"({self._store_errors} so far this run). See logs/pitcrew.log.",
                 warn=True)
             return
+        if fragment:
+            # Marked after the insert rather than carried on the `Lap` record,
+            # which has no such field - `Lap` is what GT7 said, and this is
+            # what we make of it.
+            self.store.exclude_lap(lap_id, "fragment")
         self.refresh_nav_state()
         # Race laps belong to the race session, not to the practice rack.
         # They were pushed on here numbered as a continuation of the practice
