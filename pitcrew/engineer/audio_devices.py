@@ -252,7 +252,60 @@ def _host_api_names(sd) -> dict[int, str]:
             for i, api in enumerate(sd.query_hostapis())}
 
 
-def _candidates(sd, device: object | None, kind: str) -> list:
+def open_exclusive_output(device: object, samplerate: int, *,
+                          channels: int = 2, dtype: str = "float32",
+                          blocksize: int = 0, callback=None):
+    """A stream that owns its card outright, or a refusal. No middle ground.
+
+    For the tactile transducer, where "isolated from everything else the PC is
+    doing" is a requirement rather than a preference. Three things follow from
+    exclusive mode and all three are the point:
+
+    * **Nothing else can open the endpoint while this is held.** A stray
+      notification cannot arrive through the driver's seat.
+    * **The Windows audio engine is bypassed**, and with it every APO. Bass
+      Management redirects everything below its crossover, Loudness
+      Equalization compresses the dynamics, and both would quietly ruin a
+      signal whose whole content is 25-120 Hz.
+    * **The endpoint's volume slider stops applying**, which removes one of
+      the two gain stages between the app and the piston.
+
+    **It will not fall back to another host API, deliberately.** Exclusive
+    mode exists only under WASAPI. `_open_first_that_works` walks down to MME
+    on a refusal, which for the voice is right - a call out of the wrong
+    speaker beats no call - but here it would silently hand back a *shared*
+    stream on the very endpoint the caller asked to have to itself. Every
+    Windows sound would then arrive through the transducer, which is the exact
+    thing this function is for. So a refusal is raised.
+    """
+    import sounddevice as sd
+
+    if device is None:
+        # "The default device" is the one thing this must not accept. The
+        # default is wherever Windows is sending everything else, and taking
+        # exclusive ownership of it would mute the machine.
+        raise ValueError(
+            "a transducer has to be named. Opening the system default "
+            "exclusively would take the card everything else is playing "
+            "through.")
+
+    with _ENUMERATE_LOCK:
+        routes = _candidates(sd, device, "output", host_api="Windows WASAPI")
+        if not routes:
+            raise RuntimeError(
+                f"{describe(device)} has no WASAPI endpoint on this machine, "
+                f"so it cannot be opened exclusively. Sharing it would let "
+                f"every other sound on the PC through it.")
+        stream = sd.OutputStream(
+            samplerate=samplerate, channels=channels, dtype=dtype,
+            device=routes[0], blocksize=blocksize, callback=callback,
+            extra_settings=sd.WasapiSettings(exclusive=True))
+        stream.start()
+        return stream
+
+
+def _candidates(sd, device: object | None, kind: str,
+                host_api: str | None = None) -> list:
     """Every route to the chosen card, best first.
 
     None stays None - that is PortAudio's own default, which is re-resolved
@@ -278,9 +331,17 @@ def _candidates(sd, device: object | None, kind: str) -> list:
         if endpoint_key(info.get("name", "")) != wanted:
             continue
         api = apis.get(info.get("hostapi"), "")
+        # A caller that needs one specific route - exclusive mode exists only
+        # under WASAPI - gets that route or nothing. Falling through to
+        # another host API would quietly give it a stream with different
+        # properties from the ones it asked for.
+        if host_api is not None and api != host_api:
+            continue
         rank = (_HOST_API_ORDER.index(api) if api in _HOST_API_ORDER
                 else len(_HOST_API_ORDER))
         found.append((rank, index))
+    if host_api is not None:
+        return [index for _rank, index in sorted(found)]
     if not found:
         log("audio").warning(
             "no %s device matching %r on this machine - using the default",

@@ -320,3 +320,48 @@ def test_one_card_reached_by_two_names_is_one_lock():
 
 def test_the_default_device_has_a_lock_of_its_own():
     assert audio_devices.lock_for(None) is audio_devices.lock_for(None)
+
+
+# ------------------------------------------- keeping the transducer to itself
+
+def test_an_exclusive_open_uses_wasapi_and_refuses_to_fall_back(monkeypatch):
+    """Exclusive mode exists only under WASAPI, and the ordinary open walks
+    down to MME when a route refuses.
+
+    For the voice that is right - a call out of the wrong speaker beats no
+    call. For the transducer it would hand back a *shared* stream on the very
+    endpoint the caller asked to have to itself, and every Windows sound would
+    then arrive through the driver's seat. So it raises instead.
+    """
+    sd = _machine()
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", sd)
+    routes = audio_devices._candidates(
+        sd, "Headphones (JBL Endurance Run 3C)", "output",
+        host_api="Windows WASAPI")
+    assert routes == [JBL_WASAPI], "took a route that is not WASAPI"
+
+
+def test_a_card_with_no_wasapi_route_is_refused_not_shared(monkeypatch):
+    """Silently sharing would be the worst outcome: it looks like success."""
+    sd = _machine()
+    routes = audio_devices._candidates(
+        sd, "Speakers (2- Realtek(R) Audio)", "output",
+        host_api="Windows NoSuchApi")
+    assert routes == []
+
+
+def test_the_system_default_cannot_be_taken_exclusively():
+    """The default is where everything else on the PC is playing. Taking it
+    exclusively would mute the machine."""
+    with pytest.raises(ValueError, match="named"):
+        audio_devices.open_exclusive_output(None, 48000)
+
+
+def test_the_ordinary_open_still_walks_every_route(monkeypatch):
+    """The exclusive path must not have changed how the voice behaves - it
+    still wants any route that plays."""
+    sd = _machine()
+    routes = audio_devices._candidates(
+        sd, "Headphones (JBL Endurance Run 3C)", "output")
+    assert len(routes) > 1
+    assert routes[0] == JBL_WASAPI
