@@ -15,9 +15,12 @@ the CRC polynomial - could not be verified at all.
 
 That is why `CRC_VARIANTS` is a list and not a number. The device answers a
 bad checksum with `NACK` reason 4, which names the fault precisely, so the
-handshake tries candidates until one is acknowledged and the answer becomes
-*measured* rather than assumed. A protocol constant nobody can verify is not
-the same as a protocol constant nobody can determine.
+handshake tries candidates until one is acknowledged. A protocol constant
+nobody can verify is not the same as a protocol constant nobody can
+determine - and asking the device settled it in one connection: it speaks
+**DVB-S2**, having rejected the three more obvious candidates first. That
+answer is now measured, and the probe stays because it was measured on one
+board and a reflash could change it.
 
 What is verified, from `DisplayClientV2.ino` in the repo:
 
@@ -111,15 +114,28 @@ class CrcVariant:
         return crc
 
 
-# Ordered by how likely each is to be the one, best first. Dallas/Maxim is
-# what avr-libc's `_crc_ibutton_update` computes and what almost every Arduino
-# project reaches for, which is the whole reason it leads.
+# **DVB-S2 leads because the device said so.** Asked on 15 Aug 2026, the
+# Redion on COM5 rejected Dallas/Maxim, CRC-8/ATM and SAE-J1850 in turn - each
+# with NACK reason 4, "checksum did not match" - and acknowledged DVB-S2. That
+# rejection pattern is itself the proof the framing is right: the firmware
+# parsed all four frames well enough to say precisely what was wrong with the
+# first three.
+#
+# Worth dwelling on, because it is the reason this is a list. Dallas/Maxim is
+# what avr-libc's `_crc_ibutton_update` computes and what nearly every Arduino
+# project reaches for, so it is what a reasonable person would have hardcoded
+# after losing the firmware source - and it would have silently driven nothing
+# at all.
+#
+# The others stay, and the probe stays, because this was measured on one
+# device and a reflash or a replacement board could answer differently.
 CRC_VARIANTS: tuple[CrcVariant, ...] = (
+    CrcVariant("crc8-dvb-s2", 0xD5, reflected=False),
     CrcVariant("dallas-maxim", 0x8C, reflected=True),
     CrcVariant("crc8-atm", 0x07, reflected=False),
     CrcVariant("crc8-sae-j1850", 0x1D, reflected=False),
-    CrcVariant("crc8-dvb-s2", 0xD5, reflected=False),
 )
+# The one this rig speaks. Still probed rather than assumed at connect time.
 DEFAULT_CRC = CRC_VARIANTS[0]
 
 

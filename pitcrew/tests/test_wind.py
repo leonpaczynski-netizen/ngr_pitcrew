@@ -1,11 +1,12 @@
 """The wind simulator's framing and its link, without an Arduino.
 
 The device is a Sector 17 / Redion WSP whose firmware source SimHub deleted on
-its way out, so the framing here is reconstructed and one constant - the CRC
-polynomial - could not be verified at all. These tests pin the shape of the
-protocol and, more importantly, prove the two behaviours that exist precisely
-because of that uncertainty: the handshake determines the checksum by asking
-the device, and a write failure never closes the port from inside the write.
+its way out, so the framing here is reconstructed and the CRC polynomial could
+not be read off anything. It was recovered by asking the board instead - see
+`test_the_measured_checksum_is_tried_first`. These tests pin the shape of the
+protocol and, more importantly, the two behaviours that exist because of that
+uncertainty: the handshake determines the checksum rather than assuming it,
+and a write failure never closes the port from inside the write.
 
 Nothing here opens a serial port.
 """
@@ -310,3 +311,36 @@ def test_shutdown_joins_the_thread(monkeypatch):
     assert thread is not None
     assert not thread.is_alive()
     assert threading.active_count() >= 1
+
+
+# ------------------------------------------------------ measured on the rig
+
+def test_the_measured_checksum_is_tried_first():
+    """Asked of the Redion on COM5, 15 Aug 2026: it rejected Dallas/Maxim,
+    CRC-8/ATM and SAE-J1850 - each with NACK reason 4 - and acknowledged
+    DVB-S2. Dallas/Maxim is what a reasonable person would have hardcoded,
+    and it would have driven nothing at all."""
+    assert arq.DEFAULT_CRC.name == "crc8-dvb-s2"
+    assert arq.DEFAULT_CRC.polynomial == 0xD5
+    assert arq.DEFAULT_CRC.reflected is False
+    assert arq.CRC_VARIANTS[0] is arq.DEFAULT_CRC
+
+
+def test_the_alternatives_are_kept_so_another_board_can_still_be_found():
+    """One device was measured. A reflash or a replacement could differ."""
+    assert len(arq.CRC_VARIANTS) >= 4
+    assert {v.name for v in arq.CRC_VARIANTS} >= {"dallas-maxim", "crc8-atm"}
+
+
+def test_channel_zero_is_the_left_fan_and_one_is_the_right():
+    """Established by driving one channel at a time and having the driver say
+    which moved, seen from the cockpit. Nothing recorded it: SimHub's config
+    said only that roles 2 and 3 mapped onto the first two channels."""
+    assert wind.CHANNEL_LEFT == 0
+    assert wind.CHANNEL_RIGHT == 1
+    payload = arq.motors_payload([200, 0, 0, 0])
+    assert payload[3 + wind.CHANNEL_LEFT] == 200, "left is not channel 0"
+
+
+def test_a_missing_device_is_backed_off_rather_than_polled_all_session():
+    assert wind.RECONNECT_MAX_S > wind.RECONNECT_S

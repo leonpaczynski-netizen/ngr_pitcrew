@@ -69,16 +69,33 @@ WRITE_TIMEOUT_S = 0.25
 READ_TIMEOUT_S = 0.15
 # How long to wait after opening before talking, so the bootloader is done.
 # The Uno's Optiboot window is about a second.
+#
+# **Opening the port does NOT spin the fans up.** Measured on this rig,
+# 15 Aug 2026: the port was opened with DTR held low and held for six seconds
+# with the driver listening, and neither fan moved. That was the open question
+# this layer was built most defensively around, and the answer is the good
+# one - there is no startup blast to design around, and no reason to fear the
+# app being started with a headset already on.
 RESET_SETTLE_S = 1.6
-# How often to retry a dead link. Windows can hand back a different COM
-# number after a replug, so discovery runs again each time rather than
-# reusing the old one.
+# How often to retry a dead link, backing off to the cap so a device that is
+# unplugged is not polled at a steady rate all session. Discovery runs again
+# each time rather than reusing the old port - Windows can hand back a
+# different COM number after a replug.
 RECONNECT_S = 2.0
+RECONNECT_MAX_S = 30.0
 
 # This device declares four, though only two fans are wired. All four bytes go
 # every time: the firmware reads exactly `motorCount()` of them with no
 # framing, so a short write leaves it waiting mid-command.
 CHANNELS = 4
+
+# Measured on the rig, 15 Aug 2026, by driving one channel at a time and
+# having the driver say which fan moved. Seen from the cockpit. Nothing
+# recorded this: `WindSettings.json` said only that roles 2 and 3 mapped onto
+# the first two channels, and neither SimHub's role numbering nor the
+# firmware's channel order says which side that is.
+CHANNEL_LEFT = 0
+CHANNEL_RIGHT = 1
 
 
 @dataclass
@@ -172,7 +189,7 @@ class WindLink:
         handle.open()
         self._serial = handle
         # Even with DTR held low a freshly enumerated board may still be in
-        # its bootloader, and bytes sent into that are lost rather than
+        # its bootloader, and bytes sent into that are discarded rather than
         # queued.
         time.sleep(RESET_SETTLE_S)
         handle.reset_input_buffer()
@@ -329,17 +346,28 @@ class WindSim:
     # -------------------------------------------------------------- thread
 
     def _run(self) -> None:
-        """Own the link, keep it fed, and rebuild it when it dies."""
+        """Own the link, keep it fed, and rebuild it when it dies.
+
+        The link is opened once and held. Re-opening a serial port to send
+        four bytes would be wasteful even if it were harmless, and it resets
+        the board every time.
+        """
+        backoff = RECONNECT_S
         while not self._stop.is_set():
             if self._link is None and not self._connect():
-                # Nothing to talk to. Wait rather than spin, and try
-                # discovery again - the COM number can change across a replug.
-                self._stop.wait(RECONNECT_S)
+                # Nothing to talk to. Back off rather than poll a missing
+                # device at a steady rate for the whole session, and run
+                # discovery again each time - the COM number can change
+                # across a replug.
+                self._stop.wait(backoff)
+                backoff = min(backoff * 2, RECONNECT_MAX_S)
                 continue
             if not self._send_once():
                 self._drop_link()
                 self._stop.wait(RECONNECT_S)
+                backoff = RECONNECT_S
                 continue
+            backoff = RECONNECT_S
             self._stop.wait(SEND_INTERVAL_S)
         self._drop_link()
 
