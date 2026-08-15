@@ -728,6 +728,13 @@ class PracticeScreen(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.scroller.horizontalScrollBar().valueChanged.connect(
             self.head_view.horizontalScrollBar().setValue)
+        # Where he was looking, held across a rebuild. As a fraction, because
+        # a rebuild can change the height it is a fraction of - striking a lap
+        # can end a stint, and a stint header is a row's worth of pixels
+        # appearing above him.
+        self._pending_scroll: tuple[float, int] | None = None
+        self.scroller.verticalScrollBar().rangeChanged.connect(
+            self._scroll_range_changed)
 
         self.rack = QWidget()
         self.rack_layout = QVBoxLayout(self.rack)
@@ -870,6 +877,21 @@ class PracticeScreen(QWidget):
         return list(self._rows)
 
     def _rebuild_rack(self) -> None:
+        # **Keep his place on the rack.** Every row widget below is destroyed
+        # and built again, so the scroll area's contents briefly have no
+        # height and the bar is clamped back to the top. Tagging a compound or
+        # striking a lap goes through here, which meant marking up lap 14 of a
+        # long session threw him back to lap 1 - once per mark.
+        #
+        # Saved as a fraction rather than as pixels because a rebuild can
+        # change the height it is a fraction of: striking a lap can end a
+        # stint, and a stint header is a row's worth of pixels appearing above
+        # where he was looking.
+        bar = self.scroller.verticalScrollBar()
+        if bar.maximum():
+            self._pending_scroll = (bar.value() / bar.maximum(),
+                                    self.scroller.horizontalScrollBar().value())
+
         # **`rack_empty` is not the rack's to delete.** It is built once and
         # kept, and the previous rebuild put it into this layout when there
         # were no laps - so a blanket `deleteLater()` over everything in the
@@ -932,6 +954,23 @@ class PracticeScreen(QWidget):
             self.rack_layout.addWidget(widget)
             self._row_widgets.append(widget)
         self.rack_layout.addStretch(1)
+        # No restore here, and no timer either. The rack does not know its own
+        # height yet: the old rows are only destroyed when the event loop next
+        # turns, and the layout collapses to nothing on the way through. A
+        # `singleShot(0)` fires inside that collapse, against a maximum of
+        # zero, and clamps him to the top just as surely as doing nothing.
+        #
+        # So the restore waits to be told the range is real - see
+        # `_scroll_range_changed`, wired once in the constructor.
+
+    def _scroll_range_changed(self, _minimum: int, maximum: int) -> None:
+        """Put him back where he was, once there is a range to put him in."""
+        if self._pending_scroll is None or not maximum:
+            return
+        fraction, sideways = self._pending_scroll
+        self._pending_scroll = None
+        self.scroller.verticalScrollBar().setValue(round(fraction * maximum))
+        self.scroller.horizontalScrollBar().setValue(sideways)
 
     def _on_row_changed(self, lap_id: int) -> None:
         self.refresh()

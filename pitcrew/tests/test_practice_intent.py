@@ -143,3 +143,41 @@ def test_both_are_correctable_after_the_fact(store: Store, event_id):
     session = store.get_session(session_id)
     assert session["practice_intent"] == FOR_QUALIFYING
     assert session["practice_mode"] == TIME_TRIAL
+
+
+# ------------------------------------------------------ keeping his place
+
+def test_marking_a_lap_does_not_throw_him_back_to_the_top(qt_app):
+    """*"when I select a tyre compound or strike through a lap in practice it
+    takes me to the top of the page"*
+
+    Both go through `_rebuild_rack`, which destroys every row widget and
+    builds it again - so the scroll area's contents momentarily have no height
+    and the bar clamps to zero. On a long session that is once per mark, and
+    the marking up is the whole point of the screen.
+    """
+    screen = PracticeScreen()
+    screen.set_laps([a_lap(n, 109_000 + n * 137) for n in range(1, 41)])
+    screen.resize(1400, 600)
+    screen.show()
+    qt_app.processEvents()
+
+    bar = screen.scroller.verticalScrollBar()
+    assert bar.maximum() > 0, "forty laps should not fit in six hundred pixels"
+    bar.setValue(bar.maximum() // 2)
+    qt_app.processEvents()
+    was = bar.value()
+
+    screen._rows[19].excluded = True
+    screen._rebuild_rack()
+    # Several turns, because the rack genuinely has no height for one of them:
+    # the old rows are destroyed on the first, so the layout collapses before
+    # the new ones are measured. That collapse is why a `singleShot(0)` cannot
+    # do this job.
+    for _ in range(5):
+        qt_app.processEvents()
+
+    assert bar.maximum() > 0
+    assert abs(bar.value() - was) < bar.maximum() * 0.05, (
+        f"struck a lap at {was} and landed at {bar.value()}")
+    screen.hide()

@@ -77,16 +77,49 @@ def test_every_effect_sits_where_the_rig_can_deliver_it():
     His lateral load ran 52-70, ending exactly on the null, so loading the car
     harder raised the amplitude and lowered the delivery - the signal partly
     cancelling itself at the moment it mattered most.
+
+    The bar is 1.5 rather than the low peak's 3.0 because the two peaks are
+    not equal: the low one measures 3 and the high one only 2. Both are usable
+    and the high one has to be, because with six effects and one piston they
+    do not all fit in twelve hertz.
+    """
+    for spec in PORSCHE_RSR_17:
+        top = spec.freq_hi or spec.freq_lo
+        for hz in (spec.freq_lo, (spec.freq_lo + top) / 2.0, top):
+            response = transducer.felt_response(hz)
+            assert response >= 1.5, (
+                f"{spec.name} passes through {hz:.0f} Hz where this rig "
+                f"delivers {response:.1f} of 3 - no gain fixes that")
+
+
+def test_the_whole_band_is_reachable_not_just_the_bottom_of_it():
+    """Pitch is driven by the effect's own intensity, not by its amplitude.
+
+    They were the same number once, which tied how high an effect could climb
+    to how loud it was allowed to be. Lateral load reached 47 of its 44-56 Hz
+    and the kerb thump 41 of its 40-52 - so the rising-pitch cue that tells
+    him load is building did not exist, and the master gain transposed the
+    whole rig on its way past.
     """
     mix = HapticMix(block=BLOCK)
-    for spec in PORSCHE_RSR_17:
-        amplitude = float(mix._scale[mix.names.index(spec.name)])
-        top = spec.freq_lo + (spec.freq_hi - spec.freq_lo) * min(1.0, amplitude)
-        operating = top if spec.freq_hi else spec.freq_lo
-        response = transducer.felt_response(operating)
-        assert response >= 1.9, (
-            f"{spec.name} runs at {operating:.0f} Hz where this rig delivers "
-            f"{response:.1f} of 3 - that is the null, and no gain fixes it")
+    swept = np.zeros(len(mix.names), dtype=np.float32)
+    index = mix.names.index("lateral_load")
+    spec = PORSCHE_RSR_17[index]
+
+    swept[index] = 1.0
+    for _ in range(400):                       # past the smoothing constant
+        mix.render(swept, BLOCK)
+    reached = mix._voices[index]._pitch
+    assert reached > 0.9, (
+        f"lateral load only reached {reached:.0%} of its band at full "
+        f"intensity - pitch is still following amplitude")
+
+    mix.master = 0.25
+    for _ in range(400):
+        mix.render(swept, BLOCK)
+    assert abs(mix._voices[index]._pitch - reached) < 0.02, (
+        "the master gain moved the pitch - it is a volume control, not a "
+        "transpose")
 
 
 def test_nothing_is_placed_in_the_null():

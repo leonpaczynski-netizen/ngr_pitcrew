@@ -212,6 +212,9 @@ class _Voice:
         self._rate = float(rate)
         self._phase = 0.0
         self._level = 0.0
+        # Where in its band the effect currently sits, 0-1. Kept apart from
+        # the level - see `render`.
+        self._pitch = 0.0
         # Bandpass state for the noise, a two-pole state-variable filter. It
         # is unconditionally stable at these frequencies - 25-160 Hz against a
         # 48 kHz rate is an f/fs of a few thousandths.
@@ -233,13 +236,20 @@ class _Voice:
     def level(self) -> float:
         return self._level
 
-    def render(self, out: np.ndarray, intensity: float, n: int) -> None:
+    def render(self, out: np.ndarray, intensity: float, pitch: float,
+               n: int) -> None:
         """Add this effect's contribution for `n` samples into `out`.
 
         `intensity` is 0-1, the effect's own idea of how hard it is happening.
-        It sets both the amplitude and - when the spec gives a range - the
-        frequency, which is what makes wheelspin rise in pitch as it worsens
-        rather than merely getting louder.
+        `intensity` is the amplitude to render at - gain, felt trim and
+        master already applied. `pitch` is the effect's own 0-1 intensity
+        BEFORE any of that, and is what walks the frequency up its band.
+
+        **They have to be two numbers.** They used to be one, and it made the
+        pitch of every effect a function of its volume: an effect with a small
+        gain could never climb out of the bottom of its own band, and turning
+        the master up transposed the entire rig. Lateral load used a quarter
+        of its range and the kerb thump a twelfth.
         """
         target = float(np.clip(intensity, 0.0, 1.0))
         if target < SILENT and self._level < SILENT:
@@ -261,11 +271,18 @@ class _Voice:
         np.add(ramp, start, out=ramp)
         self._level = float(ramp[-1])
 
-        # Frequency follows intensity when a range was given. `freq_hi` of 0
-        # means a single tone, which is how SimHub stores the gear effect.
+        # Frequency follows the effect's own intensity when a range was
+        # given. `freq_hi` of 0 means a single tone, which is how SimHub
+        # stores the gear effect.
+        #
+        # Smoothed the same way the level is, and over the same time constant,
+        # so a step in intensity bends the pitch rather than stepping it - a
+        # pitch jump is heard as a click even when the phase is continuous.
         spec = self.spec
         if spec.freq_hi:
-            freq = spec.freq_lo + (spec.freq_hi - spec.freq_lo) * self._level
+            aim = float(np.clip(pitch, 0.0, 1.0))
+            self._pitch += (aim - self._pitch) * float(ramp[-1])
+            freq = spec.freq_lo + (spec.freq_hi - spec.freq_lo) * self._pitch
         else:
             freq = spec.freq_lo
 
@@ -422,7 +439,8 @@ class HapticMix:
         out[:] = 0.0
         for index, voice in enumerate(self._voices):
             shaped = voice.spec.shape(float(intensities[index]))
-            voice.render(out, shaped * self._scale[index] * self.master, n)
+            voice.render(out, shaped * self._scale[index] * self.master,
+                         shaped, n)
         self._block_dc(out, n)
         self._limit(out, n)
         if n:
