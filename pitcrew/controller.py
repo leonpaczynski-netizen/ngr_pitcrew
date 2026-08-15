@@ -1367,8 +1367,9 @@ class PitCrewController(QObject):
                 engine.stop()
         self.settings_screen.note_rig(
             f"Road rumble at half, {wanted.haptics_gain:.1f}x. Felt about "
-            f"right? The amplifier is at its maximum, so this is the only "
-            f"level control left.")
+            f"right? If it wants to be stronger, turn the amplifier up "
+            f"first - this control drives the limiter and the duty cycle, "
+            f"and its own knob does not.")
 
     def stop_haptics(self) -> None:
         engine, self.bridge.haptics = self.bridge.haptics, None

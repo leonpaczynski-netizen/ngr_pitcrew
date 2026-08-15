@@ -300,33 +300,51 @@ def test_compression_is_counted_so_a_squashed_mix_can_be_seen():
     assert calm.limited_blocks == 0
 
 
-def test_the_gear_thump_is_trimmed_for_its_frequency():
-    """Reported twice from the seat as far too strong, and once as tripping
-    the amplifier's protection at a master of 1 with the amp at 35.
+def test_the_gear_thump_is_trimmed_against_the_road_he_is_actually_on():
+    """Reported three times as too strong, and the first trim under-did it
+    because it was sized against the wrong comparison.
 
-    His gains are not comparable across frequencies and I read them as though
-    they were. Piston excursion falls as 1/f-squared above resonance, so the
-    same amplitude at 48 Hz moves the transducer far further than at 132 Hz:
-    measured, the gear thump was felt 8.3 times more strongly than the road
-    rumble while sitting at almost identical amplitude. A large low-frequency
-    excursion is also what an amplifier goes into protection over.
+    Two mistakes, both in the reference:
+
+    * **Band centre, not the real operating frequency.** Frequency is
+      interpolated from the post-gain amplitude, which tops out well below
+      1.0, so no effect reaches its declared `freq_hi`. The road bed's centre
+      is 132 Hz; it actually runs at about 116 Hz, and the mix cannot produce
+      132 below a master of 2.
+    * **Peak against peak.** A gear shift always reaches its own peak. The
+      road bed almost never does - measured over a real lap it sits near 0.107
+      while its peak is 0.269. Comparing peaks flattered gear by a factor of
+      two and a half.
+
+    Measured against the bed present at each of thirty shifts on a real lap,
+    gear was 3.9x more felt. Parity would be a trim of 0.065; a transient
+    should stand above the bed rather than sit level with it, so this checks
+    it lands somewhere useful above 1x and well under the 3.9x he complained
+    about.
     """
+    # Measured on `fixtures/watkins_glen_lap.bin`: the road bed's live median
+    # amplitude and the frequency it actually runs at, rather than its
+    # declared band.
+    ROAD_LIVE_AMPLITUDE = 0.1065
+    ROAD_LIVE_HZ = 116.0
+    GEAR_HZ = 48.0
+
     gear = {s.name: s for s in PORSCHE_RSR_17}["gear"]
     assert gear.gain == 39.87, "his own number must stay visible"
     assert gear.felt_trim < 1.0, "the correction belongs in the trim"
 
     mix = HapticMix(block=BLOCK)
-    def felt(name: str) -> float:
-        spec = {s.name: s for s in mix.specs}[name]
-        centre = spec.freq_lo if not spec.freq_hi else (
-            spec.freq_lo + spec.freq_hi) / 2
-        return float(mix._scale[mix.names.index(name)]) / centre ** 2
+    gear_amplitude = float(mix._scale[mix.names.index("gear")])
+    felt_gear = gear_amplitude / GEAR_HZ ** 2
+    felt_road = ROAD_LIVE_AMPLITUDE / ROAD_LIVE_HZ ** 2
+    ratio = felt_gear / felt_road
 
-    ratio = felt("gear") / felt("wheels_rumble")
-    assert ratio < 3.0, (
-        f"a gear shift is still felt {ratio:.1f}x the road - it rattles the "
-        f"rig and trips the amp")
-    assert ratio > 1.0, "a shift should still stand out over the road"
+    assert ratio > 1.0, (
+        f"a shift is felt {ratio:.2f}x the road he is on - it should still "
+        f"stand out as an event")
+    assert ratio < 2.5, (
+        f"a shift is felt {ratio:.2f}x the road he is on - he called 3.9x "
+        f"overpowered and rattling the rig")
 
 
 def test_an_impossible_trim_is_refused():

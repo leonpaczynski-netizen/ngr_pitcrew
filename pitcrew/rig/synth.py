@@ -95,9 +95,10 @@ class EffectSpec:
     # trip the amplifier's protection at a master of 1 with the amp at 35.
     #
     # Piston excursion falls as 1/f-squared above resonance, so the same
-    # amplitude at 48 Hz moves the transducer far further than at 132 Hz.
-    # Measured on this profile: the gear thump is felt 8.3 times more strongly
-    # than the road rumble despite sitting at almost identical amplitude. A
+    # amplitude at 48 Hz moves the transducer far further than at the ~116 Hz
+    # the road bed actually runs at. (An earlier note here said 132 Hz, the
+    # band's declared top - which the mix cannot reach at a master of 1, and
+    # sizing the first trim against it is why that trim was too timid.) A
     # large low-frequency excursion is also precisely what an amplifier goes
     # into protection over.
     #
@@ -159,11 +160,18 @@ class EffectSpec:
 PORSCHE_RSR_17 = (
     EffectSpec("wheels_spin_lock", 70.00, 82.0, 108.0, noise=9.0,
                threshold=14.0, min_force=28.0, gamma=1.60, input_gain=115.0),
-    # -12 dB of felt trim. At 48 Hz this thump was 8.3 times more felt than
-    # the road rumble at nearly the same amplitude, reported twice from the
-    # seat as far too strong and once as tripping the amp's protection. His
-    # 39.87 is untouched; the trim carries the correction.
-    EffectSpec("gear", 39.87, 48.0, transient=True, felt_trim=0.25),
+    # -20 dB of felt trim, and the number was arrived at twice.
+    #
+    # The first attempt compared gear's PEAK against the road's PEAK and
+    # landed on 0.25. That is the wrong comparison: a gear shift always
+    # reaches its own peak, and the road bed almost never does. Measured
+    # against the bed actually present at each of thirty shifts on a real
+    # lap, gear was 3.9 times more felt - not the 1.45 the peak comparison
+    # implied - which is why "still overpowered" survived the first trim.
+    #
+    # Parity with the bed would be 0.065. A transient should stand above the
+    # bed rather than sit level with it, so this leaves it about 1.5x.
+    EffectSpec("gear", 39.87, 48.0, transient=True, felt_trim=0.10),
     EffectSpec("wheels_rumble", 37.62, 112.0, 152.0, noise=12.0,
                threshold=8.0, min_force=28.0, gamma=1.60),
     EffectSpec("traction_loss", 35.19, 52.0, 70.0, noise=6.0,
@@ -321,10 +329,15 @@ class HapticMix:
         #
         # The relative balance between effects is his, tuned over eight days,
         # and should be changed by editing an effect rather than by leaning on
-        # this. But the amplifier is already at its maximum - 50 of 50 - so
-        # there is no knob left on the hardware, and "everything a bit
-        # stronger" has nowhere else to come from. The limiter still holds the
-        # ceiling whatever this is set to.
+        # this. The limiter still holds the peak whatever this is set to - but
+        # NOT the duty cycle, which is what an amplifier's protection responds
+        # to, so this is not a free control. Measured on a real lap: a master
+        # of 2.5 puts 31.5% of blocks into the limiter and holds the mix at
+        # -9.1 dBFS sustained, against 0.05% and -16.4 dBFS at 1.0.
+        #
+        # The amplifier's own knob is the better answer to "not strong
+        # enough": it is at 35 of 50, so there is 3 dB sitting unused, and
+        # turning it up changes neither the duty cycle nor the mix.
         self.master = max(0.0, min(4.0, float(master)))
         self._rate = rate
         self._block = block

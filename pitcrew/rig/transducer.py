@@ -97,8 +97,12 @@ TRANSIENT_CEILING = 0.71                       # -3 dBFS
 # mid-race.
 HARD_LIMIT = 0.89                              # -1 dBFS
 
-# The amp is at its maximum, so there is no knob left to turn up. Anything
-# that needs to be stronger has to come out of the 6 dB above the reference,
-# and once that is gone the answer is a different effect balance rather than
-# more gain. Worth knowing before tuning starts.
+# Whether the amplifier has anything left. It has: 35 of 50, about 3 dB.
+#
+# That matters more than it looks. Five places in this codebase used to say
+# the amp was exhausted - one of them spoken to the driver after every haptics
+# test - which sent him to the digital master instead. The master drives the
+# limiter, the duty cycle and (because frequency is interpolated from
+# amplitude) the pitch of every effect. The amp's knob drives none of those.
+# When it is not strong enough, the knob is the right answer.
 AMP_AT_MAXIMUM = AMP_VOLUME_AT_CALIBRATION >= AMP_VOLUME_MAX

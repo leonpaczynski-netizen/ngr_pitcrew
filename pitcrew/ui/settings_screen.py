@@ -362,11 +362,16 @@ class SettingsScreen(QWidget):
         under the seat, and neither is something that should start making
         itself felt because the app was updated.
 
-        The gain exists because the amplifier is already at its maximum, 50 of
-        50, so there is no knob left on the hardware. The balance BETWEEN the
-        effects is the driver's own SimHub tuning and belongs in the effect
-        list; this moves all of it together, which is the adjustment that
-        cannot be made anywhere else.
+        The gain moves everything together; the balance BETWEEN effects is the
+        driver's own SimHub tuning and belongs in the effect list.
+
+        **It is capped at 1.5, and that is a safety limit rather than a taste
+        one.** The limiter holds the peak at any setting, but not the duty
+        cycle - and duty cycle is what an amplifier's protection responds to.
+        Measured over a real lap: a master of 2.5 puts 31.5% of blocks into
+        the limiter and holds the mix at -9.1 dBFS sustained, against 0.05%
+        and -16.4 dBFS at 1.0. A master of 2 tripped this amp and cost a PC
+        restart. The hint here used to invite exactly that setting.
         """
         plate = Plate("Rig")
         plate.body.addWidget(BodyLabel(
@@ -379,16 +384,16 @@ class SettingsScreen(QWidget):
         plate.body.addWidget(self.haptics_enabled)
 
         self.haptics_gain = QDoubleSpinBox()
-        self.haptics_gain.setRange(0.0, 4.0)
+        self.haptics_gain.setRange(0.0, 1.5)
         self.haptics_gain.setSingleStep(0.1)
         self.haptics_gain.setDecimals(1)
         block_wheel(self.haptics_gain)
         plate.body.addWidget(Field(
             "Strength", self.haptics_gain, suffix="x",
-            hint="1.0 is the level the amplifier was calibrated against. The "
-                 "limiter holds the ceiling whatever this is set to — past "
-                 "about 2.5 the balance between effects is the thing to "
-                 "change, not the level."))
+            hint="1.0 is the level the transducer was calibrated against. "
+                 "If it wants to be stronger, turn the amplifier up first — "
+                 "it is at 35 of 50. This drives the limiter and the duty "
+                 "cycle; the amp's own knob does not."))
 
         self.wind_enabled = QCheckBox("Wind simulator is on")
         plate.body.addWidget(self.wind_enabled)

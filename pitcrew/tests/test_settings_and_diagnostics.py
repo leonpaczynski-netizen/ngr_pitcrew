@@ -679,11 +679,30 @@ def test_the_rig_settings_round_trip_through_the_screen(qt_app):
 
     screen = SettingsScreen()
     screen.load(dataclasses.replace(Settings(), haptics_enabled=True,
-                                    haptics_gain=1.8, wind_enabled=True))
+                                    haptics_gain=1.3, wind_enabled=True))
     out = screen.values()
     assert out.haptics_enabled is True
     assert out.wind_enabled is True
-    assert out.haptics_gain == 1.8
+    assert out.haptics_gain == 1.3
+
+
+def test_the_master_gain_cannot_be_set_where_it_trips_the_amp(qt_app):
+    """A safety limit, not a taste one.
+
+    The limiter holds the PEAK at any setting but not the duty cycle, and duty
+    cycle is what an amplifier's protection responds to. Measured over a real
+    lap: a master of 2.5 puts 31.5% of blocks into the limiter and holds the
+    mix at -9.1 dBFS sustained, against 0.05% and -16.4 dBFS at 1.0. A master
+    of 2 tripped this amp and cost a PC restart - and the hint on this very
+    field used to invite the driver past 2.5.
+    """
+    import dataclasses
+
+    screen = SettingsScreen()
+    screen.load(dataclasses.replace(Settings(), haptics_gain=1.0))
+    assert screen.haptics_gain.maximum() <= 1.5
+    screen.haptics_gain.setValue(4.0)
+    assert screen.values().haptics_gain <= 1.5
 
 
 def test_the_rig_is_off_in_a_fresh_settings_object():

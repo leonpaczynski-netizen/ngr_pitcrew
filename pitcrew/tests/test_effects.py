@@ -16,6 +16,7 @@ import numpy as np
 
 from pitcrew.rig import effects
 from pitcrew.rig.effects import EffectDeriver
+from pitcrew.rig.synth import PORSCHE_RSR_17 as PORSCHE_RSR_17_SPECS
 
 from .conftest import make_packet, rolling_wheel_rps
 
@@ -362,3 +363,35 @@ def test_the_lock_lets_go_quickly_when_the_wheel_does():
     for _ in range(20):
         value = float(deriver.update(rolling(brake_raw=0))[0])
     assert value < 0.1, f"still ringing at {value:.2f}"
+
+
+def test_scrabbling_back_over_a_kerb_from_the_grass_is_not_an_apex_hit():
+    """`car_on_track` is GT7's flags bit 0 - "in a session", not "on the
+    racing surface" - so nothing upstream distinguishes a clean apex from a
+    recovery. Two such transitions occurred on one real lap."""
+    deriver = EffectDeriver()
+    deriver.update(rolling(surfaces="GGGG"))
+    from_grass = float(deriver.update(rolling(surfaces="GGCC"))[4])
+    assert from_grass == 0.0
+
+    clean = EffectDeriver()
+    clean.update(rolling(surfaces="TTTT"))
+    from_tarmac = float(clean.update(rolling(surfaces="TTCC"))[4])
+    assert from_tarmac >= effects.KERB_THUMP
+
+
+def test_the_kerb_thump_owns_a_channel_the_driver_tuned_to_fire_rarely():
+    """Worth asserting because it is a change he did not ask for and has not
+    been told about.
+
+    He set `wheels_impact` threshold to 55 where his others were 8-28, which
+    reads as "this should fire almost never" - a 12 g velocity step, i.e. a
+    crash. The kerb thump clears that gate comfortably, so on a real lap 100%
+    of that channel's output is now kerbs, 44 times a lap. The masking is
+    narrow but real: a genuine impact in the 0.55-0.75 band landing during a
+    kerb strike is swallowed by the `max()`.
+    """
+    impact = {s.name: s for s in PORSCHE_RSR_17_SPECS}["wheels_impact"]
+    assert impact.threshold == 55.0
+    assert impact.shape(effects.KERB_THUMP) > 0.0, (
+        "the kerb thump no longer reaches the channel it was routed into")

@@ -330,7 +330,12 @@ class EffectDeriver:
         self._kerb_pulse *= float(np.exp(-dt / KERB_THUMP_DECAY_S))
         if not surfaces or not previous:
             return self._kerb_pulse
-        arrived = any(now == "C" and was != "C"
+        # **From tarmac only.** `car_on_track` is GT7's flags bit 0, which
+        # means "in a session" rather than "on the racing surface", so a run
+        # wide and a scrabble back over the kerb used to fire a full-strength
+        # apex hit. A kerb arrived at from grass or dirt is the driver
+        # recovering, and it is the rumble bed's business.
+        arrived = any(now == "C" and was == "T"
                       for now, was in zip(surfaces, previous))
         if arrived:
             self._kerb_pulse = max(self._kerb_pulse, KERB_THUMP)
