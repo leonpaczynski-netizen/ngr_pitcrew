@@ -116,6 +116,80 @@ def felt_response(frequency: float) -> float:
             return low + (high - low) * (frequency - low_hz) / span
     return points[-1][1]
 
+# **The spectral plan, and why there is one.**
+#
+# Six effects used to be placed one at a time, each against its own argument,
+# and two of them ended up in the same twelve hertz: wheel-spin at 82-108 and
+# road rumble at 86-104. The road bed is live for 95% of a lap and wheel-spin
+# for 9%, on one piston, summed into one signal - so the continuous immersion
+# effect sat directly on top of the limit cue for the whole of every lap. That
+# is the "immersion masking performance" failure in its purest form, and no
+# amount of gain on wheel-spin fixes it, because raising it raises what it has
+# to beat once the limiter closes.
+#
+# So placement is decided here, for the whole set at once, against the measured
+# response above. Two regions deliver: 28-66 Hz and 80-115 Hz. Everything else
+# is either below the amplifier's low-cut, in the 70 Hz null, or in the falling
+# region above 120.
+#
+# The organising idea is physical rather than arbitrary, because a tactile
+# vocabulary has to be learnable without being memorised:
+#
+#     **low is the car, high is the contact patch.**
+#
+# Engine, road, brakes, impacts and chassis load - everything that is mass
+# moving - lives in the low region, in the order a driver would expect: the
+# quietest continuous thing at the bottom, the sharpest events in the middle
+# where this rig is strongest. Tyre slip - the only thing here that is
+# happening at the road surface rather than in the structure - has the whole of
+# the high region to itself, so "the tyres are letting go" is the one message
+# that never shares a frequency with anything.
+#
+#     band        felt   effect          class      why here
+#     28-34 Hz    1.8-2.4  engine        bed        weakest region, lowest value
+#     34-41 Hz    2.4-3.0  road          bed        the thing he is inside all lap
+#     40-50 Hz    3.0-3.0  brake limit   CRITICAL   strongest region, highest value
+#     50 Hz       3.0      driveline     transient  a single confirming tick
+#     52-60 Hz    2.9-2.0  impact        transient  strong, and clear of the null
+#     56-66 Hz    2.4-1.4  chassis load  state      compensated across its band
+#     88-108 Hz   2.0-1.9  rear traction CRITICAL   the high region, undivided
+#
+# The overlaps are deliberate and are separated in TIME rather than in
+# frequency. Brake and impact share 44-50 Hz; a brake cue is a pulse train
+# lasting the whole braking zone and an impact is a 120 ms one-shot, and the
+# body has no trouble with that. What the body cannot do is separate two
+# continuous rasps in the same band, which is exactly what the old placement
+# asked of it.
+BAND_PLAN = (
+    ("engine",        28.0,  34.0),
+    ("road",          34.0,  41.0),
+    ("brake_limit",   40.0,  50.0),
+    ("driveline",     50.0,  50.0),
+    ("impact",        52.0,  60.0),
+    ("chassis_load",  56.0,  66.0),
+    ("rear_traction", 88.0, 108.0),
+)
+
+# **Amplitude modulation, and why it is the largest unused dimension here.**
+#
+# There are two usable regions and seven things to say, so frequency alone
+# cannot carry the vocabulary. What it can carry is character, and the cheapest
+# character available is the rate at which an effect pulses.
+#
+# The body is good at this in a way it is not good at carrier frequency. At
+# 40-100 Hz the receptors involved integrate rather than resolve, so 44 Hz and
+# 52 Hz feel like the same thing at different strengths. A 44 Hz tone pulsed
+# eight times a second and the same tone pulsed sixteen times a second do not
+# feel like the same thing at all - flutter in the 5-20 Hz range is
+# discriminated well, and it is also how the two events being reported here
+# actually feel in a real car: a locking tyre judders and a spinning one
+# rasps.
+#
+# Above about 20 Hz the modulation fuses with the carrier and stops being a
+# rate, which is why both ranges stop short of it.
+AM_RANGE_HZ = (5.0, 16.0)
+AM_MAX_DEPTH = 0.60
+
 # **The reference.** 40 Hz at -6 dBFS, with the amp at 50 - which is its
 # maximum - was reported very strong and did not knock the piston. That fixes
 # what "full" means: every effect gain below is a fraction of a level someone

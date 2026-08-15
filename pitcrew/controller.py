@@ -1358,8 +1358,8 @@ class PitCrewController(QObject):
             engine.set_master(wanted.haptics_gain)
 
         names = list(self.bridge.effects.NAMES)
-        levels = [0.0] * len(names)
-        levels[names.index("wheels_rumble")] = 0.5
+        levels = [0.0] * (len(names) + len(self.bridge.effects.MODIFIERS))
+        levels[names.index("road")] = 0.5
         try:
             deadline = _monotonic() + 2.0
             while _monotonic() < deadline:
@@ -1850,6 +1850,37 @@ class PitCrewController(QObject):
         threading.Thread(target=ask, name="PitCrewHapticsMeter",
                          daemon=True).start()
 
+    # Below this an effect was not doing anything worth writing down.
+    _EXPLAIN_FLOOR = 0.01
+
+    def _log_haptic_state(self, haptics) -> None:
+        """One line naming every effect that was actually contributing.
+
+        Deliberately only the ones above the floor: a report listing seven
+        effects of which five are at zero is a report nobody reads, and the
+        interesting case is almost always one or two of them.
+        """
+        try:
+            rows = [r for r in haptics.explain() if r["final"] > self._EXPLAIN_FLOOR]
+        except Exception as exc:                            # noqa: BLE001
+            log("haptics").debug("could not read the mix: %s", exc)
+            return
+        if not rows:
+            return
+        parts = [f"{r['effect']} {r['final']:.3f}@{r['hz']:.0f}Hz"
+                 + (f" -{r['ducked_by']*100:.0f}%" if r["ducked_by"] > 0.05 else "")
+                 for r in rows]
+        log("haptics").info("mix: %s", " · ".join(parts))
+        car = self.bridge.effects.explain()
+        log("haptics").info(
+            "car: traction %s %.2f (%s, %s) · brake %s %.2f (%s) · "
+            "rotation %s %.2f (%s) · unload %.2f",
+            car["traction"]["state"], car["traction"]["level"],
+            car["traction"]["witness"], car["traction"]["confidence"],
+            car["brake"]["state"], car["brake"]["level"], car["brake"]["axle"],
+            car["rotation"]["state"], car["rotation"]["level"],
+            car["rotation"]["confidence"], car["load"]["unload"])
+
     def _report_rig(self) -> None:
         """Write down what the outputs are actually doing, once every so often.
 
@@ -1869,6 +1900,13 @@ class PitCrewController(QObject):
                 "blocks %d · fades %d · limited %d · running %s",
                 haptics.callbacks, haptics.faded_out,
                 haptics._mix.limited_blocks, haptics.running)
+            # **What the mix was doing, not just that it was running.**
+            #
+            # "I felt something odd in turn four" is unanswerable an hour
+            # later unless the numbers were written down at the time. One line
+            # per report is cheap and it is the difference between diagnosing
+            # a cue and re-driving the session to reproduce it.
+            self._log_haptic_state(haptics)
             self._check_transducer_is_heard(haptics)
         wind = self.bridge.wind
         if wind is not None and getattr(wind, "state", None) is not None:

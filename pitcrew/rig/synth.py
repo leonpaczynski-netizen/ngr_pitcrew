@@ -56,6 +56,22 @@ SMOOTH_S = 0.02
 # bottom third of everything this rig can produce.
 DC_BLOCK_HZ = 5.0
 
+# **The four priority classes, and what they buy.**
+#
+# One piston sums everything, so the only way an important cue stays legible is
+# for the unimportant ones to get out of its way. Human-factors work on
+# vibrotactile displays puts the number of concurrently attendable streams at
+# one body site at about two; beyond that they merge into a texture. This
+# system has seven voices, so it can only work if at any instant there is ONE
+# foreground and ONE background.
+#
+# That is what these classes enforce. Everything in STATE and BED is background
+# and ducks; everything in CRITICAL and TRANSIENT is foreground and does not.
+CRITICAL = 0     # the car is at or past a limit; never ducked by anything
+TRANSIENT = 1    # a discrete event, brief, allowed past the sustained ceiling
+STATE = 2        # what the car is doing, continuously
+BED = 3          # immersion; the sound of the car being alive
+
 
 @dataclass(frozen=True)
 class EffectSpec:
@@ -104,11 +120,55 @@ class EffectSpec:
     # imperceptible without passing through right. Size these against the
     # curve now, not against arithmetic.
     felt_trim: float = 1.0
-    # A transient may use the headroom above the sustained ceiling. That
-    # reserve is what makes a gear shift read as an event over the road bed
-    # rather than as the bed briefly getting louder - on one piston, with
-    # everything summed into one signal, contrast is all there is.
-    transient: bool = False
+    # **A correction ACROSS the effect's own band, which is a different
+    # question from the one `felt_trim` answers.**
+    #
+    # `felt_trim` is a static number for where the effect sits. It cannot
+    # help an effect that MOVES: chassis load spans 56-66 Hz, and the rig
+    # delivers 2.4 at the bottom of that and 1.4 at the top, so as the driver
+    # loads the car harder the effect rises in amplitude and falls in
+    # delivery. The same fault was found and fixed once before by narrowing a
+    # band away from the 70 Hz null; this fixes the general case instead.
+    #
+    # When set, the rendered amplitude is divided by the response at the
+    # frequency being played and multiplied by the response at the band's
+    # centre, so climbing the band changes pitch and not felt strength. It is
+    # normalised to the centre precisely so it does NOT double-count the
+    # driver's own gain, which was tuned with the effect somewhere in the
+    # middle of its range.
+    band_compensate: bool = False
+    # **Amplitude modulation: the pulse rate, in hertz, at the bottom and top
+    # of the effect's severity.** Zero means an unmodulated tone.
+    #
+    # This is the second axis of the tactile vocabulary and the one the rig
+    # had no use of at all. See `transducer.AM_RANGE_HZ`.
+    am_lo: float = 0.0
+    am_hi: float = 0.0
+    am_depth: float = 0.0
+    # **Priority, which decides what gets out of whose way.** Lower is more
+    # important. The mixer reads only this - `transient` below is kept because
+    # it is the word the rest of the code and the tests use for class 1.
+    #
+    #   0 CRITICAL   the car is at or past a limit
+    #   1 TRANSIENT  a discrete event that just happened
+    #   2 STATE      what the car is doing, continuously
+    #   3 BED        immersion; the sound of the car being alive
+    priority: int = 3
+    # How fast the level is allowed to move, up and down, as time constants.
+    # Separate because they are separate questions: a limit cue must arrive
+    # the frame it is true, and must not chatter when it stops. Zero means
+    # "use the module default", which is what every immersion effect wants.
+    attack_s: float = 0.0
+    release_s: float = 0.0
+
+    @property
+    def transient(self) -> bool:
+        """Class 1: a discrete event, allowed past the sustained ceiling."""
+        return self.priority == TRANSIENT
+
+    @property
+    def centre_hz(self) -> float:
+        return (self.freq_lo + (self.freq_hi or self.freq_lo)) / 2.0
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.gain <= 100.0:
@@ -130,6 +190,22 @@ class EffectSpec:
         if not 0.0 < self.felt_trim <= 4.0:
             raise ValueError(
                 f"{self.name}: felt trim {self.felt_trim} is not 0-4")
+        if not 0.0 <= self.am_depth <= transducer.AM_MAX_DEPTH:
+            raise ValueError(
+                f"{self.name}: modulation depth {self.am_depth} is not "
+                f"0-{transducer.AM_MAX_DEPTH}. Deeper than that and the effect "
+                f"spends more time off than on, which reads as a stutter "
+                f"rather than as a rate.")
+        low, high = transducer.AM_RANGE_HZ
+        for rate in (self.am_lo, self.am_hi):
+            if rate and not low <= rate <= high:
+                raise ValueError(
+                    f"{self.name}: modulation at {rate} Hz is outside the "
+                    f"{low}-{high} Hz the body reads as a rate. Below it the "
+                    f"pulses are separate events; above it the modulation "
+                    f"fuses with the carrier and stops being a rate at all.")
+        if self.priority not in (CRITICAL, TRANSIENT, STATE, BED):
+            raise ValueError(f"{self.name}: unknown priority {self.priority}")
 
     def shape(self, intensity: float) -> float:
         """The driver's own gain chain: threshold, gamma, then minimum force.
@@ -152,110 +228,175 @@ class EffectSpec:
         return minimum + (1.0 - minimum) * value
 
 
-# How far the sustained bed ducks under a full-scale transient, and how
-# quickly it gets there and back. 0.70 is about 10 dB at full - and a kerb
-# thump does not shape to full, so the bed measured over his laps drops by
-# nearer 7, which is what turns a gear shift from 8.5 dB under the road into
-# 4 above it.
+# How far the background gets out of the way, and how quickly.
+#
+# 0.70 is about 10 dB at full - and a kerb thump does not shape to full, so the
+# bed measured over his laps drops by nearer 7, which is what turns a gear
+# shift from 8.5 dB under the road into 4 above it.
 DUCK_DEPTH = 0.70
+# A limit cue gets more, because it lasts longer and matters more: 0.82 is
+# about 15 dB. The point is not to make the cue loud - it is to make it the
+# only thing happening, which is a different and much cheaper way to be
+# noticed.
+DUCK_CRITICAL = 0.82
 DUCK_ATTACK_S = 0.02
 DUCK_RELEASE_S = 0.18
 
-# The six the driver had enabled, with his gains and bands. Twenty more exist
-# in SimHub and were all off; porting them would be inventing a preference he
-# did not express.
-PORSCHE_RSR_17 = (
-    # **-2.5 dB.** "Rear tyre traction loss on acceleration a little strong",
-    # and the replay agrees: it is the only effect that reaches the sustained
-    # ceiling, peaking at 0.5000 on 9% of the lap. It stays the loudest thing
-    # in the mix - it should be, it is the one that says the car is sliding -
-    # but it no longer sets the ceiling on its own.
-    EffectSpec("wheels_spin_lock", 70.00, 82.0, 108.0, noise=9.0,
-               threshold=14.0, min_force=28.0, gamma=1.60, input_gain=115.0,
-               felt_trim=0.75),
-    # -20 dB of felt trim, and the number was arrived at twice.
+# **When the car goes light, the rig goes quiet.**
+#
+# Unloading is the one vehicle state that must NOT be reported by adding
+# energy, and the reason is that a real car does the opposite: over a crest the
+# tyres stop transmitting and the seat goes still. Reproducing that costs no
+# bandwidth at all and needs no band of its own - the background is simply
+# attenuated in proportion, and the body reads the absence.
+#
+# It is also the only cue here that cannot be masked, because it is not a
+# signal.
+UNLOAD_DUCK = 0.75
+UNLOAD_ATTACK_S = 0.05
+UNLOAD_RELEASE_S = 0.12
+
+# **Two limit cues at once.** Measured over 40 laps, the braking cue and the
+# traction cue are both above their confirmed level on 0.14% of frames - rare,
+# but it is corner exit onto a kerb and a trail-braked entry that steps out,
+# which are not moments to hand the driver two overlapping rasps. The lesser of
+# the two is attenuated to well under half so that one of them is clearly the
+# message and the other is context.
+ARBITRATE_ABOVE = 0.35
+ARBITRATE_DUCK = 0.45
+
+# **The profile, and what survived from his own tuning.**
+#
+# The six effects here were his, ported from eight days of SimHub tuning, and
+# four of them survive with his gain untouched. What changed is what feeds them
+# and where they sit, and one thing is worth saying plainly: **his shaping
+# constants for the two limit cues no longer mean what they meant.**
+#
+# `threshold=14` on wheel-spin was tuned against an input that read 0.037 while
+# the car was simply accelerating - see the account in `vehicle.py`. Against an
+# input that now reads zero unless the rear is genuinely doing something, the
+# same 14 would cut most of the range it exists to report. Carrying it over
+# unchanged would have been faithful to the number and unfaithful to the
+# intention. His GAIN is the part that carries the intention - how loud this
+# effect should be relative to the others - and that is kept exactly.
+#
+# Listed in band order, which is also roughly the order of how much of a lap
+# each one is present for.
+PROFILE = (
+    # **The engine bed, moved down off the strong region.** His RPM effect sat
+    # at 34-42 Hz, which straddles the 40 Hz peak - the single most efficient
+    # frequency this rig has - for the least informative thing in the mix. It
+    # now sits at 28-34, where the rig delivers 1.8-2.4 rather than 2.4-3.0,
+    # and the space it vacated goes to the braking cue.
     #
-    # The first attempt compared gear's PEAK against the road's PEAK and
-    # landed on 0.25. That is the wrong comparison: a gear shift always
-    # reaches its own peak, and the road bed almost never does. Measured
-    # against the bed actually present at each of thirty shifts on a real
-    # lap, gear was 3.9 times more felt - not the 1.45 the peak comparison
-    # implied - which is why "still overpowered" survived the first trim.
+    # His curve is hand-drawn in `effects.RPM_CURVE` and arrives here already
+    # shaped, so it takes no gamma of its own. Worth knowing before asking for
+    # more: the curve spans 36.91 to 63.06 across the revs actually used, so
+    # this channel has **4.6 dB of range in a whole lap** however loud it is
+    # made. It is a bed that firms up with revs, not a tachometer. Making it
+    # one means redrawing the curve, which is his to draw.
+    EffectSpec("engine", 9.52, 28.0, 34.0, noise=3.0,
+               priority=BED, felt_trim=2.50),
+    # **Road texture, moved out of the high region entirely.**
     #
-    # Parity with the bed would be 0.065. A transient should stand above the
-    # bed rather than sit level with it, so this leaves it about 1.5x.
-    # 48 Hz is the single most efficient frequency this rig has - measured 3.0
-    # of 3 - which is why it kept coming back too strong however it was
-    # trimmed. 0.25 was too strong and 0.10 could not be felt at all, so the
-    # answer is between: this sits nearer the quiet end, because a thump on
-    # the peak carries further than the arithmetic suggests.
-    # **+11 dB, from 0.16.** Every previous trim here was fitted against a
-    # model that has since been measured and refuted, at an amplifier setting
-    # he has since moved, with the road bed sitting in the null where it could
-    # not compete. All three changed. Replayed over eight real laps, gear
-    # fired at -26.8 dBFS, 8.5 dB BELOW the road bed - "gear shift can't
-    # feel", and arithmetic rather than taste.
+    # This is the change that matters most in the whole file. His band was
+    # 112-152 Hz, which the measured response rates 0.9 of 3; it was moved to
+    # 86-104 to get it onto the upper peak, and that put the bed the driver is
+    # inside for 95% of a lap directly on top of the wheel-spin cue at 82-108.
+    # Two continuous rasps, same twelve hertz, one piston. The traction cue
+    # could not be heard over the road for the whole of every lap, and that is
+    # not a gain problem.
     #
-    # 0.55 puts it 2.5 dB above the bed, and the ducking above gives it
-    # another 7 for the length of the thump. It reached 1.5x the bed at 0.25
-    # once and was called overpowered, which is why this is not simply set
-    # back there: the contrast now comes from the bed getting out of the way,
-    # not from the thump being large.
-    EffectSpec("gear", 39.87, 48.0, transient=True, felt_trim=0.55),
-    # **Moved off the null.** His band was 112-152 Hz, which on the measured
-    # response is 0.9 of 3 - the dead spot. The road bed is the thing he feels
-    # most of the time and it was landing where this rig cannot deliver, which
-    # is why the kerb boost riding on it vanished too. 86-104 puts it on the
-    # upper peak and keeps it clear of wheel-spin above it.
-    # **-2 dB, because it is a different effect now.** Rescaling the texture
-    # curve took this from silent-or-full - on for 24% of the lap and pinned
-    # whenever it was - to a bed that is live for 95% and varies. Same peak,
-    # far more of it, so the same trim would be a louder rig overall.
-    EffectSpec("wheels_rumble", 37.62, 86.0, 104.0, noise=12.0,
-               threshold=8.0, min_force=28.0, gamma=1.60, felt_trim=0.80),
-    # His `TractionLossContainer`, renamed to what it actually carries. The
-    # gain, band, noise and filter are all still his; only the input changed,
-    # from a saturating yaw-error model to lateral g.
-    # **Narrowed so it cannot climb into the null.** His 52-70 band ends
-    # exactly on the dead spot, so as he loaded the car harder the effect rose
-    # in amplitude and fell in delivery - the signal partly cancelling itself
-    # at the very moment it mattered. 44-56 keeps the whole range on the lower
-    # peak, so more load is more felt all the way up.
-    # **-3 dB.** "A little strong", and it is live for 43% of the lap - more
-    # than anything else except the engine bed. It is also sitting on the
-    # strongest region this rig has, which the placement change handed it for
-    # free. Quieter, still the second loudest thing, and now getting out of
-    # the way when a kerb arrives.
-    EffectSpec("lateral_load", 35.19, 44.0, 56.0, noise=6.0,
-               threshold=9.0, min_force=12.0, gamma=1.40, felt_trim=0.70),
-    # Raised off the bottom. 28-38 Hz measures 2.0-2.5 of 3, which is not bad
-    # - but the kerb thump living here was a third the amplitude of the test
-    # tone and could not be felt, and 40-52 is the strongest region this rig
-    # has. Impacts are rare and want authority; kerbs want to be sharp.
-    # **+7 dB.** The kerb thump is the whole of this channel in practice, and
-    # it fired at -23.4 dBFS: 11.3 dB under the road bed and 7.6 dB under
-    # lateral load, which shares its region of the response. Two effects at
-    # once burying it, on one piston, in the same twelve hertz - "kerb thump I
-    # can't feel". His gain of 12.31 was set for genuine impacts, which are
-    # rare; the kerb strike is not rare and it is the one he wants.
-    EffectSpec("wheels_impact", 12.31, 40.0, 52.0, noise=3.0, transient=True,
-               threshold=55.0, min_force=20.0, gamma=1.20, felt_trim=2.20),
-    # The RPM curve is drawn by hand in `effects.RPM_CURVE` and arrives here
-    # already shaped, so it takes no gamma of its own.
+    # 34-41 Hz puts it in the low region where road rumble belongs physically -
+    # a real chassis passes surface noise through at 20-80 Hz - and leaves the
+    # entire 80-115 region to the tyres.
+    EffectSpec("road", 37.62, 34.0, 41.0, noise=12.0, threshold=8.0,
+               min_force=28.0, gamma=1.60, priority=BED, felt_trim=0.80,
+               band_compensate=True),
+    # **The braking cue, and it is new.**
     #
-    # **+8 dB, and it is still the quietest thing in the mix.** Reported weak
-    # twice. Replayed, it sat at -27.4 dBFS for the whole lap - his own gain
-    # of 9.52 against wheel-spin's 70, faithfully carried over, and inaudible
-    # under everything else once the rest of the mix was working.
+    # There was no braking cue. There was a lock detector sharing a channel
+    # with wheel-spin, reporting the ABS for over a second in every braking
+    # zone - see `vehicle.py` for the measurement. This replaces it with two
+    # states on one voice: the regulator working, at a level he can brake to,
+    # and a genuine lock above it.
     #
-    # Worth knowing before asking for more: his curve spans 36.91 to 63.06
-    # across the revs actually used, so this channel has only **4.6 dB of
-    # range in a whole lap** however loud it is made. It is a bed that firms
-    # up with revs, not a tachometer. Making it one means redrawing the curve,
-    # which is his to draw.
-    EffectSpec("rpm", 9.52, 34.0, 42.0, noise=3.0, felt_trim=2.50),
+    # It gets 40-50 Hz, the strongest ten hertz this rig has, because it is the
+    # highest-value cue in the system for a driver whose stated weakness is
+    # trail-braking depth. It pulses, at 7 Hz where the regulator has just
+    # started and 16 Hz at a lock, because that is both what a locking tyre
+    # feels like and the axis the body reads best at this carrier frequency.
+    #
+    # The gain matches wheel-spin's 70 - his loudest - and the felt trim takes
+    # it back down, because 40-50 Hz delivers 3.0 against the high region's
+    # 2.0. Equal number, equal felt authority, which is the intention.
+    EffectSpec("brake_limit", 70.00, 40.0, 50.0, noise=4.0, min_force=18.0,
+               gamma=1.25, priority=CRITICAL, felt_trim=0.62,
+               am_lo=7.0, am_hi=16.0, am_depth=0.55,
+               attack_s=0.006, release_s=0.05),
+    # His gear thump, renamed for what it carries: a shift, and the rev
+    # limiter. A single confirming tick at the strongest frequency on the rig.
+    #
+    # 0.55 was arrived at by measurement rather than taste. Replayed over eight
+    # real laps it fired at -26.8 dBFS, 8.5 dB BELOW the road bed - "gear shift
+    # can't feel", and arithmetic rather than opinion. Parity with the bed
+    # would be 0.065 of his gain; a transient should stand above the bed rather
+    # than sit level with it, and the ducking below gives it another 7 dB for
+    # the length of the thump.
+    EffectSpec("driveline", 39.87, 50.0, priority=TRANSIENT, felt_trim=0.55),
+    # Impacts: a kerb strike, a landing, a compression the suspension has not
+    # seen before, a collision. Raised off 28-38 Hz - where the kerb thump was
+    # a third of the test tone and could not be felt - and now clear of the
+    # braking cue below it rather than sitting inside it.
+    #
+    # His threshold of 55 was set for genuine impacts, which are rare. The
+    # channel now also carries kerb strikes and landings, which are not, so it
+    # comes down to 25 - otherwise a landing would have to be an accident
+    # before it was felt.
+    EffectSpec("impact", 12.31, 52.0, 60.0, noise=3.0, priority=TRANSIENT,
+               threshold=25.0, min_force=20.0, gamma=1.20, felt_trim=2.20),
+    # His `TractionLossContainer`, renamed to what it actually carries: how
+    # hard the car is leaning on its tyres, in g. The gain, noise and filter
+    # are still his; the input changed from a saturating yaw-error model to
+    # lateral g, and the band from 52-70 - which ended exactly on the null - to
+    # 56-66 with the response compensated across it, so loading the car harder
+    # now means feeling more all the way up instead of the signal partly
+    # cancelling itself at the moment it mattered.
+    EffectSpec("chassis_load", 35.19, 56.0, 66.0, noise=6.0, threshold=9.0,
+               min_force=12.0, gamma=1.40, priority=STATE, felt_trim=0.85,
+               band_compensate=True),
+    # **The tyres, with the whole high region to themselves.**
+    #
+    # His band, his gain, his noise. What changed is that nothing else is in
+    # here any more, and that the input is now slip above a learned reference
+    # rather than slip above 1.04 - which, measured, was ordinary acceleration
+    # for most of every lap.
+    #
+    # It rasps rather than pulses: 5 Hz where the rear has just started
+    # working, 14 Hz when it is away. Shallower modulation than the braking cue
+    # because a slide is a continuous thing and a lock is not.
+    # **The threshold is 15 and it is doing real work.** Replayed over his own
+    # laps without one, this channel was live for 84% of the lap at a median
+    # of -20 dBFS - which is not a limit cue, it is a second bed, and a bed in
+    # the one band reserved for limit cues. The state model reports the rear
+    # working from the 72nd percentile upward because that is true and the
+    # diagnostics want it; the driver is only TOLD from the point where it is
+    # worth a correction. Live 12% of the lap, which is about four seconds a
+    # lap and matches where the wheels are genuinely past their reference.
+    EffectSpec("rear_traction", 70.00, 86.0, 104.0, noise=9.0, threshold=15.0,
+               min_force=20.0, gamma=1.30, priority=CRITICAL, felt_trim=1.00,
+               am_lo=5.0, am_hi=14.0, am_depth=0.45,
+               attack_s=0.006, release_s=0.05, band_compensate=True),
 )
 
+# The name it had while there were six effects and they were all his. Kept so
+# nothing that imports it breaks; it is the same object.
+PORSCHE_RSR_17 = PROFILE
+
+# Values that arrive alongside the effects and render nothing. See
+# `HapticMix.render` and `effects.EffectDeriver.MODIFIERS` - the two lists have
+# to agree, and a test says so.
+MODIFIERS = ("unload",)
 
 class _Voice:
     """One effect's oscillator, its noise, and the state both carry forward."""
@@ -280,6 +421,11 @@ class _Voice:
         self._buf = np.zeros(block, dtype=np.float32)
         self._ramp = np.zeros(block, dtype=np.float32)
         self._noise = np.zeros(block, dtype=np.float32)
+        self._am = np.zeros(block, dtype=np.float32)
+        # The modulator's own phase, carried forward for exactly the reason the
+        # carrier's is: a pulse rate that changes with severity would click at
+        # every change if the phase were recomputed from a sample index.
+        self._am_phase = 0.0
         self._idx = np.arange(1, block + 1, dtype=np.float32)
         # Carried across blocks so the interpolated noise does not restart
         # from zero at every boundary, which would be a click per block.
@@ -288,6 +434,14 @@ class _Voice:
     @property
     def level(self) -> float:
         return self._level
+
+    @property
+    def frequency(self) -> float:
+        """Where in its band this voice last played, for the explainer."""
+        spec = self.spec
+        if not spec.freq_hi:
+            return spec.freq_lo
+        return spec.freq_lo + (spec.freq_hi - spec.freq_lo) * self._pitch
 
     def render(self, out: np.ndarray, intensity: float, pitch: float,
                n: int) -> None:
@@ -304,6 +458,7 @@ class _Voice:
         the master up transposed the entire rig. Lateral load used a quarter
         of its range and the kerb thump a twelfth.
         """
+        spec = self.spec
         target = float(np.clip(intensity, 0.0, 1.0))
         if target < SILENT and self._level < SILENT:
             # Nothing here and nothing decaying. Leave the phase where it is:
@@ -316,7 +471,16 @@ class _Voice:
         ramp = self._ramp[:n]
 
         # Interpolate the level across the block rather than stepping it.
-        alpha = 1.0 - np.exp(-1.0 / (SMOOTH_S * self._rate))
+        #
+        # **Attack and release are separate**, and for the limit cues they are
+        # very different. A single 20 ms constant is 20 ms of latency on a
+        # wheel-lock warning, which is a fifth of the reaction time the warning
+        # exists to buy; the same 20 ms on the way down is too fast and makes
+        # the cue chatter at its own threshold. Immersion effects leave both at
+        # zero and get the module default, which is what they want.
+        rising = target >= self._level
+        tau = spec.attack_s if rising else spec.release_s
+        alpha = 1.0 - np.exp(-1.0 / (max(tau or SMOOTH_S, 1e-4) * self._rate))
         np.multiply(self._idx[:n], alpha, out=ramp)
         np.clip(ramp, 0.0, 1.0, out=ramp)
         start = self._level
@@ -331,13 +495,27 @@ class _Voice:
         # Smoothed the same way the level is, and over the same time constant,
         # so a step in intensity bends the pitch rather than stepping it - a
         # pitch jump is heard as a click even when the phase is continuous.
-        spec = self.spec
         if spec.freq_hi:
             aim = float(np.clip(pitch, 0.0, 1.0))
             self._pitch += (aim - self._pitch) * float(ramp[-1])
             freq = spec.freq_lo + (spec.freq_hi - spec.freq_lo) * self._pitch
         else:
             freq = spec.freq_lo
+
+        # **Compensate the response across the band, not at a point.**
+        #
+        # `felt_trim` is a static correction for where an effect sits; it can
+        # do nothing for one that moves. Normalised to the band centre so it
+        # does not double-count the driver's own gain, which was tuned with
+        # the effect somewhere in the middle of its range. Clamped, because
+        # this is a correction and not a licence: an effect that needs more
+        # than a factor of two to be heard is in the wrong band.
+        if spec.band_compensate:
+            here = transducer.felt_response(freq)
+            centre = transducer.felt_response(spec.centre_hz)
+            if here > 1e-6:
+                correction = min(1.8, max(0.6, centre / here))
+                np.multiply(ramp, correction, out=ramp)
 
         # Phase carried forward, so a frequency change bends the wave instead
         # of jumping it.
@@ -350,8 +528,38 @@ class _Voice:
         if spec.noise:
             self._add_noise(buf, freq, n, spec.noise / 100.0)
 
+        if spec.am_depth and spec.am_lo:
+            self._modulate(buf, n, spec)
+
         np.multiply(buf, ramp, out=buf)
         np.add(out[:n], buf, out=out[:n])
+
+    def _modulate(self, buf: np.ndarray, n: int, spec: EffectSpec) -> None:
+        """Pulse the carrier, at a rate that rises with severity.
+
+        The second axis of the tactile vocabulary, and the cheap one. At a
+        40-100 Hz carrier the receptors integrate rather than resolve, so two
+        effects eight hertz apart feel like one effect at two strengths;
+        flutter between about 5 and 20 Hz is discriminated well, and it is also
+        what the events being reported actually feel like in a car - a locking
+        tyre judders, a spinning one rasps.
+
+        The envelope is `1 - d + d * (0.5 + 0.5 sin)`, so it swings between
+        `1 - d` and 1 and never inverts the carrier. Depth is capped in
+        `EffectSpec.__post_init__`: deeper than 0.6 and the effect spends more
+        time off than on, which reads as a stutter rather than as a rate.
+        """
+        rate = spec.am_lo + (spec.am_hi - spec.am_lo) * self._pitch
+        step = 2.0 * np.pi * rate / self._rate
+        am = self._am[:n]
+        np.multiply(self._idx[:n], step, out=am)
+        np.add(am, self._am_phase, out=am)
+        self._am_phase = float((self._am_phase + step * n) % (2.0 * np.pi))
+        np.sin(am, out=am)
+        depth = spec.am_depth
+        np.multiply(am, 0.5 * depth, out=am)
+        np.add(am, 1.0 - 0.5 * depth, out=am)
+        np.multiply(buf, am, out=buf)
 
     def _add_noise(self, buf: np.ndarray, freq: float, n: int,
                    ratio: float) -> None:
@@ -486,8 +694,27 @@ class HapticMix:
         # before a 90 ms thump has peaked, slow enough coming back that the
         # recovery is not itself an event.
         self._duck = 1.0
-        self._transient = np.array([spec.transient for spec in self.specs],
-                                   dtype=bool)
+        self._unload_duck = 1.0
+        self._priority = np.array([spec.priority for spec in self.specs],
+                                  dtype=np.int8)
+        self._transient = self._priority == TRANSIENT
+        self._critical = self._priority == CRITICAL
+        # Background is everything that is allowed to get out of the way.
+        self._background = self._priority >= STATE
+        # **The explainer's storage, made once.**
+        #
+        # "What exactly caused that vibration" is a question the driver will
+        # ask an hour after the session, and it can only be answered if the
+        # numbers were kept at the time. They are kept in preallocated arrays
+        # rather than dictionaries because this runs inside the audio callback,
+        # where allocating is the one thing not to do; `explain()` builds the
+        # readable form later, on whatever thread asks.
+        count = len(self.specs)
+        self._last_raw = np.zeros(count, dtype=np.float32)
+        self._last_shaped = np.zeros(count, dtype=np.float32)
+        self._last_level = np.zeros(count, dtype=np.float32)
+        self._last_duck = np.ones(count, dtype=np.float32)
+        self._last_freq = np.zeros(count, dtype=np.float32)
         self._dc_y = 0.0
         # Held rather than rebuilt: the DC correction is ramped across each
         # block, and `linspace` in a callback allocates.
@@ -505,33 +732,102 @@ class HapticMix:
 
     def render(self, intensities: np.ndarray, n: int) -> np.ndarray:
         """One block of mono signal. The returned view is reused - copy it if
-        it has to outlive the call."""
+        it has to outlive the call.
+
+        `intensities` carries one value per effect, and may carry one more:
+        the **unload modifier**, which is not an effect and renders nothing.
+        A shorter array is read as an unload of zero, so anything written
+        against the old length still works.
+        """
         out = self._out[:n]
         out[:] = 0.0
-        shaped = np.array([voice.spec.shape(float(intensities[index]))
-                           for index, voice in enumerate(self._voices)],
-                          dtype=np.float32)
+        count = len(self._voices)
+        raw = self._last_raw
+        for index in range(count):
+            raw[index] = float(intensities[index])
+        unload = (float(intensities[count])
+                  if len(intensities) > count else 0.0)
+        shaped = self._last_shaped
+        for index, voice in enumerate(self._voices):
+            shaped[index] = voice.spec.shape(float(raw[index]))
 
-        # The loudest transient asking to be heard, and how far the bed steps
-        # aside for it. One duck for the whole bed rather than one per pair:
-        # the driver feels the sum, not the effects.
-        event = float(shaped[self._transient].max()) if self._transient.any() else 0.0
-        aim = 1.0 - DUCK_DEPTH * event
         seconds = n / float(self._rate)
+
+        # **Arbitration between the two limit cues.** They coincide on 0.14% of
+        # measured frames, which is rare and is exactly the moment not to hand
+        # the driver two overlapping rasps: the lesser is attenuated so one of
+        # them is clearly the message and the other is context.
+        if self._critical.any():
+            levels = shaped[self._critical]
+            if levels.size > 1:
+                order = np.argsort(levels)[::-1]
+                if levels[order[0]] > ARBITRATE_ABOVE and levels[order[1]] > ARBITRATE_ABOVE:
+                    indices = np.flatnonzero(self._critical)
+                    for rank in order[1:]:
+                        shaped[indices[rank]] *= ARBITRATE_DUCK
+            critical = float(shaped[self._critical].max())
+        else:
+            critical = 0.0
+
+        # How far the background steps aside, and for what. One duck for the
+        # whole background rather than one per pair: the driver feels the sum,
+        # not the effects.
+        event = (float(shaped[self._transient].max())
+                 if self._transient.any() else 0.0)
+        aim = 1.0 - max(DUCK_DEPTH * event, DUCK_CRITICAL * critical)
         tau = DUCK_ATTACK_S if aim < self._duck else DUCK_RELEASE_S
         self._duck += (aim - self._duck) * min(1.0, seconds / tau)
 
+        # **The absence cue.** When the car goes light the background is pulled
+        # down rather than anything being added, because that is what a real
+        # car does over a crest and because it is the one message on this rig
+        # that nothing can mask.
+        want = 1.0 - UNLOAD_DUCK * min(1.0, max(0.0, unload))
+        tau = UNLOAD_ATTACK_S if want < self._unload_duck else UNLOAD_RELEASE_S
+        self._unload_duck += (want - self._unload_duck) * min(1.0, seconds / tau)
+
         for index, voice in enumerate(self._voices):
-            level = float(shaped[index]) * self._scale[index] * self.master
-            if not self._transient[index]:
-                level *= self._duck
+            duck = (self._duck * self._unload_duck
+                    if self._background[index] else 1.0)
+            level = float(shaped[index]) * self._scale[index] * self.master * duck
+            self._last_duck[index] = duck
+            self._last_level[index] = level
             voice.render(out, level, float(shaped[index]), n)
+            self._last_freq[index] = voice.frequency
         self._block_dc(out, n)
         self._limit(out, n)
         if n:
             self._recent_peak = max(self._recent_peak,
                                     float(np.max(np.abs(out[:n]))))
         return out
+
+    def explain(self) -> list[dict]:
+        """Every number behind the last block, per effect.
+
+        The whole answer to "what exactly caused that vibration". Built here
+        rather than in the callback: dictionaries allocate, and the callback
+        must not.
+        """
+        rows = []
+        for index, spec in enumerate(self.specs):
+            rows.append({
+                "effect": spec.name,
+                "priority": spec.priority,
+                "raw": round(float(self._last_raw[index]), 4),
+                "shaped": round(float(self._last_shaped[index]), 4),
+                "base_gain": round(float(self._scale[index]), 4),
+                "ducked_by": round(1.0 - float(self._last_duck[index]), 4),
+                "final": round(float(self._last_level[index]), 4),
+                "hz": round(float(self._last_freq[index]), 1),
+                "felt": round(transducer.felt_response(
+                    float(self._last_freq[index]) or spec.centre_hz), 2),
+            })
+        return rows
+
+    @property
+    def duck(self) -> float:
+        """What the background is currently multiplied by, all causes."""
+        return self._duck * self._unload_duck
 
     def take_recent_peak(self) -> float:
         """The loudest thing rendered since this was last called."""

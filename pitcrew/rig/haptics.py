@@ -57,7 +57,7 @@ class HapticsEngine:
     PortAudio's thread, so a slow sound card cannot reach the packet handler.
     """
 
-    def __init__(self, *, specs=synth.PORSCHE_RSR_17,
+    def __init__(self, *, specs=synth.PROFILE,
                  device: str = transducer.DEVICE_NAME,
                  master: float = 1.0) -> None:
         self._device = device
@@ -70,8 +70,13 @@ class HapticsEngine:
         # arrays rather than a lock: the callback must never wait on a thread
         # that could be descheduled, and a half-updated intensity is one frame
         # stale, which the smoothing in `synth` swallows anyway.
-        self._wanted = np.zeros(len(self._specs), dtype=np.float32)
-        self._live = np.zeros(len(self._specs), dtype=np.float32)
+        # **One slot per effect plus one per modifier.** A modifier renders
+        # nothing and changes what the effects do - `unload` pulls the
+        # background down so the driver feels the car go light. Sizing this
+        # array from the number of VOICES would drop it silently.
+        width = len(self._specs) + len(synth.MODIFIERS)
+        self._wanted = np.zeros(width, dtype=np.float32)
+        self._live = np.zeros(width, dtype=np.float32)
         # Bumped on every update. The callback watches it rather than a clock,
         # because it is the only evidence that anything upstream is alive.
         self._generation = 0
@@ -89,9 +94,17 @@ class HapticsEngine:
     # --------------------------------------------------------- from outside
 
     def set_intensities(self, values) -> None:
-        """The effect levels, 0-1 each. Called on the telemetry thread."""
-        np.clip(np.asarray(values, dtype=np.float32), 0.0, 1.0,
-                out=self._wanted)
+        """The effect levels and modifiers, 0-1 each, on the telemetry thread.
+
+        A shorter array than expected is accepted and the rest left at zero,
+        because that is what a caller written before the modifiers existed
+        sends and silence is the right answer for a modifier nobody set.
+        """
+        incoming = np.asarray(values, dtype=np.float32)
+        count = min(len(incoming), len(self._wanted))
+        np.clip(incoming[:count], 0.0, 1.0, out=self._wanted[:count])
+        if count < len(self._wanted):
+            self._wanted[count:] = 0.0
         self._generation += 1
 
     def set_master(self, gain: float) -> None:
@@ -120,6 +133,15 @@ class HapticsEngine:
     @property
     def running(self) -> bool:
         return self._stream is not None and not self._suspended
+
+    def explain(self) -> list[dict]:
+        """Every number behind the last block rendered, per effect.
+
+        Wired through from the mix so that a driver who felt something odd can
+        be answered rather than guessed at. Safe to call from any thread: it
+        reads arrays the callback writes and builds its own output.
+        """
+        return self._mix.explain()
 
     def describe(self) -> str:
         if self.error:

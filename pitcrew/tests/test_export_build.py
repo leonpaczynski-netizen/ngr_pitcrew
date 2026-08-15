@@ -33,7 +33,12 @@ class StoredFrames:
     """
 
     def __init__(self, frames: list[dict]) -> None:
-        rows = [[f[name] for name in FRAME_FIELDS] for f in frames]
+        # `.get`, not `[]`. `FRAME_FIELDS` is append-only and a fixture that
+        # demanded every column would break the moment one was added - which
+        # is also the real case on disk, where a lap recorded last month has
+        # fewer columns than one recorded today. Missing is None, which is
+        # what CLAUDE.md rule 3 says it has to be.
+        rows = [[f.get(name) for name in FRAME_FIELDS] for f in frames]
         self.frame_count = len(frames)
         self.sample_hz = 60.0
         self.blob = encode_frames(rows)

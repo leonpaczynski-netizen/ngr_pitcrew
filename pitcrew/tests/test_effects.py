@@ -1,443 +1,364 @@
-"""Six intensities out of GT7's channels.
+"""What the driver is told, from a packet, with no rig in the room.
 
-Everything under test here is DERIVED - GT7 broadcasts no slip channel, no
-road-texture channel, no impact channel and no ABS flag - so these are tests
-of a model against its own stated thresholds, not of a measurement. The one
-that matters most is the first: an effect reading full scale down a straight
-is worse than an effect that never fires, because the driver would feel the
-car doing something it is not doing and drive to it.
+`test_vehicle.py` covers what the car is doing. This covers the layer that
+turns that into seven amplitudes: the immersion channels, the one-shots, and
+the wiring that has to keep the two lists in step.
+
+The distinction is worth keeping because the two fail differently. A wrong
+number in `vehicle` is a wrong claim about the car; a wrong number here is a
+cue that is too loud, in the wrong place, or masking something better.
 """
 from __future__ import annotations
 
-import dataclasses
-import struct
-
 import numpy as np
 
-from pitcrew.rig import effects
+from pitcrew.rig import vehicle
 from pitcrew.rig.effects import EffectDeriver
-from pitcrew.rig.synth import PORSCHE_RSR_17 as PORSCHE_RSR_17_SPECS
-
-from .conftest import make_packet, rolling_wheel_rps
-
-# Where things sit inside the 72-byte extended tail.
-_ROAD_WHEEL_L = 352 - 296
-_ROAD_WHEEL_R = 356 - 296
-_SURFACE = 344 - 296
-_WHEELBASE = 360 - 296
+from pitcrew.rig.synth import PROFILE
+from pitcrew.tests.test_vehicle import Frame as _CarFrame
 
 
-def racing(*, road_wheel: float = 0.0, surfaces: str = "TTTT",
-           wheelbase: float = 2.516, **overrides):
-    """A packet with a real extended tail, since that is where the channels
-    this module leans on actually live."""
-    packet = make_packet(extended=True, **overrides)
-    tail = bytearray(packet.tail or bytes(72))
-    struct.pack_into("<f", tail, _ROAD_WHEEL_L, road_wheel)
-    struct.pack_into("<f", tail, _ROAD_WHEEL_R, road_wheel)
-    struct.pack_into("<f", tail, _WHEELBASE, wheelbase)
-    tail[_SURFACE:_SURFACE + 4] = surfaces.encode("ascii")
-    return dataclasses.replace(packet, tail=bytes(tail))
+class Frame(_CarFrame):
+    """A packet as far as both layers are concerned.
 
-
-def rolling(speed_ms: float = 59.7, **overrides):
-    """A car travelling in a straight line with its wheels rolling true.
-
-    Any wheel the caller names keeps the caller's value - that is how a single
-    wheel is made to spin or lock without respecifying the other three.
+    `EffectDeriver` reads a handful of fields `VehicleModel` does not - the
+    flags, the revs, the world velocity vector - so this adds them to the same
+    stub rather than growing a second one that could drift from it.
     """
-    rps = rolling_wheel_rps(speed_ms)
-    wheels = {"wheel_rps_fl": rps, "wheel_rps_fr": rps,
-              "wheel_rps_rl": rps, "wheel_rps_rr": rps}
-    wheels.update(overrides)
-    return racing(speed_ms=speed_ms, **wheels)
+
+    def __init__(self, *, rpm=6000.0, rpm_max=8000.0, on_track=True,
+                 paused=False, velocity=(0.0, 0.0, 0.0), **kw):
+        super().__init__(**kw)
+        self.engine_rpm = rpm
+        self.rpm_alert_max = rpm_max
+        self.car_on_track = on_track
+        self.paused = paused
+        if velocity != (0.0, 0.0, 0.0):
+            self.vel_x, self.vel_y, self.vel_z = velocity
+        self.speed_kmh = self.speed_ms * 3.6
 
 
-def settle(deriver: EffectDeriver, packet, frames: int = 3) -> np.ndarray:
+def _index(name: str) -> int:
+    return EffectDeriver.NAMES.index(name)
+
+
+def _settle(deriver: EffectDeriver, frames: int = 400, **kw) -> np.ndarray:
     out = None
     for _ in range(frames):
-        out = deriver.update(packet).copy()
+        out = deriver.update(Frame(**kw)).copy()
     return out
 
 
-def one(deriver: EffectDeriver, packet, name: str) -> float:
-    return float(settle(deriver, packet)[deriver.NAMES.index(name)])
+# ------------------------------------------------------------- the contract
+
+def test_the_deriver_and_the_mix_agree_on_what_the_effects_are():
+    assert EffectDeriver.NAMES == tuple(s.name for s in PROFILE)
 
 
-# ------------------------------------------------------- the straight line
-
-def test_a_car_going_straight_reports_no_load():
-    """Lateral g is speed times yaw rate. Straight means no yaw means no load,
-    whatever the steering is doing."""
-    packet = rolling(road_wheel=0.0016, angvel_y=0.0)
-    assert one(EffectDeriver(), packet, "lateral_load") == 0.0
-
-
-def test_load_rises_with_how_hard_the_car_is_actually_cornering():
-    """The point of the change: resolution all the way to the limit.
-
-    The model this replaced was `speed * steering / wheelbase` against yaw,
-    which correlated 0.991 with steering times speed and sat at FULL SCALE for
-    34-53% of a real lap. It could not tell a corner taken well within the
-    limit from one on the edge, which is precisely what the driver wanted to
-    use it for.
-    """
-    def load(g: float) -> float:
-        # speed 59.7 m/s, so yaw rate for a given lateral g is g*9.81/v.
-        return one(EffectDeriver(),
-                   rolling(angvel_y=g * 9.81 / 59.7), "lateral_load")
-
-    gentle, committed, limit = load(0.5), load(1.2), load(2.0)
-    assert 0.0 < gentle < committed < limit
-    assert limit < 1.0, "no resolution left at the limit, which is the point"
-
-
-def test_the_scale_is_in_g_so_it_means_the_same_in_every_car():
-    """1.2 g is 1.2 g at any speed, in any car. That is what makes it worth
-    learning from - a number he can carry between corners and cars."""
-    slow = one(EffectDeriver(),
-               rolling(speed_ms=30.0, angvel_y=1.2 * 9.81 / 30.0),
-               "lateral_load")
-    fast = one(EffectDeriver(),
-               rolling(speed_ms=70.0, angvel_y=1.2 * 9.81 / 70.0),
-               "lateral_load")
-    assert abs(slow - fast) < 1e-6
-
-
-def test_it_does_not_depend_on_the_sign_of_a_channel_nobody_has_verified():
-    """`recorder.py` records that `angvel_y`'s sign is unverified against the
-    packet. Taking the magnitude means this effect cannot be wrong about it -
-    unlike the sideslip cue that was proposed and rejected for exactly that.
-    """
-    left = one(EffectDeriver(), rolling(angvel_y=0.35), "lateral_load")
-    right = one(EffectDeriver(), rolling(angvel_y=-0.35), "lateral_load")
-    assert left == right > 0.0
-
-
-def test_it_survives_a_packet_format_without_the_extended_tail():
-    """The model it replaced needed the road-wheel angle, which lives in the
-    tail - so on format A or B it silently returned zero. Lateral g needs only
-    speed and yaw, both of which are in the base packet."""
-    from .conftest import make_packet
-
-    base = make_packet(extended=False, speed_ms=59.7, angvel_y=0.30)
-    assert float(EffectDeriver().update(base)[3]) > 0.0
-
-
-def test_a_stationary_car_is_not_loaded_however_it_is_spinning():
-    """Below walking pace the arithmetic means nothing, and a car being
-    rotated in a garage is not cornering."""
-    assert one(EffectDeriver(), racing(speed_ms=1.0, angvel_y=2.0),
-               "lateral_load") == 0.0
-
-
-def test_rolling_wheels_are_not_spinning_or_locking():
-    assert one(EffectDeriver(), rolling(), "wheels_spin_lock") == 0.0
-
-
-# ---------------------------------------------------------------- wheels
-
-def test_wheelspin_needs_the_throttle_to_be_open():
-    """A wheel reading fast in the air is not wheelspin the driver caused."""
-    fast = rolling_wheel_rps(59.7) * 1.30
-    on = rolling(wheel_rps_rl=fast, wheel_rps_rr=fast, throttle_raw=255)
-    off = rolling(wheel_rps_rl=fast, wheel_rps_rr=fast, throttle_raw=0)
-    assert one(EffectDeriver(), on, "wheels_spin_lock") > \
-        one(EffectDeriver(), off, "wheels_spin_lock")
-
-
-def test_a_lock_up_needs_the_brake_to_be_on():
-    """A wheel reading slow over a kerb is not a lock-up, and the pedal is
-    what separates the two. He trail-brakes deep by design, so this effect
-    firing on lifts would be constant.
-
-    Settled over a longer window than most of these, because a lock is no
-    longer believed on sight: it has to hold for `LOCK_ATTACK_S` before it is
-    reported, which is what stops ABS pulsing being read as a lock-up. Three
-    frames only reaches about 0.2 of the way there now.
-    """
-    slow = rolling_wheel_rps(59.7) * 0.60
-    braking = rolling(wheel_rps_fl=slow, wheel_rps_fr=slow, brake_raw=200)
-    coasting = rolling(wheel_rps_fl=slow, wheel_rps_fr=slow, brake_raw=0)
-    held = settle(EffectDeriver(), braking, frames=60)
-    assert float(held[0]) > 0.5
-    assert one(EffectDeriver(), coasting, "wheels_spin_lock") == 0.0
-
-
-def test_slip_is_not_computed_from_a_divisor_that_means_nothing():
-    """Below walking pace the ratio is arithmetic on nearly zero."""
-    crawling = racing(speed_ms=1.0, wheel_rps_fl=50.0)
-    assert one(EffectDeriver(), crawling, "wheels_spin_lock") == 0.0
-
-
-# ---------------------------------------------------------------- surface
-
-def test_a_kerb_is_felt_because_gt7_says_it_is_a_kerb():
-    """The one input here that is measured rather than modelled - and the one
-    SimHub's GT7 support cannot see, because it reads the base packet format
-    only and so has to infer kerbs from suspension."""
-    tarmac = one(EffectDeriver(), rolling(surfaces="TTTT"), "wheels_rumble")
-    kerb = one(EffectDeriver(), rolling(surfaces="TTCC"), "wheels_rumble")
-    assert kerb > tarmac + 0.3
-
-
-def test_grass_and_dirt_are_felt_but_less_than_a_kerb():
-    grass = one(EffectDeriver(), rolling(surfaces="GGGG"), "wheels_rumble")
-    kerb = one(EffectDeriver(), rolling(surfaces="CCCC"), "wheels_rumble")
-    assert 0.0 < grass < kerb
-
-
-def _over_bumps(speed_ms: float) -> float:
-    """Rumble from a road that is actually moving the suspension."""
+def test_it_returns_one_value_per_effect_and_one_per_modifier():
+    """The modifiers are appended after the effects. Sizing anything from the
+    number of VOICES drops them silently, which is a cue that stops working
+    with nothing raised anywhere."""
     deriver = EffectDeriver()
-    value = 0.0
-    for frame in range(12):
-        height = 0.08 + (0.006 if frame % 2 else -0.006)
-        value = float(deriver.update(rolling(
-            speed_ms=speed_ms,
-            suspension_fl=height, suspension_fr=height,
-            suspension_rl=height, suspension_rr=height))[2])
-    return value
+    out = deriver.update(Frame())
+    assert len(out) == len(EffectDeriver.NAMES) + len(EffectDeriver.MODIFIERS)
 
 
-def test_the_same_bump_matters_less_at_walking_pace():
-    """His SimHub rumble scaled to `MaxEffectSpeed 130`.
-
-    Tested on tarmac with the suspension genuinely moving, because the speed
-    scaling now applies to the TEXTURE only. A kerb is deliberately exempt -
-    see below.
-    """
-    assert _over_bumps(40.0) > _over_bumps(5.0)
-
-
-def test_a_kerb_is_not_scaled_down_just_because_the_corner_is_slow():
-    """The change that came out of "ripple strips don't feel sharp enough".
-
-    A bump at 40 km/h genuinely is not the bump it is at 130 - the suspension
-    moves less. But a kerb is a kerb: the wheel is on a different surface, and
-    hairpins are exactly where kerbs matter most.
-    """
-    fast = one(EffectDeriver(), rolling(speed_ms=40.0, surfaces="CCCC"),
-               "wheels_rumble")
-    slow = one(EffectDeriver(), rolling(speed_ms=5.0, surfaces="CCCC"),
-               "wheels_rumble")
-    assert fast == slow
-    # float32, so a hair under the constant.
-    assert slow >= effects.KERB_BOOST - 1e-6
-
-
-def test_arriving_on_a_kerb_fires_a_low_thump():
-    """The rumble band's frequency follows its intensity, so a kerb drives the
-    HIGHEST frequency in it - and piston excursion falls as 1/f-squared, so
-    the hardest hit is the least felt. Measured: ordinary road 135 Hz, kerb
-    149 Hz, four-fifths the excursion. It gets buzzier, not sharper.
-
-    A real ripple strip is a thud with a rattle on top. This is the thud.
-    """
+def test_every_value_is_a_fraction():
     deriver = EffectDeriver()
-    for _ in range(4):
-        deriver.update(rolling(surfaces="TTTT"))
-    on_kerb = float(deriver.update(rolling(surfaces="TTCC"))[4])
-    assert on_kerb >= effects.KERB_THUMP
+    for throttle in (0.0, 0.5, 1.0):
+        for brake in (0.0, 1.0):
+            out = deriver.update(Frame(throttle=throttle, brake=brake,
+                                       rear_slip=1.4, front_slip=0.6))
+            assert np.all(out >= 0.0) and np.all(out <= 1.0), out
 
 
-def test_sitting_on_a_kerb_is_a_texture_rather_than_a_repeated_thump():
-    """It is the EDGE that reads as sharp. A wheel resting on a kerb through
-    a whole chicane is what the rumble effect is for."""
+def test_nothing_happens_off_track():
+    """A car in the garage or mid-load produces position jumps and suspension
+    steps that are not events, and the driver is not in the seat to feel
+    them."""
     deriver = EffectDeriver()
-    deriver.update(rolling(surfaces="TTTT"))
-    first = float(deriver.update(rolling(surfaces="TTCC"))[4])
-    for _ in range(30):
-        later = float(deriver.update(rolling(surfaces="TTCC"))[4])
-    assert later < first * 0.2, "it kept thumping while the wheel sat there"
+    _settle(deriver, throttle=0.8, rear_slip=1.03)
+    out = deriver.update(Frame(on_track=False, throttle=1.0, rear_slip=1.5))
+    assert float(np.max(out)) == 0.0
+    paused = deriver.update(Frame(paused=True, throttle=1.0, rear_slip=1.5))
+    assert float(np.max(paused)) == 0.0
 
 
-def test_texture_comes_from_suspension_movement_not_its_position():
-    """Height alone is ride height plus load transfer. A car sitting at a
-    constant, unusual height is not on a rough surface."""
+# ------------------------------------------------------------------- engine
+
+def test_revs_are_a_fraction_of_this_cars_own_limiter():
+    """GT7 broadcasts the shift light and the limiter per car, so the engine
+    bed needs no configuration and is right on a Gr.4 and a Gr.1 without being
+    told anything about either."""
     deriver = EffectDeriver()
-    still = rolling(suspension_fl=0.09, suspension_fr=0.09,
-                    suspension_rl=0.09, suspension_rr=0.09)
-    assert one(deriver, still, "wheels_rumble") == 0.0
+    low = deriver.update(Frame(rpm=2000.0, rpm_max=8000.0))[_index("engine")]
+    high = deriver.update(Frame(rpm=7600.0, rpm_max=8000.0))[_index("engine")]
+    assert high > low
+    other_car = deriver.update(
+        Frame(rpm=3800.0, rpm_max=4000.0))[_index("engine")]
+    assert other_car > low, "it is reading absolute revs, not a fraction"
 
 
-# ------------------------------------------------------------------ engine
-
-def test_a_gear_change_thumps_once_and_decays():
+def test_a_car_with_no_limiter_reported_is_silent_rather_than_full():
     deriver = EffectDeriver()
-    fourth = rolling(gear_raw=0x04, engine_rpm=8000.0,
-                     rpm_alert_min=8500, rpm_alert_max=9000)
-    fifth = dataclasses.replace(fourth, gear_raw=0x05)
-    deriver.update(fourth)
-    at_shift = float(deriver.update(fifth)[1])
-    assert at_shift > 0.3, "the shift was not felt"
-    for _ in range(30):
-        after = float(deriver.update(fifth)[1])
-    assert after < at_shift * 0.2, "the thump did not decay"
+    assert deriver.update(Frame(rpm=6000.0, rpm_max=0.0))[_index("engine")] == 0.0
+
+
+# ---------------------------------------------------------------- driveline
+
+def test_a_gear_change_ticks_once_and_decays():
+    deriver = EffectDeriver()
+    deriver.update(Frame(gear=3))
+    shifted = deriver.update(Frame(gear=4))[_index("driveline")]
+    assert shifted > 0.0
+    after = shifted
+    for _ in range(12):
+        after = deriver.update(Frame(gear=4))[_index("driveline")]
+    assert after < shifted * 0.4, "the tick became a state"
 
 
 def test_a_shift_at_the_limiter_is_felt_harder_than_one_at_half_revs():
-    """His profile modulated the gear gain by rpm between 50% and 90%."""
-    def shift(rpm: float) -> float:
-        deriver = EffectDeriver()
-        low = rolling(gear_raw=0x03, engine_rpm=rpm, rpm_alert_max=9000)
-        deriver.update(low)
-        return float(deriver.update(dataclasses.replace(low, gear_raw=0x04))[1])
-
-    assert shift(8600.0) > shift(4000.0)
-
-
-def test_rolling_backwards_out_of_the_box_is_not_a_gearshift():
     deriver = EffectDeriver()
-    neutral = rolling(gear_raw=0x00)
-    first = dataclasses.replace(neutral, gear_raw=0x01)
-    deriver.update(neutral)
-    assert float(deriver.update(first)[1]) == 0.0
+    deriver.update(Frame(gear=3, rpm=4000.0))
+    soft = deriver.update(Frame(gear=4, rpm=4000.0))[_index("driveline")]
+    deriver.reset()
+    deriver.update(Frame(gear=3, rpm=7600.0))
+    hard = deriver.update(Frame(gear=4, rpm=7600.0))[_index("driveline")]
+    assert hard > soft
 
 
-def test_the_rpm_curve_is_his_and_is_read_in_ascending_order():
-    """SimHub stores his control points with the last one sorting fourth, and
-    sorts them on load. Read top to bottom the curve is a different shape."""
-    xs = [x for x, _ in effects.RPM_CURVE]
-    assert xs == sorted(xs)
-    assert effects.RPM_CURVE[-1] == (100.0, 63.06), "it tops out at 63%, not 100"
+def test_rolling_backwards_out_of_the_pit_box_is_not_a_gearshift():
+    deriver = EffectDeriver()
+    deriver.update(Frame(gear=1))
+    assert deriver.update(Frame(gear=0))[_index("driveline")] == 0.0
 
 
-def test_revs_are_a_fraction_of_this_cars_own_limiter():
-    """`rpm_alert_max` is broadcast per car, so this needs no configuration
-    and is right on a Gr.4 and a Gr.1 without being told anything."""
-    high = one(EffectDeriver(), rolling(engine_rpm=8800.0, rpm_alert_max=9000),
-               "rpm")
-    low = one(EffectDeriver(), rolling(engine_rpm=8800.0, rpm_alert_max=18000),
-              "rpm")
-    assert high > low
+def test_the_rev_limiter_gets_a_tick_and_it_is_on_the_edge():
+    """A measured flag that was going entirely unused. Over 40 laps it is
+    active on 0.08% of frames in 52 episodes of about 42 ms - rare, short and
+    unambiguous, which is the profile of something worth a tick and not worth
+    a state. Sitting on the limiter down a straight is already reported by the
+    engine bed at full revs; what is worth saying is that it just arrived,
+    because that is the moment a shift is late."""
+    deriver = EffectDeriver()
+    deriver.update(Frame(limiter=False))
+    hit = deriver.update(Frame(limiter=True))[_index("driveline")]
+    assert hit > 0.0
+    held = hit
+    for _ in range(20):
+        held = deriver.update(Frame(limiter=True))[_index("driveline")]
+    assert held < hit * 0.2, "it became a tone instead of a tick"
+
+
+# --------------------------------------------------------------------- road
+
+def test_texture_comes_from_suspension_movement_not_its_position():
+    """Height alone is ride height plus load transfer. Its rate of change is
+    the part that is surface."""
+    deriver = EffectDeriver()
+    still = (0.280, 0.280, 0.295, 0.295)
+    for _ in range(5):
+        flat = deriver.update(Frame(suspension=still))[_index("road")]
+    # A car sitting lower but just as still is not on a rougher road.
+    lower = (0.270, 0.270, 0.285, 0.285)
+    for _ in range(5):
+        also_flat = deriver.update(Frame(suspension=lower))[_index("road")]
+    assert also_flat <= flat + 0.05
+
+    moving = deriver.update(Frame(suspension=(0.300, 0.262, 0.310, 0.278)))
+    assert moving[_index("road")] > flat
+
+
+def test_the_same_bump_matters_less_at_walking_pace():
+    """His SimHub rumble had `MaxEffectSpeed 130`: the suspension is moving
+    less at 40 km/h, so the same reading is not the same event."""
+    fast = EffectDeriver()
+    fast.update(Frame(speed=40.0, suspension=(0.280, 0.280, 0.295, 0.295)))
+    quick = fast.update(Frame(speed=40.0,
+                              suspension=(0.300, 0.300, 0.315, 0.315)))
+    slow = EffectDeriver()
+    slow.update(Frame(speed=8.0, suspension=(0.280, 0.280, 0.295, 0.295)))
+    crawl = slow.update(Frame(speed=8.0,
+                              suspension=(0.300, 0.300, 0.315, 0.315)))
+    assert quick[_index("road")] > crawl[_index("road")]
+
+
+def test_a_kerb_and_the_grass_read_differently_from_tarmac():
+    """Surface type is the one input in the whole file that is genuinely
+    measured rather than modelled, and the one SimHub's GT7 support cannot see
+    at all because it reads the base packet only."""
+    deriver = EffectDeriver()
+    deriver.update(Frame(surfaces="TTTT"))
+    tarmac = deriver.update(Frame(surfaces="TTTT"))[_index("road")]
+    deriver.reset()
+    deriver.update(Frame(surfaces="TTTT"))
+    kerb = deriver.update(Frame(surfaces="TTCC"))[_index("road")]
+    deriver.reset()
+    deriver.update(Frame(surfaces="TTTT"))
+    grass = deriver.update(Frame(surfaces="GGGG"))[_index("road")]
+    assert kerb > tarmac
+    assert grass > tarmac
+
+
+def test_a_kerb_is_not_scaled_down_just_because_the_corner_is_slow():
+    """A kerb is a kerb - the wheel is on a different surface. Scaling that by
+    speed is what made ripple strips feel soft in the hairpins, which is where
+    they matter most."""
+    deriver = EffectDeriver()
+    deriver.update(Frame(speed=10.0, surfaces="TTTT"))
+    slow_kerb = deriver.update(Frame(speed=10.0, surfaces="TTCC"))[_index("road")]
+    assert slow_kerb > 0.0
 
 
 # ------------------------------------------------------------------ impacts
 
-def test_a_step_in_velocity_no_engine_could_produce_is_an_impact():
+def test_arriving_on_a_kerb_thumps_once():
+    """A real ripple strip is a thud with a rattle on top. The rattle rides
+    the road bed; this is the thud, and it fires on the EDGE because the edge
+    is what reads as sharp."""
     deriver = EffectDeriver()
-    cruising = rolling(vel_x=59.7, vel_y=0.0, vel_z=0.0)
-    deriver.update(cruising)
-    hit = dataclasses.replace(cruising, vel_x=55.0)
-    assert float(deriver.update(hit)[4]) > 0.5
+    deriver.update(Frame(surfaces="TTTT"))
+    strike = deriver.update(Frame(surfaces="TTCT"))[_index("impact")]
+    assert strike > 0.5
+    held = strike
+    for _ in range(20):
+        held = deriver.update(Frame(surfaces="TTCT"))[_index("impact")]
+    assert held < strike * 0.2, (
+        "sitting on a kerb through a chicane became one long impact")
+
+
+def test_a_step_in_world_velocity_is_an_impact():
+    deriver = EffectDeriver()
+    deriver.update(Frame(velocity=(50.0, 0.0, 0.0)))
+    hit = deriver.update(Frame(velocity=(46.0, 0.0, 0.0)))[_index("impact")]
+    assert hit > 0.5
 
 
 def test_ordinary_braking_is_not_an_impact():
+    """2 g is a heavy stop and it is 0.33 m/s in a frame, well under the
+    threshold. His SimHub impact effect ran a threshold of 55 where the others
+    were 8 to 28, which is him saying this should fire rarely."""
     deriver = EffectDeriver()
-    cruising = rolling(vel_x=59.7)
-    deriver.update(cruising)
-    slowing = dataclasses.replace(cruising, vel_x=59.4)
-    assert float(deriver.update(slowing)[4]) == 0.0
+    deriver.update(Frame(velocity=(50.0, 0.0, 0.0)))
+    braking = deriver.update(Frame(velocity=(49.67, 0.0, 0.0)))[_index("impact")]
+    assert braking == 0.0
 
 
-# -------------------------------------------------------------- off track
+# ------------------------------------------------------------- chassis load
 
-def test_nothing_fires_while_the_car_is_not_on_track():
-    """A garage visit produces position jumps and suspension steps that are
-    not events, and he is not in the seat to feel them anyway."""
+def test_load_is_in_g_so_it_means_the_same_in_every_car():
+    """The model this replaced compared measured yaw against the yaw a
+    neutral-steer car would have done, which is only valid in the tyres'
+    linear range: measured over a real lap it correlated 0.991 with steering
+    times speed - it was a steering meter - and sat at full scale for 34-53%
+    of every lap. A signal that saturates cannot be used to judge how much
+    speed to carry, which is what he wanted it for."""
     deriver = EffectDeriver()
-    out = deriver.update(make_packet(extended=True, on_track=False,
-                                     engine_rpm=8000.0, rpm_alert_max=9000))
-    assert float(np.max(out)) == 0.0
+    index = _index("chassis_load")
+    gentle = deriver.update(Frame(speed=50.0, yaw=0.10))[index]   # 0.51 g
+    hard = deriver.update(Frame(speed=50.0, yaw=0.30))[index]     # 1.53 g
+    limit = deriver.update(Frame(speed=50.0, yaw=0.40))[index]    # 2.04 g
+    assert 0.0 < gentle < hard < limit < 1.0, (gentle, hard, limit)
 
 
-def test_coming_back_on_track_does_not_fire_a_phantom_impact():
-    """The car reappears somewhere else on the map with a different velocity.
-    Carrying the old one across the gap would be a collision that never
-    happened, at full scale, the instant he rejoins."""
+def test_a_car_going_straight_is_not_loaded():
     deriver = EffectDeriver()
-    deriver.update(rolling(vel_x=59.7))
-    deriver.update(make_packet(extended=True, on_track=False))
-    rejoined = rolling(vel_x=-30.0)
-    assert float(deriver.update(rejoined)[4]) == 0.0
+    assert deriver.update(Frame(speed=70.0, yaw=0.0))[_index("chassis_load")] == 0.0
 
 
-def test_every_intensity_stays_between_nought_and_one():
+def test_load_does_not_depend_on_the_sign_of_a_channel_nobody_verified():
+    """`recorder.py` records `angvel_y`'s sign as still unverified. Taking the
+    magnitude means a left-hander and a right-hander feel the same, which is
+    correct, and means a sign convention that flipped would change nothing."""
     deriver = EffectDeriver()
-    for packet in (rolling(), rolling(surfaces="CCCC", angvel_y=3.0),
-                   rolling(wheel_rps_fl=400.0, throttle_raw=255),
-                   rolling(speed_ms=0.5)):
-        out = settle(deriver, packet)
-        assert float(np.min(out)) >= 0.0
-        assert float(np.max(out)) <= 1.0
+    index = _index("chassis_load")
+    left = deriver.update(Frame(speed=50.0, yaw=0.30))[index]
+    right = deriver.update(Frame(speed=50.0, yaw=-0.30))[index]
+    assert left == right
 
 
-# --------------------------------------------------------------- the ABS
-
-def test_abs_pulsing_is_not_reported_as_a_lock_up():
-    """Reported from the seat as "ABS is way too strong", which is worth
-    reading carefully: there IS no ABS effect and none was built, because GT7
-    broadcasts no ABS flag.
-
-    What he felt was the lock half of `wheels_spin_lock` firing on the assist
-    itself - ABS pulses the brakes at 10-15 Hz, every pulse drops wheel speed
-    below road speed, and a detector with no memory calls each one a lock-up.
-    On a driver whose technique is trail-braking deep that is most of every
-    corner. The distinction is duration, not depth.
-    """
+def test_a_stationary_car_is_not_loaded_however_it_is_spinning():
     deriver = EffectDeriver()
-    slow = rolling_wheel_rps(59.7) * 0.55
-    locked = rolling(wheel_rps_fl=slow, wheel_rps_fr=slow, brake_raw=220)
-    free = rolling(brake_raw=220)
-
-    peak = 0.0
-    for frame in range(120):                       # two seconds of ABS
-        pulsing = locked if (frame // 3) % 2 == 0 else free
-        peak = max(peak, float(deriver.update(pulsing)[0]))
-    assert peak < 0.6, f"the assist still dominates, reaching {peak:.2f}"
+    assert deriver.update(Frame(speed=1.0, yaw=3.0))[_index("chassis_load")] == 0.0
 
 
-def test_a_lock_that_is_actually_held_still_comes_through():
-    """The other half. Slowing the attack must not deafen a real lock."""
+# ---------------------------------------------------- the two critical cues
+
+def test_ordinary_acceleration_does_not_reach_the_traction_channel():
+    """The defect the whole rebuild was for, checked where the driver feels
+    it rather than where the model computes it."""
     deriver = EffectDeriver()
-    slow = rolling_wheel_rps(59.7) * 0.55
-    locked = rolling(wheel_rps_fl=slow, wheel_rps_fr=slow, brake_raw=220)
-    for _ in range(120):
-        value = float(deriver.update(locked)[0])
-    assert value > 0.9, f"a held lock only reached {value:.2f}"
+    out = _settle(deriver, throttle=0.8, rear_slip=1.032)
+    assert out[_index("rear_traction")] == 0.0
 
 
-def test_the_lock_lets_go_quickly_when_the_wheel_does():
-    """Slow to believe, quick to forget - otherwise it rings on past the
-    corner it belonged to."""
+def test_a_genuine_slide_does_reach_it():
     deriver = EffectDeriver()
-    slow = rolling_wheel_rps(59.7) * 0.55
-    locked = rolling(wheel_rps_fl=slow, wheel_rps_fr=slow, brake_raw=220)
-    for _ in range(120):
-        deriver.update(locked)
-    for _ in range(20):
-        value = float(deriver.update(rolling(brake_raw=0))[0])
-    assert value < 0.1, f"still ringing at {value:.2f}"
+    _settle(deriver, throttle=0.8, rear_slip=1.032)
+    for _ in range(6):
+        out = deriver.update(Frame(throttle=0.9, rear_slip=1.16))
+    assert out[_index("rear_traction")] > 0.5
 
 
-def test_scrabbling_back_over_a_kerb_from_the_grass_is_not_an_apex_hit():
-    """`car_on_track` is GT7's flags bit 0 - "in a session", not "on the
-    racing surface" - so nothing upstream distinguishes a clean apex from a
-    recovery. Two such transitions occurred on one real lap."""
+def test_the_abs_working_reaches_the_brake_channel_but_not_at_alarm_level():
     deriver = EffectDeriver()
-    deriver.update(rolling(surfaces="GGGG"))
-    from_grass = float(deriver.update(rolling(surfaces="GGCC"))[4])
-    assert from_grass == 0.0
-
-    clean = EffectDeriver()
-    clean.update(rolling(surfaces="TTTT"))
-    from_tarmac = float(clean.update(rolling(surfaces="TTCC"))[4])
-    assert from_tarmac >= effects.KERB_THUMP
+    _settle(deriver, throttle=0.5, rear_slip=1.02)
+    for _ in range(60):
+        out = deriver.update(Frame(brake=1.0, front_slip=0.87, rear_slip=0.94))
+    level = out[_index("brake_limit")]
+    assert 0.0 < level < 0.6
+    assert deriver.state.brake_state == vehicle.BRAKE_LIMIT_S
 
 
-def test_the_kerb_thump_owns_a_channel_the_driver_tuned_to_fire_rarely():
-    """Worth asserting because it is a change he did not ask for and has not
-    been told about.
+def test_the_two_critical_channels_stay_separate():
+    """One reports the front axle under braking and the other the rear under
+    power. They used to be the same channel, on the reasoning that a piston
+    cannot say which end - which turned out to be wrong twice over, because
+    the events barely overlap in time and the rig has two usable regions an
+    octave apart."""
+    deriver = EffectDeriver()
+    _settle(deriver, throttle=0.5, rear_slip=1.02)
+    for _ in range(8):
+        braking = deriver.update(Frame(brake=1.0, front_slip=0.74,
+                                       rear_slip=0.95))
+    assert braking[_index("brake_limit")] > 0.5
+    assert braking[_index("rear_traction")] == 0.0
 
-    He set `wheels_impact` threshold to 55 where his others were 8-28, which
-    reads as "this should fire almost never" - a 12 g velocity step, i.e. a
-    crash. The kerb thump clears that gate comfortably, so on a real lap 100%
-    of that channel's output is now kerbs, 44 times a lap. The masking is
-    narrow but real: a genuine impact in the 0.55-0.75 band landing during a
-    kerb strike is swallowed by the `max()`.
-    """
-    impact = {s.name: s for s in PORSCHE_RSR_17_SPECS}["wheels_impact"]
-    assert impact.threshold == 55.0
-    assert impact.shape(effects.KERB_THUMP) > 0.0, (
-        "the kerb thump no longer reaches the channel it was routed into")
+
+# ---------------------------------------------------------------- modifiers
+
+def test_going_light_is_reported_as_a_modifier_and_not_as_an_effect():
+    """It must not add energy. A real car goes quiet over a crest, and
+    reproducing that costs no band at all."""
+    deriver = EffectDeriver()
+    _settle(deriver, frames=600, throttle=0.4, rear_slip=1.01)
+    for _ in range(6):
+        out = deriver.update(Frame(throttle=0.4, rear_slip=1.01,
+                                   suspension=(0.255, 0.255, 0.270, 0.270)))
+    unload = len(EffectDeriver.NAMES) + EffectDeriver.MODIFIERS.index("unload")
+    assert out[unload] > 0.5
+
+
+# ------------------------------------------------------------ observability
+
+def test_it_can_say_what_it_just_decided():
+    """"What exactly caused that vibration" is asked an hour after the
+    session, and can only be answered if the numbers were kept at the time."""
+    deriver = EffectDeriver()
+    _settle(deriver, throttle=0.8, rear_slip=1.032)
+    report = deriver.explain()
+    assert set(report) == {"traction", "brake", "rotation", "load", "surface",
+                           "inputs"}
+    assert report["traction"]["state"] in (
+        vehicle.GRIPPED, vehicle.APPROACHING_SLIP, vehicle.USEFUL_SLIP)
+    assert report["traction"]["reference"] is not None
+    assert report["inputs"]["throttle"] == 0.8
+
+
+def test_a_session_boundary_clears_everything_behind_the_effects():
+    deriver = EffectDeriver()
+    _settle(deriver, throttle=0.8, rear_slip=1.032)
+    assert deriver.state.slip_reference is not None
+    deriver.reset()
+    assert deriver.state.slip_reference is None

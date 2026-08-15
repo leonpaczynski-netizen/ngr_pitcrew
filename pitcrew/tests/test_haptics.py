@@ -40,7 +40,7 @@ def _pump_live(engine, blocks: int, level: float = 0.8,
     assert against a row of zeros.
     """
     out = np.zeros((frames, transducer.CHANNELS), dtype=np.float32)
-    values = [level] * len(engine._specs)
+    values = [level] * len(engine._wanted)
     for _ in range(blocks):
         engine.set_intensities(values)
         engine._callback(out, frames, None, None)
@@ -113,7 +113,7 @@ def test_the_feed_coming_back_fades_in_again():
     assert engine._fade == 0.0
 
     for _ in range(60):
-        engine.set_intensities([0.8] * len(engine._specs))
+        engine.set_intensities([0.8] * len(engine._wanted))
         _pump(engine, 1)
     assert engine._fade > 0.5, "the feed returned and nothing came back on"
 
@@ -122,7 +122,7 @@ def test_a_feed_that_keeps_arriving_never_fades():
     engine = _engine()
     out = np.zeros((512, transducer.CHANNELS), dtype=np.float32)
     for _ in range(300):
-        engine.set_intensities([0.5] * len(engine._specs))
+        engine.set_intensities([0.5] * len(engine._wanted))
         engine._callback(out, 512, None, None)
     assert engine._fade == 1.0
     assert engine.faded_out == 0
@@ -132,7 +132,7 @@ def test_repeating_the_same_values_still_counts_as_alive():
     """A driver holding a steady speed sends the same intensities every frame.
     Treating "unchanged" as "stopped" would fade out on the straights."""
     engine = _engine()
-    steady = [0.4] * len(engine._specs)
+    steady = [0.4] * len(engine._wanted)
     out = np.zeros((512, transducer.CHANNELS), dtype=np.float32)
     for _ in range(300):
         engine.set_intensities(steady)
@@ -152,7 +152,7 @@ def test_nothing_leaves_that_would_trip_the_amps_protection():
     engine = _engine()
     out = np.zeros((512, transducer.CHANNELS), dtype=np.float32)
     for _ in range(120):
-        engine.set_intensities([1.0] * len(engine._specs))
+        engine.set_intensities([1.0] * len(engine._wanted))
         engine._callback(out, 512, None, None)
         assert _peak(out) <= transducer.HARD_LIMIT + 1e-6
 
@@ -161,7 +161,7 @@ def test_silence_in_is_silence_out():
     engine = _engine()
     out = np.zeros((512, transducer.CHANNELS), dtype=np.float32)
     for _ in range(60):
-        engine.set_intensities([0.0] * len(engine._specs))
+        engine.set_intensities([0.0] * len(engine._wanted))
         engine._callback(out, 512, None, None)
     assert _peak(out) < 1e-3
 
@@ -171,7 +171,7 @@ def test_a_block_bigger_than_the_buffer_is_filled_not_overrun():
     Writing part of it and leaving the rest as whatever was in the buffer
     would be a repeating fragment - a buzz."""
     engine = _engine()
-    engine.set_intensities([0.5] * len(engine._specs))
+    engine.set_intensities([0.5] * len(engine._wanted))
     frames = haptics.MAX_BLOCK + 512
     out = np.full((frames, transducer.CHANNELS), 9.0, dtype=np.float32)
     engine._callback(out, frames, None, None)
@@ -260,7 +260,8 @@ def test_a_packet_reaches_the_transducer():
     bridge.haptics = Sink()
     assert bridge.on_packet(_encoded()) is True
     assert len(seen) == 1
-    assert len(seen[0]) == len(bridge.effects.NAMES)
+    assert len(seen[0]) == (len(bridge.effects.NAMES)
+                            + len(bridge.effects.MODIFIERS))
 
 
 def test_a_transducer_that_raises_cannot_cost_him_the_session():
@@ -357,6 +358,6 @@ def test_a_silent_lap_is_not_mistaken_for_a_dead_transducer():
 
     engine = _engine()
     for _ in range(40):
-        engine.set_intensities([0.0] * len(engine._specs))
+        engine.set_intensities([0.0] * len(engine._wanted))
         _pump(engine, 1)
     assert engine.take_recent_peak() < PitCrewController._AUDIBLE_PEAK

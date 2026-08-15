@@ -13,6 +13,20 @@ reference rather than by ear against whatever happened to be playing.
     python tools/haptics_bench.py band           # what the amp actually passes
     python tools/haptics_bench.py calibrate      # the reference level
 
+and for learning the tactile vocabulary rather than testing the hardware, the
+two that play the REAL mix rather than a bare tone:
+
+    python tools/haptics_bench.py cue rear_traction --level 0.4
+    python tools/haptics_bench.py cue brake_limit --sweep
+    python tools/haptics_bench.py pair rear_traction road
+
+`cue` plays one effect through the real `HapticMix` - its own band, its own
+gain chain, its own modulation - which is the only way to learn what a cue
+means without a car in front of it. `pair` plays the second effect as a
+background and then brings the first in on top, which is the question that
+matters on a single piston: not "can I feel it" but "can I still tell it
+apart".
+
 Every tone is faded in and out. A sine gated on and off is a click, and a
 click through this amp is a thump.
 """
@@ -239,6 +253,99 @@ def cmd_calibrate(args) -> int:
     return 0
 
 
+def cmd_cue(args) -> int:
+    """One effect, through the real mix, so the driver can learn it.
+
+    Not a bare tone. A bare tone at 95 Hz is not what the traction cue feels
+    like: the real one carries band-limited noise, a pulse rate that rises
+    with severity, and a gain chain with a threshold and a minimum force. A
+    driver who learns the tone and then goes out has learned the wrong thing.
+    """
+    from pitcrew.rig.synth import MODIFIERS, PROFILE, HapticMix, to_stereo
+
+    names = [spec.name for spec in PROFILE]
+    if args.effect not in names:
+        print(f"unknown effect {args.effect!r}. one of: {', '.join(names)}")
+        return 2
+    index = names.index(args.effect)
+    spec = PROFILE[index]
+
+    block = 512
+    mix = HapticMix(block=block, master=args.master)
+    values = np.zeros(len(PROFILE) + len(MODIFIERS), dtype=np.float32)
+    frames = int(RATE * args.seconds)
+    mono = np.zeros(frames, dtype=np.float32)
+    stereo = np.zeros((frames, 2), dtype=np.float32)
+    for start in range(0, frames - block, block):
+        # A sweep walks the effect from nothing to full over the whole call, so
+        # the driver hears the pitch and the pulse rate climb together - which
+        # is the part that carries severity and the part a fixed level cannot
+        # teach.
+        values[index] = (start / frames if args.sweep else args.level)
+        mono[start:start + block] = mix.render(values, block)
+    to_stereo(mono, stereo, frames)
+    fade = max(1, int(RATE * FADE_S))
+    ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)[:, None]
+    stereo[:fade] *= ramp
+    stereo[-fade:] *= ramp[::-1]
+
+    top = spec.freq_hi or spec.freq_lo
+    print(f"{spec.name}: {spec.freq_lo:.0f}-{top:.0f} Hz, gain {spec.gain:.2f}, "
+          f"trim {spec.felt_trim:.2f}"
+          + (f", pulsing {spec.am_lo:.0f}-{spec.am_hi:.0f} Hz at depth "
+             f"{spec.am_depth:.2f}" if spec.am_depth else ", unmodulated"))
+    print("sweeping nothing to full" if args.sweep
+          else f"held at {args.level:.2f}")
+    print(_play(stereo))
+    return 0
+
+
+def cmd_pair(args) -> int:
+    """A cue against a background, which is the only question that matters.
+
+    With one piston everything sums, so "can he feel it" is the easy half.
+    The hard half is whether he can still tell it apart from whatever else is
+    playing - and the ducking design exists precisely to answer it. This plays
+    the background alone, then the cue on top of it, so the difference is the
+    thing being judged rather than the level.
+    """
+    from pitcrew.rig.synth import MODIFIERS, PROFILE, HapticMix, to_stereo
+
+    names = [spec.name for spec in PROFILE]
+    for name in (args.effect, args.against):
+        if name not in names:
+            print(f"unknown effect {name!r}. one of: {', '.join(names)}")
+            return 2
+    cue, bed = names.index(args.effect), names.index(args.against)
+
+    block = 512
+    mix = HapticMix(block=block, master=args.master)
+    values = np.zeros(len(PROFILE) + len(MODIFIERS), dtype=np.float32)
+    values[bed] = args.background
+    frames = int(RATE * args.seconds)
+    mono = np.zeros(frames, dtype=np.float32)
+    stereo = np.zeros((frames, 2), dtype=np.float32)
+    # A third of the call is background alone, then the cue comes in.
+    entry = frames // 3
+    for start in range(0, frames - block, block):
+        values[cue] = args.level if start >= entry else 0.0
+        mono[start:start + block] = mix.render(values, block)
+    to_stereo(mono, stereo, frames)
+    fade = max(1, int(RATE * FADE_S))
+    ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)[:, None]
+    stereo[:fade] *= ramp
+    stereo[-fade:] *= ramp[::-1]
+
+    print(f"{args.against} at {args.background:.2f} for "
+          f"{entry / RATE:.1f} s, then {args.effect} at {args.level:.2f} "
+          f"on top of it")
+    print("the question is not whether the second one is loud. "
+          "It is whether you could name it "
+          "without being told which it was.")
+    print(_play(stereo))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="command", required=True)
@@ -270,6 +377,24 @@ def main() -> int:
     cal.add_argument("--seconds", type=float, default=10.0)
     cal.add_argument("--amplitude", type=float, default=0.5)
     cal.set_defaults(run=cmd_calibrate)
+
+    cue = subs.add_parser("cue", help="one effect, through the real mix")
+    cue.add_argument("effect")
+    cue.add_argument("--level", type=float, default=0.5)
+    cue.add_argument("--sweep", action="store_true",
+                     help="walk it from nothing to full instead")
+    cue.add_argument("--seconds", type=float, default=6.0)
+    cue.add_argument("--master", type=float, default=1.0)
+    cue.set_defaults(run=cmd_cue)
+
+    pair = subs.add_parser("pair", help="a cue against a background")
+    pair.add_argument("effect")
+    pair.add_argument("against")
+    pair.add_argument("--level", type=float, default=0.6)
+    pair.add_argument("--background", type=float, default=0.7)
+    pair.add_argument("--seconds", type=float, default=9.0)
+    pair.add_argument("--master", type=float, default=1.0)
+    pair.set_defaults(run=cmd_pair)
 
     args = parser.parse_args()
     return args.run(args)

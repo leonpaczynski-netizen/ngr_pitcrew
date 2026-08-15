@@ -117,6 +117,37 @@ FRAME_FIELDS: tuple[str, ...] = (
     # pit stop in any packet format, so the tank climbing is both the detector
     # and the measurement. See `analysis/refuel.py`.
     "fuel_l",
+    # **World velocity, and the reason it is being kept at last.**
+    #
+    # The haptic layer derives sideslip - the angle between where the car is
+    # pointing and where it is going - from the velocity vector against the
+    # yaw rate. Both are in the base packet, so the live model has what it
+    # needs; the difficulty is proving it, because until now the only route to
+    # a path heading offline was differencing `pos_x`/`pos_z`, which are
+    # stored to the centimetre. That puts the reconstructed residual's noise
+    # floor at 0.06 deg against 0.18 deg of real sideslip at the limit, which
+    # is why the rotation cue is capped at MEDIUM confidence and attenuated.
+    #
+    # These three columns are what lift that cap. They are floats at 60 Hz and
+    # need no differencing at all, so one recorded lap re-run through
+    # `tools/rig_levels.py` settles whether the model is worth trusting - and
+    # if it is not, says so, which is equally worth having.
+    #
+    # Appended, so laps recorded before this still decode: the blob carries
+    # its own field list.
+    "vel_x", "vel_y", "vel_z",
+    # **Where the front wheels are actually pointing, radians.** GT7 offsets
+    # 352 and 356, averaged - not `steering_deg`, which is the in-game rim at
+    # 296 and saturates at +-pi regardless of the driver's rotation setting.
+    #
+    # Kept because the front-saturation question cannot be answered without
+    # it. The obvious model - measured yaw against the yaw a neutral-steer car
+    # would do - needs a road-wheel angle, and fed the rim instead it becomes
+    # a steering meter: measured, the implied steer gain falls by a factor of
+    # 2.5 from small angles to large, and there is no way to tell how much of
+    # that is tyre saturation and how much is the steering rack. With this
+    # column it is separable. Without it, no front cue should be built at all.
+    "road_wheel_rad",
 )
 
 # The driver's physical wheel rotation setting (Fanatec DD Extreme).  Reported
@@ -575,6 +606,9 @@ class LapRecorder:
                 round(self._distance_m, 2),
                 packet.time_of_day_ms,
                 round(packet.fuel_level, 3),
+                round(packet.vel_x, 3), round(packet.vel_y, 3),
+                round(packet.vel_z, 3),
+                _round(packet.road_wheel_angle, 5),
             ])
 
     def take_rows(self) -> list[list]:

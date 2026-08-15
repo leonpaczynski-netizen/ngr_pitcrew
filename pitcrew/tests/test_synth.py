@@ -7,7 +7,12 @@ ramping, an effect placed outside what the amplifier passes, a peak that trips
 the amp's DC-protect and stops the unit for the rest of the race.
 
 A click at 150 W into a 1 lb piston is a thump, so continuity is the headline
-here and most of these are really one assertion asked in different ways.
+here and several of these are one assertion asked in different ways.
+
+The rest are about the thing that only matters because there is ONE piston:
+whether an important cue can still be told from an unimportant one when both
+are playing. That is not a question about arithmetic, and it is the question
+the whole priority and ducking design exists to answer.
 """
 from __future__ import annotations
 
@@ -15,8 +20,14 @@ import numpy as np
 import pytest
 
 from pitcrew.rig import transducer
+from pitcrew.rig.effects import EffectDeriver
 from pitcrew.rig.synth import (
-    PORSCHE_RSR_17,
+    BED,
+    CRITICAL,
+    MODIFIERS,
+    PROFILE,
+    STATE,
+    TRANSIENT,
     EffectSpec,
     HapticMix,
     to_stereo,
@@ -25,8 +36,11 @@ from pitcrew.rig.synth import (
 BLOCK = 512
 
 
-def _full(mix: HapticMix, value: float = 0.5) -> np.ndarray:
-    return np.full(len(mix.specs), value, dtype=np.float32)
+def _values(mix: HapticMix, value: float = 0.5) -> np.ndarray:
+    """Every effect at `value`, and the modifiers at zero."""
+    out = np.zeros(len(mix.specs) + len(MODIFIERS), dtype=np.float32)
+    out[:len(mix.specs)] = value
+    return out
 
 
 def _settle(mix: HapticMix, intensities, blocks: int = 40) -> np.ndarray:
@@ -36,32 +50,35 @@ def _settle(mix: HapticMix, intensities, blocks: int = 40) -> np.ndarray:
     return out
 
 
-# ------------------------------------------------------------- the profile
+def _named(name: str) -> EffectSpec:
+    return {s.name: s for s in PROFILE}[name]
 
-def test_the_six_effects_are_the_ones_he_actually_had_on():
-    """Twenty more exist in SimHub and were all disabled. Porting those would
-    be inventing a preference he never expressed."""
-    assert len(PORSCHE_RSR_17) == 6
-    assert {s.name for s in PORSCHE_RSR_17} == {
-        "wheels_spin_lock", "gear", "wheels_rumble", "lateral_load",
-        "wheels_impact", "rpm"}
+
+# --------------------------------------------------------------- the profile
+
+def test_the_seven_effects_are_the_seven_the_deriver_produces():
+    """Two lists in two modules that must agree, in order, or the mix renders
+    the road bed at the braking cue's frequency and nothing says so."""
+    assert tuple(s.name for s in PROFILE) == EffectDeriver.NAMES
+    assert MODIFIERS == EffectDeriver.MODIFIERS
 
 
 def test_his_tuned_gains_came_across_unchanged():
     """Eight days of tuning, in his numbers rather than in defaults.
 
-    The GAINS are his and stay his. The BANDS have moved, because the rig's
-    response was measured afterwards and two of them were sitting where it
-    cannot deliver - see the next test.
+    The GAINS are his and stay his - they are the statement of how loud each
+    effect should be relative to the others, which is the part that took eight
+    days. What has moved is where each one sits and what feeds it, both of
+    which were measured afterwards.
     """
-    by_name = {s.name: s for s in PORSCHE_RSR_17}
-    assert by_name["wheels_spin_lock"].gain == 70.00
-    assert by_name["wheels_rumble"].gain == 37.62
-    assert by_name["lateral_load"].gain == 35.19
-    assert by_name["gear"].gain == 39.87
-    assert by_name["wheels_impact"].gain == 12.31
-    assert by_name["rpm"].gain == 9.52
-    assert by_name["gear"].freq_hi == 0.0, "the gear thump is a single tone"
+    by_name = {s.name: s for s in PROFILE}
+    assert by_name["rear_traction"].gain == 70.00     # was wheels_spin_lock
+    assert by_name["road"].gain == 37.62              # was wheels_rumble
+    assert by_name["chassis_load"].gain == 35.19      # was lateral_load
+    assert by_name["driveline"].gain == 39.87         # was gear
+    assert by_name["impact"].gain == 12.31            # was wheels_impact
+    assert by_name["engine"].gain == 9.52             # was rpm
+    assert by_name["driveline"].freq_hi == 0.0, "the shift tick is one tone"
 
 
 def test_every_effect_sits_where_the_rig_can_deliver_it():
@@ -69,49 +86,142 @@ def test_every_effect_sits_where_the_rig_can_deliver_it():
     per run, rated 0-3. It is a resonance structure, not a rolloff - peaks at
     40-55 and 85-105 Hz with a NULL at 70 and a fall above 120.
 
-    His road rumble was at 112-152, which measures 0.9 of 3. The road bed - the
-    thing he feels most of the time - was landing in the dead spot, and the
-    kerb boost that rides on it went with it. Reported as "kerb strikes not
-    felt" and "ripple strips not felt" in the same breath.
-
-    His lateral load ran 52-70, ending exactly on the null, so loading the car
-    harder raised the amplitude and lowered the delivery - the signal partly
-    cancelling itself at the moment it mattered most.
-
     The bar is 1.5 rather than the low peak's 3.0 because the two peaks are
     not equal: the low one measures 3 and the high one only 2. Both are usable
-    and the high one has to be, because with six effects and one piston they
-    do not all fit in twelve hertz.
+    and the high one has to be, because seven effects do not fit in twelve
+    hertz.
+
+    An effect that compensates across its own band is allowed to reach further
+    down the curve, because it corrects for exactly this as it climbs - but
+    only to 1.2, since the correction is clamped and a band that needs more
+    than a factor of two is the wrong band rather than an under-trimmed one.
     """
-    for spec in PORSCHE_RSR_17:
+    for spec in PROFILE:
         top = spec.freq_hi or spec.freq_lo
-        for hz in (spec.freq_lo, (spec.freq_lo + top) / 2.0, top):
+        floor = 1.2 if spec.band_compensate else 1.5
+        for hz in (spec.freq_lo, spec.centre_hz, top):
             response = transducer.felt_response(hz)
-            assert response >= 1.5, (
+            assert response >= floor, (
                 f"{spec.name} passes through {hz:.0f} Hz where this rig "
                 f"delivers {response:.1f} of 3 - no gain fixes that")
 
+
+def test_the_two_limit_cues_are_an_octave_apart():
+    """**The change that matters most in this file.**
+
+    Wheel-spin used to sit at 82-108 Hz and the road bed at 86-104. The bed is
+    live for half a lap and the limit cue for a tenth of one, on one piston,
+    summed into one signal - so the immersion effect sat directly on top of the
+    performance cue for the whole of every lap, and no gain fixes that either,
+    because raising the cue raises what it has to beat once the limiter closes.
+
+    Braking and traction are now the only two CRITICAL effects and they are as
+    far apart as this rig allows: low band and high band, an octave and a bit.
+    Confusing "the fronts are locking" with "the rear is going" would produce
+    opposite corrections, so this is the one pair that must never blur.
+    """
+    critical = [s for s in PROFILE if s.priority == CRITICAL]
+    assert len(critical) == 2
+    low, high = sorted(critical, key=lambda s: s.freq_lo)
+    assert (high.freq_lo / (low.freq_hi or low.freq_lo)) >= 1.7, (
+        "the two limit cues are less than an octave apart")
+    # And nothing continuous shares the high one.
+    for spec in PROFILE:
+        if spec is high or spec.priority <= TRANSIENT:
+            continue
+        top = spec.freq_hi or spec.freq_lo
+        assert top <= high.freq_lo, (
+            f"{spec.name} runs to {top:.0f} Hz, into the band reserved for "
+            f"tyre slip")
+
+
+def test_nothing_is_placed_in_the_null():
+    """70 Hz measured 1 of 3 with 50 and 85 either side measuring 3 and 2."""
+    assert transducer.felt_response(transducer.FELT_NULL_HZ) < 1.5
+    for spec in PROFILE:
+        top = spec.freq_hi or spec.freq_lo
+        assert not spec.freq_lo < transducer.FELT_NULL_HZ < top, (
+            f"{spec.name} spans {spec.freq_lo:.0f}-{top:.0f} Hz, across the "
+            f"null - it would fade as it got louder")
+
+
+def test_every_effect_fits_inside_what_this_amplifier_passes():
+    for spec in PROFILE:
+        top = spec.freq_hi or spec.freq_lo
+        assert spec.freq_lo >= transducer.BAND_LOW_HZ
+        assert top <= transducer.BAND_HIGH_HZ
+
+
+def test_an_effect_outside_the_band_is_refused_at_construction():
+    with pytest.raises(ValueError, match="amplifier passes"):
+        EffectSpec("too low", 50.0, 12.0, 20.0)
+    with pytest.raises(ValueError, match="amplifier passes"):
+        EffectSpec("too high", 50.0, 150.0, 220.0)
+
+
+def test_the_engine_bed_is_off_the_strongest_region():
+    """It is the least informative thing in the mix and it plays for 100% of
+    every lap. It used to sit at 34-42 Hz, straddling the single most
+    efficient frequency this rig has."""
+    engine = _named("engine")
+    peak_low, peak_high = transducer.FELT_PEAK_LOW
+    assert (engine.freq_hi or engine.freq_lo) <= peak_low
+    assert engine.priority == BED
+
+
+# --------------------------------------------------------------- continuity
+
+def test_nothing_jumps_between_blocks():
+    """A step between blocks is a discontinuity and a discontinuity at 150 W
+    is a thump."""
+    mix = HapticMix(block=BLOCK)
+    intensities = _values(mix, 0.6)
+    previous = None
+    for _ in range(30):
+        out = mix.render(intensities, BLOCK).copy()
+        if previous is not None:
+            seam = abs(float(out[0]) - float(previous[-1]))
+            inside = float(np.max(np.abs(np.diff(out))))
+            assert seam <= inside * 4 + 1e-3, (
+                f"a step of {seam:.4f} at the block seam against {inside:.4f} "
+                f"inside it")
+        previous = out
+
+
+def test_a_level_change_ramps_across_the_block_and_does_not_step():
+    mix = HapticMix(block=BLOCK)
+    _settle(mix, _values(mix, 0.05), blocks=10)
+    quiet = float(np.max(np.abs(mix.render(_values(mix, 0.05), BLOCK))))
+    jumped = mix.render(_values(mix, 1.0), BLOCK).copy()
+    assert float(np.max(np.abs(jumped[:8]))) < quiet * 6 + 0.02, (
+        "the level stepped at the start of the block instead of ramping")
+
+
+def test_silence_in_gives_silence_out():
+    mix = HapticMix(block=BLOCK)
+    out = _settle(mix, _values(mix, 0.0), blocks=30)
+    assert float(np.max(np.abs(out))) < 1e-3
+
+
+# ------------------------------------------------------------- the two axes
 
 def test_the_whole_band_is_reachable_not_just_the_bottom_of_it():
     """Pitch is driven by the effect's own intensity, not by its amplitude.
 
     They were the same number once, which tied how high an effect could climb
-    to how loud it was allowed to be. Lateral load reached 47 of its 44-56 Hz
-    and the kerb thump 41 of its 40-52 - so the rising-pitch cue that tells
-    him load is building did not exist, and the master gain transposed the
-    whole rig on its way past.
+    to how loud it was allowed to be - so the rising-pitch cue that tells him
+    load is building did not exist, and the master gain transposed the whole
+    rig on its way past.
     """
     mix = HapticMix(block=BLOCK)
-    swept = np.zeros(len(mix.names), dtype=np.float32)
-    index = mix.names.index("lateral_load")
-    spec = PORSCHE_RSR_17[index]
-
+    index = mix.names.index("chassis_load")
+    swept = np.zeros(len(mix.names) + len(MODIFIERS), dtype=np.float32)
     swept[index] = 1.0
-    for _ in range(400):                       # past the smoothing constant
+    for _ in range(400):
         mix.render(swept, BLOCK)
     reached = mix._voices[index]._pitch
     assert reached > 0.9, (
-        f"lateral load only reached {reached:.0%} of its band at full "
+        f"chassis load only reached {reached:.0%} of its band at full "
         f"intensity - pitch is still following amplitude")
 
     mix.master = 0.25
@@ -122,117 +232,130 @@ def test_the_whole_band_is_reachable_not_just_the_bottom_of_it():
         "transpose")
 
 
-def test_nothing_is_placed_in_the_null():
-    """70 Hz measured 1 of 3 with 50 and 85 either side measuring 3 and 2."""
-    assert transducer.felt_response(transducer.FELT_NULL_HZ) < 1.5
-    for spec in PORSCHE_RSR_17:
-        top = spec.freq_hi or spec.freq_lo
-        straddles = spec.freq_lo < transducer.FELT_NULL_HZ < top
-        assert not straddles, (
-            f"{spec.name} spans {spec.freq_lo:.0f}-{top:.0f} Hz, across the "
-            f"null - it would fade as it got louder")
+def test_the_limit_cues_pulse_and_the_rate_rises_with_severity():
+    """The second axis of the vocabulary, and the one this rig had no use of.
+
+    At a 40-100 Hz carrier the receptors integrate rather than resolve, so two
+    effects eight hertz apart feel like one effect at two strengths. Flutter
+    between about 5 and 20 Hz is discriminated well - so the rate carries the
+    severity, and the carrier only says which system is talking.
+    """
+    for name in ("brake_limit", "rear_traction"):
+        spec = _named(name)
+        assert spec.am_depth > 0.0, f"{name} does not pulse"
+        assert spec.am_hi > spec.am_lo, f"{name}'s rate does not rise"
+        low, high = transducer.AM_RANGE_HZ
+        assert low <= spec.am_lo and spec.am_hi <= high
 
 
-def test_every_effect_fits_inside_what_this_amplifier_passes():
-    for spec in PORSCHE_RSR_17:
-        top = spec.freq_hi or spec.freq_lo
-        assert spec.freq_lo >= transducer.BAND_LOW_HZ
-        assert top <= transducer.BAND_HIGH_HZ
+def test_a_pulsed_effect_actually_pulses_the_signal():
+    """The envelope has to reach the output, not merely be configured."""
+    mix = HapticMix(block=4096)
+    index = mix.names.index("brake_limit")
+    values = np.zeros(len(mix.names) + len(MODIFIERS), dtype=np.float32)
+    values[index] = 1.0
+    for _ in range(30):
+        out = mix.render(values, 4096)
+    envelope = np.abs(out)
+    # A steady tone has a flat envelope; a modulated one does not. Compare the
+    # loudest and quietest tenth of a block that is long enough to hold a
+    # whole modulation cycle at the top rate.
+    chunks = envelope.reshape(32, -1).max(axis=1)
+    assert chunks.min() < chunks.max() * 0.75, (
+        "the modulation is configured but not reaching the signal")
 
 
-def test_an_effect_outside_the_band_is_refused_at_construction():
-    """Below the amp's fixed low-cut is excursion spent for no output, and
-    excursion is what bottoms a piston. Better a ValueError than a mystery."""
-    with pytest.raises(ValueError, match="outside"):
-        EffectSpec("too_low", 50.0, 10.0, 20.0)
-    with pytest.raises(ValueError, match="outside"):
-        EffectSpec("too_high", 50.0, 150.0, 400.0)
+def test_modulation_that_would_stutter_rather_than_pulse_is_refused():
+    with pytest.raises(ValueError, match="modulation depth"):
+        EffectSpec("bad", 50.0, 40.0, 50.0, am_lo=8.0, am_hi=12.0,
+                   am_depth=0.95)
+    with pytest.raises(ValueError, match="reads as a rate"):
+        EffectSpec("bad", 50.0, 40.0, 50.0, am_lo=40.0, am_hi=60.0,
+                   am_depth=0.4)
 
 
-# --------------------------------------------------------------- continuity
-
-def test_nothing_jumps_between_blocks():
-    """The sample either side of a block boundary is where a click lives, and
-    a click at 150 W is a thump. Phase is carried forward for exactly this."""
+def test_compensating_across_a_band_keeps_the_felt_strength_flat():
+    """`felt_trim` is a number for where an effect sits. It can do nothing for
+    one that MOVES, and chassis load spans a stretch where the rig falls from
+    2.4 to 1.4 - so loading the car harder used to raise the amplitude and
+    lower the delivery at the same time."""
+    spec = _named("chassis_load")
+    assert spec.band_compensate is True
     mix = HapticMix(block=BLOCK)
-    intensities = _full(mix, 0.6)
-    _settle(mix, intensities)
+    index = mix.names.index("chassis_load")
+    voice = mix._voices[index]
 
-    first = mix.render(intensities, BLOCK).copy()
-    second = mix.render(intensities, BLOCK).copy()
-    seam = abs(float(second[0]) - float(first[-1]))
-    biggest_inside = float(np.max(np.abs(np.diff(first))))
-    assert seam <= biggest_inside * 3.0, (
-        f"the block boundary jumped by {seam:.5f} where the largest step "
-        f"inside a block is {biggest_inside:.5f}")
-
-
-def test_a_frequency_change_bends_the_wave_rather_than_jumping_it():
-    """Wheelspin rises in pitch as it worsens. Recomputing phase from an
-    absolute sample index would click on every one of those changes."""
-    mix = HapticMix(specs=(PORSCHE_RSR_17[0],), block=BLOCK)
-    quiet = np.array([0.2], dtype=np.float32)
-    loud = np.array([0.9], dtype=np.float32)
-    _settle(mix, quiet)
-    before = mix.render(quiet, BLOCK).copy()
-    after = mix.render(loud, BLOCK).copy()
-    seam = abs(float(after[0]) - float(before[-1]))
-    assert seam < 0.05, f"pitch change clicked, seam {seam:.4f}"
+    felt = []
+    for intensity in (0.35, 1.0):
+        values = np.zeros(len(mix.names) + len(MODIFIERS), dtype=np.float32)
+        values[index] = intensity
+        for _ in range(500):
+            mix.render(values, BLOCK)
+        amplitude = float(np.max(np.abs(mix._out[:BLOCK])))
+        felt.append(amplitude * transducer.felt_response(voice.frequency))
+    assert felt[1] > felt[0], (
+        "the effect climbed its band into a weaker part of the response and "
+        "came out no stronger - the compensation is not working")
 
 
-def test_a_level_change_ramps_across_the_block_and_does_not_step():
-    mix = HapticMix(specs=(PORSCHE_RSR_17[2],), block=BLOCK)
-    off = np.array([0.0], dtype=np.float32)
-    on = np.array([1.0], dtype=np.float32)
-    _settle(mix, off, blocks=5)
-    first_on = mix.render(on, BLOCK).copy()
-    start = float(np.max(np.abs(first_on[:32])))
-    end = float(np.max(np.abs(first_on[-32:])))
-    assert start < end, "the effect arrived at full level instantly"
-
-
-def test_silence_in_gives_silence_out():
-    mix = HapticMix(block=BLOCK)
-    out = _settle(mix, np.zeros(len(mix.specs), dtype=np.float32))
-    assert float(np.max(np.abs(out))) < 1e-3
-
-
-# -------------------------------------------------------------- protection
+# --------------------------------------------------------------- protection
 
 def test_the_output_never_passes_the_hard_limit():
     """The BKA-PRO's DC-protect trips on excessive input and stops the unit
     until it is reset. The limiter is the difference between one loud moment
     and no haptics for the rest of the race."""
     mix = HapticMix(block=BLOCK)
-    everything = _full(mix, 1.0)
+    everything = _values(mix, 1.0)
     for _ in range(60):
         out = mix.render(everything, BLOCK)
         assert float(np.max(np.abs(out))) <= transducer.HARD_LIMIT + 1e-6
 
 
-def test_reaching_the_limiter_is_counted_because_it_means_the_mix_is_wrong():
-    mix = HapticMix(block=BLOCK)
-    for _ in range(60):
-        mix.render(_full(mix, 1.0), BLOCK)
-    assert isinstance(mix.limited_blocks, int)
-
-
-def test_a_transient_may_be_louder_than_anything_sustained():
-    """One piston, everything summed into one signal - so contrast is the only
-    thing that keeps a gear shift legible over the road bed."""
-    by_name = {s.name: s for s in PORSCHE_RSR_17}
-    assert by_name["gear"].transient is True
-    assert by_name["wheels_rumble"].transient is False
-
-
 def test_the_output_is_finite_under_everything_at_once():
     mix = HapticMix(block=BLOCK)
     for value in (0.0, 0.3, 1.0, 0.0, 1.0):
-        out = _settle(mix, _full(mix, value), blocks=10)
+        out = _settle(mix, _values(mix, value), blocks=10)
         assert bool(np.all(np.isfinite(out)))
 
 
-# ------------------------------------------------------------ the two ears
+def test_a_transient_can_actually_get_past_the_bed():
+    """The headroom above the sustained ceiling only means something if the
+    limiter lets a peak reach it. It used to soft-clip at the SUSTAINED
+    ceiling, so the summed output was pinned there whatever went in and a
+    gear shift could never be louder than the road it was heard over."""
+    mix = HapticMix(block=BLOCK, master=3.0)
+    peak = 0.0
+    for _ in range(80):
+        out = mix.render(_values(mix, 1.0), BLOCK)
+        peak = max(peak, float(np.max(np.abs(out))))
+    assert peak > transducer.SUSTAINED_CEILING * 1.2
+    assert peak <= transducer.HARD_LIMIT + 1e-6
+
+
+def test_compression_is_counted_so_a_squashed_mix_can_be_seen():
+    """Driving the limiter constantly is not the limiter working - it is the
+    level being wrong, and it holds the transducer near full scale against an
+    amplifier whose rating assumes a one-third duty cycle."""
+    hot = HapticMix(block=BLOCK, master=4.0)
+    for _ in range(60):
+        hot.render(_values(hot, 1.0), BLOCK)
+    calm = HapticMix(block=BLOCK, master=0.5)
+    for _ in range(60):
+        calm.render(_values(calm, 0.3), BLOCK)
+    assert hot.limited_blocks > calm.limited_blocks
+    assert calm.limited_blocks == 0
+
+
+def test_the_master_gain_moves_everything_and_still_respects_the_limiter():
+    quiet = HapticMix(block=BLOCK, master=0.5)
+    loud = HapticMix(block=BLOCK, master=3.0)
+    a = float(np.max(np.abs(_settle(quiet, _values(quiet, 0.5)))))
+    b = float(np.max(np.abs(_settle(loud, _values(loud, 0.5)))))
+    assert b > a
+    assert b <= transducer.HARD_LIMIT + 1e-6
+
+
+# -------------------------------------------------------------- the two ears
 
 def test_the_mix_goes_to_both_channels_at_half():
     """Both reach the piston and they sum, measured. Full scale on both would
@@ -245,18 +368,16 @@ def test_the_mix_goes_to_both_channels_at_half():
     assert np.allclose(out[:, 1], out[:, 0])
 
 
-# ------------------------------------------------------------- the budget
+# ---------------------------------------------------------------- the budget
 
 def test_a_block_costs_a_small_fraction_of_its_own_duration():
-    """Measured at about 1% for a 1024-sample block with every effect running.
-    Asserted loosely, because this runs on whatever machine CI has - the point
-    is to catch a change that makes it an order of magnitude worse, which is
-    what reintroducing a per-sample Python loop would do.
-    """
+    """Asserted loosely, because this runs on whatever machine CI has - the
+    point is to catch a change that makes it an order of magnitude worse,
+    which is what reintroducing a per-sample Python loop would do."""
     import time
 
     mix = HapticMix(block=1024)
-    everything = _full(mix, 0.5)
+    everything = _values(mix, 0.5)
     for _ in range(20):
         mix.render(everything, 1024)
     start = time.perf_counter()
@@ -269,28 +390,21 @@ def test_a_block_costs_a_small_fraction_of_its_own_duration():
         f"too close to real time to be safe in a callback")
 
 
-# --------------------------------------------------- his gain chain, restored
+# ---------------------------------------------------- his gain chain, kept
 
 def test_an_effect_that_fires_at_all_starts_at_his_minimum_force():
-    """Reported from the seat as "worked fine, just very weak".
-
-    His profile puts `MinimumForce` at 12-28 on every continuous effect, so an
-    effect that fires starts there rather than creeping up from nothing. The
-    first build implemented a plain linear intensity and left it out, which
-    turns every ordinary event into a whisper - the raw intensities out of
-    `effects` sit low most of the time and a linear map keeps them there.
-    """
-    rumble = {s.name: s for s in PORSCHE_RSR_17}["wheels_rumble"]
-    assert rumble.min_force == 28.0
-    just_over = rumble.shape(rumble.threshold / 100.0 + 0.01)
-    assert just_over >= 0.28, "it crept up from nothing instead of starting"
+    """Reported from the seat as "worked fine, just very weak". His profile
+    puts `MinimumForce` at 12-28 on every continuous effect, so an effect that
+    fires starts there rather than creeping up from nothing."""
+    road = _named("road")
+    assert road.min_force == 28.0
+    assert road.shape(road.threshold / 100.0 + 0.01) >= 0.28
 
 
 def test_below_the_threshold_nothing_happens_at_all():
     """The floor must not make the threshold meaningless - order matters."""
-    impact = {s.name: s for s in PORSCHE_RSR_17}["wheels_impact"]
-    assert impact.threshold == 55.0
-    assert impact.shape(0.30) == 0.0
+    impact = _named("impact")
+    assert impact.shape(impact.threshold / 100.0 - 0.05) == 0.0
     assert impact.shape(0.90) > 0.0
 
 
@@ -302,46 +416,13 @@ def test_gamma_lifts_the_small_end_without_moving_the_top():
 
 
 def test_no_effect_is_louder_than_the_level_he_calibrated_against():
-    """SimHub's gains are weights inside its own chain - his sat under a
-    profile gain of 49.8. Read as fractions of full scale, even the strongest
-    effect peaked at 0.35 against a reference of 0.5 he called very strong, so
-    they are normalised by the largest gain instead.
-
-    The largest no longer lands exactly on the ceiling, because wheel-spin now
-    carries a trim of its own: replayed over eight of his laps it was the only
-    effect reaching 0.5000, on 9% of the lap, and he reported it strong. What
-    still has to hold is that nothing goes ABOVE the level the amplifier was
-    calibrated at - the headroom over it belongs to the limiter and to brief
-    transients, not to a sustained effect.
-    """
+    """The headroom above the calibration level belongs to the limiter and to
+    brief transients, not to any one effect's own scale."""
     mix = HapticMix(block=BLOCK)
     for spec, scale in zip(mix.specs, mix._scale):
-        ceiling = (transducer.TRANSIENT_CEILING if spec.transient
-                   else transducer.SUSTAINED_CEILING)
-        assert float(scale) <= ceiling + 1e-6, (
-            f"{spec.name} peaks at {float(scale):.4f}, above the {ceiling} "
-            f"this rig was calibrated against")
-
-
-def test_the_balance_between_effects_is_still_his():
-    """Normalising must not reorder them - the proportions are the tuning."""
-    mix = HapticMix(block=BLOCK)
-    by_gain = sorted(mix.specs, key=lambda s: s.gain)
-    scales = [mix._scale[mix.names.index(s.name)] for s in by_gain
-              if not s.transient]
-    assert scales == sorted(scales)
-
-
-def test_the_master_gain_moves_everything_and_still_respects_the_limiter():
-    """The amplifier is at its maximum, so "everything stronger" has nowhere
-    else to come from."""
-    quiet = HapticMix(block=BLOCK, master=0.5)
-    loud = HapticMix(block=BLOCK, master=3.0)
-    intensities = _full(quiet, 0.5)
-    a = float(np.max(np.abs(_settle(quiet, intensities))))
-    b = float(np.max(np.abs(_settle(loud, _full(loud, 0.5)))))
-    assert b > a
-    assert b <= transducer.HARD_LIMIT + 1e-6
+        assert float(scale) <= transducer.SUSTAINED_CEILING + 1e-6, (
+            f"{spec.name} peaks at {float(scale):.4f}, above the "
+            f"{transducer.SUSTAINED_CEILING} this rig was calibrated against")
 
 
 def test_an_impossible_shaping_is_refused():
@@ -349,113 +430,139 @@ def test_an_impossible_shaping_is_refused():
         EffectSpec("bad", 50.0, 40.0, 60.0, gamma=0.0)
     with pytest.raises(ValueError):
         EffectSpec("bad", 50.0, 40.0, 60.0, min_force=140.0)
-
-
-def test_a_transient_can_actually_get_past_the_bed():
-    """The headroom above the sustained ceiling only means something if the
-    limiter lets a peak reach it.
-
-    It used to soft-clip at the SUSTAINED ceiling, so the summed output was
-    pinned there whatever went in - measured at 0.499 across every master gain
-    from 1 to 4 - and a gear shift could never be louder than the road it was
-    heard over. The contrast the whole one-piston design rests on was being
-    removed by its own protection.
-    """
-    mix = HapticMix(block=BLOCK, master=3.0)
-    peak = 0.0
-    for _ in range(80):
-        out = mix.render(_full(mix, 1.0), BLOCK)
-        peak = max(peak, float(np.max(np.abs(out))))
-    assert peak > transducer.SUSTAINED_CEILING * 1.2, (
-        f"the mix is still clamped at the bed's ceiling - peaked at {peak:.3f}")
-    assert peak <= transducer.HARD_LIMIT + 1e-6
-
-
-def test_compression_is_counted_so_a_squashed_mix_can_be_seen():
-    """Driving the limiter constantly is not the limiter working - it is the
-    level being wrong, and it holds the transducer near full scale against an
-    amplifier whose rating assumes a one-third duty cycle."""
-    hot = HapticMix(block=BLOCK, master=4.0)
-    for _ in range(60):
-        hot.render(_full(hot, 1.0), BLOCK)
-    calm = HapticMix(block=BLOCK, master=0.5)
-    for _ in range(60):
-        calm.render(_full(calm, 0.3), BLOCK)
-    assert hot.limited_blocks > calm.limited_blocks
-    assert calm.limited_blocks == 0
-
-
-def test_a_thump_stands_above_the_bed_it_lands_on():
-    """Reported four times, in both directions, and every trim before this one
-    was sized against a model that has since been measured and refuted.
-
-    The old test compared `amplitude / frequency**2`, on the belief that felt
-    output falls as the square of frequency. The sweep says otherwise: this
-    rig is a resonance structure with peaks at 40-55 and 85-105 Hz and a null
-    at 70, so 48 Hz is not "more felt because it is lower", it is more felt
-    because it happens to sit on a peak. Comparing the two the old way made a
-    shift look 8.6x the road when the measured response makes it 2.6x.
-
-    Numbers below are from `tools/rig_levels.py` over eight of his own laps -
-    the bed present at the moment a shift actually fires, ducked as the mix
-    ducks it, not the bed's peak. A shift always reaches its own peak; the
-    road almost never does, which is what flattered gear by two and a half in
-    the first place.
-    """
-    BED_HZ = 95.0            # where the rumble runs, mid-band
-    BED_AT_A_SHIFT = 0.0896  # ducked, median over every shift in eight laps
-
-    gear = {s.name: s for s in PORSCHE_RSR_17}["gear"]
-    assert gear.gain == 39.87, "his own number must stay visible"
-    assert gear.transient, "the duck is keyed off this"
-
-    mix = HapticMix(block=BLOCK)
-    thump = float(mix._scale[mix.names.index("gear")])
-    felt_thump = thump * transducer.felt_response(gear.freq_lo)
-    felt_bed = BED_AT_A_SHIFT * transducer.felt_response(BED_HZ)
-    ratio = felt_thump / felt_bed
-
-    assert ratio > 1.5, (
-        f"a shift is felt {ratio:.2f}x the road under it - at 0.9x he said it "
-        f"could not be felt at all")
-    assert ratio < 4.0, (
-        f"a shift is felt {ratio:.2f}x the road under it - he called it "
-        f"overpowered and rattling the rig when it was higher")
-
-
-def test_the_bed_gets_out_of_the_way_for_an_event():
-    """The only way an event stays legible on one piston.
-
-    Six effects, one transducer, two usable regions of response - so frequency
-    separates nothing, and the kerb thump shares its twelve hertz with lateral
-    load. Measured, it fired 11.3 dB BELOW the road bed and 7.6 dB below
-    lateral load. "Kerb thump I can't feel" was not a gain problem; it was a
-    contrast problem, and gain alone cannot fix it because raising everything
-    raises what it has to beat.
-    """
-    mix = HapticMix(block=BLOCK)
-    quiet = np.zeros(len(mix.names), dtype=np.float32)
-    quiet[mix.names.index("wheels_rumble")] = 1.0
-
-    for _ in range(20):
-        mix.render(quiet, BLOCK)
-    undisturbed = mix._duck
-    assert undisturbed > 0.98, "nothing is firing, so nothing should duck"
-
-    firing = quiet.copy()
-    firing[mix.names.index("wheels_impact")] = 1.0
-    for _ in range(20):
-        mix.render(firing, BLOCK)
-    assert mix._duck < 0.45, (
-        f"the bed only ducked to {mix._duck:.2f} under a full-scale kerb "
-        f"strike - not enough to hear the strike over it")
-
-    for _ in range(200):
-        mix.render(quiet, BLOCK)
-    assert mix._duck > 0.95, "the bed never came back"
-
-
-
-def test_an_impossible_trim_is_refused():
     with pytest.raises(ValueError, match="felt trim"):
         EffectSpec("bad", 50.0, 40.0, 60.0, felt_trim=0.0)
+    with pytest.raises(ValueError, match="priority"):
+        EffectSpec("bad", 50.0, 40.0, 60.0, priority=9)
+
+
+# --------------------------------------------------- priority and contrast
+
+def test_every_effect_declares_which_class_it_is_in():
+    classes = {s.name: s.priority for s in PROFILE}
+    assert classes["brake_limit"] == CRITICAL
+    assert classes["rear_traction"] == CRITICAL
+    assert classes["driveline"] == TRANSIENT
+    assert classes["impact"] == TRANSIENT
+    assert classes["chassis_load"] == STATE
+    assert classes["road"] == BED
+    assert classes["engine"] == BED
+
+
+def test_the_background_gets_out_of_the_way_for_an_event():
+    """The only way an event stays legible on one piston. Measured before this
+    existed: the kerb thump fired 11.3 dB BELOW the road bed. "Kerb thump I
+    can't feel" was not a gain problem - raising everything raises what it has
+    to beat."""
+    mix = HapticMix(block=BLOCK)
+    quiet = np.zeros(len(mix.names) + len(MODIFIERS), dtype=np.float32)
+    quiet[mix.names.index("road")] = 1.0
+
+    _settle(mix, quiet, blocks=20)
+    assert mix.duck > 0.98, "nothing is firing, so nothing should duck"
+
+    firing = quiet.copy()
+    firing[mix.names.index("impact")] = 1.0
+    _settle(mix, firing, blocks=20)
+    assert mix.duck < 0.45, (
+        f"the background only ducked to {mix.duck:.2f} under a full-scale "
+        f"kerb strike - not enough to hear the strike over it")
+
+    _settle(mix, quiet, blocks=200)
+    assert mix.duck > 0.95, "the background never came back"
+
+
+def test_a_limit_cue_ducks_the_background_harder_than_an_event_does():
+    """A transient is over in 90 ms and a limit cue is not, so it earns more:
+    the point is not to make the cue loud, it is to make it the only thing
+    happening, which is a cheaper way to be noticed."""
+    mix = HapticMix(block=BLOCK)
+    base = np.zeros(len(mix.names) + len(MODIFIERS), dtype=np.float32)
+    base[mix.names.index("road")] = 1.0
+
+    event = base.copy()
+    event[mix.names.index("impact")] = 1.0
+    _settle(mix, event, blocks=30)
+    under_event = mix.duck
+
+    mix = HapticMix(block=BLOCK)
+    limit = base.copy()
+    limit[mix.names.index("rear_traction")] = 1.0
+    _settle(mix, limit, blocks=30)
+    assert mix.duck < under_event
+
+
+def test_a_limit_cue_is_never_ducked_by_anything():
+    """Everything else may be attenuated for contrast. The two cues that say
+    the car is past a limit may not, because the moment they are is the moment
+    something else is also happening."""
+    mix = HapticMix(block=BLOCK)
+    everything = _values(mix, 1.0)
+    _settle(mix, everything, blocks=30)
+    for row in mix.explain():
+        if row["priority"] == CRITICAL:
+            assert row["ducked_by"] == 0.0, f"{row['effect']} was ducked"
+
+
+def test_two_limit_cues_at_once_leave_one_of_them_in_charge():
+    """Measured, they coincide on 0.14% of frames - rare, and exactly the
+    moment not to hand the driver two overlapping rasps."""
+    mix = HapticMix(block=BLOCK)
+    both = np.zeros(len(mix.names) + len(MODIFIERS), dtype=np.float32)
+    both[mix.names.index("rear_traction")] = 1.0
+    both[mix.names.index("brake_limit")] = 0.8
+    _settle(mix, both, blocks=30)
+    rows = {r["effect"]: r for r in mix.explain()}
+    assert rows["brake_limit"]["shaped"] < rows["rear_traction"]["shaped"] * 0.7, (
+        "both limit cues are running at full authority into one piston")
+
+
+def test_the_car_going_light_pulls_the_background_down_and_adds_nothing():
+    """Unloading is the one state that must NOT be reported by adding energy,
+    because a real car does the opposite: over a crest the tyres stop
+    transmitting and the seat goes still. It costs no band and it cannot be
+    masked, because it is not a signal."""
+    mix = HapticMix(block=BLOCK)
+    # The background alone, which is what going light silences. The limit cues
+    # are deliberately not attenuated - a wheel locking as the car lands is
+    # still a wheel locking - so including them here would be measuring the
+    # wrong thing.
+    loaded = np.zeros(len(mix.specs) + len(MODIFIERS), dtype=np.float32)
+    for spec in PROFILE:
+        if spec.priority >= STATE:
+            loaded[mix.names.index(spec.name)] = 0.6
+    _settle(mix, loaded, blocks=40)
+    heavy = float(np.max(np.abs(mix._out[:BLOCK])))
+
+    light = loaded.copy()
+    light[len(mix.specs) + MODIFIERS.index("unload")] = 1.0
+    _settle(mix, light, blocks=40)
+    airborne = float(np.max(np.abs(mix._out[:BLOCK])))
+    assert airborne < heavy * 0.4, (
+        f"the rig was {airborne:.4f} with the car light against {heavy:.4f} "
+        f"loaded - the driver would not feel it go")
+
+
+def test_a_caller_that_sends_no_modifiers_still_works():
+    """Back-compatibility with anything written before the modifiers existed:
+    silence is the right answer for a modifier nobody set."""
+    mix = HapticMix(block=BLOCK)
+    short = np.full(len(mix.specs), 0.5, dtype=np.float32)
+    out = _settle(mix, short, blocks=20)
+    assert float(np.max(np.abs(out))) > 0.01
+
+
+# ------------------------------------------------------------- the explainer
+
+def test_the_mix_can_say_what_it_just_did():
+    """A black-box output cannot be diagnosed an hour after the session, and
+    an hour after the session is when the driver asks."""
+    mix = HapticMix(block=BLOCK)
+    _settle(mix, _values(mix, 0.6), blocks=20)
+    rows = mix.explain()
+    assert len(rows) == len(PROFILE)
+    for row in rows:
+        assert set(row) >= {"effect", "priority", "raw", "shaped", "base_gain",
+                            "ducked_by", "final", "hz", "felt"}
+        assert row["hz"] > 0.0
+        assert 0.0 <= row["ducked_by"] <= 1.0
