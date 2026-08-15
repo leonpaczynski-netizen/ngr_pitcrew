@@ -1,0 +1,11 @@
+{
+  "lap_id": 79,
+  "sample_hz": 60.0,
+  "frame_count": 6211,
+  "lap_time_ms": 103623,
+  "compound": "RS",
+  "fuel_capacity_l": 100.0,
+  "track": "Watkins Glen International",
+  "layout": "Long Course",
+  "car_name": "Lamborghini Huracán GT3 '15"
+}

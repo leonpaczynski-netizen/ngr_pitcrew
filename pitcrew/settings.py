@@ -116,6 +116,15 @@ class Settings:
     # it in practice too is how you find out whether the button works at all
     # without committing to a race to test it.
     ptt_in_practice: bool = False
+    # **Which sound card, by name.** Empty means "whatever Windows calls the
+    # default", which is what the app always did - and what put the engineer's
+    # calls into a headset that was not connected, silently, because PortAudio
+    # resolves the default once at import and a disconnected endpoint accepts
+    # audio without complaining. Stored as a name rather than an index because
+    # indices are renumbered whenever a device appears or goes.
+    audio_output_device: str = ""
+    audio_input_device: str = ""
+
     speech_backend: str = SPEECH_SAPI
     # low  - acts only when sure, asks more often
     # high - acts readily, asks rarely

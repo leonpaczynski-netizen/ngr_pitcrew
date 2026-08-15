@@ -32,6 +32,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from dataclasses import replace
+
+from pitcrew.engineer import audio_devices
+
 from pitcrew.settings import (
     FEED_PS5,
     FEED_SIMHUB,
@@ -50,6 +54,7 @@ from pitcrew.ui.widgets import (
     Plate,
     StencilLabel,
     block_wheel,
+    mark_unset,
 )
 
 RPM_LABELS = {
@@ -115,6 +120,7 @@ class SettingsScreen(QWidget):
         right = QVBoxLayout()
         right.setSpacing(theme.GAP_WIDE)
         right.addWidget(self._beep_plate())
+        right.addWidget(self._audio_plate())
         right.addWidget(self._voice_plate())
         right.addStretch(1)
         columns.addLayout(right, 1)
@@ -341,6 +347,45 @@ class SettingsScreen(QWidget):
         plate.body.addStretch(1)
         return plate
 
+    def _audio_plate(self) -> Plate:
+        """Which sound card the engineer speaks into, and which one hears him.
+
+        This exists because of what silence looked like without it. PortAudio
+        resolves "the default device" once, when it is first imported; the
+        driver puts the PSVR2 on after the app is already running, so the call
+        went to whatever was default at launch. A disconnected endpoint does
+        not raise - measured, a full second of audio written to one completed
+        and returned cleanly - so the engineer spoke, the counter went up, the
+        call appeared on the race screen, and the man in the headset heard
+        nothing with every indicator green.
+
+        Named devices rather than indices: PortAudio renumbers whenever
+        something is plugged in, and a stale index is how this failed before.
+        """
+        plate = Plate("Sound devices")
+        plate.body.addWidget(BodyLabel(
+            "Set these to the headset you race in. Left on the system "
+            "default, a device connected after the app started will not be "
+            "found, and nothing will say so.",
+            size=13, colour=theme.STENCIL_DIM))
+
+        self.audio_output = QComboBox()
+        self.audio_input = QComboBox()
+        for combo, kind in ((self.audio_output, "output"),
+                            (self.audio_input, "input")):
+            combo.addItem("System default", "")
+            for _index, name in audio_devices.devices(kind):
+                combo.addItem(name, name)
+            mark_unset(combo, unset="")
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(theme.GAP)
+        grid.setVerticalSpacing(theme.GAP)
+        grid.addWidget(Field("He hears the engineer on", self.audio_output), 0, 0)
+        grid.addWidget(Field("The engineer hears him on", self.audio_input), 1, 0)
+        plate.body.addLayout(grid)
+        return plate
+
     def _voice_plate(self) -> Plate:
         """How the engineer sounds.
 
@@ -400,6 +445,11 @@ class SettingsScreen(QWidget):
     # ---------------------------------------------------------------- state
 
     def load(self, settings: Settings) -> None:
+        # Kept so `values()` can carry through the fields with no control on
+        # this screen. Building a fresh Settings from the widgets meant every
+        # Save silently rewrote `speech_backend` and `speech_sensitivity` back
+        # to their defaults - settings that could be stored and never set.
+        self._loaded = settings
         self.udp_port.setValue(settings.udp_port)
         self.udp_source_ip.setText(settings.udp_source_ip)
         index = self.feed_source.findData(settings.feed_source)
@@ -408,6 +458,10 @@ class SettingsScreen(QWidget):
         self.banner_enabled.setChecked(settings.banner_enabled)
         self._sync_feed_source()
         self.game_version.setText(settings.game_version)
+        for combo, chosen in ((self.audio_output, settings.audio_output_device),
+                              (self.audio_input, settings.audio_input_device)):
+            index = combo.findData(chosen)
+            combo.setCurrentIndex(index if index >= 0 else 0)
         self.ptt_enabled.setChecked(settings.ptt_enabled)
         self.ptt_key.setCurrentText(settings.ptt_key)
         self.ptt_in_practice.setChecked(settings.ptt_in_practice)
@@ -430,7 +484,10 @@ class SettingsScreen(QWidget):
         self.ps5_field.setVisible(self.feed_source.currentData() == FEED_PS5)
 
     def values(self) -> Settings:
-        return Settings(
+        # `replace`, not a fresh Settings: anything this screen has no control
+        # for keeps the value it was loaded with instead of reverting.
+        return replace(
+            getattr(self, "_loaded", Settings()),
             udp_port=self.udp_port.value(),
             udp_source_ip=self.udp_source_ip.text().strip(),
             feed_source=self.feed_source.currentData(),
@@ -446,6 +503,8 @@ class SettingsScreen(QWidget):
             voice_length_scale=self.length_scale.value(),
             voice_noise_scale=self.noise_scale.value(),
             voice_noise_w_scale=self.noise_w_scale.value(),
+            audio_output_device=self.audio_output.currentData() or "",
+            audio_input_device=self.audio_input.currentData() or "",
         )
 
     def _sync_rpm_enabled(self) -> None:

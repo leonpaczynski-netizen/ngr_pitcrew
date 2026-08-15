@@ -85,10 +85,23 @@ this one); `schema.py`'s migration ladder (no migration runs at v5→v5).
   default is a disconnected Bluetooth earbud that opens without error and delivers zero frames,
   which the app reports as "no speech in the capture" → "Say again."
 
-## Two things that are not code defects but will bite during UAT
-- **`captures/` is not real telemetry.** 204 files, 2,030 datagrams, **one distinct payload**.
-  CLAUDE.md §7's checked-in real-session fixture does not exist, so the raw-capture path has
-  never been exercised against a live stream in a form anyone kept.
+## Status: all findings remediated — see `git log` on `fix/pre-uat-review-2026-08-15`
+
+Fixed and verified on the real database: the yaw axis and the 2*pi slip error (with the 132
+stored laps repaired on read rather than re-captured), the corner detectors, the live fuel
+calls, timed races, the export payload and validator (contract now 1.5), the PTT thread hop,
+the semantic gate selection, `band_ink_for`, the sheet-purpose retag, plans following the
+driver to the wrong event, CWD-relative data paths, the pit-loss/refuel provenance, the audio
+device selection, and the rack/export divergence.
+
+`pitcrew/tests/fixtures/watkins_glen_lap.bin` is now the real recorded lap CLAUDE.md §7 asks
+for, and `test_real_capture_fixture.py` asserts physics against it rather than golden values.
+
+## Remaining, and they are not code
+- **`captures/` is still synthetic.** 245 files, one distinct payload. It is gitignored and
+  untracked, so it was left alone rather than deleted. The *aggregation* fixture now exists
+  (above), but the **raw UDP datagram path** still has no real sample — take one live capture
+  during UAT and check it in, rather than fabricating packets from decoded frames.
 - **`is_pit_lap` is 0 on all 132 laps**, so a real 69.6 s pit stop reports as an incident
   ("Came to a stop, +73.3 s") and `race_outcome` says "No stops." `tools/reaggregate.py --apply`
   fixes it; nothing runs it automatically.

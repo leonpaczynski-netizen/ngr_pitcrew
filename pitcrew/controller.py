@@ -29,7 +29,7 @@ from pitcrew.analysis.incidents import (
     read_rows,
     stored_or_read,
 )
-from pitcrew.analysis.runs import auto_out_laps, carry_compound
+from pitcrew.analysis.runs import auto_out_laps, fuel_implausible_laps, carry_compound
 from pitcrew.diagnostics import log
 from pitcrew.engineer.ptt import (
     PushToTalk,
@@ -38,6 +38,7 @@ from pitcrew.engineer.ptt import (
     best_semantic_matcher,
 )
 from pitcrew.engineer.shift_beep import ShiftBeep
+from pitcrew.engineer import audio_devices
 from pitcrew.engineer.voice import Voice
 from pitcrew.export.build import _rows_to_laps, build_event_export
 from pitcrew.export.payload import APP_VERSION, ExportRefused, to_json
@@ -213,6 +214,9 @@ class PitCrewController(QObject):
         self.settings_screen = settings_screen
         self.prompt_issue_id: int | None = None
         self.settings = settings.load(store)
+        # The streams are opened deep inside two engines that must not know
+        # what a settings object is, so the choice is pushed down instead.
+        self._apply_audio_devices(self.settings)
         # The screen-filling notice, anchored to whichever screen the practice
         # page is on. None where there is no Qt widget to anchor to, which is
         # every controller test and every capture replay - the recording path
@@ -632,6 +636,15 @@ class PitCrewController(QObject):
 
     # -------------------------------------------------------------- settings
 
+    def _apply_audio_devices(self, values: settings.Settings) -> None:
+        """Tell the audio layer which card he races on.
+
+        Empty means the system default, which is what this always did - and
+        what let the engineer speak into a headset that was not connected.
+        """
+        audio_devices.set_output_device(values.audio_output_device or None)
+        audio_devices.set_input_device(values.audio_input_device or None)
+
     def save_settings(self, new: settings.Settings) -> None:
         """Apply the button and the beep, and remember them."""
         try:
@@ -645,6 +658,7 @@ class PitCrewController(QObject):
         feed_moved = (new.udp_port != self.settings.udp_port
                       or new.udp_source_ip != self.settings.udp_source_ip)
         self.settings = new
+        self._apply_audio_devices(new)
         if self._port_override is None:
             self.port = new.udp_port
         self.bridge.apply_settings(new)
@@ -1410,6 +1424,20 @@ class PitCrewController(QObject):
             if row.lap_num in auto_out_laps(rows):
                 row.is_out_lap = True
 
+        # **And the fuel-implausible laps, for the same reason.** A lap
+        # boundary landing inside a garage transition burns a twentieth of a
+        # lap's fuel and, being short, was promoted to the rack's best - so the
+        # screen read 1.9 s quicker than the payload on the owner's own Monza
+        # session. The export strikes those laps through `classify_exclusions`;
+        # the rack did not, and the two disagreed about the number he judges
+        # every session by.
+        capacity = self._event_fuel_capacity(event_id)
+        for lap_num in fuel_implausible_laps(rows, capacity):
+            for row in rows:
+                if row.lap_num == lap_num and not row.excluded:
+                    row.excluded = True
+                    row.exclusion_reason = "fuel-implausible"
+
         # Incidents after the out-laps, because an out-lap loses time it is
         # supposed to lose and must not be judged for it. Answered from the
         # three stored numbers, so no frame blob is decoded to draw the rack.
@@ -1419,6 +1447,19 @@ class PitCrewController(QObject):
                     row.incident = True
                     row.incident_note = incident.describe()
         return rows
+
+    def _event_fuel_capacity(self, event_id: int) -> float | None:
+        """The tank this event ran, or None if no session saw a plausible one.
+
+        First *plausible*, not first non-null: a session that opened before the
+        car was loaded stores 0.0, and 0 is a real capacity meaning electric -
+        which switches the fuel-plausibility test off for the whole event.
+        """
+        for session in self.store.list_sessions(event_id, "practice"):
+            capacity = session["fuel_capacity_l"]
+            if capacity:
+                return float(capacity)
+        return None
 
     def _report_health(self) -> None:
         """Say which of the several silences this one is.
