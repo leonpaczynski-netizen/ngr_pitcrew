@@ -325,6 +325,20 @@ def open_exclusive_output(device: object, samplerate: int, *,
         return stream
 
 
+def _matching_indices(sd, name: str, kind: str) -> list[int]:
+    """Every device index whose card is `name`. Empty means it is not here.
+
+    Separate from `_candidates` because that one deliberately answers "the
+    default" when nothing matches, which is the right answer for the voice and
+    the wrong one for a device-specific stream.
+    """
+    wanted = endpoint_key(name)
+    field = f"max_{kind}_channels"
+    return [index for index, info in enumerate(sd.query_devices())
+            if info.get(field, 0) > 0
+            and endpoint_key(info.get("name", "")) == wanted]
+
+
 def _candidates(sd, device: object | None, kind: str,
                 host_api: str | None = None) -> list:
     """Every route to the chosen card, best first.
@@ -443,7 +457,7 @@ def _reinitialise(sd) -> None:
 def open_output(samplerate: int, *, channels: int = 1, dtype: str = "int16",
                 device: object | None = _DEFAULT, blocksize: int = 0,
                 callback=None, finished_callback=None,
-                extra_settings=None):
+                extra_settings=None, strict: bool = False):
     """A started output stream, retried once.
 
     `device` names a card explicitly; omitting it uses the one the driver
@@ -456,10 +470,26 @@ def open_output(samplerate: int, *, channels: int = 1, dtype: str = "int16",
     `callback` opens a stream PortAudio pulls from on its own thread rather
     than one written to by the caller - which is how a continuous signal is
     generated without a Python thread trying to keep up with the card.
+
+    `strict` refuses rather than falling back to the default when the named
+    card is not there. **The default is right for the voice and wrong for the
+    transducer**, and the difference is not a detail: a call out of the wrong
+    speaker still reaches the driver, whereas a road-rumble bed routed to his
+    headphones because the ButtKicker was switched off puts 40 Hz in his ears
+    for a whole race. Silence is the correct output for a transducer that is
+    not connected.
     """
     import sounddevice as sd
 
     chosen = _OUTPUT if device is _DEFAULT else device
+    if strict and isinstance(chosen, str):
+        with _ENUMERATE_LOCK:
+            _reinitialise(sd)
+            if not _matching_indices(sd, chosen, "output"):
+                raise RuntimeError(
+                    f"no output device named {chosen!r} on this machine. "
+                    f"Refusing to fall back to the default - this sound is "
+                    f"meant for one specific card.")
 
     def attempt():
         return _open_first_that_works(
