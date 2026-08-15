@@ -399,14 +399,29 @@ class HapticMix:
         Reaching the limiter routinely means the mix is wrong, not that the
         limiter is working, so it is counted.
         """
+        # **The knee is the transient ceiling, not the sustained one.**
+        #
+        # It used to soft-clip at `SUSTAINED_CEILING`, which defeated the whole
+        # reason the headroom above it exists: a gear shift or a kerb is
+        # allowed past the bed precisely so it reads as an event, and clamping
+        # the summed output at the bed's own ceiling made that impossible.
+        # Measured, driving a plausible lap: the peak sat pinned at 0.499 at
+        # every master gain from 1 to 4, while 71% of blocks were being
+        # compressed at 4. The driver was hearing a compressor rather than a
+        # mix - which is why turning it up added fullness but no impact.
+        #
+        # It is also the likeliest reason the transducer went quiet mid-corner.
+        # The BKA-PRO's 150 W rating assumes a one-third duty cycle and its
+        # DC-protect trips on sustained excessive input; 71% of blocks held
+        # near full scale is exactly that.
         peak = float(np.max(np.abs(out[:n]))) if n else 0.0
-        if peak > transducer.SUSTAINED_CEILING:
-            np.tanh(out[:n] / transducer.SUSTAINED_CEILING, out=out[:n])
-            np.multiply(out[:n], transducer.SUSTAINED_CEILING, out=out[:n])
+        if peak > transducer.TRANSIENT_CEILING:
+            np.tanh(out[:n] / transducer.TRANSIENT_CEILING, out=out[:n])
+            np.multiply(out[:n], transducer.TRANSIENT_CEILING, out=out[:n])
+            self.limited_blocks += 1
         if peak > transducer.HARD_LIMIT:
             np.clip(out[:n], -transducer.HARD_LIMIT, transducer.HARD_LIMIT,
                     out=out[:n])
-            self.limited_blocks += 1
 
 
 def to_stereo(mono: np.ndarray, out: np.ndarray, n: int) -> None:

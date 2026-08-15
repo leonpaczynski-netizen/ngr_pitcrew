@@ -264,3 +264,37 @@ def test_an_impossible_shaping_is_refused():
         EffectSpec("bad", 50.0, 40.0, 60.0, gamma=0.0)
     with pytest.raises(ValueError):
         EffectSpec("bad", 50.0, 40.0, 60.0, min_force=140.0)
+
+
+def test_a_transient_can_actually_get_past_the_bed():
+    """The headroom above the sustained ceiling only means something if the
+    limiter lets a peak reach it.
+
+    It used to soft-clip at the SUSTAINED ceiling, so the summed output was
+    pinned there whatever went in - measured at 0.499 across every master gain
+    from 1 to 4 - and a gear shift could never be louder than the road it was
+    heard over. The contrast the whole one-piston design rests on was being
+    removed by its own protection.
+    """
+    mix = HapticMix(block=BLOCK, master=3.0)
+    peak = 0.0
+    for _ in range(80):
+        out = mix.render(_full(mix, 1.0), BLOCK)
+        peak = max(peak, float(np.max(np.abs(out))))
+    assert peak > transducer.SUSTAINED_CEILING * 1.2, (
+        f"the mix is still clamped at the bed's ceiling - peaked at {peak:.3f}")
+    assert peak <= transducer.HARD_LIMIT + 1e-6
+
+
+def test_compression_is_counted_so_a_squashed_mix_can_be_seen():
+    """Driving the limiter constantly is not the limiter working - it is the
+    level being wrong, and it holds the transducer near full scale against an
+    amplifier whose rating assumes a one-third duty cycle."""
+    hot = HapticMix(block=BLOCK, master=4.0)
+    for _ in range(60):
+        hot.render(_full(hot, 1.0), BLOCK)
+    calm = HapticMix(block=BLOCK, master=0.5)
+    for _ in range(60):
+        calm.render(_full(calm, 0.3), BLOCK)
+    assert hot.limited_blocks > calm.limited_blocks
+    assert calm.limited_blocks == 0

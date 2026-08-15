@@ -1752,6 +1752,35 @@ class PitCrewController(QObject):
                 return float(capacity)
         return None
 
+    def _report_rig(self) -> None:
+        """Write down what the outputs are actually doing, once every so often.
+
+        Because two sessions were spent guessing. "The haptics dropped in the
+        first corner" and "the wind stopped again" are both symptoms with
+        several possible causes, and every number that would separate them -
+        how many blocks the transducer rendered, how many it faded out, how
+        many the limiter caught, how many frames the fans sent, how many the
+        device rejected - was being counted and thrown away.
+
+        A symptom the driver reports an hour later is worth much less than a
+        line in the log, and this is cheap.
+        """
+        haptics = self.bridge.haptics
+        if haptics is not None:
+            log("haptics").info(
+                "blocks %d · fades %d · limited %d · running %s",
+                haptics.callbacks, haptics.faded_out,
+                haptics._mix.limited_blocks, haptics.running)
+        wind = self.bridge.wind
+        if wind is not None and getattr(wind, "state", None) is not None:
+            state = wind.state
+            log("wind").info(
+                "frames %d · resyncs %d · stale %d · failures %d · "
+                "level %.2f · connected %s",
+                state.frames_sent, state.resyncs, state.stale_bytes,
+                state.write_failures, self.bridge.wind_curve.level,
+                state.connected)
+
     def _report_health(self) -> None:
         """Say which of the several silences this one is.
 
@@ -1760,6 +1789,9 @@ class PitCrewController(QObject):
         no laps appear. Zeros are the one failure mode that survives all the
         way into a setup recommendation, so each gets its own sentence.
         """
+        self._health_ticks = getattr(self, "_health_ticks", 0) + 1
+        if self._health_ticks % 10 == 0:
+            self._report_rig()
         if self.listener is None:
             return
         # The port the listener is actually on. `self.port` is the configured
