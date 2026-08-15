@@ -1311,7 +1311,8 @@ class PitCrewController(QObject):
         if not self.settings.haptics_enabled or self.bridge.haptics is not None:
             return self.bridge.haptics is not None
         engine = HapticsEngine(
-            device=self.settings.haptics_device or transducer.DEVICE_NAME)
+            device=self.settings.haptics_device or transducer.DEVICE_NAME,
+            master=self.settings.haptics_gain)
         if not engine.start():
             log("haptics").warning(
                 "no haptics this session: %s", engine.error)

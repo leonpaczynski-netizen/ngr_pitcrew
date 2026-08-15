@@ -143,6 +143,11 @@ class Settings:
     # than an index for the same reason as the engineer's card: indices are
     # renumbered whenever a device appears or goes.
     haptics_device: str = ""
+    # Master gain over the whole haptic mix, 0-4. The balance between effects
+    # is his SimHub tuning and belongs in the effect list; this is the one
+    # number to turn when everything wants to be stronger - which it does,
+    # because the amplifier is already at its maximum and has nothing left.
+    haptics_gain: float = 1.0
 
     # --- shift beep
     beep_enabled: bool = True

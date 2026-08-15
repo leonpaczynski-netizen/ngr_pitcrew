@@ -58,11 +58,12 @@ class HapticsEngine:
     """
 
     def __init__(self, *, specs=synth.PORSCHE_RSR_17,
-                 device: str = transducer.DEVICE_NAME) -> None:
+                 device: str = transducer.DEVICE_NAME,
+                 master: float = 1.0) -> None:
         self._device = device
         self._specs = tuple(specs)
         self._mix = synth.HapticMix(specs, rate=transducer.SAMPLE_RATE,
-                                    block=MAX_BLOCK)
+                                    block=MAX_BLOCK, master=master)
         self._stereo = np.zeros((MAX_BLOCK, transducer.CHANNELS),
                                 dtype=np.float32)
         # What the telemetry thread writes and the callback reads. Plain

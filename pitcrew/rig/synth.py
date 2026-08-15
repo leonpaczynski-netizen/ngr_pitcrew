@@ -71,6 +71,23 @@ class EffectSpec:
     freq_lo: float
     freq_hi: float = 0.0
     noise: float = 0.0
+    # **His gamma filter, and the reason the first build felt weak.**
+    #
+    # `threshold` cuts below a level and `min_force` is applied after it, so an
+    # effect that fires at all starts at 12-28% rather than creeping up from
+    # nothing. Leaving these out - as the first version did - turns every
+    # ordinary event into a whisper, because the raw intensities that come out
+    # of `effects` sit low most of the time and a linear map keeps them there.
+    # He set these values on the rig over eight days; they are not decoration.
+    #
+    # `gamma` above 1 makes the effect more sensitive - it lifts the small end
+    # without moving the top - which is why it is applied as a 1/gamma
+    # exponent. `input_gain` above 100 lets an effect saturate before its input
+    # does; only wheelspin uses it, at 115.
+    threshold: float = 0.0
+    min_force: float = 0.0
+    gamma: float = 1.0
+    input_gain: float = 100.0
     # A transient may use the headroom above the sustained ceiling. That
     # reserve is what makes a gear shift read as an event over the road bed
     # rather than as the bed briefly getting louder - on one piston, with
@@ -89,17 +106,48 @@ class EffectSpec:
                 f"the {transducer.BAND_LOW_HZ:.0f}-{transducer.BAND_HIGH_HZ:.0f} "
                 f"Hz this amplifier passes. Below the low-cut is excursion "
                 f"spent for no output, and excursion is what bottoms a piston.")
+        if self.gamma <= 0.0:
+            raise ValueError(f"{self.name}: gamma {self.gamma} is not positive")
+        if not 0.0 <= self.min_force <= 100.0:
+            raise ValueError(
+                f"{self.name}: minimum force {self.min_force} is not 0-100")
+
+    def shape(self, intensity: float) -> float:
+        """The driver's own gain chain: threshold, gamma, then minimum force.
+
+        Order matters and is SimHub's: the threshold decides whether the effect
+        happens at all, and the minimum force decides how hard it starts once
+        it does. Applying the floor first would make the threshold meaningless,
+        because everything would arrive already lifted.
+        """
+        value = intensity * (self.input_gain / 100.0)
+        if value <= 0.0:
+            return 0.0
+        floor = self.threshold / 100.0
+        if value <= floor:
+            return 0.0
+        if floor < 1.0:
+            value = (value - floor) / (1.0 - floor)
+        value = min(1.0, value) ** (1.0 / self.gamma)
+        minimum = self.min_force / 100.0
+        return minimum + (1.0 - minimum) * value
 
 
 # The six the driver had enabled, with his gains and bands. Twenty more exist
 # in SimHub and were all off; porting them would be inventing a preference he
 # did not express.
 PORSCHE_RSR_17 = (
-    EffectSpec("wheels_spin_lock", 70.00, 82.0, 108.0, noise=9.0),
+    EffectSpec("wheels_spin_lock", 70.00, 82.0, 108.0, noise=9.0,
+               threshold=14.0, min_force=28.0, gamma=1.60, input_gain=115.0),
     EffectSpec("gear", 39.87, 48.0, transient=True),
-    EffectSpec("wheels_rumble", 37.62, 112.0, 152.0, noise=12.0),
-    EffectSpec("traction_loss", 35.19, 52.0, 70.0, noise=6.0),
-    EffectSpec("wheels_impact", 12.31, 28.0, 38.0, noise=3.0, transient=True),
+    EffectSpec("wheels_rumble", 37.62, 112.0, 152.0, noise=12.0,
+               threshold=8.0, min_force=28.0, gamma=1.60),
+    EffectSpec("traction_loss", 35.19, 52.0, 70.0, noise=6.0,
+               threshold=9.0, min_force=12.0, gamma=1.40),
+    EffectSpec("wheels_impact", 12.31, 28.0, 38.0, noise=3.0, transient=True,
+               threshold=55.0, min_force=20.0, gamma=1.20),
+    # The RPM curve is drawn by hand in `effects.RPM_CURVE` and arrives here
+    # already shaped, so it takes no gamma of its own.
     EffectSpec("rpm", 9.52, 34.0, 42.0, noise=3.0),
 )
 
@@ -243,8 +291,17 @@ class HapticMix:
 
     def __init__(self, specs=PORSCHE_RSR_17, *,
                  rate: int = transducer.SAMPLE_RATE,
-                 block: int = 2048) -> None:
+                 block: int = 2048, master: float = 1.0) -> None:
         self.specs = tuple(specs)
+        # One number over the whole mix, for the driver to turn.
+        #
+        # The relative balance between effects is his, tuned over eight days,
+        # and should be changed by editing an effect rather than by leaning on
+        # this. But the amplifier is already at its maximum - 50 of 50 - so
+        # there is no knob left on the hardware, and "everything a bit
+        # stronger" has nowhere else to come from. The limiter still holds the
+        # ceiling whatever this is set to.
+        self.master = max(0.0, min(4.0, float(master)))
         self._rate = rate
         self._block = block
         self._voices = [_Voice(spec, rate, block) for spec in self.specs]
@@ -252,10 +309,25 @@ class HapticMix:
         # Per-effect scale: SimHub's 0-100 gain against the reference level
         # the driver actually felt. A transient may reach past the sustained
         # ceiling into the headroom above it.
+        # **Relative to the loudest effect, not to an abstract 100.**
+        #
+        # SimHub's gains are weights inside its own chain - his sat under a
+        # profile gain of 49.8 and a global of 100 - so reading them as
+        # fractions of full scale here made even the strongest effect peak at
+        # 0.35 against a reference of 0.5 that he had described as "very
+        # strong", and the quiet ones vanished. Reported from the seat as
+        # "worked fine, just very weak".
+        #
+        # Normalising by the largest gain keeps the balance he tuned - which
+        # is the part worth eight days - while letting the mix reach the level
+        # the amplifier was actually calibrated against. His loudest is
+        # wheelspin at 70; that one now reaches the ceiling and everything
+        # else sits below it in the proportions he chose.
+        loudest = max(spec.gain for spec in self.specs) or 100.0
         self._scale = np.array(
-            [spec.gain / 100.0 * (transducer.TRANSIENT_CEILING
-                                  if spec.transient
-                                  else transducer.SUSTAINED_CEILING)
+            [spec.gain / loudest * (transducer.TRANSIENT_CEILING
+                                    if spec.transient
+                                    else transducer.SUSTAINED_CEILING)
              for spec in self.specs], dtype=np.float32)
         self._dc_y = 0.0
         # Held rather than rebuilt: the DC correction is ramped across each
@@ -274,7 +346,8 @@ class HapticMix:
         out = self._out[:n]
         out[:] = 0.0
         for index, voice in enumerate(self._voices):
-            voice.render(out, float(intensities[index]) * self._scale[index], n)
+            shaped = voice.spec.shape(float(intensities[index]))
+            voice.render(out, shaped * self._scale[index] * self.master, n)
         self._block_dc(out, n)
         self._limit(out, n)
         return out

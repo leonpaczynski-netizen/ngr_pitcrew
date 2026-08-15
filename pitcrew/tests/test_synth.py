@@ -191,3 +191,76 @@ def test_a_block_costs_a_small_fraction_of_its_own_duration():
     assert each < budget * 0.25, (
         f"{each * 1e6:.0f} us against a {budget * 1e6:.0f} us budget - "
         f"too close to real time to be safe in a callback")
+
+
+# --------------------------------------------------- his gain chain, restored
+
+def test_an_effect_that_fires_at_all_starts_at_his_minimum_force():
+    """Reported from the seat as "worked fine, just very weak".
+
+    His profile puts `MinimumForce` at 12-28 on every continuous effect, so an
+    effect that fires starts there rather than creeping up from nothing. The
+    first build implemented a plain linear intensity and left it out, which
+    turns every ordinary event into a whisper - the raw intensities out of
+    `effects` sit low most of the time and a linear map keeps them there.
+    """
+    rumble = {s.name: s for s in PORSCHE_RSR_17}["wheels_rumble"]
+    assert rumble.min_force == 28.0
+    just_over = rumble.shape(rumble.threshold / 100.0 + 0.01)
+    assert just_over >= 0.28, "it crept up from nothing instead of starting"
+
+
+def test_below_the_threshold_nothing_happens_at_all():
+    """The floor must not make the threshold meaningless - order matters."""
+    impact = {s.name: s for s in PORSCHE_RSR_17}["wheels_impact"]
+    assert impact.threshold == 55.0
+    assert impact.shape(0.30) == 0.0
+    assert impact.shape(0.90) > 0.0
+
+
+def test_gamma_lifts_the_small_end_without_moving_the_top():
+    sensitive = EffectSpec("a", 50.0, 40.0, 60.0, gamma=1.6)
+    flat = EffectSpec("b", 50.0, 40.0, 60.0, gamma=1.0)
+    assert sensitive.shape(0.3) > flat.shape(0.3)
+    assert sensitive.shape(1.0) == pytest.approx(flat.shape(1.0))
+
+
+def test_gains_are_relative_to_the_loudest_effect_not_to_an_abstract_full():
+    """SimHub's gains are weights inside its own chain - his sat under a
+    profile gain of 49.8. Read as fractions of full scale, even the strongest
+    effect peaked at 0.35 against a reference of 0.5 he called very strong."""
+    mix = HapticMix(block=BLOCK)
+    loudest = max(s.gain for s in mix.specs)
+    strongest = mix.specs[[s.gain for s in mix.specs].index(loudest)]
+    index = mix.names.index(strongest.name)
+    ceiling = (transducer.TRANSIENT_CEILING if strongest.transient
+               else transducer.SUSTAINED_CEILING)
+    assert mix._scale[index] == pytest.approx(ceiling)
+
+
+def test_the_balance_between_effects_is_still_his():
+    """Normalising must not reorder them - the proportions are the tuning."""
+    mix = HapticMix(block=BLOCK)
+    by_gain = sorted(mix.specs, key=lambda s: s.gain)
+    scales = [mix._scale[mix.names.index(s.name)] for s in by_gain
+              if not s.transient]
+    assert scales == sorted(scales)
+
+
+def test_the_master_gain_moves_everything_and_still_respects_the_limiter():
+    """The amplifier is at its maximum, so "everything stronger" has nowhere
+    else to come from."""
+    quiet = HapticMix(block=BLOCK, master=0.5)
+    loud = HapticMix(block=BLOCK, master=3.0)
+    intensities = _full(quiet, 0.5)
+    a = float(np.max(np.abs(_settle(quiet, intensities))))
+    b = float(np.max(np.abs(_settle(loud, _full(loud, 0.5)))))
+    assert b > a
+    assert b <= transducer.HARD_LIMIT + 1e-6
+
+
+def test_an_impossible_shaping_is_refused():
+    with pytest.raises(ValueError):
+        EffectSpec("bad", 50.0, 40.0, 60.0, gamma=0.0)
+    with pytest.raises(ValueError):
+        EffectSpec("bad", 50.0, 40.0, 60.0, min_force=140.0)

@@ -14,14 +14,21 @@ SIGKILL. The price is that this must transmit **unconditionally**, at better
 than 1 Hz, even when the value has not changed. Send-on-change would make the
 fans stutter at exactly the moment the driver is holding a steady speed.
 
-**Opening the port resets the board.** Asserting DTR pulls the Uno's reset
-line, and for the second or so of reset and bootloader the PWM pins float. If
-these fans are true 4-wire units that means full speed, because Intel's spec
-says an absent control signal shall run the fan at maximum. Two 4000 RPM
-blowers going to 100% is startling on a desk and genuinely unpleasant in a
-headset, so `dtr` is cleared **before** the port is opened. UNVERIFIED for
-this unit - it depends on how the fans are wired - which is why the bench
-test comes before anything drives this from telemetry.
+**Opening the port resets the board**, so `dtr` is cleared before the port is
+opened rather than after - by then the reset pulse has already happened. The
+worry was that the PWM pins float through the reset and bootloader window,
+and Intel's 4-wire spec says a fan with no control signal shall run at
+maximum: two 4000 RPM blowers at 100% would be startling on a desk and worse
+in a headset. Bench-tested on this rig with the driver listening - port held
+open six seconds, neither fan moved - so there is no startup blast here. The
+flag stays because it costs nothing and is correct on a board where the reset
+is DTR-driven.
+
+**Every frame is acknowledged, and the acknowledgement is read.** The firmware
+NACKs a packet id it did not expect, and `write` succeeds regardless because
+the bytes only have to reach the OS buffer. Skipping the reply cost a session:
+one lost frame desynchronised the sequence, the device rejected everything
+after it, its deadman stopped the fans, and nothing on this side noticed.
 
 **Never close the port from inside a write.** This is the exact shape of the
 deadlock that wedged SimHub: a failing write called `Close()` while the reader
@@ -84,6 +91,14 @@ RESET_SETTLE_S = 1.6
 RECONNECT_S = 2.0
 RECONNECT_MAX_S = 30.0
 
+# How many frames may go unanswered before the link is treated as dead. The
+# device replies within a millisecond, so a run this long is not a busy
+# moment - it is a cable, a hub, or a board that has stopped listening. At
+# `SEND_INTERVAL_S` this is about two seconds, which is longer than the
+# firmware's own deadman: the fans will already have stopped by the time we
+# give up, and the reconnect is what brings them back.
+UNANSWERED_LIMIT = 8
+
 # This device declares four, though only two fans are wired. All four bytes go
 # every time: the firmware reads exactly `motorCount()` of them with no
 # framing, so a short write leaves it waiting mid-command.
@@ -128,6 +143,7 @@ class WindState:
     last_values: tuple[int, ...] = field(default_factory=tuple)
     frames_sent: int = 0
     write_failures: int = 0
+    resyncs: int = 0
     error: str | None = None
 
     def describe(self) -> str:
@@ -138,7 +154,11 @@ class WindState:
         where = f"on {self.port}"
         if self.firmware:
             where += f", firmware {self.firmware}"
-        return f"Wind simulator {where}. {self.frames_sent} frames sent."
+        # Resyncs are surfaced rather than hidden: a link that works only
+        # because it keeps resynchronising is not a healthy link, and the
+        # driver has no other way to know it is happening.
+        note = f", {self.resyncs} resyncs" if self.resyncs else ""
+        return f"Wind simulator {where}. {self.frames_sent} frames sent{note}."
 
 
 def available() -> bool:
@@ -187,6 +207,11 @@ class WindLink:
         self._packet_id = arq.BROADCAST_ID
         self.crc = arq.DEFAULT_CRC
         self.firmware: str | None = None
+        # Frames the device did not answer, in a row, and rejections it has
+        # resynchronised from. Both are reported: a link that works only
+        # because it keeps resynchronising is not a healthy link.
+        self.unanswered = 0
+        self.resyncs = 0
 
     def open(self) -> None:
         """Open without resetting the board into a full-speed blast."""
@@ -302,9 +327,45 @@ class WindLink:
             self.port)
         return False
 
-    def send(self, values: tuple[int, ...]) -> None:
-        """Set every channel. Raises on a dead link, and does not close."""
+    def send(self, values: tuple[int, ...]) -> bool:
+        """Set every channel, and check the device accepted it.
+
+        **Reading the reply is not optional, and leaving it out cost a
+        session.** The frames carry a sequential packet id and the firmware
+        NACKs one that is not the id it expected. Lose or corrupt a single
+        frame - on a CH340 that drops a link ten times in three days, that is
+        a matter of when - and its expectation diverges from ours permanently:
+        it rejects everything from then on, while `write` goes on succeeding
+        because the bytes reach the OS buffer regardless.
+
+        The fans then stop, because the firmware's own deadman zeroes them a
+        second after the last frame it accepted. Observed live: wind for one
+        corner, then nothing for the rest of the session, and not one line in
+        the log - because from this side nothing had gone wrong.
+
+        A rejection is recoverable and cheap to recover from: packet id 255 is
+        a broadcast the firmware accepts whatever it was expecting, so the
+        next frame resynchronises. Returns whether the device is still with
+        us; raises only on a genuinely dead link, and never closes the port.
+        """
         self._write(arq.motors_payload(list(values)))
+        reply = self._read_reply()
+        if reply is None:
+            # Silence is not yet a failure. The device answers within a
+            # millisecond or so, but a busy moment is not a reason to tear
+            # down a working link - `WindSim` counts these and acts on a run
+            # of them.
+            self.unanswered += 1
+            return self.unanswered < UNANSWERED_LIMIT
+        self.unanswered = 0
+        if reply.acknowledged:
+            return True
+        # Rejected. Resynchronise on the broadcast id rather than carrying a
+        # disagreement about sequence for the rest of the session.
+        self.resyncs += 1
+        self._packet_id = arq.BROADCAST_ID
+        log("wind").info("%s %s - resynchronising", self.port, reply.describe())
+        return True
 
 
 class WindSim:
@@ -426,12 +487,22 @@ class WindSim:
         with self._lock:
             values = self._wanted
         try:
-            link.send(values)
+            alive = link.send(values)
         except Exception as exc:                            # noqa: BLE001
             self.state.write_failures += 1
             self.state.error = f"Lost the wind simulator on {link.port}: {exc}"
             log("wind").warning(self.state.error)
             return False
+        if not alive:
+            # Writes are still succeeding - the bytes reach the OS buffer
+            # whatever the device does - so this is the only way a board that
+            # has stopped listening is ever noticed.
+            self.state.error = (
+                f"{link.port} stopped answering after "
+                f"{self.state.frames_sent} frames. Reconnecting.")
+            log("wind").warning(self.state.error)
+            return False
+        self.state.resyncs = link.resyncs
         self.state.frames_sent += 1
         self.state.last_values = values
         return True
