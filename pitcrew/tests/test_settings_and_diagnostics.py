@@ -668,3 +668,39 @@ def test_a_line_that_synthesises_to_nothing_opens_no_stream():
         else:
             sys.modules["sounddevice"] = original
     assert opened == []
+
+
+# ------------------------------------------------------------------ the rig
+
+def test_the_rig_settings_round_trip_through_the_screen(qt_app):
+    """He tunes the transducer by feel, so it needs a control he can reach -
+    the amplifier is already at its maximum and has no knob left."""
+    import dataclasses
+
+    screen = SettingsScreen()
+    screen.load(dataclasses.replace(Settings(), haptics_enabled=True,
+                                    haptics_gain=1.8, wind_enabled=True))
+    out = screen.values()
+    assert out.haptics_enabled is True
+    assert out.wind_enabled is True
+    assert out.haptics_gain == 1.8
+
+
+def test_the_rig_is_off_in_a_fresh_settings_object():
+    """150 W into a piston under the seat is not something an app update
+    should switch on."""
+    assert Settings().haptics_enabled is False
+    assert Settings().wind_enabled is False
+    assert Settings().haptics_gain == 1.0
+
+
+def test_the_strength_can_be_changed_without_restarting_the_stream():
+    """Judging a level means feeling it change. Tearing the stream down to
+    apply a number would mean stopping the session to tune it."""
+    from pitcrew.rig.haptics import HapticsEngine
+
+    engine = HapticsEngine(master=1.0)
+    engine.set_master(2.5)
+    assert engine._mix.master == 2.5
+    engine.set_master(99.0)
+    assert engine._mix.master == 4.0, "the master gain is not bounded"

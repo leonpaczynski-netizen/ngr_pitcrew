@@ -94,6 +94,15 @@ class HapticsEngine:
                 out=self._wanted)
         self._generation += 1
 
+    def set_master(self, gain: float) -> None:
+        """Change the overall strength without restarting the stream.
+
+        Read by the callback on its next block. Nothing is torn down, so the
+        driver can turn it up and feel the difference immediately rather than
+        stopping the session to judge a number.
+        """
+        self._mix.master = max(0.0, min(4.0, float(gain)))
+
     def silence(self) -> None:
         self._wanted[:] = 0.0
         self._generation += 1

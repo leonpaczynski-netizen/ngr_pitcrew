@@ -69,6 +69,7 @@ class SettingsScreen(QWidget):
     saved = pyqtSignal(object)          # Settings
     test_beep_requested = pyqtSignal()
     test_voice_requested = pyqtSignal()
+    test_haptics_requested = pyqtSignal()
     test_feed_requested = pyqtSignal()
     capture_toggled = pyqtSignal(bool)      # raw session capture
     listen_toggled = pyqtSignal(bool)
@@ -121,6 +122,7 @@ class SettingsScreen(QWidget):
         right.setSpacing(theme.GAP_WIDE)
         right.addWidget(self._beep_plate())
         right.addWidget(self._audio_plate())
+        right.addWidget(self._rig_plate())
         right.addWidget(self._voice_plate())
         right.addStretch(1)
         columns.addLayout(right, 1)
@@ -353,6 +355,62 @@ class SettingsScreen(QWidget):
         plate.body.addStretch(1)
         return plate
 
+    def _rig_plate(self) -> Plate:
+        """The transducer and the fans - what the app drives rather than reads.
+
+        Both are off until switched on: the transducer puts 150 W into a piston
+        under the seat, and neither is something that should start making
+        itself felt because the app was updated.
+
+        The gain exists because the amplifier is already at its maximum, 50 of
+        50, so there is no knob left on the hardware. The balance BETWEEN the
+        effects is the driver's own SimHub tuning and belongs in the effect
+        list; this moves all of it together, which is the adjustment that
+        cannot be made anywhere else.
+        """
+        plate = Plate("Rig")
+        plate.body.addWidget(BodyLabel(
+            "Wind and haptics, driven straight from the telemetry. Both need "
+            "their hardware connected — a transducer that is not there stays "
+            "silent rather than borrowing another card.",
+            size=13, colour=theme.STENCIL_DIM))
+
+        self.haptics_enabled = QCheckBox("Transducer is on")
+        plate.body.addWidget(self.haptics_enabled)
+
+        self.haptics_gain = QDoubleSpinBox()
+        self.haptics_gain.setRange(0.0, 4.0)
+        self.haptics_gain.setSingleStep(0.1)
+        self.haptics_gain.setDecimals(1)
+        block_wheel(self.haptics_gain)
+        plate.body.addWidget(Field(
+            "Strength", self.haptics_gain, suffix="x",
+            hint="1.0 is the level the amplifier was calibrated against. The "
+                 "limiter holds the ceiling whatever this is set to — past "
+                 "about 2.5 the balance between effects is the thing to "
+                 "change, not the level."))
+
+        self.wind_enabled = QCheckBox("Wind simulator is on")
+        plate.body.addWidget(self.wind_enabled)
+
+        self.rig_note = BodyLabel("", size=13, colour=theme.STENCIL_DIM)
+        self.rig_note.setWordWrap(True)
+        plate.body.addWidget(self.rig_note)
+
+        row = QHBoxLayout()
+        row.setSpacing(theme.GAP)
+        test = MarkButton("Test transducer", compact=True)
+        test.clicked.connect(self.test_haptics_requested.emit)
+        row.addWidget(test)
+        row.addStretch(1)
+        plate.body.addLayout(row)
+        return plate
+
+    def note_rig(self, text: str, *, warn: bool = False) -> None:
+        self.rig_note.setText(text)
+        self.rig_note.setStyleSheet(
+            f"color: {theme.DANGER_INK};" if warn else "")
+
     def _audio_plate(self) -> Plate:
         """Which sound card the engineer speaks into, and which one hears him.
 
@@ -468,6 +526,9 @@ class SettingsScreen(QWidget):
                               (self.audio_input, settings.audio_input_device)):
             index = combo.findData(chosen)
             combo.setCurrentIndex(index if index >= 0 else 0)
+        self.haptics_enabled.setChecked(settings.haptics_enabled)
+        self.haptics_gain.setValue(settings.haptics_gain)
+        self.wind_enabled.setChecked(settings.wind_enabled)
         self.ptt_enabled.setChecked(settings.ptt_enabled)
         self.ptt_key.setCurrentText(settings.ptt_key)
         self.ptt_in_practice.setChecked(settings.ptt_in_practice)
@@ -511,6 +572,9 @@ class SettingsScreen(QWidget):
             voice_noise_w_scale=self.noise_w_scale.value(),
             audio_output_device=self.audio_output.currentData() or "",
             audio_input_device=self.audio_input.currentData() or "",
+            haptics_enabled=self.haptics_enabled.isChecked(),
+            haptics_gain=self.haptics_gain.value(),
+            wind_enabled=self.wind_enabled.isChecked(),
         )
 
     def _sync_rpm_enabled(self) -> None:

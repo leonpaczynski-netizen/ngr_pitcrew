@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import sqlite3
+import time
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic as _monotonic
@@ -383,6 +384,8 @@ class PitCrewController(QObject):
             self.settings_screen.saved.connect(self.save_settings)
             self.settings_screen.test_beep_requested.connect(self.test_beep)
             self.settings_screen.test_voice_requested.connect(self.test_voice)
+            self.settings_screen.test_haptics_requested.connect(
+                self.test_haptics)
             self.settings_screen.test_feed_requested.connect(self.test_feed)
             self.settings_screen.capture_toggled.connect(self.toggle_capture)
             self.settings_screen.listen_toggled.connect(self.probe_button)
@@ -1320,6 +1323,51 @@ class PitCrewController(QObject):
         self.bridge.effects.reset()
         self.bridge.haptics = engine
         return True
+
+    def test_haptics(self) -> None:
+        """Make the transducer do something, here, without going out.
+
+        The whole point of a settings page for hardware: he is in a headset
+        while driving and cannot see this screen, so the only way to know the
+        strength is right is to feel it standing still. Runs the road-rumble
+        effect at half, which is the one he will spend a lap inside.
+        """
+        if self.settings_screen is None:
+            return
+        wanted = self.settings_screen.values()
+        engine = self.bridge.haptics
+        borrowed = engine is None
+        if borrowed:
+            engine = HapticsEngine(
+                device=wanted.haptics_device or transducer.DEVICE_NAME,
+                master=wanted.haptics_gain)
+            if not engine.start():
+                self.settings_screen.note_rig(engine.error or
+                                              "The transducer would not open.",
+                                              warn=True)
+                return
+        else:
+            # Live session: honour the number in the box rather than the one
+            # the session started with, so turning it up can be judged now.
+            engine.set_master(wanted.haptics_gain)
+
+        names = list(self.bridge.effects.NAMES)
+        levels = [0.0] * len(names)
+        levels[names.index("wheels_rumble")] = 0.5
+        try:
+            deadline = _monotonic() + 2.0
+            while _monotonic() < deadline:
+                engine.set_intensities(levels)
+                QApplication.processEvents()
+                time.sleep(0.02)
+            engine.silence()
+        finally:
+            if borrowed:
+                engine.stop()
+        self.settings_screen.note_rig(
+            f"Road rumble at half, {wanted.haptics_gain:.1f}x. Felt about "
+            f"right? The amplifier is at its maximum, so this is the only "
+            f"level control left.")
 
     def stop_haptics(self) -> None:
         engine, self.bridge.haptics = self.bridge.haptics, None

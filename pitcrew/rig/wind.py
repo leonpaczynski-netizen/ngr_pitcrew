@@ -144,6 +144,7 @@ class WindState:
     frames_sent: int = 0
     write_failures: int = 0
     resyncs: int = 0
+    stale_bytes: int = 0
     error: str | None = None
 
     def describe(self) -> str:
@@ -212,6 +213,9 @@ class WindLink:
         # because it keeps resynchronising is not a healthy link.
         self.unanswered = 0
         self.resyncs = 0
+        # Bytes thrown away as stale. Non-zero means a reply arrived late or
+        # unread, which is the shape of the fault that stopped the fans twice.
+        self.stale_bytes = 0
 
     def open(self) -> None:
         """Open without resetting the board into a full-speed blast."""
@@ -275,10 +279,44 @@ class WindLink:
         self._packet_id = arq.next_id(self._packet_id)
 
     def _read_reply(self) -> arq.Reply | None:
+        """One reply, read to its own length and no further.
+
+        **A fixed-size read is what broke this.** Asking for three bytes when
+        an ACK is two means the third comes out of whatever arrives next, so a
+        single unread byte shifts every reply from then on. It happened for
+        real: `Command_Hello` answers with the firmware's version letter after
+        its acknowledgement, that byte was left in the buffer, and minutes
+        later a motors reply came back reading `0x6a` - which is ASCII 'j', the
+        version letter from the handshake, finally being consumed as the head
+        of somebody else's message. From there the device and this side never
+        agreed again, and the fans stopped.
+
+        So the kind byte is read first and decides how much more to take.
+        """
         if self._serial is None:
             return None
-        data = self._serial.read(3)
-        return arq.parse_reply(data) if data else None
+        head = self._serial.read(1)
+        if not head:
+            return None
+        wanted = {arq.REPLY_ACK: 1, arq.REPLY_NACK: 2}.get(head[0], 0)
+        rest = self._serial.read(wanted) if wanted else b""
+        return arq.parse_reply(head + rest)
+
+    def _drain(self) -> int:
+        """Throw away anything unread. Returns how much there was.
+
+        Called before each frame, because at four frames a second against a
+        device that answers in about a millisecond, anything still waiting is
+        the last exchange's and cannot be about this one. Belt to the braces
+        above: the length-aware read stops the misalignment happening, and
+        this stops any that happens anyway from lasting more than one frame.
+        """
+        if self._serial is None:
+            return 0
+        waiting = getattr(self._serial, "in_waiting", 0) or 0
+        if waiting:
+            self._serial.reset_input_buffer()
+        return int(waiting)
 
     def handshake(self) -> bool:
         """Prove the framing works, and find out which checksum it speaks.
@@ -312,6 +350,10 @@ class WindLink:
                     self.port)
                 return False
             if reply.acknowledged:
+                # `Command_Hello` answers with the firmware's version letter
+                # after its acknowledgement. Leaving it unread is what shifted
+                # every later reply by a byte and eventually stopped the fans.
+                self._drain()
                 log("wind").info(
                     "%s speaks the %s checksum - measured, not assumed.",
                     self.port, variant.name)
@@ -348,6 +390,9 @@ class WindLink:
         next frame resynchronises. Returns whether the device is still with
         us; raises only on a genuinely dead link, and never closes the port.
         """
+        stale = self._drain()
+        if stale:
+            self.stale_bytes += stale
         self._write(arq.motors_payload(list(values)))
         reply = self._read_reply()
         if reply is None:
@@ -503,6 +548,7 @@ class WindSim:
             log("wind").warning(self.state.error)
             return False
         self.state.resyncs = link.resyncs
+        self.state.stale_bytes = link.stale_bytes
         self.state.frames_sent += 1
         self.state.last_values = values
         return True
