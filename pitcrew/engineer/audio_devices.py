@@ -257,6 +257,27 @@ def open_exclusive_output(device: object, samplerate: int, *,
                           blocksize: int = 0, callback=None):
     """A stream that owns its card outright, or a refusal. No middle ground.
 
+    **Measured not to work on the ButtKicker PRO, 15 Aug 2026. Do not reach
+    for this on that rig without checking it again first.** It opens, reports
+    21.3 ms and a sensible rate and channel count, and then renders nothing:
+    the endpoint metered 0.0000 for the whole call and the driver in the seat
+    felt nothing, while the identical tone through a shared stream metered
+    0.125 and was felt. Repeatedly opening and closing it also degrades the
+    endpoint until further opens fail outright with -9996; a fresh process
+    opens cleanly again.
+
+    That is exactly the fault this module exists to catch - a card accepting
+    audio and playing none of it - arrived at from the inside, by an API that
+    reports success. Which is why the transducer runs shared, and why the
+    endpoint meter is not optional on that path: it is the only thing that
+    would have caught this.
+
+    Kept rather than deleted because it is correct for devices where WASAPI
+    exclusive genuinely works, and because the reasons to want it are real -
+    they are below. But a caller must verify that sound actually arrives,
+    and cannot verify it with the endpoint meter, which does not see past the
+    audio engine that exclusive mode bypasses. A human, or nothing.
+
     For the tactile transducer, where "isolated from everything else the PC is
     doing" is a requirement rather than a preference. Three things follow from
     exclusive mode and all three are the point:

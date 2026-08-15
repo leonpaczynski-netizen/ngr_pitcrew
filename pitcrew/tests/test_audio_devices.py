@@ -365,3 +365,32 @@ def test_the_ordinary_open_still_walks_every_route(monkeypatch):
         sd, "Headphones (JBL Endurance Run 3C)", "output")
     assert len(routes) > 1
     assert routes[0] == JBL_WASAPI
+
+
+def test_exclusive_mode_is_not_the_transducers_path():
+    """Measured on the rig, 15 Aug 2026, and it changed the design.
+
+    `open_exclusive_output` opens on the ButtKicker PRO, reports 21.3 ms and
+    a sensible rate and channel count, and renders nothing: the endpoint
+    metered 0.0000 for the whole call and the driver felt nothing, while the
+    identical tone through a shared stream metered 0.125 and was felt.
+
+    So the docstring has to carry that warning, or the next person reads a
+    function that promises isolation and gets silence - which is the fault
+    this module exists to catch, reached from the inside by an API that
+    reports success.
+    """
+    doc = audio_devices.open_exclusive_output.__doc__
+    assert "Measured not to work on the ButtKicker PRO" in doc
+    assert "0.0000" in doc
+
+
+def test_isolation_does_not_depend_on_exclusive_mode():
+    """The question that prompted all this was whether other PC sounds can
+    reach the transducer. Two of the three layers never needed exclusive
+    mode: the amp is its own endpoint addressed by name, and it is not the
+    Windows default, which is where anything asking for "the default" goes.
+    """
+    shaker = audio_devices.lock_for("Speakers (ButtKicker PRO)")
+    default = audio_devices.lock_for(None)
+    assert shaker is not default
