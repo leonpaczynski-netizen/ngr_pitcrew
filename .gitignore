@@ -63,3 +63,11 @@ data/gt7_sessions.db
 *.pyc
 # scratch icon crops
 _icon_*.png
+
+# Staged for deletion - a Kokoro ONNX model and a whole virtualenv, 533 MB
+# across 5,831 files. Ignored rather than committed because git history does
+# not shed large blobs without a rewrite, and this is not source.
+_to_delete/
+# Pasted SimHub forum threads, kept while the wind and shaker work was live.
+# Research notes, not repo content.
+allissues.txt
