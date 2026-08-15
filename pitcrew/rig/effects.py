@@ -43,8 +43,24 @@ from pitcrew.telemetry.recorder import _slip_ratios
 # analysis layer has its own, stricter trips.
 SPIN_ONSET = 0.04          # 4% faster than the road
 SPIN_FULL = 0.25           # 25% and it is a full-scale event
-LOCK_ONSET = 0.04
-LOCK_FULL = 0.30
+LOCK_ONSET = 0.10
+LOCK_FULL = 0.40
+# **How long a wheel must stay slow before it counts as locked.**
+#
+# Reported from the seat as "ABS is way too strong" - which is worth reading
+# carefully, because there IS no ABS effect. GT7 broadcasts no ABS flag and
+# none was built. What he was feeling is the lock half of `wheels_spin_lock`
+# firing on the ABS itself: the system pulses the brakes at something like
+# 10-15 Hz, every pulse drops the wheel speed below the road speed, and a
+# detector with no memory sees a lock-up on each one. On a driver whose whole
+# technique is trail-braking deep that is most of every corner.
+#
+# The distinction that matters is duration, not depth. An ABS cycle is tens of
+# milliseconds; a genuine lock persists. So the lock signal is given an attack
+# slow enough that a pulse cannot climb it and a real lock can, and a quick
+# release so the effect still stops when the wheel does.
+LOCK_ATTACK_S = 0.22
+LOCK_RELEASE_S = 0.08
 # Below this the ratio is arithmetic on a divisor that means nothing.
 SLIP_MIN_SPEED_MS = 3.0
 
@@ -131,6 +147,7 @@ class EffectDeriver:
         self._prev_velocity: tuple[float, float, float] | None = None
         self._gear_pulse = 0.0
         self._impact_pulse = 0.0
+        self._lock_level = 0.0
 
     def reset(self) -> None:
         """Between sessions. Stale state across a garage visit is a phantom
@@ -140,6 +157,7 @@ class EffectDeriver:
         self._prev_velocity = None
         self._gear_pulse = 0.0
         self._impact_pulse = 0.0
+        self._lock_level = 0.0
 
     def update(self, packet: GT7Packet, dt: float = FRAME_S) -> np.ndarray:
         """The six intensities for this frame."""
@@ -153,7 +171,7 @@ class EffectDeriver:
             self.reset()
             return out
 
-        out[0] = self._spin_lock(packet)
+        out[0] = self._spin_lock(packet, dt)
         out[1] = self._gear(packet, dt)
         out[2] = self._rumble(packet, dt)
         out[3] = self._traction_loss(packet)
@@ -163,7 +181,7 @@ class EffectDeriver:
 
     # ---------------------------------------------------------------- wheels
 
-    def _spin_lock(self, p: GT7Packet) -> float:
+    def _spin_lock(self, p: GT7Packet, dt: float) -> float:
         """Wheelspin and lock-up, from surface speed against road speed.
 
         One effect for both because that is how he had it: a wheel doing
@@ -184,7 +202,13 @@ class EffectDeriver:
             lock = 0.0
         if p.throttle < PEDAL_ON:
             spin *= 0.5
-        return max(spin, lock)
+
+        # Lock has to hold before it is believed - see `LOCK_ATTACK_S`. ABS
+        # pulses the brakes faster than this can climb, so the effect stops
+        # reporting the assist and starts reporting the wheel.
+        tau = LOCK_ATTACK_S if lock > self._lock_level else LOCK_RELEASE_S
+        self._lock_level += (lock - self._lock_level) * min(1.0, dt / tau)
+        return max(spin, self._lock_level)
 
     def _rumble(self, p: GT7Packet, dt: float) -> float:
         """Road texture, and the honest account of what this is.

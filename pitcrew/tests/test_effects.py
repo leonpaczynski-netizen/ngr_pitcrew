@@ -102,11 +102,18 @@ def test_wheelspin_needs_the_throttle_to_be_open():
 def test_a_lock_up_needs_the_brake_to_be_on():
     """A wheel reading slow over a kerb is not a lock-up, and the pedal is
     what separates the two. He trail-brakes deep by design, so this effect
-    firing on lifts would be constant."""
+    firing on lifts would be constant.
+
+    Settled over a longer window than most of these, because a lock is no
+    longer believed on sight: it has to hold for `LOCK_ATTACK_S` before it is
+    reported, which is what stops ABS pulsing being read as a lock-up. Three
+    frames only reaches about 0.2 of the way there now.
+    """
     slow = rolling_wheel_rps(59.7) * 0.60
     braking = rolling(wheel_rps_fl=slow, wheel_rps_fr=slow, brake_raw=200)
     coasting = rolling(wheel_rps_fl=slow, wheel_rps_fr=slow, brake_raw=0)
-    assert one(EffectDeriver(), braking, "wheels_spin_lock") > 0.5
+    held = settle(EffectDeriver(), braking, frames=60)
+    assert float(held[0]) > 0.5
     assert one(EffectDeriver(), coasting, "wheels_spin_lock") == 0.0
 
 
@@ -251,3 +258,51 @@ def test_every_intensity_stays_between_nought_and_one():
         out = settle(deriver, packet)
         assert float(np.min(out)) >= 0.0
         assert float(np.max(out)) <= 1.0
+
+
+# --------------------------------------------------------------- the ABS
+
+def test_abs_pulsing_is_not_reported_as_a_lock_up():
+    """Reported from the seat as "ABS is way too strong", which is worth
+    reading carefully: there IS no ABS effect and none was built, because GT7
+    broadcasts no ABS flag.
+
+    What he felt was the lock half of `wheels_spin_lock` firing on the assist
+    itself - ABS pulses the brakes at 10-15 Hz, every pulse drops wheel speed
+    below road speed, and a detector with no memory calls each one a lock-up.
+    On a driver whose technique is trail-braking deep that is most of every
+    corner. The distinction is duration, not depth.
+    """
+    deriver = EffectDeriver()
+    slow = rolling_wheel_rps(59.7) * 0.55
+    locked = rolling(wheel_rps_fl=slow, wheel_rps_fr=slow, brake_raw=220)
+    free = rolling(brake_raw=220)
+
+    peak = 0.0
+    for frame in range(120):                       # two seconds of ABS
+        pulsing = locked if (frame // 3) % 2 == 0 else free
+        peak = max(peak, float(deriver.update(pulsing)[0]))
+    assert peak < 0.6, f"the assist still dominates, reaching {peak:.2f}"
+
+
+def test_a_lock_that_is_actually_held_still_comes_through():
+    """The other half. Slowing the attack must not deafen a real lock."""
+    deriver = EffectDeriver()
+    slow = rolling_wheel_rps(59.7) * 0.55
+    locked = rolling(wheel_rps_fl=slow, wheel_rps_fr=slow, brake_raw=220)
+    for _ in range(120):
+        value = float(deriver.update(locked)[0])
+    assert value > 0.9, f"a held lock only reached {value:.2f}"
+
+
+def test_the_lock_lets_go_quickly_when_the_wheel_does():
+    """Slow to believe, quick to forget - otherwise it rings on past the
+    corner it belonged to."""
+    deriver = EffectDeriver()
+    slow = rolling_wheel_rps(59.7) * 0.55
+    locked = rolling(wheel_rps_fl=slow, wheel_rps_fr=slow, brake_raw=220)
+    for _ in range(120):
+        deriver.update(locked)
+    for _ in range(20):
+        value = float(deriver.update(rolling(brake_raw=0))[0])
+    assert value < 0.1, f"still ringing at {value:.2f}"
