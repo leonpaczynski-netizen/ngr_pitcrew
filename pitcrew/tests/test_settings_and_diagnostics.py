@@ -46,6 +46,19 @@ def wired(qt_app, store: Store):
     screen = SettingsScreen()
     controller = PitCrewController(store, EventScreen(), PracticeScreen(),
                                    settings_screen=screen)
+    # **The suite does not get to make a noise.** `test_voice` calls
+    # `voice.say_now` for real, and the `_confirm_audio` doubles below replace
+    # the *verification* while still invoking the play callback - so every
+    # full-suite run said "Radio check. Box this lap or next." out loud
+    # through whatever card the driver had selected. He heard it during a
+    # session and reasonably reported it as the app talking at random.
+    #
+    # The beep path already avoided this by stubbing `shift_beep._tone` per
+    # test. Doing it here instead covers the whole file, including any test
+    # added later that reaches the voice by a route nobody thought about.
+    spoken: list[str] = []
+    controller.voice.say_now = lambda line: (spoken.append(line), (True, ""))[1]
+    controller.voice.spoken = spoken
     yield controller, screen, store
     controller.shutdown()
 
@@ -301,6 +314,10 @@ def test_a_line_the_sound_card_never_played_is_not_reported_as_spoken(wired):
     note = screen.beep_note.text()
     assert "no audio reached" in note
     assert "accepting sound and dropping it" in note
+    # The line still has to have been handed to the voice - the fault under
+    # test is a card that drops what it was given, not an app that never
+    # spoke. Without this the silencing above could hide a real regression.
+    assert controller.voice.spoken == ["Radio check. Box this lap or next."]
 
 
 # -------------------------------------------------------------- the button
