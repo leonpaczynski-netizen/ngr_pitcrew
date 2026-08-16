@@ -20,7 +20,7 @@ from pitcrew.race.calls import (
     _fuel_gap,
     _fuel_instruction,
     clear_stint,
-    fuel_map_for,
+
     next_call,
 )
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator, RacePhase
@@ -133,11 +133,11 @@ def test_no_box_call_while_in_the_pit():
 
 # --------------------------------------------------------------------- fuel
 
-def test_short_on_fuel_asks_for_a_leaner_map():
+def test_short_on_fuel_asks_him_to_save_it():
     state = a_state(lap=5, fuel_l=10.0, stint_ends_on_lap=12)
     call = next_call(state)
     assert call.kind == FUEL_SHORT
-    assert "Map" in call.call
+    assert "Short-shift" in call.call
     assert "short" in call.reason
 
 
@@ -586,31 +586,62 @@ def test_overdue_laps_are_not_counted_as_fuel_in_hand():
     assert next_call(state).kind == BOX_NOW      # boxing outranks the fuel call
 
 
-# ------------------------------------------------------ the map is not fixed
+# --------------------------------------------- the lever is the shift, not a map
 #
-# Regression for S9. Map 3 is 0.85 on the measured table, so it answers a
-# shortfall of 15% of the remaining distance and nothing larger.
+# He runs fuel map 1 only and has tested why: a map step costs more lap time
+# than the fuel it saves, against short-shifting, lift-and-coast or a tow. His
+# own test is primary evidence, so `fuel_map_for` is gone and the shortfall is
+# answered in the lever he actually uses.
 
-def test_the_map_follows_from_the_shortfall():
-    assert fuel_map_for(8.5, 10.0) == (3, 0.0)     # exactly map 3's 0.85
-    assert fuel_map_for(8.4, 10.0)[0] == 4         # a tenth more and 3 will not do
-    assert fuel_map_for(7.2, 10.0)[0] == 5
-    assert fuel_map_for(10.0, 10.0)[0] == 1        # nothing to save: stay rich
-
-
-def test_a_shortfall_no_map_can_recover_says_what_is_left():
-    """Map 6 is the leanest there is. Below that it is a stop, not a map."""
-    level, still = fuel_map_for(4.0, 10.0)
-    assert level == 6
-    assert still == pytest.approx(2.0)             # 4 L of laps at half rate is 8
-
-
-def test_a_large_shortfall_is_not_answered_with_map_3():
-    state = a_state(lap=5, fuel_l=6.8, stint_ends_on_lap=15, laps_since_stop=5)
+def test_a_fuel_shortfall_asks_for_a_short_shift_and_not_a_map():
+    state = a_state(lap=5, fuel_l=20.0, stint_ends_on_lap=15,
+                    laps_since_stop=5, short_shift_l_per_1000rpm=1.762)
     call = _fuel(state)
     assert call.kind == FUEL_SHORT
-    assert call.call == "Map 6 down the straights."
-    assert "still leaves" in call.reason
+    assert call.call.startswith("Short-shift ")
+    assert "Map" not in call.call and "map" not in call.reason
+    assert "laps short on fuel" in call.reason
+
+
+def test_the_rpm_drop_follows_from_the_size_of_the_shortfall():
+    """A fixed drop answers one shortfall and no other - the same fault the
+    fixed "Map 3" had. The conversion is the car's own measured slope."""
+    def drop_for(fuel_l):
+        state = a_state(lap=5, fuel_l=fuel_l, stint_ends_on_lap=15,
+                        laps_since_stop=5, short_shift_l_per_1000rpm=1.762)
+        return int(_fuel(state).call.split()[-1].rstrip("."))
+
+    small, large = drop_for(30.0), drop_for(24.0)
+    assert 0 < small < large, (small, large)
+
+
+def test_a_shortfall_short_shifting_cannot_cover_says_what_is_left():
+    """Past the cap it is a box decision, not a saving one - and the laps it
+    still cannot cover are the useful half of the call."""
+    state = a_state(lap=5, fuel_l=8.0, stint_ends_on_lap=25,
+                    laps_since_stop=5, short_shift_l_per_1000rpm=1.762)
+    call = _fuel(state)
+    assert call.kind == FUEL_SHORT
+    assert "Still" in call.reason and "short after it" in call.reason
+
+
+def test_a_car_with_no_measured_slope_names_the_lever_without_a_number():
+    """The lever is still his. The number would be fabricated."""
+    state = a_state(lap=5, fuel_l=20.0, stint_ends_on_lap=15,
+                    laps_since_stop=5, short_shift_l_per_1000rpm=None)
+    call = _fuel(state)
+    assert call.kind == FUEL_SHORT
+    assert call.call == "Short-shift and lift into the slow corners."
+    assert not any(ch.isdigit() for ch in call.call)
+
+
+def test_the_drop_is_rounded_because_he_is_reading_a_beep():
+    """The fit's own interval is [0.92, 2.60] L per 1000 rpm, so an rpm-exact
+    drop would imply a precision that does not exist."""
+    state = a_state(lap=5, fuel_l=20.0, stint_ends_on_lap=15,
+                    laps_since_stop=5, short_shift_l_per_1000rpm=1.762)
+    drop = int(_fuel(state).call.split()[-1].rstrip("."))
+    assert drop % 50 == 0, drop
 
 
 # ------------------------------------------------- a worsening call is repeated

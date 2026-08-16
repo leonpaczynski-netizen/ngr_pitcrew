@@ -520,8 +520,8 @@ class Store:
                 " fuel_used, position, compound, is_pit_lap, is_out_lap, gear_ratios, "
                 " tyres_changed, fuel_added_l, tod_start_ms, tod_end_ms, "
                 " standing_start_ms, crawl_s, off_track_s, spin_s, "
-                " recorded_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " short_shift_rpm, recorded_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (session_id, lap.lap_num, lap.lap_time_ms, lap.delta_ms,
                  lap.fuel_start, lap.fuel_end, lap.fuel_used, lap.position,
                  lap.compound, int(lap.is_pit_lap), int(lap.is_out_lap),
@@ -537,6 +537,10 @@ class Store:
                  getattr(frames, "crawl_s", None) if frames is not None else None,
                  getattr(frames, "off_track_s", None) if frames is not None else None,
                  getattr(frames, "spin_s", None) if frames is not None else None,
+                 # None stays None: a lap recorded before this existed makes
+                 # no claim about how it was driven, and 0.0 would be the
+                 # claim that it was driven on the normal threshold.
+                 getattr(lap, "short_shift_rpm", None),
                  _now()))
             lap_id = int(cur.lastrowid)
             if frames is not None:

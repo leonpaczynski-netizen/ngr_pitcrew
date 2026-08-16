@@ -165,6 +165,10 @@ class TelemetryBridge(QObject):
         # `_apply_shift_points`.
         self._shift_points = None
         self._car_id = None
+        # The largest short-shift drop in force at any point during the lap
+        # being driven. None until a packet arrives - a lap nobody watched
+        # makes no claim about how it was driven.
+        self._lap_short_shift_rpm = None
 
     def _apply_shift_points(self) -> None:
         """Install the measured per-gear table for the car now on track.
@@ -220,6 +224,9 @@ class TelemetryBridge(QObject):
             SessionKind.RACE if race else SessionKind.PRACTICE)
         self.recorder.discard()
         self._announced = False
+        # A session boundary ends the lap in progress, so the shift mode
+        # accumulated for it belongs to nothing.
+        self._lap_short_shift_rpm = None
         # Velocity and suspension carried across a session boundary are a
         # collision that never happened, at full scale, the instant he
         # rejoins somewhere else on the map.
@@ -293,10 +300,23 @@ class TelemetryBridge(QObject):
 
         self.recorder.record_frame(packet)
         self.shift_beep.update(packet, _monotonic())
+        # **How the lap being driven right now is being shifted.** Held per
+        # frame rather than read at the line, because the switch can be thrown
+        # mid-lap and what matters afterwards is that the lap was driven under
+        # an instruction at all - a lap half short-shifted is not a clean
+        # sample of the car either way.
+        if self.shift_beep.short_shifting:
+            self._lap_short_shift_rpm = max(
+                self._lap_short_shift_rpm or 0.0,
+                self.shift_beep.short_shift_drop_rpm)
+        elif self._lap_short_shift_rpm is None:
+            self._lap_short_shift_rpm = 0.0
         for event in self.state.update(packet):
             if event.kind is EventKind.LAP_COMPLETED:
                 # Detach inline; compress and store on the Qt thread.
                 rows = self.recorder.take_rows()
+                event.data["lap"].short_shift_rpm = self._lap_short_shift_rpm
+                self._lap_short_shift_rpm = None
                 self.lap_completed.emit(event.data["lap"], rows)
             self.session_event.emit(event)
 
@@ -2230,6 +2250,23 @@ class PitCrewController(QObject):
             self.strategy.show_plans([], [], timed=False)
             self.strategy.set_status("Build a plan for this event.")
 
+    def _short_shift_slope(self) -> float | None:
+        """Litres per lap per 1000 rpm for the car on the stream, or None.
+
+        None is the honest answer for a car nobody has fitted, and the fuel
+        call handles it by naming the lever without a number. Guessing here -
+        borrowing another car's slope, or averaging - would put a fabricated
+        conversion behind an instruction spoken as a measurement.
+        """
+        car_id = getattr(self.bridge, "_car_id", None)
+        if car_id is None:
+            return None
+        table = getattr(self.settings, "short_shift_litres_per_1000rpm", None)
+        if not table:
+            return None
+        value = table.get(str(car_id))
+        return float(value) if value else None
+
     def _race_context(self, event) -> PlanContext:
         """What this race actually is, in the units the race layer expects.
 
@@ -2314,7 +2351,11 @@ class PitCrewController(QObject):
             plan,
             fuel_per_lap_l=inputs.fuel_per_lap_l if inputs else None,
             wear_per_lap=inputs.wear_per_lap if inputs else None,
-            fuel_capacity_l=inputs.fuel_capacity_l if inputs else None)
+            fuel_capacity_l=inputs.fuel_capacity_l if inputs else None,
+            # Keyed by the car the stream is showing, which `on_packet` has
+            # already learned. Missing is the normal state for a car whose
+            # short-shift trade nobody has fitted yet.
+            short_shift_l_per_1000rpm=self._short_shift_slope())
 
         actual = self._race_context(event)
         stored = (plan or {}).get("context")

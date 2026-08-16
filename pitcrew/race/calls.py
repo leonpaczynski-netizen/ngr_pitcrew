@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from pitcrew.strategy.model import FUEL_MAP_CONSUMPTION
+
 
 # Confidence travels with every call so a guess never sounds like a reading.
 HIGH = "high"
@@ -123,6 +123,18 @@ class RaceState:
     # cannot hold it the call became a shortfall that does not exist.
     next_stint_laps: int | None = None
     wear_per_lap: float | None = None
+    # **What a short-shift is worth on this car, in litres per lap per 1000
+    # rpm.** Measured by `tools/shortshift_trade.py` from laps where his own
+    # upshift rpm varied: 1.762 on the Porsche at Monza, 95% CI [0.92, 2.60],
+    # over 69 laps across 5 sessions. None for a car nobody has measured, and
+    # then the fuel call names the lever without a number rather than
+    # inventing a conversion.
+    short_shift_l_per_1000rpm: float | None = None
+    # How far the beep may be dropped before the answer stops being "save
+    # fuel" and starts being "box". Beyond this the lap-time cost is well
+    # outside anything the fit bounds, and short-shifting out of the
+    # powerband is not fuel saving.
+    short_shift_max_drop_rpm: float = 800.0
     laps_since_stop: int = 0
     # A stop was made and nothing said whether the tyres came off. The wear
     # model keeps counting through it - GT7 lets you take fuel without taking
@@ -338,31 +350,58 @@ def _fuel_instruction(state: RaceState) -> str:
     return f"Fuel to {litres:.0f} litres."
 
 
-def fuel_map_for(onboard_laps: float, needed_laps: float) -> tuple[int, float]:
-    """The richest map that still reaches the target, and what it leaves short.
+# **`fuel_map_for` was here and has been deleted, deliberately.**
+#
+# It picked the richest fuel map that still reached the fuel target, and it
+# was careful work: the map followed from the size of the shortfall rather
+# than being a fixed "Map 3", and it reported what even map 6 could not cover.
+#
+# It is gone because the driver tested the premise and it does not hold for
+# him: "I have only ever run FM1 and generally will never run anything else -
+# you lose more lap time running a different fuel map than the fuel you save,
+# versus short shifting and lift and coast or sitting in slipstream." His own
+# test is primary evidence (CLAUDE.md §4.1), and a helper that exists to make
+# a recommendation he will never take is not neutral - it is an invitation to
+# wire the call back. `FUEL_MAP_CONSUMPTION` stays in `strategy.model`, where
+# the offline plan still reasons about maps it may be asked to compare.
 
-    CLAUDE.md §5.3: **map 1 is the richest**, 6 the leanest, and step 6 is
-    anomalous - about half the fuel for about 80% of the power - so the map is
-    read from the measured table rather than extrapolated down a straight line.
 
-    The map has to follow from the shortfall. A fixed "Map 3" is 0.85 on that
-    table, so it answers a deficit of 15% of the remaining distance and
-    nothing larger: told to run map 3 with two laps missing from a ten-lap
-    stint, the driver saves for the rest of the stint and still runs dry.
+def short_shift_for(state: RaceState) -> tuple[float | None, float]:
+    """The rpm drop that closes the fuel gap, and what it still leaves short.
 
-    Returns the leanest map and the laps it still cannot cover when even map 6
-    is not enough - which is a box call, not a fuel-saving one, and the caller
-    says so.
+    **The lever is short-shifting, never a fuel map.** He runs map 1 only and
+    has tested why: a map step costs more lap time than the fuel it saves,
+    against short-shifting, lift-and-coast or a tow. His own test is primary
+    evidence, so the map recommendation this replaced was wrong for the only
+    driver this app has.
+
+    The conversion is measured per car by `tools/shortshift_trade.py` - on the
+    Porsche at Monza, 1.762 L per 1000 rpm over 69 laps - and where no
+    measurement exists for the car the answer is None, which the caller speaks
+    as the lever without a number rather than inventing one.
     """
-    if needed_laps <= 0:
-        return min(FUEL_MAP_CONSUMPTION), 0.0
-    required = onboard_laps / needed_laps
-    for level in sorted(FUEL_MAP_CONSUMPTION):
-        if FUEL_MAP_CONSUMPTION[level] <= required:
-            return level, 0.0
-    leanest = max(FUEL_MAP_CONSUMPTION)
-    still = needed_laps - onboard_laps / FUEL_MAP_CONSUMPTION[leanest]
-    return leanest, still
+    slope = state.short_shift_l_per_1000rpm
+    burn = state.fuel_per_lap_l
+    target = _fuel_target(state)
+    if not slope or slope <= 0 or not burn or not target or target <= 0:
+        return None, 0.0
+    if state.fuel_l is None:
+        return None, 0.0
+    # The burn that would make the fuel reach, and what has to come off.
+    needed_burn = state.fuel_l / target
+    saving = burn - needed_burn
+    if saving <= 0:
+        return 0.0, 0.0
+    drop = saving / slope * 1000.0
+    if drop <= state.short_shift_max_drop_rpm:
+        return drop, 0.0
+    # Capped: short-shifting alone will not do it, and the laps it still
+    # cannot cover are the useful half of the call - that is a box decision,
+    # not a saving one.
+    capped = state.short_shift_max_drop_rpm
+    reachable = burn - capped / 1000.0 * slope
+    still = target - (state.fuel_l / reachable if reachable > 0 else target)
+    return capped, max(0.0, still)
 
 
 def _fuel(state: RaceState) -> Call | None:
@@ -372,17 +411,24 @@ def _fuel(state: RaceState) -> Call | None:
 
     confidence = MEDIUM if state.lap < 3 else HIGH
     if gap < -FUEL_SHORT_LAPS:
-        onboard = state.laps_of_fuel() or 0.0
-        level, still = fuel_map_for(onboard, _fuel_target(state) or 0.0)
+        drop, still = short_shift_for(state)
         reason = f"You're {abs(gap):.1f} laps short on fuel."
         if still > 0.05:
-            reason += f" Map {level} still leaves {still:.1f}."
-        return Call(
-            FUEL_SHORT, state.lap,
-            f"Map {level} down the straights.",
-            reason,
-            confidence,
-            severity=-gap)
+            # Said second because the instruction still stands - saving what
+            # can be saved shortens the fill even when it cannot delete it.
+            reason += f" Still {still:.1f} short after it."
+        if drop:
+            # Rounded to fifty because he is reading a beep, not a dial, and
+            # a drop stated to the rpm implies a precision the fit does not
+            # have - its interval is [0.92, 2.60] L per 1000 rpm.
+            call = f"Short-shift {int(round(drop / 50.0) * 50)}."
+        else:
+            # No measured conversion for this car. The lever is still right -
+            # it is his lever - but the number would be fabricated, so it is
+            # replaced by the other two things he actually does.
+            call = "Short-shift and lift into the slow corners."
+        return Call(FUEL_SHORT, state.lap, call, reason, confidence,
+                    severity=-gap)
     if gap > FUEL_LONG_LAPS and _past_half_stint(state):
         # Only worth saying once the stint is half run. At the start of a
         # stint there is always surplus - the tank was just filled - and

@@ -72,12 +72,17 @@ class RaceCoordinator:
     def __init__(self, plan: dict | None = None,
                  fuel_per_lap_l: float | None = None,
                  wear_per_lap: float | None = None,
-                 fuel_capacity_l: float | None = None) -> None:
+                 fuel_capacity_l: float | None = None,
+                 short_shift_l_per_1000rpm: float | None = None) -> None:
         self.phase = RacePhase.IDLE
         self.plan = plan or {}
         self.state = RaceState(
             fuel_per_lap_l=fuel_per_lap_l, wear_per_lap=wear_per_lap,
-            fuel_capacity_l=fuel_capacity_l)
+            fuel_capacity_l=fuel_capacity_l,
+            # What a short-shift is worth on this car, measured from his own
+            # laps. None where nobody has measured it, and the fuel call then
+            # names the lever without a number - see `calls.short_shift_for`.
+            short_shift_l_per_1000rpm=short_shift_l_per_1000rpm)
         self.refusal: str | None = None
         self.planned_fuel_per_lap_l = fuel_per_lap_l
         self._burns: list[float] = []

@@ -147,6 +147,11 @@ class Lap:
     tyres_changed: bool | None = None
     # Litres put in during a stop on this lap, `None` where there was no stop.
     fuel_added_l: float | None = None
+    # How far the shift beep was dropped while this lap was driven, in rpm.
+    # `None` means nobody recorded it; `0.0` means it was driven on the normal
+    # threshold. A lap driven under the app's own fuel-saving instruction is
+    # not evidence about the car - see the column comment in `store.schema`.
+    short_shift_rpm: float | None = None
 
 
 class SessionState:

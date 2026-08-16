@@ -201,3 +201,45 @@ def test_a_shift_point_no_gt7_car_could_have_is_refused():
         S.Settings(beep_shift_points={"3247": {"3": 250.0}}).validate()
     with __import__("pytest").raises(ValueError, match="gears 1-8"):
         S.Settings(beep_shift_points={"3247": {"11": 8250.0}}).validate()
+
+
+def test_a_short_shift_saving_that_is_zero_or_negative_is_refused():
+    """The live call divides by this: a zero asks for infinite rpm, and a
+    negative says short-shifting BURNS fuel."""
+    from pitcrew import settings as S
+
+    for bad in (0.0, -1.5, 25.0):
+        with __import__("pytest").raises(ValueError, match="short-shift saving"):
+            S.Settings(short_shift_litres_per_1000rpm={"3247": bad}).validate()
+
+
+# ------------------------------------------------- what the lap records
+
+def test_a_lap_records_how_it_was_shifted_and_null_is_not_zero(tmp_path):
+    """A lap driven under the app's own fuel-saving instruction is not
+    evidence about the car - a short-shift costs about the same as the pace
+    deficit the stint calls hunt for. Null means nobody recorded it; 0.0 means
+    it was driven on the normal threshold, and they are different claims."""
+    from pitcrew.store.db import Store
+    from pitcrew.telemetry.session_state import Lap
+
+    store = Store(str(tmp_path / "pitcrew.db"))
+    event = store.create_event(name="Round 1", track="Monza")
+    session = store.start_session(event, "practice")
+
+    def a_lap(num, **kw):
+        return Lap(lap_num=num, lap_time_ms=94_000, best_lap_ms=94_000,
+                   delta_ms=0, fuel_start=40.0, fuel_end=36.6, fuel_used=3.4,
+                   position=1, is_pit_lap=False, is_out_lap=False, **kw)
+
+    store.add_lap(session, a_lap(1, short_shift_rpm=None), None)
+    store.add_lap(session, a_lap(2, short_shift_rpm=0.0), None)
+    store.add_lap(session, a_lap(3, short_shift_rpm=300.0), None)
+
+    import sqlite3
+    con = sqlite3.connect(str(tmp_path / "pitcrew.db"))
+    seen = dict(con.execute(
+        "SELECT lap_num, short_shift_rpm FROM laps ORDER BY lap_num").fetchall())
+    assert seen[1] is None, "a lap nobody watched must not claim it was normal"
+    assert seen[2] == 0.0
+    assert seen[3] == 300.0

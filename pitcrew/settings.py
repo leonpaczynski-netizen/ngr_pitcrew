@@ -185,6 +185,17 @@ class Settings:
     # those bins are empty. Once a session is run with this on, the tool can
     # price it per gear and this becomes a measured figure.
     beep_short_shift_drop: float = 500.0
+    # **What a short-shift is worth in fuel, per car: `{car_id: L/1000rpm}`.**
+    #
+    # Measured by `tools/shortshift_trade.py` off laps where his own upshift
+    # rpm varied - 1.762 on the Porsche at Monza, 95% CI [0.92, 2.60], 69 laps
+    # across 5 sessions. It is what turns "you are 1.2 laps short" into a
+    # number of rpm rather than into a fuel map he will never use.
+    #
+    # A car with no entry gets None and the live call names the lever without
+    # a figure. That is the honest failure: the lever is his whatever the car,
+    # the conversion is not.
+    short_shift_litres_per_1000rpm: dict = field(default_factory=dict)
 
     # --- how the engineer sounds.
     #
@@ -247,6 +258,14 @@ class Settings:
             raise ValueError(
                 f"a short-shift drop of {self.beep_short_shift_drop} rpm is "
                 f"not a saving, it is a different gearbox - expected 0-4000")
+        for car, slope in (self.short_shift_litres_per_1000rpm or {}).items():
+            # A negative slope would say short-shifting BURNS fuel, and the
+            # live call divides by this - a zero would ask for infinite rpm.
+            if not 0.0 < float(slope) <= 20.0:
+                raise ValueError(
+                    f"a short-shift saving of {slope} L per 1000 rpm for "
+                    f"{car!r} is not a measurement of a GT7 car - expected "
+                    f"a positive figure up to 20")
         if self.ptt_enabled and not self.ptt_key.strip():
             raise ValueError("push to talk needs a button")
         if self.speech_backend not in SPEECH_BACKENDS:

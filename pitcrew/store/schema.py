@@ -391,6 +391,18 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("crawl_s", "REAL"),
         ("off_track_s", "REAL"),
         ("spin_s", "REAL"),
+        # **How far the shift beep was dropped while this lap was driven, in
+        # rpm.** Null where it was never recorded, 0.0 where the lap was
+        # driven on the normal threshold, positive where he was short-
+        # shifting - and the three are genuinely different claims, which is
+        # why this is not a boolean.
+        #
+        # It exists because a lap driven under the app's own fuel-saving
+        # instruction is not evidence about the car. A short-shift costs
+        # around half a second, the same size as the pace deficit the stint
+        # calls hunt for, so a pace series that cannot see this measures the
+        # app's own radio calls and then boxes him for them.
+        ("short_shift_rpm", "REAL"),
     ),
     "setup_sheets": (
         # `race` or `qualifying`. Two sheets for one car are two different
