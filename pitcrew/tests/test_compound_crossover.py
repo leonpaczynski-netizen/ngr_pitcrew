@@ -159,25 +159,24 @@ def test_an_unmeasured_compound_is_planned_but_never_called_measured():
     assert any("no measured rate of its own" in note for note in plan.notes)
 
 
-def test_two_compounds_planned_on_one_rate_read_as_indistinguishable():
-    """Not as equally good. They tie because nothing can tell them apart.
-
-    This is the trap the whole feature could fall into: with only RS measured,
-    RH inherits RS's rate, the two plans cost the same to the second, and a
-    naive readout would report a dead heat as a finding.
-    """
+def test_an_untested_compound_creates_no_plan_and_no_phantom_crossover():
+    """With only RS measured, RH used to be planned on RS's inherited rate,
+    tie to the second, and the crossover had to caption a dead heat as "not
+    a comparison yet". Yas Marina, 16 Aug 2026, showed where that road ends:
+    the night-race plan suggested compounds nobody had ever run. The
+    untested tyre is no longer planned at all - so there is nothing to
+    compare, and no untested stint to suggest."""
     inputs = RaceInputs(
         race_laps=30, lap_time_ms=93_000, fuel_per_lap_l=2.6,
         fuel_capacity_l=100.0, wear_per_lap=0.026,
         available_compounds=("RS", "RH"), evidence_compound="RS",
         compound_profiles={
             "RS": CompoundProfile("RS", 0.0, 0.026, SOURCE_MEASURED, 12, 1)})
-    crossover = recommend(inputs)[0].crossover
-
-    assert crossover["restsOnAssumption"] is True
-    assert crossover["alternative"]["lostBySeconds"] == 0.0
-    assert "not a comparison yet" in crossover["verdict"]
-    assert "read the gauge" in crossover["verdict"]
+    plans = recommend(inputs)
+    assert all(stint.compound == "RS"
+               for plan in plans for stint in plan.stints)
+    assert plans[0].crossover is None, (
+        "one tested compound leaves nothing to cross over")
 
 
 def test_a_decided_call_says_by_how_much_it_was_decided():

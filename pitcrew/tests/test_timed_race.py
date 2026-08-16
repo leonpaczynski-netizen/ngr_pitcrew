@@ -175,6 +175,45 @@ def test_the_wets_are_still_declared_available_to_the_driver():
     assert "IM" not in inputs.planning_compounds()
 
 
+def test_an_untested_compound_is_never_a_strategy():
+    """Yas Marina, 16 Aug 2026: the night-race plan suggested RH and RM,
+    neither of which had ever been run - an unprofiled compound inherits the
+    reference's pace and rate, so the search saw identical tyres and chose
+    on nothing. "It should only suggest tyres that have been tested."
+    """
+    inputs = an_input(compound_profiles={
+        "RH": CompoundProfile("RH", 0.0, 0.0577, SOURCE_MEASURED,
+                              laps_measured=25, stints_measured=2,
+                              longest_stint_laps=15)})
+    assert inputs.planning_compounds() == ("RH",)
+    for plan in recommend(inputs):
+        for stint in plan.stints:
+            assert stint.compound == "RH", plan.notes
+
+
+def test_a_required_compound_is_planned_even_when_untested():
+    """The regulations outrank the evidence filter: every plan without a
+    required compound is illegal, so an untested-but-required tyre stays
+    plannable and the plan carries the assumption rather than hiding it."""
+    inputs = an_input(
+        required_compounds=("RM",),
+        compound_profiles={
+            "RH": CompoundProfile("RH", 0.0, 0.0577, SOURCE_MEASURED,
+                                  laps_measured=25, stints_measured=2,
+                                  longest_stint_laps=15)})
+    assert "RM" in inputs.planning_compounds()
+    for plan in recommend(inputs):
+        assert "RM" in {stint.compound for stint in plan.stints}
+
+
+def test_with_no_profiles_at_all_the_filter_stands_down():
+    """No profile anywhere means the model cannot tell compounds apart, which
+    is already said elsewhere - filtering every declared compound out on top
+    of that would turn thin evidence into an empty search."""
+    inputs = an_input(compound_profiles={}, evidence_compound=None)
+    assert inputs.planning_compounds() == ("RH", "RM", "RS")
+
+
 # ---------------------------------------------------- planning past evidence
 
 def test_a_stint_is_never_planned_longer_than_one_that_has_been_run():

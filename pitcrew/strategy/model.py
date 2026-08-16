@@ -281,9 +281,30 @@ class RaceInputs:
         and beats, plans built on measured rubber, because a compound with no
         profile inherits the reference's rate and looks free. They stay
         available to the driver as a live call; they are not a strategy.
+
+        **Untested dry compounds are not planned on either, for the same
+        reason.** Yas Marina, 16 Aug 2026: the night-race plan suggested RH
+        and RM, neither of which had ever been run. A compound with no
+        profile inherits the reference's pace delta of zero and the
+        reference's wear rate, so the search saw three identical tyres and
+        chose between them on nothing. Asked for directly: "it should only
+        suggest tyres that have been tested." A declared-but-untested
+        compound stays a live call for the driver, not a strategy.
+
+        Two deliberate exceptions. A compound the REGULATIONS require is
+        planned regardless - every plan without it is illegal, and the
+        [ASSUMED] note already says what such a plan rests on. And when
+        nothing at all has a profile the model cannot tell compounds apart
+        anyway, so the filter stands down rather than filtering the whole
+        declaration out.
         """
-        return tuple(code for code in self.available_compounds
-                     if code and not is_wet_compound(code))
+        dry = tuple(code for code in self.available_compounds
+                    if code and not is_wet_compound(code))
+        if not self.compound_profiles:
+            return dry
+        return tuple(code for code in dry
+                     if code in self.compound_profiles
+                     or code in self.required_compounds)
 
     def missing(self) -> list[str]:
         """What is not known. A plan built on these is caveated, not hidden."""
