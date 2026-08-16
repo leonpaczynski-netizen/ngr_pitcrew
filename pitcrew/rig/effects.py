@@ -162,6 +162,22 @@ STRIKE_GAP_S = 0.08           # the silence that makes it a rhythm
 STRIKE_SECOND = 0.85          # the echo hit, which then decays normally
 STRIKE_OWN_TAIL_S = 0.15      # how far past the gap it keeps the channel
 
+# **The rear coming round is a throb, not a louder brake.**
+#
+# Session 40, lap 1: the first three braking zones peaked at 0.82-0.90 of
+# REAR_UNSTABLE on cold tyres - the rear genuinely stepping out under trail
+# braking, reported honestly, and read from the seat as "brakes extremely
+# intense", because it rode the brake voice's continuous rasp and a louder
+# rasp reads as the same message with the volume up. Asked for directly:
+# "lower, and give it its own signature."
+#
+# The level cap moved into `vehicle._braking`; this is the signature. The
+# brake voice's own modulation runs 7-16 Hz, so the rear cue gates the level
+# at 3.5 Hz - a slow, heavy throb below anything the lock cues produce. One
+# piston cannot speak in two places, but it can speak in two rhythms.
+REAR_THROB_HZ = 3.5
+REAR_THROB_FLOOR = 0.35       # the quiet half of the throb, not silence
+
 # **Lateral acceleration, in g.** Speed times yaw rate over 9.81 - the standard
 # derivation, and the same one `recorder.py` computes for the export, so the
 # two agree by construction.
@@ -257,6 +273,7 @@ class EffectDeriver:
         self._kerb_pulse = 0.0
         self._strike_t: float | None = None
         self._strike_size = 0.0
+        self._rear_phase = 0.0
         self._limiter_pulse = 0.0
         self._prev_limiter = False
         self.state = vehicle.VehicleState()
@@ -273,6 +290,7 @@ class EffectDeriver:
         self._kerb_pulse = 0.0
         self._strike_t = None
         self._strike_size = 0.0
+        self._rear_phase = 0.0
         self._limiter_pulse = 0.0
         self._prev_limiter = False
         self._spike_speed = 0.0
@@ -295,7 +313,7 @@ class EffectDeriver:
 
         out[0] = self._engine(packet)
         out[1] = self._road(packet, state, dt)
-        out[2] = state.brake_level
+        out[2] = self._rear_throb(state, dt)
         out[3] = max(self._driveline(packet, state, dt),
                      self._limiter(state, dt))
         strike, strike_owns = self._suspension_strike(state, dt)
@@ -406,6 +424,22 @@ class EffectDeriver:
                 self._texture_speed, 0.0, KERB_THUMP_FULL_MS)
             self._kerb_pulse = max(self._kerb_pulse, hit)
         return self._kerb_pulse
+
+    def _rear_throb(self, s: vehicle.VehicleState, dt: float) -> float:
+        """The brake channel, with the rear cue gated into its own rhythm.
+
+        Every other brake state passes through untouched. REAR_UNSTABLE is
+        chopped at REAR_THROB_HZ so the rear coming round reads as a slow
+        heavy pulse - a different message from a lock, on the only voice
+        both have to share.
+        """
+        if s.brake_state != vehicle.BRAKE_REAR_UNSTABLE:
+            self._rear_phase = 0.0
+            return s.brake_level
+        self._rear_phase = (self._rear_phase + dt * REAR_THROB_HZ) % 1.0
+        if self._rear_phase >= 0.5:
+            return s.brake_level * REAR_THROB_FLOOR
+        return s.brake_level
 
     def _suspension_strike(self, s: vehicle.VehicleState,
                            dt: float) -> tuple[float, bool]:

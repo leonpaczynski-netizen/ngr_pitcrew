@@ -287,6 +287,27 @@ def test_the_rear_locking_harder_than_the_front_is_its_own_state():
         state = model.update(Frame(brake=0.6, front_slip=0.94, rear_slip=0.90))
     assert state.brake_state == V.BRAKE_REAR_UNSTABLE
     assert state.brake_axle == "rear"
+    # "Lower, and give it its own signature": capped well under the lock
+    # alarm - session 40's cold-tyre out-lap peaked this at 0.90 and it read
+    # as the brakes being broken. The signature lives in `effects`.
+    assert 0.30 <= state.brake_level <= 0.551, state.brake_level
+
+
+def test_braking_at_the_optimum_is_silence_and_the_rasp_is_the_error():
+    """The driver's own mapping, chosen after two other shapes: "quiet at
+    optimum, grow as brake locking worsens." The boundary is marked by the
+    ONSET of feedback - silence turning into anything is the change a body
+    notices best - so braking done well must feel like nothing at all."""
+    model = V.VehicleModel()
+    settle(model, throttle=0.5, rear_slip=1.02)
+    state = None
+    for _ in range(60):            # held exactly at the measured peak
+        state = model.update(Frame(brake=1.0, front_slip=0.90, rear_slip=0.96))
+    assert state.brake_state == V.BRAKE_LIMIT_S
+    assert state.brake_level < 0.02, "braking done well must be silent"
+    for _ in range(60):            # let it slide past the peak
+        state = model.update(Frame(brake=1.0, front_slip=0.86, rear_slip=0.96))
+    assert state.brake_level > 0.1, "past the peak the rasp must appear"
 
 
 def test_an_unloaded_wheel_under_braking_is_not_called_a_lock():

@@ -266,6 +266,26 @@ def test_a_sausage_kerb_is_a_hit_even_when_the_surface_never_says_kerb():
     assert held < hit * 0.3, "a single clip became one long impact"
 
 
+def test_the_rear_coming_round_throbs_rather_than_shouting():
+    """One piston cannot speak in two places, but it can speak in two
+    rhythms: REAR_UNSTABLE gates the brake channel at 3.5 Hz - below the
+    lock cues' own 7-16 Hz modulation - so the rear coming round reads as a
+    slow heavy pulse rather than as the brake cue with the volume up."""
+    from pitcrew.rig.effects import REAR_THROB_FLOOR
+
+    deriver = EffectDeriver()
+    s = vehicle.VehicleState()
+    s.brake_state = vehicle.BRAKE_REAR_UNSTABLE
+    s.brake_level = 0.5
+    levels = {round(deriver._rear_throb(s, 1.0 / 60.0), 3) for _ in range(30)}
+    assert 0.5 in levels, "the loud half of the throb is missing"
+    assert round(0.5 * REAR_THROB_FLOOR, 3) in levels, (
+        "it never dips - no rhythm, just a level")
+    s.brake_state = vehicle.BRAKE_LOCKED
+    assert deriver._rear_throb(s, 1.0 / 60.0) == 0.5, (
+        "a lock must pass through untouched")
+
+
 def test_a_sausage_inside_a_ripple_strip_is_not_swallowed_by_the_edge_thump():
     """T7, measured: the strike fired at 0.77 in the same frames the strip's
     edge thump held the channel at 0.87-1.00, and max() never let the sausage

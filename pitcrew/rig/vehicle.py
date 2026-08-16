@@ -1280,57 +1280,42 @@ class VehicleModel:
             s.brake_level = 0.65 + 0.35 * ramp(worst, lock_threshold, LOCK_FULL)
         elif s.rear_unstable > 0.10:
             s.brake_state = BRAKE_REAR_UNSTABLE
-            s.brake_level = 0.45 + 0.45 * s.rear_unstable
+            # **Capped well below the lock alarm.** This peaked at 0.82-0.90
+            # through the first three braking zones of every cold-tyre
+            # out-lap - the rear genuinely was stepping out, but rendered as
+            # "the brake cue, louder" it read as the brakes being broken
+            # rather than the rear being loose. Asked for directly: "lower,
+            # and give it its own signature." The cap is here; the signature
+            # is the slow throb in `effects._rear_throb`, which is what
+            # separates it from a lock without needing to out-shout one.
+            s.brake_level = 0.30 + 0.25 * s.rear_unstable
             s.brake_axle = "rear"
         elif self._latches["at_limit"].active:
             s.brake_state = BRAKE_LIMIT_S
-            # **Anchored on the measured optimum, not on the whole plateau.**
+            # **Silent at the optimum, growing as the lock worsens.**
             #
-            # Below `BRAKE_OPTIMUM` this is a light presence - the brakes are
-            # working and there is nothing to correct, so it says so quietly.
-            # Above it he is giving up braking force, and the level and the
-            # pulse rate climb together the further past he goes.
+            # The third shape this cue has had, each driven from the seat.
+            # The first ramped smoothly across the whole range and changed
+            # nothing measurable about his braking. The second put a step AT
+            # the optimum - a boundary a smooth ramp cannot mark - and the
+            # step did mark it, but it also meant the cue was never quiet: a
+            # light presence below the optimum, a jump to 0.22 at it, and
+            # most of every heavy stop spent at 0.27-0.47. Reported as "not
+            # feeling right and intuitive... a bit of feedback to a lot of
+            # feedback", meaning the amplitudes carried no readable meaning.
             #
-            # The old single ramp from 0.075 upward was loudest at 0.15, which
-            # is past the peak and is also where he spends 68% of his heavy
-            # braking - so the cue was at its most insistent through the part
-            # of the zone he most needed to be able to ignore. Reported as
-            # "too heavy and loud", and the shape was the reason rather than
-            # the gain.
-            # **There is a STEP at the optimum, and it is deliberate.**
-            #
-            # The first version of this ramped smoothly from 0.08 to 0.48
-            # across the whole range. Measured against his next drive it
-            # changed nothing: median front slip 0.1284 against 0.1288 before,
-            # and 63.3% of heavy braking still past the peak against 66.4%.
-            # Reported from the seat in exactly those terms - "not sure if
-            # it's actually letting me know if I am going beyond max braking
-            # or I just braked better". He had not braked better. The cue had
-            # got out of the way, which is pleasant and is not information.
-            #
-            # A level that climbs smoothly cannot mark a boundary, because
-            # there is nothing to notice AT the boundary: the driver would
-            # have to hold an absolute amplitude in mind and compare against
-            # it, which is not something a body does. What a body notices
-            # easily is a change. So crossing the peak nearly doubles the
-            # level in one step, and since the pulse rate and the carrier are
-            # both driven by that same number, the rhythm and the pitch step
-            # with it. Three things change at once, at the one slip value
-            # where his lap time is.
-            #
-            # Below the peak this is quieter than the smooth version was. The
-            # point is not to be loud on the right side of the boundary; it is
-            # to be different on the wrong side of it.
-            if worst <= BRAKE_OPTIMUM:
-                s.brake_level = 0.06 + 0.06 * ramp(worst, BRAKE_AT_LIMIT,
-                                                   BRAKE_OPTIMUM)
-            else:
-                s.brake_level = 0.22 + 0.28 * ramp(worst, BRAKE_OPTIMUM,
-                                                   lock_threshold)
-        elif worst > BRAKE_STABLE:
-            s.brake_state = BRAKE_STABLE_S
-            s.brake_level = 0.10 * ramp(worst, BRAKE_STABLE, BRAKE_AT_LIMIT)
+            # The driver then chose the mapping himself: "quiet at optimum,
+            # grow as brake locking worsens." So the boundary is now marked
+            # by the ONSET of feedback rather than by a step between two
+            # nonzero levels - silence turning into anything is the change a
+            # body notices best. Braking done well feels like nothing; the
+            # rasp appearing and growing means slip past the peak, heading
+            # for the lock threshold; LOCKED stays the alarm it was. The AM
+            # rate rides the same number, so the rhythm quickens with it.
+            s.brake_level = 0.50 * ramp(worst, BRAKE_OPTIMUM, lock_threshold)
         else:
+            # Working brakes on the right side of the optimum, including the
+            # old STABLE presence band: silence, by the same choice.
             s.brake_state = BRAKE_STABLE_S
             s.brake_level = 0.0
 
