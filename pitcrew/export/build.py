@@ -530,9 +530,17 @@ def _strategy_section(store, event_id: int) -> dict | None:
 
     calls = _calls_made(store, event_id)
     if calls:
-        section["callsMade"] = calls
+        # The contract defines callsMade[] as lap/call/reason/accepted/
+        # confidence and the validator enforces exactly that, so the internal
+        # bookkeeping keys - `kind` and `resolution` - stay out of the
+        # payload. They exist for the outcome line below, which is where the
+        # audit reads them.
+        section["callsMade"] = [
+            {key: value for key, value in call.items()
+             if key in ("lap", "call", "reason", "accepted", "confidence")}
+            for call in calls]
 
-    outcome = _outcome(store, event_id, section)
+    outcome = _outcome(store, event_id, calls, section)
     if outcome:
         section["outcome"] = outcome
     return section
@@ -562,20 +570,32 @@ def _refuel_rate(planned: float | None, event) -> tuple[float | None, str]:
                   else DECLARED_REFUEL_SOURCE)
 
 
-def _outcome(store, event_id: int, section: dict) -> str:
-    """What happened, from the race laps. Omitted when no race was run."""
+def _outcome(store, event_id: int, calls: list[dict], section: dict) -> str:
+    """What happened, from the race laps. Omitted when no race was run.
+
+    Takes the full `_calls_made` list - with the internal `kind` and
+    `resolution` keys still on it - rather than the contract-trimmed copy in
+    the section, because the stay-out fold is found by its recorded kind.
+    """
     race_laps = event_lap_inputs(store, event_id, "race")
     if not race_laps:
         return ""
     plan = section.get("plan") or {}
-    declined = sum(1 for call in section.get("callsMade") or []
-                   if call.get("accepted") is False)
+    declined = sum(1 for call in calls if call.get("accepted") is False)
+    # The lap the engineer stopped repeating an ignored box call and folded
+    # to the driver's stay-out. Read off the revision's own recorded kind,
+    # never inferred from the spoken text - a data key derived from a
+    # display label is a defect this codebase has already paid for once.
+    stay_out = next((call["lap"] for call in calls
+                     if call.get("kind") == "stay-out"
+                     and call.get("accepted")), None)
     text = race_outcome(
         race_laps,
         planned_stops=plan.get("stops"),
         planned_pit_laps=[plan["pitLap"]] if plan.get("pitLap") else None,
         binding_constraint=section.get("bindingConstraint"),
-        declined_calls=declined)
+        declined_calls=declined,
+        stay_out_lap=stay_out)
     fuel = fuel_left_note(race_laps)
     return f"{text} {fuel}".strip() if fuel else text
 
@@ -589,12 +609,23 @@ def _calls_made(store, event_id: int) -> list[dict]:
     calls: list[dict] = []
     for run in store.list_race_runs(event_id):
         for revision in store.list_revisions(run["id"]):
-            calls.append({
+            entry = {
                 "lap": revision["lap_num"],
                 "call": revision["reason"],
                 "accepted": revision["accepted"],
                 "confidence": revision["plan"].get("confidence", "unstated"),
-            })
+            }
+            # The structured kind, where the revision recorded one. It is
+            # what lets the outcome find the stay-out fold without parsing
+            # the spoken sentence back apart.
+            if revision["plan"].get("kind"):
+                entry["kind"] = revision["plan"]["kind"]
+            # How an offer left the desk - accepted, explicitly kept,
+            # expired unanswered, superseded - so the audit can tell a
+            # refusal from a question the driver never answered.
+            if revision["plan"].get("resolution"):
+                entry["resolution"] = revision["plan"]["resolution"]
+            calls.append(entry)
     return calls
 
 

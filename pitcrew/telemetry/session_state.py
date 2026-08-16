@@ -36,6 +36,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from pitcrew.analysis.refuel import MAX_PLAUSIBLE_LPS
+from pitcrew.diagnostics import log
 from pitcrew.telemetry.packet import GT7Packet
 from pitcrew.telemetry.recorder import SAMPLE_HZ
 
@@ -92,6 +93,14 @@ TYRE_SWAP_MAX_SPEED_KPH = 10.0
 # Race-start gates.  See the module docstring for why both exist.
 RACE_START_SPEED_KMH = 80.0
 GRID_LOW_SPEED_KMH = 30.0
+
+# A timed race is finished when a lap completes with this little on the
+# clock.  **`remaining_time_ms` is a signed field whose -1 means "not in a
+# race" (packet.py), not "expired"** - a plain `<= 0` here would let one
+# transient -1 mid-race end it on the next crossing.  Zero is what the clock
+# actually shows at expiry; the small allowance above it is jitter margin,
+# nothing more.
+TIMED_RACE_EXPIRED_MAX_MS = 1_000
 
 
 class Phase(enum.Enum):
@@ -152,6 +161,13 @@ class Lap:
     # threshold. A lap driven under the app's own fuel-saving instruction is
     # not evidence about the car - see the column comment in `store.schema`.
     short_shift_rpm: float | None = None
+    # Mean tyre surface temperature over the lap's frames, per axle, degC.
+    # Computed live so the race engineer can speak about the one tyre channel
+    # GT7 actually broadcasts - it used to exist only in the offline
+    # aggregation, which is why a whole race was driven without a single
+    # temperature call being possible. `None` where no frame carried temps.
+    tyre_temp_front_c: float | None = None
+    tyre_temp_rear_c: float | None = None
 
 
 class SessionState:
@@ -181,6 +197,21 @@ class SessionState:
         self._fuel_window: deque[tuple[float, float]] = deque()
         self._tyres_changed_in_stop: bool | None = None
         self._fuel_added_in_stop: float | None = None
+        # Per-lap axle temperature accumulators, reset at each lap boundary.
+        # Sums rather than lists: at 60 Hz a lap is several thousand frames
+        # and the only question ever asked is the mean.
+        self._temp_sum_front = 0.0
+        self._temp_sum_rear = 0.0
+        self._temp_frames = 0
+        # Whether a race clock was ever seen counting. A timed race is the
+        # one kind whose finish the lap counter cannot see - `laps_in_race`
+        # is -1 or 0 for it, so `laps_remaining()` is None and RACE_FINISHED
+        # never fired: one measured 30-minute race ended with the engineer
+        # mid-box-call and no chequered flag, because as far as this class
+        # was concerned the race never ended at all. The clock is the finish
+        # signal there: a lap completed after `remaining_time_ms` has run out
+        # is the final lap.
+        self._timed_clock_ran = False
 
     # ------------------------------------------------------------------ state
 
@@ -254,6 +285,18 @@ class SessionState:
         ratios = [r for r in packet.gear_ratios if r]
         if ratios:
             self._gear_ratios = ratios
+
+        if packet.car_on_track:
+            # Accumulated before `_check_lap` so the frame that completes a
+            # lap still belongs to it. Grid frames land in lap one, which is
+            # what the offline aggregation does too - lap one's mean says
+            # what the tyres were at the start, formation heat included.
+            temps = packet.tyre_temps
+            self._temp_sum_front += (temps[0] + temps[1]) / 2.0
+            self._temp_sum_rear += (temps[2] + temps[3]) / 2.0
+            self._temp_frames += 1
+        if self._phase is Phase.RACING and packet.remaining_time_ms > 0:
+            self._timed_clock_ran = True
 
         events.extend(self._update_phase(packet, now))
         events.extend(self._update_pit(packet, now))
@@ -443,6 +486,10 @@ class SessionState:
 
         lap_time_ms = p.last_lap_ms
         best_ms = p.best_lap_ms
+        temp_front = temp_rear = None
+        if self._temp_frames:
+            temp_front = round(self._temp_sum_front / self._temp_frames, 1)
+            temp_rear = round(self._temp_sum_rear / self._temp_frames, 1)
         lap = Lap(
             lap_num=len(self._laps) + 1,
             lap_time_ms=lap_time_ms,
@@ -457,21 +504,49 @@ class SessionState:
             gear_ratios=list(self._gear_ratios) if self._gear_ratios else None,
             tyres_changed=self._tyres_changed_in_stop if self._pit_lap else None,
             fuel_added_l=self._fuel_added_in_stop if self._pit_lap else None,
+            tyre_temp_front_c=temp_front,
+            tyre_temp_rear_c=temp_rear,
         )
         self._laps.append(lap)
         self._pit_lap = False
         self._out_lap_pending = False
         self._tyres_changed_in_stop = None
         self._fuel_added_in_stop = None
+        self._temp_sum_front = 0.0
+        self._temp_sum_rear = 0.0
+        self._temp_frames = 0
 
         self._fuel_lap_start = p.fuel_level
         self._lap_started_at = now
         self._prev_laps_completed = p.laps_completed
 
-        events = [SessionEvent(EventKind.LAP_COMPLETED, {"lap": lap})]
+        # The clock travels with the lap so the race layer can tell "the
+        # plan's estimated distance is done" from "the flag has fallen" -
+        # a timed race that outruns its estimate by a lap is still a race.
+        events = [SessionEvent(EventKind.LAP_COMPLETED, {
+            "lap": lap,
+            "remaining_time_ms": p.remaining_time_ms,
+        })]
+        if self._timed_clock_ran:
+            # Written down on purpose, one line per lap: nothing persists
+            # this field, and the finish gate above rests on GT7 clamping
+            # the clock at zero after expiry - a claim no recorded session
+            # has yet certified. If a post-expiry lap ever logs a negative
+            # number here, the gate is wrong and this line is the evidence.
+            log("session").info(
+                "lap %d completed with %d ms on the race clock",
+                lap.lap_num, p.remaining_time_ms)
 
         remaining = self.laps_remaining()
-        if self.kind is SessionKind.RACE and remaining == 0:
+        # A timed race's finish: the clock was seen running and has now run
+        # out, so the lap just completed was the final one. Gated on the lap
+        # count being unknown so a lap race - whose `remaining_time_ms` GT7
+        # reports as -1 - can never take this branch, and gated at zero
+        # rather than `<= 0` so the -1 sentinel showing transiently
+        # mid-race cannot finish it either.
+        timed_expired = (self._laps_in_race <= 0 and self._timed_clock_ran
+                         and 0 <= p.remaining_time_ms < TIMED_RACE_EXPIRED_MAX_MS)
+        if self.kind is SessionKind.RACE and (remaining == 0 or timed_expired):
             self._phase = Phase.FINISHED
             events.append(SessionEvent(EventKind.RACE_FINISHED, {
                 "laps": len(self._laps),

@@ -23,7 +23,7 @@ from pitcrew.strategy.model import is_wet_compound
 from pitcrew.analysis.recency import weighted
 from pitcrew.analysis.runs import split_runs
 from pitcrew.analysis.weather import wet_evidence
-from pitcrew.analysis.session import LapInput, counted_laps, green_lap_reference_ms
+from pitcrew.analysis.session import LapInput, counted_laps, reference_pace_ms
 from pitcrew.analysis.wear import wear_per_lap as wear_rate
 from pitcrew.analysis.wear import wear_rate_by_compound
 from pitcrew.analysis.tyre_window import qualification, window_by_compound
@@ -489,7 +489,16 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                      if lap.fuel_start > lap.fuel_end else None),
         current_sheet_id=current_sheet)
     fuel_per_lap = round(fuel_per_lap, 3) if fuel_per_lap is not None else None
-    reference_ms = green_lap_reference_ms(laps)
+    # **The pace reference, not the degradation reference.** This called
+    # `green_lap_reference_ms` - the best of the oldest session's opening
+    # laps, kept fresh-tyre-early on purpose for the wear fit - against that
+    # function's own docstring, which says in as many words to use
+    # `reference_pace_ms` for the pace a plan is built on. The wrong number
+    # twice over set the stop laps, the timed race's distance, and the live
+    # pace-drift comparison: one race was judged "2% slower than planned"
+    # against a three-day-old opening lap its own laps 2-3 promptly beat.
+    # The green-lap figure still does its real job in `analysis/wear`.
+    reference_ms, _ = reference_pace_ms(laps, current_sheet_id=current_sheet)
     wear = wear_rate(laps)
     capacity = _fuel_capacity(store, event_id)
 
@@ -589,7 +598,10 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                  "" if not timed else _timed_race_note(inputs)),
         Evidence("Reference lap",
                  _lap_time(reference_ms), MEASURED if reference_ms else MISSING,
-                 f"fastest of the first counted laps, {len(counted)} counted"
+                 # Weighted like the fuel figure and for the same reason: the
+                 # old note claimed "fastest of the first counted laps",
+                 # which is the degradation reference's shape, not this one's.
+                 f"recency-weighted pace over {len(counted)} counted laps"
                  if reference_ms else "run a practice lap"),
         Evidence("Fuel per lap",
                  f"{fuel_per_lap:.2f} L" if fuel_per_lap else "—",

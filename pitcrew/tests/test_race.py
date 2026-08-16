@@ -107,11 +107,29 @@ def test_silence_is_a_valid_answer():
 # ------------------------------------------------------------------- boxing
 
 def test_box_this_lap_names_the_compound_and_the_fuel():
-    state = a_state(lap=10, next_compound="RS")
+    # 10 litres aboard, so the fill is a real instruction. With the default
+    # 40 L the new sanity guard rightly says no fuel is needed - the tank
+    # already covers the next stint - which is its own test below.
+    state = a_state(lap=10, next_compound="RS", fuel_l=10.0)
     call = next_call(state)
     assert call.kind == BOX_NOW
     assert "RS" in call.call
     assert "litres" in call.reason
+
+
+def test_a_fill_below_what_is_aboard_is_not_an_instruction():
+    """"Fuel to 27 litres" was voiced with 51.9 L in the tank. GT7 cannot
+    fill downwards, so obeying was impossible - the honest line is that the
+    fuel is fine, which also says what the stop is for. And it must not
+    open with "No fuel": under a helmet that phrase is an emergency until
+    the second half of the sentence lands."""
+    state = a_state(lap=10, next_compound="RS", fuel_l=51.9,
+                    fuel_per_lap_l=6.79, next_stint_laps=3)
+    call = next_call(state)
+    assert call.kind == BOX_NOW
+    assert "Fuel is fine" in call.reason
+    assert not call.reason.startswith("No fuel")
+    assert "litres" not in call.reason
 
 
 def test_box_soon_counts_down():

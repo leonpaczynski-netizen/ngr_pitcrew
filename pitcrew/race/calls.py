@@ -30,12 +30,20 @@ BOX_SOON = "box-soon"
 FUEL_SHORT = "fuel-short"
 FUEL_LONG = "fuel-long"
 TYRE = "tyre"
+TYRE_TEMP = "tyre-temp"
 STATUS = "status"
 GREEN = "green"
+STAY_OUT = "stay-out"
 CHEQUER = "chequer"
 
-URGENCY = (BOX_NOW, FUEL_SHORT, BOX_SOON, TYRE, FUEL_LONG, GREEN, CHEQUER,
-           STATUS)
+# **The chequered flag outranks everything.** It used to sit second from
+# last, below the box call - and on the night that mattered, "Box this lap.
+# RS. Fuel to 27 litres." was voiced on the driver's chequered-flag crossing
+# of a race he had just finished without stopping. The flag is the one call
+# that is true exactly once and never again; nothing said instead of it can
+# be more urgent.
+URGENCY = (CHEQUER, BOX_NOW, FUEL_SHORT, BOX_SOON, TYRE, FUEL_LONG,
+           TYRE_TEMP, GREEN, STATUS)
 
 # A status call every few laps, so silence means "nothing to report" rather
 # than "the app has died".
@@ -45,6 +53,54 @@ STATUS_EVERY_LAPS = 5
 FUEL_SHORT_LAPS = 0.5
 # Fuel surplus above which he is carrying a lap he does not need.
 FUEL_LONG_LAPS = 1.5
+
+# How many laps a box call goes unanswered before the engineer stops
+# repeating it and re-reads the race in the light of what the driver is
+# actually doing. The driver's action is primary evidence: nine identical
+# "Box this lap" calls were once voiced to a driver executing a perfectly
+# feasible zero-stop, the last of them on his chequered-flag crossing.
+BOX_IGNORED_LAPS = 2
+# The fuel gap to the flag, in laps, inside which staying out is a plan
+# rather than a gamble when the car has NO measured short-shift slope. With
+# a measured slope there is no constant floor at all: the gate is
+# `short_shift_for`'s own arithmetic - the fold happens only when the lever,
+# within its rpm cap, actually closes the gap. A -1.5 floor used to stand in
+# for that and it overcommitted: at 800 rpm of cap the lever could leave
+# 0.7 laps uncovered and the fold still said "you can make it".
+STAY_OUT_GAP_UNMEASURED = -0.5
+# What `short_shift_for` may report still-short after the drop and the fold
+# still claim the flag - the same epsilon below which the fuel call does not
+# bother voicing a residue.
+STAY_OUT_STILL_SHORT = 0.05
+
+# --- tyre temperature, the one tyre channel GT7 actually broadcasts ---
+#
+# Everything here is measured: the temperatures are per-lap frame means and
+# the window they are judged against is measured from this event's own laps
+# (`race/temps.py`) - never the fabricated real-world band the strategy layer
+# still carries with `windowMeasured: false`. No window on file means the
+# comparison is not made, not that a default is invented.
+
+# More than this below the measured window floor at the green is worth a
+# warning; less is a normal out-of-the-garage state not worth a word.
+TEMP_COLD_BELOW_C = 10.0
+# Both axles still climbing by at least this much per lap reads as "cold at
+# the green" even with no window on file - the relative form of the same call.
+TEMP_RISING_C = 4.0
+# An axle this far above its own steady mean, for this many consecutive laps,
+# is a departure worth calling. The baseline is each axle against ITSELF:
+# on some cars the rears run 8-11 degC hotter than the fronts all race, and
+# that offset is the car's normal, never a finding.
+TEMP_TREND_C = 5.0
+TEMP_TREND_LAPS = 2
+# A set's first laps are warm-up (about two on the measured cars), so its
+# baseline starts after them. **Counted from the start of the history, not
+# from the race lap number**: the history is cleared on a tyre change, and a
+# filter on the absolute lap once let a fresh set fitted on lap 10 put its
+# own cold laps into its baseline - after which its normal steady
+# temperature read as "heating" in every race with a stop.
+TEMP_WARMUP_LAPS = 2
+TEMP_BASELINE_MIN_LAPS = 3
 
 # How much worse a thing has to get before it is worth saying twice, in the
 # units of the call itself. The docstring on `next_call` has always promised
@@ -74,6 +130,12 @@ class Call:
     # worse. Not exported and never spoken: it exists so the same call can be
     # made again when the thing it was about has deteriorated.
     severity: float | None = None
+    # Which occasion of a many-occasion kind this is. The tyre-temperature
+    # kind has three distinct things it can say - cold, in window, trending -
+    # and each is said at most once per stint; suppressing by kind alone
+    # would let the first swallow the other two. Recorded by
+    # `RaceState.record`, never spoken or exported.
+    tag: str | None = None
 
     def spoken(self) -> str:
         """Instruction, then reason. Confidence only when it is not high."""
@@ -122,6 +184,13 @@ class RaceState:
     # stop 1 of a two-stop asks for a tankful nobody needs, and where the tank
     # cannot hold it the call became a shortfall that does not exist.
     next_stint_laps: int | None = None
+    # Whether the plan holds a further stop *after* the next one. None is
+    # "nobody said" - the state was built by hand, as the tests do - and then
+    # the fill is taken at its word. False is a positive claim, and it matters
+    # when the plan has gone stale: with no stop after the next stint, that
+    # stint runs to the flag, so a fill sized to a stint shorter than the
+    # laps actually remaining would send him back out to run dry.
+    further_stop_planned: bool | None = None
     wear_per_lap: float | None = None
     # **What a short-shift is worth on this car, in litres per lap per 1000
     # rpm.** Measured by `tools/shortshift_trade.py` from laps where his own
@@ -140,6 +209,23 @@ class RaceState:
     # model keeps counting through it - GT7 lets you take fuel without taking
     # tyres - and the call that rests on it says so out loud.
     tyre_change_unconfirmed: bool = False
+    # --- tyre temperature, per-lap frame means fed by the coordinator ---
+    # The measured working window per axle, (floor, ceiling) in degC, from
+    # this event's own practice laps. None where nobody has measured one -
+    # never a default band, and never the strategy layer's fabricated
+    # real-world figures.
+    temp_window_front: tuple[float, float] | None = None
+    temp_window_rear: tuple[float, float] | None = None
+    # Measured laps from stone cold to the window, or None where no practice
+    # session started cold enough to show it. Spoken in the cold-tyre call
+    # when present; the call carries no number otherwise.
+    temp_laps_to_window: int | None = None
+    # (lap, front mean, rear mean) per completed lap that carried temps.
+    # Cleared on a tyre change - a new set's baseline is its own.
+    temp_history: list[tuple[int, float, float]] = field(default_factory=list)
+    # Which tyre-temp occasions were said this stint: "cold", "in-window",
+    # "trend-front", "trend-rear". Each is said at most once per stint.
+    temp_said: set[str] = field(default_factory=set)
     said: list[str] = field(default_factory=list)
     # What each kind was last said at, so a call can be made again when it has
     # got worse. Kept beside `said` rather than inside it because `said` is
@@ -176,12 +262,18 @@ class RaceState:
         return (self.stint_ends_on_lap is not None
                 and self.lap >= self.stint_ends_on_lap)
 
+    def note_temps(self, lap: int, front_c: float, rear_c: float) -> None:
+        """One completed lap's measured axle means, in order driven."""
+        self.temp_history.append((lap, front_c, rear_c))
+
     def record(self, call: Call) -> None:
         """Remember a call was made, and how bad it was when it was."""
         if call.kind not in self.said:
             self.said.append(call.kind)
         if call.severity is not None:
             self.said_at[call.kind] = call.severity
+        if call.kind == TYRE_TEMP and call.tag:
+            self.temp_said.add(call.tag)
 
 
 def _fuel_target(state: RaceState) -> float | None:
@@ -246,6 +338,11 @@ def _worth_saying_again(state: RaceState, call: Call) -> bool:
         # it as well meant the reassuring call could only ever be made once,
         # on lap 5, and never again for the rest of the race.
         return True
+    if call.kind == TYRE_TEMP:
+        # Rate-limited per occasion by `temp_said`, which `_tyre_temp` checks
+        # itself: suppressing on the kind would let the cold warning at the
+        # green swallow the in-window confirmation it promised.
+        return True
     margin = WORSE_BY.get(call.kind)
     was = state.said_at.get(call.kind)
     if margin is None or call.severity is None or was is None:
@@ -261,8 +358,24 @@ def _candidates(state: RaceState) -> list[Call | None]:
         _box_soon(state),
         _fuel(state),
         _tyre(state),
+        _tyre_temp(state),
         _status(state),
     ]
+
+
+def _crossing_the_line(state: RaceState) -> bool:
+    """The race's distance is covered but the finish event has not landed yet.
+
+    LAP_COMPLETED for the final lap arrives before RACE_FINISHED - they are
+    produced by the same packet, in that order - and in that gap the box call
+    used to win the lap: "Box this lap. RS. Fuel to 27 litres." was voiced on
+    the driver's chequered-flag crossing. Nothing about a stop, fuel or
+    status is actionable on a lap that no longer exists, so every such call
+    stands down here and the flag settles it. For a timed race the distance
+    is the plan's own estimate, so the honest behaviour in the gap is
+    silence, not a premature flag.
+    """
+    return state.laps_remaining() == 0 and not state.finished
 
 
 def _green(state: RaceState) -> Call | None:
@@ -273,23 +386,60 @@ def _green(state: RaceState) -> Call | None:
 
 
 def _chequer(state: RaceState) -> Call | None:
+    """Position and one closing fact. The last words of the race should say
+    what the race was, not what the plan wanted."""
     if not state.finished:
         return None
-    where = f"P{state.position}." if state.position else ""
-    return Call(CHEQUER, state.lap, "Chequered flag.", where)
+    parts = []
+    if state.position:
+        parts.append(f"P{state.position}.")
+    if state.fuel_l is not None:
+        fact = f"Fuel {state.fuel_l:.1f} litres"
+        if state.stint_index == 0 and state.lap > 0:
+            # No stop was ever taken - the stint pointer only moves on one.
+            fact += " - zero-stop made it"
+        parts.append(fact + ".")
+    return Call(CHEQUER, state.lap, "Chequered flag.", " ".join(parts))
 
 
 def _box_now(state: RaceState) -> Call | None:
     to_stop = state.laps_to_stop()
     if to_stop is None or state.in_pit or state.finished:
         return None
-    if to_stop > 0:
+    if to_stop > 0 or _crossing_the_line(state):
         return None
 
     fuel = _fuel_instruction(state)
     compound = f" {state.next_compound}." if state.next_compound else ""
     # `to_stop` is not None here, so neither is the lap it came from.
     overdue = state.lap - (state.stint_ends_on_lap or 0)
+    if overdue > 0:
+        # **Never the same sentence twice.** The deterioration threshold
+        # re-fires this call every lap once a planned stop is skipped -
+        # severity is laps overdue and grows by exactly one - and it used to
+        # re-fire *verbatim*, nine laps running. A repeat has to carry the
+        # new fact: how overdue, and where the fuel stands against the flag.
+        # (Past the box lap `_fuel_gap` is measured against the flag, which
+        # is the frame he is actually racing in.)
+        gap = _fuel_gap(state)
+        laps_word = "lap" if overdue == 1 else "laps"
+        reason = f"{overdue} {laps_word} overdue."
+        confidence = HIGH
+        if gap is not None and gap < 0:
+            # This used to say "You will not make the flag." off a constant
+            # floor - an unhedged claim about the future, and the measured
+            # driver closed 0.7 laps with lift-and-coast alone on the very
+            # night it was written for. The FUEL_SHORT register instead:
+            # the measured gap, its frame, and his lever - hedged, because
+            # "on current burn" is a projection, not a reading.
+            reason += (f" You're {abs(gap):.1f} laps short of the flag on "
+                       "current burn - short-shift and lift if you stay "
+                       "out.")
+            confidence = MEDIUM
+        elif fuel:
+            reason += f" {fuel}"
+        return Call(BOX_NOW, state.lap, f"Box this lap.{compound}", reason,
+                    confidence, severity=float(overdue))
     return Call(
         BOX_NOW, state.lap,
         f"Box this lap.{compound}",
@@ -302,7 +452,7 @@ def _box_soon(state: RaceState) -> Call | None:
     to_stop = state.laps_to_stop()
     if to_stop is None or state.in_pit or state.finished:
         return None
-    if not 1 <= to_stop <= 2:
+    if not 1 <= to_stop <= 2 or _crossing_the_line(state):
         return None
     return Call(
         BOX_SOON, state.lap,
@@ -334,6 +484,17 @@ def _fuel_instruction(state: RaceState) -> str:
         return ""
     if state.next_stint_laps is not None:
         after_stop = state.next_stint_laps
+        # **A stale plan must not size the fill.** When no further stop is
+        # planned after the next stint, that stint runs to the flag - so if
+        # the plan has drifted and the stint is now shorter than the laps
+        # actually remaining, sizing the fill to it sends him back out to
+        # run dry. `further_stop_planned` is None where nobody said (state
+        # built by hand), and then the stint's own figure is taken at its
+        # word.
+        remaining = state.laps_remaining()
+        if (state.further_stop_planned is False and remaining is not None
+                and remaining > after_stop):
+            after_stop = remaining
     elif state.stint_ends_on_lap is not None:
         # A stop is planned but how long the stint after it runs is unknown.
         # Fuelling to the flag is the safe direction to be wrong in, and the
@@ -342,6 +503,16 @@ def _fuel_instruction(state: RaceState) -> str:
     else:
         after_stop = state.laps_remaining()
     litres = (after_stop + 1) * state.fuel_per_lap_l
+
+    # **A fill below what is already aboard is not an instruction.** "Fuel to
+    # 27 litres" was voiced with 51.9 L in the tank - obeying was impossible
+    # without draining it. GT7 cannot fill downwards, so when the tank
+    # already covers the stint the honest line is that the fuel is fine,
+    # which also tells him what the stop is actually for. Not "No fuel -":
+    # under a helmet a sentence that leads with those words is an emergency
+    # until its second half arrives.
+    if state.fuel_l is not None and litres <= state.fuel_l:
+        return "Fuel is fine - the tank covers the next stint."
 
     capacity = state.fuel_capacity_l
     if capacity and litres > capacity:
@@ -404,9 +575,71 @@ def short_shift_for(state: RaceState) -> tuple[float | None, float]:
     return capped, max(0.0, still)
 
 
+def stay_out_call(state: RaceState) -> Call | None:
+    """The fold: the driver has voted with the car, and the fuel agrees.
+
+    Made by the coordinator when a box call has gone `BOX_IGNORED_LAPS`
+    unanswered, in place of the tenth repetition. The driver's action is
+    primary evidence (CLAUDE.md §4.1): a driver running past his stop lap by
+    lap is executing a stay-out, and the engineer's job becomes checking
+    whether it works, not restating the plan he has already left.
+
+    Returns None when the fuel genuinely cannot reach the flag within the
+    short-shift lever's range - then the box call stands, escalated. Past the
+    box lap `_fuel_gap` is already measured against the flag, which is the
+    only target a stay-out has.
+
+    **The measured-slope gate is `short_shift_for`'s own arithmetic, not a
+    constant.** A -1.5-lap floor used to stand in for the lever's reach and
+    it overcommitted: the drop is capped at `short_shift_max_drop_rpm`, and
+    the first component of `short_shift_for`'s answer used to be taken while
+    the second - the laps the capped drop still cannot cover - was thrown
+    away, so a fold could say "you can make it" over a 0.7-lap hole and
+    retire a stop the driver needed. The fold now requires the lever to
+    actually close the gap.
+
+    And it says "should", not "can", whenever it rests on him executing a
+    saving lap after lap: `spoken()` only voices LOW out loud, so the hedge
+    has to live in the words themselves.
+    """
+    gap = _fuel_gap(state)
+    if gap is None:
+        return None
+    if gap >= 0:
+        # The one unhedged form: the fuel aboard reaches on the burn already
+        # measured, with no saving asked of him.
+        return Call(STAY_OUT, state.lap, "Staying out? You can make it.",
+                    "Fuel is good to the flag.")
+    if state.short_shift_l_per_1000rpm:
+        drop, still = short_shift_for(state)
+        if not drop or still > STAY_OUT_STILL_SHORT:
+            # The capped lever leaves laps uncovered: that is a box
+            # decision, not a saving one, and the box call stands.
+            return None
+        # Rounded to fifty for the same reason the fuel call rounds: he is
+        # reading a beep, and the fit's interval does not support more.
+        return Call(
+            STAY_OUT, state.lap,
+            "Staying out? You should make it.",
+            f"Short-shift {int(round(drop / 50.0) * 50)}, "
+            f"you're {abs(gap):.1f} short.")
+    if gap < STAY_OUT_GAP_UNMEASURED:
+        return None
+    # No measured slope for this car: the lever is named without a number
+    # rather than inventing one, and the confidence drops with it.
+    return Call(
+        STAY_OUT, state.lap,
+        "Staying out? You should make it.",
+        f"Short-shift and lift - you're {abs(gap):.1f} laps short to the "
+        "flag.",
+        MEDIUM)
+
+
 def _fuel(state: RaceState) -> Call | None:
     gap = _fuel_gap(state)
     if gap is None or state.in_pit or state.finished:
+        return None
+    if _crossing_the_line(state):
         return None
 
     confidence = MEDIUM if state.lap < 3 else HIGH
@@ -460,6 +693,8 @@ def _tyre(state: RaceState) -> Call | None:
     """
     if state.wear_per_lap is None or state.in_pit or state.finished:
         return None
+    if _crossing_the_line(state):
+        return None
     consumed = state.laps_since_stop * state.wear_per_lap
     if consumed < 0.85:
         return None
@@ -477,11 +712,103 @@ def _tyre(state: RaceState) -> Call | None:
         severity=consumed)
 
 
+def _tyre_temp(state: RaceState) -> Call | None:
+    """The one tyre channel GT7 broadcasts, spoken sparingly.
+
+    Three occasions, each at most once per stint, all from measured data:
+
+    * **Cold at the green** - the first lap's means sit well below the
+      measured window floor. With no window on file the relative form is
+      allowed instead: both axles still climbing hard after lap one.
+    * **In window** - confirmation, and only of a warning already given.
+      A confirmation of nothing is chatter.
+    * **A departure from the axle's own baseline** - not from the other
+      axle's. Rears 8-11 degC hotter than fronts is this car's normal and ran
+      that way for a whole measured race; only an axle leaving its OWN steady
+      mean, or exiting the measured window hot, is a change worth a word.
+      Fronts going first may suggest brake balance rearward - never, under
+      any circumstances, forward: that is a standing driver instruction.
+    """
+    if state.in_pit or state.finished or _crossing_the_line(state):
+        return None
+    history = state.temp_history
+    if not history:
+        return None
+    lap, front, rear = history[-1]
+    if lap != state.lap:
+        # The latest reading is from an earlier lap - this lap carried no
+        # temps, and a call about a stale reading would be presented as
+        # current. Missing is silence, never a carry-forward.
+        return None
+    wf, wr = state.temp_window_front, state.temp_window_rear
+
+    # (a) Cold at the green.
+    if "cold" not in state.temp_said:
+        if wf and wr and len(history) == 1:
+            if (front < wf[0] - TEMP_COLD_BELOW_C
+                    or rear < wr[0] - TEMP_COLD_BELOW_C):
+                if state.temp_laps_to_window:
+                    n = state.temp_laps_to_window
+                    reason = f"{n} lap{'' if n == 1 else 's'} to window."
+                else:
+                    reason = "Below window."
+                return Call(TYRE_TEMP, state.lap, "Tyres cold.", reason,
+                            tag="cold")
+        elif wf is None and len(history) == 2:
+            # No measured window yet: the only allowed form is relative -
+            # both axles still climbing hard says lap one started cold.
+            _, f0, r0 = history[0]
+            if front - f0 >= TEMP_RISING_C and rear - r0 >= TEMP_RISING_C:
+                return Call(TYRE_TEMP, state.lap, "Tyres cold.",
+                            "Still coming up to temperature.", MEDIUM,
+                            tag="cold")
+
+    # (b) In window - confirmation of the warning, not chatter.
+    if ("cold" in state.temp_said and "in-window" not in state.temp_said
+            and wf and wr
+            and wf[0] <= front <= wf[1] and wr[0] <= rear <= wr[1]):
+        return Call(TYRE_TEMP, state.lap, "Tyres in window.", "",
+                    tag="in-window")
+
+    # (c) A departure from the axle's own established baseline. The
+    # baseline is positional within THIS set's history - its first
+    # `TEMP_WARMUP_LAPS` entries are its warm-up and stay out - never the
+    # absolute race lap: the history is cleared on a tyre change, and a
+    # lap-number filter once let a set fitted mid-race baseline itself on
+    # its own cold laps, reading its normal steady temperature as heating.
+    recent = history[-TEMP_TREND_LAPS:]
+    steady = history[TEMP_WARMUP_LAPS:-TEMP_TREND_LAPS]
+    if len(recent) < TEMP_TREND_LAPS or len(steady) < TEMP_BASELINE_MIN_LAPS:
+        return None
+    base_front = sum(e[1] for e in steady) / len(steady)
+    base_rear = sum(e[2] for e in steady) / len(steady)
+    # Rears first: on the measured cars they are the loaded axle, and the
+    # traction warning is the more expensive one to miss.
+    if "trend-rear" not in state.temp_said:
+        trending = all(e[2] - base_rear >= TEMP_TREND_C for e in recent)
+        hot = wr is not None and all(e[2] > wr[1] for e in recent)
+        if trending or hot:
+            up = rear - base_rear
+            return Call(TYRE_TEMP, state.lap, "Rears heating.",
+                        f"Up {up:.0f} on their normal. Mind traction.",
+                        tag="trend-rear")
+    if "trend-front" not in state.temp_said:
+        trending = all(e[1] - base_front >= TEMP_TREND_C for e in recent)
+        hot = wf is not None and all(e[1] > wf[1] for e in recent)
+        if trending or hot:
+            up = front - base_front
+            return Call(TYRE_TEMP, state.lap, "Fronts heating.",
+                        f"Up {up:.0f} on their normal. "
+                        "Brake balance one click rearward.",
+                        tag="trend-front")
+    return None
+
+
 def _status(state: RaceState) -> Call | None:
     """Proactive reassurance, rarely. Silence should mean nothing to report."""
     if state.lap < 1 or state.finished or state.in_pit:
         return None
-    if state.lap % STATUS_EVERY_LAPS != 0:
+    if state.lap % STATUS_EVERY_LAPS != 0 or _crossing_the_line(state):
         return None
     remaining = state.laps_remaining()
     where = f"P{state.position}." if state.position else ""
@@ -509,8 +836,13 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
     state.said = [kind for kind in state.said if kind in (GREEN,)]
     state.said_at = {kind: value for kind, value in state.said_at.items()
                      if kind in (GREEN,)}
+    # The temp occasions speak freshly each stint either way; the history
+    # only survives when the rubber does - a new set's baseline is its own,
+    # and it starts cold, which is exactly what the cold check should see.
+    state.temp_said = set()
     if tyres_changed:
         state.laps_since_stop = 0
         state.tyre_change_unconfirmed = False
+        state.temp_history = []
     elif tyres_changed is None:
         state.tyre_change_unconfirmed = True

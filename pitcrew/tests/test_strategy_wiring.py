@@ -61,9 +61,16 @@ def test_fuel_per_lap_is_measured_from_the_laps(planned):
 
 
 def test_the_out_lap_does_not_set_the_reference(planned):
+    """The out-lap stays out; and the reference is the *pace*, not the
+    opening lap. `build_inputs` used to take `green_lap_reference_ms` - the
+    best of the first counted laps, a degradation reference by its own
+    docstring - so a race was once judged "2% slower than planned" against a
+    three-day-old opening lap. The plan is now built on `reference_pace_ms`:
+    the recency-weighted median of every counted lap, 94,200 here, not the
+    94,100 the old green-lap figure would have picked."""
     _, _, store, event_id = planned
     inputs, _ = build_inputs(store, event_id)
-    assert inputs.lap_time_ms == 94_100    # lap 2, not the out-lap
+    assert inputs.lap_time_ms == 94_200    # weighted pace over laps 2-6
 
 
 def test_wear_is_missing_until_the_gauge_is_read(planned):

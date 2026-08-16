@@ -14,7 +14,17 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 
-from pitcrew.race.calls import Call, RaceState, clear_stint, next_call
+from pitcrew.race.calls import (
+    BOX_IGNORED_LAPS,
+    BOX_NOW,
+    STAY_OUT,
+    Call,
+    RaceState,
+    _crossing_the_line,
+    clear_stint,
+    next_call,
+    stay_out_call,
+)
 from pitcrew.telemetry.session_state import EventKind, Phase
 
 
@@ -86,6 +96,9 @@ class RaceCoordinator:
         self.refusal: str | None = None
         self.planned_fuel_per_lap_l = fuel_per_lap_l
         self._burns: list[float] = []
+        # Lap times fit to judge pace against the plan - see
+        # `representative_pace_ms` for what is kept out and why.
+        self._pace_ms: list[int] = []
         self._stints = list(self.plan.get("stints") or ())
         self._apply_stint(0)
 
@@ -160,6 +173,11 @@ class RaceCoordinator:
         # stop is for that stint and not for the whole rest of the race.
         self.state.next_stint_laps = (following.get("laps") if following
                                       else None)
+        # Whether a stop comes after that stint too. When it does not, the
+        # next stint runs to the flag, and the fill call clamps it against
+        # the laps actually remaining - a stale plan's stint length must not
+        # size a fill that has to reach the end of the race.
+        self.state.further_stop_planned = index + 2 < len(self._stints)
         # The last stint runs to the flag; there is no stop at the end of it.
         if following is None:
             self.state.stint_ends_on_lap = None
@@ -205,6 +223,15 @@ class RaceCoordinator:
     # Below this the race has not shown enough of its own burn to trust it
     # over the practice figure.
     BURN_LAPS_NEEDED = 3
+    # And the same for pace: fewer representative laps than this and the
+    # pace against the plan is unknown - not zero, and never lap one.
+    PACE_LAPS_NEEDED = 3
+
+    # A timed race's lap count is the plan's own estimate. When it runs out
+    # while the packet clock still shows this much time, the estimate was a
+    # lap short and the driver is genuinely going round again - the count is
+    # extended rather than the engineer falling silent on a real racing lap.
+    EXTRA_LAP_CLOCK_MS = 20_000
 
     def _on_lap(self, event, packet) -> Call | None:
         lap = event.data["lap"]
@@ -213,6 +240,20 @@ class RaceCoordinator:
         self.state.fuel_l = lap.fuel_end
         if lap.position:
             self.state.position = lap.position
+
+        # **The estimated distance yields to the clock.** For a timed race
+        # `laps_total` is the plan's derived distance; if it undershoots by
+        # a lap, `laps_remaining()` hits zero one lap early and every call
+        # stands down on a lap he is actually racing. The session state now
+        # sends the packet clock with each completed lap: meaningfully more
+        # than zero left means the flag has not fallen, so the countdown is
+        # stretched by one and the engineer keeps talking.
+        remaining_ms = event.data.get("remaining_time_ms")
+        if (self.state.race_minutes and self.state.laps_total is not None
+                and self.state.laps_remaining() == 0
+                and remaining_ms is not None
+                and remaining_ms > self.EXTRA_LAP_CLOCK_MS):
+            self.state.laps_total += 1
 
         # Fuel calls must use what this race is actually burning, not what
         # practice suggested. Told he could push while burning 35% more than
@@ -224,13 +265,112 @@ class RaceCoordinator:
             ordered = sorted(self._burns)
             self.state.fuel_per_lap_l = ordered[len(ordered) // 2]
 
+        # **Lap one never enters the pace record.** It carries the grid and -
+        # on race day - a standing start, and it once fed the pace-vs-plan
+        # check on its own: "lapping 2% slower than planned" was voiced two
+        # minutes into a race whose laps 2-3 promptly beat the reference.
+        # Pit and out laps are excluded for the same reason they are excluded
+        # offline; incidents cannot be flagged live, which is one more reason
+        # the pace is a median and never a single lap.
+        if (lap.lap_num > 1 and not lap.is_pit_lap and not lap.is_out_lap
+                and lap.lap_time_ms > 0):
+            self._pace_ms.append(lap.lap_time_ms)
+
+        # The per-lap axle temperature means, where the session state
+        # computed them. Both or neither: a one-axle reading would make the
+        # asymmetry checks compare a measurement against a gap.
+        front = getattr(lap, "tyre_temp_front_c", None)
+        rear = getattr(lap, "tyre_temp_rear_c", None)
+        if front is not None and rear is not None:
+            self.state.note_temps(lap.lap_num, front, rear)
+
+        folded = self._reconsider_ignored_box()
+        if folded is not None:
+            self.state.record(folded)
+            return folded
         return self._emit()
+
+    def _reconsider_ignored_box(self) -> Call | None:
+        """A box call ignored twice is answered, not repeated.
+
+        The stint pointer only advances on a PIT_EXIT, so a skipped stop used
+        to leave the plan frozen and the box call re-firing verbatim every
+        lap - nine times in one measured race, the last on the chequered-flag
+        crossing, while the one call the driver needed (he was 0.4 laps short
+        of a feasible zero-stop) was computed and outranked every lap.
+
+        Two laps past the planned stop with the driver still out, the
+        engineer re-reads the race: if the fuel aboard reaches the flag
+        within the short-shift lever's range, the stay-out is said ONCE and
+        the box call is retired - the plan folds to what he is actually
+        doing. If the fuel genuinely cannot reach, the box call stands and
+        escalates instead (`_box_now`).
+        """
+        state = self.state
+        if (BOX_NOW not in state.said or STAY_OUT in state.said
+                or state.in_pit or state.finished or not state.past_box_lap):
+            return None
+        if _crossing_the_line(state):
+            # The distance is covered and the finish event is one packet
+            # behind this one. A plan whose last stop sat two laps before
+            # the end once put the fold exactly here - "Staying out? You
+            # can make it." voiced on the chequered-flag crossing, recorded
+            # as a driver decision about a race that was already over.
+            return None
+        overdue = state.lap - (state.stint_ends_on_lap or 0)
+        if overdue < BOX_IGNORED_LAPS:
+            return None
+        call = stay_out_call(state)
+        if call is None:
+            return None
+        # Internally adopt the zero-stop shape for the remainder: one stint
+        # to the flag, no compound waiting, the fuel target becomes the flag.
+        remaining = state.laps_remaining()
+        if remaining:
+            self.adopt((remaining,))
+        else:
+            state.stint_ends_on_lap = None
+            state.next_stint_laps = None
+            state.next_compound = None
+        return call
 
     def observed_fuel_per_lap(self) -> float | None:
         if len(self._burns) < self.BURN_LAPS_NEEDED:
             return None
         ordered = sorted(self._burns)
         return ordered[len(ordered) // 2]
+
+    # The pace window is wider than the minimum so that incident laps -
+    # which cannot be flagged live - can be dropped and a median still
+    # taken. A lap this far over the race's own best so far is an incident,
+    # not noise: his measured lap-to-lap noise is about 0.8% of a two-minute
+    # lap, while the measured incidents run 5-10% over. 4% splits the two
+    # populations with margin on both sides.
+    PACE_WINDOW_LAPS = 5
+    PACE_OUTLIER_FRACTION = 0.04
+
+    def representative_pace_ms(self) -> int | None:
+        """The pace this race is showing, or None before it has shown one.
+
+        A median over the last `PACE_WINDOW_LAPS` clean laps, never a single
+        lap: the driver's measured lap-to-lap noise sits right at the
+        re-plan threshold on a two-minute lap, so a single-lap trigger is a
+        coin flip. And a median of only three is not enough either - the
+        measured race had *adjacent* incident laps (crawl, then a spin
+        recovery, +6% and +9%), and two of three carry the median with them.
+        So laps more than `PACE_OUTLIER_FRACTION` over the race's own best
+        are dropped as incidents first; fewer than `PACE_LAPS_NEEDED` clean
+        laps in the window means the pace is unknown right now - None, not a
+        number built out of trouble.
+        """
+        if len(self._pace_ms) < self.PACE_LAPS_NEEDED:
+            return None
+        cutoff = min(self._pace_ms) * (1.0 + self.PACE_OUTLIER_FRACTION)
+        window = sorted(ms for ms in self._pace_ms[-self.PACE_WINDOW_LAPS:]
+                        if ms <= cutoff)
+        if len(window) < self.PACE_LAPS_NEEDED:
+            return None
+        return window[len(window) // 2]
 
     def _on_finish(self, event) -> Call | None:
         self.phase = RacePhase.FINISHED

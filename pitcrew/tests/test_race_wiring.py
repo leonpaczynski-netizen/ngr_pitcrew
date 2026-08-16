@@ -156,6 +156,105 @@ def test_declined_calls_are_kept(raced):
     assert all(r["accepted"] is False for r in revisions)
 
 
+def test_an_expired_offer_is_recorded_not_vanished(raced, monkeypatch):
+    """One unanswered offer once gagged the loop for 29 minutes AND never
+    reached `race_revisions` - offers were only recorded on resolve, and it
+    was never resolved. Expiry is a resolution now, and it is filed."""
+    from pitcrew.race.replan import RECOMMENDED, Replan
+
+    controller, _, store, event_id = raced
+    controller.start_race()
+    green(controller)
+    offer = Replan(RECOMMENDED, "burning 20% more fuel than planned",
+                   stops=2, stint_laps=(7, 6), gain_s=12.0)
+    monkeypatch.setattr("pitcrew.controller.assess", lambda **kwargs: offer)
+    for lap_num in range(1, 5):
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+
+    revisions = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
+    expired = [r for r in revisions
+               if r["plan"].get("resolution") == "expired unanswered"]
+    assert len(expired) == 1
+    assert expired[0]["accepted"] is False
+    assert controller._replans.pending is None
+
+
+def test_a_superseding_offer_is_spoken_and_the_old_one_recorded(
+        raced, monkeypatch, voice):
+    from pitcrew.race.replan import NONE, RECOMMENDED, URGENT, Replan
+
+    controller, _, store, event_id = raced
+    controller.start_race()
+    green(controller)
+    verdicts = iter([
+        Replan(RECOMMENDED, "burning more fuel than planned",
+               stops=2, stint_laps=(7, 6), gain_s=12.0),
+        Replan(URGENT, "1.4 laps short of the flag on current burn",
+               stops=1, stint_laps=(9,), confidence="high"),
+    ])
+    fallback = Replan(NONE, "on the plan")
+    monkeypatch.setattr("pitcrew.controller.assess",
+                        lambda **kwargs: next(verdicts, fallback))
+    a_lap(controller, 1, 88.6)
+    a_lap(controller, 2, 85.2)
+
+    revisions = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
+    superseded = [r for r in revisions
+                  if r["plan"].get("resolution") == "superseded by a new offer"]
+    assert len(superseded) == 1
+    assert controller._replans.pending is not None
+    assert controller._replans.pending.verdict == URGENT
+    assert any("1 stop" in line for line in voice.spoken)
+
+
+def test_a_pending_offer_at_teardown_is_recorded_not_vanished(
+        raced, monkeypatch):
+    """An offer voiced in the final laps used to vanish from the record
+    entirely when the race closed on it - the audit hole the forensics
+    documented. Teardown drains it as "race ended unanswered"."""
+    from pitcrew.race.replan import RECOMMENDED, Replan
+
+    controller, _, store, event_id = raced
+    controller.start_race()
+    green(controller)
+    offer = Replan(RECOMMENDED, "burning 20% more fuel than planned",
+                   stops=2, stint_laps=(7, 6), gain_s=12.0)
+    monkeypatch.setattr("pitcrew.controller.assess", lambda **kwargs: offer)
+    a_lap(controller, 1, 88.6)
+    controller.stop_race()
+
+    revisions = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
+    ended = [r for r in revisions
+             if r["plan"].get("resolution") == "race ended unanswered"]
+    assert len(ended) == 1
+    assert ended[0]["accepted"] is False
+
+
+def test_an_ignored_box_call_folds_and_is_recorded_as_the_drivers_call(raced):
+    """Nine verbatim "Box this lap" calls were once voiced to a driver
+    running a feasible zero-stop - the ninth on his chequered-flag crossing.
+    Two laps past an ignored stop the engineer now folds to the stay-out,
+    and the revision chain records the fold as accepted with its reason:
+    the driver voted by staying out, and the audit must read it that way
+    round rather than as one more call he ignored."""
+    controller, _, store, event_id = raced
+    controller.start_race()
+    green(controller)
+    for lap_num in range(1, 20):
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+
+    runs = store.list_race_runs(event_id)
+    revisions = store.list_revisions(runs[0]["id"])
+    folds = [r for r in revisions if r["plan"].get("kind") == "stay-out"]
+    assert len(folds) == 1
+    assert folds[0]["accepted"] is True
+    assert folds[0]["plan"]["resolution"] == "driver stayed out"
+    assert "Staying out" in folds[0]["reason"]
+    # And the fold is the only revision that claims the driver's assent.
+    assert all(r["accepted"] is False for r in revisions
+               if r["plan"].get("kind") != "stay-out")
+
+
 def test_the_calls_reach_the_export(raced):
     from pitcrew.export.build import build_event_export
 

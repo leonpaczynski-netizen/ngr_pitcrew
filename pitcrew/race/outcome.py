@@ -24,8 +24,16 @@ def race_outcome(laps: list[LapInput], *, planned_stops: int | None = None,
                  planned_pit_laps: list[int] | None = None,
                  final_position: int | None = None,
                  binding_constraint: str | None = None,
-                 declined_calls: int = 0) -> str:
-    """Facts about the race just run. Empty string when nothing was run."""
+                 declined_calls: int = 0,
+                 stay_out_lap: int | None = None) -> str:
+    """Facts about the race just run. Empty string when nothing was run.
+
+    `stay_out_lap` is the lap the engineer stopped repeating an ignored box
+    call and folded to the driver's stay-out. It belongs in the outcome
+    because it is the whole shape of the disagreement in one clause: the
+    plan said stop, the driver ran on, the engineer adopted what he was
+    actually doing - and the audit should read that way round.
+    """
     if not laps:
         return ""
 
@@ -43,6 +51,10 @@ def race_outcome(laps: list[LapInput], *, planned_stops: int | None = None,
         parts.append(
             f"the plan called for {planned_stops} "
             f"stop{'' if planned_stops == 1 else 's'}")
+        if stay_out_lap is not None:
+            parts.append(
+                f"the engineer folded to the driver's stay-out on lap "
+                f"{stay_out_lap}")
     elif (planned_pit_laps and stops
           # **An incomplete plan cannot assert a deviation.** The plan used to
           # travel as a single `pitLap`, so a two-stop race run exactly to its

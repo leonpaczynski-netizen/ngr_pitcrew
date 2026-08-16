@@ -57,8 +57,10 @@ from pitcrew.setup.parse import parse_reply
 from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
 from pitcrew.store import catalogs
 from pitcrew.store.db import Store
+from pitcrew.race.calls import STAY_OUT
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
-from pitcrew.race.replan import assess, observed_fuel_per_lap
+from pitcrew.race.replan import OfferDesk, assess, observed_fuel_per_lap
+from pitcrew.race.temps import measured_temp_window
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.selftest import LISTEN_S, check_feed
@@ -400,7 +402,12 @@ class PitCrewController(QObject):
         self.race_run_id: int | None = None
         self._race_inputs = None
         self._race_burns: list[float] = []
-        self._pending_replan = None
+        # The one open re-plan offer and its lifecycle. It used to be a bare
+        # `_pending_replan` attribute with one rule - while anything pends,
+        # every later verdict is discarded - and one unanswered offer at
+        # minute two of a measured race silenced every adaptation to the
+        # flag. The desk expires, supersedes and records; see `race/replan`.
+        self._replans = OfferDesk()
         # Whether the engineer talks during the race in progress. True outside
         # a race so nothing that speaks for another reason is silenced by it.
         self._engineer_speaks = True
@@ -2498,8 +2505,17 @@ class PitCrewController(QObject):
             self.ptt.start()
         self._race_inputs = inputs
         self._race_burns = []
-        self._pending_replan = None
+        self._replans.reset()
         self.ptt.pending_replan = None
+        # The measured tyre-temperature window for this event, decoded once
+        # from its practice laps. None where nothing was measured - the
+        # temperature voice then stays silent rather than judging against
+        # the strategy layer's fabricated band.
+        window = measured_temp_window(self.store, event["id"])
+        if window is not None:
+            self.race.state.temp_window_front = window.front
+            self.race.state.temp_window_rear = window.rear
+            self.race.state.temp_laps_to_window = window.laps_to_window
         self.race_screen.clear_log()
         self.race_screen.set_armed(True)
 
@@ -2532,6 +2548,16 @@ class PitCrewController(QObject):
             # for a rehearsal, and `auto_out_laps` acts on.
             self.session_id = None
         if self.race_run_id is not None:
+            # An offer still open at teardown is resolved into the record,
+            # not dropped: an offer voiced in the final two laps used to
+            # vanish from `race_revisions` entirely - the same audit hole
+            # the pending-offer gag left. Drained before `finish_race_run`
+            # clears the run id the revision has to be filed against, and
+            # before `self.race` goes away with the lap number.
+            leftover = self._replans.drain(
+                lap=self.race.state.lap if self.race else 0)
+            if leftover is not None:
+                self._record_resolution(leftover)
             self.store.finish_race_run(self.race_run_id)
             self.race_run_id = None
         self.race = None
@@ -2539,7 +2565,7 @@ class PitCrewController(QObject):
         # and connected, and Accept then dereferenced `self.race`, which this
         # method had just set to None - straight out of a Qt slot, which aborts
         # the process, immediately after a race and before the export.
-        self._pending_replan = None
+        self._replans.reset()
         self.ptt.pending_replan = None
         if self.race_screen is not None:
             self.race_screen.hide_offer()
@@ -2569,10 +2595,21 @@ class PitCrewController(QObject):
             # Every call is recorded, accepted or not: a plan offered and
             # ignored is evidence about the model, and dropping it would make
             # the model look better than it was.
+            #
+            # **The stay-out fold is the one call recorded as accepted.**
+            # It is not the engineer imposing anything - the driver voted by
+            # staying out, laps past his stop, and the call adopts what he
+            # is already doing. Recording it declined would tell the audit
+            # the driver ignored the engineer at the exact moment the two
+            # finally agreed.
+            payload = {"call": call.as_export(), "confidence": call.confidence,
+                       "kind": call.kind}
+            accepted = call.kind == STAY_OUT
+            if accepted:
+                payload["resolution"] = "driver stayed out"
             self.store.append_revision(
-                self.race_run_id, call.lap, call.call,
-                {"call": call.as_export(), "confidence": call.confidence},
-                accepted=False)
+                self.race_run_id, call.lap, call.call, payload,
+                accepted=accepted)
 
     # ------------------------------------------------------------------- ptt
 
@@ -2616,7 +2653,7 @@ class PitCrewController(QObject):
     def _show_ptt_answer(self, heard: str, said: str) -> None:
         if self.race_screen is not None:
             self.race_screen.show_exchange(heard, said)
-        if self._pending_replan is not None and heard:
+        if self._replans.pending is not None and heard:
             from pitcrew.engineer.intents import ACCEPT, KEEP, match_intent
             intent = match_intent(heard)
             if intent in (ACCEPT, KEEP):
@@ -2628,24 +2665,48 @@ class PitCrewController(QObject):
 
     def _resolve_replan(self, *, accepted: bool) -> None:
         """Record what the driver did with the offer, and act on it."""
-        offer = self._pending_replan
-        self._pending_replan = None
+        resolution = self._replans.resolve(
+            accepted=accepted, lap=self.race.state.lap if self.race else 0)
         self.ptt.pending_replan = None
-        if offer is None or self.race_run_id is None:
+        if resolution is None or self.race_run_id is None:
             return
-        self.store.append_revision(
-            self.race_run_id, self.race.state.lap if self.race else 0,
-            offer.call() or offer.reason, offer.as_plan(), accepted=accepted)
+        self._record_resolution(resolution)
+        offer = resolution.offer
         if accepted and offer.stint_laps and self.race is not None:
             self.race.adopt(offer.stint_laps)
         # The question is answered, so it stops being asked.
         if self.race_screen is not None:
             self.race_screen.hide_offer()
 
+    def _record_resolution(self, resolution) -> None:
+        """One resolved offer into the revision chain, with how it ended.
+
+        `resolution` distinguishes a driver who said "keep" from an offer
+        that expired unanswered under a helmet - the audit needs to tell a
+        refusal from a question that was never answerable.
+        """
+        if self.race_run_id is None:
+            return
+        offer = resolution.offer
+        payload = offer.as_plan()
+        payload["resolution"] = resolution.reason
+        self.store.append_revision(
+            self.race_run_id, resolution.lap,
+            offer.call() or offer.reason, payload,
+            accepted=resolution.accepted)
+
     # ---------------------------------------------------------------- replan
 
     def _check_replan(self, lap) -> None:
-        """After each lap, ask whether the plan still holds."""
+        """After each lap, ask whether the plan still holds.
+
+        The verdict is computed **every lap**, whatever is pending: the old
+        `if pending: return` gate threw the computed verdict away, and one
+        unanswered offer at minute two of a measured race discarded every
+        later finding - including the fuel drift that would have cancelled
+        both stops - all the way to the flag. The desk now decides what a
+        pending offer means: expiry, replacement, or a lap more of patience.
+        """
         if self.race is None or not self.race.running:
             return
         if lap.fuel_used > 0:
@@ -2658,25 +2719,37 @@ class PitCrewController(QObject):
             fuel_l=self.race.state.fuel_l,
             planned_fuel_per_lap=self.race.planned_fuel_per_lap_l,
             observed_fuel_per_lap_l=self.race.observed_fuel_per_lap(),
-            lap_time_ms=lap.lap_time_ms,
+            # The race's representative pace - a median of recent clean
+            # laps, None until three exist - never the lap that just
+            # happened, and never lap one, which carries the standing start.
+            lap_time_ms=self.race.representative_pace_ms(),
             planned_lap_time_ms=inputs.lap_time_ms if inputs else None,
             current_stops=self.race.stops_planned(),
             inputs=inputs,
             fuel_capacity_l=inputs.fuel_capacity_l if inputs else None,
         )
-        if not verdict.offered or self._pending_replan is not None:
+        spoken, resolutions = self._replans.consider(
+            verdict, self.race.state.lap)
+        for resolution in resolutions:
+            # Expired or superseded without the driver - recorded, because
+            # an offer that vanished without trace would make the model look
+            # better than it was. Expiry adopts nothing: the old plan stands.
+            self._record_resolution(resolution)
+            self.ptt.pending_replan = None
+            if self.race_screen is not None:
+                self.race_screen.hide_offer()
+        if spoken is None:
             return
 
-        # Offered, never imposed: it stands until he accepts or keeps.
-        self._pending_replan = verdict
-        self.ptt.pending_replan = verdict.call()
-        text = f"{verdict.call()} {verdict.reason}."
+        # Offered, never imposed: it stands until he answers or it lapses.
+        self.ptt.pending_replan = spoken.call()
+        text = f"{spoken.call()} {spoken.reason}."
         if self._engineer_speaks:
             self.voice.say(text)
         self.last_call = text
         self.ptt.last_call = text
         if self.race_screen is not None:
-            self.race_screen.show_offer(verdict)
+            self.race_screen.show_offer(spoken)
 
     # ---------------------------------------------------------------- export
 
