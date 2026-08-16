@@ -146,6 +146,22 @@ STRIKE_ONSET_MS = 1.5
 STRIKE_FULL_MS = 3.2
 STRIKE_FLOOR = 0.70           # fires rarely; when it fires it is a hit
 
+# **The strike is a rhythm, not a level.**
+#
+# Measured at T7, the second Lesmo's inside strip: the sausage fired the
+# strike at 0.77 in the very frames the strip's edge thump held the impact
+# channel at 0.87-1.00 - and the channel took the max, so the sausage never
+# won a single frame. Reported from the seat, twice: "still not feeling the
+# sausage strikes." Not an amplitude problem - the strip is also loud, and
+# more level on a shared voice cannot separate two events. What nothing else
+# in the mix does is double-tap: for a quarter second the strike OWNS the
+# channel - full hit, a real gap, a second hit - and the gap punched into
+# the strip's barrage is as much of the signature as the taps.
+STRIKE_TAP_S = 0.07           # the first hit
+STRIKE_GAP_S = 0.08           # the silence that makes it a rhythm
+STRIKE_SECOND = 0.85          # the echo hit, which then decays normally
+STRIKE_OWN_TAIL_S = 0.15      # how far past the gap it keeps the channel
+
 # **Lateral acceleration, in g.** Speed times yaw rate over 9.81 - the standard
 # derivation, and the same one `recorder.py` computes for the export, so the
 # two agree by construction.
@@ -239,7 +255,8 @@ class EffectDeriver:
         self._gear_pulse = 0.0
         self._impact_pulse = 0.0
         self._kerb_pulse = 0.0
-        self._strike_pulse = 0.0
+        self._strike_t: float | None = None
+        self._strike_size = 0.0
         self._limiter_pulse = 0.0
         self._prev_limiter = False
         self.state = vehicle.VehicleState()
@@ -254,7 +271,8 @@ class EffectDeriver:
         self._gear_pulse = 0.0
         self._impact_pulse = 0.0
         self._kerb_pulse = 0.0
-        self._strike_pulse = 0.0
+        self._strike_t = None
+        self._strike_size = 0.0
         self._limiter_pulse = 0.0
         self._prev_limiter = False
         self._spike_speed = 0.0
@@ -280,9 +298,10 @@ class EffectDeriver:
         out[2] = state.brake_level
         out[3] = max(self._driveline(packet, state, dt),
                      self._limiter(state, dt))
-        out[4] = max(self._impact(packet, dt), self._kerb_thump(state, dt),
-                     self._suspension_strike(state, dt),
+        strike, strike_owns = self._suspension_strike(state, dt)
+        others = max(self._impact(packet, dt), self._kerb_thump(state, dt),
                      state.landed, state.compression)
+        out[4] = strike if strike_owns else max(others, strike)
         out[5] = self._chassis_load(state)
         out[6] = state.traction_level
         out[7] = state.unload
@@ -388,7 +407,8 @@ class EffectDeriver:
             self._kerb_pulse = max(self._kerb_pulse, hit)
         return self._kerb_pulse
 
-    def _suspension_strike(self, s: vehicle.VehicleState, dt: float) -> float:
+    def _suspension_strike(self, s: vehicle.VehicleState,
+                           dt: float) -> tuple[float, bool]:
         """A sausage kerb, read off the spring rather than the surface char.
 
         Fires on the worst wheel's single-frame compression velocity, so it
@@ -396,13 +416,35 @@ class EffectDeriver:
         the case the edge-triggered thump above structurally cannot catch.
         Off the racing surface it holds its peace: bouncing across grass is
         exactly this signature and is not an event worth reporting.
+
+        Returns the level and whether the strike currently OWNS the impact
+        channel. While it owns it, the caller renders this envelope INSTEAD
+        of the max of everything else - the double-tap's gap has to actually
+        reach the piston, and against a ripple strip's edge thumps a max()
+        fills the gap straight back in.
         """
-        self._strike_pulse *= float(np.exp(-dt / IMPACT_DECAY_S))
-        if not s.off_surface and self._spike_speed >= STRIKE_ONSET_MS:
-            hit = STRIKE_FLOOR + (1.0 - STRIKE_FLOOR) * _ramp(
+        if self._strike_t is not None:
+            self._strike_t += dt
+        firing = not s.off_surface and self._spike_speed >= STRIKE_ONSET_MS
+        if firing and self._strike_t is None:
+            self._strike_t = 0.0
+            self._strike_size = STRIKE_FLOOR + (1.0 - STRIKE_FLOOR) * _ramp(
                 self._spike_speed, STRIKE_ONSET_MS, STRIKE_FULL_MS)
-            self._strike_pulse = max(self._strike_pulse, hit)
-        return self._strike_pulse
+        t = self._strike_t
+        if t is None:
+            return 0.0, False
+        if t < STRIKE_TAP_S:
+            level = self._strike_size
+        elif t < STRIKE_TAP_S + STRIKE_GAP_S:
+            level = 0.0
+        else:
+            level = self._strike_size * STRIKE_SECOND * float(
+                np.exp(-(t - STRIKE_TAP_S - STRIKE_GAP_S) / IMPACT_DECAY_S))
+            if level < 0.02:
+                self._strike_t = None
+                return 0.0, False
+        owns = t < STRIKE_TAP_S + STRIKE_GAP_S + STRIKE_OWN_TAIL_S
+        return level, owns
 
     # ---------------------------------------------------------------- engine
 

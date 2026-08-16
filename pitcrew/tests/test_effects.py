@@ -266,6 +266,30 @@ def test_a_sausage_kerb_is_a_hit_even_when_the_surface_never_says_kerb():
     assert held < hit * 0.3, "a single clip became one long impact"
 
 
+def test_a_sausage_inside_a_ripple_strip_is_not_swallowed_by_the_edge_thump():
+    """T7, measured: the strike fired at 0.77 in the same frames the strip's
+    edge thump held the channel at 0.87-1.00, and max() never let the sausage
+    win a frame - so the driver felt the strip and no sausage, twice. While a
+    strike runs, it owns the channel: hit, gap, hit. The gap punched into the
+    thump's ring is the part nothing else in the mix can produce."""
+    deriver = EffectDeriver()
+    rest = (0.280, 0.280, 0.295, 0.295)
+    deriver.update(Frame(speed=30.0, surfaces="TTTT", suspension=rest))
+    # Arrive on the strip: the edge thump fires and rings.
+    deriver.update(Frame(speed=30.0, surfaces="CCTT", suspension=rest))
+    # Clip the sausage while the thump is still loud.
+    spiked = (0.315, 0.280, 0.295, 0.295)
+    hit = deriver.update(Frame(
+        speed=30.0, surfaces="CCTT", suspension=spiked))[_index("impact")]
+    assert hit >= 0.7
+    levels = [deriver.update(Frame(
+        speed=30.0, surfaces="CCTT", suspension=spiked))[_index("impact")]
+        for _ in range(12)]
+    assert min(levels) < 0.05, (
+        f"no gap - the strike drowned in the edge thump: {levels}")
+    assert max(levels) > 0.4, f"no second tap: {levels}"
+
+
 def test_riding_a_ripple_strip_is_not_a_sausage_strike():
     """Kerb-riding oscillation measured p99 1.39 m/s over eight laps; the
     strike onset sits above it so the strip keeps its texture-and-edge feel
