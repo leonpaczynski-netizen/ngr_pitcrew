@@ -14,6 +14,32 @@ Three of them cost real sessions to learn:
 * **Hysteresis, not a level.** It re-arms only once rpm falls back below 95%
   of the threshold, so sitting on the limiter beeps once rather than sixty
   times a second.
+
+**The threshold is per gear, and it is measured.** One number for every gear
+is a compromise between shift points that are genuinely different, and it was
+costing real time: measured over his own laps, the Shelby GT350R's crossover
+sits at about 8250 rpm in all five upshifts while the beep was set to 8640, so
+he was holding every gear several hundred rpm into the part of the curve where
+the next gear already pulls harder. The Porsche RSR, measured the same way,
+shows no crossover at all inside the rpm range it was driven in.
+
+That difference is why the number cannot be a constant, a default, or a guess.
+`tools/shift_points.py` derives it per car and per gear from recorded laps:
+acceleration is the derivative of the measured speed channel, and the upshift
+point is where the next gear's acceleration - at the rpm the engine lands on,
+which is the same road speed and therefore the same drag - beats this gear's.
+GT7 broadcasts no torque curve, so this is derived rather than measured; what
+makes it honest is that it is derived from his own car and is re-checkable.
+
+**Short-shifting is a live switch, not a second profile to configure.** He
+prefers saving fuel by short-shifting over leaning the fuel map, because a map
+step costs power everywhere while a short-shift costs only the top of each
+gear - and it drops rear tyre temperature as well. So the race threshold moves
+down by a stated number of rpm when the engineer asks for fuel, and back up
+when it stops asking. Anything that reads this must know which mode produced a
+lap: laps driven short-shifted cost about half a second, which is the same
+size as the pace deficit the stint calls look for, and a lap-time series that
+does not exclude them measures the app's own instruction.
 """
 from __future__ import annotations
 
@@ -27,6 +53,17 @@ DOWNSHIFT_MUTE_S = 0.3
 # Re-arm once rpm falls back to this fraction of the threshold.
 REARM_FRACTION = 0.95
 DEFAULT_RPM = 7000.0
+# How far below the performance threshold a short-shift sits, when no measured
+# figure has been supplied for the car. Deliberately modest: the whole point is
+# that the cost is bounded and known, and 500 rpm off a crossover in the
+# 8000-8500 region is inside the band where the measured acceleration curves
+# are still close together. A car whose curve falls off a cliff wants its own
+# number from `tools/shift_points.py`, not this one.
+DEFAULT_SHORT_SHIFT_DROP_RPM = 500.0
+# No threshold may be dragged below this by a short-shift request. Short-
+# shifting out of the powerband is not fuel saving, it is driving badly, and
+# an engineer that asks for it has stopped being useful.
+MIN_THRESHOLD_RPM = 3000.0
 
 
 def driving_gate(car_on_track: bool, paused: bool, loading: bool) -> bool:
@@ -77,9 +114,24 @@ class ShiftBeep:
     """Stateful wrapper around `should_beep`, fed one packet at a time."""
 
     def __init__(self, *, rpm: float = DEFAULT_RPM, enabled: bool = True,
-                 tone=None) -> None:
+                 tone=None, per_gear: dict[int, float] | None = None,
+                 short_shift_drop_rpm: float | None = None) -> None:
         self.rpm = rpm
         self.enabled = enabled
+        # Measured per-gear thresholds, keyed by gear. A gear with no measured
+        # figure falls back to `rpm` rather than to a default: a made-up number
+        # for one gear inside a measured table is the worst of both, because it
+        # is indistinguishable from the measured ones at the wheel.
+        self.per_gear: dict[int, float] = dict(per_gear or {})
+        # How far down a short-shift moves the threshold. Per gear where it has
+        # been measured, otherwise the scalar.
+        self.short_shift_drop_rpm = (DEFAULT_SHORT_SHIFT_DROP_RPM
+                                     if short_shift_drop_rpm is None
+                                     else float(short_shift_drop_rpm))
+        self.short_shift_drop_per_gear: dict[int, float] = {}
+        # The live switch. Flipped by the engineer when fuel needs saving and
+        # cleared when it does not - see the module docstring.
+        self.short_shifting = False
         self._tone = tone if tone is not None else _default_tone()
         self._prev_gear = 0
         self._shift_above = False
@@ -87,6 +139,20 @@ class ShiftBeep:
         self.beeps = 0
         # Why the last beep did not sound, for the settings screen to report.
         self.last_error: str | None = None
+
+    def threshold_for(self, gear: int) -> float:
+        """The rpm this gear beeps at, right now.
+
+        Public because the settings screen and the export both have to be able
+        to show what the driver is actually being told, and because a threshold
+        that can only be inferred from behaviour is one nobody can check.
+        """
+        base = self.per_gear.get(int(gear), self.rpm)
+        if not self.short_shifting:
+            return base
+        drop = self.short_shift_drop_per_gear.get(
+            int(gear), self.short_shift_drop_rpm)
+        return max(MIN_THRESHOLD_RPM, base - drop)
 
     def update(self, packet, now: float) -> bool:
         if not driving_gate(packet.car_on_track, packet.paused, packet.loading):
@@ -97,7 +163,7 @@ class ShiftBeep:
             prev_gear=self._prev_gear,
             cur_gear=packet.current_gear,
             rpm=packet.engine_rpm,
-            threshold=self.rpm,
+            threshold=self.threshold_for(packet.current_gear),
             shift_above=self._shift_above,
             enabled=self.enabled,
             downshift_muted_until=self._muted_until,
