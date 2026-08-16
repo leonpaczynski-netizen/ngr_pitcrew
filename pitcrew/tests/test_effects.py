@@ -245,6 +245,57 @@ def test_ordinary_braking_is_not_an_impact():
     assert braking == 0.0
 
 
+def test_a_sausage_kerb_is_a_hit_even_when_the_surface_never_says_kerb():
+    """A sausage clipped at speed is under the wheel for less than one frame,
+    so the surface char can miss it entirely - and one mounted behind a ripple
+    strip is C-to-C, which the edge trigger rejects on purpose. The spring
+    stays compressed for frames afterwards, and that step is the witness:
+    30 mm into one wheel in one frame is 1.8 m/s, above everything eight laps
+    of tarmac and kerb-riding produced."""
+    deriver = EffectDeriver()
+    rest = (0.280, 0.280, 0.295, 0.295)
+    deriver.update(Frame(speed=45.0, suspension=rest))
+    deriver.update(Frame(speed=45.0, suspension=rest))
+    hit = deriver.update(Frame(
+        speed=45.0, suspension=(0.310, 0.280, 0.295, 0.295)))[_index("impact")]
+    assert hit >= 0.7
+    held = hit
+    for _ in range(25):
+        held = deriver.update(Frame(
+            speed=45.0, suspension=(0.310, 0.280, 0.295, 0.295)))[_index("impact")]
+    assert held < hit * 0.3, "a single clip became one long impact"
+
+
+def test_riding_a_ripple_strip_is_not_a_sausage_strike():
+    """Kerb-riding oscillation measured p99 1.39 m/s over eight laps; the
+    strike onset sits above it so the strip keeps its texture-and-edge feel
+    rather than machine-gunning thumps."""
+    deriver = EffectDeriver()
+    low = (0.280, 0.280, 0.295, 0.295)
+    high = (0.288, 0.288, 0.295, 0.295)      # 8 mm = 0.48 m/s, strip motion
+    deriver.update(Frame(speed=20.0, surfaces="CCTT", suspension=low))
+    ride = 0.0
+    for _ in range(30):
+        ride = max(ride, deriver.update(Frame(
+            speed=20.0, surfaces="CCTT", suspension=high))[_index("impact")])
+        ride = max(ride, deriver.update(Frame(
+            speed=20.0, surfaces="CCTT", suspension=low))[_index("impact")])
+    assert ride < 0.1, ride
+
+
+def test_bouncing_across_grass_is_not_a_sausage_strike():
+    """Off the racing surface this exact signature is the ground being rough,
+    not an event; the load model already holds its peace there and so does
+    the strike."""
+    deriver = EffectDeriver()
+    rest = (0.280, 0.280, 0.295, 0.295)
+    deriver.update(Frame(speed=30.0, surfaces="GGGG", suspension=rest))
+    bounce = deriver.update(Frame(
+        speed=30.0, surfaces="GGGG",
+        suspension=(0.315, 0.280, 0.295, 0.295)))[_index("impact")]
+    assert bounce == 0.0
+
+
 # ------------------------------------------------------------- chassis load
 
 def test_load_is_in_g_so_it_means_the_same_in_every_car():

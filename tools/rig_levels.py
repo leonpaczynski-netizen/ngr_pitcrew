@@ -24,7 +24,8 @@ reconstructed:
     velocity vector and needs no differencing, so the rotation numbers here
     are a floor rather than an estimate;
   * `vel_x/y/z` therefore cannot drive the collision detector, so the impact
-    channel here carries the kerb strike, the landing and the compression only.
+    channel here carries the kerb strike, the suspension strike, the landing
+    and the compression only.
 
     python tools/rig_levels.py [--laps N] [--db PATH]
 """

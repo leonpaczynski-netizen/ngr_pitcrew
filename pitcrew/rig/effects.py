@@ -119,6 +119,33 @@ KERB_THUMP_FLOOR = 0.70       # a brushed kerb, still unmistakably a kerb
 KERB_THUMP_FULL_MS = 0.30     # suspension velocity at which it maxes out
 KERB_THUMP_DECAY_S = 0.12
 
+# **The kerb the surface channel cannot see.**
+#
+# A sausage kerb clipped at speed is under the wheel for less than one 60 Hz
+# frame, so the per-wheel surface char can miss it entirely - and one mounted
+# behind a ripple strip is a C-to-C non-edge, which the tarmac-only guard on
+# the strike above rejects on purpose. Reported from the seat: "ripple strips
+# feel great but when I go over a sausage at speed I feel nothing."
+#
+# The suspension is the witness the surface char is not: the contact is
+# sub-frame but the spring stays compressed for frames afterwards, so the
+# height channel carries a step the surface channel never saw. Measured over
+# 8 stored laps (246,097 wheel-frames on tarmac, 9,221 touching kerb),
+# per-wheel compression in one frame, as a velocity:
+#
+#     tarmac        p99 0.17 m/s   p99.9 0.53   p99.99 1.08   max 1.44
+#     riding a kerb p50 0.08       p90 0.59     p99 1.39
+#     the silent hits the report was about: 1.5 to 3.4, almost all C-to-C
+#     with no edge, recurring at the same lap positions across laps
+#
+# Onset sits above the kerb-riding p99 so hammering a ripple strip stays the
+# texture and edge-thump it already is; full scale is the biggest hit
+# actually recorded. Worst wheel, not the average - a one-wheel clip is the
+# event, and averaging it over four wheels is how it was being lost.
+STRIKE_ONSET_MS = 1.5
+STRIKE_FULL_MS = 3.2
+STRIKE_FLOOR = 0.70           # fires rarely; when it fires it is a hit
+
 # **Lateral acceleration, in g.** Speed times yaw rate over 9.81 - the standard
 # derivation, and the same one `recorder.py` computes for the export, so the
 # two agree by construction.
@@ -212,6 +239,7 @@ class EffectDeriver:
         self._gear_pulse = 0.0
         self._impact_pulse = 0.0
         self._kerb_pulse = 0.0
+        self._strike_pulse = 0.0
         self._limiter_pulse = 0.0
         self._prev_limiter = False
         self.state = vehicle.VehicleState()
@@ -226,8 +254,10 @@ class EffectDeriver:
         self._gear_pulse = 0.0
         self._impact_pulse = 0.0
         self._kerb_pulse = 0.0
+        self._strike_pulse = 0.0
         self._limiter_pulse = 0.0
         self._prev_limiter = False
+        self._spike_speed = 0.0
         self.state = vehicle.VehicleState()
 
     def update(self, packet: GT7Packet, dt: float = FRAME_S) -> np.ndarray:
@@ -251,6 +281,7 @@ class EffectDeriver:
         out[3] = max(self._driveline(packet, state, dt),
                      self._limiter(state, dt))
         out[4] = max(self._impact(packet, dt), self._kerb_thump(state, dt),
+                     self._suspension_strike(state, dt),
                      state.landed, state.compression)
         out[5] = self._chassis_load(state)
         out[6] = state.traction_level
@@ -261,6 +292,8 @@ class EffectDeriver:
 
     # Suspension velocity this frame, kept for the kerb grading below.
     _texture_speed = 0.0
+    # Worst single wheel's compression velocity this frame, for the strike.
+    _spike_speed = 0.0
 
     def _road(self, p: GT7Packet, s: vehicle.VehicleState, dt: float) -> float:
         """Road texture, and the honest account of what this is.
@@ -276,9 +309,13 @@ class EffectDeriver:
                    p.suspension_rl, p.suspension_rr)
         previous, self._prev_suspension = self._prev_suspension, heights
         if previous is None or dt <= 0:
+            self._spike_speed = 0.0
             return 0.0
         speed = sum(abs(h - q) for h, q in zip(heights, previous)) / (4.0 * dt)
         self._texture_speed = speed
+        # Larger is more compressed, so a positive step is the wheel taking a
+        # hit. Worst wheel, kept for the suspension strike below.
+        self._spike_speed = max(h - q for h, q in zip(heights, previous)) / dt
         texture = _ramp(speed, TEXTURE_ONSET_MS, TEXTURE_FULL_MS)
 
         # **The speed scaling belongs to the texture, not to the surface.**
@@ -350,6 +387,22 @@ class EffectDeriver:
                 self._texture_speed, 0.0, KERB_THUMP_FULL_MS)
             self._kerb_pulse = max(self._kerb_pulse, hit)
         return self._kerb_pulse
+
+    def _suspension_strike(self, s: vehicle.VehicleState, dt: float) -> float:
+        """A sausage kerb, read off the spring rather than the surface char.
+
+        Fires on the worst wheel's single-frame compression velocity, so it
+        works when the contact was too brief for the surface channel to see -
+        the case the edge-triggered thump above structurally cannot catch.
+        Off the racing surface it holds its peace: bouncing across grass is
+        exactly this signature and is not an event worth reporting.
+        """
+        self._strike_pulse *= float(np.exp(-dt / IMPACT_DECAY_S))
+        if not s.off_surface and self._spike_speed >= STRIKE_ONSET_MS:
+            hit = STRIKE_FLOOR + (1.0 - STRIKE_FLOOR) * _ramp(
+                self._spike_speed, STRIKE_ONSET_MS, STRIKE_FULL_MS)
+            self._strike_pulse = max(self._strike_pulse, hit)
+        return self._strike_pulse
 
     # ---------------------------------------------------------------- engine
 
