@@ -444,3 +444,74 @@ def test_a_session_boundary_forgets_everything_learned():
     assert model.state.slip_reference is not None
     model.reset()
     assert model.update(Frame(throttle=0.8, rear_slip=1.032)).traction == V.UNKNOWN
+
+
+def test_a_slide_estimate_cannot_get_stuck_after_an_excursion():
+    """Reported from the seat as a constant vibration after coming off track.
+
+    The log named it: `rear_traction 0.425@101Hz` with the car stationary and
+    `rotation SEVERE_ROTATION 1.00` driving it. Sideslip is an integral, and
+    the original design only pulled its reference back above 40 m/s dead
+    straight - so any excursion accumulated an offset the car could never work
+    off, because it never got fast and straight again. Reproduced at +136 deg
+    after two seconds, and +82 deg a full minute later.
+
+    A sideslip angle is a transient quantity. Nothing a driver needs telling
+    about lasts ten seconds, so it washes out in four whatever the car is
+    doing, and it can never claim more than a spin's worth in the first place.
+    """
+    model = V.VehicleModel()
+    heading = 0.0
+    for _ in range(900):
+        heading += V.HEADING_SIGN * 0.02 * V.FRAME_S
+        model.update(Frame(speed=60.0, yaw=0.02, heading=heading,
+                           throttle=0.6, rear_slip=1.03))
+
+    # An excursion: the car rotates hard and the path does not follow.
+    for _ in range(120):
+        model.update(Frame(speed=25.0, yaw=1.2, heading=heading,
+                           throttle=0.0, rear_slip=1.0))
+    assert abs(model.state.beta_deg) <= V.BETA_LIMIT_DEG + 1e-6, (
+        f"the estimate reached {model.state.beta_deg:.0f} deg - unbounded")
+
+    # And then he trundles back to the pits, never fast or straight enough to
+    # retake the old anchor.
+    for _ in range(60 * 60):
+        heading += V.HEADING_SIGN * 0.05 * V.FRAME_S
+        state = model.update(Frame(speed=15.0, yaw=0.05, heading=heading,
+                                   throttle=0.2, rear_slip=1.01))
+    assert abs(state.beta_deg) < 1.0, (
+        f"a minute later it still claims {state.beta_deg:.1f} deg of slide")
+    assert state.rotation_level == 0.0
+    assert state.traction_level == 0.0, (
+        "the rear-traction cue is still being held up by a stuck estimate")
+
+
+def test_the_braking_cue_stays_quiet_until_it_has_something_to_say():
+    """Reported from the seat as "intense from the moment I apply any brake".
+
+    The level is shaped in `_braking` against the measured grip peak - light
+    at and below it, climbing above - and that shaping is only worth doing if
+    it survives the gain chain. It did not: `min_force` turned the bottom of
+    the range into a step, so a level of 0.07 rendered at 0.273.
+    """
+    from pitcrew.rig.synth import PROFILE
+
+    spec = {s.name: s for s in PROFILE}["brake_limit"]
+    model = V.VehicleModel()
+    settle(model, throttle=0.5, rear_slip=1.02)
+
+    levels = {}
+    for label, front in (("light", 0.945), ("optimum", 0.895),
+                         ("past it", 0.855)):
+        for _ in range(30):
+            state = model.update(Frame(brake=1.0, front_slip=front,
+                                       rear_slip=0.97))
+        levels[label] = spec.shape(state.brake_level)
+
+    assert levels["light"] < 0.12, (
+        f"just touching the brakes renders {levels['light']:.3f} - that is the "
+        f"whole complaint")
+    assert levels["optimum"] < levels["past it"], (
+        "it is no louder past the grip peak than on it, so it says nothing")
+    assert levels["past it"] > levels["light"] * 2.5

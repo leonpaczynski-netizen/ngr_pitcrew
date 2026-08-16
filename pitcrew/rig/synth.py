@@ -342,8 +342,29 @@ PROFILE = (
     # he gives up 12.4% of braking force, and 68% of his heavy braking is
     # spent there. Quieter, and now loudest where it is telling him something
     # he can act on.
-    EffectSpec("brake_limit", 70.00, 40.0, 50.0, noise=4.0, min_force=18.0,
-               gamma=1.25, priority=CRITICAL, felt_trim=0.42,
+    # **No minimum force, and no gamma. Both were defeating the shape.**
+    #
+    # Reported from the seat: "intense from the moment I apply any brake". The
+    # log named it - `brake STABLE 0.07` rendering at 0.087 amplitude, where
+    # STABLE is meant to be almost nothing.
+    #
+    # `min_force` exists so that an effect which fires at all is felt rather
+    # than creeping up from nothing, and it is right for a kerb strike or a
+    # shift. It is wrong here, because it turns the bottom of a continuously
+    # varying cue into a step: a level of 0.07 came out shaped at 0.273, four
+    # times what was asked for, the instant the brake was touched. The gentle
+    # presence designed below `BRAKE_OPTIMUM` could not survive it, and nor
+    # could `STABLE`.
+    #
+    # `gamma` of 1.25 was making it worse from the other side - it lifts the
+    # small end by design, which is the opposite of what this cue wants. This
+    # is the one effect in the set whose bottom end must stay quiet, because
+    # the bottom end is where he spends every braking zone.
+    #
+    # So the level computed in `vehicle._braking` is now rendered as it was
+    # computed. That is the whole point of having shaped it there.
+    EffectSpec("brake_limit", 70.00, 40.0, 50.0, noise=4.0, min_force=0.0,
+               gamma=1.0, priority=CRITICAL, felt_trim=0.42,
                am_lo=7.0, am_hi=16.0, am_depth=0.55,
                attack_s=0.006, release_s=0.05),
     # His gear thump, renamed for what it carries: a shift, and the rev
@@ -355,12 +376,19 @@ PROFILE = (
     # would be 0.065 of his gain; a transient should stand above the bed rather
     # than sit level with it, and the ducking below gives it another 7 dB for
     # the length of the thump.
-    # **+2.6 dB, from 0.55.** "Gears could still come up slightly" - and the
-    # replay agrees there is room: at 0.55 a shift was 2.37x the road bed it
-    # lands on in felt strength, and the working range established when this
-    # was last argued is 1.5x to 4x. 0.74 puts it near 3.2x, which is inside
-    # that and short of the 0.25 that was once called overpowered.
-    EffectSpec("driveline", 39.87, 50.0, priority=TRANSIENT, felt_trim=0.74),
+    # **+4.7 dB in total, from 0.55 to 0.95.** Asked for twice: "gears could
+    # still come up slightly" after the first lift already took it from 2.37x
+    # to 3.21x the road bed it lands on.
+    #
+    # 0.95 puts it near 4.1x, which is at the top of the 1.5x-4x range this
+    # was last argued over - and that range is worth re-reading rather than
+    # treating as a fence. It was established when the shift sat at 48 Hz
+    # against a road bed at 86-104 Hz that was in the wrong place, ducked less
+    # hard, and shared no band with it. The bed has since moved to 34-41 Hz,
+    # the duck went from 10 dB to 15 for a critical cue, and a transient now
+    # lands on a background that is genuinely out of the way. The old ceiling
+    # was a statement about a different mix.
+    EffectSpec("driveline", 39.87, 50.0, priority=TRANSIENT, felt_trim=0.95),
     # Impacts: a kerb strike, a landing, a compression the suspension has not
     # seen before, a collision. Raised off 28-38 Hz - where the kerb thump was
     # a third of the test tone and could not be felt - and now clear of the

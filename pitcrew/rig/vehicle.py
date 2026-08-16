@@ -329,13 +329,43 @@ BETA_FULL_DEG = 8.0
 # 0.15 rad/s is about 8.6 deg/s.
 BETA_RATE_ONSET = 0.15
 BETA_RATE_FULL = 0.90
-# Where the sideslip reference is re-anchored: fast, straight and unsteered,
-# which is where the car is not sliding by construction.
+# **Where the sideslip reference is re-anchored, and why this is now a
+# washout rather than a drifting integral.**
+#
+# Reported from the seat: a constant vibration after coming off track. The log
+# named it exactly - `rear_traction 0.425@101Hz` with the car stationary, and
+# `rotation SEVERE_ROTATION 1.00` driving it through the rotation witness.
+#
+# The cause is this estimator. Sideslip is integrated from the residual
+# between yaw and the path heading, and the original design only pulled the
+# reference back when the car was above 40 m/s, dead straight and unsteered.
+# Everywhere else it leaked with a 120 s time constant, which is no leak at
+# all. Any small bias in the residual therefore accumulated: reproduced, a two
+# second excursion put the estimate at +136 deg, and a full minute of crawling
+# back to the pits left it at +82. The cue has no way back from that - the car
+# never gets fast and straight again, so the anchor is never retaken, and the
+# rasp is permanent.
+#
+# **A sideslip angle is a transient quantity and must be treated as one.** A
+# genuine slide lasts a few tenths of a second to a couple of seconds; nothing
+# a driver needs to be told about lasts ten. So the integral now washes out
+# with a 4 s time constant whatever the car is doing, and the straight-line
+# anchor stays as the fast path on top of it.
+#
+# The cost is deliberate and is the right direction to be wrong in: a drift
+# held for many seconds fades from the ANGLE term. It does not fade from the
+# RATE term, which is the half that catches the rear leaving in the first
+# place, and a ten second drift is a spin the driver already knows about.
 ANCHOR_SPEED_MS = 40.0
 ANCHOR_YAW = 0.03
 ANCHOR_STEER = 0.02
 ANCHOR_PULL_S = 0.30          # how quickly the anchor is taken when available
-ANCHOR_LEAK_S = 120.0         # and how slowly it drifts when it is not
+ANCHOR_LEAK_S = 4.0           # and how quickly it washes out when it is not
+# A hard stop on what the estimate may claim, in degrees. Past about this the
+# car is spinning rather than sliding, the driver has more pressing evidence
+# than a transducer, and the only thing an unbounded number can do from here
+# is get stuck. Reproduced at +136 deg with the car parked.
+BETA_LIMIT_DEG = 25.0
 # Runtime proof that the two channels still mean what they meant on the bench.
 # Correlation is accumulated over a rolling window; below the threshold the
 # rotation state reports UNKNOWN and the cue is silent rather than wrong.
@@ -961,6 +991,13 @@ class VehicleModel:
         self._beta_anchor += ((self._beta_raw - self._beta_anchor)
                               * min(1.0, dt / tau))
         beta = self._beta_raw - self._beta_anchor
+        # Clamped, and the raw integral pulled back with it so the estimator
+        # cannot sit outside its own range carrying a number it can never
+        # work off.
+        ceiling = math.radians(BETA_LIMIT_DEG)
+        if abs(beta) > ceiling:
+            beta = math.copysign(ceiling, beta)
+            self._beta_raw = self._beta_anchor + beta
 
         s.beta_deg = math.degrees(beta)
         s.beta_rate = beta_rate
