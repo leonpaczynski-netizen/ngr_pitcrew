@@ -371,6 +371,10 @@ BETA_LIMIT_DEG = 25.0
 # rotation state reports UNKNOWN and the cue is silent rather than wrong.
 CHECK_WINDOW = 600            # frames, ten seconds
 CHECK_MIN_CORR = 0.80
+# Below this much variance in the yaw channel there is nothing for a
+# correlation to measure - see `_HeadingCheck.trusted`. 0.02 rad/s is well
+# under the 0.045 median of his lap and comfortably over a straight.
+CHECK_MIN_VARIANCE = 4e-4     # rad/s squared
 
 # --------------------------------------------------------------------- load
 #
@@ -679,6 +683,10 @@ class _HeadingCheck:
         self._sxx = self._syy = self._sxy = 0.0
         self._sx = self._sy = 0.0
         self.correlation = 0.0
+        self._variance = 0.0
+        # What the last verdict was while there was still evidence for one.
+        # Starts False so nothing is trusted before it has been earned.
+        self._last_verdict = False
 
     def update(self, yaw: float, path_yaw: float) -> None:
         # A decaying accumulator rather than a ring buffer: no allocation, and
@@ -694,6 +702,7 @@ class _HeadingCheck:
         cov = self._sxy - self._sx * self._sy / n
         vx = self._sxx - self._sx * self._sx / n
         vy = self._syy - self._sy * self._sy / n
+        self._variance = vx / n
         self.correlation = ((cov / math.sqrt(vx * vy))
                             if vx > 1e-9 and vy > 1e-9 else 0.0)
 
@@ -701,11 +710,35 @@ class _HeadingCheck:
         self._count = 0
         self._sx = self._sy = self._sxx = self._syy = self._sxy = 0.0
         self.correlation = 0.0
+        self._variance = 0.0
+        self._last_verdict = False
 
     @property
     def trusted(self) -> bool:
-        return (self._count >= self._n // 4
-                and abs(self.correlation) >= CHECK_MIN_CORR)
+        """Whether the two channels have been shown to agree recently.
+
+        **A straight is not disagreement.** The log from a real drive shows
+        this flapping between trusted and not several times a lap - `rotation
+        NEUTRAL (high)` in the corners and `rotation UNKNOWN (none)` on the
+        straights - which took the rotation cue away exactly where it would
+        next be needed, at the end of the straight under braking.
+
+        The reason is arithmetic rather than physical. A correlation needs
+        variance in both channels to mean anything, and on a straight both yaw
+        and the path yaw rate are flat, so the ratio is noise over noise. The
+        check was reporting "these channels no longer agree" when what it had
+        actually found was "there is nothing here to agree about".
+
+        So a verdict is only revised where there is something to revise it
+        with. Below the variance floor the last real verdict stands, which is
+        the honest reading: the last time there was evidence, they agreed.
+        """
+        if self._count < self._n // 4:
+            return False
+        if self._variance < CHECK_MIN_VARIANCE:
+            return self._last_verdict
+        self._last_verdict = abs(self.correlation) >= CHECK_MIN_CORR
+        return self._last_verdict
 
 
 @dataclass
@@ -1228,11 +1261,35 @@ class VehicleModel:
             # of the zone he most needed to be able to ignore. Reported as
             # "too heavy and loud", and the shape was the reason rather than
             # the gain.
+            # **There is a STEP at the optimum, and it is deliberate.**
+            #
+            # The first version of this ramped smoothly from 0.08 to 0.48
+            # across the whole range. Measured against his next drive it
+            # changed nothing: median front slip 0.1284 against 0.1288 before,
+            # and 63.3% of heavy braking still past the peak against 66.4%.
+            # Reported from the seat in exactly those terms - "not sure if
+            # it's actually letting me know if I am going beyond max braking
+            # or I just braked better". He had not braked better. The cue had
+            # got out of the way, which is pleasant and is not information.
+            #
+            # A level that climbs smoothly cannot mark a boundary, because
+            # there is nothing to notice AT the boundary: the driver would
+            # have to hold an absolute amplitude in mind and compare against
+            # it, which is not something a body does. What a body notices
+            # easily is a change. So crossing the peak nearly doubles the
+            # level in one step, and since the pulse rate and the carrier are
+            # both driven by that same number, the rhythm and the pitch step
+            # with it. Three things change at once, at the one slip value
+            # where his lap time is.
+            #
+            # Below the peak this is quieter than the smooth version was. The
+            # point is not to be loud on the right side of the boundary; it is
+            # to be different on the wrong side of it.
             if worst <= BRAKE_OPTIMUM:
-                s.brake_level = 0.08 + 0.06 * ramp(worst, BRAKE_AT_LIMIT,
+                s.brake_level = 0.06 + 0.06 * ramp(worst, BRAKE_AT_LIMIT,
                                                    BRAKE_OPTIMUM)
             else:
-                s.brake_level = 0.14 + 0.34 * ramp(worst, BRAKE_OPTIMUM,
+                s.brake_level = 0.22 + 0.28 * ramp(worst, BRAKE_OPTIMUM,
                                                    lock_threshold)
         elif worst > BRAKE_STABLE:
             s.brake_state = BRAKE_STABLE_S

@@ -398,8 +398,29 @@ PROFILE = (
     # channel now also carries kerb strikes and landings, which are not, so it
     # comes down to 25 - otherwise a landing would have to be an accident
     # before it was felt.
+    # **+4.8 dB and compensated across its band.** "Initial kerb strike is
+    # non-existent, but running on them feels real" - so the texture bed is
+    # doing its job and the strike is not.
+    #
+    # The log has the numbers. A strike fired at `impact 0.167@58Hz` against a
+    # shift tick at `0.2705@50Hz` that he called perfect. This rig delivers
+    # 3.0 at 50 Hz and 2.11 at 58, so the strike was arriving at 43% of the
+    # tick's felt strength - half of the thing he called right, which is about
+    # where "non-existent" lives.
+    #
+    # And it got weaker as it got harder, which is the fault `band_compensate`
+    # exists for: the band runs 52-60 Hz and the pitch follows severity, so a
+    # big hit climbed toward the 70 Hz null while a light one stayed on the
+    # peak. The harder the kerb, the less of it arrived.
+    #
+    # 3.80 is close to the ceiling of 4.0, and that is worth saying rather
+    # than hiding. His gain of 12.31 was set for genuine collisions, which are
+    # rare; this channel's day job is now kerbs, which are not. If it ever
+    # needs more than the trim can give, the GAIN is the thing to revisit - a
+    # trim is meant to carry a correction, not a change of purpose.
     EffectSpec("impact", 12.31, 52.0, 60.0, noise=3.0, priority=TRANSIENT,
-               threshold=25.0, min_force=20.0, gamma=1.20, felt_trim=2.20),
+               threshold=25.0, min_force=20.0, gamma=1.20, felt_trim=3.80,
+               band_compensate=True),
     # His `TractionLossContainer`, renamed to what it actually carries: how
     # hard the car is leaning on its tyres, in g. The gain, noise and filter
     # are still his; the input changed from a saturating yaw-error model to

@@ -1901,16 +1901,36 @@ class PitCrewController(QObject):
         except Exception as exc:                            # noqa: BLE001
             log("haptics").debug("could not read the mix: %s", exc)
             return
-        if not rows:
-            return
+        # **Silence is logged, not skipped, and skipping it cost a diagnosis.**
+        #
+        # Reported from the seat: "haptics died on second lap". The log for
+        # that minute held block counts and nothing else - no mix line, no
+        # state line - because this returned early whenever every effect was
+        # below the floor. The one event worth diagnosing produced the one
+        # gap in the evidence.
+        #
+        # It was then diagnosed WRONGLY from a neighbouring subsystem. The
+        # wind level read 0.00 over the same ten seconds, so the car looked
+        # parked. The driver said otherwise and the stored frames agreed with
+        # him: 1,320 of a possible 1,320 for that stretch, mean 173 km/h,
+        # minimum 59, no gaps. Two outputs silent, one recorder perfectly
+        # happy, and nothing written down that could separate them.
         parts = [f"{r['effect']} {r['final']:.3f}@{r['hz']:.0f}Hz"
                  + (f" -{r['ducked_by']*100:.0f}%" if r["ducked_by"] > 0.05 else "")
                  for r in rows]
-        log("haptics").info("mix: %s", " · ".join(parts))
+        log("haptics").info("mix: %s", " · ".join(parts) if parts
+                            else "SILENT - every effect under the floor")
         car = self.bridge.effects.explain()
+        # **The inputs, not only the verdicts.** Silence has several causes and
+        # they are indistinguishable without these: a car in the garage should
+        # be silent and a car at 173 km/h should not. A stream that has gone to
+        # zeros without dropping a packet then shows up here as a
+        # contradiction rather than as an absence.
+        inputs = car["inputs"]
         log("haptics").info(
-            "car: traction %s %.2f (%s, %s) · brake %s %.2f (%s) · "
-            "rotation %s %.2f (%s) · unload %.2f",
+            "car: %.0f km/h · thr %.2f brk %.2f · traction %s %.2f (%s, %s) · "
+            "brake %s %.2f (%s) · rotation %s %.2f (%s) · unload %.2f",
+            inputs["speed_ms"] * 3.6, inputs["throttle"], inputs["brake"],
             car["traction"]["state"], car["traction"]["level"],
             car["traction"]["witness"], car["traction"]["confidence"],
             car["brake"]["state"], car["brake"]["level"], car["brake"]["axle"],
