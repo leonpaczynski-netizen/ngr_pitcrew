@@ -361,3 +361,63 @@ def test_a_silent_lap_is_not_mistaken_for_a_dead_transducer():
         engine.set_intensities([0.0] * len(engine._wanted))
         _pump(engine, 1)
     assert engine.take_recent_peak() < PitCrewController._AUDIBLE_PEAK
+
+
+# ------------------------------------------------- recovering without dying
+
+class _FakeStream:
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_a_recovery_that_rebuilds_the_device_list_does_not_deadlock(monkeypatch):
+    """Session 40 froze the whole app on this. `recover` held the engine's
+    lock while `open_output` decided the device list was stale and called
+    straight back into `suspend` on the same engine, on the same thread - a
+    self-deadlock with a plain Lock, and the driver's stop-practice click
+    then queued behind it forever."""
+    import threading
+
+    engine = _engine()
+    engine._stream = _FakeStream()
+
+    def open_output(*args, **kwargs):
+        # What `audio_devices._reinitialise` does to every sustained stream
+        # before tearing PortAudio down, on the caller's own thread.
+        engine.suspend()
+        engine.resume()
+        return _FakeStream()
+
+    monkeypatch.setattr(haptics.audio_devices, "open_output", open_output)
+    monkeypatch.setattr(haptics.audio_devices, "register_sustained",
+                        lambda e: None)
+    monkeypatch.setattr(haptics.audio_devices, "unregister_sustained",
+                        lambda e: None)
+
+    result = []
+    worker = threading.Thread(target=lambda: result.append(engine.recover()),
+                              daemon=True)
+    worker.start()
+    worker.join(timeout=5.0)
+    assert result, "recover deadlocked against its own suspend"
+    assert result[0] is True
+    assert engine.recoveries == 1
+    assert engine.running
+
+
+def test_a_recovery_cannot_resurrect_a_stopped_transducer(monkeypatch):
+    """`stop` used to unregister first and lock second, so a recovery that
+    won the lock race could reopen and re-register a stream the driver had
+    stopped - and the next device rebuild would then resurrect it."""
+    engine = _engine()
+    engine._stream = _FakeStream()
+    monkeypatch.setattr(haptics.audio_devices, "unregister_sustained",
+                        lambda e: None)
+    engine.stop()
+    assert engine.recover() is False
+    assert not engine.running
+    assert engine.recoveries == 0
+

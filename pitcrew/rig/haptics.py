@@ -85,8 +85,18 @@ class HapticsEngine:
         self._fade = 0.0
 
         self._stream = None
-        self._lock = threading.Lock()
+        # Reentrant, and it has to be: `recover` holds this lock while it
+        # reopens, and `audio_devices.open_output` may decide the device list
+        # is stale and rebuild it - which calls straight back into `suspend`
+        # on this same engine, on this same thread. With a plain Lock that is
+        # a self-deadlock, and the main thread's `stop` then queues behind it
+        # forever. Session 40 froze the whole app on exactly this: the driver
+        # clicked stop practice in the same second the wedge detector fired
+        # its first field recovery. With an RLock the nested suspend/resume
+        # see `_stream is None` mid-reopen and fall through as no-ops.
+        self._lock = threading.RLock()
         self._suspended = False
+        self._stopped = False
         self.error: str | None = None
         self.faded_out = 0
         self.callbacks = 0
@@ -173,7 +183,7 @@ class HapticsEngine:
         `suspend`/`resume`.
         """
         with self._lock:
-            if self._suspended or self._stream is None:
+            if self._stopped or self._suspended or self._stream is None:
                 return False
             self._close()
             self._fade = 0.0
@@ -189,12 +199,18 @@ class HapticsEngine:
 
     def start(self) -> bool:
         with self._lock:
+            self._stopped = False
             return self._open()
 
     def stop(self) -> None:
-        audio_devices.unregister_sustained(self)
+        # The flag goes up under the lock BEFORE unregistering. Without it,
+        # a recovery that won the lock race could reopen and re-register the
+        # stream after this unregistered it - and the next device rebuild
+        # would then resurrect a transducer the driver had stopped.
         with self._lock:
+            self._stopped = True
             self._close()
+        audio_devices.unregister_sustained(self)
 
     def _open(self) -> bool:
         if self._stream is not None:
@@ -251,7 +267,7 @@ class HapticsEngine:
     def resume(self) -> None:
         """Called after. The card may be a different index now, or gone."""
         with self._lock:
-            if not self._suspended:
+            if not self._suspended or self._stopped:
                 return
             self._suspended = False
             self._fade = 0.0
