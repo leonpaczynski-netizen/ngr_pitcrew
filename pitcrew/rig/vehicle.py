@@ -1244,6 +1244,13 @@ class VehicleModel:
                 self._latches[name].reset()
             return
 
+        # **The rear axle is NOT shift-blinded here, and that is a finding,
+        # not an omission.** Session 41: 87 of 390 LOCKED(rear) frames sat
+        # within 0.25 s of a downshift, which looked like the driveline step
+        # leaking in - and the driver then confirmed from the seat that the
+        # Shelby's downshifts genuinely lock the rears in game. Engine
+        # braking through a downshift IS a rear lock; a blind here would
+        # hide a real event exactly where his trail-braking lives.
         worst = max(s.front_lock, s.rear_lock)
         s.brake_axle = "front" if s.front_lock >= s.rear_lock else "rear"
 
