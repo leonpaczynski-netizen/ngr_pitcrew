@@ -1236,10 +1236,6 @@ class VehicleModel:
         worst = max(s.front_lock, s.rear_lock)
         s.brake_axle = "front" if s.front_lock >= s.rear_lock else "rear"
 
-        # The regulated plateau, learned. Sampled only where the axle is
-        # genuinely working, so cruising on the brakes does not drag it down.
-        if worst > BRAKE_STABLE:
-            self._plateau.update(worst)
         plateau = max(LOCK_FLOOR / PLATEAU_MARGIN, self._plateau.value or 0.0)
         lock_threshold = max(LOCK_FLOOR, plateau * PLATEAU_MARGIN)
         s.lock_threshold = lock_threshold
@@ -1248,6 +1244,24 @@ class VehicleModel:
 
         self._latches["at_limit"].update(worst, dt)
         self._latches["locking"].update(worst, dt)
+
+        # The regulated plateau, learned. Sampled only where the axle is
+        # genuinely working, so cruising on the brakes does not drag it down.
+        #
+        # **Blanked while a lock is running, exactly like the slip reference.**
+        # A quantile converges on the quantile of the stream it is shown, and
+        # this one was being shown its own detections: every LOCKED frame
+        # taught it that locking is normal, at a rise 5.7x faster than the
+        # fall. Reported from the seat as "braking starts over the top, learns,
+        # then goes very quiet" - about 3.4 s of deep braking moved the
+        # threshold up by 0.05, and working that off needs ~19 s of braking
+        # below it, more than the rest of the session contained. The upward
+        # step alone is withheld during the event: a threshold that is too
+        # high hides locks, so the estimator is always allowed to fall.
+        if worst > BRAKE_STABLE:
+            quiet = (not self._latches["locking"].active
+                     and worst < lock_threshold)
+            self._plateau.update(worst, allow_rise=quiet)
 
         # **Rear instability, corroborated.** The wheel-speed reversal alone
         # lives in runs of one to two frames, too close to the noise to drive a

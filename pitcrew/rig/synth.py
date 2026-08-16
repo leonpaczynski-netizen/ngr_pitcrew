@@ -274,9 +274,20 @@ ARBITRATE_DUCK = 0.45
 # grabbing up to 15 dB of duck and handing it back, so the thing the driver
 # felt was not the cues, it was the BED breathing around them.
 #
-# Below this shaped level a cue rides on top of the bed without moving it;
-# above, the duck scales from zero. The cue itself is unaffected - this gates
-# what the background does, not what the foreground says.
+# Below this level a cue rides on top of the bed without moving it; above, the
+# duck scales from zero. The cue itself is unaffected - this gates what the
+# background does, not what the foreground says.
+#
+# **The gate reads the cue's strength above its own floor, not the shaped
+# level.** `min_force` lifts a cue's output the moment it fires at all -
+# rear_traction's floor is 0.20, which sits above this gate by construction,
+# so gating on the shaped level made the gate unreachable for exactly the
+# channel it was built to filter. Reported from the seat, second time round,
+# as "a little bit of the ducking issue still": a slip of 0.17 shaped to 0.245
+# and moved the bed 15%, and without the floor it would have shaped to 0.056 -
+# under the gate, no duck at all. The floor is a claim about perceptibility
+# (anything the piston renders should be feelable), not about significance,
+# so it is stripped back off before the bed decides whether to move.
 DUCK_GATE = 0.15
 
 # **The profile, and what survived from his own tuning.**
@@ -795,6 +806,13 @@ class HapticMix:
         # recovery is not itself an event.
         self._duck = 1.0
         self._unload_duck = 1.0
+        # The per-voice `min_force` floors, stripped back off when the duck
+        # decides - see DUCK_GATE - with the buffer preallocated because
+        # `render` is the callback and the callback must not allocate.
+        self._floors = np.array([spec.min_force / 100.0
+                                 for spec in self.specs], dtype=np.float32)
+        self._floor_span = np.maximum(np.float32(1e-6), 1.0 - self._floors)
+        self._strength = np.zeros(len(self.specs), dtype=np.float32)
         self._priority = np.array([spec.priority for spec in self.specs],
                                   dtype=np.int8)
         self._transient = self._priority == TRANSIENT
@@ -865,18 +883,25 @@ class HapticMix:
                     indices = np.flatnonzero(self._critical)
                     for rank in order[1:]:
                         shaped[indices[rank]] *= ARBITRATE_DUCK
-            critical = float(shaped[self._critical].max())
-        else:
-            critical = 0.0
 
         # How far the background steps aside, and for what. One duck for the
         # whole background rather than one per pair: the driver feels the sum,
         # not the effects.
-        event = (float(shaped[self._transient].max())
+        #
+        # The duck decides on the cue's strength above its own `min_force`
+        # floor - see DUCK_GATE for why gating on the lifted level made the
+        # gate unreachable for exactly the channel it was built to filter.
+        strength = self._strength
+        np.subtract(shaped, self._floors, out=strength)
+        strength /= self._floor_span
+        np.maximum(strength, 0.0, out=strength)
+        event = (float(strength[self._transient].max())
                  if self._transient.any() else 0.0)
+        critical_s = (float(strength[self._critical].max())
+                      if self._critical.any() else 0.0)
         # Gated, then rescaled so a full-scale cue still earns its full duck.
         event = max(0.0, event - DUCK_GATE) / (1.0 - DUCK_GATE)
-        critical_g = max(0.0, critical - DUCK_GATE) / (1.0 - DUCK_GATE)
+        critical_g = max(0.0, critical_s - DUCK_GATE) / (1.0 - DUCK_GATE)
         aim = 1.0 - max(DUCK_DEPTH * event, DUCK_CRITICAL * critical_g)
         tau = DUCK_ATTACK_S if aim < self._duck else DUCK_RELEASE_S
         self._duck += (aim - self._duck) * min(1.0, seconds / tau)

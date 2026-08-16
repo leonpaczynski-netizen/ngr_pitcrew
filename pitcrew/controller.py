@@ -1832,6 +1832,18 @@ class PitCrewController(QObject):
     # A rendered peak below this is a quiet moment, not a signal, and asking
     # the card whether it played it would prove nothing either way.
     _AUDIBLE_PEAK = 0.02
+    # The last health check's outcome, written by the meter thread and read by
+    # the next report. **The success path used to record nothing**, and that
+    # cost a diagnosis: in session 39 the endpoint wedged below the audio
+    # engine, the engine kept metering the app's own signal back, and every
+    # check passed silently - a check that passes was indistinguishable in the
+    # log from one that never ran. This line cannot see below the engine
+    # either (nothing in software certifies the piston), but it separates
+    # "checked, engine renders" / "not asked, too quiet" / "unreadable", and a
+    # driver reporting dead haptics against a logged healthy endpoint now
+    # isolates the fault to below the engine in one line instead of a night
+    # of forensics.
+    _endpoint_note = "endpoint not yet asked"
 
     def _check_transducer_is_heard(self, haptics) -> None:
         """Did the card play what we rendered, or only accept it?
@@ -1859,6 +1871,8 @@ class PitCrewController(QObject):
         """
         produced = haptics.take_recent_peak()
         if produced < self._AUDIBLE_PEAK:
+            self._endpoint_note = (
+                f"endpoint not asked (rendered {produced:.3f}, quiet)")
             return
         device = self.settings.haptics_device or transducer.DEVICE_NAME
 
@@ -1868,10 +1882,19 @@ class PitCrewController(QObject):
             try:
                 heard = endpoint_meter.poll_briefly(device, seconds=0.4)
             except Exception as exc:                        # noqa: BLE001
+                self._endpoint_note = "endpoint unreadable"
                 log("haptics").debug("could not read the endpoint: %s", exc)
                 return
             if heard > endpoint_meter.SILENT_PEAK:
+                # The engine renders what we produce. This says nothing about
+                # the piston - session 39's wedge sat below the engine and
+                # passed this check throughout - which is exactly why the
+                # value is written down rather than silently returned past.
+                self._endpoint_note = (
+                    f"rendered {produced:.2f} · endpoint {heard:.3f}")
                 return
+            self._endpoint_note = (
+                f"rendered {produced:.2f} · endpoint SILENT")
             # Deliberately an error rather than a warning. The driver cannot
             # see this screen, and a transducer that is accepting audio and
             # playing none of it is indistinguishable from a working one by
@@ -1933,13 +1956,19 @@ class PitCrewController(QObject):
         # zeros without dropping a packet then shows up here as a
         # contradiction rather than as an absence.
         inputs = car["inputs"]
+        # `lock@` is the learned lock threshold. Session 39 was diagnosed
+        # blind on exactly this number: the cue collapsed because the
+        # threshold had climbed, and the climb was inferred from code because
+        # nothing had written the value down.
         log("haptics").info(
             "car: %.0f km/h · thr %.2f brk %.2f · traction %s %.2f (%s, %s) · "
-            "brake %s %.2f (%s) · rotation %s %.2f (%s) · unload %.2f",
+            "brake %s %.2f (%s, lock@%.2f) · rotation %s %.2f (%s) · "
+            "unload %.2f",
             inputs["speed_ms"] * 3.6, inputs["throttle"], inputs["brake"],
             car["traction"]["state"], car["traction"]["level"],
             car["traction"]["witness"], car["traction"]["confidence"],
             car["brake"]["state"], car["brake"]["level"], car["brake"]["axle"],
+            car["brake"]["lock_threshold"],
             car["rotation"]["state"], car["rotation"]["level"],
             car["rotation"]["confidence"], car["load"]["unload"])
 
@@ -1958,10 +1987,15 @@ class PitCrewController(QObject):
         """
         haptics = self.bridge.haptics
         if haptics is not None:
+            # The endpoint note is the PREVIOUS cycle's check - the check runs
+            # after this line, on its own thread. Ten seconds stale is fine;
+            # invisible was the problem.
             log("haptics").info(
-                "blocks %d · fades %d · limited %d · running %s",
+                "blocks %d · fades %d · limited %d · running %s · %s · "
+                "recoveries %d",
                 haptics.callbacks, haptics.faded_out,
-                haptics._mix.limited_blocks, haptics.running)
+                haptics._mix.limited_blocks, haptics.running,
+                self._endpoint_note, haptics.recoveries)
             # **What the mix was doing, not just that it was running.**
             #
             # "I felt something odd in turn four" is unanswerable an hour

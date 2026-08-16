@@ -476,6 +476,24 @@ def test_the_background_gets_out_of_the_way_for_an_event():
     assert mix.duck > 0.95, "the background never came back"
 
 
+def test_a_cue_at_its_own_floor_does_not_move_the_bed():
+    """`min_force` lifts rear_traction to 0.20 the moment it fires, which sat
+    above the 0.15 duck gate by construction - so every slip episode moved the
+    bed 15-30% however slight, and what the driver felt was the BED breathing.
+    Reported twice from the seat, the second time as "a little bit of the
+    ducking issue still". The duck decides on strength above the cue's own
+    floor: a barely-firing cue rides on top of the bed without moving it."""
+    mix = HapticMix(block=BLOCK)
+    base = np.zeros(len(mix.names) + len(MODIFIERS), dtype=np.float32)
+    base[mix.names.index("road")] = 1.0
+    # Session 39, 12:55:47: raw slip 0.17 shaped to 0.245 and pulled the bed
+    # 15%; without the floor it would have shaped to 0.056, under the gate.
+    base[mix.names.index("rear_traction")] = 0.17
+    _settle(mix, base, blocks=30)
+    assert mix.duck > 0.95, (
+        f"a cue at its perceptibility floor pulled the bed to {mix.duck:.2f}")
+
+
 def test_a_limit_cue_ducks_the_background_harder_than_an_event_does():
     """A transient is over in 90 ms and a limit cue is not, so it earns more:
     the point is not to make the cue loud, it is to make it the only thing

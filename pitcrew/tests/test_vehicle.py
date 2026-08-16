@@ -234,6 +234,39 @@ def test_the_lock_threshold_can_never_be_learned_away():
         "it learned the lock and stopped reporting it")
 
 
+def test_a_lock_does_not_teach_the_plateau_that_locking_is_normal():
+    """The quantile converges on the quantile of the stream it is shown, and
+    it was being shown its own detections. Session 39, from the seat: braking
+    over the top in the first corners, then the cue "learns", then it goes
+    very quiet - 3.4 s of deep braking moved the threshold up 0.05 and the
+    session did not contain the ~19 s of braking needed to work it back off.
+    The upward step is blanked during the event, like the slip reference."""
+    model = V.VehicleModel()
+    settle(model, throttle=0.5, rear_slip=1.02)
+    state = None
+    for _ in range(60):
+        state = model.update(Frame(brake=1.0, front_slip=0.88, rear_slip=0.95))
+    before = state.lock_threshold
+    for _ in range(240):                           # four seconds locked solid
+        state = model.update(Frame(brake=1.0, front_slip=0.74, rear_slip=0.95))
+    assert state.brake_state == V.BRAKE_LOCKED
+    assert state.lock_threshold <= before, (
+        "the lock event taught the detector to stop detecting it")
+
+
+def test_deep_but_unlocked_regulation_still_raises_the_threshold():
+    """Blanking must not freeze the learner. A car that regulates deeper than
+    the floor teaches from the band below the threshold, so the threshold can
+    still follow the car - it just cannot be taught by the locks it exists to
+    catch."""
+    model = V.VehicleModel()
+    settle(model, throttle=0.5, rear_slip=1.02)
+    state = None
+    for _ in range(300):
+        state = model.update(Frame(brake=1.0, front_slip=0.84, rear_slip=0.95))
+    assert state.lock_threshold > V.LOCK_FLOOR
+
+
 def test_a_lock_up_needs_the_brake_to_be_on():
     """A wheel reading slow in the air over a kerb is not a lock-up, and the
     brake pedal is what separates the two."""
