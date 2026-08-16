@@ -150,3 +150,54 @@ def test_nothing_beeps_off_track_whatever_the_table_says():
     beep, _ = beeper(rpm=9000.0, per_gear={3: 7000.0})
     frames = [Packet(gear=3, rpm=8500.0, on_track=False)] * 5
     assert run(beep, frames) == []
+
+
+# ------------------------------------------------------ the table, in settings
+
+def test_the_table_survives_the_round_trip_through_the_store(tmp_path):
+    """It is written by a tool and read back as JSON. `str(dict)` round-trips
+    only through `eval`, and a settings loader that evals stored text runs
+    whatever is in the database."""
+    from pitcrew import settings as S
+    from pitcrew.store.db import Store
+
+    store = Store(str(tmp_path / "pitcrew.db"))
+    original = S.Settings(beep_shift_points={"3247": {"3": 8250.0, "4": 8250.0}},
+                          beep_short_shift_drop=650.0)
+    S.save(store, original)
+    back = S.load(store)
+    assert back.beep_shift_points == {"3247": {"3": 8250.0, "4": 8250.0}}
+    assert back.beep_short_shift_drop == 650.0
+
+
+def test_a_car_with_no_measured_table_gets_an_empty_one_not_a_neighbours():
+    """The whole value of a per-gear threshold is that it was measured on that
+    gearbox. A table that quietly filled itself would be indistinguishable at
+    the wheel from one that had been measured."""
+    from pitcrew import settings as S
+
+    s = S.Settings(beep_shift_points={"3247": {"3": 8250.0}})
+    assert s.shift_points_for("3247") == {3: 8250.0}
+    assert s.shift_points_for("9999") == {}
+    assert s.shift_points_for(None) == {}
+
+
+def test_an_unreadable_table_costs_the_beep_and_not_every_other_setting(tmp_path):
+    from pitcrew import settings as S
+    from pitcrew.store.db import Store
+
+    store = Store(str(tmp_path / "pitcrew.db"))
+    S.save(store, S.Settings(beep_rpm=8100.0))
+    store.set_state(S.PREFIX + "beep_shift_points", "{not json at all")
+    back = S.load(store)
+    assert back.beep_shift_points == {}
+    assert back.beep_rpm == 8100.0, "one bad table reset unrelated settings"
+
+
+def test_a_shift_point_no_gt7_car_could_have_is_refused():
+    from pitcrew import settings as S
+
+    with __import__("pytest").raises(ValueError, match="not a threshold"):
+        S.Settings(beep_shift_points={"3247": {"3": 250.0}}).validate()
+    with __import__("pytest").raises(ValueError, match="gears 1-8"):
+        S.Settings(beep_shift_points={"3247": {"11": 8250.0}}).validate()

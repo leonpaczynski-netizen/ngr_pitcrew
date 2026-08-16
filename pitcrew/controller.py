@@ -159,12 +159,57 @@ class TelemetryBridge(QObject):
         # the driver picked a number, and the game must not overwrite it.
         self.beep_from_game = True
         self.beep_wanted = True
+        # The settings the per-gear table lives in, and the car the stream is
+        # currently showing. The table is per car and the car is not known
+        # until a packet arrives, so the two are kept apart and joined in
+        # `_apply_shift_points`.
+        self._shift_points = None
+        self._car_id = None
+
+    def _apply_shift_points(self) -> None:
+        """Install the measured per-gear table for the car now on track.
+
+        A car with no measured table gets an EMPTY one, never a neighbour's
+        and never a default: the whole value of a per-gear threshold is that
+        it was measured on that gearbox, and a table that quietly fills itself
+        would be indistinguishable at the wheel from one that was.
+        """
+        settings = self._shift_points
+        if settings is None:
+            return
+        table = (settings.shift_points_for(self._car_id)
+                 if self._car_id is not None else {})
+        self.shift_beep.per_gear = table
+        if self._car_id is None:
+            return
+        if table:
+            log("beep").info(
+                "car %s has measured shift points: %s", self._car_id,
+                ", ".join(f"g{g} {rpm:.0f}" for g, rpm in sorted(table.items())))
+        else:
+            # **The car id is logged even when there is no table, and that is
+            # the point of the line.** It is the key the table is stored
+            # under, GT7 only sends it on the wire, and nothing persists it -
+            # so without this the driver cannot find out what to key his own
+            # measured table to, and the feature is unreachable for a car he
+            # has just started driving.
+            log("beep").info(
+                "car %s has no measured shift points - beeping at %.0f rpm in "
+                "every gear. Run tools/shift_points.py against a session in "
+                "this car and store the table under this id.",
+                self._car_id, self.shift_beep.rpm)
 
     def apply_settings(self, settings) -> None:
         self.beep_wanted = settings.beep_enabled
         self.beep_from_game = settings.uses_game_rpm
         if not settings.uses_game_rpm:
             self.shift_beep.rpm = settings.beep_rpm
+        # Held rather than applied: which car this is arrives with the first
+        # packet, so the table cannot be looked up until then - see
+        # `_apply_shift_points`.
+        self._shift_points = settings
+        self.shift_beep.short_shift_drop_rpm = settings.beep_short_shift_drop
+        self._apply_shift_points()
         # Only the stream can turn the beep on when it follows the game: until
         # a packet arrives there is no threshold to beep at.
         self.shift_beep.enabled = settings.beep_enabled and (
@@ -233,6 +278,12 @@ class TelemetryBridge(QObject):
                         "Settings screen.", packet.rpm_alert_min)
             else:
                 self.shift_beep.enabled = self.beep_wanted
+            # Now the car is known, so the measured per-gear table can be
+            # looked up. It overrides both the game's shift light and the
+            # driver's single number, because it is the only one of the three
+            # measured on this gearbox.
+            self._car_id = packet.car_id
+            self._apply_shift_points()
             self.stream_seen.emit({
                 "packet_format": packet.packet_format,
                 "car_category": packet.car_category,

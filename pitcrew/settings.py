@@ -17,7 +17,8 @@ short-shift, which is a decision only he can make.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+import json
+from dataclasses import dataclass, field, fields
 
 # Where the beep threshold comes from.
 RPM_FROM_GT7 = "gt7"        # the car's own shift-light rpm, off the packet
@@ -156,6 +157,34 @@ class Settings:
     beep_enabled: bool = True
     beep_rpm_source: str = RPM_FROM_GT7
     beep_rpm: float = 7000.0
+    # **Measured upshift points, per car, per gear.** `{car_id: {gear: rpm}}`,
+    # both keys strings because this round-trips through JSON.
+    #
+    # GT7's own shift light is one rpm for the whole gearbox and it is not the
+    # crossover: measured over his own laps, the Shelby GT350R's next gear
+    # starts pulling harder at about 8250 rpm in all five upshifts, while the
+    # threshold in use was 8640 - so every straight was driven several hundred
+    # rpm into the part of the curve where the shift was already free. The
+    # Porsche RSR measured the opposite way and wants the limiter in every
+    # gear. One number cannot serve both cars, which is why this is a table
+    # and why it is filled by `tools/shift_points.py` from recorded laps
+    # rather than typed in.
+    #
+    # A car with no entry falls back to `beep_rpm` or to GT7's shift light,
+    # per `beep_rpm_source`. An empty table is the normal state for a car that
+    # has not been driven yet.
+    beep_shift_points: dict = field(default_factory=dict)
+    # How far a short-shift moves every threshold down when the engineer asks
+    # for fuel. He prefers this to leaning the fuel map, which costs power
+    # everywhere while this costs only the top of each gear - and it drops
+    # rear tyre temperature as well.
+    #
+    # **Not yet measurable on his data, and that is why it is a setting.** The
+    # tool can cost a short-shift only where the next gear has been driven at
+    # the rpm the early shift lands on, and he has never short-shifted, so
+    # those bins are empty. Once a session is run with this on, the tool can
+    # price it per gear and this becomes a measured figure.
+    beep_short_shift_drop: float = 500.0
 
     # --- how the engineer sounds.
     #
@@ -196,6 +225,28 @@ class Settings:
             raise ValueError(
                 f"a shift threshold of {self.beep_rpm} rpm is not a threshold "
                 f"any GT7 car has - expected 1000-20000")
+        # The table is written by a tool and round-trips through JSON, so it is
+        # checked rather than trusted: a wrong key here is a beep at an rpm
+        # nobody chose, in one gear, which is very hard to notice at the wheel.
+        for car, table in (self.beep_shift_points or {}).items():
+            if not isinstance(table, dict):
+                raise ValueError(
+                    f"shift points for {car!r} should be a table of gear to "
+                    f"rpm, got {type(table).__name__}")
+            for gear, rpm in table.items():
+                if int(gear) not in range(1, 9):
+                    raise ValueError(
+                        f"shift points for {car!r} name gear {gear!r}, and "
+                        f"GT7 cars have gears 1-8")
+                if not 1000.0 <= float(rpm) <= 20000.0:
+                    raise ValueError(
+                        f"shift point of {rpm} rpm for {car!r} gear {gear} is "
+                        f"not a threshold any GT7 car has - expected "
+                        f"1000-20000")
+        if not 0.0 <= self.beep_short_shift_drop <= 4000.0:
+            raise ValueError(
+                f"a short-shift drop of {self.beep_short_shift_drop} rpm is "
+                f"not a saving, it is a different gearbox - expected 0-4000")
         if self.ptt_enabled and not self.ptt_key.strip():
             raise ValueError("push to talk needs a button")
         if self.speech_backend not in SPEECH_BACKENDS:
@@ -210,6 +261,19 @@ class Settings:
     @property
     def uses_game_rpm(self) -> bool:
         return self.beep_rpm_source == RPM_FROM_GT7
+
+    def shift_points_for(self, car_id) -> dict[int, float]:
+        """The measured per-gear table for this car, or empty.
+
+        Empty is the honest answer for a car that has not been driven, and it
+        leaves the beep on whatever `beep_rpm_source` says. Filling it with a
+        neighbouring car's numbers, or with a default, would be a measurement
+        claim about a gearbox nobody has measured.
+        """
+        table = (self.beep_shift_points or {}).get(str(car_id))
+        if not table:
+            return {}
+        return {int(gear): float(rpm) for gear, rpm in table.items()}
 
     def voice_tuning(self) -> dict[str, float]:
         """The synthesis parameters, in the names Piper's config uses."""
@@ -246,7 +310,13 @@ def save(store, settings: Settings) -> None:
         value = getattr(settings, item.name)
         store.set_state(PREFIX + item.name,
                         "1" if value is True else
-                        "0" if value is False else str(value))
+                        "0" if value is False else
+                        # **A table goes as JSON, never as `str(dict)`.** The
+                        # repr round-trips only through `eval`, and a settings
+                        # loader that evals stored text is a settings loader
+                        # that runs whatever is in the database.
+                        json.dumps(value) if isinstance(value, dict) else
+                        str(value))
 
 
 def _looks_like_ipv4(text: str) -> bool:
@@ -257,6 +327,15 @@ def _looks_like_ipv4(text: str) -> bool:
 
 
 def _coerce(kind, raw: str):
+    if kind is dict or kind == "dict":
+        # A table that will not parse is dropped to empty rather than allowed
+        # to fail the whole settings load: an unreadable shift-point table
+        # should cost the per-gear beep, not every other setting with it.
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
     if kind is bool or kind == "bool":
         return raw not in ("0", "", "False", "false")
     if kind is float or kind == "float":
