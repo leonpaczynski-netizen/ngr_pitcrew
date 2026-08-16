@@ -547,3 +547,53 @@ def test_an_event_deleted_elsewhere_is_refused_not_crashed_into(wired):
 
     assert store.active_event_id() == v8
     assert "no longer in the store" in event_screen.footer_note.text()
+
+
+def test_a_lap_that_never_crossed_the_line_is_not_counted_as_one(wired):
+    """Reported from the seat twice, and the second time with numbers.
+
+    Two and a third laps driven, three recorded, laps two and three carrying
+    the SAME time. GT7's `last_lap_ms` is a reliable crossing signal while the
+    stream is continuous, but leaving the session drops it and brings it back -
+    and a value that has changed away and back looks exactly like a new lap
+    time. The fragment then inherits a whole lap's time: 1,306 frames of
+    telemetry claiming 110.9 seconds.
+
+    The claimed time is what does the damage. A lap time on the record is a
+    number something will eventually average, rank or fit a degradation curve
+    through, and this one was never set. So it is cleared, the lap is excluded,
+    and it never reaches the rack - he sees the laps he drove. The frames stay
+    on disk, because doubtful evidence is quarantined here and never deleted.
+
+    Driven through `_on_lap_completed` directly rather than by monkeypatching
+    the recorder: replacing a method on a Qt-owned object keeps the closure
+    alive past teardown and segfaults the interpreter on Windows/Py3.14, which
+    costs the whole run its output and looks nothing like a test failure.
+    """
+    from pitcrew.telemetry.recorder import FRAME_FIELDS
+    from pitcrew.telemetry.session_state import Lap
+
+    controller, _, practice, store = wired
+    controller._on_event_saved(an_event())
+    session_id = controller.open_practice_session()
+
+    # 1,306 frames is 21.8 s at 60 Hz - the real number off the real session.
+    row = [None] * len(FRAME_FIELDS)
+    row[FRAME_FIELDS.index("t_ms")] = 0
+    row[FRAME_FIELDS.index("speed_kph")] = 180.0
+    rows = [list(row) for _ in range(1306)]
+    for index, one in enumerate(rows):
+        one[FRAME_FIELDS.index("t_ms")] = int(index * 1000 / 60)
+
+    lap = Lap(lap_num=3, lap_time_ms=110_921, best_lap_ms=110_921,
+              delta_ms=0, fuel_start=88.0, fuel_end=85.0, fuel_used=3.0,
+              position=1, is_pit_lap=False, is_out_lap=False)
+    controller._on_lap_completed(lap, rows)
+
+    stored = store.list_laps(session_id)
+    assert len(stored) == 1, "the frames should still be on disk"
+    assert stored[0]["lap_time_ms"] == 0, (
+        "it kept a lap time it never set - something will average that")
+    assert stored[0]["excluded"] == 1
+    assert stored[0]["exclusion_reason"] == "fragment"
+    assert practice.rows() == [], "a lap he did not complete reached the rack"

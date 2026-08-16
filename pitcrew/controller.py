@@ -97,6 +97,18 @@ _LOST_PACKET_BUDGET = 30
 # gap and still be worth keeping; a fragment inheriting the previous lap's
 # time comes in at a few per cent.
 _LAP_FRAGMENT_FRACTION = 0.5
+# ...and how much recording there has to be before that ratio is allowed to
+# disbelieve a lap at all.
+#
+# The two failures look nothing alike. A lap that recorded 21.8 seconds of a
+# claimed 110 means the recorder was working and the lap was short - that is a
+# phantom. A lap that recorded two frames means the RECORDER was not running,
+# which says nothing whatever about whether he drove the lap, and calling that
+# a phantom would throw away real laps whenever the stream started late.
+#
+# Ten seconds is comfortably above anything that counts as "no recording" and
+# comfortably below both phantoms seen so far.
+_LAP_MIN_EVIDENCE_S = 10.0
 # One GT7 frame. The rig outputs are slew-limited in real time rather than in
 # packets, so they need a duration; the stream's own 59.88 Hz is close enough
 # to nominal that using the constant costs nothing a fan could express.
@@ -1573,31 +1585,51 @@ class PitCrewController(QObject):
 
         # **A lap has to have been driven for as long as it says it was.**
         #
-        # Observed: two laps driven, three recorded. The third carried 192
-        # frames - 3.2 seconds - while claiming lap two's time of 110,174 ms,
-        # and its end-of-lap clock was EARLIER than its start. GT7's
-        # `last_lap_ms` still held the previous lap when the boundary fired on
-        # the way out of the session, so a fragment inherited a whole lap's
-        # time.
+        # Observed twice. Two laps driven, three recorded; the third carried
+        # 192 frames - 3.2 seconds - while claiming lap two's time. Then again
+        # after the haptic rebuild: two and a third laps driven, three
+        # recorded, the third carrying 1,306 frames against a claimed 110.9 s
+        # and lap two's exact time.
         #
-        # A phantom lap is not a cosmetic problem. It lands on the rack, in
-        # the best-lap comparison, in the degradation fit and in the stint
-        # count, and it looks exactly like a real lap that happened to match
-        # the one before it.
+        # The cause is upstream and is not a bug in the lap detector. GT7's
+        # `last_lap_ms` is a reliable crossing signal while the stream is
+        # continuous, but leaving the session drops it and brings it back -
+        # and a value that has changed away and back satisfies "this is a new
+        # lap time" perfectly. The fragment then inherits a whole lap's time.
         #
-        # Excluded rather than dropped: CLAUDE.md's rule throughout is that
-        # doubtful evidence is quarantined and labelled, never deleted, so the
-        # frames stay on disk and the reason is on the record.
+        # A phantom lap is not cosmetic. It lands on the rack, in the best-lap
+        # comparison, in the degradation fit and in the stint count, and it
+        # looks exactly like a real lap that happened to match the one before.
+        #
+        # **The claimed time is what gets removed, not the evidence.** Marking
+        # it excluded was not enough: the row still carried a lap time it
+        # never set, and a lap time on the record is a number something will
+        # eventually average. So the time is cleared, the lap is excluded, and
+        # it never reaches the rack - he sees the two laps he drove. The
+        # frames stay on disk with the reason attached, because CLAUDE.md's
+        # rule throughout is that doubtful evidence is quarantined and
+        # labelled rather than deleted.
+        # **Judged only where there is something to judge against.** A lap
+        # that recorded no frames at all is not evidence that it did not
+        # happen - it is the absence of evidence either way, and the
+        # conservative reading of that is to believe GT7. Every phantom seen
+        # so far arrived with plenty of frames: 192 the first time and 1,306
+        # the second.
         fragment = False
         if frames is not None and lap.lap_time_ms:
             recorded_s = frames.frame_count / max(1.0, frames.sample_hz)
             claimed_s = lap.lap_time_ms / 1000.0
-            fragment = recorded_s < claimed_s * _LAP_FRAGMENT_FRACTION
+            fragment = (recorded_s >= _LAP_MIN_EVIDENCE_S
+                        and recorded_s < claimed_s * _LAP_FRAGMENT_FRACTION)
             if fragment:
                 log("session").warning(
                     "lap %s carries %.1fs of frames against a claimed %.1fs - "
-                    "recording it as a fragment rather than a lap",
-                    lap.lap_num, recorded_s, claimed_s)
+                    "it never crossed the line, so it is not being counted as "
+                    "a lap", lap.lap_num, recorded_s, claimed_s)
+                # A time it did not set is the part that does damage. Nothing
+                # downstream can average, rank or fit against a zero, and
+                # `delta_ms` goes with it for the same reason.
+                lap = replace(lap, lap_time_ms=0, delta_ms=0)
 
         if frames is not None:
             # Taken while the rows are still uncompressed and in hand. The
@@ -1628,6 +1660,10 @@ class PitCrewController(QObject):
             # which has no such field - `Lap` is what GT7 said, and this is
             # what we make of it.
             self.store.exclude_lap(lap_id, "fragment")
+            self.refresh_nav_state()
+            # **And it stops here.** The rack is his count of what he drove;
+            # a lap that never crossed the line does not belong on it.
+            return
         self.refresh_nav_state()
         # Race laps belong to the race session, not to the practice rack.
         # They were pushed on here numbered as a continuation of the practice

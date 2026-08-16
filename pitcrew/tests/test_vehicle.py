@@ -292,23 +292,23 @@ def test_a_car_going_where_it_points_is_not_rotating():
     for _ in range(900):
         heading += V.HEADING_SIGN * yaw * V.FRAME_S
         state = model.update(Frame(speed=55.0, yaw=yaw, heading=heading))
-    assert state.rotation_confidence == V.MEDIUM
+    assert state.rotation_confidence == V.HIGH
     assert state.rotation in (V.ROTATION_NEUTRAL, V.ROTATION_ROTATING)
     assert abs(state.beta_deg) < V.BETA_ONSET_DEG
 
 
-def test_the_rotation_cue_never_claims_more_than_medium_confidence():
-    """It was validated against a path heading reconstructed from positions
-    stored to the centimetre, which puts its own noise floor at 0.06 deg
-    against 0.18 deg of real sideslip at the limit. Live it should be far
-    better, because the velocity vector needs no differencing - but that has
-    not been recorded yet, and until it has, the number is not promoted."""
+def test_the_rotation_cue_is_trusted_now_that_the_channel_was_checked():
+    """It was capped at MEDIUM while the only available validation had to
+    difference positions stored to the centimetre. `vel_x/y/z` were added to
+    the recorder to settle it and one lap did: corr -0.978, slope -0.996, and
+    a straight-line residual of 0.0059 rad/s p90 - which is 0.10 deg of
+    sideslip over a 0.3 s slide against a 1.5 deg onset."""
     model = V.VehicleModel()
     heading = 0.0
     for _ in range(900):
         heading += V.HEADING_SIGN * 0.30 * V.FRAME_S
         state = model.update(Frame(speed=55.0, yaw=0.30, heading=heading))
-    assert state.rotation_confidence != V.HIGH
+    assert state.rotation_confidence == V.HIGH
 
 
 def test_channels_that_stop_agreeing_take_the_cue_with_them():
@@ -319,7 +319,7 @@ def test_channels_that_stop_agreeing_take_the_cue_with_them():
     for _ in range(900):
         heading += V.HEADING_SIGN * 0.30 * V.FRAME_S
         model.update(Frame(speed=55.0, yaw=0.30, heading=heading))
-    assert model.state.rotation_confidence == V.MEDIUM
+    assert model.state.rotation_confidence == V.HIGH
     # Now the heading stops tracking the yaw entirely.
     import math
     for index in range(900):
@@ -341,7 +341,7 @@ def test_the_rear_coming_round_off_the_throttle_still_reaches_the_driver():
         heading += V.HEADING_SIGN * 0.30 * V.FRAME_S
         model.update(Frame(speed=55.0, yaw=0.30, heading=heading,
                            throttle=0.5, rear_slip=1.02))
-    assert model.state.rotation_confidence == V.MEDIUM
+    assert model.state.rotation_confidence == V.HIGH
     # The chassis now turns faster than the path it is on: the rear is going,
     # and no wheel is spinning.
     for _ in range(12):

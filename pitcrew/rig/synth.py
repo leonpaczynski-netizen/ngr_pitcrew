@@ -330,8 +330,20 @@ PROFILE = (
     # The gain matches wheel-spin's 70 - his loudest - and the felt trim takes
     # it back down, because 40-50 Hz delivers 3.0 against the high region's
     # 2.0. Equal number, equal felt authority, which is the intention.
+    # **-3.5 dB, and the shape changed with it.** Reported from the seat after
+    # the first drive as "too heavy and loud... quite extreme". Both are true
+    # and they had different causes: the level, which this trim fixes, and the
+    # shape, which `vehicle.BRAKE_OPTIMUM` fixes by anchoring the climb on the
+    # slip where GT7 stops giving more braking force rather than on the whole
+    # regulated plateau.
+    #
+    # It stays a CRITICAL cue at the strongest frequency on the rig, because
+    # the measurement says the information is worth real time: past the peak
+    # he gives up 12.4% of braking force, and 68% of his heavy braking is
+    # spent there. Quieter, and now loudest where it is telling him something
+    # he can act on.
     EffectSpec("brake_limit", 70.00, 40.0, 50.0, noise=4.0, min_force=18.0,
-               gamma=1.25, priority=CRITICAL, felt_trim=0.62,
+               gamma=1.25, priority=CRITICAL, felt_trim=0.42,
                am_lo=7.0, am_hi=16.0, am_depth=0.55,
                attack_s=0.006, release_s=0.05),
     # His gear thump, renamed for what it carries: a shift, and the rev
@@ -343,7 +355,12 @@ PROFILE = (
     # would be 0.065 of his gain; a transient should stand above the bed rather
     # than sit level with it, and the ducking below gives it another 7 dB for
     # the length of the thump.
-    EffectSpec("driveline", 39.87, 50.0, priority=TRANSIENT, felt_trim=0.55),
+    # **+2.6 dB, from 0.55.** "Gears could still come up slightly" - and the
+    # replay agrees there is room: at 0.55 a shift was 2.37x the road bed it
+    # lands on in felt strength, and the working range established when this
+    # was last argued is 1.5x to 4x. 0.74 puts it near 3.2x, which is inside
+    # that and short of the 0.25 that was once called overpowered.
+    EffectSpec("driveline", 39.87, 50.0, priority=TRANSIENT, felt_trim=0.74),
     # Impacts: a kerb strike, a landing, a compression the suspension has not
     # seen before, a collision. Raised off 28-38 Hz - where the kerb thump was
     # a third of the test tone and could not be felt - and now clear of the

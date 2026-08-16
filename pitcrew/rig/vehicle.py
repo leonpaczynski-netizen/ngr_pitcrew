@@ -195,6 +195,43 @@ SHIFT_BLIND_S = 0.05
 # LOCKED reserved for what happens above it.
 BRAKE_STABLE = 0.055          # p20 of braking frames: the axle is just working
 BRAKE_AT_LIMIT = 0.075        # p55: the regulator has started
+# **Where the tyre actually stops giving more, measured rather than assumed.**
+#
+# Reported from the seat: the braking cue is "too heavy and loud... GT7 doesn't
+# punish the abuse of ABS as far as I am aware". Worth settling from his own
+# laps rather than from a forum, and the physical test is direct - if GT7
+# models a slip-versus-force curve with a peak, deceleration falls once slip
+# goes past it.
+#
+# Straight-line braking (pedal above 85%, under 0.35 lateral g), 50-70 m/s,
+# where there is enough downforce and enough force demand for the curve to
+# show:
+#
+#     front slip   0.06-0.09   0.09-0.12   0.12-0.15   0.15-0.18
+#     median decel   2.022 g     2.192 g     2.022 g     1.920 g
+#     frames           334        1994        5794         903
+#
+# **GT7 punishes it by 12.4%.** There is a peak at about 0.105 and the deepest
+# band gives up an eighth of the braking force. And 68% of his heavy-braking
+# frames sit past that peak, so the information is worth real time - which is
+# exactly why the answer is not to turn the cue down and lose it.
+#
+# What was wrong is the SHAPE. The cue ramped from 0.075 to the lock threshold
+# as one climb, so it was loudest at 0.15 - already past the peak and well
+# into the region where he is losing brake force - and it was a full pulsing
+# judder for about eight seconds a lap. It told him "you are braking" loudly
+# instead of "you have gone past the best of it".
+#
+# So the ramp is anchored here instead. At and below the optimum the cue is a
+# light presence: the brakes are working, nothing to correct. Above it the
+# level and the pulse rate climb together, and that climb is the message.
+#
+# Below 50 m/s the trend reverses (1.741 g at 0.09-0.12 against 1.869 at
+# 0.15-0.18), which is not evidence that deep slip helps at low speed so much
+# as that the deepest slip there happens at the end of a zone with the car
+# already slow. The high-speed band is where the physics is clean, and it is
+# also where the lap time is.
+BRAKE_OPTIMUM = 0.105
 # The floor under the lock threshold. Above every plateau measured on this car
 # and below the 0.258 maximum ever seen.
 LOCK_FLOOR = 0.170
@@ -260,14 +297,27 @@ REAR_ROTATION_ONSET = 0.35
 # checked again at runtime - see `_HeadingCheck`. A sign convention that
 # silently flipped would turn an oversteer warning into a reward for it.
 #
-# **What it can and cannot do.** Reconstructed from position the residual sits
-# near its own noise floor: 0.06 deg on a straight against 0.18 deg of real
-# sideslip at the limit. That floor is an artefact of what was recorded -
-# positions are stored to the centimetre - and not of the feed, because live
-# the velocity vector is a float and needs no differencing at all. Until that
-# has been confirmed against a lap recorded with world velocity in it, this
-# state is reported at MEDIUM confidence and the cue built on it is attenuated
-# rather than trusted outright.
+# **Confirmed against the real channel, 16 Aug 2026.** The reconstruction
+# above had to difference positions stored to the centimetre, which put the
+# residual near its own noise floor and was the reason this state was capped
+# at MEDIUM. `vel_x/y/z` were added to the recorder to settle it, and one lap
+# does:
+#
+#     corr(angvel_y, velocity-derived path yaw) = -0.9779
+#     slope                                     = -0.9961
+#     residual on straights   p50 0.0019 rad/s, p90 0.0059 rad/s
+#
+# The sign is confirmed, the scale is 1.0, and the noise floor supports the
+# thresholds with room to spare: 0.0059 rad/s integrated over a 0.3 s slide is
+# 0.10 deg of sideslip against a 1.5 deg onset, and the rate onset of 0.15
+# rad/s sits at twenty-five times the straight-line residual. So the state is
+# reported at HIGH confidence and the cue is no longer attenuated.
+#
+# One caution worth keeping: the first attempt at this validation returned
+# corr -0.27 and was wrong. Two laps had been concatenated and the heading
+# differenced across the seam, and a single 188 rad/s outlier in 13,922
+# samples is enough to bury a correlation of -0.98. Differencing anything
+# across a lap boundary is a mistake this file should not have to learn twice.
 HEADING_SIGN = -1.0           # measured: path heading runs opposite to angvel_y
 # Sideslip that counts as the car sliding rather than merely cornering.
 # 1.5 deg is above every straight-line reading and above the 90th percentile
@@ -926,9 +976,10 @@ class VehicleModel:
         angle_part = ramp(abs(s.beta_deg), BETA_ONSET_DEG, BETA_FULL_DEG)
         rate_part = ramp(beta_rate * sign, BETA_RATE_ONSET, BETA_RATE_FULL)
         s.rotation_level = max(angle_part, rate_part)
-        # Medium, and it stays medium until a lap carrying world velocity has
-        # been recorded and the model checked against it. See the module note.
-        s.rotation_confidence = MEDIUM
+        # High, since the model was checked against the real velocity vector
+        # rather than against a path reconstructed from stored positions. The
+        # runtime check above is what keeps it honest frame to frame.
+        s.rotation_confidence = HIGH
         if s.rotation_level >= 0.75:
             s.rotation = ROTATION_SEVERE
         elif s.rotation_level >= 0.40:
@@ -1035,7 +1086,9 @@ class VehicleModel:
         # second thing to learn for no gain.
         slide_level = s.rotation_level
         if s.rotation_confidence == MEDIUM:
-            # Attenuated rather than trusted outright, per the module note.
+            # Kept for the case where the runtime check has only partly
+            # settled. With the model validated against the real velocity
+            # vector the ordinary path is HIGH and carries no attenuation.
             slide_level *= 0.80
         level = self._traction_env.update(max(wheel_level, slide_level), dt)
 
@@ -1058,7 +1111,8 @@ class VehicleModel:
         else:
             s.traction = GRIPPED
         s.traction_level = level
-        s.traction_confidence = HIGH if wheel_level >= slide_level else MEDIUM
+        s.traction_confidence = (HIGH if wheel_level >= slide_level
+                                 else s.rotation_confidence)
         s.reasons["traction"] = ("wheel" if wheel_level >= slide_level
                                  else "rotation")
 
@@ -1124,13 +1178,25 @@ class VehicleModel:
             s.brake_axle = "rear"
         elif self._latches["at_limit"].active:
             s.brake_state = BRAKE_LIMIT_S
-            # Deliberately modest. This is the state he is in for most of every
-            # braking zone and it is information, not an alarm: a driver who
-            # can feel where the regulator starts working can brake to it on
-            # purpose. An alarm here is the "ABS is way too strong" complaint
-            # restated.
-            s.brake_level = 0.18 + 0.32 * ramp(worst, BRAKE_AT_LIMIT,
-                                               lock_threshold)
+            # **Anchored on the measured optimum, not on the whole plateau.**
+            #
+            # Below `BRAKE_OPTIMUM` this is a light presence - the brakes are
+            # working and there is nothing to correct, so it says so quietly.
+            # Above it he is giving up braking force, and the level and the
+            # pulse rate climb together the further past he goes.
+            #
+            # The old single ramp from 0.075 upward was loudest at 0.15, which
+            # is past the peak and is also where he spends 68% of his heavy
+            # braking - so the cue was at its most insistent through the part
+            # of the zone he most needed to be able to ignore. Reported as
+            # "too heavy and loud", and the shape was the reason rather than
+            # the gain.
+            if worst <= BRAKE_OPTIMUM:
+                s.brake_level = 0.08 + 0.06 * ramp(worst, BRAKE_AT_LIMIT,
+                                                   BRAKE_OPTIMUM)
+            else:
+                s.brake_level = 0.14 + 0.34 * ramp(worst, BRAKE_OPTIMUM,
+                                                   lock_threshold)
         elif worst > BRAKE_STABLE:
             s.brake_state = BRAKE_STABLE_S
             s.brake_level = 0.10 * ramp(worst, BRAKE_STABLE, BRAKE_AT_LIMIT)
