@@ -257,18 +257,29 @@ PLATEAU_MARGIN = 1.15
 # **Rear instability under braking**, which matters more here than anywhere
 # else because his whole technique is trail-braking deep.
 #
-# Measured: the front axle locks more than the rear on 97% of braking frames -
-# median bias -0.021 - so the rear running slower than the front is rare and
-# sharp. It happens on 3.08% of braking frames at any margin at all and 0.64%
-# at 0.005, in runs of one to two frames.
+# **The wheel-speed witness this used to carry is dead, and the replay is
+# what killed it.** The design assumed the rear running slower than the front
+# was rare and sharp - measured on the Porsche, the front locks more on 97%
+# of braking frames - so a latched rear-vs-front bias was allowed to drive a
+# REAR_UNSTABLE state on the brake channel. Replayed over two cars in one
+# day (sessions 40 and 41): 20 episodes at Monza, 88 at Yas Marina, and the
+# chassis was actually rotating during 1% and 3% of those frames. The other
+# 97-99% were engine braking - the driven axle reads a few percent slow the
+# moment the throttle closes, the drag varies with gear and revs, and the
+# throttle-indexed reference cannot cancel a load it never sees. The same
+# fault as the 1.04 wheelspin threshold, at the other end of the car: a cue
+# reading the drivetrain and calling it the tyres.
 #
-# One to two frames is close enough to the noise that wheel speed alone cannot
-# carry this cue. So it is corroborated: the rear stepping out under brakes
-# shows in the chassis heading before it shows in the wheel, and the state
-# fires on either a confirmed wheel-speed reversal or a rotation excess while
-# the brake is meaningfully applied.
-REAR_LOCK_BIAS = 0.006
-REAR_LOCK_BIAS_FULL = 0.030
+# So the rear coming round under braking keeps ONE witness - the chassis
+# rotating while the brake is meaningfully applied - and it is not a brake
+# state at all any more: the rotation witness already feeds the traction
+# channel in `_traction`, so the rear stepping out reads in the same voice,
+# the same ramp and the same rhythm whether the throttle or the brake caused
+# it. Asked for directly (session 41): "traction loss from throttle is very
+# intuitive... can you match the rear traction loss [on braking] to more
+# like the throttle traction loss." A rear axle that genuinely LOCKS still
+# reports through the worst-axle path; `rear_unstable` stays in the state
+# for the explainer, as the rotation witness's view of the same event.
 BRAKE_ROTATION_GATE = 0.15    # brake fraction at which rotation counts here
 # How much rotation counts as instability rather than as the car turning in.
 # Set against the replayed distribution: at 0.35 the state fires on 0.9% of
@@ -423,7 +434,6 @@ BRAKE_STABLE_S = "STABLE"
 BRAKE_LIMIT_S = "AT_LIMIT"
 BRAKE_INCIPIENT = "INCIPIENT_LOCK"
 BRAKE_LOCKED = "LOCKED"
-BRAKE_REAR_UNSTABLE = "REAR_UNSTABLE"
 
 ROTATION_NEUTRAL = "NEUTRAL"
 ROTATION_ROTATING = "ROTATING"
@@ -826,8 +836,6 @@ class VehicleModel:
             "at_limit": _Latch(BRAKE_AT_LIMIT, BRAKE_AT_LIMIT * 0.8, confirm=1),
             "locking": _Latch(LOCK_FLOOR, LOCK_FLOOR * 0.82, confirm=2,
                               hold_s=0.08),
-            "rear_bias": _Latch(REAR_LOCK_BIAS, REAR_LOCK_BIAS * 0.6,
-                                confirm=3, hold_s=0.15),
         }
         self._prev_heading: float | None = None
         self._beta_raw = 0.0
@@ -1165,7 +1173,10 @@ class VehicleModel:
         # cannot spin up while the brakes are on it, so anything the ratio
         # says there is the front axle's behaviour leaking in - and the rear
         # coming round under braking is real, common for this driver, and
-        # carried by the rotation witness below and by `BRAKE_REAR_UNSTABLE`.
+        # carried by the rotation witness below, which stays live on the
+        # brakes for exactly that reason. This is the whole of the braking
+        # rear-instability cue since the wheel-bias witness was measured and
+        # retired - see the account above BRAKE_ROTATION_GATE.
         wheel_level = (0.0 if (s.shifted or braking)
                        else ramp(excess, SLIP_ONSET, SLIP_FULL))
 
@@ -1229,7 +1240,7 @@ class VehicleModel:
             s.brake_state = BRAKE_FREE
             s.brake_level = 0.0
             s.brake_axle = None
-            for name in ("at_limit", "locking", "rear_bias"):
+            for name in ("at_limit", "locking"):
                 self._latches[name].reset()
             return
 
@@ -1263,33 +1274,18 @@ class VehicleModel:
                      and worst < lock_threshold)
             self._plateau.update(worst, allow_rise=quiet)
 
-        # **Rear instability, corroborated.** The wheel-speed reversal alone
-        # lives in runs of one to two frames, too close to the noise to drive a
-        # critical cue; the chassis rotating under brakes is the other half of
-        # the same event and is slower and larger.
-        bias = s.rear_lock - s.front_lock
-        self._latches["rear_bias"].update(bias, dt)
-        wheel_unstable = (ramp(bias, REAR_LOCK_BIAS, REAR_LOCK_BIAS_FULL)
-                          if self._latches["rear_bias"].active else 0.0)
-        rotation_unstable = (ramp(s.rotation_level, REAR_ROTATION_ONSET, 1.0)
-                             if p.brake >= BRAKE_ROTATION_GATE else 0.0)
-        s.rear_unstable = max(wheel_unstable, rotation_unstable)
+        # The rotation witness's view of the rear under braking, kept for the
+        # explainer only. The EVENT reaches the driver through the traction
+        # channel - the rotation witness in `_traction` is live under braking
+        # by design - so the rear stepping out reads in the tyre voice, in
+        # the same vocabulary as throttle traction loss. See the account
+        # above BRAKE_ROTATION_GATE for the wheel-speed witness this replaced.
+        s.rear_unstable = (ramp(s.rotation_level, REAR_ROTATION_ONSET, 1.0)
+                           if p.brake >= BRAKE_ROTATION_GATE else 0.0)
 
         if self._latches["locking"].active:
             s.brake_state = BRAKE_LOCKED
             s.brake_level = 0.65 + 0.35 * ramp(worst, lock_threshold, LOCK_FULL)
-        elif s.rear_unstable > 0.10:
-            s.brake_state = BRAKE_REAR_UNSTABLE
-            # **Capped well below the lock alarm.** This peaked at 0.82-0.90
-            # through the first three braking zones of every cold-tyre
-            # out-lap - the rear genuinely was stepping out, but rendered as
-            # "the brake cue, louder" it read as the brakes being broken
-            # rather than the rear being loose. Asked for directly: "lower,
-            # and give it its own signature." The cap is here; the signature
-            # is the slow throb in `effects._rear_throb`, which is what
-            # separates it from a lock without needing to out-shout one.
-            s.brake_level = 0.30 + 0.25 * s.rear_unstable
-            s.brake_axle = "rear"
         elif self._latches["at_limit"].active:
             s.brake_state = BRAKE_LIMIT_S
             # **Silent at the optimum, growing as the lock worsens.**

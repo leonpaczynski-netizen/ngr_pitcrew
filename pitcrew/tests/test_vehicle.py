@@ -277,20 +277,50 @@ def test_a_lock_up_needs_the_brake_to_be_on():
     assert state.brake_level == 0.0
 
 
-def test_the_rear_locking_harder_than_the_front_is_its_own_state():
-    """Rare and sharp: measured, the front locks more on 97% of braking
-    frames. The rear going first under trail braking is the one that spins the
-    car, and it is a different correction from a front lock."""
+def test_the_rear_reading_slow_under_brakes_alone_is_not_instability():
+    """**The witness this replaces was measured and retired.** A rear axle
+    running a few percent slower than the front under braking is engine
+    braking on the driven axle - replayed over two cars, the old wheel-bias
+    state fired 108 times in a day and the chassis was rotating during 1-3%
+    of its frames. With no rotation, a modest rear bias must read as braking,
+    not as the rear stepping out, and nothing may reach the traction voice."""
     model = V.VehicleModel()
     settle(model, throttle=0.5, rear_slip=1.02)
     for _ in range(8):
         state = model.update(Frame(brake=0.6, front_slip=0.94, rear_slip=0.90))
-    assert state.brake_state == V.BRAKE_REAR_UNSTABLE
-    assert state.brake_axle == "rear"
-    # "Lower, and give it its own signature": capped well under the lock
-    # alarm - session 40's cold-tyre out-lap peaked this at 0.90 and it read
-    # as the brakes being broken. The signature lives in `effects`.
-    assert 0.30 <= state.brake_level <= 0.551, state.brake_level
+    assert state.brake_state in (V.BRAKE_STABLE_S, V.BRAKE_LIMIT_S)
+    assert state.rear_unstable == 0.0
+    assert state.traction_level == 0.0
+
+
+def test_the_rear_coming_round_on_the_brakes_reads_in_the_tyre_voice():
+    """Asked for directly (session 41): "traction loss from throttle is very
+    intuitive... match the rear traction loss [on braking] to more like the
+    throttle traction loss." So the rear stepping out under trail braking is
+    not a brake state: the rotation witness carries it into the traction
+    channel - the same voice, ramp and rhythm as a power-on slide - while the
+    brake channel keeps reporting the braking itself."""
+    import math
+    model = V.VehicleModel()
+    settle(model, throttle=0.5, rear_slip=1.02)
+    heading = 0.0
+    for _ in range(900):                       # earn the heading check
+        heading += V.HEADING_SIGN * 0.30 * V.FRAME_S
+        model.update(Frame(speed=55.0, yaw=0.30, heading=heading,
+                           throttle=0.5, rear_slip=1.02))
+    assert model.state.rotation_confidence == V.HIGH
+    # Trail braking, and the chassis turns faster than the path it is on.
+    for _ in range(12):
+        state = model.update(Frame(speed=55.0, yaw=0.95, heading=heading,
+                                   brake=0.6, throttle=0.0,
+                                   front_slip=0.93, rear_slip=0.96))
+        heading += V.HEADING_SIGN * 0.30 * V.FRAME_S
+    assert state.traction_level > 0.0, "the tyre voice must carry it"
+    assert state.reasons.get("traction") == "rotation"
+    assert state.rear_unstable > 0.0, "the explainer keeps the braking view"
+    assert state.brake_state in (V.BRAKE_STABLE_S, V.BRAKE_LIMIT_S,
+                                 V.BRAKE_INCIPIENT, V.BRAKE_LOCKED), (
+        "the brake channel reports braking, not the rear")
 
 
 def test_braking_at_the_optimum_is_silence_and_the_rasp_is_the_error():

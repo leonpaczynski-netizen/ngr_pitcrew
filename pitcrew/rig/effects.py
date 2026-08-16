@@ -98,6 +98,18 @@ TEXTURE_FULL_SPEED_KPH = 130.0
 # and throwing away the difference between clipping one and climbing one.
 KERB_BOOST = 0.15
 OFF_SURFACE_BOOST = 0.25
+# **And neither boost applies at walking pace.** Session 41, measured: a spin
+# at the Yas chicane left the car crawling back across kerb and grass at
+# 14-31 km/h, and the boosts held the road bed at 0.15-0.49 for about four
+# seconds with the car barely moving - reported from the seat as "prolonged
+# rumble after going off track". The texture itself already scales with
+# speed; the boosts were added AFTER that scaling, so a stationary car on a
+# kerb rumbled like one riding it. Full authority by 45 km/h keeps every
+# hairpin ripple strip exactly as it was - the lesson about kerbs mattering
+# most in slow corners stands - and a car gathering itself up after a spin
+# goes quiet.
+SURFACE_BOOST_ONSET_KPH = 12.0
+SURFACE_BOOST_FULL_KPH = 45.0
 
 # **A kerb also gets a thump, separate from the rattle.**
 #
@@ -162,21 +174,23 @@ STRIKE_GAP_S = 0.08           # the silence that makes it a rhythm
 STRIKE_SECOND = 0.85          # the echo hit, which then decays normally
 STRIKE_OWN_TAIL_S = 0.15      # how far past the gap it keeps the channel
 
-# **The rear coming round is a throb, not a louder brake.**
+# **The rear coming round under braking now speaks in the tyre voice, and
+# the throb it used to get here is gone.**
 #
-# Session 40, lap 1: the first three braking zones peaked at 0.82-0.90 of
-# REAR_UNSTABLE on cold tyres - the rear genuinely stepping out under trail
-# braking, reported honestly, and read from the seat as "brakes extremely
-# intense", because it rode the brake voice's continuous rasp and a louder
-# rasp reads as the same message with the volume up. Asked for directly:
-# "lower, and give it its own signature."
-#
-# The level cap moved into `vehicle._braking`; this is the signature. The
-# brake voice's own modulation runs 7-16 Hz, so the rear cue gates the level
-# at 3.5 Hz - a slow, heavy throb below anything the lock cues produce. One
-# piston cannot speak in two places, but it can speak in two rhythms.
-REAR_THROB_HZ = 3.5
-REAR_THROB_FLOOR = 0.35       # the quiet half of the throb, not silence
+# The history is worth a paragraph because it ran through three shapes in two
+# days. Session 40 read it as "brakes extremely intense" - REAR_UNSTABLE
+# riding the brake voice - so it was capped at 0.30-0.55 and chopped into a
+# 3.5 Hz throb to separate it from a lock. Session 41 the driver compared the
+# result with the throttle-side cue and chose: "traction loss from throttle
+# is very intuitive... match the rear traction loss [on braking] to more like
+# the throttle traction loss." The replay then settled it structurally: the
+# wheel-bias witness behind most of those brake-channel episodes was engine
+# braking, not the rear stepping out (two cars, 108 episodes, chassis
+# rotation present on 1-3% of the frames - see `vehicle.py` above
+# BRAKE_ROTATION_GATE), and every genuine episode was ALREADY being carried
+# by the rotation witness on `rear_traction`. So the brake channel reports
+# braking, the tyre channel reports the rear - however it let go - and "the
+# rear is going" has one voice, one ramp and one rhythm everywhere.
 
 # **Lateral acceleration, in g.** Speed times yaw rate over 9.81 - the standard
 # derivation, and the same one `recorder.py` computes for the export, so the
@@ -273,7 +287,6 @@ class EffectDeriver:
         self._kerb_pulse = 0.0
         self._strike_t: float | None = None
         self._strike_size = 0.0
-        self._rear_phase = 0.0
         self._limiter_pulse = 0.0
         self._prev_limiter = False
         self.state = vehicle.VehicleState()
@@ -290,7 +303,6 @@ class EffectDeriver:
         self._kerb_pulse = 0.0
         self._strike_t = None
         self._strike_size = 0.0
-        self._rear_phase = 0.0
         self._limiter_pulse = 0.0
         self._prev_limiter = False
         self._spike_speed = 0.0
@@ -313,7 +325,11 @@ class EffectDeriver:
 
         out[0] = self._engine(packet)
         out[1] = self._road(packet, state, dt)
-        out[2] = self._rear_throb(state, dt)
+        # As computed in `vehicle._braking`, rendered as computed. The rear
+        # coming round under braking is not on this channel any more - the
+        # rotation witness carries it into `traction_level` below, in the
+        # same vocabulary as throttle traction loss.
+        out[2] = state.brake_level
         out[3] = max(self._driveline(packet, state, dt),
                      self._limiter(state, dt))
         strike, strike_owns = self._suspension_strike(state, dt)
@@ -363,10 +379,16 @@ class EffectDeriver:
         # to be slow is what made ripple strips feel soft in the hairpins,
         # which is where kerbs matter most.
         texture *= min(1.0, p.speed_kmh / TEXTURE_FULL_SPEED_KPH)
+        # The boosts carry their own, gentler speed gate - see
+        # SURFACE_BOOST_ONSET_KPH: full by 45 km/h so slow-corner kerbs keep
+        # their voice, nothing at a crawl so a car limping back from a spin
+        # does not rumble while barely moving.
+        moving = _ramp(p.speed_kmh, SURFACE_BOOST_ONSET_KPH,
+                       SURFACE_BOOST_FULL_KPH)
         if s.on_kerb:
-            texture = min(1.0, texture + KERB_BOOST)
+            texture = min(1.0, texture + KERB_BOOST * moving)
         elif s.off_surface:
-            texture = min(1.0, texture + OFF_SURFACE_BOOST)
+            texture = min(1.0, texture + OFF_SURFACE_BOOST * moving)
         return texture
 
     def _engine(self, p: GT7Packet) -> float:
@@ -424,22 +446,6 @@ class EffectDeriver:
                 self._texture_speed, 0.0, KERB_THUMP_FULL_MS)
             self._kerb_pulse = max(self._kerb_pulse, hit)
         return self._kerb_pulse
-
-    def _rear_throb(self, s: vehicle.VehicleState, dt: float) -> float:
-        """The brake channel, with the rear cue gated into its own rhythm.
-
-        Every other brake state passes through untouched. REAR_UNSTABLE is
-        chopped at REAR_THROB_HZ so the rear coming round reads as a slow
-        heavy pulse - a different message from a lock, on the only voice
-        both have to share.
-        """
-        if s.brake_state != vehicle.BRAKE_REAR_UNSTABLE:
-            self._rear_phase = 0.0
-            return s.brake_level
-        self._rear_phase = (self._rear_phase + dt * REAR_THROB_HZ) % 1.0
-        if self._rear_phase >= 0.5:
-            return s.brake_level * REAR_THROB_FLOOR
-        return s.brake_level
 
     def _suspension_strike(self, s: vehicle.VehicleState,
                            dt: float) -> tuple[float, bool]:

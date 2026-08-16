@@ -266,24 +266,33 @@ def test_a_sausage_kerb_is_a_hit_even_when_the_surface_never_says_kerb():
     assert held < hit * 0.3, "a single clip became one long impact"
 
 
-def test_the_rear_coming_round_throbs_rather_than_shouting():
-    """One piston cannot speak in two places, but it can speak in two
-    rhythms: REAR_UNSTABLE gates the brake channel at 3.5 Hz - below the
-    lock cues' own 7-16 Hz modulation - so the rear coming round reads as a
-    slow heavy pulse rather than as the brake cue with the volume up."""
-    from pitcrew.rig.effects import REAR_THROB_FLOOR
-
+def test_a_kerb_boost_needs_the_car_to_be_moving():
+    """Session 41: a spin left the car crawling back across kerb and grass at
+    14-31 km/h, and the surface boosts - added after the texture's own speed
+    scaling, so with no floor under them - held the road bed at 0.15-0.49 for
+    four seconds. Reported as "prolonged rumble after going off track". At
+    speed a kerb is a kerb; at a crawl it is nothing."""
     deriver = EffectDeriver()
-    s = vehicle.VehicleState()
-    s.brake_state = vehicle.BRAKE_REAR_UNSTABLE
-    s.brake_level = 0.5
-    levels = {round(deriver._rear_throb(s, 1.0 / 60.0), 3) for _ in range(30)}
-    assert 0.5 in levels, "the loud half of the throb is missing"
-    assert round(0.5 * REAR_THROB_FLOOR, 3) in levels, (
-        "it never dips - no rhythm, just a level")
-    s.brake_state = vehicle.BRAKE_LOCKED
-    assert deriver._rear_throb(s, 1.0 / 60.0) == 0.5, (
-        "a lock must pass through untouched")
+    deriver.update(Frame(speed=45.0, surfaces="CCTT"))       # 162 km/h
+    riding = deriver.update(Frame(speed=45.0, surfaces="CCTT"))[_index("road")]
+    assert riding >= 0.14, "a kerb at speed must keep its boost"
+    deriver.reset()
+    deriver.update(Frame(speed=4.0, surfaces="CCTT"))        # 14 km/h crawl
+    crawl = deriver.update(Frame(speed=4.0, surfaces="CCTT"))[_index("road")]
+    assert crawl < 0.05, f"a kerb at walking pace rumbled at {crawl:.2f}"
+
+
+def test_crawling_across_grass_after_an_off_is_quiet():
+    """The other half of the same incident: two wheels on grass at crawling
+    speed took the off-surface boost at full."""
+    deriver = EffectDeriver()
+    deriver.update(Frame(speed=5.0, surfaces="GTGT"))        # 18 km/h
+    crawl = deriver.update(Frame(speed=5.0, surfaces="GTGT"))[_index("road")]
+    assert crawl < 0.08, f"grass at walking pace rumbled at {crawl:.2f}"
+    deriver.reset()
+    deriver.update(Frame(speed=30.0, surfaces="GTGT"))       # 108 km/h
+    fast = deriver.update(Frame(speed=30.0, surfaces="GTGT"))[_index("road")]
+    assert fast >= 0.2, "running wide at speed must still read as off"
 
 
 def test_a_sausage_inside_a_ripple_strip_is_not_swallowed_by_the_edge_thump():
