@@ -405,6 +405,9 @@ UNLOAD_FULL_Z = 2.6
 # "travel remaining" implies a measurement nobody made. This is an excursion
 # toward the observed extreme and it is named as that.
 COMPRESSION_Z = 2.6
+# How long after rejoining the tarmac the load cues stay quiet while the car
+# settles and the suspension stops carrying the excursion.
+OFF_SURFACE_GRACE_S = 1.5
 
 # States, as words rather than numbers, because these are what the driver is
 # told and what the tests assert on.
@@ -835,6 +838,7 @@ class VehicleModel:
         self._prev_speed: float | None = None
         self._unload_peak = 0.0
         self._unload_since = 0.0
+        self._offtrack_grace = 0.0
         self.state = VehicleState()
 
     # ------------------------------------------------------------- lifecycle
@@ -860,6 +864,7 @@ class VehicleModel:
         self._prev_speed = None
         self._unload_peak = 0.0
         self._unload_since = 0.0
+        self._offtrack_grace = 0.0
         self.state = VehicleState()
 
     # -------------------------------------------------------------- a frame
@@ -942,6 +947,23 @@ class VehicleModel:
         What this is: how far each corner sits from where that corner sits
         when the car is doing nothing, in units of its own spread.
         """
+        # **Off the racing surface, the load model stops listening.**
+        #
+        # Reported from the seat: "when I went off track it took a while for
+        # haptics to settle, it didn't recognise I was back on track straight
+        # away". The neutral is a 20-second average, and twenty seconds of
+        # bouncing across grass drags it somewhere no tarmac lap ever goes -
+        # so the first corners after rejoining read as phantom unloading and
+        # compression until the reference has crawled back. The excursion is
+        # not evidence about normal ride height, so it is not allowed to
+        # teach, and the cues built on the reference hold their peace for a
+        # moment after rejoining rather than reporting the reference's error.
+        if s.off_surface:
+            self._offtrack_grace = OFF_SURFACE_GRACE_S
+            return
+        if self._offtrack_grace > 0.0:
+            self._offtrack_grace = max(0.0, self._offtrack_grace - dt)
+            return
         heights = (p.suspension_fl, p.suspension_fr,
                    p.suspension_rl, p.suspension_rr)
         zs = []

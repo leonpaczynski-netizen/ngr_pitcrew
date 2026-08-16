@@ -76,7 +76,11 @@ def test_his_tuned_gains_came_across_unchanged():
     assert by_name["road"].gain == 37.62              # was wheels_rumble
     assert by_name["chassis_load"].gain == 35.19      # was lateral_load
     assert by_name["driveline"].gain == 39.87         # was gear
-    assert by_name["impact"].gain == 12.31            # was wheels_impact
+    # The one deliberate exception, and the test names it so it cannot be
+    # quiet. His 12.31 was set for collisions; the channel's day job is now
+    # kerb strikes, the trim was at 3.8 of a maximum 4 after two rounds of
+    # "kerbs not felt", and a trim is a correction, not a change of purpose.
+    assert by_name["impact"].gain == 18.00            # was 12.31, his
     assert by_name["engine"].gain == 9.52             # was rpm
     assert by_name["driveline"].freq_hi == 0.0, "the shift tick is one tone"
 

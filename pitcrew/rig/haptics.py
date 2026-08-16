@@ -90,6 +90,7 @@ class HapticsEngine:
         self.error: str | None = None
         self.faded_out = 0
         self.callbacks = 0
+        self.recoveries = 0
 
     # --------------------------------------------------------- from outside
 
@@ -152,6 +153,37 @@ class HapticsEngine:
         note = f", {limited} blocks limited" if limited else ""
         return (f"Transducer on {self._device}, {self.callbacks} blocks"
                 f"{note}.")
+
+    def recover(self) -> bool:
+        """Close and reopen the stream in place, because the endpoint wedged.
+
+        The failure this answers is chronic and hardware-level: the ButtKicker
+        USB endpoint periodically enters a state where it accepts every sample
+        and renders none - Windows shows it healthy, the meter shows nothing,
+        and on the worst days only a reboot brings it back. The health check
+        can SEE this (loud in, silence out); until now all it could do was
+        write a log line the driver cannot read inside a headset.
+
+        Reopening the WASAPI client is the strongest un-wedge available from
+        user space. If the device is too far gone even for that, the reopen
+        fails or the meter stays silent, the count says so, and the log can
+        then say "power-cycle it" with evidence rather than guessing.
+
+        Thread-safe: called from the health check's own thread, same lock as
+        `suspend`/`resume`.
+        """
+        with self._lock:
+            if self._suspended or self._stream is None:
+                return False
+            self._close()
+            self._fade = 0.0
+            opened = self._open()
+        self.recoveries += 1
+        if opened:
+            log("haptics").warning(
+                "the transducer stream was reopened in place (recovery %d) - "
+                "the endpoint had wedged", self.recoveries)
+        return opened
 
     # ------------------------------------------------------------ lifecycle
 

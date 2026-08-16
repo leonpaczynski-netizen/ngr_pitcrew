@@ -265,6 +265,20 @@ UNLOAD_RELEASE_S = 0.12
 ARBITRATE_ABOVE = 0.35
 ARBITRATE_DUCK = 0.45
 
+# **A cue has to mean it before the bed moves for it.**
+#
+# Reported from the seat as "a constant on and off hum that I couldn't work
+# out what it was meant to represent", and the log agrees: the background duck
+# read -5%, -25%, -59%, -8% on successive samples. Low-level flickers of the
+# critical cues - a brake at its quiet floor, a traction level of 0.1 - were
+# grabbing up to 15 dB of duck and handing it back, so the thing the driver
+# felt was not the cues, it was the BED breathing around them.
+#
+# Below this shaped level a cue rides on top of the bed without moving it;
+# above, the duck scales from zero. The cue itself is unaffected - this gates
+# what the background does, not what the foreground says.
+DUCK_GATE = 0.15
+
 # **The profile, and what survived from his own tuning.**
 #
 # The six effects here were his, ported from eight days of SimHub tuning, and
@@ -363,8 +377,18 @@ PROFILE = (
     #
     # So the level computed in `vehicle._braking` is now rendered as it was
     # computed. That is the whole point of having shaped it there.
+    # **0.85, up from 0.42 - three cuts were made and never summed.**
+    #
+    # "Braking felt numb, no increase in feedback felt braking hard or soft."
+    # Correct: the trim went 0.62 to 0.42, `min_force` 18 to 0 and the
+    # below-optimum floor 0.18 to 0.06 in successive fixes, each right alone,
+    # together about 13 dB - and the felt table then read road bed 0.54
+    # against brake 0.28 at p99. The highest-value cue in the system was
+    # losing to an immersion bed by half, which is the exact inversion the
+    # priority classes exist to prevent. The SHAPE stays as it is - quiet
+    # floor, step at the optimum - and the authority comes back.
     EffectSpec("brake_limit", 70.00, 40.0, 50.0, noise=4.0, min_force=0.0,
-               gamma=1.0, priority=CRITICAL, felt_trim=0.42,
+               gamma=1.0, priority=CRITICAL, felt_trim=0.85,
                am_lo=7.0, am_hi=16.0, am_depth=0.55,
                attack_s=0.006, release_s=0.05),
     # His gear thump, renamed for what it carries: a shift, and the rev
@@ -418,7 +442,16 @@ PROFILE = (
     # rare; this channel's day job is now kerbs, which are not. If it ever
     # needs more than the trim can give, the GAIN is the thing to revisit - a
     # trim is meant to carry a correction, not a change of purpose.
-    EffectSpec("impact", 12.31, 52.0, 60.0, noise=3.0, priority=TRANSIENT,
+    # **18.0, and it is the one gain in this file that is no longer his.**
+    #
+    # 12.31 was set in SimHub for genuine collisions, which are rare; this
+    # channel's day job is now kerb strikes and landings, which are not, and
+    # after two rounds of "kerb strikes not felt" the trim was at 3.8 of a
+    # maximum 4 with nothing left. A trim is meant to carry a correction, not
+    # a change of purpose - the purpose changed, so the gain does, recorded
+    # here rather than smuggled. 18/70 at trim 3.8 puts the scale at 0.489,
+    # just under the calibrated ceiling.
+    EffectSpec("impact", 18.00, 52.0, 60.0, noise=3.0, priority=TRANSIENT,
                threshold=25.0, min_force=20.0, gamma=1.20, felt_trim=3.80,
                band_compensate=True),
     # His `TractionLossContainer`, renamed to what it actually carries: how
@@ -526,6 +559,22 @@ class _Voice:
         """
         spec = self.spec
         target = float(np.clip(intensity, 0.0, 1.0))
+        # **The band compensation scales the TARGET, never the ramp.**
+        #
+        # It was applied to the interpolated ramp after it was built, which
+        # rescaled the ramp's STARTING point too - so whenever the correction
+        # changed between blocks, this block began somewhere the last one did
+        # not end. A discontinuity at every boundary, in proportion to the
+        # amplitude: measured at 0.105 against an in-block step of 0.007 once
+        # the impact channel got loud enough to show it. Folding it into the
+        # target keeps the level continuous, at the cost of the correction
+        # lagging by one block - about 11 ms on a value that follows the
+        # pitch smoothing, which is far slower than that anyway.
+        if spec.band_compensate:
+            here = transducer.felt_response(self.frequency)
+            centre = transducer.felt_response(spec.centre_hz)
+            if here > 1e-6:
+                target = min(1.0, target * min(1.8, max(0.6, centre / here)))
         if target < SILENT and self._level < SILENT:
             # Nothing here and nothing decaying. Leave the phase where it is:
             # it costs nothing to keep and means the next onset starts from a
@@ -567,21 +616,6 @@ class _Voice:
             freq = spec.freq_lo + (spec.freq_hi - spec.freq_lo) * self._pitch
         else:
             freq = spec.freq_lo
-
-        # **Compensate the response across the band, not at a point.**
-        #
-        # `felt_trim` is a static correction for where an effect sits; it can
-        # do nothing for one that moves. Normalised to the band centre so it
-        # does not double-count the driver's own gain, which was tuned with
-        # the effect somewhere in the middle of its range. Clamped, because
-        # this is a correction and not a licence: an effect that needs more
-        # than a factor of two to be heard is in the wrong band.
-        if spec.band_compensate:
-            here = transducer.felt_response(freq)
-            centre = transducer.felt_response(spec.centre_hz)
-            if here > 1e-6:
-                correction = min(1.8, max(0.6, centre / here))
-                np.multiply(ramp, correction, out=ramp)
 
         # Phase carried forward, so a frequency change bends the wave instead
         # of jumping it.
@@ -840,7 +874,10 @@ class HapticMix:
         # not the effects.
         event = (float(shaped[self._transient].max())
                  if self._transient.any() else 0.0)
-        aim = 1.0 - max(DUCK_DEPTH * event, DUCK_CRITICAL * critical)
+        # Gated, then rescaled so a full-scale cue still earns its full duck.
+        event = max(0.0, event - DUCK_GATE) / (1.0 - DUCK_GATE)
+        critical_g = max(0.0, critical - DUCK_GATE) / (1.0 - DUCK_GATE)
+        aim = 1.0 - max(DUCK_DEPTH * event, DUCK_CRITICAL * critical_g)
         tau = DUCK_ATTACK_S if aim < self._duck else DUCK_RELEASE_S
         self._duck += (aim - self._duck) * min(1.0, seconds / tau)
 
@@ -962,10 +999,26 @@ class HapticMix:
         # The BKA-PRO's 150 W rating assumes a one-third duty cycle and its
         # DC-protect trips on sustained excessive input; 71% of blocks held
         # near full scale is exactly that.
+        # **The knee is applied to every block, not only the loud ones.**
+        #
+        # It used to be conditional on the block's own peak, which made the
+        # limiter itself a discontinuity generator: with the mix sitting near
+        # the ceiling, alternate blocks got the tanh curve and their
+        # neighbours did not, and the boundary between a compressed sample and
+        # an uncompressed one is a step. Measured at 0.085 across a seam
+        # against 0.007 inside the block - at 150 W, a click per block.
+        #
+        # tanh is memoryless and identical everywhere, so applied always it
+        # cannot disagree with itself at a boundary. The cost is about 2% of
+        # gentle compression at half scale, which is beneath anything the
+        # driver can feel; the count still marks only the blocks that were
+        # genuinely into the knee, because that is the signal that the mix is
+        # running too hot.
         peak = float(np.max(np.abs(out[:n]))) if n else 0.0
-        if peak > transducer.TRANSIENT_CEILING:
+        if n:
             np.tanh(out[:n] / transducer.TRANSIENT_CEILING, out=out[:n])
             np.multiply(out[:n], transducer.TRANSIENT_CEILING, out=out[:n])
+        if peak > transducer.TRANSIENT_CEILING:
             self.limited_blocks += 1
         if peak > transducer.HARD_LIMIT:
             np.clip(out[:n], -transducer.HARD_LIMIT, transducer.HARD_LIMIT,

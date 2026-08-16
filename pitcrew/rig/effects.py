@@ -106,7 +106,17 @@ OFF_SURFACE_BOOST = 0.25
 # of touching the kerb rather than for as long as the wheel is on it, because
 # the edge is what reads as sharp. Sitting on a kerb through a chicane stays a
 # texture.
-KERB_THUMP = 0.85
+# **Graded by how hard the kerb is hit, not fired at one size.**
+#
+# Reported from the seat: "huge kerbs are felt huge but subtle kerbs aren't
+# felt at all, there is no middle ground". The strike used to fire at a fixed
+# 0.85 whatever happened - so what he was feeling as "huge" was the separate
+# velocity-step impact and the texture bed, and the strike itself was the
+# part he could not feel at any size. A binary input cannot have a middle
+# ground; the suspension velocity at the moment of the strike can, and it is
+# already measured: median 0.082 m/s on a kerb, p90 0.318.
+KERB_THUMP_FLOOR = 0.70       # a brushed kerb, still unmistakably a kerb
+KERB_THUMP_FULL_MS = 0.30     # suspension velocity at which it maxes out
 KERB_THUMP_DECAY_S = 0.12
 
 # **Lateral acceleration, in g.** Speed times yaw rate over 9.81 - the standard
@@ -249,6 +259,9 @@ class EffectDeriver:
 
     # ------------------------------------------------------------- immersion
 
+    # Suspension velocity this frame, kept for the kerb grading below.
+    _texture_speed = 0.0
+
     def _road(self, p: GT7Packet, s: vehicle.VehicleState, dt: float) -> float:
         """Road texture, and the honest account of what this is.
 
@@ -265,6 +278,7 @@ class EffectDeriver:
         if previous is None or dt <= 0:
             return 0.0
         speed = sum(abs(h - q) for h, q in zip(heights, previous)) / (4.0 * dt)
+        self._texture_speed = speed
         texture = _ramp(speed, TEXTURE_ONSET_MS, TEXTURE_FULL_MS)
 
         # **The speed scaling belongs to the texture, not to the surface.**
@@ -332,7 +346,9 @@ class EffectDeriver:
         """
         self._kerb_pulse *= float(np.exp(-dt / KERB_THUMP_DECAY_S))
         if s.kerb_strike:
-            self._kerb_pulse = max(self._kerb_pulse, KERB_THUMP)
+            hit = KERB_THUMP_FLOOR + (1.0 - KERB_THUMP_FLOOR) * _ramp(
+                self._texture_speed, 0.0, KERB_THUMP_FULL_MS)
+            self._kerb_pulse = max(self._kerb_pulse, hit)
         return self._kerb_pulse
 
     # ---------------------------------------------------------------- engine

@@ -1879,9 +1879,15 @@ class PitCrewController(QObject):
             log("haptics").error(
                 "the transducer rendered a peak of %.3f here and %s metered "
                 "nothing - it is accepting the audio and playing none of it. "
-                "Check the amplifier is on and out of protection; Windows "
-                "will still report the device as healthy.",
-                produced, device)
+                "Reopening the stream.", produced, device)
+            # **And then do something about it.** This exact wedge has needed
+            # a laptop restart from the seat more than once, and a log line
+            # is not a recovery. Reopening the WASAPI client is the strongest
+            # un-wedge available from user space; if the endpoint is too far
+            # gone even for that, the next health pass will say so and the
+            # advice becomes "power-cycle it" with evidence.
+            if self.bridge.haptics is haptics:
+                haptics.recover()
 
         threading.Thread(target=ask, name="PitCrewHapticsMeter",
                          daemon=True).start()
