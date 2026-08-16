@@ -596,6 +596,7 @@ class PracticeScreen(QWidget):
     recording_toggled = pyqtSignal(bool)
     practice_mode_changed = pyqtSignal(str)
     practice_intent_changed = pyqtSignal(str)
+    coach_speaks_changed = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -658,6 +659,26 @@ class PracticeScreen(QWidget):
             lambda: self.practice_intent_changed.emit(self.practice_intent()))
         header.addWidget(Field("Practising", self.intent_picker), 0,
                          Qt.AlignmentFlag.AlignBottom)
+
+        # Whether the qualifying coach talks, in the Race screen's idiom.
+        # Silent still does the work: every call is computed and logged, it
+        # simply is not spoken - so a silent qualifying run still leaves the
+        # record of what the coach would have said.
+        self.coach_picker = QComboBox()
+        self.coach_picker.addItem("Speaks", True)
+        self.coach_picker.addItem("Silent", False)
+        self.coach_picker.setToolTip(
+            "The qualifying coach: out-lap temperatures, then the live delta "
+            "against your best practice lap. Only armed while Practising is "
+            "set to Qualifying. Silent still logs every call.")
+        # Live, like the race screen's engineer toggle: silencing a coach
+        # mid-out-lap must not wait for the next session.
+        self.coach_picker.currentIndexChanged.connect(
+            lambda: self.coach_speaks_changed.emit(self.coach_speaks()))
+        block_wheel(self.coach_picker)
+        header.addWidget(Field("Coach", self.coach_picker,
+                               hint="Qualifying sessions only"),
+                         0, Qt.AlignmentFlag.AlignBottom)
 
         # Secondary. The run *ends* on the primary, and this screen shipped
         # two crayon fills - one at the top to start and one at the bottom to
@@ -1053,6 +1074,9 @@ class PracticeScreen(QWidget):
 
     def practice_intent(self) -> str:
         return self.intent_picker.currentData()
+
+    def coach_speaks(self) -> bool:
+        return bool(self.coach_picker.currentData())
 
     def set_practice_intent(self, intent: str | None) -> None:  # noqa: N802
         index = self.intent_picker.findData(intent or FOR_RACE)

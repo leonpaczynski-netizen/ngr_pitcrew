@@ -31,7 +31,12 @@ from pitcrew.analysis.incidents import (
     read_rows,
     stored_or_read,
 )
-from pitcrew.analysis.runs import auto_out_laps, fuel_implausible_laps, carry_compound
+from pitcrew.analysis.runs import (
+    FOR_QUALIFYING,
+    auto_out_laps,
+    carry_compound,
+    fuel_implausible_laps,
+)
 from pitcrew.diagnostics import log
 from pitcrew.engineer.ptt import (
     PushToTalk,
@@ -60,6 +65,7 @@ from pitcrew.store.db import Store
 from pitcrew.race.calls import STAY_OUT
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.race.replan import OfferDesk, assess, observed_fuel_per_lap
+from pitcrew.race.qualifying import QualifyingCoach, reference_lap
 from pitcrew.race.temps import measured_temp_window
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
@@ -156,6 +162,11 @@ class TelemetryBridge(QObject):
         # stalled USB port must not reach the packet handler.
         self.wind_curve = WindCurve()
         self.wind = None
+        # The qualifying coach, armed by the controller when a practice
+        # session opens with the qualifying intent. On the telemetry thread
+        # like the shift beep, because the out-lap and delta calls are about
+        # the frame they were computed from; its voice is a queue put.
+        self.quali = None
         self.racing = False
         # Whether the first packet is allowed to set the threshold. Off means
         # the driver picked a number, and the game must not overwrite it.
@@ -229,6 +240,9 @@ class TelemetryBridge(QObject):
         # A session boundary ends the lap in progress, so the shift mode
         # accumulated for it belongs to nothing.
         self._lap_short_shift_rpm = None
+        # A coach armed for the previous session would speak about laps that
+        # belong to nothing. Whoever opens the next session re-arms it.
+        self.quali = None
         # Velocity and suspension carried across a session boundary are a
         # collision that never happened, at full scale, the instant he
         # rejoins somewhere else on the map.
@@ -313,7 +327,8 @@ class TelemetryBridge(QObject):
                 self.shift_beep.short_shift_drop_rpm)
         elif self._lap_short_shift_rpm is None:
             self._lap_short_shift_rpm = 0.0
-        for event in self.state.update(packet):
+        events = self.state.update(packet)
+        for event in events:
             if event.kind is EventKind.LAP_COMPLETED:
                 # Detach inline; compress and store on the Qt thread.
                 rows = self.recorder.take_rows()
@@ -321,6 +336,25 @@ class TelemetryBridge(QObject):
                 self._lap_short_shift_rpm = None
                 self.lap_completed.emit(event.data["lap"], rows)
             self.session_event.emit(event)
+
+        # The qualifying coach, under the same doctrine as the outputs
+        # below: an adviser must never cost the driver a recorded lap, so it
+        # runs after everything that carries state, guarded, and is dropped
+        # for the session on its first exception. Speaking is a queue put.
+        # Read once into a local: the Qt thread clears `self.quali` on
+        # disarm, and a second read between check and call would raise here
+        # and be mis-logged as the coach's own fault.
+        coach = self.quali
+        if coach is not None:
+            try:
+                coach.update(packet, events, _monotonic())
+            except Exception as exc:                       # noqa: BLE001
+                log("quali").error(
+                    "the qualifying coach raised on the telemetry thread and "
+                    "has been stopped for this session: %s: %s",
+                    type(exc).__name__, exc, exc_info=True)
+                if self.quali is coach:
+                    self.quali = None
 
         # **Last, and unable to hurt anything above it.** This is an output,
         # and CLAUDE.md is clear that the app observes and advises - so a
@@ -459,6 +493,7 @@ class PitCrewController(QObject):
         self.practice.practice_mode_changed.connect(self._on_practice_mode)
         self.practice.practice_intent_changed.connect(
             self._on_practice_intent)
+        self.practice.coach_speaks_changed.connect(self._on_coach_speaks)
         if self.strategy is not None:
             self.strategy.build_requested.connect(self.build_strategy)
             self.strategy.approve_requested.connect(self.approve_strategy)
@@ -1398,7 +1433,41 @@ class PitCrewController(QObject):
         # evidence; it does not replace it. Three runs at one circuit are one
         # body of evidence about one car.
         self.practice.set_laps(self._rows_for_event(event["id"]))
+        if intent == FOR_QUALIFYING:
+            self._arm_quali(event)
         return self.session_id
+
+    def _arm_quali(self, event: dict, *, mid_lap: bool = False) -> None:
+        """Arm the qualifying coach with what practice actually measured.
+
+        Both halves arm independently and honestly: the temperature target
+        is the window measured from this event's own laps (`race/temps.py`,
+        never the fabricated band), and the delta reference is the best
+        counted practice lap's frames. Either can be missing - the coach
+        says what it is missing and coaches with the rest.
+
+        Decodes up to sixteen lap blobs (~1 s) on the Qt thread - a
+        pre-session action, the same cost the race arm already pays.
+        `mid_lap` means the car is already circulating: the coach then holds
+        its tongue until the next line crossing rather than calling "Out
+        lap" into the middle of a flyer.
+        """
+        window = measured_temp_window(self.store, event["id"])
+        reference = reference_lap(self.store, event["id"])
+        speaks = self.practice.coach_speaks()
+        self.bridge.quali = QualifyingCoach(
+            window=window, reference=reference,
+            speak=self.voice.say if speaks else None, mid_lap=mid_lap)
+        # One auditable line: what tonight's coaching rests on.
+        log("quali").info(
+            "armed: reference lap %s (%s), window front %s rear %s, "
+            "laps to window %s, %s",
+            reference.lap_id if reference else None,
+            f"{reference.lap_time_ms / 1000:.3f}s" if reference else "none",
+            window.front if window else None,
+            window.rear if window else None,
+            window.laps_to_window if window else None,
+            "speaking" if speaks else "silent")
 
     def start_haptics(self) -> bool:
         """Open the transducer for this session, if the driver wants it.
@@ -1571,10 +1640,23 @@ class PitCrewController(QObject):
                  f"{self.listener.heartbeat_format}, listening on "
                  f"{self.feed_port}"
                  if self.direct else f"Listening on {self.feed_port}")
-        self.practice.set_status(f"{where}. Waiting for the car to go out.")
+        status = f"{where}. Waiting for the car to go out."
+        coach = self.bridge.quali
+        if coach is not None:
+            # The armed state and what it was armed with, where he can read
+            # it before putting the headset on. The coaching itself is voice.
+            status += (" Qualifying coach armed - reference "
+                       f"{coach.reference.lap_time_ms / 1000:.1f}."
+                       if coach.reference else
+                       " Qualifying coach armed - no reference lap, "
+                       "temperatures and lap times only.")
+        self.practice.set_status(status)
         self.announce("Recording", "Go out when you are ready.")
 
     def stop_practice(self) -> None:
+        # The coach before the listener, so no frame can arrive for a coach
+        # whose session is being closed under it.
+        self.bridge.quali = None
         self.stop_haptics()
         self.stop_wind()
         if self.listener is not None:
@@ -1796,6 +1878,31 @@ class PitCrewController(QObject):
         """
         if self.session_id is not None:
             self.store.set_practice_intent(self.session_id, intent)
+        # The coach follows the intent live: switching to qualifying
+        # mid-session arms it, switching away stands it down. Only for an
+        # open practice session - a race has its own engineer.
+        if self.session_id is None or self.session_kind != "practice":
+            return
+        if intent == FOR_QUALIFYING:
+            event = self.active_event()
+            if event is not None and self.bridge.quali is None:
+                # Mid-lap if the stream shows the car on track: the fresh
+                # coach then waits for the next line crossing instead of
+                # announcing an out lap that is not one.
+                self._arm_quali(event, mid_lap=self.bridge.state.on_track)
+        elif self.bridge.quali is not None:
+            self.bridge.quali = None
+            log("quali").info("disarmed - intent moved off qualifying")
+
+    def _on_coach_speaks(self, speaks: bool) -> None:
+        """The Speaks/Silent toggle follows him live, mid-session.
+
+        Silent still records: the coach keeps computing and logging every
+        call, exactly as the race engineer's silent mode does.
+        """
+        coach = self.bridge.quali
+        if coach is not None:
+            coach.set_speak(self.voice.say if speaks else None)
 
     def _on_lap_changed(self, lap_id: int) -> None:
         """Persist a mark the moment it is made."""
