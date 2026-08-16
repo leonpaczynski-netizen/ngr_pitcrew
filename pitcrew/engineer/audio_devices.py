@@ -55,6 +55,22 @@ _DEFAULT = object()
 # process, so it must not run while another thread is opening a stream.
 _ENUMERATE_LOCK = threading.RLock()
 
+
+def enumeration_lock():
+    """The lock that serialises device-list rebuilds against stream opens.
+
+    Public for exactly one reason: lock ORDER. `devices` takes this lock and
+    then calls `suspend` on every sustained holder - the holder's own lock -
+    while a holder that opens a stream from inside its own lock arrives here
+    needing this one. Same two locks, opposite order, two threads: the app
+    stops for good, and the likeliest collision is the driver opening the
+    settings screen in the same seconds a wedge recovery is reopening the
+    transducer. So any holder that will open while holding its own lock must
+    take this lock FIRST; it is re-entrant, so the nested acquisitions inside
+    `open_output` on the same thread cost nothing.
+    """
+    return _ENUMERATE_LOCK
+
 # **One lock per card, not one across the process.**
 #
 # It began as a single global, on the belief that overlapping PortAudio

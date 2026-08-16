@@ -421,3 +421,509 @@ def test_a_recovery_cannot_resurrect_a_stopped_transducer(monkeypatch):
     assert not engine.running
     assert engine.recoveries == 0
 
+
+# --------------------------------------- the full rebuild, one rung further
+
+def _patch_rebuild_plumbing(monkeypatch, engine, open_output):
+    monkeypatch.setattr(haptics, "REBUILD_SETTLE_S", 0.0)
+    monkeypatch.setattr(haptics.audio_devices, "open_output", open_output)
+    monkeypatch.setattr(haptics.audio_devices, "register_sustained",
+                        lambda e: None)
+    monkeypatch.setattr(haptics.audio_devices, "unregister_sustained",
+                        lambda e: None)
+
+
+def test_a_rebuild_that_reenumerates_does_not_deadlock(monkeypatch):
+    """Same trap as `recover`, one rung up: `open_output` may decide the
+    device list is stale and call straight back into `suspend` on this same
+    engine, on this same thread. The RLock has to hold for the rebuild too."""
+    import threading
+
+    engine = _engine()
+    engine._stream = _FakeStream()
+
+    def open_output(*args, **kwargs):
+        engine.suspend()
+        engine.resume()
+        return _FakeStream()
+
+    _patch_rebuild_plumbing(monkeypatch, engine, open_output)
+
+    result = []
+    worker = threading.Thread(target=lambda: result.append(engine.rebuild()),
+                              daemon=True)
+    worker.start()
+    worker.join(timeout=5.0)
+    assert result, "rebuild deadlocked against its own suspend"
+    assert result[0] is True
+    assert engine.rebuilds == 1
+    assert engine.running
+
+
+def test_a_rebuild_retries_even_when_the_last_attempt_opened_nothing(
+        monkeypatch):
+    """`recover` demands a live stream to reopen; a rebuild must not, because
+    the attempt before it may have failed to open anything at all - which is
+    exactly the state a retry exists for."""
+    engine = _engine()
+    assert engine._stream is None
+    _patch_rebuild_plumbing(monkeypatch, engine,
+                            lambda *a, **k: _FakeStream())
+    assert engine.rebuild() is True
+    assert engine.running
+
+
+def test_a_stop_during_the_rebuild_settle_wins(monkeypatch):
+    """The driver clicking stop while the rebuild is standing back must end
+    the session, not race it: the second lock take re-checks `_stopped`, so
+    the rebuild opens nothing and stays down."""
+    engine = _engine()
+    engine._stream = _FakeStream()
+    opened = []
+    monkeypatch.setattr(haptics.audio_devices, "open_output",
+                        lambda *a, **k: opened.append(1) or _FakeStream())
+    monkeypatch.setattr(haptics.audio_devices, "unregister_sustained",
+                        lambda e: None)
+    monkeypatch.setattr(haptics.time, "sleep", lambda s: engine.stop())
+
+    # None, not False: the driver stopping it is an abort, not a failure,
+    # and the watchdog must not spend a capped attempt on it.
+    assert engine.rebuild() is None
+    assert opened == [], "a stopped engine was reopened anyway"
+    assert not engine.running
+    assert engine.rebuilds == 0
+
+
+def test_a_recovery_racing_the_settings_picker_cannot_deadlock(monkeypatch):
+    """The AB-BA: the picker takes the enumeration lock and then calls
+    `suspend` - the engine's lock - on every sustained stream, while a
+    recovery that took the engine's lock first arrives at the enumeration
+    lock from inside `_open`. Opposite order, both blocking, permanent - and
+    the likeliest collision is exactly this feature's scenario: haptics die,
+    the driver opens Settings while the watchdog reopens. `recover` now
+    takes the enumeration lock strictly first."""
+    import threading
+    import time as _time
+
+    engine = _engine()
+    engine._stream = _FakeStream()
+
+    def open_output(*args, **kwargs):
+        # The real one serialises on the enumeration lock too.
+        with haptics.audio_devices.enumeration_lock():
+            return _FakeStream()
+
+    monkeypatch.setattr(haptics.audio_devices, "open_output", open_output)
+    monkeypatch.setattr(haptics.audio_devices, "register_sustained",
+                        lambda e: None)
+    monkeypatch.setattr(haptics.audio_devices, "unregister_sustained",
+                        lambda e: None)
+
+    taken = threading.Event()
+    go = threading.Event()
+
+    def settings_picker() -> None:
+        # What `devices` does: enumeration lock first, then every sustained
+        # holder's suspend/resume.
+        with haptics.audio_devices.enumeration_lock():
+            taken.set()
+            go.wait(timeout=5.0)
+            engine.suspend()
+            engine.resume()
+
+    picker = threading.Thread(target=settings_picker, daemon=True)
+    picker.start()
+    assert taken.wait(timeout=5.0)
+
+    result = []
+    recovering = threading.Thread(
+        target=lambda: result.append(engine.recover()), daemon=True)
+    recovering.start()
+    _time.sleep(0.2)         # let the recovery reach its first lock acquire
+    go.set()
+    picker.join(timeout=5.0)
+    recovering.join(timeout=5.0)
+    assert not picker.is_alive(), "the picker deadlocked against recover"
+    assert result, "recover deadlocked against the picker"
+    assert result[0] is True
+    assert engine.running
+
+
+# ------------------------------------ the watchdog that convicts the meter
+
+def _frozen_polls(wd, count, heard=0.054, start=0.0, step=10.0):
+    """Loud polls with a varying rendered peak and a meter stuck on one
+    number - the race of 16 Aug 2026, distilled."""
+    rendered = (0.30, 0.55, 0.42, 0.51, 0.38, 0.47)
+    verdicts = []
+    for i in range(count):
+        verdicts.append(wd.judge(rendered[i % len(rendered)], heard,
+                                 start + step * i))
+    return verdicts
+
+
+def test_a_meter_frozen_on_a_live_signal_is_convicted_inside_a_minute():
+    wd = haptics.TransducerWatchdog()
+    verdicts = _frozen_polls(wd, 10)
+    assert "stale" in verdicts, "twenty minutes of 0.054 read as healthy"
+    declared_at = verdicts.index("stale") * 10.0
+    assert 30.0 <= declared_at <= 60.0, (
+        f"declared after {declared_at:.0f}s - wanted the order of 30-60s")
+    # And every poll before the threshold withheld judgement - a repeating
+    # value is never "live", however early in the run.
+    assert set(verdicts[:verdicts.index("stale")]) == {"unsettled"}
+
+
+def test_a_jittering_meter_is_never_convicted():
+    wd = haptics.TransducerWatchdog()
+    verdicts = [wd.judge(0.45, 0.080 + 0.001 * (i % 7), i * 10.0)
+                for i in range(200)]
+    assert "stale" not in verdicts
+    # And once enough distinct readings are in, it is confirmed alive.
+    assert verdicts[-1] == "live"
+
+
+def test_a_steady_rendered_level_cannot_convict_the_meter():
+    """An identical reading only means anything if what WE rendered varied.
+    A dead-steady state gives a working meter every reason to repeat
+    itself, so however long it repeats, it is not evidence."""
+    wd = haptics.TransducerWatchdog()
+    for i in range(200):
+        assert wd.judge(0.40, 0.054, i * 10.0) != "stale"
+
+
+def test_a_quiet_spell_pauses_the_run_rather_than_resetting_it():
+    """Staleness is judged only on polls actually taken while loud - the
+    controller never asks the meter for a parked car. The frozen run resumes
+    after the spell, because the meter is still frozen either way."""
+    wd = haptics.TransducerWatchdog()
+    assert "stale" not in _frozen_polls(wd, 3, start=0.0)
+    # Ten minutes in the pit lane: no polls at all.
+    verdicts = _frozen_polls(wd, 2, start=600.0)
+    assert verdicts[-1] == "stale"
+
+
+def test_a_silent_reading_ends_the_frozen_run():
+    """Silence is the OTHER wedge and has its own handling; a run that
+    straddles it would be counting two different failures as one."""
+    wd = haptics.TransducerWatchdog()
+    _frozen_polls(wd, 4)
+    wd.silent(40.0)
+    assert "stale" not in _frozen_polls(wd, 4, start=50.0)
+
+
+def test_one_changed_reading_is_not_a_recovery():
+    """A wedge that survives the endpoint's pump rebuild comes back frozen
+    at a NEW float. The first reading of it must be "unsettled", never
+    "live" - "live" fires `settled`, and `settled` is what claims a rebuild
+    worked and resets the ladder."""
+    wd = haptics.TransducerWatchdog()
+    _frozen_polls(wd, 6)                        # convicted at 0.054
+    wd.reopened(50.0)
+    wd.rebuilt(True, 60.0)
+    # The endpoint re-froze at a different number.
+    assert wd.judge(0.42, 0.061, 70.0) == "unsettled"
+    # The ladder did not reset off that single reading...
+    assert wd.plan_recovery(80.0) != "reopen"
+    # ...and the new value convicts in its own right.
+    verdicts = _frozen_polls(wd, 6, heard=0.061, start=80.0)
+    assert "stale" in verdicts
+    assert "live" not in verdicts
+
+
+def test_a_ping_ponging_meter_is_still_convicted():
+    """A meter alternating between two frozen values is as dead as one stuck
+    on a single value. Judging only against the previous reading would reset
+    the count on every flip and never convict."""
+    wd = haptics.TransducerWatchdog()
+    rendered = (0.30, 0.55, 0.42, 0.51)
+    verdicts = [wd.judge(rendered[i % len(rendered)],
+                         0.054 if i % 2 == 0 else 0.061, i * 10.0)
+                for i in range(20)]
+    assert "stale" in verdicts, "the A,B,A,B ping-pong was never convicted"
+    assert "live" not in verdicts, "a two-value ping-pong read as alive"
+
+
+# ------------------------------------------------- the cadence as a witness
+
+def test_a_sustained_cadence_drop_is_named_once_and_corroborates(caplog):
+    """100/s falling to 64/s and staying there is the endpoint's audio pump
+    being rebuilt - a device-side event worth one warning, and worth holding
+    as corroboration for the meter's verdict."""
+    import logging
+
+    wd = haptics.TransducerWatchdog()
+    state = {"t": 0.0, "blocks": 0}
+
+    def cycle(rate):
+        state["blocks"] += int(rate * 10)
+        state["t"] += 10.0
+        wd.note_cadence(state["blocks"], state["t"])
+
+    with caplog.at_level(logging.WARNING, logger="pitcrew.haptics"):
+        for _ in range(4):                      # baseline at ~100 blocks/s
+            cycle(100)
+        assert not wd.corroborated(state["t"])
+        cycle(64)                               # one low cycle is jitter
+        assert not wd.corroborated(state["t"])
+        cycle(64)                               # two is a drop
+        assert wd.corroborated(state["t"])
+        cycle(64)
+        cycle(64)
+
+    warnings = [r for r in caplog.records if "pump" in r.getMessage()]
+    assert len(warnings) == 1, "the drop was warned more than once"
+    # Corroboration ages out rather than tainting the whole session.
+    assert not wd.corroborated(state["t"] + 500.0)
+
+
+def test_corroboration_shortens_the_meter_verdict_by_one_poll():
+    wd = haptics.TransducerWatchdog()
+    state = {"blocks": 0}
+    for i in range(6):
+        state["blocks"] += 1000 if i < 4 else 640
+        wd.note_cadence(state["blocks"], 10.0 * (i + 1))
+    assert wd.corroborated(60.0)
+    verdicts = _frozen_polls(wd, wd.STALE_POLLS_CORROBORATED, start=70.0)
+    assert verdicts[-1] == "stale"
+
+
+def test_a_counter_that_went_backwards_is_not_a_cadence_drop(caplog):
+    """A replaced engine restarts its block counter; that is bookkeeping,
+    not a device event."""
+    import logging
+
+    wd = haptics.TransducerWatchdog()
+    for i in range(4):
+        wd.note_cadence(1000 * (i + 1), 10.0 * (i + 1))
+    with caplog.at_level(logging.WARNING, logger="pitcrew.haptics"):
+        wd.note_cadence(100, 50.0)
+        wd.note_cadence(1100, 60.0)
+    assert not any("pump" in r.getMessage() for r in caplog.records)
+
+
+# --------------------------------------------------- the ladder of recovery
+
+def test_the_first_wedge_gets_a_reopen_and_a_flap_gets_the_rebuild():
+    wd = haptics.TransducerWatchdog()
+    assert wd.plan_recovery(0.0) == "reopen"
+    wd.reopened(0.0)
+    # Evidence back ten seconds later: the reopen did not hold.
+    assert wd.plan_recovery(10.0) == "rebuild"
+
+
+def test_a_reopen_that_held_resets_the_ladder():
+    wd = haptics.TransducerWatchdog()
+    wd.reopened(0.0)
+    # The meter is seen alive well past the flap window: episode over.
+    wd.settled(wd.FLAP_WINDOW_S + 20.0)
+    assert wd.plan_recovery(wd.FLAP_WINDOW_S + 30.0) == "reopen"
+
+
+def test_rebuilds_are_capped_backed_off_and_end_in_one_clear_stand_down():
+    wd = haptics.TransducerWatchdog()
+    wd.reopened(0.0)
+    t, rebuilds, waits = 10.0, 0, 0
+    while not wd.degraded and t < 1000.0:
+        action = wd.plan_recovery(t)
+        if action == "rebuild":
+            rebuilds += 1
+            wd.rebuilt(True, t)
+        elif action == "wait":
+            waits += 1
+        t += 10.0
+    assert rebuilds == wd.MAX_REBUILDS
+    assert waits > 0, "every rebuild fired back-to-back with no backoff"
+    assert wd.degraded
+    notice = wd.take_notice()
+    assert notice is not None
+    written, spoken = notice
+    assert "power-cycle" in written
+    assert spoken, "nothing for the voice to say"
+    assert wd.take_notice() is None, "the notice repeated"
+    assert wd.plan_recovery(t + 500.0) == "stand-down"
+
+
+def test_a_rebuild_is_only_claimed_after_the_meter_is_seen_alive():
+    """The stream opening proves nothing - opening is the one thing a wedged
+    endpoint still does perfectly. The driver is told when the meter moves."""
+    wd = haptics.TransducerWatchdog()
+    wd.reopened(0.0)
+    wd.rebuilt(True, 10.0)
+    assert wd.take_notice() is None, "claimed success off a bare open"
+    wd.settled(20.0)
+    notice = wd.take_notice()
+    assert notice is not None and "came back" in notice[0]
+    # And once only, however often it settles afterwards.
+    wd.settled(30.0)
+    assert wd.take_notice() is None
+
+
+# ------------------------------- the controller wiring, driven without a card
+
+class _RecordingVoice:
+    def __init__(self):
+        self.spoken = []
+
+    def say(self, text):
+        self.spoken.append(text)
+
+
+class _WedgedForGood:
+    """Recovers and rebuilds on command; the device stays dead regardless."""
+
+    def __init__(self):
+        self.reopens = 0
+        self.rebuilds_called = 0
+
+    def recover(self):
+        self.reopens += 1
+        return True
+
+    def rebuild(self):
+        self.rebuilds_called += 1
+        return True
+
+
+def _rack(engine):
+    """A controller pared down to the endpoint-reading path."""
+    from pitcrew.controller import PitCrewController
+
+    class Bridge:
+        haptics = engine
+
+    class Rack:
+        _act_on_endpoint_reading = PitCrewController._act_on_endpoint_reading
+        _deliver_rig_notice = PitCrewController._deliver_rig_notice
+        _endpoint_note = ""
+
+        def __init__(self):
+            self._rig_watchdog = haptics.TransducerWatchdog()
+            self.bridge = Bridge()
+            self.voice = _RecordingVoice()
+
+    return Rack()
+
+
+def test_a_frozen_race_night_runs_the_whole_ladder_and_tells_him_once():
+    """The 16 Aug 2026 race, replayed against the fix: meter frozen at 0.054
+    from 20:32 to the flag. Reopen, then the rebuilds, then one spoken
+    instruction and a stand-down - not twenty minutes of `recoveries 0`."""
+    engine = _WedgedForGood()
+    rack = _rack(engine)
+    rendered = (0.30, 0.55, 0.42, 0.51, 0.38, 0.47)
+    for i in range(60):                          # ten minutes of 10s polls
+        rack._act_on_endpoint_reading(engine, "Speakers (ButtKicker PRO)",
+                                      rendered[i % len(rendered)], 0.054,
+                                      10.0 * i)
+    assert engine.reopens == 1
+    assert engine.rebuilds_called == rack._rig_watchdog.MAX_REBUILDS
+    assert rack._rig_watchdog.degraded
+    assert len(rack.voice.spoken) == 1, (
+        f"spoken {len(rack.voice.spoken)} times: {rack.voice.spoken}")
+    assert "STALE" in rack._endpoint_note
+    assert "recovery exhausted" in rack._endpoint_note
+
+
+def test_a_rebuild_aborted_by_the_drivers_stop_is_not_an_attempt():
+    """`rebuild` answers None when a stop or suspend cut it short. That is
+    the driver's own action, not the device failing - spending one of the
+    three capped attempts on it would degrade a session that merely raced
+    its own shutdown."""
+
+    class Aborting:
+        def __init__(self):
+            self.reopens = 0
+            self.rebuild_calls = 0
+
+        def recover(self):
+            self.reopens += 1
+            return True
+
+        def rebuild(self):
+            self.rebuild_calls += 1
+            return None
+
+    engine = Aborting()
+    rack = _rack(engine)
+    rendered = (0.30, 0.55, 0.42, 0.51)
+    for i in range(30):
+        rack._act_on_endpoint_reading(engine, "ButtKicker",
+                                      rendered[i % len(rendered)], 0.054,
+                                      10.0 * i)
+    assert engine.rebuild_calls >= 2, "an aborted rebuild was never retried"
+    assert not rack._rig_watchdog.degraded
+    assert rack.voice.spoken == []
+
+
+def test_a_poll_from_a_stopped_session_cannot_touch_the_watchdog():
+    """The meter poll runs on its own thread and can land after the session
+    it belonged to was stopped. It must not deposit its reading into - or
+    lazily create state for - whatever session comes next."""
+    rack = _rack(None)                   # the session has been stopped
+    old_engine = _WedgedForGood()
+    rack._act_on_endpoint_reading(old_engine, "ButtKicker", 0.5, 0.054, 0.0)
+    assert old_engine.reopens == 0
+    assert rack._endpoint_note == "", "a dead session's poll wrote the note"
+    assert rack._rig_watchdog.stale_details()["count"] == 0
+
+
+def test_report_rig_feeds_the_engines_block_counter_to_the_watchdog():
+    """The cadence watchdog's whole diet is `haptics.callbacks` once per
+    report cycle. Wiring it to any other counter would silently blind the
+    corroboration."""
+    from pitcrew.controller import PitCrewController
+
+    engine = _engine()
+    _pump_live(engine, 7)
+    fed = []
+
+    class Watchdog:
+        degraded = False
+
+        def note_cadence(self, blocks, now):
+            fed.append((blocks, now))
+
+    class Bridge:
+        haptics = engine
+        wind = None
+
+    class Rack:
+        _report_rig = PitCrewController._report_rig
+
+        def __init__(self):
+            self.bridge = Bridge()
+            self._rig_watchdog = Watchdog()
+            self._endpoint_note = "endpoint not yet asked"
+            self._log_haptic_state = lambda h: None
+            self._check_transducer_is_heard = lambda h: None
+
+    Rack()._report_rig()
+    assert len(fed) == 1
+    assert fed[0][0] == engine.callbacks == 7
+
+
+def test_a_wedge_the_reopen_fixes_stays_quiet():
+    """19:58 and 20:12 the same day: one reopen, endpoint back, race goes on.
+    No rebuild, no spoken notice - the log lines recover writes are enough."""
+    engine = _WedgedForGood()
+    rack = _rack(engine)
+    rendered = (0.30, 0.55, 0.42, 0.51, 0.38)
+    # Frozen until the reopen fires...
+    polls = 0
+    while engine.reopens == 0:
+        rack._act_on_endpoint_reading(engine, "ButtKicker",
+                                      rendered[polls % len(rendered)], 0.054,
+                                      10.0 * polls)
+        polls += 1
+    # ...after which the meter jitters again.
+    for i in range(polls, polls + 30):
+        rack._act_on_endpoint_reading(engine, "ButtKicker",
+                                      rendered[i % len(rendered)],
+                                      0.080 + 0.001 * (i % 5), 10.0 * i)
+    assert engine.reopens == 1
+    assert engine.rebuilds_called == 0
+    assert rack.voice.spoken == []
+    assert "endpoint 0.0" in rack._endpoint_note
+    assert not rack._rig_watchdog.degraded
+

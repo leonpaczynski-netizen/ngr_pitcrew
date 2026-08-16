@@ -42,7 +42,7 @@ from pitcrew.engineer.ptt import (
 from pitcrew.engineer.shift_beep import ShiftBeep
 from pitcrew.rig import transducer
 from pitcrew.rig.effects import EffectDeriver
-from pitcrew.rig.haptics import HapticsEngine
+from pitcrew.rig.haptics import HapticsEngine, TransducerWatchdog
 from pitcrew.rig.wind import WindSim
 from pitcrew.rig.wind_curve import WindCurve
 from pitcrew.engineer import audio_devices, endpoint_meter
@@ -1411,6 +1411,9 @@ class PitCrewController(QObject):
             return False
         self.bridge.effects.reset()
         self.bridge.haptics = engine
+        # A fresh watchdog per engine: its cadence baseline and its recovery
+        # ladder belong to this stream, not to whatever the last session did.
+        self._rig_watchdog = TransducerWatchdog()
         return True
 
     def test_haptics(self) -> None:
@@ -1461,6 +1464,7 @@ class PitCrewController(QObject):
 
     def stop_haptics(self) -> None:
         engine, self.bridge.haptics = self.bridge.haptics, None
+        self._rig_watchdog = None
         if engine is not None:
             engine.stop()
 
@@ -1915,6 +1919,10 @@ class PitCrewController(QObject):
     # isolates the fault to below the engine in one line instead of a night
     # of forensics.
     _endpoint_note = "endpoint not yet asked"
+    # Judges the endpoint's numbers and holds the recovery ladder. Created
+    # with the engine in `start_haptics`; lazily here only so a bridge wired
+    # by hand in a test still gets one.
+    _rig_watchdog: TransducerWatchdog | None = None
 
     def _check_transducer_is_heard(self, haptics) -> None:
         """Did the card play what we rendered, or only accept it?
@@ -1940,10 +1948,16 @@ class PitCrewController(QObject):
         say anything, and spending that on the Qt thread would be a visible
         stutter every ten seconds of a race.
         """
+        # The degraded latch stays visible on every path, including the ones
+        # that never reach the meter - it is the one state the driver acts on.
+        watchdog = self._rig_watchdog
+        exhausted = (" · recovery exhausted"
+                     if watchdog is not None and watchdog.degraded else "")
         produced = haptics.take_recent_peak()
         if produced < self._AUDIBLE_PEAK:
             self._endpoint_note = (
-                f"endpoint not asked (rendered {produced:.3f}, quiet)")
+                f"endpoint not asked (rendered {produced:.3f}, quiet)"
+                f"{exhausted}")
             return
         device = self.settings.haptics_device or transducer.DEVICE_NAME
 
@@ -1953,38 +1967,124 @@ class PitCrewController(QObject):
             try:
                 heard = endpoint_meter.poll_briefly(device, seconds=0.4)
             except Exception as exc:                        # noqa: BLE001
-                self._endpoint_note = "endpoint unreadable"
+                self._endpoint_note = f"endpoint unreadable{exhausted}"
                 log("haptics").debug("could not read the endpoint: %s", exc)
                 return
-            if heard > endpoint_meter.SILENT_PEAK:
+            self._act_on_endpoint_reading(haptics, device, produced, heard,
+                                          _monotonic())
+
+        threading.Thread(target=ask, name="PitCrewHapticsMeter",
+                         daemon=True).start()
+
+    def _act_on_endpoint_reading(self, haptics, device: str, produced: float,
+                                 heard: float, now: float) -> None:
+        """Judge one endpoint reading and run the recovery ladder it earns.
+
+        Separated from the worker thread that takes the reading so the whole
+        ladder can be driven in a test without a sound card or a thread. Two
+        readings are wedge evidence of equal rank: the meter reading nothing
+        while we render loud, and - the race of 16 Aug 2026 - the meter
+        reading the SAME number every check while what we render varies. The
+        old detector only knew the first, so a meter that froze at 0.054 was
+        read as healthy for twenty minutes of dead haptics.
+        """
+        if self.bridge.haptics is not haptics:
+            # A poll still in flight from a session that has since been
+            # stopped. It must not deposit its reading into - or lazily
+            # create - the next session's watchdog.
+            return
+        watchdog = self._rig_watchdog
+        if watchdog is None:
+            watchdog = self._rig_watchdog = TransducerWatchdog()
+        exhausted = " · recovery exhausted" if watchdog.degraded else ""
+        if heard > endpoint_meter.SILENT_PEAK:
+            verdict = watchdog.judge(produced, heard, now)
+            if verdict == "live":
                 # The engine renders what we produce. This says nothing about
                 # the piston - session 39's wedge sat below the engine and
                 # passed this check throughout - which is exactly why the
                 # value is written down rather than silently returned past.
+                watchdog.settled(now)
                 self._endpoint_note = (
-                    f"rendered {produced:.2f} · endpoint {heard:.3f}")
+                    f"rendered {produced:.2f} · endpoint {heard:.3f}"
+                    f"{exhausted}")
+                self._deliver_rig_notice(watchdog)
                 return
+            if verdict == "unsettled":
+                # A number, but not yet a verdict either way - typically the
+                # first readings after a value change. Written down as
+                # unconfirmed; no recovery is planned off it and no recovery
+                # is declared to have worked off it.
+                self._endpoint_note = (
+                    f"rendered {produced:.2f} · endpoint {heard:.3f} "
+                    f"(unconfirmed){exhausted}")
+                return
+            run = watchdog.stale_details()
             self._endpoint_note = (
-                f"rendered {produced:.2f} · endpoint SILENT")
+                f"rendered {produced:.2f} · endpoint STALE "
+                f"(frozen at {heard:.3f}){exhausted}")
+            # One ERROR when the run first convicts; the polls after it say
+            # nothing new, and the race night would have written this line
+            # 119 times. The status line above carries STALE every cycle.
+            # `first` is latched by the watchdog on the candidate itself -
+            # keying on count == needed here missed the conviction when the
+            # cadence corroboration lowered `needed` between polls.
+            writer = (log("haptics").error
+                      if run["first"]
+                      else log("haptics").debug)
+            writer(
+                "the transducer rendered varying peaks (%.2f-%.2f) and %s "
+                "has metered exactly %.3f for %d checks. A meter on a live "
+                "signal jitters - this one is dead, and the endpoint behind "
+                "it has stopped rendering, which is the same wedge as "
+                "metering nothing.%s", run["rendered_low"],
+                run["rendered_high"], device, heard, run["count"],
+                (" The block cadence dropped at the same time, which "
+                 "corroborates a device-side drop."
+                 if watchdog.corroborated(now) else ""))
+        else:
+            watchdog.silent(now)
+            self._endpoint_note = (
+                f"rendered {produced:.2f} · endpoint SILENT{exhausted}")
             # Deliberately an error rather than a warning. The driver cannot
             # see this screen, and a transducer that is accepting audio and
             # playing none of it is indistinguishable from a working one by
             # every other measure the app has.
             log("haptics").error(
                 "the transducer rendered a peak of %.3f here and %s metered "
-                "nothing - it is accepting the audio and playing none of it. "
-                "Reopening the stream.", produced, device)
-            # **And then do something about it.** This exact wedge has needed
-            # a laptop restart from the seat more than once, and a log line
-            # is not a recovery. Reopening the WASAPI client is the strongest
-            # un-wedge available from user space; if the endpoint is too far
-            # gone even for that, the next health pass will say so and the
-            # advice becomes "power-cycle it" with evidence.
-            if self.bridge.haptics is haptics:
-                haptics.recover()
+                "nothing - it is accepting the audio and playing none of it.",
+                produced, device)
+        # **And then do something about it.** This exact wedge has needed a
+        # laptop restart from the seat more than once, and a log line is not
+        # a recovery. Reopen in place first; if the evidence comes straight
+        # back - the "came and went" flapping - tear down and rebuild from a
+        # fresh device list, a capped number of times, and then say so once
+        # and stand down rather than hammer a device that is gone.
+        action = watchdog.plan_recovery(now)
+        if action == "reopen":
+            haptics.recover()
+            watchdog.reopened(now)
+        elif action == "rebuild":
+            outcome = haptics.rebuild()
+            if outcome is not None:
+                # None is the driver's own stop cutting the rebuild short -
+                # not an attempt, so not spent against the cap.
+                watchdog.rebuilt(outcome, now)
+        self._deliver_rig_notice(watchdog)
 
-        threading.Thread(target=ask, name="PitCrewHapticsMeter",
-                         daemon=True).start()
+    def _deliver_rig_notice(self, watchdog) -> None:
+        """The one operational instruction, where the driver will get it.
+
+        The log line carries the evidence; the spoken line is the seam that
+        reaches a man in a headset. `take_notice` is one-shot, so neither can
+        repeat.
+        """
+        notice = watchdog.take_notice()
+        if notice is None:
+            return
+        written, spoken = notice
+        log("haptics").error(written)
+        self.voice.say(spoken)
 
     # Below this an effect was not doing anything worth writing down.
     _EXPLAIN_FLOOR = 0.01
@@ -2058,15 +2158,21 @@ class PitCrewController(QObject):
         """
         haptics = self.bridge.haptics
         if haptics is not None:
+            if self._rig_watchdog is None:
+                self._rig_watchdog = TransducerWatchdog()
+            # The callback count once per cycle is the cadence watchdog's
+            # whole diet: the rate falling and staying fallen is the
+            # endpoint's audio pump being rebuilt under the stream.
+            self._rig_watchdog.note_cadence(haptics.callbacks, _monotonic())
             # The endpoint note is the PREVIOUS cycle's check - the check runs
             # after this line, on its own thread. Ten seconds stale is fine;
             # invisible was the problem.
             log("haptics").info(
                 "blocks %d · fades %d · limited %d · running %s · %s · "
-                "recoveries %d",
+                "recoveries %d · rebuilds %d",
                 haptics.callbacks, haptics.faded_out,
                 haptics._mix.limited_blocks, haptics.running,
-                self._endpoint_note, haptics.recoveries)
+                self._endpoint_note, haptics.recoveries, haptics.rebuilds)
             # **What the mix was doing, not just that it was running.**
             #
             # "I felt something odd in turn four" is unanswerable an hour
