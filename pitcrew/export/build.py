@@ -456,7 +456,16 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
                 f"observedMinHeightMm is the raw minimum of the same channel, "
                 f"which is the EXTENDED end and a measurement rather than "
                 f"this inference")
-        corners = aggregate_corners(model, counted_with_frames, bottoming_ref)
+        # **The packet's own wheelbase where the session recorded one.**
+        # `understeer-mid`'s expected yaw goes as 1/wheelbase, and with
+        # nothing stored every car was judged against the RSR's 2.516 m -
+        # about 4% high on the Huracan, biased toward reporting understeer on
+        # a flag the driver had contradicted four sessions running. Sessions
+        # recorded before the column existed read null and fall back to the
+        # stated default, which the thresholds block already labels `assumed`.
+        corners = aggregate_corners(
+            model, counted_with_frames, bottoming_ref,
+            wheelbase_m=_session_field(session, "wheelbase_m"))
 
     setup = None
     driver_changes = None
@@ -501,7 +510,9 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         gearing=gearing,
         strategy=strategy,
         derived=Derived(
-            {**thresholds.as_export(), **incident_thresholds()},
+            {**thresholds.as_export(
+                wheelbase_m=_session_field(session, "wheelbase_m")),
+             **incident_thresholds()},
             bottoming_ref_mm=bottoming_ref,
             bottoming_ref_source=bottoming_ref_source,
             observed_min_height_mm=observed_min,

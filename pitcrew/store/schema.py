@@ -767,6 +767,16 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # nothing wrote it; 0 is never stored, because 0 is GT7's "the car has
         # not loaded" sentinel and not a car.
         ("car_id_observed", "INTEGER"),
+        # **The wheelbase the packet broadcasts, and it was never stored.**
+        # `understeer-mid` divides expected yaw by it, and with nothing on
+        # file it used `thresholds.DEFAULT_WHEELBASE_M` - which is 2.516 m,
+        # the Porsche RSR's, measured off a real packet and then applied to
+        # every car. The Huracan is about 2.62, so expected yaw ran ~4% high
+        # and the bias pointed at reporting understeer, on a flag the driver
+        # had contradicted across four sessions. Extended packets carry it at
+        # offset 360; it is a per-car constant, so it belongs on the session
+        # rather than in every frame of the blob.
+        ("wheelbase_m", "REAL"),
         # The `cars.id` that observation resolved to. Null where it resolved
         # to nothing, which is a real state and not a failure.
         ("car_ref_observed", "INTEGER"),

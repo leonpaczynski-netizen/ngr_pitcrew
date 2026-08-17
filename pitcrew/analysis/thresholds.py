@@ -274,7 +274,9 @@ def as_export(drivetrain: str | None = None,
         "understeerWheelbaseM": wheelbase_m or DEFAULT_WHEELBASE_M,
         "understeerWheelbaseSource": (
             "measured on this car" if wheelbase_m else
-            "assumed - the recorder does not store the packet's wheelbase"),
+            "assumed - this session predates the wheelbase column, so the "
+            f"default of {DEFAULT_WHEELBASE_M:g} m is in use and it is the "
+            "Porsche RSR's, not this car's"),
         "throttleOnPct": THROTTLE_ON_PCT,
         "brakeOnPct": BRAKE_ON_PCT,
         "brakeLookbackM": BRAKE_LOOKBACK_M,

@@ -697,6 +697,7 @@ class Store:
                           car_category: str | None = None,
                           fuel_capacity_l: float | None = None,
                           car_id: int | None = None,
+                          wheelbase_m: float | None = None,
                           game_version: str | None = None) -> str | None:
         """Record what the stream actually delivered, once it is known.
 
@@ -707,8 +708,10 @@ class Store:
             conn.execute(
                 "UPDATE sessions SET packet_format = COALESCE(?, packet_format), "
                 "car_category = COALESCE(?, car_category), "
-                "fuel_capacity_l = COALESCE(?, fuel_capacity_l) WHERE id = ?",
-                (packet_format, car_category, fuel_capacity_l, session_id))
+                "fuel_capacity_l = COALESCE(?, fuel_capacity_l), "
+                "wheelbase_m = COALESCE(?, wheelbase_m) WHERE id = ?",
+                (packet_format, car_category, fuel_capacity_l, wheelbase_m,
+                 session_id))
             if car_id is None:
                 return None
             return self._observe_car_id(conn, session_id, int(car_id),

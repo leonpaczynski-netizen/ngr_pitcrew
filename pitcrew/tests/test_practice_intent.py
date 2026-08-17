@@ -86,6 +86,34 @@ def test_an_unlabelled_sheet_counts_as_a_race_sheet_and_never_as_quali(store: St
     assert store.sheet_for("RSR", "qualifying") is None
 
 
+def test_the_race_resolves_a_sheet_by_the_same_rule_as_practice(store: Store):
+    """**The race recorded no sheet at all**, so the Watkins export reported
+    the event's v1 values as the setup as run - the low car with the trimmed
+    rear wing that Rev C had been written to replace. It also nulled
+    `laps.compound` on all twenty laps, which kept sixteen fit-eligible laps
+    out of the RS tyre model, and it dropped `gearingConstantK` onto the
+    derived final drive the payload's own note calls high.
+    """
+    store.save_setup_sheet(SetupSheet(car_name="RSR", sheet_name="race v3",
+                                      values={"rh_f": 68}, purpose="race"))
+    store.save_setup_sheet(SetupSheet(car_name="RSR", sheet_name="quali",
+                                      values={"rh_f": 55},
+                                      purpose="qualifying"))
+    assert store.sheet_for("RSR", "race").sheet_name == "race v3"
+
+    # And where the car has several sheets and none of them is a race sheet,
+    # the honest answer is still none - a named sheet he was not running is
+    # worse than no sheet, because the export presents it as the setup as run.
+    store.save_setup_sheet(SetupSheet(car_name="GTR", sheet_name="quali a",
+                                      values={"rh_f": 55},
+                                      purpose="qualifying"))
+    store.save_setup_sheet(SetupSheet(car_name="GTR", sheet_name="quali b",
+                                      values={"rh_f": 56},
+                                      purpose="qualifying"))
+    assert store.sheet_for("GTR", "race") is None
+    assert len(store.list_setup_sheets("GTR")) == 2
+
+
 def test_the_purpose_travels_into_the_export(store: Store):
     sheet = SetupSheet(car_name="RSR", sheet_name="q", values={"rh_f": 55},
                        purpose="qualifying")

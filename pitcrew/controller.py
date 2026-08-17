@@ -352,6 +352,10 @@ class TelemetryBridge(QObject):
                 "car_category": packet.car_category,
                 "fuel_capacity_l": packet.fuel_capacity,
                 "car_id": packet.car_id,
+                # A per-car constant the extended packets carry and nothing
+                # stored, so `understeer-mid` was dividing every car's
+                # expected yaw by the RSR's 2.516 m.
+                "wheelbase_m": packet.wheelbase_m,
             })
         elif not self._car_announced and packet.car_id:
             # **The first packet is often too early to know what the car is.**
@@ -370,6 +374,10 @@ class TelemetryBridge(QObject):
                 "car_category": packet.car_category,
                 "fuel_capacity_l": packet.fuel_capacity,
                 "car_id": packet.car_id,
+                # A per-car constant the extended packets carry and nothing
+                # stored, so `understeer-mid` was dividing every car's
+                # expected yaw by the RSR's 2.516 m.
+                "wheelbase_m": packet.wheelbase_m,
             })
 
         self.recorder.record_frame(packet)
@@ -1828,6 +1836,7 @@ class PitCrewController(QObject):
             car_category=facts["car_category"],
             fuel_capacity_l=facts["fuel_capacity_l"],
             car_id=facts.get("car_id"),
+            wheelbase_m=facts.get("wheelbase_m"),
             # Stamped on the id the moment it is learned, because packet-id
             # stability across a GT7 version bump is **unproven** - one car,
             # one version. A renumbering has to be visible as a flagged
@@ -2878,8 +2887,42 @@ class PitCrewController(QObject):
             return False
 
         self.bridge.reset(race=True)
+        # **The race records the sheet it was run on, exactly as practice
+        # does.** It did not, and that is the most expensive omission in the
+        # loop: with no `setup_sheet_id` the export reports the *event's* v1
+        # sheet as the setup as run, so the Watkins race post-mortem described
+        # the low car with the trimmed rear wing - precisely the setup Rev C
+        # had been written to replace. Every delta and every ranked cost would
+        # have been computed against a car that was not on the circuit, and
+        # coherently enough that nothing would have looked wrong.
+        #
+        # It cascades further than the setup block. `laps.compound` comes off
+        # the sheet, so all twenty race laps landed with a null compound and
+        # sixteen fit-eligible laps sat outside the RS tyre model entirely;
+        # `fuelMap` went null for the same reason; and `gearingConstantK`,
+        # which prefers the sheet's final drive and only falls back to the
+        # derived one, fell back - and the derived figure reads high through
+        # the unloaded tyre radius, which the payload's own note says.
+        #
+        # Same rule as practice, and the same refusal: where the car has one
+        # sheet that is the sheet, where a race sheet exists it is that, and
+        # where neither holds the session records NO sheet rather than a
+        # plausible wrong one. A named sheet he was not running is worse than
+        # none, because the export presents it as the setup as run.
+        sheet = self.store.sheet_for(event["car_name"] or "", "race")
+        if sheet is None:
+            sheets = self.store.list_setup_sheets(event["car_name"] or "")
+            sheet = sheets[0] if len(sheets) == 1 else None
+            if sheet is None and sheets:
+                self.race_screen.set_status(
+                    f"No race sheet on file for this car, and it has "
+                    f"{len(sheets)} others - this race is recorded without "
+                    f"one, so its laps carry no compound and the export "
+                    f"cannot say what was on the car. Load the race sheet on "
+                    f"the Event screen.", warn=True)
         self.session_id = self.store.start_session(
-            event["id"], "race", rehearsal=rehearsal)
+            event["id"], "race", setup_sheet_id=sheet.id if sheet else None,
+            rehearsal=rehearsal)
         self.session_kind = "race"
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
