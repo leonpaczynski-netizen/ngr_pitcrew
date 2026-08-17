@@ -289,6 +289,249 @@ def test_registering_twice_does_not_suspend_twice():
         audio_devices.unregister_sustained(held)
 
 
+# ------------------------------------- not cutting a sentence off to do it
+
+@pytest.fixture(autouse=True)
+def _no_playback_left_behind():
+    """A test that leaks a playback would hang the next one for the cap."""
+    yield
+    with audio_devices._PLAYING_STATE:
+        audio_devices._PLAYING.clear()
+        audio_devices._PLAYING_STATE.notify_all()
+
+
+class _Speaking:
+    """A line playing on a thread of its own, as the voice really does it.
+
+    On a thread of its own on purpose: `_wait_for_playback` deliberately does
+    not wait on the calling thread, so a playback opened on the test's own
+    thread would not exercise the wait at all.
+    """
+
+    def __init__(self, what: str = "the engineer's line") -> None:
+        import threading
+
+        self.line = None
+        self._what = what
+        self._open = threading.Event()
+        self._release = threading.Event()
+        self.ended = threading.Event()
+        # Called on the speaking thread just before the line ends, for tests
+        # that care what happened on which side of it.
+        self.on_end = lambda: None
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def __enter__(self):
+        self._thread.start()
+        assert self._open.wait(timeout=5.0)
+        return self
+
+    def __exit__(self, *_exc):
+        self._release.set()
+        self._thread.join(timeout=5.0)
+        return False
+
+    def _run(self) -> None:
+        self.line = audio_devices.begin_playback(self._what)
+        self._open.set()
+        self._release.wait(timeout=10.0)
+        self.on_end()
+        audio_devices.end_playback(self.line)
+        self.ended.set()
+
+    def finish_in(self, seconds: float) -> None:
+        import threading
+        threading.Timer(seconds, self._release.set).start()
+
+
+def test_a_rebuild_with_nothing_playing_does_not_wait():
+    """The common case, and it must cost nothing: between lines, a rebuild is
+    exactly as free as it was before any of this existed."""
+    import time as _time
+
+    started = _time.monotonic()
+    audio_devices._reinitialise(_machine())
+    assert _time.monotonic() - started < 0.5
+
+
+def test_a_rebuild_waits_for_a_line_that_is_being_spoken():
+    """The mechanism, at the point where it does the damage.
+
+    `_reinitialise` calls `sd._terminate()`, and PortAudio closes every open
+    stream in the process when it does - measured here on 15 Aug 2026: two
+    streams open, terminate, re-init, both to zero callbacks with nothing
+    raised, `.active` afterwards `PortAudioError -9988`. Applied to the voice
+    that is a sentence stopping in the middle of a word, silently. The next
+    test drives the caller that really does this.
+    """
+    with _Speaking() as speaking:
+        speaking.finish_in(0.3)
+        audio_devices._reinitialise(_machine())
+        assert speaking.ended.is_set(), \
+            "the rebuild went ahead over the top of the line"
+        assert speaking.line.interrupted is False, \
+            "a line it waited for was marked cut"
+
+
+def test_the_settings_screen_enumerating_does_not_cut_the_engineer_off(
+        monkeypatch):
+    """The path that motivated all of this, driven end to end.
+
+    `ui/settings_screen.py::_audio_plate` fills its two device pickers during
+    `_build` by calling `audio_devices.devices("output")` and then
+    `devices("input")`. `devices` re-enumerates on every call - on purpose, so
+    the list includes the headset just plugged in - and re-enumerating is
+    `sd._terminate()`, which was measured on 15 Aug 2026 to close every open
+    stream in the process without raising anything.
+
+    So the driver opening the settings screen while the engineer is talking
+    used to cut him off mid-word, twice, in the shipped app. Nothing about it
+    needed a bug to happen: a screen being built is not an event anything
+    would think to check against the voice.
+
+    Driven through `devices` rather than `_reinitialise` deliberately - the
+    entry point is the part that was never connected to the consequence.
+    """
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", _machine())
+    with _Speaking() as speaking:
+        speaking.finish_in(0.3)
+        audio_devices.devices("output")
+        audio_devices.devices("input")
+        assert speaking.ended.is_set(), \
+            "the picker enumerated over the top of the engineer's line"
+        assert speaking.line.interrupted is False, \
+            "the line survived but was marked cut anyway"
+
+
+def test_the_wait_gives_up_rather_than_starving_the_recovery():
+    """Bounded on purpose. A wait that could not time out would let one stuck
+    engine hold the transducer down for the rest of the race - trading one
+    silent output for another, which is not a fix."""
+    import time as _time
+
+    with _Speaking() as speaking:
+        started = _time.monotonic()
+        audio_devices._wait_for_playback(cap=0.2)
+        waited = _time.monotonic() - started
+        assert 0.15 <= waited < 2.0, "it did not give up on schedule"
+        assert speaking.line.interrupted is True, \
+            "it cut the line without saying so"
+
+
+def test_a_rebuild_never_waits_on_its_own_thread():
+    """`_retry_once` re-enumerates from inside an open. A caller that is
+    itself mid-playback would otherwise wait for itself until the cap."""
+    import time as _time
+
+    line = audio_devices.begin_playback("the engineer's line")
+    try:
+        started = _time.monotonic()
+        audio_devices._wait_for_playback(cap=5.0)
+        assert _time.monotonic() - started < 1.0
+        assert line.interrupted is True
+    finally:
+        audio_devices.end_playback(line)
+
+
+def test_the_deferral_is_reported_once_and_says_what_it_means(caplog):
+    with _Speaking() as speaking:
+        speaking.finish_in(0.2)
+        with caplog.at_level("INFO", logger="pitcrew.audio"):
+            audio_devices._wait_for_playback(cap=5.0)
+    held = [r for r in caplog.records if "held the audio device rebuild" in
+            r.getMessage()]
+    assert len(held) == 1, "one line per collision, not one per attempt"
+
+
+def test_a_cut_line_is_reported_as_a_warning(caplog):
+    with _Speaking():
+        with caplog.at_level("INFO", logger="pitcrew.audio"):
+            audio_devices._wait_for_playback(cap=0.05)
+    cut = [r for r in caplog.records if "cut off" in r.getMessage()]
+    assert len(cut) == 1
+    assert cut[0].levelname == "WARNING"
+
+
+def test_the_wait_runs_before_the_transducer_is_suspended():
+    """Suspending the sustained holders first would mute the haptics for the
+    length of the wait - paying for the fix with the thing the fix is for."""
+    order = []
+
+    class _Watcher(_Sustained):
+        def suspend(self) -> None:
+            order.append("suspend")
+            super().suspend()
+
+    held = _Watcher()
+    audio_devices.register_sustained(held)
+    try:
+        with _Speaking() as speaking:
+            speaking.on_end = lambda: order.append("line ended")
+            speaking.finish_in(0.2)
+            audio_devices._reinitialise(_machine())
+    finally:
+        audio_devices.unregister_sustained(held)
+    assert order == ["line ended", "suspend"]
+
+
+def test_a_rebuild_cannot_slip_between_the_open_and_the_gate(monkeypatch):
+    """"After the open" on its own is not enough, and the gap is the point.
+
+    The lock order forbids declaring a playback before opening its stream -
+    that is an AB-BA against the enumeration lock. But declaring a moment
+    after the open leaves a window in which the stream exists and nothing has
+    said so, and a rebuild landing there closes it having seen nothing. That
+    is the worse shape of the original fault, because `interrupted` stays
+    False and the line is not even said again.
+
+    So `open_and_declare` holds the enumeration lock across both. Here a
+    rebuild is already queued for that lock before the open begins: it must
+    not get through until the line is over.
+    """
+    import threading
+    import time as _time
+
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", _machine())
+    in_the_open = threading.Event()
+    rebuilt = threading.Event()
+
+    def rebuild() -> None:
+        in_the_open.wait(timeout=5.0)
+        audio_devices.devices("output")
+        rebuilt.set()
+
+    waiting = threading.Thread(target=rebuild, daemon=True)
+    waiting.start()
+
+    def open_stream():
+        in_the_open.set()
+        # Every chance to get in: the real window is microseconds wide.
+        _time.sleep(0.3)
+        return _Stream(device=None)
+
+    _stream, playback = audio_devices.open_and_declare(
+        "the engineer's line", open_stream)
+    try:
+        assert not rebuilt.is_set(), "a rebuild landed inside the open"
+        _time.sleep(0.2)
+        assert not rebuilt.is_set(), \
+            "the rebuild got past a stream that had already declared itself"
+        assert playback.interrupted is False
+    finally:
+        audio_devices.end_playback(playback)
+    waiting.join(timeout=5.0)
+    assert rebuilt.is_set(), "the rebuild never ran at all"
+
+
+def test_the_cap_leaves_room_for_a_cut_line_to_still_be_worth_saying():
+    """A line cut at the cap has to be able to come back inside
+    `voice.STALE_AFTER_S`, or the deferral would guarantee every re-speak
+    arrives too late to be said."""
+    from pitcrew.engineer import voice as voice_module
+
+    assert audio_devices.DEFER_CAP_S < voice_module.STALE_AFTER_S
+
+
 # ------------------------------------------------------------ per-card locks
 
 def test_two_cards_do_not_block_each_other():

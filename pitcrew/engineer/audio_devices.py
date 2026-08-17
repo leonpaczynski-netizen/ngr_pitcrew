@@ -34,6 +34,7 @@ that can only be reported.
 from __future__ import annotations
 
 import threading
+import time
 
 from pitcrew.diagnostics import log
 
@@ -125,6 +126,190 @@ def unregister_sustained(holder) -> None:
     with _SUSTAINED_GUARD:
         if holder in _SUSTAINED:
             _SUSTAINED.remove(holder)
+
+
+# Streams that ARE the sound they are making - the other half of `_SUSTAINED`.
+#
+# The comment above says a spoken line opens a stream and closes it a second
+# later, so re-enumerating between lines costs nothing. True, and it was the
+# whole justification for leaving the voice off the sustained register. What it
+# does not cover is a re-enumeration landing DURING a line: `_terminate()`
+# closes that stream mid-sentence, the engineer stops in the middle of a word,
+# and nothing is raised and nothing is logged.
+#
+# **The path that does it is the settings screen, and it is the shipped app.**
+# `ui/settings_screen.py::_audio_plate` fills its two device pickers by calling
+# `devices("output")` and `devices("input")` while `_build` runs, and `devices`
+# re-enumerates on every call - deliberately, so that the list offered includes
+# the headset the driver plugged in a moment ago. So opening the settings
+# screen mid-session runs `_reinitialise` twice, and `_reinitialise` measured
+# its own consequence on 15 Aug 2026: two streams open, terminate, re-init,
+# and both went to zero callbacks with nothing raised, `.active` afterwards
+# giving `PortAudioError -9988`. That docstring drew the conclusion for the
+# transducer and registered it as sustained. **It missed the voice**, which is
+# not registered, and which is the only channel the driver has under a helmet.
+#
+# `TransducerWatchdog` (881e213) is a second way in - `recover()` and
+# `rebuild()` both reach `open_output`, and a failed open re-enumerates - and
+# it is written here as the possibility it is rather than as a sighting.
+# **The engineer talking over the driver on 17 Aug 2026 was not either of
+# them.** That was the test suite on his real output device, and it is fixed
+# in `pitcrew/tests/conftest.py` at 81ab637; the diagnosis that blamed the
+# watchdog for it is withdrawn. The hazard outlived the withdrawal because the
+# settings-screen path has a measured mechanism and a human who reaches for it
+# mid-session, which is a stronger case than the one that was retracted.
+#
+# So a rebuild now WAITS for the sound in flight to finish before tearing
+# PortAudio down. **Nothing that arrives here is urgent enough to refuse.** A
+# picker being populated is a screen the driver is already reading; a haptics
+# recovery has had the transducer silent for its whole conviction window
+# before it ever got this far. Another two seconds costs neither of them
+# anything, and it is the difference between a call heard and half a call. If
+# the wait runs out the rebuild goes ahead and marks what it is about to cut,
+# so the caller can say it again - see `voice.LineCut`.
+#
+# Suspend/resume, the mechanism `_SUSTAINED` uses, is deliberately NOT what
+# this is. A tactile bed resumed a moment later is continuous; a sentence
+# resumed mid-word is not obviously better than one cut, the write is a
+# blocking call on the voice thread that another thread closing under it is
+# the SimHub close-from-send deadlock in a new costume, and the resume would
+# need a lock the recovery thread already holds. Deferral and re-speak instead.
+_PLAYING: list = []
+_PLAYING_STATE = threading.Condition(threading.Lock())
+
+# How long a rebuild will hold off for. A spoken race call is two to four
+# seconds; this is a couple beyond the longest plausible one, so a line that is
+# still going at the cap is a stuck engine rather than a long sentence, and
+# waiting further would starve whatever wanted the rebuild - a driver watching
+# an empty device picker, or a transducer recovery. It is deliberately under
+# `voice.STALE_AFTER_S` (8 s): a line cut at the cap must still be able to come
+# back as fresh, or the deferral would guarantee the re-speak is always too
+# late to be worth saying.
+DEFER_CAP_S = 6.0
+
+
+class Playback:
+    """One short-lived stream that is open and being written to right now."""
+
+    __slots__ = ("what", "thread", "interrupted")
+
+    def __init__(self, what: str) -> None:
+        self.what = what
+        self.thread = threading.get_ident()
+        # Set when a rebuild ran out of patience and tore the stream down
+        # anyway. Read by the caller after its write loop: the voice re-speaks
+        # the line if it is still true, the shift beep does not - a beep said
+        # late is a wrong shift point, and the next one is a corner away.
+        self.interrupted = False
+
+
+def begin_playback(what: str) -> Playback:
+    """Declare that a stream is open and mid-write. `what` names it in the log.
+
+    **Call this AFTER the open, holding `enumeration_lock()` across both, and
+    open nothing else before `end_playback`.** Every clause is load-bearing,
+    and the first two pull against each other.
+
+    *After the open*, because `_reinitialise` waits on this gate while holding
+    the enumeration lock, and the enumeration lock is what every open goes
+    through. A caller that declared itself first and opened second would be
+    holding the gate against a rebuild that holds the lock its open needs:
+    the same two locks in the opposite order, which is the AB-BA that
+    `enumeration_lock` exists to document, reopened from a new direction.
+
+    *Across both*, because "after the open" on its own leaves a gap between
+    the stream starting and the gate going up, and a rebuild landing in that
+    gap closes a stream it never saw. That is this module's own silent
+    truncation narrowed to microseconds rather than removed - and it is the
+    worse shape of it, because `interrupted` stays False afterwards, so the
+    line is lost without even being said again. Holding the enumeration lock
+    over the pair makes them atomic against the only thing in the process that
+    calls `_terminate()`. It adds no lock order that is not already there:
+    this gate is a leaf, taken under that lock by the rebuild too, and the
+    lock is re-entrant so a nested open costs nothing.
+    """
+    playback = Playback(what)
+    with _PLAYING_STATE:
+        _PLAYING.append(playback)
+    return playback
+
+
+def end_playback(playback: Playback) -> None:
+    """The stream is closed. Release any rebuild that was holding off."""
+    with _PLAYING_STATE:
+        if playback in _PLAYING:
+            _PLAYING.remove(playback)
+        _PLAYING_STATE.notify_all()
+
+
+def open_and_declare(what: str, open_stream):
+    """Start a stream and raise its gate as one step. `(stream, playback)`.
+
+    The only correct way to do the pair, so that no caller has to re-derive
+    the lock order in `begin_playback` and none of them can get it subtly
+    wrong in a different way. `open_stream` is a no-argument callable that
+    returns a started stream - a callable rather than the arguments to
+    `open_output`, because the three callers want three different opens and
+    the rate is not known until the first chunk of synthesis comes back.
+
+    Holding the enumeration lock across the two is not extra caution, it is
+    the point: see `begin_playback`. It costs nothing, because `open_output`
+    already holds that lock for the whole of its own attempt.
+    """
+    with _ENUMERATE_LOCK:
+        stream = open_stream()
+        return stream, begin_playback(what)
+
+
+def _wait_for_playback(cap: float | None = None) -> None:
+    """Hold a device-list rebuild until the sound in flight has finished.
+
+    Bounded, always. A wait that could not time out would let a stuck engine
+    hold off the settings picker, or a transducer recovery, for the rest of
+    the race - which in the second case is trading one silent output for
+    another. At the cap it proceeds and marks every stream it is about to
+    close, so nothing is cut without something knowing.
+
+    A playback on the CALLING thread is never waited for - it would be waiting
+    on itself - but it is still marked, because `_terminate()` is going to
+    close it just the same.
+    """
+    # Read here rather than defaulted in the signature, so that raising or
+    # lowering the cap at runtime - which the tests do, and which a settings
+    # screen could - actually reaches this.
+    cap = DEFER_CAP_S if cap is None else cap
+    mine = threading.get_ident()
+    started = time.monotonic()
+    with _PLAYING_STATE:
+        if not _PLAYING:
+            return
+        others = [p for p in _PLAYING if p.thread != mine]
+        labels = ", ".join(sorted({p.what for p in _PLAYING}))
+        while others:
+            left = cap - (time.monotonic() - started)
+            if left <= 0:
+                break
+            _PLAYING_STATE.wait(left)
+            others = [p for p in _PLAYING if p.thread != mine]
+        waited = time.monotonic() - started
+        cut = list(_PLAYING)
+        for playback in cut:
+            playback.interrupted = True
+    # Outside the lock, and only when something actually happened: this fires
+    # once per rebuild that collided with a sound, not once per attempt.
+    if cut:
+        log("audio").warning(
+            "%s was still playing after %.1fs, so the audio devices were "
+            "rebuilt underneath it and it was cut off. Whatever was speaking "
+            "will say it again if it is still true.",
+            ", ".join(sorted({p.what for p in cut})), waited)
+    else:
+        log("audio").info(
+            "held the audio device rebuild %.1fs for %s to finish. Nothing "
+            "that re-enumerates is more urgent than that: a device picker is "
+            "a screen he is reading, and a sentence he only half hears cannot "
+            "be got back.", waited, labels)
+
 
 # Which route to a card to try first. A headset is reachable through several
 # host APIs and they are **not** equivalent. Measured on this machine against
@@ -437,8 +622,25 @@ def _reinitialise(sd) -> None:
     for the rest of the race with nothing logged and no exception raised.
 
     So sustained streams are suspended around the rebuild and resumed after,
-    rather than silently destroyed by it. Everything short-lived is unchanged.
+    rather than silently destroyed by it.
+
+    **And it was never survivable for the short-lived ones either - that
+    paragraph reasoned about the gaps between lines and forgot the lines.**
+    One spoken line is a stream open for two to four seconds, and the caller
+    that reaches this most often is the settings screen: `_audio_plate` calls
+    `devices("output")` and `devices("input")` while it builds its pickers, so
+    the driver opening settings mid-session lands here twice, and either one
+    can close the stream the engineer is talking through. He hears half a
+    sentence, `sd` raises nothing, and this function logs nothing.
+
+    `_wait_for_playback` holds the rebuild until the sound in flight has
+    finished, up to `DEFER_CAP_S`, and marks what it cuts if it runs out of
+    patience. It runs FIRST, before the sustained holders are suspended:
+    suspending the transducer for the length of the wait would mute the
+    haptics in order to protect the voice, which is paying for the fix with
+    the thing the fix is for.
     """
+    _wait_for_playback()
     _WORKING.clear()
     with _SUSTAINED_GUARD:
         holders = list(_SUSTAINED)

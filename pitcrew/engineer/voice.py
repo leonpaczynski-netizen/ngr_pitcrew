@@ -59,6 +59,10 @@ def clip_filename(text: str) -> str:
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     return f"{digest}.wav"
 
+# What a spoken line calls itself while it holds a stream open, for the log
+# line a deferred device rebuild writes. See `audio_devices.begin_playback`.
+SPOKEN_LINE = "the engineer's line"
+
 # A call older than this has been overtaken by the race.
 STALE_AFTER_S = 8.0
 # Deliberately shallow: a backlog read at the driver is worse than silence.
@@ -68,6 +72,17 @@ MAX_QUEUED = 3
 # means "find the best one available". Conflating the two made a test
 # asking for silence get SAPI5 instead.
 AUTO = object()
+
+
+class LineCut(RuntimeError):
+    """A device-list rebuild closed the stream while the line was playing.
+
+    Not an engine failure and not counted as one. `audio_devices` holds a
+    rebuild off for as long as `DEFER_CAP_S` so that this stays rare, but the
+    wait is bounded on purpose - a rebuild that could never proceed would
+    starve the transducer recovery - so the line can still be cut, and when it
+    is, `Voice._run` decides whether saying it again is better than silence.
+    """
 
 
 class NotSpoken(RuntimeError):
@@ -211,6 +226,28 @@ class Voice:
                 continue
             try:
                 self._engine.speak(text)
+            except LineCut:
+                # A rebuild of the audio device list closed the stream in the
+                # middle of the line. Not a failure of the engine, so it does
+                # not touch `_failures` - the card is fine and the next line
+                # will play - but the driver heard half a sentence, and half a
+                # sentence from a race engineer is worse than none.
+                #
+                # Re-queued with its ORIGINAL timestamp, not a fresh one. The
+                # staleness rule above is already the right test for whether a
+                # call is still worth making, and restarting the clock here
+                # would let a box call arrive ten seconds after it was true.
+                age = _now() - queued_at
+                if age <= STALE_AFTER_S:
+                    log("voice").warning(
+                        "the audio devices were rebuilt mid-line and cut %r "
+                        "off after %.1fs - saying it again.", text, age)
+                    self._queue.put((queued_at, text))
+                else:
+                    log("voice").warning(
+                        "the audio devices were rebuilt mid-line and cut %r "
+                        "off. It is %.1fs old now, so it is dropped rather "
+                        "than said late.", text, age)
             except Exception as exc:            # noqa: BLE001 - see below
                 # Deliberately broad: a synthesis failure mid-race must not
                 # take the app with it, and the driver still has the screen
@@ -330,10 +367,17 @@ class PiperEngine:
     def speak(self, text: str) -> None:
         with _play_lock():
             stream = None
+            line = None
             try:
                 for samples, rate in self.synthesise(text):
                     if stream is None:
-                        stream = open_output(rate)
+                        # Opened and declared as one step, under the
+                        # enumeration lock. Declaring first would be an AB-BA
+                        # deadlock and declaring a moment later would leave a
+                        # gap a rebuild can close the stream in - see
+                        # `audio_devices.begin_playback` for both halves.
+                        stream, line = audio_devices.open_and_declare(
+                            SPOKEN_LINE, lambda: open_output(rate))
                     stream.write(samples)
             finally:
                 if stream is not None:
@@ -341,6 +385,10 @@ class PiperEngine:
                     # the last syllable off.
                     stream.stop()
                     stream.close()
+                if line is not None:
+                    audio_devices.end_playback(line)
+        if line is not None and line.interrupted:
+            raise LineCut("a device rebuild closed the stream mid-line")
 
 
 class VoicePackEngine:
@@ -416,6 +464,15 @@ class VoicePackEngine:
                 self._play(segments)
                 self.hits += 1
                 return
+            except LineCut:
+                # The pack had the line and played it; the app's own device
+                # rebuild cut it short. Counted as the hit it was - hits and
+                # misses measure what the manifest covers, not what the card
+                # did with it - and passed straight up, because re-speaking is
+                # `Voice`'s decision and synthesising it here would say the
+                # same line twice in two different voices.
+                self.hits += 1
+                raise
             except Exception as exc:             # noqa: BLE001
                 # A pack that cannot play must not cost the driver the call.
                 # Logged as the device fault it is and NOT counted as a miss:
@@ -445,16 +502,24 @@ class VoicePackEngine:
     def _play(self, segments) -> None:
         with _play_lock():
             stream = None
+            line = None
             try:
                 for name in segments:
                     samples, rate = self._read(self._clips[name]["file"])
                     if stream is None:
-                        stream = open_output(rate)
+                        # One step, under the enumeration lock, for the two
+                        # reasons in `audio_devices.begin_playback`.
+                        stream, line = audio_devices.open_and_declare(
+                            SPOKEN_LINE, lambda: open_output(rate))
                     stream.write(samples)
             finally:
                 if stream is not None:
                     stream.stop()
                     stream.close()
+                if line is not None:
+                    audio_devices.end_playback(line)
+        if line is not None and line.interrupted:
+            raise LineCut("a device rebuild closed the stream mid-line")
 
     def _read(self, filename: str):
         import numpy as np

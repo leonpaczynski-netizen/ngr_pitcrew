@@ -60,6 +60,9 @@ DEFAULT_RPM = 7000.0
 # are still close together. A car whose curve falls off a cliff wants its own
 # number from `tools/shift_points.py`, not this one.
 DEFAULT_SHORT_SHIFT_DROP_RPM = 500.0
+# What the beep calls itself while it holds a stream open, for the log line a
+# deferred device rebuild writes. See `audio_devices.begin_playback`.
+BEEP = "the shift beep"
 # No threshold may be dragged below this by a short-shift request. Short-
 # shifting out of the powerband is not fuel saving, it is driving badly, and
 # an engineer that asks for it has stopped being useful.
@@ -281,12 +284,36 @@ class _TonePlayer:
         # streams crash the host rather than mixing, and a beep landing on top
         # of a call is exactly when that would happen.
         with audio_devices.lock_for(audio_devices.output_device()):
-            stream = audio_devices.open_output(self._rate)
+            # The beep is behind the same gate as the engineer's line, so a
+            # device-list rebuild waits for it too - see
+            # `audio_devices.begin_playback` for why the open and the
+            # declaration are one step.
+            #
+            # Its exposure is smaller than the voice's in every direction and
+            # worth stating rather than assuming. The stream is open for the
+            # sixty milliseconds of the tone instead of a whole sentence, so a
+            # rebuild has to land in a much narrower window to catch it, and
+            # holding a rebuild for sixty milliseconds costs the caller
+            # nothing worth naming. It never overlaps a spoken line - both
+            # take `lock_for(output_device())` first - so it can only ever be
+            # the one thing a rebuild is waiting on.
+            #
+            # **A cut beep is not fired again**, unlike a cut line. A beep is
+            # an instruction about the rpm the engine is at right now; played
+            # late it names the wrong shift point, which is worse than the
+            # missed one. `_TonePlayer.__call__` already drops an overlapping
+            # beep for the same reason, so this is the existing rule and not a
+            # second one. `interrupted` is therefore read by nobody here - the
+            # gate exists to make the rebuild wait, and the marking is only
+            # of interest to a caller that can act on it.
+            stream, _beep = audio_devices.open_and_declare(
+                BEEP, lambda: audio_devices.open_output(self._rate))
             try:
                 stream.write(self._samples)
             finally:
                 stream.stop()
                 stream.close()
+                audio_devices.end_playback(_beep)
 
 
 def _square_wave(freq: float, ms: int, rate: int):

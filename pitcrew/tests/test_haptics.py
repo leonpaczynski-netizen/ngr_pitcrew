@@ -549,6 +549,191 @@ def test_a_recovery_racing_the_settings_picker_cannot_deadlock(monkeypatch):
     assert engine.running
 
 
+def test_a_recovery_waits_for_the_engineer_and_neither_thread_hangs(
+        monkeypatch):
+    """The third leg of the same lock trap, added by the deferral.
+
+    The settings screen is the caller that made a rebuild wait for the voice
+    worth doing, but the recovery path is the one that can deadlock over it,
+    so it is the one tested here. `recover` takes the enumeration lock, `_open`
+    reaches `_reinitialise`, and `_reinitialise` now waits there for the voice
+    to finish its line. The voice holds no enumeration lock while it plays - it
+    takes it across the open and the declaration together and drops it before
+    the first write - so the wait clears. Holding it through the write, or
+    declaring before the open, would be the same two locks in opposite orders
+    on two threads, and the whole app would stop.
+    """
+    import threading
+    import time as _time
+
+    engine = _engine()
+    engine._stream = _FakeStream()
+
+    def open_output(*args, **kwargs):
+        with haptics.audio_devices.enumeration_lock():
+            haptics.audio_devices._reinitialise(_FakeSoundDevice())
+            return _FakeStream()
+
+    monkeypatch.setattr(haptics.audio_devices, "open_output", open_output)
+    monkeypatch.setattr(haptics.audio_devices, "register_sustained",
+                        lambda e: None)
+    monkeypatch.setattr(haptics.audio_devices, "unregister_sustained",
+                        lambda e: None)
+
+    speaking = _speak_for(0.4)
+    try:
+        result = []
+        worker = threading.Thread(
+            target=lambda: result.append(engine.recover()), daemon=True)
+        started = _time.monotonic()
+        worker.start()
+        worker.join(timeout=10.0)
+        assert not worker.is_alive(), "the recovery deadlocked on the voice"
+        assert result == [True]
+        assert speaking["line"].interrupted is False, "the line was cut anyway"
+        assert _time.monotonic() - started >= 0.3, "it did not wait at all"
+    finally:
+        speaking["release"].set()
+        speaking["thread"].join(timeout=5.0)
+
+
+def test_the_wait_cannot_hold_a_recovery_down_for_the_race(monkeypatch):
+    """The other half of the deadlock discipline: a deferral must have a
+    timeout, not a condition that can never be signalled. A voice thread stuck
+    forever must cost the transducer seconds, not the session."""
+    import time as _time
+
+    engine = _engine()
+    engine._stream = _FakeStream()
+
+    monkeypatch.setattr(haptics.audio_devices, "DEFER_CAP_S", 0.2)
+
+    def open_output(*args, **kwargs):
+        with haptics.audio_devices.enumeration_lock():
+            haptics.audio_devices._reinitialise(_FakeSoundDevice())
+            return _FakeStream()
+
+    monkeypatch.setattr(haptics.audio_devices, "open_output", open_output)
+    monkeypatch.setattr(haptics.audio_devices, "register_sustained",
+                        lambda e: None)
+    monkeypatch.setattr(haptics.audio_devices, "unregister_sustained",
+                        lambda e: None)
+
+    speaking = _speak_for(30.0)          # a line that never ends
+    try:
+        started = _time.monotonic()
+        assert engine.recover() is True
+        assert _time.monotonic() - started < 3.0, "the recovery was starved"
+        assert speaking["line"].interrupted is True
+    finally:
+        speaking["release"].set()
+        speaking["thread"].join(timeout=5.0)
+
+
+def test_a_rebuild_also_waits_and_also_comes_back(monkeypatch):
+    """`rebuild` is the escalation past `recover` and takes the same two locks
+    in the same order, but by a different route - it drops the engine lock,
+    unregisters, sleeps out the settle, and only then takes the enumeration
+    lock. Covered separately because "the same discipline" is an assertion
+    about code that was written twice."""
+    import time as _time
+
+    engine = _engine()
+    engine._stream = _FakeStream()
+
+    monkeypatch.setattr(haptics, "REBUILD_SETTLE_S", 0.01)
+
+    def open_output(*args, **kwargs):
+        with haptics.audio_devices.enumeration_lock():
+            haptics.audio_devices._reinitialise(_FakeSoundDevice())
+            return _FakeStream()
+
+    monkeypatch.setattr(haptics.audio_devices, "open_output", open_output)
+    monkeypatch.setattr(haptics.audio_devices, "register_sustained",
+                        lambda e: None)
+    monkeypatch.setattr(haptics.audio_devices, "unregister_sustained",
+                        lambda e: None)
+
+    speaking = _speak_for(0.4)
+    try:
+        started = _time.monotonic()
+        assert engine.rebuild() is True
+        assert _time.monotonic() - started >= 0.3, "it did not wait at all"
+        assert speaking["line"].interrupted is False, "the line was cut anyway"
+        assert engine.running
+    finally:
+        speaking["release"].set()
+        speaking["thread"].join(timeout=5.0)
+
+
+def test_stop_during_a_deferred_recovery_still_wins(monkeypatch):
+    """The driver's stop must not queue behind a sentence. `stop` takes only
+    the engine's lock, and the deferral holds the enumeration lock - so a
+    recovery waiting on the voice cannot make the app unstoppable."""
+    import threading
+
+    engine = _engine()
+    engine._stream = _FakeStream()
+
+    def open_output(*args, **kwargs):
+        with haptics.audio_devices.enumeration_lock():
+            haptics.audio_devices._reinitialise(_FakeSoundDevice())
+            return _FakeStream()
+
+    monkeypatch.setattr(haptics.audio_devices, "open_output", open_output)
+    monkeypatch.setattr(haptics.audio_devices, "register_sustained",
+                        lambda e: None)
+    monkeypatch.setattr(haptics.audio_devices, "unregister_sustained",
+                        lambda e: None)
+
+    speaking = _speak_for(0.5)
+    try:
+        recovering = threading.Thread(target=engine.recover, daemon=True)
+        recovering.start()
+        stopper = threading.Thread(target=engine.stop, daemon=True)
+        stopper.start()
+        stopper.join(timeout=5.0)
+        assert not stopper.is_alive(), "stop queued behind the spoken line"
+        recovering.join(timeout=10.0)
+        assert not recovering.is_alive()
+    finally:
+        speaking["release"].set()
+        speaking["thread"].join(timeout=5.0)
+
+
+class _FakeSoundDevice:
+    """Enough of `sounddevice` for `_reinitialise` to run against nothing."""
+
+    def _terminate(self):
+        pass
+
+    def _initialize(self):
+        pass
+
+
+def _speak_for(seconds: float) -> dict:
+    """A line playing on a thread of its own, as the voice really plays one.
+
+    On its own thread on purpose: `_wait_for_playback` never waits on the
+    calling thread, so a playback declared here would not exercise the wait.
+    """
+    import threading
+
+    state: dict = {"release": threading.Event()}
+    opened = threading.Event()
+
+    def run() -> None:
+        state["line"] = audio_devices.begin_playback("the engineer's line")
+        opened.set()
+        state["release"].wait(timeout=seconds)
+        audio_devices.end_playback(state["line"])
+
+    state["thread"] = threading.Thread(target=run, daemon=True)
+    state["thread"].start()
+    assert opened.wait(timeout=5.0)
+    return state
+
+
 # ------------------------------------ the watchdog that convicts the meter
 
 def _frozen_polls(wd, count, heard=0.054, start=0.0, step=10.0):

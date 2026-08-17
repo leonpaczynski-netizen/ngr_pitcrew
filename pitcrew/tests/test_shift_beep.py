@@ -243,3 +243,81 @@ def test_a_lap_records_how_it_was_shifted_and_null_is_not_zero(tmp_path):
     assert seen[1] is None, "a lap nobody watched must not claim it was normal"
     assert seen[2] == 0.0
     assert seen[3] == 300.0
+
+
+# ------------------------------ not being cut off by a device list rebuild
+
+def test_the_beep_holds_a_device_rebuild_off_while_it_sounds(monkeypatch):
+    """`sd._terminate()` closes every open stream in the process, silently,
+    and the transducer watchdog now rebuilds the device list mid-race. Sixty
+    milliseconds is worth waiting for and costs a recovery nothing.
+
+    Deliberately NOT re-fired if it is cut, unlike a spoken line: a beep is an
+    instruction about the rpm the engine is at right now, and one played late
+    tells him to shift in the wrong place.
+    """
+    import threading
+
+    from pitcrew.engineer import audio_devices
+
+    order: list[str] = []
+    # Only this thread's events: a leftover "PitCrewBeep" thread from another
+    # test would otherwise interleave its own open into the list.
+    mine = threading.get_ident()
+
+    def note(event):
+        if threading.get_ident() == mine:
+            order.append(event)
+
+    class _Stream:
+        def write(self, _samples):
+            note("write")
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(audio_devices, "open_output",
+                        lambda _rate: note("open") or _Stream())
+    monkeypatch.setattr(audio_devices, "begin_playback",
+                        lambda what: note(f"gate up: {what}")
+                        or audio_devices.Playback(what))
+    monkeypatch.setattr(audio_devices, "end_playback",
+                        lambda p: note("gate down"))
+
+    SB._TonePlayer(ms=1)._render()
+    # The gate goes up AFTER the open, never before: the open goes through the
+    # enumeration lock and a rebuild waits on the gate from inside it, so the
+    # other order is an AB-BA deadlock.
+    assert order == ["open", f"gate up: {SB.BEEP}", "write", "gate down"]
+
+
+def test_a_beep_cut_by_a_rebuild_is_not_fired_again(monkeypatch):
+    from pitcrew.engineer import audio_devices
+
+    class _Stream:
+        def __init__(self):
+            self.writes = 0
+
+        def write(self, _samples):
+            self.writes += 1
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    stream = _Stream()
+    monkeypatch.setattr(audio_devices, "open_output", lambda _rate: stream)
+
+    def cut(what):
+        playback = audio_devices.Playback(what)
+        playback.interrupted = True
+        return playback
+
+    monkeypatch.setattr(audio_devices, "begin_playback", cut)
+    SB._TonePlayer(ms=1)._render()          # raises nothing, retries nothing
+    assert stream.writes == 1
