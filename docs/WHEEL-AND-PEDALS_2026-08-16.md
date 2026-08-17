@@ -234,11 +234,21 @@ these values are live-but-unpersisted. Save to a named slot.
 - `FUL` **100%, unchanged.** The first draft of this section argued `FUL` to 0
   as straight duplication of the ButtKicker, on the grounds that FullForce
   renders high-frequency road, engine and ABS texture that the transducer
-  already carries in measured bands. **The driver reports that FullForce is how
-  he feels dirty air behind the car in front, and does not want to lose it.**
-  Standing rule §4.1 makes the driver's report primary evidence, and here it is
-  decisive rather than merely weighty, because the deduction's premise was
-  false.
+  already carries in measured bands. **The driver reports that he feels dirty
+  air behind the car in front, that he could not feel it before FullForce
+  shipped for GT7, and that he does not want to lose it.** Standing rule §4.1
+  makes the driver's report primary evidence, and here it is decisive rather
+  than merely weighty, because the deduction's premise was false.
+
+  **He explicitly does not claim the mechanism**, only the before/after — and
+  that distinction is kept here rather than rounded away. The confound is that
+  a game or firmware release which added FullForce support could equally have
+  changed GT7's own force signal, in which case the cue lives in the base force
+  channel and would survive `FUL` at 0. What the timing *does* rule out is any
+  slider that was already set to its current value when the cue appeared:
+  `FOR`, `SPR`, `DPR` and the rest cannot explain a signal that arrived with a
+  software change. The live candidates are FullForce itself and GT7's force
+  signal — the latter most plausibly surfaced by Sensitivity at 9 (§8.4).
 
   **Pit Crew cannot see other cars.** There is no proximity, no closing speed
   and no aero state in any of the four packet formats — `CLAUDE.md` §5.3 already
@@ -252,6 +262,22 @@ these values are live-but-unpersisted. Save to a named slot.
   levels are measurable by replaying his laps through `tools/rig_levels.py` and
   FullForce's are not measurable at all. When two channels collide, move the one
   you can measure.
+
+  **`FUL` stays at 100 on asymmetry, not on certainty.** Leaving it on costs
+  partial duplication, which is fixable on the side of the rig that can be
+  measured. Turning it off, if it is the source, costs an unmeasurable cue with
+  no other channel — the app cannot see other cars at all, so nothing would
+  replace it and nothing would even report it missing. Unequal costs under
+  uncertainty decide it.
+
+  **The attribution is testable, and worth testing, because it decides this
+  recommendation.** `FUL` is one slider and fully reversible: run laps in
+  traffic at 100, then at 0, and ask whether dirty air still announces itself.
+  If the cue survives `FUL` 0, it is in GT7's force signal, the duplication
+  argument revives intact and `FUL` should go to 0 after all. If it dies with
+  `FUL`, this section is settled on direct evidence rather than on asymmetry.
+  Do this before the `FEI` step, since `FEI` is the other change that could dull
+  the same texture and two unknowns should not move at once.
 
 **Measured-backed inference**
 
