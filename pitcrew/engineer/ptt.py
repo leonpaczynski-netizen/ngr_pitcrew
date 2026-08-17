@@ -19,6 +19,10 @@ his hands full; asking him to confirm costs him one syllable.
 
 Input and recognition are both injectable, so the whole path can be driven in
 tests, and so a machine without a microphone still runs the app.
+
+The microphone stream is declared to `audio_devices` while it is open, the
+same way the engineer's spoken line is - see `CUT_BY_REBUILD` below for why,
+and for what a press the app cut short comes back as.
 """
 from __future__ import annotations
 
@@ -26,7 +30,7 @@ import os
 import threading
 
 from pitcrew.diagnostics import log
-from pitcrew.engineer import gate
+from pitcrew.engineer import audio_devices, gate
 from pitcrew.engineer.audio_devices import open_input
 from pitcrew.engineer.intents import (
     PHRASES,
@@ -43,6 +47,85 @@ from pitcrew.engineer.intents import (
 # `gate.check_audio`, which threw away the entire transcript for being long.
 MAX_CAPTURE_S = 6.0
 SAMPLE_RATE = 16_000
+
+# What the microphone calls itself while it holds a stream open, for the log
+# line a deferred device rebuild writes. See `audio_devices.begin_playback`.
+MICROPHONE = "the driver's question"
+
+# Why there was no question, when the reason was the app's own doing.
+#
+# `audio_devices._reinitialise` calls `sd._terminate()`, and PortAudio closes
+# **every open stream in the process** when it does - measured here on 15 Aug
+# 2026: two streams open, terminate, re-init, both to zero callbacks with
+# nothing raised, `.active` afterwards giving `PortAudioError -9988`. `a6006cd`
+# fixed that for the engineer's voice, whose line IS a short-lived stream. The
+# microphone is the same shape of stream from the other direction:
+# `MoonshineRecogniser` opens it on button-down and closes it on button-up, so
+# a rebuild landing inside a press closes the driver's microphone in the middle
+# of his question and nothing raises.
+#
+# The route in is not exotic. `ui/settings_screen.py::_audio_plate` fills its
+# two pickers by calling `devices("output")` and then `devices("input")` while
+# the screen is being built, and `devices` re-enumerates on every call on
+# purpose so a headset plugged in a moment ago appears - so the driver opening
+# settings while holding the button runs the teardown twice. The transducer
+# watchdog is a second way in.
+#
+# **The voice's answer to being cut is not available here.** It re-speaks the
+# line, because it knows what the line was. The app does not know what the
+# driver was about to ask, so the only two things it can do with a cut press
+# are tell him or not tell him. It tells him, and it throws away whatever the
+# decoder had rather than answering it. Three things decide that:
+#
+# * **Silence is the one outcome he cannot act on.** A press that produces
+#   nothing is indistinguishable from a press the app never heard, and that is
+#   the failure mode `CLAUDE.md` §7 names outright - the thing that must fail
+#   loudly rather than degrade into zeros. He is in a headset with both hands
+#   on the wheel: one short line is a channel he has, and the log is not.
+# * **Half a question is worse than no question.** The audio stops the instant
+#   `_terminate()` runs and the transcript keeps only what arrived before it,
+#   so what would reach `gate.judge` is the front of a sentence. `intents.py`'s
+#   rule is that an engineer who confidently mis-hears is worse than one who
+#   says "say again", and a truncated question is precisely how a confident
+#   mis-hearing gets manufactured. Asking again costs him a corner; being
+#   answered on a question he never finished can cost him the race.
+# * **It is not "say again" in the gate's existing words.** `NOTHING_HEARD`
+#   says "I didn't catch that", which puts it on the recogniser; `NO_INPUT` and
+#   `NO_DEVICE` send him to check a device that is working perfectly. Naming
+#   the reason accurately is the whole argument of `gate.SPOKEN`, so this
+#   reason gets its own line rather than borrowing one that is wrong.
+#
+# **Holding the rebuild off for the length of the press is not the rejected
+# alternative - it is the first half of the fix.** Declaring the stream is what
+# makes a rebuild wait, and it waits up to `audio_devices.DEFER_CAP_S`, which
+# is why a cut press should now be rare rather than routine. What that wait
+# cannot be is unbounded: a press is driver-paced, and one stuck button would
+# otherwise starve a transducer recovery for the rest of the race. This is what
+# happens when the bounded wait runs out.
+CUT_BY_REBUILD = "the audio devices were rebuilt mid-question"
+
+# The rejection reasons this module owns, spoken in their own words.
+#
+# Separate from `gate.SPOKEN` only because this is the half of the fix that
+# lives here. HANDOFF: it belongs in `gate.py` beside the other nine - as a
+# constant, a `SPOKEN` line and an `ALL_REASONS` entry - and until it is
+# there, `phrase_manifest.rejection_lines` will not pre-render it, so this one
+# line falls through to live synthesis. That is a pause at the moment the
+# driver has just failed to get an answer, which is exactly the pause
+# `rejection_lines` exists to remove.
+OWN_SPOKEN: dict[str, str] = {
+    # §5.5 form: the instruction first, the reason second and short. It
+    # deliberately does not say "check the device" the way the two device
+    # reasons do - his microphone is fine, and sending him to unplug a working
+    # headset mid-race would be the cost of borrowing their words.
+    CUT_BY_REBUILD: "Say that again. I lost the microphone for a moment.",
+}
+
+
+def spoken_reason(reason: str | None) -> str:
+    """What the driver hears about a rejection, including this module's own."""
+    return OWN_SPOKEN.get(reason or "") or gate.spoken_reason(reason)
+
 
 # Answers to "did you mean X?". One syllable each, because he is mid-corner
 # and both hands are busy. Kept separate from the ACCEPT/KEEP intents, which
@@ -197,7 +280,7 @@ class PushToTalk:
         """
         self.last_reason = reason
         self.last_verdict = gate.Verdict(gate.REJECT, UNKNOWN, "", reason)
-        text = gate.spoken_reason(reason)
+        text = spoken_reason(reason)
         self._reply(text, "")
         return text
 
@@ -416,6 +499,9 @@ class MoonshineRecogniser:
         # anything here, or did the button get brushed?
         self._silence_rms = silence_rms
         self._stream = None
+        # The `audio_devices.Playback` standing for the open microphone, for
+        # as long as the button is held. None between presses.
+        self._capture = None
         self._speech_blocks = 0
         self._total_blocks = 0
         self._truncated = False
@@ -429,6 +515,13 @@ class MoonshineRecogniser:
         """Button down: open the mic and start feeding the decoder."""
         import numpy as np
         import sounddevice as sd
+
+        # A press whose button-up never arrived would otherwise leave the last
+        # declaration standing behind this one, and it would never come down -
+        # `end` only releases the current one. Every device rebuild for the
+        # rest of the session would then wait the whole cap for it.
+        if self._capture is not None:
+            self._release_capture()
 
         self._speech_blocks = 0
         self._total_blocks = 0
@@ -459,9 +552,48 @@ class MoonshineRecogniser:
                 log("ptt").warning("add_audio raised: %s: %s",
                                    type(exc).__name__, exc)
 
-        self._stream = open_input(
-            self.SAMPLE_RATE, channels=1, dtype="float32",
-            blocksize=self.BLOCK, callback=on_audio)
+        # Opened and declared as one step, under the enumeration lock, so that
+        # a device rebuild can neither close the microphone while he is
+        # talking into it nor slip into the gap between the stream starting
+        # and the declaration going up. Both halves are argued in
+        # `audio_devices.begin_playback`; what a rebuild that runs out of
+        # patience anyway costs him is argued at `CUT_BY_REBUILD`.
+        #
+        # The declaration outlives this call - it stands until the button
+        # comes up - but the enumeration lock does not, so nothing here holds
+        # a lock across the driver's finger.
+        self._stream, self._capture = audio_devices.open_and_declare(
+            MICROPHONE,
+            lambda: open_input(
+                self.SAMPLE_RATE, channels=1, dtype="float32",
+                blocksize=self.BLOCK, callback=on_audio))
+
+    def _release_capture(self):
+        """Close the microphone and take its declaration down. Both, always.
+
+        Guarded because the failure it covers is the one this exists for: a
+        stream `sd._terminate()` has already closed raises `PortAudioError
+        -9988` from `stop()`, and that raise escaping would leave the playback
+        declared for the rest of the session. Every device rebuild afterwards
+        would then wait the whole of `DEFER_CAP_S` for a stream nobody is
+        using, and this press would reach the driver as `gate.FAILED` - "check
+        the log" - rather than as the "say it again" he can act on.
+        """
+        stream, self._stream = self._stream, None
+        capture, self._capture = self._capture, None
+        try:
+            if stream is not None:
+                stream.stop()
+                stream.close()
+        except Exception as exc:                 # noqa: BLE001 - see above
+            log("ptt").info(
+                "the microphone stream would not close cleanly (%s: %s) - "
+                "which is what a device rebuild having already closed it "
+                "looks like from here", type(exc).__name__, exc)
+        finally:
+            if capture is not None:
+                audio_devices.end_playback(capture)
+        return capture
 
     def end(self) -> str:
         """Button up: close the mic and return what was said, or nothing.
@@ -470,12 +602,24 @@ class MoonshineRecogniser:
         UNKNOWN path and the engineer says "say again" - the behaviour that was
         already there, reached the same way.
         """
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            finally:
-                self._stream = None
+        capture = self._release_capture()
+
+        if capture is not None and capture.interrupted:
+            # The app closed his microphone in the middle of his question -
+            # see `CUT_BY_REBUILD`. Whatever the decoder holds is the front of
+            # a sentence, so it is dropped rather than judged, and he is told
+            # once, here, on the way out of the press. Told once and not per
+            # attempt: two rebuilds inside one hold both set the same sticky
+            # flag, and this reads it a single time.
+            self._transcriber.stop()
+            self.last_reason = CUT_BY_REBUILD
+            log("ptt").warning(
+                "a device rebuild closed the microphone while the button was "
+                "still held. %.2fs of audio reached the decoder before it "
+                "went; a question cannot be asked again on his behalf, so it "
+                "is discarded rather than answered and he is asked to say it "
+                "again.", self._total_blocks * self.BLOCK / self.SAMPLE_RATE)
+            return ""
 
         if self._truncated:
             log("ptt").info("capture reached the %.0fs limit - transcribing "
@@ -515,6 +659,12 @@ class MoonshineRecogniser:
         return text
 
     def close(self) -> None:
+        # A press that never gets its button-up - the app shutting down, or
+        # the listener being swapped mid-hold - would otherwise leave the
+        # declaration standing, and every device rebuild for the rest of the
+        # session would wait the whole cap for a microphone nobody is holding.
+        if getattr(self, "_capture", None) is not None:
+            self._release_capture()
         transcriber = getattr(self, "_transcriber", None)
         if transcriber is not None:
             transcriber.close()

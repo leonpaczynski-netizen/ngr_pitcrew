@@ -17,6 +17,7 @@ import time
 
 import pytest
 
+from pitcrew.engineer import audio_devices
 from pitcrew.engineer import gate
 from pitcrew.engineer import ptt
 from pitcrew.engineer.intents import BOX_WHEN, FUEL, UNKNOWN
@@ -530,6 +531,320 @@ def test_the_bands_sit_inside_the_measured_gap():
     # At medium, every real question measured acts outright rather than
     # asking - the whole point of putting the band inside the gap.
     assert gate.bands("medium")[0] > real_worst - 0.06
+
+
+# ------------------------------------- the app closing his own microphone
+#
+# `audio_devices._reinitialise` calls `sd._terminate()`, and PortAudio closes
+# every open stream in the process when it does - measured here 15 Aug 2026:
+# two streams open, terminate, re-init, both to zero callbacks with nothing
+# raised, `.active` afterwards `PortAudioError -9988`. `a6006cd` covered the
+# engineer's voice. The microphone is the same shape of stream from the other
+# side: opened on button-down, closed on button-up. The route in is the
+# shipped app - `ui/settings_screen.py::_audio_plate` enumerates output and
+# then input while the screen is being built - so the driver opening settings
+# with the button held used to lose his question, twice, in silence.
+#
+# None of these needs a sound card, a decoder or a model.
+
+@pytest.fixture(autouse=True)
+def _no_capture_left_behind():
+    """A leaked declaration would make the next test wait out the whole cap."""
+    yield
+    with audio_devices._PLAYING_STATE:
+        audio_devices._PLAYING.clear()
+        audio_devices._PLAYING_STATE.notify_all()
+
+
+class PortAudio:
+    """Enough of `sounddevice` for a device-list rebuild and nothing else."""
+
+    def _terminate(self):
+        pass
+
+    def _initialize(self):
+        pass
+
+
+class Mic:
+    """An input stream. Optionally one PortAudio has already closed."""
+
+    def __init__(self, already_closed: bool = False) -> None:
+        self.stopped = False
+        self.closed = False
+        self._already_closed = already_closed
+
+    def stop(self):
+        if self._already_closed:
+            # What `stop()` really does on a stream `_terminate()` has taken:
+            # -9988, invalid stream pointer, and the first word anything says
+            # about it.
+            raise RuntimeError("PortAudioError -9988: invalid stream pointer")
+        self.stopped = True
+
+    def close(self):
+        self.closed = True
+
+
+class Transcriber:
+    """Moonshine's streaming decoder, reduced to what it was given and said."""
+
+    def __init__(self, text: str = "when do i box") -> None:
+        self.text = text
+        self.started = 0
+        self.stopped = 0
+
+    def start(self):
+        self.started += 1
+
+    def add_audio(self, _block, _rate):
+        pass
+
+    def stop(self):
+        self.stopped += 1
+
+    def update_transcription(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(lines=[SimpleNamespace(text=self.text)])
+
+    def close(self):
+        pass
+
+
+def microphone(heard: str = "when do i box"):
+    """A `MoonshineRecogniser` with no model, no numpy and no sound card."""
+    mic = ptt.MoonshineRecogniser.__new__(ptt.MoonshineRecogniser)
+    mic._max_capture_s = MAX_CAPTURE
+    mic._silence_rms = 0.012
+    mic._stream = None
+    mic._capture = None
+    mic._speech_blocks = 0
+    mic._total_blocks = 0
+    mic._truncated = False
+    mic.last_reason = None
+    mic._transcriber = Transcriber(heard)
+    return mic
+
+
+def spoke(mic, seconds: float = 2.0) -> None:
+    """Two seconds of a man asking a question, as the block counters see it.
+
+    Without this every press below would be rejected at stage 0 for delivering
+    no audio, and the thing under test would never be reached.
+    """
+    blocks = int(seconds * mic.SAMPLE_RATE / mic.BLOCK)
+    mic._total_blocks = blocks
+    mic._speech_blocks = blocks
+
+
+def rebuilding():
+    """A device rebuild on a thread that is not holding the button.
+
+    On another thread on purpose, twice over: it is where the settings screen
+    and the transducer watchdog really run, and `_wait_for_playback`
+    deliberately never waits on its own thread, so a rebuild driven from the
+    test thread would not exercise the wait at all.
+    """
+    done = threading.Event()
+
+    def run():
+        audio_devices._reinitialise(PortAudio())
+        done.set()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread, done
+
+
+def rebuilt():
+    """A rebuild, waited out. Fails rather than hangs if it never returns."""
+    thread, done = rebuilding()
+    assert done.wait(10.0), "the rebuild never finished"
+    thread.join(timeout=5.0)
+
+
+def test_a_rebuild_waits_for_the_button_to_come_up(monkeypatch):
+    """The first half of the fix, and the half that should nearly always be
+    enough. The microphone is declared for as long as it is open, so a rebuild
+    holds off instead of closing it under him - the same gate the engineer's
+    line goes behind, reached from the input side."""
+    mic = microphone()
+    monkeypatch.setattr(ptt, "open_input", lambda *a, **k: Mic())
+    mic.begin()
+    spoke(mic)
+
+    thread, done = rebuilding()
+    assert not done.wait(0.4), "the rebuild went ahead over the top of him"
+    assert mic.end() == "when do i box", "the question did not survive"
+    assert mic.last_reason is None
+    assert done.wait(5.0), "the rebuild never got through afterwards"
+    thread.join(timeout=5.0)
+
+
+def test_a_rebuild_between_presses_is_not_delayed_at_all():
+    """The common case, and it must cost nothing. Nothing is declared between
+    presses, so a rebuild is exactly as free as it was before any of this."""
+    started = time.monotonic()
+    rebuilt()
+    assert time.monotonic() - started < 0.5
+
+
+def test_a_press_with_no_rebuild_still_answers_normally(monkeypatch):
+    """The whole mechanism has to be invisible when nothing collides."""
+    mic = microphone("how much fuel")
+    monkeypatch.setattr(ptt, "open_input", lambda *a, **k: Mic())
+    mic.begin()
+    spoke(mic)
+    assert mic.end() == "how much fuel"
+    assert mic.last_reason is None
+    assert audio_devices._PLAYING == []
+
+
+def test_a_cut_press_throws_the_half_question_away(monkeypatch):
+    """The decision this fix had to make, and the reason for it.
+
+    The voice re-speaks a line it had; the app cannot re-ask a question it
+    never knew. What it holds after a cut is whatever reached the decoder
+    before `_terminate()` ran, which is the front of a sentence - and
+    `intents.py`'s rule is that an engineer who confidently mis-hears is worse
+    than one who says "say again". So a complete-looking transcript is
+    discarded anyway, because there is no way to tell it from a truncated one.
+    """
+    mic = microphone("when do i box")
+    monkeypatch.setattr(ptt, "open_input", lambda *a, **k: Mic())
+    monkeypatch.setattr(audio_devices, "DEFER_CAP_S", 0.05)
+    mic.begin()
+    spoke(mic)
+    rebuilt()                       # runs out of patience and cuts him off
+
+    assert mic.end() == "", "half a question was handed to the gate"
+    assert mic.last_reason == ptt.CUT_BY_REBUILD
+    assert mic._transcriber.stopped == 1, "the decoder was left running"
+
+
+def test_a_cut_press_asks_him_to_say_it_again_in_words_of_its_own(monkeypatch):
+    """Silence is the one outcome he cannot act on: a press that produces
+    nothing is indistinguishable from a press the app never heard, which is
+    the failure mode `CLAUDE.md` §7 names. He is in a headset, so one short
+    line is a channel he has and the log is not."""
+    mic = microphone()
+    monkeypatch.setattr(ptt, "open_input", lambda *a, **k: Mic())
+    monkeypatch.setattr(audio_devices, "DEFER_CAP_S", 0.05)
+    said = []
+    talk = PushToTalk(snapshot=dict, speak=said.append, recogniser=mic)
+
+    talk.begin()
+    spoke(mic)
+    rebuilt()
+    talk.end()
+
+    assert said == [ptt.spoken_reason(ptt.CUT_BY_REBUILD)]
+    assert talk.last_reason == ptt.CUT_BY_REBUILD
+    assert "again" in said[0].lower(), "he was not told what to do about it"
+
+
+def test_the_cut_does_not_borrow_another_reason_s_words():
+    """`NOTHING_HEARD` puts it on the recogniser and `NO_INPUT` sends him to
+    check a device that is working perfectly. Naming the reason accurately is
+    the whole argument of `gate.SPOKEN`."""
+    ours = ptt.spoken_reason(ptt.CUT_BY_REBUILD)
+    assert ours not in [gate.spoken_reason(r) for r in gate.ALL_REASONS]
+    assert "check the device" not in ours.lower()
+    # Everything gate.py does know about still comes back from gate.py.
+    for reason in gate.ALL_REASONS:
+        assert ptt.spoken_reason(reason) == gate.spoken_reason(reason)
+    assert ptt.spoken_reason(None) == gate.spoken_reason(None)
+
+
+def test_two_rebuilds_in_one_press_are_one_line_not_two(monkeypatch):
+    """`_audio_plate` calls `devices("output")` and then `devices("input")`,
+    so the shipped path is two teardowns inside one press. He is told on the
+    way out of the press, once, not once per attempt."""
+    mic = microphone()
+    monkeypatch.setattr(ptt, "open_input", lambda *a, **k: Mic())
+    monkeypatch.setattr(audio_devices, "DEFER_CAP_S", 0.05)
+    said = []
+    talk = PushToTalk(snapshot=dict, speak=said.append, recogniser=mic)
+
+    talk.begin()
+    spoke(mic)
+    rebuilt()
+    rebuilt()
+    talk.end()
+
+    assert said == [ptt.spoken_reason(ptt.CUT_BY_REBUILD)]
+
+
+def test_the_declaration_comes_down_even_when_the_stream_is_already_dead(
+        monkeypatch):
+    """A stream `_terminate()` has taken raises -9988 from `stop()`. If that
+    escaped, the declaration would stand for the rest of the session and every
+    later rebuild would wait the whole cap for a microphone nobody is holding -
+    and this press would reach him as "check the log" instead of "say it
+    again"."""
+    mic = microphone()
+    monkeypatch.setattr(ptt, "open_input",
+                        lambda *a, **k: Mic(already_closed=True))
+    monkeypatch.setattr(audio_devices, "DEFER_CAP_S", 0.05)
+    said = []
+    talk = PushToTalk(snapshot=dict, speak=said.append, recogniser=mic)
+
+    talk.begin()
+    spoke(mic)
+    rebuilt()
+    talk.end()                                  # must not raise
+
+    assert audio_devices._PLAYING == [], "the microphone is still declared"
+    assert said == [ptt.spoken_reason(ptt.CUT_BY_REBUILD)]
+    assert talk.last_reason != gate.FAILED
+
+    # And the next rebuild is free again, which is the point of the above.
+    started = time.monotonic()
+    rebuilt()
+    assert time.monotonic() - started < 0.5
+
+
+def test_closing_mid_press_does_not_leave_the_microphone_declared(monkeypatch):
+    """A press that never gets its button-up - the app stopping, or the key
+    being rebound mid-hold - is the other way to leak the declaration."""
+    mic = microphone()
+    monkeypatch.setattr(ptt, "open_input", lambda *a, **k: Mic())
+    mic.begin()
+    mic.close()
+    assert audio_devices._PLAYING == []
+    started = time.monotonic()
+    rebuilt()
+    assert time.monotonic() - started < 0.5
+
+
+def test_a_held_button_and_a_rebuild_cannot_deadlock(monkeypatch):
+    """Two locks and two threads, in the order `enumeration_lock` warns about.
+
+    `open_and_declare` takes the enumeration lock and then the playback gate;
+    `_reinitialise` takes the enumeration lock and waits on that same gate. So
+    the press must be able to finish while a rebuild is holding the lock and
+    waiting for it - `end_playback` deliberately needs only the gate - and the
+    next press must open cleanly once the rebuild has been through.
+    """
+    mic = microphone()
+    monkeypatch.setattr(ptt, "open_input", lambda *a, **k: Mic())
+    mic.begin()
+    spoke(mic)
+
+    thread, done = rebuilding()
+    assert not done.wait(0.3)
+    # Button up while the rebuild sits on the lock waiting for it.
+    assert mic.end() == "when do i box"
+    assert done.wait(10.0), "the rebuild never came out of the wait"
+    thread.join(timeout=5.0)
+
+    # And the button still works afterwards, which is the other half of a
+    # deadlock: an enumeration lock left held would hang the next press here.
+    again = microphone("how much fuel")
+    again.begin()
+    spoke(again)
+    assert again.end() == "how much fuel"
+    assert audio_devices._PLAYING == []
 
 
 # ------------------------------------------------ the recogniser deadline (E6)
