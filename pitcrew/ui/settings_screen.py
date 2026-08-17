@@ -44,6 +44,7 @@ from pitcrew.settings import (
     RPM_FROM_GT7,
     RPM_MANUAL,
     Settings,
+    shift_point_key,
 )
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
@@ -55,7 +56,17 @@ from pitcrew.ui.widgets import (
     StencilLabel,
     block_wheel,
     mark_unset,
+    struck_when_empty,
 )
+
+# Spin boxes have no null. The minimum of the range renders as a dash, so a
+# gear nobody has measured never reads as "beep at 1000 rpm".
+NO_SHIFT_POINT = 0.0
+# GT7 has no seven-speed in the driver's league and the table is per gear, so
+# six rows covers every car he runs. A car with fewer simply leaves the tail
+# blank.
+SHIFT_GEARS = (1, 2, 3, 4, 5, 6)
+
 
 RPM_LABELS = {
     RPM_FROM_GT7: "GT7's own shift light",
@@ -65,6 +76,12 @@ RPM_LABELS = {
 
 class SettingsScreen(QWidget):
     """Set the button and the beep, and prove both of them work."""
+
+    # The per-gear tables as loaded, and which car the rows on screen belong
+    # to. Class attributes because the plates are built during `__init__` and
+    # the picker fires its own signal on the way, before `load` has run.
+    _shift_points: dict = {}
+    _shift_car_shown = None
 
     saved = pyqtSignal(object)          # Settings
     test_beep_requested = pyqtSignal()
@@ -352,8 +369,152 @@ class SettingsScreen(QWidget):
 
         self.beep_note = BodyLabel("", size=13, colour=theme.CHALK)
         plate.body.addWidget(self.beep_note)
+        plate.body.addWidget(self._per_gear_block())
         plate.body.addStretch(1)
         return plate
+
+    # ------------------------------------------------------- per-gear table
+
+    def _per_gear_block(self) -> QWidget:
+        """The per-gear threshold table, per car.
+
+        **The setting existed and there was no way to reach it.** `Settings
+        .beep_shift_points` has been keyed by GT7 packet car id since the
+        table was added, filled only by `tools/shift_points.py`, and the
+        driver had no way to see what was in it or to put a number in himself.
+        One car wants the limiter in every gear and another wants 8250 in all
+        five - which is the whole reason it is a table - and none of that was
+        visible from the app.
+
+        Keyed by the packet's car id because that is the only identity GT7
+        broadcasts. The picker shows names so nobody has to know that.
+        """
+        box = QWidget()
+        column = QVBoxLayout(box)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(theme.GAP)
+        column.addWidget(BodyLabel(
+            "Per-gear thresholds, per car. A gear left blank falls back to "
+            "the setting above. Measured by tools/shift_points.py from your "
+            "own laps - what you type here overwrites it.",
+            size=13, colour=theme.STENCIL_DIM))
+
+        # **Filled by the controller, not read from a file here.**
+        # `car_id_map.json` looks like the right source and is not: its ids
+        # are an ordinal from an older catalogue, measured false on 17 Aug
+        # 2026 when the Shelby streamed 3391 against that file's 473. The
+        # canonical `cars` table is the only place a LEARNED packet id lives.
+        self.shift_car = QComboBox()
+        self.shift_car.setEditable(False)
+        block_wheel(self.shift_car)
+        self.shift_car.currentIndexChanged.connect(self._on_shift_car_changed)
+        column.addWidget(Field("Car", self.shift_car))
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(theme.GAP)
+        grid.setVerticalSpacing(theme.GAP)
+        self.shift_gears: dict[int, QDoubleSpinBox] = {}
+        for index, gear in enumerate(SHIFT_GEARS):
+            spin = QDoubleSpinBox()
+            spin.setRange(NO_SHIFT_POINT, 20000.0)
+            spin.setDecimals(0)
+            spin.setSingleStep(50.0)
+            spin.setSpecialValueText("—")
+            spin.setValue(NO_SHIFT_POINT)
+            block_wheel(spin)
+            # `mark_unset` is for combos; a spin box with a special value text
+            # gets the same treatment from `struck_when_empty`, which is what
+            # the event screen's blank-able numbers already use.
+            struck_when_empty(spin)
+            self.shift_gears[gear] = spin
+            grid.addWidget(Field(f"Gear {gear}", spin, suffix="RPM"),
+                           index // 3, index % 3)
+        column.addLayout(grid)
+
+        self.shift_note = BodyLabel("", size=13, colour=theme.CHALK)
+        column.addWidget(self.shift_note)
+        return box
+
+    def set_cars(self, cars) -> None:
+        """The car list for the per-gear picker, canonical rows from the store.
+
+        Each entry carries the learned packet car id where the stream has ever
+        shown one, and the name otherwise - which is what
+        `Settings.shift_points_for` falls back to. Every Porsche session on
+        file predates the id capture, so without the name key the driver could
+        not enter a table for the car he is racing tomorrow.
+        """
+        self.shift_car.blockSignals(True)
+        self.shift_car.clear()
+        for name, car_id in cars:
+            label = name if car_id else f"{name}  (id not learned yet)"
+            self.shift_car.addItem(label, car_id if car_id else str(name))
+        self.shift_car.blockSignals(False)
+        self._shift_car_shown = None
+        self._show_shift_points(self.shift_car.currentData())
+
+    def _on_shift_car_changed(self) -> None:
+        """Show the stored table for the newly picked car.
+
+        The edits for the car being left are harvested first, so switching to
+        check another car and switching back does not silently discard them.
+        """
+        self._harvest_shift_points()
+        self._show_shift_points(self.shift_car.currentData())
+
+    def _harvest_shift_points(self) -> None:
+        car_id = getattr(self, "_shift_car_shown", None)
+        if car_id is None:
+            return
+        table = {str(gear): spin.value()
+                 for gear, spin in self.shift_gears.items()
+                 if spin.value() > NO_SHIFT_POINT}
+        car_id = self._shift_key(car_id)
+        points = dict(self._shift_points or {})
+        # An emptied table is a deletion, not an empty dict: a car keyed to
+        # `{}` reads as "measured, and it came out blank".
+        if table:
+            points[str(car_id)] = table
+        else:
+            points.pop(str(car_id), None)
+        self._shift_points = points
+
+    @staticmethod
+    def _shift_key(car) -> str:
+        """The settings key for whatever the picker is carrying.
+
+        An int is a learned packet car id and keys directly; a string is a car
+        name and keys through `shift_point_key`, which is the fallback
+        `Settings.shift_points_for` reads when the id is not yet known.
+        """
+        if isinstance(car, int):
+            return str(car)
+        return shift_point_key(str(car))
+
+    def _show_shift_points(self, car_id) -> None:
+        self._shift_car_shown = car_id
+        table = (self._shift_points or {}).get(self._shift_key(car_id)) or {}
+        for gear, spin in self.shift_gears.items():
+            spin.setValue(float(table.get(str(gear), NO_SHIFT_POINT)))
+        if table:
+            self.shift_note.setText(
+                f"{len(table)} of {len(SHIFT_GEARS)} gears set for this car.")
+        else:
+            self.shift_note.setText(
+                "Nothing stored for this car - every gear falls back to the "
+                "threshold above.")
+
+    def note_stream_car(self, car_id: int | None) -> None:
+        """Select the car the stream is showing, if the picker knows it.
+
+        The id only exists on the wire, so before this the driver had to read
+        it out of a log line to key his own table to it.
+        """
+        if car_id is None:
+            return
+        index = self.shift_car.findData(int(car_id))
+        if index >= 0:
+            self.shift_car.setCurrentIndex(index)
 
     def _rig_plate(self) -> Plate:
         """The transducer and the fans - what the app drives rather than reads.
@@ -541,6 +702,9 @@ class SettingsScreen(QWidget):
         index = self.rpm_source.findData(settings.beep_rpm_source)
         self.rpm_source.setCurrentIndex(max(0, index))
         self.beep_rpm.setValue(settings.beep_rpm)
+        self._shift_points = dict(settings.beep_shift_points or {})
+        self._shift_car_shown = None
+        self._show_shift_points(self.shift_car.currentData())
         self.length_scale.setValue(settings.voice_length_scale)
         self.noise_scale.setValue(settings.voice_noise_scale)
         self.noise_w_scale.setValue(settings.voice_noise_w_scale)
@@ -558,8 +722,13 @@ class SettingsScreen(QWidget):
     def values(self) -> Settings:
         # `replace`, not a fresh Settings: anything this screen has no control
         # for keeps the value it was loaded with instead of reverting.
+        # Anything typed for the car currently shown has not been folded
+        # into the table yet - the fold happens on a car change, and the
+        # driver may well save without ever changing car.
+        self._harvest_shift_points()
         return replace(
             getattr(self, "_loaded", Settings()),
+            beep_shift_points=dict(self._shift_points or {}),
             udp_port=self.udp_port.value(),
             udp_source_ip=self.udp_source_ip.text().strip(),
             feed_source=self.feed_source.currentData(),

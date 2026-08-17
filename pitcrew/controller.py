@@ -206,6 +206,11 @@ class TelemetryBridge(QObject):
         # `_apply_shift_points`.
         self._shift_points = None
         self._car_id = None
+        # The car's canonical NAME, set from the active event. It is what
+        # `Settings.shift_points_for` falls back to while the packet car id
+        # is still unknown - which is every car the app has not yet seen on
+        # the wire, including the one being raced tomorrow.
+        self._car_name = None
         # Whether a REAL car id has been announced yet, as distinct from
         # `_announced`, which only says a packet arrived. The first packet
         # routinely carries id 0 - the car has not loaded - and that is not an
@@ -227,14 +232,14 @@ class TelemetryBridge(QObject):
         settings = self._shift_points
         if settings is None:
             return
-        table = (settings.shift_points_for(self._car_id)
-                 if self._car_id is not None else {})
+        table = settings.shift_points_for(self._car_id,
+                                          car_name=self._car_name)
         self.shift_beep.per_gear = table
         if self._car_id is None:
             return
         if table:
             log("beep").info(
-                "car %s has measured shift points: %s", self._car_id,
+                "car %s has shift points: %s", self._car_id,
                 ", ".join(f"g{g} {rpm:.0f}" for g, rpm in sorted(table.items())))
         else:
             # **The car id is logged even when there is no table, and that is
@@ -601,6 +606,12 @@ class PitCrewController(QObject):
             self.settings_screen.test_feed_requested.connect(self.test_feed)
             self.settings_screen.capture_toggled.connect(self.toggle_capture)
             self.settings_screen.listen_toggled.connect(self.probe_button)
+            # **The picker for the per-gear shift table.** Canonical rows,
+            # each carrying its LEARNED packet car id where the stream has
+            # ever shown one. `car_id_map.json` is not a source for this: its
+            # ids are an ordinal from an older catalogue and measured false -
+            # the Shelby streams 3391 against that file's 473.
+            self.settings_screen.set_cars(self._cars_for_shift_points())
             self.settings_screen.load(self.settings)
             self.settings_screen.show_capabilities(
                 speech=self.voice.engine_name, hook=self.ptt.has_listener)
@@ -645,7 +656,18 @@ class PitCrewController(QObject):
 
     def active_event(self) -> dict | None:
         event_id = self.store.active_event_id()
-        return self.store.get_event(event_id) if event_id else None
+        event = self.store.get_event(event_id) if event_id else None
+        # **The car's name, on the way past.** The bridge needs it to find a
+        # per-gear shift table for a car whose packet id has never been seen -
+        # which is every car until it has been driven with the app recording,
+        # including the one being raced next. Setting it here rather than
+        # hunting for an event-changed hook keeps the two in step: the bridge
+        # can never be looking at a car the app is not.
+        name = (event or {}).get("car_name") if event else None
+        if getattr(self.bridge, "_car_name", None) != name:
+            self.bridge._car_name = name
+            self.bridge._apply_shift_points()
+        return event
 
     def _refresh_race_options(self, event) -> None:
         """Say whether there is a plan for the Strategy choice to be about.
@@ -945,6 +967,18 @@ class PitCrewController(QObject):
         """
         audio_devices.set_output_device(values.audio_output_device or None)
         audio_devices.set_input_device(values.audio_input_device or None)
+
+    def _cars_for_shift_points(self):
+        """`(name, learned packet id or None)`, by name, for the picker."""
+        rows = []
+        try:
+            for car in self.store.list_cars():
+                name = car["name"]
+                if name:
+                    rows.append((name, car["gt7_car_id"]))
+        except Exception:                                   # noqa: BLE001
+            return []
+        return sorted(set(rows), key=lambda pair: pair[0].casefold())
 
     def save_settings(self, new: settings.Settings) -> None:
         """Apply the button and the beep, and remember them."""

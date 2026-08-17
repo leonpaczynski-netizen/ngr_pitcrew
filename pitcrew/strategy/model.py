@@ -85,6 +85,13 @@ FUEL_MARGIN_SYSTEMATIC = 0.02
 FUEL_MARGIN_MIN_L = 0.5
 
 
+# How far from its group's median a value may sit and still be that group's.
+# Wide on purpose - see `consecutive_sd`.
+TRIM_BAND = 0.25
+# Median absolute deviation to a standard deviation, for a normal.
+MAD_TO_SIGMA = 1.4826
+
+
 def consecutive_sd(groups) -> float | None:
     """Lap-to-lap scatter, from consecutive differences within each group.
 
@@ -104,17 +111,38 @@ def consecutive_sd(groups) -> float | None:
 
     Groups of fewer than three contribute nothing: two laps give one
     difference and one difference has no spread.
+
+    **Trimmed and robust, because the counted population is not clean.** On
+    the Monza event the laps that survive `counted_laps` still include a 182 s
+    lap, a lap where the tank moved 0.16 L, and six sessions where it did not
+    move at all. Straight sd over that reads 5.64 s on lap time and 1.21 L on
+    fuel - against a burn of 6.2 L/lap, which would size a fuel margin larger
+    than the thing it is protecting and hand back the pit time this estimator
+    exists to save. So each group is trimmed to values within `TRIM_BAND` of
+    its own median first, and the scale is a median absolute deviation rather
+    than a standard deviation, so one survivor cannot carry the answer.
+
+    The trim is deliberately wide. It is there to reject a lap the car did not
+    drive, not to reject a lap driven differently: a genuine fuel-saving lap
+    is a few percent down and stays in, which is the whole point of measuring
+    scatter on his own driving.
     """
     sigmas: list[float] = []
     for values in groups:
         series = [float(v) for v in values if v is not None]
         if len(series) < 3:
             continue
-        deltas = [b - a for a, b in zip(series, series[1:])]
-        try:
-            sigmas.append(statistics.stdev(deltas) / math.sqrt(2.0))
-        except statistics.StatisticsError:
+        middle = statistics.median(series)
+        if middle:
+            series = [v for v in series
+                      if abs(v - middle) <= TRIM_BAND * abs(middle)]
+        if len(series) < 3:
             continue
+        deltas = [b - a for a, b in zip(series, series[1:])]
+        centre = statistics.median(deltas)
+        mad = statistics.median([abs(d - centre) for d in deltas])
+        sigmas.append(MAD_TO_SIGMA * mad / math.sqrt(2.0))
+    sigmas = [s for s in sigmas if s > 0.0]
     if not sigmas:
         return None
     return math.sqrt(sum(s * s for s in sigmas) / len(sigmas))

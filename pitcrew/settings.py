@@ -22,6 +22,17 @@ from dataclasses import dataclass, field, fields
 
 # Where the beep threshold comes from.
 RPM_FROM_GT7 = "gt7"        # the car's own shift-light rpm, off the packet
+
+# The prefix that marks a shift-point table keyed by car NAME rather than by
+# the packet's car id. A name is not an identity GT7 broadcasts, so it is the
+# fallback and never the preference - but the id is unknown until the car has
+# been driven with the app recording, and a table nobody can enter before the
+# session they want it for is a table nobody can use.
+
+
+def shift_point_key(car_name: str) -> str:
+    """The `beep_shift_points` key for a car with no learned packet id."""
+    return "name:" + " ".join(str(car_name).split()).casefold()
 RPM_MANUAL = "manual"       # a number the driver chose
 RPM_SOURCES = (RPM_FROM_GT7, RPM_MANUAL)
 
@@ -281,15 +292,27 @@ class Settings:
     def uses_game_rpm(self) -> bool:
         return self.beep_rpm_source == RPM_FROM_GT7
 
-    def shift_points_for(self, car_id) -> dict[int, float]:
+    def shift_points_for(self, car_id, car_name: str | None = None
+                         ) -> dict[int, float]:
         """The measured per-gear table for this car, or empty.
 
         Empty is the honest answer for a car that has not been driven, and it
         leaves the beep on whatever `beep_rpm_source` says. Filling it with a
         neighbouring car's numbers, or with a default, would be a measurement
         claim about a gearbox nobody has measured.
+
+        **Keyed by packet car id, and by NAME until that id is known.** The id
+        is the only identity GT7 broadcasts and it is the right key - but it
+        only exists once the car has been driven with the app recording, and
+        every Porsche session on file predates that capture. Without the name
+        fallback the driver could not enter a table for a car until after the
+        session he wanted it for. The id wins where both exist, because the id
+        is the thing the stream actually matched.
         """
-        table = (self.beep_shift_points or {}).get(str(car_id))
+        points = self.beep_shift_points or {}
+        table = points.get(str(car_id))
+        if not table and car_name:
+            table = points.get(shift_point_key(car_name))
         if not table:
             return {}
         return {int(gear): float(rpm) for gear, rpm in table.items()}

@@ -112,12 +112,24 @@ def _curves(store, rows) -> dict[int, dict[float, tuple[float, int]]]:
         throttle = np.array([f.get("throttle_pct") or 0.0 for f in frames])
         brake = np.array([f.get("brake_pct") or 0.0 for f in frames])
         tarmac = np.array([(f.get("surf_fl") or "T") == "T" for f in frames])
+        # **The rev limiter is not a shift point, and it looked like the best
+        # one.** GT7 cuts fuel on the limiter, so those frames read close to
+        # zero acceleration - and a bin full of them is a bin where the next
+        # gear wins by a mile. On the RSR that put gear 1's answer at "shift
+        # at 9000" off 13 frames reading 0.00 m/s^2, which is the fuel cut and
+        # not a gearbox fact. The flag is broadcast; it just was not read.
+        limited = np.array([bool(f.get("rev_limiter")) for f in frames])
 
         k = STENCIL
         accel = np.zeros_like(speed)
         accel[k:-k] = (speed[2 * k:] - speed[:-2 * k]) / (2 * k / 60.0)
         usable = ((throttle >= 99.0) & (brake <= 1.0) & (gear >= 1)
-                  & (rpm > 0) & tarmac)
+                  & (rpm > 0) & tarmac & ~limited)
+        # A frame is contaminated by the cut for as long as the derivative
+        # window can see one, since acceleration here is a centred difference.
+        for offset in range(1, STENCIL + 1):
+            usable[offset:] &= ~limited[:-offset]
+            usable[:-offset] &= ~limited[offset:]
         usable[:k] = False
         usable[-k:] = False
         for g in range(1, 9):
