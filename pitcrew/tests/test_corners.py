@@ -377,7 +377,25 @@ def test_wheelspin_is_tested_on_the_driven_wheels():
 
 def test_an_undeclared_drivetrain_is_declared_as_such():
     assert "all four" in thresholds.as_export()["wheelspinWheels"]
-    assert "rwd" in thresholds.as_export("rwd")["wheelspinWheels"]
+    assert "RWD" in thresholds.as_export("rwd")["wheelspinWheels"]
+
+
+def test_gt7s_own_layout_codes_resolve_to_driven_wheels():
+    """The game states a layout as FF/FR/MR/RR/4WD and that is what the Event
+    screen offers, because asking him to translate his own car into `rwd` is
+    asking him to make a mistake. The detector needs the drive type."""
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        if 550.0 <= f["lap_distance_m"] <= 650.0:
+            f["throttle_pct"] = 80.0
+            f["slip_fl"] = 1.2
+    for rear in ("MR", "FR", "RR"):
+        assert "wheelspin" not in one_corner(frames, drivetrain=rear)["flags"]
+    assert "wheelspin" in one_corner(frames, drivetrain="FF")["flags"]
+    assert "wheelspin" in one_corner(frames, drivetrain="4WD")["flags"]
+    # A code nobody recognises is not a licence to guess: it falls back to all
+    # four and the payload keeps saying so.
+    assert "all four" in thresholds.as_export("space shuttle")["wheelspinWheels"]
 
 
 def test_lockup_needs_brake():

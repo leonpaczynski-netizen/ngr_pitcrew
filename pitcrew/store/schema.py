@@ -692,6 +692,18 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # belongs here. NULL until a lap has been recorded, and then the wind
         # curve falls back to the car's figure and says which it used.
         ("observed_top_kph", "REAL"),
+        # **Which wheels are driven.** GT7 broadcasts no drivetrain channel in
+        # any packet format and the torque-vector channels that might have
+        # inferred it read zero on this stream, so it is declared or it is
+        # unknown. Without it `wheelspin` watches all four wheels: at Watkins
+        # T2 that was 15 laps of 17 flagged with a kerb strike on all 17, and
+        # what it was seeing was a front wheel lifted over the kerb.
+        ("drivetrain", "TEXT"),
+        # The fuel map the car ran, 1-6, 1 richest. No channel carries it and
+        # the whole fuel model is expressed per map, so `laps.fuel_map` was
+        # null on every lap ever recorded. Declared on the event because it is
+        # a property of how the round is being driven.
+        ("fuel_map", "INTEGER"),
     ),
     "laps": (
         ("gear_ratios", "TEXT"),

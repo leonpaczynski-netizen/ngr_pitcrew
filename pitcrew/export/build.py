@@ -465,7 +465,15 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         # stated default, which the thresholds block already labels `assumed`.
         corners = aggregate_corners(
             model, counted_with_frames, bottoming_ref,
-            wheelbase_m=_session_field(session, "wheelbase_m"))
+            wheelbase_m=_session_field(session, "wheelbase_m"),
+            # **Declared, because GT7 broadcasts no drivetrain channel and
+            # the torque vectors that might have inferred one read zero on
+            # this stream.** Without it `wheelspin` watches all four wheels,
+            # so a front wheel lifted over a kerb under throttle counts: at
+            # Watkins T2 that was 15 laps of 17 with a kerb strike on all 17.
+            # None where nobody has said, and the payload goes on disclosing
+            # that it is watching all four.
+            drivetrain=(event or {}).get("drivetrain"))
 
     setup = None
     driver_changes = None
@@ -511,6 +519,7 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         strategy=strategy,
         derived=Derived(
             {**thresholds.as_export(
+                drivetrain=(event or {}).get("drivetrain"),
                 wheelbase_m=_session_field(session, "wheelbase_m")),
              **incident_thresholds()},
             bottoming_ref_mm=bottoming_ref,

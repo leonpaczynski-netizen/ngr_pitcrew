@@ -66,6 +66,20 @@ WEATHER_RULES = ("Random", "Fixed")
 RAIN_ANSWERS = ("Not answered", "Can rain", "Cannot rain")
 MULTIPLIERS = ("Off",) + tuple(f"{n}x" for n in range(1, 11))
 ABS_SETTINGS = ("Off", "Weak", "Default")
+# **Which wheels are driven, and it has to be declared because GT7 broadcasts
+# no drivetrain channel in any packet format.** Without it `wheelspin` watches
+# all four wheels, so a front wheel lifted over a kerb under throttle reads as
+# wheelspin on a rear-driven car - at Watkins T2 that was 15 laps of 17 with a
+# kerb strike on all 17. The torque-vector channels that might have inferred
+# it read zero on this stream.
+#
+# "—" is a real answer and the honest default: it means nobody has said, and
+# the detector goes on watching all four and disclosing that it does.
+DRIVETRAINS = ("—", "FF", "FR", "MR", "RR", "4WD")
+# The fuel map the car ran. GT7 broadcasts no fuel-map channel either, and the
+# whole fuel model is expressed per map. 1 is the richest - sources that
+# number them 1-5, or invert the direction, are wrong.
+FUEL_MAPS = ("—", "1", "2", "3", "4", "5", "6")
 START_TYPES = ("Rolling", "Standing", "Grid - no track limit")
 # GT7's own lobby vocabulary. A lobby offers **names, not hours**, and what
 # hour each name means differs by circuit - so the app does not interpret them,
@@ -606,6 +620,10 @@ class EventScreen(QWidget):
         self.tcs.setRange(0, 5)
         self.countersteer = QComboBox()
         self.countersteer.addItems(("Off", "On"))
+        self.drivetrain = QComboBox()
+        self.drivetrain.addItems(DRIVETRAINS)
+        self.fuel_map = QComboBox()
+        self.fuel_map.addItems(FUEL_MAPS)
 
         self.pp_cap = QDoubleSpinBox()
         self.pp_cap.setRange(EMPTY, 2000.0)
@@ -626,6 +644,13 @@ class EventScreen(QWidget):
         grid.addWidget(Field("ABS", self.abs_setting), 3, 0)
         grid.addWidget(Field("TCS", self.tcs), 3, 1)
         grid.addWidget(Field("Countersteer assist", self.countersteer), 4, 0)
+        grid.addWidget(Field(
+            "Drivetrain", self.drivetrain,
+            hint="GT7 sends none - wheelspin watches all four until told"),
+            4, 1)
+        grid.addWidget(Field(
+            "Fuel map", self.fuel_map,
+            hint="1 is richest. GT7 sends none, so it is declared"), 5, 0)
         plate.body.addLayout(grid)
         return plate
 
@@ -970,6 +995,11 @@ class EventScreen(QWidget):
         self.abs_setting.setCurrentText("Weak")
         self.tcs.setValue(0)
         self.countersteer.setCurrentText("Off")
+        # Both back to "nobody has said" rather than to a plausible value: a
+        # drivetrain carried over from the last event would silence a
+        # disclosure the payload currently makes honestly.
+        self.drivetrain.setCurrentText("—")
+        self.fuel_map.setCurrentText("—")
         self.pp_cap.setValue(EMPTY)
 
         self.priority.setCurrentIndex(0)
@@ -1020,6 +1050,10 @@ class EventScreen(QWidget):
             self.mandatory_stops.setValue(int(event.get("mandatory_stops") or 0))
             if event.get("abs_setting"):
                 self.abs_setting.setCurrentText(event["abs_setting"])
+            if event.get("drivetrain"):
+                self.drivetrain.setCurrentText(event["drivetrain"])
+            if event.get("fuel_map"):
+                self.fuel_map.setCurrentText(str(event["fuel_map"]))
             self.tcs.setValue(int(event.get("tcs") or 0))
             self.countersteer.setCurrentText(
                 "On" if event.get("countersteer") else "Off")
@@ -1115,6 +1149,13 @@ class EventScreen(QWidget):
                               else self.pit_loss.value()),
             "mandatory_stops": self.mandatory_stops.value(),
             "abs_setting": self.abs_setting.currentText(),
+            # "—" is nobody has said, and it stays NULL rather than becoming a
+            # plausible default. A drivetrain the app guessed would silence a
+            # disclosure the payload currently makes honestly.
+            "drivetrain": (self.drivetrain.currentText()
+                           if self.drivetrain.currentText() != "—" else None),
+            "fuel_map": (int(self.fuel_map.currentText())
+                         if self.fuel_map.currentText() != "—" else None),
             "tcs": self.tcs.value(),
             "countersteer": 1 if self.countersteer.currentText() == "On" else 0,
             # Blank is blank: a league with no PP cap is not a league with a

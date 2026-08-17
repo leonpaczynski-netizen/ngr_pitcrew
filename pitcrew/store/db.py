@@ -898,6 +898,19 @@ class Store:
                  # claim that it was driven on the normal threshold.
                  getattr(lap, "short_shift_rpm", None),
                  _now()))
+            # **The declared fuel map, because no channel carries it.** It was
+            # null on every lap of every session ever recorded - the cheapest
+            # field on the sheet, and the whole fuel model is expressed per
+            # map. It is a property of how the round is being driven rather
+            # than of the lap, so it comes off the event; NULL where nobody
+            # has declared one, never a plausible 1.
+            conn.execute(
+                "UPDATE laps SET fuel_map = COALESCE(?, ("
+                "  SELECT e.fuel_map FROM events e JOIN sessions s "
+                "  ON s.event_id = e.id WHERE s.id = ?)) "
+                "WHERE id = ? AND fuel_map IS NULL",
+                (getattr(lap, "fuel_map", None), session_id,
+                 int(cur.lastrowid)))
             lap_id = int(cur.lastrowid)
             if frames is not None:
                 conn.execute(

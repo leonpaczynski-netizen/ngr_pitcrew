@@ -130,10 +130,23 @@ BRAKE_LOOKBACK_M = 500.0
 # are MR, FR and MR, i.e. rear-driven, so `rwd` is the answer whenever anyone
 # gets round to recording it.
 ALL_WHEELS = ("fl", "fr", "rl", "rr")
+_RWD = ("rl", "rr")
+_FWD = ("fl", "fr")
+# **Both vocabularies, because the driver is reading GT7's.** The game states
+# a car's layout as FF/FR/MR/RR/4WD - engine position and driven axle in one
+# token - and that is what the Event screen offers, because asking him to
+# translate his own car into `rwd` is asking him to make a mistake. The drive
+# type is what the detector needs, so the layout codes resolve to it here.
 DRIVEN_WHEELS = {
-    "rwd": ("rl", "rr"),
-    "fwd": ("fl", "fr"),
+    "rwd": _RWD,
+    "fwd": _FWD,
     "awd": ALL_WHEELS,
+    "fr": _RWD,          # front engine, rear drive
+    "mr": _RWD,          # mid engine, rear drive - the Huracan GT3
+    "rr": _RWD,          # rear engine, rear drive - the 911 RSR
+    "ff": _FWD,
+    "4wd": ALL_WHEELS,
+    "awd4": ALL_WHEELS,
 }
 
 
@@ -141,17 +154,19 @@ def wheelspin_wheels(drivetrain: str | None) -> tuple[str, ...]:
     """Which wheels `wheelspin` is tested on."""
     if drivetrain is None:
         return ALL_WHEELS
-    return DRIVEN_WHEELS.get(drivetrain.lower(), ALL_WHEELS)
+    return DRIVEN_WHEELS.get(drivetrain.strip().lower(), ALL_WHEELS)
 
 
 def wheelspin_wheels_note(drivetrain: str | None) -> str:
     wheels = wheelspin_wheels(drivetrain)
-    if drivetrain is None or drivetrain.lower() not in DRIVEN_WHEELS:
+    if (drivetrain is None
+            or drivetrain.strip().lower() not in DRIVEN_WHEELS):
         return ("all four - GT7 broadcasts no drivetrain channel and none was "
                 "declared, so the contract's driven-wheel test could not be "
                 "applied. A front wheel light over a kerb under throttle reads "
                 "as wheelspin on a rear-driven car")
-    return f"{drivetrain.lower()} driven wheels ({', '.join(wheels)})"
+    return (f"{drivetrain.strip().upper()}, declared - driven wheels "
+            f"({', '.join(wheels)})")
 
 
 # --- understeer-mid --------------------------------------------------------
