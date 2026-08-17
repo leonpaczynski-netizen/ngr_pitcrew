@@ -18,6 +18,7 @@ from pitcrew.analysis.corners import (
 )
 from pitcrew.analysis.gearing import gearing_export
 from pitcrew.analysis.resolve import resolve_corner_model
+from pitcrew.race.expectations import audit_line_from_laps
 from pitcrew.analysis.runs import classify_exclusions, runs_export, split_runs
 from pitcrew.analysis.incidents import (
     as_export as incidents_export,
@@ -528,6 +529,13 @@ def _strategy_section(store, event_id: int) -> dict | None:
         assumptions["refuelRateSource"] = source
         assumptions["mandatoryStops"] = event["mandatory_stops"]
 
+    # **What the plan expected to execute, beside what it executed.** Stored
+    # with the plan rather than in the export's own schema, and reported here
+    # through `outcome` - a free-text field the contract already defines for
+    # exactly this - so nothing arrives that a reader would have to interpret
+    # conservatively. See §10's `outcome`, and `race/expectations.py`.
+    expects = approved["plan"].get("expects")
+
     calls = _calls_made(store, event_id)
     if calls:
         # The contract defines callsMade[] as lap/call/reason/accepted/
@@ -540,7 +548,7 @@ def _strategy_section(store, event_id: int) -> dict | None:
              if key in ("lap", "call", "reason", "accepted", "confidence")}
             for call in calls]
 
-    outcome = _outcome(store, event_id, calls, section)
+    outcome = _outcome(store, event_id, calls, section, expects)
     if outcome:
         section["outcome"] = outcome
     return section
@@ -570,12 +578,19 @@ def _refuel_rate(planned: float | None, event) -> tuple[float | None, str]:
                   else DECLARED_REFUEL_SOURCE)
 
 
-def _outcome(store, event_id: int, calls: list[dict], section: dict) -> str:
+def _outcome(store, event_id: int, calls: list[dict], section: dict,
+             expects: dict | None = None) -> str:
     """What happened, from the race laps. Omitted when no race was run.
 
     Takes the full `_calls_made` list - with the internal `kind` and
     `resolution` keys still on it - rather than the contract-trimmed copy in
     the section, because the stay-out fold is found by its recorded kind.
+
+    `expects` is what the plan said it would execute. **Where the race
+    superseded it, both figures go out**: what the plan was built on and what
+    it actually ran on, which is the whole audit value. Nothing about it is a
+    new key - the contract's `outcome` is prose, and prose is where a
+    comparison with its own sample counts and noise floor belongs.
     """
     race_laps = event_lap_inputs(store, event_id, "race")
     if not race_laps:
@@ -597,7 +612,8 @@ def _outcome(store, event_id: int, calls: list[dict], section: dict) -> str:
         declined_calls=declined,
         stay_out_lap=stay_out)
     fuel = fuel_left_note(race_laps)
-    return f"{text} {fuel}".strip() if fuel else text
+    parts = [text, fuel, audit_line_from_laps(expects, race_laps)]
+    return " ".join(part for part in parts if part).strip()
 
 
 def _calls_made(store, event_id: int) -> list[dict]:

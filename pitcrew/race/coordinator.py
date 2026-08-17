@@ -25,6 +25,9 @@ from pitcrew.race.calls import (
     next_call,
     stay_out_call,
 )
+from pitcrew.race.clock import RaceClock
+from pitcrew.race.expectations import ExpectationTracker
+from pitcrew.store.tyres import gap_association_for
 from pitcrew.telemetry.session_state import EventKind, Phase
 
 
@@ -83,7 +86,11 @@ class RaceCoordinator:
                  fuel_per_lap_l: float | None = None,
                  wear_per_lap: float | None = None,
                  fuel_capacity_l: float | None = None,
-                 short_shift_l_per_1000rpm: float | None = None) -> None:
+                 short_shift_l_per_1000rpm: float | None = None,
+                 lap_time_ms: int | None = None,
+                 practice_lap_samples: int = 0,
+                 practice_fuel_samples: int = 0,
+                 now=None) -> None:
         self.phase = RacePhase.IDLE
         self.plan = plan or {}
         self.state = RaceState(
@@ -95,11 +102,28 @@ class RaceCoordinator:
             short_shift_l_per_1000rpm=short_shift_l_per_1000rpm)
         self.refusal: str | None = None
         self.planned_fuel_per_lap_l = fuel_per_lap_l
+        self.planned_lap_time_ms = lap_time_ms
         self._burns: list[float] = []
         # Lap times fit to judge pace against the plan - see
         # `representative_pace_ms` for what is kept out and why.
         self._pace_ms: list[int] = []
         self._stints = list(self.plan.get("stints") or ())
+        # **The app's own race clock**, built at arming and started at the
+        # green. GT7's clock is not accurate - the driver measured it - so
+        # nothing in race control reads `remaining_time_ms` any more. See
+        # `race/clock.py`. `now` is injectable so the tests can drive a race
+        # in milliseconds instead of half an hour.
+        self._now = now
+        self.clock = RaceClock(None, **({"now": now} if now else {}))
+        # What the plan expects to execute, and what it is executing. Built
+        # from the practice figures the plan was costed with and refreshed by
+        # every completed lap - the lap-to-lap reference the driver asked for.
+        self.expect = ExpectationTracker(
+            planned_lap_time_ms=lap_time_ms,
+            planned_fuel_per_lap_l=fuel_per_lap_l,
+            planned_wear_per_lap=wear_per_lap,
+            practice_lap_samples=practice_lap_samples,
+            practice_fuel_samples=practice_fuel_samples)
         self._apply_stint(0)
 
     # ------------------------------------------------------------------ arming
@@ -116,6 +140,25 @@ class RaceCoordinator:
         if actual is not None:
             self.state.race_minutes = actual.race_minutes
             self.state.laps_total = self._laps_total_for(actual)
+            # **The race's own declared duration, from the event page.**
+            # `events.race_laps` holds MINUTES for a timed race - the
+            # documented column overload - and `context_from_event` has
+            # already sorted that out, so this is the only conversion left.
+            self.clock = RaceClock(
+                actual.race_minutes * 60.0 if actual.is_timed else None,
+                **({"now": self._now} if self._now else {}))
+            # **The tyre-temperature association, only where it was measured.**
+            # The front-to-rear gap predicts lap time on this driver's own
+            # laps at one car and one circuit and is refuted at another, so it
+            # is a scoped record rather than a rule - and where there is no
+            # record for the car and circuit on track, the conserve call does
+            # not exist at all. See `store/tyres.gap_association_for`.
+            gap = gap_association_for(actual.car, actual.track, actual.layout)
+            if gap is not None:
+                self.state.temp_gap_conserve_c = gap.conserve_gap_c
+                self.state.temp_gap_quiet_c = gap.quiet_gap_c
+                self.state.temp_gap_front_floor_c = gap.front_floor_c
+                self.state.temp_gap_s_per_c = gap.slope_s_per_c
         self.phase = RacePhase.ARMED
         return True
 
@@ -165,6 +208,11 @@ class RaceCoordinator:
             self.state.next_compound = None
             return
         stint = self._stints[index]
+        # The compound on the car now. Kept where the plan names one and left
+        # alone where it does not - a re-plan adopted mid-race carries no
+        # compound, and the rubber on the car has not changed because of it.
+        if stint.get("compound"):
+            self.state.tyre_compound = stint["compound"]
         start = stint.get("start_lap") or 1
         self.state.stint_ends_on_lap = start + stint.get("laps", 0) - 1
         following = self._stints[index + 1] if index + 1 < len(self._stints) else None
@@ -212,6 +260,13 @@ class RaceCoordinator:
             # armed is not this app's race.
             return None
         self.phase = RacePhase.RUNNING
+        # **The green flag starts the app's own clock.** RACE_STARTED is
+        # already gated on real green-flag conditions (the car seen slow, then
+        # over 80 km/h, or the lap counter moving for a rolling start), so
+        # this is the moment the race actually began. Everything about time
+        # remaining derives from here and from the laps, never from GT7's own
+        # clock, which the driver measured as inaccurate.
+        self.clock.start()
         # GT7 sends `laps_in_race = -1` for a timed race and session_state
         # clamps that to 0, so this guard never fired there anyway - but a
         # figure that did arrive would be a lap count for a race that has
@@ -220,18 +275,19 @@ class RaceCoordinator:
             self.state.laps_total = event.data["laps_in_race"]
         return self._emit()
 
-    # Below this the race has not shown enough of its own burn to trust it
-    # over the practice figure.
-    BURN_LAPS_NEEDED = 3
+    # **Green race laps before the race's own burn is used for the fuel call.**
+    # Raised from three on measurement: the running median converges inside 2%
+    # after ONE lap, so this is not a convergence figure but a precision one.
+    # The zero-versus-one-stop decision at the measured race turned on 1.80%,
+    # and a three-lap mean resolves to +/-2.18% where five resolves to
+    # +/-1.69%. The burn population is filtered the same way the pace
+    # population is: a trailing window that admitted his two fuel-saving laps
+    # read 12% under the real rate and would have planned the rest of the race
+    # on a burn he was only achieving by lifting.
+    BURN_LAPS_NEEDED = 5
     # And the same for pace: fewer representative laps than this and the
     # pace against the plan is unknown - not zero, and never lap one.
     PACE_LAPS_NEEDED = 3
-
-    # A timed race's lap count is the plan's own estimate. When it runs out
-    # while the packet clock still shows this much time, the estimate was a
-    # lap short and the driver is genuinely going round again - the count is
-    # extended rather than the engineer falling silent on a real racing lap.
-    EXTRA_LAP_CLOCK_MS = 20_000
 
     def _on_lap(self, event, packet) -> Call | None:
         lap = event.data["lap"]
@@ -241,29 +297,35 @@ class RaceCoordinator:
         if lap.position:
             self.state.position = lap.position
 
-        # **The estimated distance yields to the clock.** For a timed race
-        # `laps_total` is the plan's derived distance; if it undershoots by
-        # a lap, `laps_remaining()` hits zero one lap early and every call
-        # stands down on a lap he is actually racing. The session state now
-        # sends the packet clock with each completed lap: meaningfully more
-        # than zero left means the flag has not fallen, so the countdown is
-        # stretched by one and the engineer keeps talking.
-        remaining_ms = event.data.get("remaining_time_ms")
-        if (self.state.race_minutes and self.state.laps_total is not None
-                and self.state.laps_remaining() == 0
-                and remaining_ms is not None
-                and remaining_ms > self.EXTRA_LAP_CLOCK_MS):
-            self.state.laps_total += 1
+        # **The two measures of elapsed race time, reconciled.** The app timer
+        # is one; the sum of GT7's own exact lap figures is the other. They
+        # should stay a constant distance apart - the standing start - and a
+        # gap that grows means the app timer ran through something the laps
+        # did not. `RaceClock` prefers the lap sum when they disagree and says
+        # so once. See `race/clock.py`.
+        #
+        # **`event.data["remaining_time_ms"]` is deliberately not read here.**
+        # It still travels on the event for anything that wants to display it,
+        # but no race-control decision may rest on it: the driver measured
+        # GT7's race clock as inaccurate, and an app timer started at the
+        # green is the reference.
+        self.clock.note_lap(lap.lap_time_ms, is_pit_lap=bool(lap.is_pit_lap))
+        self.expect.note_lap(lap)
 
         # Fuel calls must use what this race is actually burning, not what
         # practice suggested. Told he could push while burning 35% more than
         # planned, the driver would run dry - and the number that produced
         # that advice would have looked perfectly reasonable.
+        # Filtered by the expectation tracker, which drops lap one, pit and
+        # out laps, incident laps and any lap driven under the app's own
+        # short-shift instruction. Kept as a list here too so
+        # `observed_fuel_per_lap` keeps its own shape for callers that built
+        # the coordinator by hand.
         if lap.fuel_used > 0:
             self._burns.append(lap.fuel_used)
-        if len(self._burns) >= self.BURN_LAPS_NEEDED:
-            ordered = sorted(self._burns)
-            self.state.fuel_per_lap_l = ordered[len(ordered) // 2]
+        green = self.expect.race_fuel_per_lap_l()
+        if green is not None and self.expect.green_laps() >= self.BURN_LAPS_NEEDED:
+            self.state.fuel_per_lap_l = green
 
         # **Lap one never enters the pace record.** It carries the grid and -
         # on race day - a standing start, and it once fed the pace-vs-plan
@@ -284,10 +346,80 @@ class RaceCoordinator:
         if front is not None and rear is not None:
             self.state.note_temps(lap.lap_num, front, rear)
 
+        # **A lap race gets the countdown too, and there it is exact.** The
+        # two-to-go and last-lap calls were reachable only on a timed race
+        # because only the clock path set the estimate - on a lap race the
+        # figure is a regulation the game reports and the call is free.
+        if not self.state.race_minutes:
+            remaining = self.state.laps_remaining()
+            self.state.laps_to_go_estimate = remaining
+            self.state.laps_estimate_firm = remaining is not None
+
+        finish = self._update_clock_distance()
+        if finish is not None:
+            return finish
+
         folded = self._reconsider_ignored_box()
         if folded is not None:
             self.state.record(folded)
             return folded
+        return self._emit()
+
+    def _update_clock_distance(self) -> Call | None:
+        """A timed race's distance, from the app clock and the median lap.
+
+        **This is the whole point of owning the clock.** The distance used to
+        be the approved plan's own estimate, frozen at arming, patched by a
+        packet field the driver does not trust when the estimate ran out a lap
+        early. Now it is recomputed at every crossing: the time left divided
+        by the lap this race is actually running, ceiling'd because GT7 drops
+        the flag at the first crossing after the clock expires.
+
+        Returns the chequered-flag call when the clock has run out - a lap
+        completing with the app timer expired IS the final lap - and None
+        otherwise. A lap race is untouched: its distance is a regulation, not
+        an estimate.
+        """
+        if not self.state.race_minutes or not self.clock.running:
+            return None
+        # **The ACHIEVED median - every completed lap, incidents included -
+        # and not the clean pace.** Measured on the 30-minute race: the
+        # achieved median of 121.51 s predicts fifteen laps, which is what
+        # happened, while the clean-pace median of 119.62 s and the practice
+        # median both predict sixteen. An incident lap does not make the car
+        # slower but it does consume the clock, and the clock is the question.
+        lap_ms = self.expect.achieved_lap_time_ms() or self.planned_lap_time_ms
+        left = self.clock.laps_left(lap_ms)
+        self.state.clock_corroborated = self.clock.corroborated
+        # **How wrong the median may be before the answer changes.** Measured
+        # on that race, the first four crossings had 0.12-0.66 s of margin
+        # against a lap-time spread of 2.04 s - the prediction there is not
+        # merely uncertain, it is unresolvable, and the honest output is not a
+        # number. From lap five the margin runs 0.9 s and upward.
+        margin = self.clock.laps_left_margin_s(lap_ms)
+        sigma = self.expect.sigma_ms()
+        self.state.laps_estimate_firm = bool(
+            margin is not None and sigma is not None
+            and margin >= sigma / 1000.0)
+        if left is None:
+            # No lap time to divide by. The plan's frozen distance is all
+            # there is, and it stands rather than being replaced by a guess.
+            return None
+        self.state.laps_total = self.state.lap + left
+        # The two-to-go and last-lap calls read this. They are safe from two
+        # laps out - measured margins of 13.3 s and 31.2 s at the end of laps
+        # 13 and 14 - which is well clear of anything the median can be wrong
+        # by, and it is why those two are the only lap-count facts spoken.
+        self.state.laps_to_go_estimate = left
+        if left > 0:
+            return None
+        # **The flag.** The app timer has expired and a lap has just been
+        # completed, so this crossing is the finish. GT7 emits nothing the
+        # app can trust here - a timed race never raised RACE_FINISHED at all
+        # before the clock did it, and one measured 30-minute race ended with
+        # the engineer mid-box-call and no chequered flag.
+        self.phase = RacePhase.FINISHED
+        self.state.finished = True
         return self._emit()
 
     def _reconsider_ignored_box(self) -> Call | None:
@@ -335,10 +467,16 @@ class RaceCoordinator:
         return call
 
     def observed_fuel_per_lap(self) -> float | None:
-        if len(self._burns) < self.BURN_LAPS_NEEDED:
+        """The race's own burn, or None before enough green laps exist.
+
+        Green laps only. Measured: burn on a green lap has a CV of 2.0% and
+        burn on any lap at all has a CV of 10.4%, the whole spread coming from
+        incident laps and laps he was deliberately saving on.
+        """
+        green = self.expect.race_fuel_per_lap_l()
+        if green is None or self.expect.green_laps() < self.BURN_LAPS_NEEDED:
             return None
-        ordered = sorted(self._burns)
-        return ordered[len(ordered) // 2]
+        return green
 
     # The pace window is wider than the minimum so that incident laps -
     # which cannot be flagged live - can be dropped and a median still
@@ -435,6 +573,12 @@ class RaceCoordinator:
             # both for the last stint of a real plan and for a race armed with
             # no plan, and the two are different answers to "when do I box".
             "hasPlan": bool(self._stints),
+            # The app's own clock, and the lap-time sum that corroborates it.
+            **self.clock.as_snapshot(),
+            # What the plan expects to execute against what it is executing -
+            # the lap-to-lap reference the driver asked for, so the screen and
+            # the PTT can both answer "are we on the plan".
+            **self.expect.as_snapshot(),
         }
 
 

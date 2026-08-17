@@ -355,11 +355,29 @@ def test_a_timed_race_counts_down_the_plans_distance_not_the_minutes():
 
 
 def test_a_timed_race_says_its_lap_count_is_an_estimate():
-    """The distance follows from the stops, so it is spoken as 'about'."""
-    state = RaceState(lap=5, laps_total=24, race_minutes=45.0, position=3)
+    """The distance follows from the clock and the pace, so it is 'about'."""
+    state = RaceState(lap=5, laps_total=24, race_minutes=45.0, position=3,
+                      laps_estimate_firm=True)
     call = next_call(state)
     assert call.kind == STATUS
     assert call.call == "P3. about 19 to go."
+
+
+def test_a_lap_count_that_cannot_be_resolved_is_not_spoken_at_all():
+    """Measured on a real 30-minute race: at the first four crossings the
+    median only had to be wrong by 0.12-0.66 s to change the predicted lap
+    count, against a lap-to-lap spread of 2.04 s. In that window the answer is
+    not uncertain, it is unresolvable - and a coin toss with "about" in front
+    of it is still a number he will plan around."""
+    state = RaceState(lap=5, laps_total=24, race_minutes=45.0, position=3)
+    call = next_call(state)
+    assert call.kind == STATUS
+    assert call.call == "P3."
+
+
+def test_with_no_position_and_no_resolvable_count_there_is_nothing_to_say():
+    state = RaceState(lap=5, laps_total=24, race_minutes=45.0)
+    assert next_call(state) is None
 
 
 def test_a_timed_race_with_no_plan_counts_down_nothing():

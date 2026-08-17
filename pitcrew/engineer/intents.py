@@ -23,6 +23,17 @@ PLAN = "plan"
 ACCEPT = "accept"
 KEEP = "keep"
 REPEAT = "repeat"
+# **The one calibration bridge that exists between his eyes and our feed.**
+# GT7's HUD reddens the frame around each tyre as it heats - PD's own manual
+# says so - and nobody has ever paired that colour with a telemetry value. He
+# reports the event; the app writes down the degrees it was reading at that
+# instant. See `race/hud_calibration.py`.
+TYRES_RED = "tyres-red"
+# **"Are we on the plan?"** - the lap-to-lap reference the driver asked for,
+# answered from what the plan said it would execute against what it is
+# executing. The fuel half is actionable; the pace half is confirmation only
+# and is withheld entirely until it clears his own measured noise floor.
+ON_PLAN = "on-plan"
 UNKNOWN = "unknown"
 
 # Phrases the driver actually uses, mapped to intent. Matching is on whole
@@ -49,6 +60,10 @@ PHRASES: dict[str, tuple[str, ...]] = {
     ACCEPT: ("accept", "do it", "yes do it", "agreed", "copy that"),
     KEEP: ("keep", "stay out", "negative", "keep the plan"),
     REPEAT: ("say again", "repeat", "again"),
+    TYRES_RED: ("tyres are red", "tires are red", "tyres red", "tires red",
+                "gone red", "went red", "frame is red"),
+    ON_PLAN: ("are we on the plan", "on the plan", "how's the burn",
+              "hows the burn", "fuel burn", "on target"),
 }
 
 # Longest phrases first: "how much fuel do i take" must win over "fuel".
@@ -125,6 +140,12 @@ def answer(intent: str, snapshot: dict, *,
     if intent == UNKNOWN:
         return Answer("Say again.", intent, answered=False)
 
+    if intent == TYRES_RED:
+        # Acknowledged, never analysed out loud. One observation is one
+        # observation, and telling him what it means would be inventing the
+        # meaning this file exists to collect evidence for.
+        return Answer("Copy, noted with the temperatures.", intent)
+
     if intent == REPEAT:
         if not last_call:
             return Answer("Nothing to repeat.", intent, answered=False)
@@ -136,6 +157,10 @@ def answer(intent: str, snapshot: dict, *,
         return Answer(
             "Copy, changing the plan." if intent == ACCEPT
             else "Copy, staying on the plan.", intent)
+
+    if intent == ON_PLAN:
+        return Answer(_on_plan(snapshot), intent,
+                      answered=snapshot.get("burnVsPlanPct") is not None)
 
     if intent == POSITION:
         position = snapshot.get("position")
@@ -188,6 +213,31 @@ def answer(intent: str, snapshot: dict, *,
         return Answer(_plan_summary(snapshot), intent)
 
     return Answer("Say again.", UNKNOWN, answered=False)
+
+
+def _on_plan(snapshot: dict) -> str:
+    """The race against what the plan expected, in one sentence.
+
+    **The two halves are not symmetric and the answer says so.** Burn is the
+    low-noise channel and it is quoted as a percentage he can act on. Pace is
+    quoted only when the deviation clears the noise floor measured on this
+    car at this circuit - inside that floor the honest answer is that the app
+    cannot tell, and a number would be read as a trend.
+    """
+    burn = snapshot.get("burnVsPlanPct")
+    if burn is None:
+        return "I don't have the burn against the plan yet."
+    direction = "over" if burn > 0 else "under"
+    said = f"Burn {abs(burn):.0f} percent {direction} plan."
+    if snapshot.get("paceIsReal"):
+        pace = snapshot.get("paceVsPlanMs") or 0
+        said += (f" Pace {abs(pace) / 1000.0:.1f} a lap "
+                 f"{'down' if pace > 0 else 'up'}.")
+    else:
+        floor = snapshot.get("paceDetectableMs")
+        said += (f" Pace is inside the {floor / 1000.0:.1f} a lap I can see."
+                 if floor else " Pace not measurable yet.")
+    return said
 
 
 def _plan_summary(snapshot: dict) -> str:

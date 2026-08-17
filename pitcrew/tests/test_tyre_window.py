@@ -1,26 +1,27 @@
-"""Tyre temperature is measured; the window it was judged against was not.
+"""Tyre temperature is measured; the window it was judged against never was.
 
-These tests used to protect a rule — "a cold tyre is slower than the compound
-is and wears less than it will" — which is true of tyres and was being applied
-through thresholds that are not GT7's. They are real-world slick figures, at
-90-110 °C, and every lap of every compound in 51 laps of Monza ran between
-68 °C and 78 °C. So the qualification fired on every compound of every session
-and put a confident sentence about nothing into every export.
+These tests used to protect a rule - "a cold tyre is slower than the compound
+is and wears less than it will" - which is true of tyres and was being applied
+through thresholds that are not GT7's. They are real-world slick figures at
+90-110 degC, and every lap of every compound in 51 laps of Monza ran between
+68 degC and 78 degC. So the qualification fired on every compound of every
+session and put a confident sentence about nothing into every export.
 
-What they protect now is the silence: the temperature is reported, the band
-travels flagged as unmeasured, and **no verdict is drawn from it** until a
-window has been measured in GT7. Measuring one is a driving job — the same
-corner at several times of day, achieved temperature against lap time.
+**The bands themselves have now been deleted rather than flagged**, because
+the flag did not stop them being read and the four-zone SHAPE was itself the
+fabrication: researched Aug 2026, no optimal tyre-temperature window has ever
+been published for GT7 by anyone, and nothing in the evidence base describes a
+cold side at all. What survives is one sourced UPPER figure per Racing
+compound - the temperature above which wear climbs, from a single 2025 test in
+this very telemetry channel - and these tests protect the distinction between
+that and a window.
 """
 from __future__ import annotations
 
 from pitcrew.analysis.session import LapInput
 from pitcrew.analysis.tyre_window import (
-    BAND_COLD,
-    BAND_HOT,
-    BAND_OPTIMAL,
-    BAND_OVERHEATING,
-    band_for,
+    BAND_ABOVE_WEAR_ONSET,
+    above_wear_onset,
     qualification,
     window_by_compound,
 )
@@ -44,28 +45,34 @@ def lap_at(lap_num: int, compound: str, temp_c: float, **overrides) -> LapInput:
     return LapInput(**fields)
 
 
-# ------------------------------------------------------------------ the bands
+# --------------------------------------------------- the one sourced figure
 
-def test_a_band_is_read_against_the_compounds_own_window():
-    """Racing Hard's optimal starts where Comfort Soft is already cooked.
-
-    85 °C is the middle of RH's range and past the top of CS's; 92 °C is well
-    beyond anything a Comfort tyre survives.
-    """
-    assert band_for("RH", 85.0) == BAND_OPTIMAL
-    assert band_for("CS", 85.0) == BAND_HOT
-    assert band_for("CS", 92.0) == BAND_OVERHEATING
+def test_the_wear_onset_threshold_is_read_per_compound():
+    """RS 88, RM 90, RH 93 degC - one test, GT7 1.55, in our own channel."""
+    assert above_wear_onset("RS", 89.0) is True
+    assert above_wear_onset("RS", 87.0) is False
+    assert above_wear_onset("RH", 89.0) is False      # RH's threshold is 93
+    assert above_wear_onset("RH", 94.0) is True
 
 
-def test_a_hard_tyre_below_its_window_is_cold_not_merely_cool():
-    # RH warms through to 75 C; below 60 it is cold.
-    assert band_for("RH", 55.0) == BAND_COLD
+def test_an_untested_compound_has_no_threshold_rather_than_a_guessed_one():
+    """Only the three Racing compounds were ever tested. Everything else is
+    None - which is "nobody has measured this", never "the tyre is fine"."""
+    assert above_wear_onset("CS", 85.0) is None
+    assert above_wear_onset("SS", 85.0) is None
+    assert above_wear_onset("IM", 85.0) is None
+    assert above_wear_onset("ZZ", 85.0) is None
+    assert above_wear_onset("", 85.0) is None
+    assert above_wear_onset(None, 85.0) is None
 
 
-def test_an_unknown_compound_gets_no_band_rather_than_a_wrong_one():
-    """A band off the wrong thresholds is worse than none at all."""
-    assert band_for("ZZ", 85.0) is None
-    assert band_for("", 85.0) is None
+def test_there_is_no_cold_side_to_read():
+    """The deleted table had a `cold_max` per compound. Nothing in the
+    evidence base describes a cold side for GT7, so the app must not have one
+    to import."""
+    from pitcrew.store import tyres
+    assert not hasattr(tyres.get_by_code("RS"), "cold_max")
+    assert not hasattr(tyres, "temp_preset")
 
 
 # ------------------------------------------------------- per-compound windows
@@ -87,14 +94,34 @@ def test_the_temperature_is_still_measured_and_reported():
     assert window["source"] == "tyre-surface-temp"
 
 
-def test_the_band_travels_flagged_as_not_measured():
-    """Kept for the UI's colour, where being roughly right is all it does -
-    and marked so nothing downstream reads it as a finding."""
+def test_no_window_is_emitted_because_none_exists():
+    """`windowC` used to carry two of the fabricated thresholds "for the UI's
+    colour bands". There is no window to carry - missing is null - and the
+    source line says so in words rather than leaving a reader to infer it."""
     laps = [lap_at(n, "RH", 74.0) for n in range(1, 7)]
     window = window_by_compound(laps)["RH"]
+    assert window["windowC"] is None
     assert window["windowMeasured"] is False
     assert window["inWindow"] is None
-    assert "NOT MEASURED IN GT7" in window["windowSource"]
+    assert window["band"] is None                     # 74 degC is under RH's 93
+    assert "No GT7 window exists" in window["windowSource"]
+    assert "wear-onset threshold of 93" in window["windowSource"]
+
+
+def test_a_compound_running_over_its_wear_threshold_says_so():
+    laps = [lap_at(n, "RS", 91.0) for n in range(1, 7)]
+    window = window_by_compound(laps)["RS"]
+    assert window["band"] == BAND_ABOVE_WEAR_ONSET
+    assert window["lapsInWindow"] == 6                # laps past the threshold
+
+
+def test_an_untested_compound_reports_the_temperature_and_nothing_else():
+    laps = [lap_at(n, "CS", 74.0) for n in range(1, 7)]
+    window = window_by_compound(laps)["CS"]
+    assert window["meanC"] == 74.0
+    assert window["band"] is None
+    assert window["lapsInWindow"] is None             # not zero - unmeasured
+    assert "NO GT7 FIGURE EXISTS for CS" in window["windowSource"]
 
 
 def test_an_excluded_lap_does_not_colour_the_temperature():

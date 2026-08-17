@@ -463,6 +463,19 @@ def _current_sheet_id(store, event) -> int | None:
     return sheets[0].id if sheets else None
 
 
+def _achieved_lap_ms(counted) -> int | None:
+    """The median lap AS DRIVEN - incidents included, struck laps excluded.
+
+    None where there is nothing to take a median of. Used only to estimate how
+    many laps fit in a clock; never to cost a plan, where the clean pace is
+    the right figure and this one would flatter the stop count.
+    """
+    times = sorted(lap.lap_time_ms for lap in counted if lap.lap_time_ms > 0)
+    if not times:
+        return None
+    return times[len(times) // 2]
+
+
 def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     """Assemble the model's inputs from the event and its practice laps."""
     event = store.get_event(event_id)
@@ -563,8 +576,27 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     timed = event["race_type"] == "time"
     race_minutes = float(event["race_laps"] or 0) if timed else None
     race_laps = event["race_laps"] or 0
-    if timed and reference_ms:
-        race_laps = laps_from_minutes(race_minutes or 0, reference_ms)
+    if timed:
+        # **How many laps fit in the clock is a different question from how
+        # fast the car goes, and it wants a different median.**
+        #
+        # `reference_ms` is the recency-weighted pace a plan is COSTED on and
+        # it is right for that. It is wrong here: it describes clean laps, and
+        # an incident lap does not make the car slower but it does consume the
+        # clock. Measured on the 30-minute race, the clean median predicted
+        # sixteen laps and the achieved median predicted fifteen, which is
+        # what happened - so the plan he approved was one lap long, and every
+        # stint length in it was cut to fit a race that never existed.
+        #
+        # The in-race estimate already uses the achieved figure
+        # (`ExpectationTracker.achieved_lap_time_ms`). This is the same choice
+        # made before the race, off practice: counted laps as they were
+        # actually driven, struck laps out, incidents IN. It is a proxy - a
+        # practice incident is not a race incident - and it remains a
+        # starting estimate that `clock_bound_stints` re-derives per plan.
+        achieved = _achieved_lap_ms(counted) or reference_ms
+        if achieved:
+            race_laps = laps_from_minutes(race_minutes or 0, achieved)
 
     inputs = RaceInputs(
         weighting=weighting,

@@ -1,15 +1,20 @@
-"""The measured tyre-temperature window, from this event's own laps.
+"""The measured tyre-temperature range, from this event's own laps.
 
-The strategy layer still carries a per-compound band that was never measured
-in GT7 - real-world slick figures at 85-110 degC, travelling with
-`windowMeasured: false` precisely so nothing treats them as a finding. On the
-measured cars the game runs a full ten degrees cooler: fronts 72-77, rears
-78-88 over eighteen laps across four sessions. Judged against the fabricated
-band those tyres read "below window" for an entire race, so the live tyre
-voice must never import it. This module builds the band the honest way: from
-the per-lap mean surface temperatures of the event's own practice laps.
+The strategy layer used to carry a per-compound band that was never measured
+in GT7 - real-world slick figures at 85-110 degC. On the measured cars the
+game runs a full ten degrees cooler: fronts 72-77, rears 78-88 over eighteen
+laps across four sessions. Judged against that band those tyres read "below
+window" for an entire race, and a fresh set is fitted at exactly the Racing
+Soft cold ceiling, so a Soft could never once reach its own window. It has
+since been deleted from `store/tyres.py` rather than flagged, because a flag
+did not stop it being read.
 
-Missing is None throughout. No practice frames means no window, and no window
+This module builds the band the honest way: from the per-lap mean surface
+temperatures of the event's own practice laps. **It is a running range, not a
+window** - see the note on `RUNNING_RANGE` for the two measurements that rule
+out reading it as one.
+
+Missing is None throughout. No practice frames means no range, and no range
 means the race engineer's temperature comparisons are not made - never made
 against a default.
 """
@@ -34,6 +39,30 @@ WINDOW_HI_PCT = 90.0
 # window. The answer is then None, not a thinner claim.
 MIN_WINDOW_LAPS = 4
 
+# **What this band is, and what it is not.**
+#
+# It is a description of where he has been running the tyres. It is NOT a
+# performance window, and the measurement says so twice over:
+#
+# * Tested directly on 17 of his own gate-passed laps, the fastest five are
+#   NOT in a narrower absolute-temperature band than the rest - the fastest-5
+#   front range (4.9 degC) is WIDER than the full 10th-90th percentile spread
+#   (4.6 degC). Front absolute temperature carries no pace information at all
+#   (within-session r = -0.13, p = 0.61) and rear absolute temperature flips
+#   sign between practice and race.
+# * Nobody outside has one either: no optimal tyre-temperature window has ever
+#   been published for GT7, by Polyphony or by anyone else.
+#
+# So no call built on this band may imply a physical optimum. The pace signal
+# that DOES survive every split is the front-to-rear gap, and it lives with
+# the calls that use it in `race/calls.py`; the compound's one sourced upper
+# figure - a wear-onset threshold, not a window - lives in `store/tyres.py`.
+# What this band is for is the warm-up comparison at the green, which is a
+# question about where he started relative to where he ends up, and for that
+# a descriptive range is exactly the right instrument.
+RUNNING_RANGE = ("running range - 10th-90th percentile of this event's steady "
+                 "practice laps; descriptive, not a performance window")
+
 # Frame blobs cost ~65 ms each to decode, so the sample is capped. The cap is
 # generous against a race evening's practice (ten laps on the measured
 # nights) and the window barely moves lap to lap.
@@ -49,6 +78,12 @@ class TempWindow:
     # None where no sampled session started cold enough to show it.
     laps_to_window: int | None
     laps_sampled: int
+    # **What kind of band this is**, which decides what a call may claim about
+    # it. There is exactly one kind, and it is descriptive - see the note
+    # above the constant for the two measurements that rule out the other
+    # kind. The field exists so that anything reading a stored window can see
+    # what it was built from rather than having to assume.
+    basis: str = RUNNING_RANGE
 
 
 def lap_axle_means(frames: list[dict]) -> tuple[float, float] | None:

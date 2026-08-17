@@ -31,6 +31,7 @@ from pitcrew.analysis.incidents import (
     read_rows,
     stored_or_read,
 )
+from pitcrew.analysis.session import counted_laps
 from pitcrew.analysis.runs import (
     FOR_QUALIFYING,
     auto_out_laps,
@@ -52,7 +53,11 @@ from pitcrew.rig.wind import WindSim
 from pitcrew.rig.wind_curve import WindCurve
 from pitcrew.engineer import audio_devices, endpoint_meter
 from pitcrew.engineer.voice import Voice
-from pitcrew.export.build import _rows_to_laps, build_event_export
+from pitcrew.export.build import (
+    _rows_to_laps,
+    build_event_export,
+    event_lap_inputs,
+)
 from pitcrew.export.payload import APP_VERSION, ExportRefused, to_json
 from pitcrew.prompts.build import KIND_LABELS, PromptRefused, build_prompt
 from pitcrew.prompts.context import gather
@@ -64,7 +69,18 @@ from pitcrew.store import catalogs
 from pitcrew.store.db import Store
 from pitcrew.race.calls import STAY_OUT
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
-from pitcrew.race.replan import OfferDesk, assess, observed_fuel_per_lap
+from pitcrew.race.expectations import PRACTICE, Expectation
+from pitcrew.race.hud_calibration import note_frame_red
+from pitcrew.race.replan import (
+    REPLAN_BUDGET_S,
+    REPLAN_MAX_STOPS,
+    REPLAN_MAX_WORK,
+    REPLAN_NARROWED_MAX_STOPS,
+    PlanRegister,
+    assess,
+    observed_fuel_per_lap,
+    replan_work,
+)
 from pitcrew.race.qualifying import QualifyingCoach, reference_lap
 from pitcrew.race.temps import measured_temp_window
 from pitcrew.strategy.evidence import build_inputs
@@ -167,6 +183,17 @@ class TelemetryBridge(QObject):
         # like the shift beep, because the out-lap and delta calls are about
         # the frame they were computed from; its voice is a queue put.
         self.quali = None
+        # The app's own race clock, handed over when a race is armed. It is
+        # ticked here rather than from the race layer because a PAUSE is only
+        # visible on the frames: `SessionState.update` returns early on one
+        # and produces no events at all, so a clock fed by events would run
+        # straight through a paused race and call the last lap early.
+        self.race_clock = None
+        # The last decoded packet, for the handful of Qt-thread answers that
+        # need a live reading rather than a per-lap aggregate - the HUD
+        # calibration report is the only one today. One attribute write per
+        # frame; nothing reads it on this thread.
+        self.last_packet = None
         self.racing = False
         # Whether the first packet is allowed to set the threshold. Off means
         # the driver picked a number, and the game must not overwrite it.
@@ -243,6 +270,9 @@ class TelemetryBridge(QObject):
         # A coach armed for the previous session would speak about laps that
         # belong to nothing. Whoever opens the next session re-arms it.
         self.quali = None
+        # And a clock belonging to the race just closed would keep accruing
+        # paused time against a race that no longer exists.
+        self.race_clock = None
         # Velocity and suspension carried across a session boundary are a
         # collision that never happened, at full scale, the instant he
         # rejoins somewhere else on the map.
@@ -315,6 +345,14 @@ class TelemetryBridge(QObject):
             })
 
         self.recorder.record_frame(packet)
+        # Before anything that can raise: the race clock is arithmetic on
+        # three floats and it must not be able to lose time because an
+        # adviser downstream had a bad frame.
+        self.last_packet = packet
+        race_clock = self.race_clock
+        if race_clock is not None:
+            race_clock.note_frame(_monotonic(),
+                                  paused=packet.paused or packet.loading)
         self.shift_beep.update(packet, _monotonic())
         # **How the lap being driven right now is being shifted.** Held per
         # frame rather than read at the line, because the switch can be thrown
@@ -436,12 +474,19 @@ class PitCrewController(QObject):
         self.race_run_id: int | None = None
         self._race_inputs = None
         self._race_burns: list[float] = []
-        # The one open re-plan offer and its lifecycle. It used to be a bare
-        # `_pending_replan` attribute with one rule - while anything pends,
-        # every later verdict is discarded - and one unanswered offer at
-        # minute two of a measured race silenced every adaptation to the
-        # flag. The desk expires, supersedes and records; see `race/replan`.
-        self._replans = OfferDesk()
+        # What the driver was last told, and the rule that decides whether
+        # the latest optimum is worth another word. This was an `OfferDesk`
+        # that held one question open for two laps and let it lapse; the
+        # driver's instruction was that an offer should not expire, because
+        # the engineer reassesses every lap anyway. What remains is the
+        # opposite guard - recalculating every lap must not become announcing
+        # every lap. See `race/replan.PlanRegister`.
+        self._replans = PlanRegister()
+        # How wide the per-lap re-plan is allowed to search, narrowed when it
+        # overruns its budget. See `replan.REPLAN_BUDGET_S`: 1.4 ms today,
+        # 6.35 s on a shape that is one compound profile away.
+        self._replan_max_stops = REPLAN_MAX_STOPS
+        self._replan_over_budget = 0
         # Whether the engineer talks during the race in progress. True outside
         # a race so nothing that speaks for another reason is silenced by it.
         self._engineer_speaks = True
@@ -2514,6 +2559,23 @@ class PitCrewController(QObject):
         plan = self._plans[index]
         payload = plan.as_dict()
         payload["export"] = plan.as_export(self._inputs)
+        # **The plan carries the two numbers it expects to execute.** The
+        # driver asked for exactly this: a median lap time and a fuel burn
+        # stored with the plan, so the engineer has something to reference lap
+        # to lap when deciding if and how the plan needs adjusting. Both
+        # travel with their sample count and their source, because a burn from
+        # three practice laps and one from fourteen are not the same claim.
+        practice_laps = len(counted_laps(
+            event_lap_inputs(self.store, event["id"], "practice")))
+        payload["expects"] = Expectation(
+            lap_time_ms=self._inputs.lap_time_ms or None,
+            lap_time_samples=practice_laps,
+            lap_time_source=PRACTICE,
+            fuel_per_lap_l=self._inputs.fuel_per_lap_l,
+            fuel_samples=practice_laps,
+            fuel_source=PRACTICE,
+            wear_per_lap=self._inputs.wear_per_lap,
+        ).as_plan()
         # What the plan was built for. Without this the race-day guard
         # has nothing to check against and silently always passes.
         context = self._race_context(event)
@@ -2567,6 +2629,12 @@ class PitCrewController(QObject):
         except ValueError:
             inputs = None
 
+        # How many practice laps stand behind the two figures the plan
+        # expects to execute. Every aggregate carries its sample count
+        # (CLAUDE.md §4.4): a burn from three laps and one from fourteen are
+        # not the same claim, and the driver is about to be told one of them.
+        practice_laps = len(counted_laps(
+            event_lap_inputs(self.store, event["id"], "practice")))
         self.race = RaceCoordinator(
             plan,
             fuel_per_lap_l=inputs.fuel_per_lap_l if inputs else None,
@@ -2575,7 +2643,12 @@ class PitCrewController(QObject):
             # Keyed by the car the stream is showing, which `on_packet` has
             # already learned. Missing is the normal state for a car whose
             # short-shift trade nobody has fitted yet.
-            short_shift_l_per_1000rpm=self._short_shift_slope())
+            short_shift_l_per_1000rpm=self._short_shift_slope(),
+            # What the plan was built to run: the practice median lap and the
+            # practice burn. The race is compared against these every lap.
+            lap_time_ms=inputs.lap_time_ms if inputs else None,
+            practice_lap_samples=practice_laps,
+            practice_fuel_samples=practice_laps)
 
         actual = self._race_context(event)
         stored = (plan or {}).get("context")
@@ -2612,6 +2685,8 @@ class PitCrewController(QObject):
             self.ptt.start()
         self._race_inputs = inputs
         self._race_burns = []
+        self._replan_max_stops = REPLAN_MAX_STOPS
+        self._replan_over_budget = 0
         self._replans.reset()
         self.ptt.pending_replan = None
         # The measured tyre-temperature window for this event, decoded once
@@ -2623,6 +2698,11 @@ class PitCrewController(QObject):
             self.race.state.temp_window_front = window.front
             self.race.state.temp_window_rear = window.rear
             self.race.state.temp_laps_to_window = window.laps_to_window
+        # The app race clock needs to see the paused frames, and only the
+        # telemetry thread does: `SessionState.update` returns early on a
+        # pause and produces no events at all, so nothing else downstream can
+        # tell that the race stopped. One arithmetic call per frame.
+        self.bridge.race_clock = self.race.clock
         self.race_screen.clear_log()
         self.race_screen.set_armed(True)
 
@@ -2655,19 +2735,15 @@ class PitCrewController(QObject):
             # for a rehearsal, and `auto_out_laps` acts on.
             self.session_id = None
         if self.race_run_id is not None:
-            # An offer still open at teardown is resolved into the record,
-            # not dropped: an offer voiced in the final two laps used to
-            # vanish from `race_revisions` entirely - the same audit hole
-            # the pending-offer gag left. Drained before `finish_race_run`
-            # clears the run id the revision has to be filed against, and
-            # before `self.race` goes away with the lap number.
-            leftover = self._replans.drain(
-                lap=self.race.state.lap if self.race else 0)
-            if leftover is not None:
-                self._record_resolution(leftover)
+            # **Nothing is drained here any more.** The offer desk used to
+            # hold one unanswered question that would otherwise vanish from
+            # `race_revisions` at the flag. There is no pending question now:
+            # every recommendation is recorded on the lap it is spoken, and
+            # the driver's answer - when it comes - is recorded beside it.
             self.store.finish_race_run(self.race_run_id)
             self.race_run_id = None
         self.race = None
+        self.bridge.race_clock = None
         # An offer outlives the race that raised it: the buttons stayed live
         # and connected, and Accept then dereferenced `self.race`, which this
         # method had just set to None - straight out of a Qt slot, which aborts
@@ -2682,20 +2758,43 @@ class PitCrewController(QObject):
             self.race_screen.set_status("Race closed.")
 
     def _on_race_event(self, event) -> None:
-        """Feed one telemetry event to the race, and say what comes back."""
+        """Feed one telemetry event to the race, and say ONE thing back.
+
+        **One call per lap has to hold across both producers.** The
+        coordinator makes calls and the re-planner makes recommendations, and
+        they used to be voiced independently, in the order the code happened
+        to run them: on lap 8 of the certifying replay the driver heard
+        "Recommend running to the flag." and then, on the same crossing,
+        "Box this lap. RS. 1 lap overdue." - two opposite instructions two
+        hundred milliseconds apart, in the exact race this engineer was
+        rebuilt for. CLAUDE.md §5.5 is unambiguous: one thing at a time.
+
+        So the two are arbitrated here. The loser is HELD rather than
+        discarded - the re-planner changes no state when it is held, so the
+        next lap decides it again on its own merits - and the coordinator's
+        call is still recorded and shown even when it is not spoken, because
+        the record is not the voice.
+        """
         if self.race is None:
             return
         call = self.race.handle(event)
+        replan = None
         if event.kind is EventKind.LAP_COMPLETED:
-            self._check_replan(event.data["lap"])
+            replan = self._check_replan(event.data["lap"], against=call)
         if self.race_screen is not None:
-            self.race_screen.show_snapshot(self.race.snapshot())
+            self.race_screen.show_snapshot(self._race_snapshot())
+        if replan is not None:
+            self._voice_replan(replan)
         if call is None:
             return
 
-        if self._engineer_speaks:
+        # Spoken unless the re-planner won the lap. Everything below the voice
+        # still happens: the screen shows it and the revision chain records
+        # it, because an audit that could not see a call the engineer decided
+        # against voicing would make the model look tidier than it was.
+        if self._engineer_speaks and replan is None:
             self.voice.say(call.spoken())
-        self.ptt.last_call = call.spoken()
+            self.ptt.last_call = call.spoken()
         if self.race_screen is not None:
             self.race_screen.show_call(call)
         if self.race_run_id is not None:
@@ -2714,17 +2813,41 @@ class PitCrewController(QObject):
             accepted = call.kind == STAY_OUT
             if accepted:
                 payload["resolution"] = "driver stayed out"
+                # **The driver has chosen a shape with his own hands.** The
+                # coordinator has already folded the plan to the zero-stop he
+                # is executing; telling the register means the next lap's
+                # recomputation confirms or revises THAT race rather than
+                # re-proposing the stop he has spent two laps declining.
+                # Only the fuel failing to reach cuts through - see
+                # `PlanRegister._blocked_by_the_driver`.
+                self._replans.note_driver_shape(
+                    self.race.stops_planned(), lap=call.lap)
             self.store.append_revision(
                 self.race_run_id, call.lap, call.call, payload,
                 accepted=accepted)
 
     # ------------------------------------------------------------------- ptt
 
+    def _race_snapshot(self) -> dict:
+        """The coordinator's snapshot plus what only the controller knows.
+
+        `replanning` is False once the per-lap re-plan has stood down. It is
+        on the snapshot rather than only in the log because silence from an
+        adviser reads as "nothing to report" - the status call says so in as
+        many words - and an engineer that has stopped adapting the strategy
+        must not be able to hide inside that.
+        """
+        if self.race is None:
+            return {}
+        return {**self.race.snapshot(),
+                "replanning": self._replan_max_stops > 0,
+                "replanOverBudget": self._replan_over_budget}
+
     def _ptt_snapshot(self) -> dict:
         """What the engineer is allowed to answer from."""
         if self.race is None:
             return {}
-        snapshot = self.race.snapshot()
+        snapshot = self._race_snapshot()
         # The fuel target for the stop, so "how much fuel do I take" has an
         # answer rather than a refusal.
         stints = (self.race.plan or {}).get("stints") or []
@@ -2760,20 +2883,70 @@ class PitCrewController(QObject):
     def _show_ptt_answer(self, heard: str, said: str) -> None:
         if self.race_screen is not None:
             self.race_screen.show_exchange(heard, said)
-        if self._replans.pending is not None and heard:
-            from pitcrew.engineer.intents import ACCEPT, KEEP, match_intent
-            intent = match_intent(heard)
-            if intent in (ACCEPT, KEEP):
-                self._resolve_replan(accepted=intent == ACCEPT)
+        if not heard:
+            return
+        from pitcrew.engineer.intents import (
+            ACCEPT,
+            KEEP,
+            TYRES_RED,
+            match_intent,
+        )
+        intent = match_intent(heard)
+        if intent == TYRES_RED:
+            self._note_tyre_frame_red()
+            return
+        # **Only an OPEN offer can be accepted or kept.** This used to gate on
+        # "the register has said something", which every spoken verdict sets -
+        # including the burn notes, which are facts and not questions - and
+        # which then stays set for the rest of the race. ACCEPT's vocabulary
+        # includes "copy that", the phrase he uses to acknowledge ANY call, so
+        # one stray acknowledgement locked the register onto a shape and wrote
+        # an empty resolution row. `pending_replan` is set only for an offer
+        # and cleared the moment it is answered.
+        if self.ptt.pending_replan and intent in (ACCEPT, KEEP):
+            self._resolve_replan(accepted=intent == ACCEPT)
+
+    def _note_tyre_frame_red(self) -> None:
+        """He saw a tyre frame go red. Write it down beside our own degrees.
+
+        **The only bridge that exists between what he can see in VR and what
+        this app measures.** PD documents the frame as reddening with heat and
+        publishes no scale; nobody has ever paired the colour with a number.
+        His report is the event - primary evidence, CLAUDE.md §4.1 - and the
+        temperature beside it is ours. Nothing reads the file yet, and nothing
+        should until there are enough rows to say something.
+        """
+        packet = self.bridge.last_packet
+        if packet is None:
+            return
+        event = self.active_event()
+        note_frame_red(
+            car_id=getattr(packet, "car_id", None),
+            compound=(self.race.state.tyre_compound if self.race else None),
+            temps=packet.tyre_temps,
+            lap=self.race.state.lap if self.race else None,
+            speed_kmh=getattr(packet, "speed_kmh", None),
+            event_id=event["id"] if event else None)
 
     def _note_button_probe(self, text: str) -> None:
         if self.settings_screen is not None:
             self.settings_screen.note_ptt(text)
 
     def _resolve_replan(self, *, accepted: bool) -> None:
-        """Record what the driver did with the offer, and act on it."""
-        resolution = self._replans.resolve(
-            accepted=accepted, lap=self.race.state.lap if self.race else 0)
+        """Record what the driver did with the recommendation, and act on it.
+
+        **"Offered, never imposed" survives continuous re-planning.** The
+        engineer's current best plan refreshes silently every lap, but taking
+        on a different stop SHAPE is still the driver's word - and either
+        answer is him choosing, so the register notes the shape either way and
+        stops re-opening a question he has just closed.
+        """
+        resolution = self._replans.answered(
+            accepted=accepted, lap=self.race.state.lap if self.race else 0,
+            # What "keep" means: the shape he is actually running. Without it
+            # the register forgot his refusal and re-offered the plan of
+            # record as news on the very next lap.
+            current_stops=self.race.stops_planned() if self.race else None)
         self.ptt.pending_replan = None
         if resolution is None or self.race_run_id is None:
             return
@@ -2786,11 +2959,12 @@ class PitCrewController(QObject):
             self.race_screen.hide_offer()
 
     def _record_resolution(self, resolution) -> None:
-        """One resolved offer into the revision chain, with how it ended.
+        """One answered recommendation into the revision chain.
 
-        `resolution` distinguishes a driver who said "keep" from an offer
-        that expired unanswered under a helmet - the audit needs to tell a
-        refusal from a question that was never answerable.
+        `resolution` distinguishes a driver who said "keep" from one who
+        accepted - the audit needs to tell a refusal from an adoption. A
+        recommendation he never answered at all is already in the chain, from
+        the lap it was spoken on.
         """
         if self.race_run_id is None:
             return
@@ -2804,59 +2978,218 @@ class PitCrewController(QObject):
 
     # ---------------------------------------------------------------- replan
 
-    def _check_replan(self, lap) -> None:
-        """After each lap, ask whether the plan still holds.
+    def _check_replan(self, lap, *, against=None):
+        """Rebuild the whole strategy problem at the end of every lap.
 
-        The verdict is computed **every lap**, whatever is pending: the old
-        `if pending: return` gate threw the computed verdict away, and one
-        unanswered offer at minute two of a measured race discarded every
-        later finding - including the fuel drift that would have cancelled
-        both stops - all the way to the flag. The desk now decides what a
-        pending offer means: expiry, replacement, or a lap more of patience.
+        The driver's instruction: *"Race engineer needs to read data at end of
+        every lap and recalculate entire strategy each lap based on all the
+        practice data and even more important the current race data."* So the
+        model is re-solved here unconditionally - no drift gate decides
+        whether to think - over practice evidence plus everything this race
+        has shown, with the race's own burn taking over from the practice
+        figure as soon as it has converged.
+
+        **Speaking is a separate decision, and it is the register's.** The
+        answer being current is the point; announcing it is not. The failure
+        this replaces is the race of 16 Aug, nine identical box calls, and
+        recalculating every lap makes that failure easier to reach rather than
+        harder. `PlanRegister.consider` speaks only on a material change - the
+        stop count moves, the stop lap slides more than a lap or two, the fuel
+        crosses into or out of "won't reach", or the burn crosses a band edge
+        against what the plan expected.
+
+        **Lap time is in none of that.** It refines the timed race's distance
+        estimate and it feeds the expectation comparison the driver asked for,
+        both of which are reported as estimates. It never moves a stop count:
+        his lap-to-lap noise is wider than the whole degradation band, and
+        there is a standing rule in this project's history against routing a
+        lap-time trigger through `recommend()`.
+
+        Returns the recomputation to voice, or None. `against` is the
+        coordinator's call for this same crossing, and it wins the lap unless
+        the fuel has stopped reaching the flag - see `_replan_outranks`.
         """
         if self.race is None or not self.race.running:
-            return
+            return None
         if lap.fuel_used > 0:
             self._race_burns.append(lap.fuel_used)
 
         inputs = self._race_inputs
+        if self._replan_max_stops <= 0:
+            # Budget exhausted. The plan he is on stands and the engineer
+            # says nothing about the stops - an adviser that blocks the Qt
+            # thread mid-race is worse than one that stops advising, and the
+            # driver is told once that it has happened.
+            return None
+
+        # **The budget is checked BEFORE the solve, because a budget measured
+        # afterwards is not a budget.** Timing `assess` and reacting to the
+        # result means the 6.35-second solve happens in full, on this thread,
+        # mid-race - and then the narrowed retry happens too. `replan_work`
+        # estimates the search from the two numbers that drive it and an
+        # oversized problem is refused rather than attempted.
+        laps_left = (self.race.state.laps_remaining() or 0)
+        work = replan_work(inputs, laps_left, self._replan_max_stops)
+        if work > REPLAN_MAX_WORK:
+            self._stand_down_replan(
+                f"the search would be {work} units against a {REPLAN_MAX_WORK} "
+                f"cap - refused without being attempted")
+            return None
+
+        started = _monotonic()
         verdict = assess(
             laps_done=self.race.state.lap,
             laps_total=self.race.state.laps_total,
             fuel_l=self.race.state.fuel_l,
             planned_fuel_per_lap=self.race.planned_fuel_per_lap_l,
             observed_fuel_per_lap_l=self.race.observed_fuel_per_lap(),
-            # The race's representative pace - a median of recent clean
-            # laps, None until three exist - never the lap that just
-            # happened, and never lap one, which carries the standing start.
+            # Accepted and then ignored by the verdict - see `assess`. Passed
+            # so a reader finds the guard rather than the absence of one.
             lap_time_ms=self.race.representative_pace_ms(),
             planned_lap_time_ms=inputs.lap_time_ms if inputs else None,
             current_stops=self.race.stops_planned(),
             inputs=inputs,
             fuel_capacity_l=inputs.fuel_capacity_l if inputs else None,
+            max_stops=self._replan_max_stops,
         )
-        spoken, resolutions = self._replans.consider(
-            verdict, self.race.state.lap)
-        for resolution in resolutions:
-            # Expired or superseded without the driver - recorded, because
-            # an offer that vanished without trace would make the model look
-            # better than it was. Expiry adopts nothing: the old plan stands.
-            self._record_resolution(resolution)
-            self.ptt.pending_replan = None
-            if self.race_screen is not None:
-                self.race_screen.hide_offer()
-        if spoken is None:
-            return
+        self._note_replan_cost(_monotonic() - started)
+        outcome = self._replans.consider(
+            verdict, lap=self.race.state.lap,
+            burn_drift=self.race.expect.burn_vs_plan(),
+            # The race has shown something the plan was not built on once its
+            # own burn has converged - the low-noise channel, and the only one
+            # allowed to move a stop count.
+            race_evidence=self.race.observed_fuel_per_lap() is not None,
+            # Asked about the candidate actually about to be said, not about
+            # the raw verdict - a verdict of "on the plan" can still produce a
+            # burn note, and ranking the verdict let one be voiced on the same
+            # crossing as a tyre call.
+            may_speak=lambda candidate: self._replan_outranks(
+                candidate, against))
+        if not outcome.spoken:
+            # **A recomputation that changes nothing is not a revision.** A
+            # row a lap would bury the ones that matter under a race's worth
+            # of "still the same plan".
+            return None
+        return outcome
 
-        # Offered, never imposed: it stands until he answers or it lapses.
-        self.ptt.pending_replan = spoken.call()
-        text = f"{spoken.call()} {spoken.reason}."
+    @staticmethod
+    def _replan_outranks(verdict, call) -> bool:
+        """Whether the re-planner may have this lap, or the coordinator does.
+
+        **One thing at a time has to hold across both producers**, so the two
+        are ranked against each other on the same scale the coordinator
+        already uses for its own calls (`calls.URGENCY`). Where the
+        re-planner sits on that scale depends on what it is saying:
+
+        * **The fuel no longer reaches the flag** is not a preference between
+          plans, it is arithmetic about whether the car gets to the end.
+          Nothing except the chequered flag outranks it.
+        * **A change of stop shape** is about a stop some laps away, so it
+          ranks with `BOX_SOON`: it beats a tyre warning or a status call and
+          it waits behind an immediate instruction. On lap 8 of the measured
+          race that is the whole point - "Box this lap, one lap overdue" and
+          "Recommend running to the flag" contradict each other, and the
+          driver heard both, two hundred milliseconds apart.
+        * **A note about the burn** is a fact rather than an instruction and
+          waits behind everything.
+
+        The stay-out fold is not in `URGENCY` - the coordinator returns it
+        directly rather than through `next_call` - and it is treated as top
+        rank, because it is the engineer agreeing with something the driver
+        has already spent two laps doing.
+        """
+        from pitcrew.race.calls import BOX_SOON, CHEQUER, STAY_OUT, URGENCY
+        from pitcrew.race.replan import NOTED, URGENT
+
+        if call is None:
+            return True
+        if verdict.verdict == URGENT:
+            return call.kind != CHEQUER
+        if verdict.verdict == NOTED or call.kind in (CHEQUER, STAY_OUT):
+            return False
+        if call.kind not in URGENCY:
+            return False
+        return URGENCY.index(call.kind) > URGENCY.index(BOX_SOON)
+
+    def _voice_replan(self, outcome) -> None:
+        """Say one recommendation, record it, and arm accept/keep if it is one."""
+        spoken = outcome.verdict
+        # **Instruction first, reason short** (§5.5). The full reason carries
+        # every fact the verdict rests on and goes into the record; what he
+        # hears is the one that raised it. The unabridged form was 145
+        # characters of three semicolon-joined clauses beginning in lower
+        # case.
+        text = (f"{spoken.call()} {spoken.spoken_reason()}".strip()
+                if spoken.offered else spoken.call())
+        # Only a change of stop shape is a question. A note about the burn
+        # against the plan's expectation is a fact, and arming accept/keep for
+        # it would ask him to answer something nobody asked.
+        self.ptt.pending_replan = spoken.call() if spoken.offered else None
         if self._engineer_speaks:
             self.voice.say(text)
         self.last_call = text
         self.ptt.last_call = text
         if self.race_screen is not None:
-            self.race_screen.show_offer(spoken)
+            if spoken.offered:
+                self.race_screen.show_offer(spoken)
+            else:
+                self.race_screen.hide_offer()
+        if self.race_run_id is not None:
+            payload = spoken.as_plan()
+            payload["why_spoken"] = outcome.why
+            self.store.append_revision(
+                self.race_run_id, outcome.lap,
+                spoken.call() or spoken.reason, payload, accepted=False)
+
+    def _note_replan_cost(self, seconds: float) -> None:
+        """The backstop, for a shape `replan_work` did not anticipate.
+
+        The real guard is the pre-check in `_check_replan`: an estimate made
+        before the solve, so an oversized problem is refused rather than run.
+        This one only fires when something got through it and cost more than
+        expected anyway - narrow once, stand down the second time.
+        """
+        if seconds <= REPLAN_BUDGET_S:
+            return
+        self._replan_over_budget += 1
+        if self._replan_max_stops > REPLAN_NARROWED_MAX_STOPS:
+            self._replan_max_stops = REPLAN_NARROWED_MAX_STOPS
+            log("race").warning(
+                "the per-lap re-plan took %.0f ms against a %.0f ms budget - "
+                "narrowing the search to %d stops. Cost is superlinear in "
+                "profiled compounds.",
+                seconds * 1000, REPLAN_BUDGET_S * 1000,
+                REPLAN_NARROWED_MAX_STOPS)
+            return
+        self._stand_down_replan(
+            f"it took {seconds * 1000:.0f} ms even narrowed")
+
+    def _stand_down_replan(self, why: str) -> None:
+        """Stop re-planning for this race, and **tell him it has stopped**.
+
+        Silence from an adviser is indistinguishable from an adviser with
+        nothing to say - that is the whole reason the status call exists - so
+        an engineer that has quietly stopped adapting the strategy is worse
+        than one that never offered to. Said once, out loud, and carried on
+        the snapshot for the rest of the race.
+        """
+        if self._replan_max_stops <= 0:
+            return
+        self._replan_max_stops = 0
+        self._replan_over_budget += 1
+        log("race").error(
+            "per-lap re-planning is off for this race and the approved plan "
+            "stands - %s. The engineer will not adapt the stop count from "
+            "here.", why)
+        told = ("Strategy re-planning is off. The approved plan stands - "
+                "I won't adapt the stops from here.")
+        if self._engineer_speaks:
+            self.voice.say(told)
+        self.last_call = told
+        self.ptt.last_call = told
+        if self.race_screen is not None:
+            self.race_screen.set_status(told, warn=True)
 
     # ---------------------------------------------------------------- export
 

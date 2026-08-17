@@ -365,7 +365,10 @@ def test_drift_needs_both_sides():
 
 
 def test_a_race_on_the_plan_says_nothing():
-    verdict = assess(laps_done=5, laps_total=20, fuel_l=50.0,
+    """Fifteen laps to run on 45 litres at 3.42 a lap is 13.2 laps of fuel.
+    The stop the plan already has is the answer, so the answer has not
+    changed."""
+    verdict = assess(laps_done=5, laps_total=20, fuel_l=45.0,
                      planned_fuel_per_lap=3.4, observed_fuel_per_lap_l=3.42,
                      lap_time_ms=94_100, planned_lap_time_ms=94_000,
                      current_stops=1, inputs=an_inputs())
@@ -392,12 +395,52 @@ def test_a_material_fuel_drift_is_noticed():
     assert "more fuel" in verdict.reason
 
 
-def test_a_small_drift_is_not_worth_saying():
+def test_a_small_drift_is_not_itself_the_finding():
+    """**The drift no longer gates the thinking, so it no longer gates the
+    answer either.** This used to assert silence on a 1.5% drift, because a
+    drift under the threshold meant `recommend` was never called at all. The
+    engineer now re-solves every lap, and with 60 litres aboard and twelve
+    laps left at 3.45 a lap, the honest answer is that the planned stop is not
+    needed - which has nothing to do with the size of the drift, and the
+    reason says so.
+
+    Whether he HEARS it is `PlanRegister`'s decision, not this function's."""
     verdict = assess(laps_done=8, laps_total=20, fuel_l=60.0,
                      planned_fuel_per_lap=3.4, observed_fuel_per_lap_l=3.45,
                      lap_time_ms=94_200, planned_lap_time_ms=94_000,
                      current_stops=1, inputs=an_inputs())
+    assert verdict.stops == 0
+    assert "fuel than planned" not in verdict.reason
+
+
+def test_the_fuel_already_in_the_car_bounds_the_first_stint():
+    """`recommend` bounds every stint by a full tank, which is right for a
+    race that starts on the grid and wrong for one re-planned on lap five with
+    half a tank. Fifteen laps to go at 3.42 needs 51.3 litres; with 45 aboard
+    the run to the flag does not fit, and ranking it first would cancel a stop
+    the driver cannot do without."""
+    verdict = assess(laps_done=5, laps_total=20, fuel_l=45.0,
+                     planned_fuel_per_lap=3.4, observed_fuel_per_lap_l=3.42,
+                     lap_time_ms=94_100, planned_lap_time_ms=94_000,
+                     current_stops=1, inputs=an_inputs())
     assert verdict.verdict == NONE
+    assert verdict.stops == 1
+
+
+def test_a_plan_that_needs_him_to_save_never_pretends_otherwise():
+    """Half a lap short is inside what lift-and-coast closes - it is the same
+    figure the stay-out fold uses for a car with no measured short-shift
+    slope. **But it is never silent.** Recommending a shape that depends on
+    him saving fuel, without saying so, would be the app betting his race on a
+    lever it never mentioned."""
+    verdict = assess(laps_done=5, laps_total=20, fuel_l=50.0,
+                     planned_fuel_per_lap=3.4, observed_fuel_per_lap_l=3.42,
+                     lap_time_ms=94_100, planned_lap_time_ms=94_000,
+                     current_stops=1, inputs=an_inputs())
+    assert verdict.stops == 0
+    assert "laps short at this burn" in verdict.reason
+    assert "short-shift and lift" in verdict.reason
+    assert verdict.confidence == "low"
 
 
 def test_a_drift_the_plan_still_wins_changes_nothing():

@@ -140,8 +140,12 @@ def test_every_call_is_recorded_with_its_reason(raced):
     revisions = store.list_revisions(runs[0]["id"])
     assert revisions
     for revision in revisions:
-        assert revision["plan"]["call"]["call"]
-        assert revision["plan"]["confidence"] in ("high", "medium", "low")
+        plan = revision["plan"]
+        # Two shapes reach the chain: an engineer call, which carries its own
+        # exported form, and a spoken recomputation, which carries the verdict
+        # and why the register decided it was worth opening his mouth.
+        assert plan.get("call", {}).get("call") or plan.get("reason")
+        assert plan["confidence"] in ("high", "medium", "low")
 
 
 def test_declined_calls_are_kept(raced):
@@ -156,30 +160,60 @@ def test_declined_calls_are_kept(raced):
     assert all(r["accepted"] is False for r in revisions)
 
 
-def test_an_expired_offer_is_recorded_not_vanished(raced, monkeypatch):
-    """One unanswered offer once gagged the loop for 29 minutes AND never
-    reached `race_revisions` - offers were only recorded on resolve, and it
-    was never resolved. Expiry is a resolution now, and it is filed."""
+def _always(controller, monkeypatch, verdict):
+    """Force one verdict, and tell the register the race has evidence.
+
+    The evidence gate is what stops the engineer re-arguing the approved plan
+    on lap one, and these tests are about what happens AFTER something has
+    changed - so they hand it the burn it is waiting for.
+    """
+    monkeypatch.setattr("pitcrew.controller.assess", lambda **kwargs: verdict)
+    monkeypatch.setattr(
+        type(controller.race), "observed_fuel_per_lap", lambda self: 3.4)
+
+
+def test_a_recomputation_is_recorded_on_the_lap_it_is_spoken(raced, monkeypatch):
+    """**Offers are no longer recorded only when they resolve.** They used to
+    be, and one unanswered offer therefore gagged the loop for 29 minutes and
+    never reached `race_revisions` at all. There is nothing to resolve now:
+    the register speaks, and what it says is filed there and then."""
     from pitcrew.race.replan import RECOMMENDED, Replan
 
     controller, _, store, event_id = raced
     controller.start_race()
     green(controller)
     offer = Replan(RECOMMENDED, "burning 20% more fuel than planned",
-                   stops=2, stint_laps=(7, 6), gain_s=12.0)
-    monkeypatch.setattr("pitcrew.controller.assess", lambda **kwargs: offer)
+                   stops=2, stint_laps=(7, 6), gain_s=12.0, next_stop_lap=7)
+    _always(controller, monkeypatch, offer)
     for lap_num in range(1, 5):
         a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
 
     revisions = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
-    expired = [r for r in revisions
-               if r["plan"].get("resolution") == "expired unanswered"]
-    assert len(expired) == 1
-    assert expired[0]["accepted"] is False
-    assert controller._replans.pending is None
+    spoken = [r for r in revisions if r["plan"].get("why_spoken")]
+    assert len(spoken) == 1
+    assert spoken[0]["plan"]["why_spoken"] == "first assessment of the race"
+    assert spoken[0]["accepted"] is False
 
 
-def test_a_superseding_offer_is_spoken_and_the_old_one_recorded(
+def test_the_same_verdict_four_laps_running_is_recorded_once(raced, monkeypatch):
+    """A recomputation that changes nothing is not a revision. A row a lap
+    would bury the ones that matter under a race's worth of "no change"."""
+    from pitcrew.race.replan import RECOMMENDED, Replan
+
+    controller, _, store, event_id = raced
+    controller.start_race()
+    green(controller)
+    _always(controller, monkeypatch,
+            Replan(RECOMMENDED, "burning 20% more", stops=2,
+                   stint_laps=(7, 6), gain_s=12.0, next_stop_lap=7))
+    for lap_num in range(1, 6):
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+
+    revisions = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
+    assert len([r for r in revisions if r["plan"].get("why_spoken")]) == 1
+
+
+def test_a_materially_different_verdict_is_spoken_and_filed(
         raced, monkeypatch, voice):
     from pitcrew.race.replan import NONE, RECOMMENDED, URGENT, Replan
 
@@ -188,46 +222,48 @@ def test_a_superseding_offer_is_spoken_and_the_old_one_recorded(
     green(controller)
     verdicts = iter([
         Replan(RECOMMENDED, "burning more fuel than planned",
-               stops=2, stint_laps=(7, 6), gain_s=12.0),
+               stops=2, stint_laps=(7, 6), gain_s=12.0, next_stop_lap=7),
         Replan(URGENT, "1.4 laps short of the flag on current burn",
-               stops=1, stint_laps=(9,), confidence="high"),
+               stops=1, stint_laps=(9,), confidence="high", next_stop_lap=9),
     ])
     fallback = Replan(NONE, "on the plan")
     monkeypatch.setattr("pitcrew.controller.assess",
                         lambda **kwargs: next(verdicts, fallback))
+    monkeypatch.setattr(
+        type(controller.race), "observed_fuel_per_lap", lambda self: 3.4)
     a_lap(controller, 1, 88.6)
     a_lap(controller, 2, 85.2)
 
     revisions = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
-    superseded = [r for r in revisions
-                  if r["plan"].get("resolution") == "superseded by a new offer"]
-    assert len(superseded) == 1
-    assert controller._replans.pending is not None
-    assert controller._replans.pending.verdict == URGENT
+    spoken = [r for r in revisions if r["plan"].get("why_spoken")]
+    assert len(spoken) == 2
+    # Two stops to one is a different race, and that is what the record
+    # says. The escalation to urgent would have carried it on its own.
+    assert spoken[1]["plan"]["why_spoken"] == "the stop count has changed"
+    assert controller._replans.told.verdict == URGENT
     assert any("1 stop" in line for line in voice.spoken)
 
 
-def test_a_pending_offer_at_teardown_is_recorded_not_vanished(
-        raced, monkeypatch):
-    """An offer voiced in the final laps used to vanish from the record
-    entirely when the race closed on it - the audit hole the forensics
-    documented. Teardown drains it as "race ended unanswered"."""
+def test_nothing_is_left_open_at_teardown_to_be_lost(raced, monkeypatch):
+    """An offer voiced in the final laps used to vanish from the record when
+    the race closed on it, because it was only filed on resolution. **There is
+    no pending state left to drain**: it was filed when it was spoken."""
     from pitcrew.race.replan import RECOMMENDED, Replan
 
     controller, _, store, event_id = raced
     controller.start_race()
     green(controller)
-    offer = Replan(RECOMMENDED, "burning 20% more fuel than planned",
-                   stops=2, stint_laps=(7, 6), gain_s=12.0)
-    monkeypatch.setattr("pitcrew.controller.assess", lambda **kwargs: offer)
+    _always(controller, monkeypatch,
+            Replan(RECOMMENDED, "burning 20% more fuel than planned",
+                   stops=2, stint_laps=(7, 6), gain_s=12.0, next_stop_lap=7))
     a_lap(controller, 1, 88.6)
+    before = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
     controller.stop_race()
+    after = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
 
-    revisions = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
-    ended = [r for r in revisions
-             if r["plan"].get("resolution") == "race ended unanswered"]
-    assert len(ended) == 1
-    assert ended[0]["accepted"] is False
+    assert len(before) == len(after)
+    assert any(r["plan"].get("why_spoken") for r in after)
+    assert controller._replans.told is None
 
 
 def test_an_ignored_box_call_folds_and_is_recorded_as_the_drivers_call(raced):
@@ -269,6 +305,46 @@ def test_the_calls_reach_the_export(raced):
     calls = payload["strategy"]["callsMade"]
     assert calls
     assert all("call" in call and "confidence" in call for call in calls)
+
+
+def test_the_plan_stores_the_two_numbers_it_expects_to_execute(raced):
+    """The lap-to-lap reference the driver asked for, written down with the
+    plan at approval so the race has something to compare itself against -
+    and so the post-race audit can see what the plan was built on."""
+    controller, _, store, event_id = raced
+    approved = store.get_approved_strategy(event_id)
+    expects = approved["plan"]["expects"]
+    assert expects["expected_fuel_per_lap_l"] == pytest.approx(3.4)
+    assert expects["expected_lap_time_ms"] == 94_000
+    # Every aggregate carries its sample count, and its source.
+    assert expects["expected_fuel_samples"] > 0
+    assert expects["expected_fuel_source"] == "practice"
+    assert "assumption" in expects["expected_wear_source"]
+
+
+def test_the_export_carries_the_expectation_and_the_outcome_against_it(raced):
+    """**Both halves, because that is the whole audit value.** The contract's
+    `outcome` is prose and this is where a comparison with its own sample
+    counts and noise floor belongs - no key the consuming tool would have to
+    read conservatively."""
+    from pitcrew.export.build import build_event_export
+
+    controller, _, store, event_id = raced
+    controller.start_race()
+    green(controller)
+    for lap_num in range(1, 12):
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+    controller.stop_race()
+
+    outcome = build_event_export(store, event_id)["strategy"]["outcome"]
+    assert "Planned on 3.40 L/lap" in outcome
+    assert "green laps" in outcome
+    assert "Planned on a 94.0 s lap" in outcome
+    assert "ran 93.0 s" in outcome
+    # Wear never stops being the plan's assumption, and the contradiction
+    # between the gauge readings and the temperature gap travels with it.
+    assert "no gauge reading was entered during the race" in outcome
+    assert "unreconciled, not averaged" in outcome
 
 
 # ---------------------------------------------------------------- lifecycle
@@ -379,3 +455,241 @@ def test_an_engine_without_warmup_is_fine():
     speaker.say("Green, green, green.")
     speaker.stop()
     assert speaker.spoken == ["Green, green, green."]
+
+
+# ------------------------------------------------- the re-plan's time budget
+
+def test_the_replan_narrows_and_then_stands_down_rather_than_blocking(raced):
+    """Measured, a per-lap re-plan costs 1.4 ms at this event's shape - and
+    the cost is superlinear in profiled compounds, so a fifty-lap timed race
+    with three of them is 6.35 seconds on the Qt thread. Today only one
+    compound has a profile, which is the only reason it is cheap. When it
+    stops being cheap the engineer keeps the plan he has and says nothing,
+    which is the correct failure for an adviser."""
+    from pitcrew.race.replan import (
+        REPLAN_MAX_STOPS,
+        REPLAN_NARROWED_MAX_STOPS,
+    )
+
+    controller, _, _, _ = raced
+    controller.start_race()
+    assert controller._replan_max_stops == REPLAN_MAX_STOPS
+    controller._note_replan_cost(0.001)
+    assert controller._replan_max_stops == REPLAN_MAX_STOPS
+    controller._note_replan_cost(0.4)
+    assert controller._replan_max_stops == REPLAN_NARROWED_MAX_STOPS
+    controller._note_replan_cost(0.4)
+    assert controller._replan_max_stops == 0
+
+
+def test_a_stood_down_replan_leaves_the_plan_alone(raced, monkeypatch):
+    controller, _, store, event_id = raced
+    controller.start_race()
+    green(controller)
+    controller._replan_max_stops = 0
+    monkeypatch.setattr("pitcrew.controller.assess",
+                        lambda **kwargs: pytest.fail("must not be called"))
+    a_lap(controller, 1, 88.6)
+    assert controller._replans.told is None
+
+
+# ----------------------------------------- the HUD colour calibration bridge
+
+def test_a_red_tyre_frame_is_paired_with_the_apps_own_degrees(
+        raced, tmp_path, monkeypatch):
+    """**The only bridge that exists between what he can see in VR and what
+    this app measures.** PD documents the frame reddening with heat and
+    publishes no scale; nobody has ever paired the colour with a number. His
+    report is the event; the temperature beside it is ours."""
+    import json
+
+    from pitcrew.race import hud_calibration
+
+    written = tmp_path / "tyre_hud_calibration.jsonl"
+    monkeypatch.setattr(hud_calibration, "CALIBRATION_FILE", written)
+    monkeypatch.setattr("pitcrew.controller.note_frame_red",
+                        hud_calibration.note_frame_red)
+
+    controller, _, _, _ = raced
+    controller.start_race()
+    green(controller)
+    a_lap(controller, 1, 88.6)
+    controller._show_ptt_answer("tyres are red", "Copy, noted.")
+
+    row = json.loads(written.read_text(encoding="utf-8").strip())
+    assert row["driverReport"] == "tyre frame went red"
+    assert row["tempC"]["fl"] is not None
+    assert row["frontMeanC"] is not None and row["rearMeanC"] is not None
+    assert row["lap"] == 1
+
+
+def test_the_report_is_acknowledged_and_never_interpreted():
+    """One observation is one observation. Telling him what it means would be
+    inventing the meaning the file exists to collect evidence for."""
+    from pitcrew.engineer.intents import TYRES_RED, answer, match_intent
+
+    assert match_intent("the tyres are red") == TYRES_RED
+    assert match_intent("front left went red") == TYRES_RED
+    said = answer(TYRES_RED, {})
+    assert said.answered is True
+    assert "noted" in said.text.lower()
+    assert "hot" not in said.text.lower()
+
+
+def test_the_driver_can_ask_whether_he_is_on_the_plan():
+    """The lap-to-lap reference, answered out loud. **The two halves are not
+    symmetric**: burn is quoted as a figure he can act on, pace only when it
+    clears the noise floor measured on this car at this circuit."""
+    from pitcrew.engineer.intents import ON_PLAN, answer, match_intent
+
+    assert match_intent("are we on the plan") == ON_PLAN
+    assert match_intent("how's the burn") == ON_PLAN
+
+    nothing_yet = answer(ON_PLAN, {})
+    assert nothing_yet.answered is False
+    assert "don't have" in nothing_yet.text
+
+    quiet = answer(ON_PLAN, {"burnVsPlanPct": -10.6, "paceIsReal": False,
+                             "paceDetectableMs": 1990})
+    assert "Burn 11 percent under plan" in quiet.text
+    assert "inside the 2.0 a lap I can see" in quiet.text
+
+    real = answer(ON_PLAN, {"burnVsPlanPct": 6.0, "paceIsReal": True,
+                            "paceVsPlanMs": 2400, "paceDetectableMs": 1990})
+    assert "Pace 2.4 a lap down" in real.text
+
+
+# --------------------------------------------- one thing at a time, end to end
+
+def test_only_one_thing_is_voiced_per_crossing(raced, monkeypatch, voice):
+    """The coordinator and the re-planner both had a voice and neither knew
+    about the other. On lap 8 of the measured race that produced "Recommend
+    running to the flag." and "Box this lap. RS. 1 lap overdue." on the same
+    crossing - two opposite instructions, §5.5 allows one."""
+    from pitcrew.race.replan import RECOMMENDED, Replan
+
+    controller, _, _, _ = raced
+    controller.start_race()
+    green(controller)
+    _always(controller, monkeypatch,
+            Replan(RECOMMENDED, "burning 20% less fuel than planned",
+                   stops=0, stint_laps=(12,), gain_s=40.0))
+    before = len(voice.spoken)
+    for lap_num in range(1, 12):
+        said = len(voice.spoken)
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+        assert len(voice.spoken) - said <= 1, (lap_num, voice.spoken[said:])
+    assert len(voice.spoken) > before
+
+
+def test_a_box_call_outranks_a_strategy_recommendation(raced):
+    """It is an immediate instruction and the recommendation is about a stop
+    some laps away. The recommendation is HELD, not discarded - it changes no
+    state, so the next lap decides it again."""
+    from pitcrew.race.calls import BOX_NOW, Call
+    from pitcrew.race.replan import NOTED, RECOMMENDED, URGENT, Replan
+
+    box = Call(BOX_NOW, 8, "Box this lap.", "")
+    outranks = PitCrewController._replan_outranks
+    assert outranks(Replan(RECOMMENDED, "", stops=0), box) is False
+    # Not reaching the flag is arithmetic, and it cuts through.
+    assert outranks(Replan(URGENT, "", stops=1), box) is True
+    # A note about the burn waits behind everything.
+    assert outranks(Replan(NOTED, "burning 8% under"), box) is False
+    assert outranks(Replan(RECOMMENDED, "", stops=0), None) is True
+
+
+# ------------------------------------------------------- the driver's answers
+
+def test_keeping_the_plan_is_remembered_as_his_choice(raced, monkeypatch):
+    """`answered(accepted=False)` used to clear the driver's shape instead of
+    setting it, against its own docstring. He said keep on one lap and the
+    next lap heard "the stop count has changed - Recommend 2 stops": the plan
+    of record, offered back as news, one lap after he refused to change it."""
+    from pitcrew.race.replan import RECOMMENDED, Replan
+
+    controller, _, _, _ = raced
+    controller.start_race()
+    green(controller)
+    offer = Replan(RECOMMENDED, "burning 20% more fuel than planned",
+                   stops=2, stint_laps=(7, 6), gain_s=12.0,
+                   laps_to_next_stop=7)
+    _always(controller, monkeypatch, offer)
+    a_lap(controller, 1, 88.6)
+    assert controller.ptt.pending_replan
+
+    controller._resolve_replan(accepted=False)
+    assert controller._replans.driver_shape_stops is not None
+
+    spoke = len(controller.voice.spoken) if hasattr(
+        controller.voice, "spoken") else None
+    a_lap(controller, 2, 85.2)
+    # The shape he kept is not re-offered to him as a change.
+    assert controller.ptt.pending_replan is None
+    if spoke is not None:
+        assert all("Recommend" not in line
+                   for line in controller.voice.spoken[spoke:])
+
+
+def test_an_acknowledgement_is_not_an_acceptance(raced, monkeypatch):
+    """ACCEPT's vocabulary includes "copy that", which he says to acknowledge
+    ANY call. The gate used to be "the register has said something", which
+    every spoken verdict sets - including the burn notes, which are facts and
+    not questions - and which then stayed set for the rest of the race. One
+    stray acknowledgement locked the register onto a shape and wrote an empty
+    resolution row."""
+    from pitcrew.race.replan import NONE, Replan
+
+    controller, _, store, event_id = raced
+    controller.start_race()
+    green(controller)
+    _always(controller, monkeypatch, Replan(NONE, "on the plan"))
+    a_lap(controller, 1, 88.6)
+    assert controller.ptt.pending_replan is None
+
+    before = len(store.list_revisions(store.list_race_runs(event_id)[0]["id"]))
+    controller._show_ptt_answer("copy that", "")
+    after = store.list_revisions(store.list_race_runs(event_id)[0]["id"])
+    assert len(after) == before
+    assert controller._replans.driver_shape_stops is None
+
+
+# ------------------------------------------------------- the re-plan's budget
+
+def test_an_oversized_search_is_refused_before_it_is_attempted(
+        raced, monkeypatch):
+    """**A budget measured after the solve is not a budget.** Timing `assess`
+    and reacting afterwards means the 6.35-second solve happens in full, on
+    this thread, mid-race - and then the narrowed retry happens too."""
+    controller, _, _, _ = raced
+    controller.start_race()
+    green(controller)
+    monkeypatch.setattr("pitcrew.controller.replan_work",
+                        lambda *args, **kwargs: 99_999)
+    monkeypatch.setattr("pitcrew.controller.assess",
+                        lambda **kwargs: pytest.fail("must not be attempted"))
+    a_lap(controller, 1, 88.6)
+    assert controller._replan_max_stops == 0
+
+
+def test_the_driver_is_told_when_the_engineer_stops_adapting(
+        raced, monkeypatch, voice):
+    """Silence from an adviser is indistinguishable from an adviser with
+    nothing to say - the status call promises exactly that reading. An
+    engineer that has quietly stopped adapting the strategy is worse than one
+    that never offered to."""
+    controller, _, _, _ = raced
+    controller.start_race()
+    green(controller)
+    monkeypatch.setattr("pitcrew.controller.replan_work",
+                        lambda *args, **kwargs: 99_999)
+    a_lap(controller, 1, 88.6)
+
+    assert any("re-planning is off" in line for line in voice.spoken)
+    assert controller._race_snapshot()["replanning"] is False
+    # Said once, not once a lap.
+    said = sum(1 for line in voice.spoken if "re-planning is off" in line)
+    a_lap(controller, 2, 85.2)
+    assert sum(1 for line in voice.spoken
+               if "re-planning is off" in line) == said
+

@@ -1,83 +1,75 @@
-"""How hot each compound actually ran — and why that is all this can say.
+"""How hot each compound actually ran - and why that is all this can say.
 
-GT7 gives per-wheel tyre **surface** temperature at 60 Hz. That figure is real
-and is measured here per compound, per lap.
+GT7 gives per-wheel tyre surface temperature at 60 Hz. That figure is real and
+is measured here per compound, per lap.
 
-**What is not real is the window it used to be judged against.** `store/tyres.py`
-carries a `cold_max` / `warming_max` / `optimal_max` / `hot_max` band per
-compound, and this module used to compare the measured temperature to it and
-emit a verdict — "RM never got into its window, so its pace deficit is
-overstated and its stint length is flattered" — into every export, as a
-finding, tagged as measurement.
+**What was not real is the window it used to be judged against.** `store/tyres`
+carried a `cold_max` / `warming_max` / `optimal_max` / `hot_max` band per
+compound, and this module compared the measured temperature to it and emitted
+a verdict - "RM never got into its window, so its pace deficit is overstated
+and its stint length is flattered" - into every export, as a finding, tagged
+as measurement.
 
-The bands were never measured in GT7 and are not GT7's numbers. They are
-real-world racing-slick figures, which live at 90–110 °C. Across 51 laps of
-Monza on three compounds, **every lap of every compound ran between 68 °C and
-78 °C**, and GT7 fits every fresh set at exactly 70.0 °C. Under those bands a
-Racing Soft could never once reach its own window, so the verdict fired every
-time and said something confident about nothing. Nobody has published GT7
-windows: the question was asked on GTPlanet in April 2025 and went unanswered.
+Those bands were real-world racing-slick figures at 90-110 degC. Across 51
+laps of Monza on three compounds **every lap of every compound ran between
+68 degC and 78 degC**, and GT7 fits every fresh set at exactly 70.0 degC -
+precisely the Racing Soft cold ceiling. Under those bands a Racing Soft could
+never once reach its own window, so the verdict fired every time and said
+something confident about nothing.
 
-So this module now reports the temperature and stops there. `qualification()`
-returns None until a window has been measured, and the band travels with
-`windowMeasured: false` so nothing downstream mistakes decoration for a
-finding.
+They are now deleted rather than flagged, because a flag did not stop them
+being read. The research behind that decision, Aug 2026: **no optimal
+tyre-temperature window has ever been published for GT7 by anyone**, and the
+only credible sourced figure is a per-compound UPPER WEAR threshold from a
+single 2025 test - `store/tyres.WEAR_ONSET_C`, with its provenance and its
+caveats beside it. There is no cold side and this module must not invent one.
 
-**Measuring one is a driving job, not a coding job**: the same corner at
-several times of day, achieved tyre temperature against lap time, and the
-temperature at which lap time stops improving is the bottom of the window.
+So this module reports the temperature, says where the wear threshold sits
+when the compound has one, and stops. `qualification()` returns None until a
+window has been measured. `windowC` goes out as `null`, because there is no
+window - missing is null, and a band shipped "for decoration" is a band that
+gets read.
 
-Surface temperature is not core temperature. GT7 exposes only the surface, and
-it responds far faster than the carcass, so a mean over a lap is a reasonable
-read of the working range while a single frame is not. Everything here is
-averaged over whole laps for that reason.
+Surface temperature is not core temperature. GT7 exposes one float per wheel,
+and parser authors - not Polyphony - are the ones who called it "surface". It
+responds fast, so a mean over a lap is a reasonable read of the working range
+while a single frame is not. Everything here is averaged over whole laps for
+that reason.
 """
 from __future__ import annotations
 
 from statistics import mean
 
 from pitcrew.analysis.session import LapInput, counted_laps
-from pitcrew.store.tyres import get_by_code
+from pitcrew.store.tyres import (
+    WEAR_ONSET_CAVEATS,
+    WEAR_ONSET_GAME_VERSION,
+    WEAR_ONSET_SOURCE,
+    get_by_code,
+)
 
 CORNERS = ("fl", "fr", "rl", "rr")
 
-BAND_COLD = "cold"
-BAND_WARMING = "warming"
-BAND_OPTIMAL = "optimal"
-BAND_HOT = "hot"
-BAND_OVERHEATING = "overheating"
-
-# The bands that mean the tyre is not delivering what the compound can do.
-BANDS_BELOW = (BAND_COLD, BAND_WARMING)
-BANDS_ABOVE = (BAND_HOT, BAND_OVERHEATING)
-
-# A compound is treated as having run in its window when at least this much of
-# the lap-by-lap evidence sat in the optimal band. Two thirds rather than a
-# majority: a tyre in window for half the run is a tyre that spent half the run
-# somewhere else, and the whole point of this module is to stop that passing as
-# clean evidence.
-IN_WINDOW_FRACTION = 2 / 3
+# **The five bands are gone.** `cold` / `warming` / `optimal` / `hot` /
+# `overheating` described a four-zone window with a cold side, and no evidence
+# for such a shape exists in GT7. What is left is the one question the evidence
+# can answer: is this compound above the temperature at which its wear starts
+# to climb?
+BAND_ABOVE_WEAR_ONSET = "above wear onset"
 
 
-def band_for(compound_code: str, temp_c: float) -> str | None:
-    """Which band a temperature falls in for this compound.
+def above_wear_onset(compound_code: str | None,
+                     temp_c: float) -> bool | None:
+    """Whether this temperature is past the compound's wear-onset threshold.
 
-    None when the compound is unknown, because a band from the wrong
-    compound's thresholds is worse than no band at all - Racing Hard's optimal
-    range starts where Comfort Soft is already overheating.
+    None where the compound is unknown or has never been tested, which is
+    every compound except the three Racing ones. None is "nobody has measured
+    this", not "the tyre is fine", and the two must never look alike.
     """
     compound = get_by_code(compound_code) if compound_code else None
-    if compound is None:
+    if compound is None or compound.wear_onset_c is None:
         return None
-    if temp_c < compound.cold_max:
-        return BAND_COLD
-    if temp_c < compound.warming_max:
-        return BAND_WARMING
-    if temp_c < compound.optimal_max:
-        return BAND_OPTIMAL
-    if temp_c < compound.hot_max:
-        return BAND_HOT
-    return BAND_OVERHEATING
+    return temp_c >= compound.wear_onset_c
 
 
 def _lap_mean_temps(lap: LapInput) -> dict[str, float] | None:
@@ -127,8 +119,9 @@ def window_by_compound(laps: list[LapInput]) -> dict[str, dict]:
         # in-window fraction counts laps rather than frames.
         lap_means = [mean(t.values()) for t in lap_temps]
         overall = mean(lap_means)
-        bands = [band_for(code, value) for value in lap_means]
-        in_window = sum(1 for band in bands if band == BAND_OPTIMAL)
+        onset = compound.wear_onset_c
+        hot_laps = (None if onset is None
+                    else sum(1 for value in lap_means if value >= onset))
 
         out[code] = {
             "meanC": round(overall, 1),
@@ -136,22 +129,39 @@ def window_by_compound(laps: list[LapInput]) -> dict[str, dict]:
             "lapsSampled": len(lap_means),
             "hottestCorner": max(per_corner, key=per_corner.__getitem__),
             "source": "tyre-surface-temp",
-            # The band and the window it is read against were never measured
-            # in GT7 - see `store/tyres.py`. They travel with the temperature
-            # so a reader can see the shape of the guess, flagged so nothing
-            # downstream treats them as a finding.
-            "band": band_for(code, overall),
-            "windowC": [compound.warming_max, compound.optimal_max],
+            # **No band, and no window.** Both used to be emitted here off
+            # figures that were never GT7's. `null` is the honest value: a
+            # reader has to be able to tell "nobody has measured a window for
+            # this game" from "the tyre was fine".
+            "band": (BAND_ABOVE_WEAR_ONSET
+                     if onset is not None and overall >= onset else None),
+            "windowC": None,
             "windowMeasured": False,
-            "windowSource": (
-                "NOT MEASURED IN GT7 - real-world slick figures carried over "
-                "from the rebuild. Every compound in the 11 Aug Monza session "
-                "ran 68-78 °C, so these bands do not describe this game. The "
-                "temperature above is measured; the band is not a finding."),
-            "lapsInWindow": in_window,
+            "windowSource": _window_source(code, onset),
+            # Laps at or above the wear-onset threshold, where one exists. Not
+            # "in window" - there is no window - but it is the key the contract
+            # gives us, carrying the only count the evidence supports.
+            "lapsInWindow": hot_laps,
             "inWindow": None,
         }
     return out
+
+
+def _window_source(code: str, onset: float | None) -> str:
+    """What is and is not known about this compound's temperature, in one line."""
+    if onset is None:
+        return (
+            f"NO GT7 FIGURE EXISTS for {code}. No optimal window has ever been "
+            "published for GT7 by Polyphony or by anyone else, and the one "
+            "community wear test covered only the three Racing compounds. The "
+            "temperature above is measured; there is nothing to judge it "
+            "against.")
+    return (
+        f"No GT7 window exists - none has ever been published. The only "
+        f"sourced figure is an UPPER wear-onset threshold of {onset:.0f} °C "
+        f"({WEAR_ONSET_SOURCE}, tested on {WEAR_ONSET_GAME_VERSION}), above "
+        f"which wear climbs disproportionately. It is not a window and there is "
+        f"no cold-side figure. Caveats: " + "; ".join(WEAR_ONSET_CAVEATS))
 
 
 def qualification(code: str, window: dict | None) -> str | None:

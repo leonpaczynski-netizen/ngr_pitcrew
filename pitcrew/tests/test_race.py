@@ -424,7 +424,12 @@ def test_fuel_calls_switch_to_the_races_own_burn_rate():
     race.arm(a_context(), a_context())
     race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
 
-    for lap_num in range(1, 5):
+    # Six laps, because lap one never enters the burn population - it carries
+    # the grid - and five green laps are needed before the race's own figure
+    # is trusted over practice. Five and not three: the running median is
+    # inside 2% after one lap, but the zero-versus-one-stop decision at the
+    # measured race turned on 1.80%, which three laps cannot resolve.
+    for lap_num in range(1, 7):
         race.handle(lap_event(lap_num, fuel_used=4.6,
                               fuel_end=92.0 - lap_num * 4.6))
 

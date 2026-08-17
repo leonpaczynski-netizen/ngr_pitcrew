@@ -1,31 +1,38 @@
 """The 16 Aug race, replayed against the engineer that failed it.
 
-Session 44, Yas Marina, 15 laps, a 2-stop plan the race left behind: the
-driver ran a feasible zero-stop, never pitted, and finished with 1.79 litres.
-The engineer of that night said "Box this lap. RS. Fuel to 27 litres."
-verbatim on every lap from 7 to 15 - the ninth voiced on his chequered-flag
-crossing - while the one unanswered re-plan offer from minute two gagged
-every later assessment, and the correct call (short-shift, 0.4 laps short)
-was computed and outranked nine laps running. Not one word about tyre
-temperature was structurally possible.
+Session 44, Yas Marina, a 30-minute race the plan expected to take 15 laps and
+a 2-stop shape the race left behind: the driver ran a feasible zero-stop,
+never pitted, and finished with 1.79 litres. The engineer of that night said
+"Box this lap. RS. Fuel to 27 litres." verbatim on every lap from 7 to 15 -
+the ninth voiced on his chequered-flag crossing - while the one unanswered
+re-plan offer from minute two gagged every later assessment.
 
-The regression here drives RaceCoordinator, OfferDesk and assess through
-that exact shape - the same plan, burns, lap times, positions and (but for
+**This file now drives the redesign the driver asked for**, which is a
+different engineer: an app race clock started at the green (GT7's own clock is
+not accurate and nothing in race control reads it), the whole strategy problem
+re-solved at every crossing, and a register that speaks only when the answer
+has materially changed. Recalculating every lap makes announcing every lap
+trivially easy to do by accident, so most of what is asserted here is silence.
+
+The replay drives RaceCoordinator, PlanRegister and assess through the exact
+shape of that night - the same plan, burns, lap times, positions and (but for
 lap one, taken from the measured stone-cold session 43 start so the cold
-branch is exercised; the real lap one was grid-warmed) the same temperatures
-- and asserts the race the engineer should have called. The unit tests below
-it pin each new mechanism on its own.
+branch is exercised; the real lap one was grid-warmed) the same temperatures -
+and asserts the race the engineer should have called. The unit tests below it
+pin each mechanism on its own.
 """
 from __future__ import annotations
 
 import pytest
 
+from pitcrew.controller import PitCrewController
 from pitcrew.race.calls import (
     BOX_NOW,
     BOX_SOON,
     CHEQUER,
     FUEL_LONG,
     HIGH,
+    LAPS_TO_GO,
     MEDIUM,
     STATUS,
     STAY_OUT,
@@ -35,18 +42,34 @@ from pitcrew.race.calls import (
     next_call,
     stay_out_call,
 )
-from pitcrew.race.coordinator import PlanContext, RaceCoordinator
+from pitcrew.race.clock import RaceClock
+from pitcrew.race.coordinator import (
+    PlanContext,
+    RaceCoordinator,
+    context_from_event,
+)
+from pitcrew.race.expectations import (
+    PRACTICE,
+    RACE,
+    ExpectationTracker,
+    detectable_delta_ms,
+)
 from pitcrew.race.replan import (
+    BAND_ON,
+    BAND_UNDER,
+    NONE,
     RECOMMENDED,
-    RESOLVED_EXPIRED,
+    RESOLVED_ACCEPTED,
     RESOLVED_KEPT,
-    RESOLVED_SUPERSEDED,
     URGENT,
-    OfferDesk,
+    PlanRegister,
     Replan,
     assess,
+    burn_band,
+    materially_different,
 )
 from pitcrew.race.temps import lap_axle_means, window_from_samples
+from pitcrew.strategy.model import CompoundProfile, RaceInputs
 from pitcrew.telemetry.session_state import (
     EventKind,
     Lap,
@@ -69,6 +92,14 @@ PLAN = {"stints": [
 ]}
 PLANNED_BURN = 7.563
 PLANNED_LAP_MS = 118_940
+RACE_SECONDS = 30 * 60
+
+# **The standing start, measured.** `standing_start_ms` on race lap 1 was
+# 44,283: the time between the green - where the app clock starts - and the
+# first line crossing, which is where the lap-time sum starts. It is the
+# offset the two measures of elapsed time are reconciled against, and it is a
+# measurement rather than an error.
+STANDING_START_S = 44.283
 
 # lap: (time_ms, position, fuel_end, fuel_used, front_mean, rear_mean).
 # Lap 1's temps are session 43's measured stone-cold start (59.3/61.5);
@@ -91,10 +122,24 @@ LAPS = {
     15: (129_675, 5, 1.79, 5.95, 72.4, 79.1),
 }
 
-# The measured window for this car at this track: practice sessions 41-43
-# ran F 70-77 / R 77-88 steady, up to temperature in about two laps.
+# The measured running range for this car at this track: practice sessions
+# 41-43 ran F 70-77 / R 77-88 steady, up to temperature in about two laps.
+# **A description of where he has been, not a window** - see `race/temps.py`.
 WINDOW_FRONT = (70.0, 77.0)
 WINDOW_REAR = (77.0, 88.0)
+
+
+class FakeMonotonic:
+    """A clock the test drives, so a 30-minute race runs in milliseconds."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, seconds: float) -> None:
+        self.t += seconds
 
 
 def lap_event(lap_num: int) -> SessionEvent:
@@ -107,15 +152,47 @@ def lap_event(lap_num: int) -> SessionEvent:
         is_pit_lap=False, is_out_lap=False,
         tyre_temp_front_c=front, tyre_temp_rear_c=rear,
     )
-    return SessionEvent(EventKind.LAP_COMPLETED, {"lap": lap})
+    # The GT7 clock still travels on the event, because the screen may want to
+    # show it. **Nothing in race control reads it** - the driver measured it as
+    # inaccurate - and this replay proves it by sending a figure that is
+    # nonsense: if any decision moved with it, these tests would say so.
+    return SessionEvent(EventKind.LAP_COMPLETED,
+                        {"lap": lap, "remaining_time_ms": -1})
+
+
+# **The event row as the app actually stores it.** Every fixture below is
+# driven through `context_from_event` from this, and nothing invents a tidier
+# name: the tyre-temperature association is keyed on `circuit/car` composed
+# from these exact strings, it was written once against an invented
+# `track="Yas Marina", layout=None`, and the consequence was a scope that
+# matched nothing - the conserve call could not fire for a whole race while
+# every test covering it passed.
+EVENT_ROW = {
+    "car_name": "Ford Shelby GT350R '16",
+    "track": "Yas Marina Circuit",
+    "layout": "Full Course",
+    "race_type": "time",
+    "race_laps": 30,
+}
 
 
 def a_timed_context() -> PlanContext:
-    return PlanContext(car="Ford Shelby GT350R '16", track="Yas Marina",
-                       layout=None, race_laps=0, race_minutes=30.0)
+    return context_from_event(EVENT_ROW)
 
 
-def tonight() -> RaceCoordinator:
+def tonight_inputs() -> RaceInputs:
+    """The rest of the race as the strategy model sees it, from practice."""
+    return RaceInputs(
+        race_laps=15, race_minutes=30.0, lap_time_ms=PLANNED_LAP_MS,
+        fuel_per_lap_l=PLANNED_BURN, fuel_capacity_l=100.0,
+        refuel_rate_lps=2.0, pit_loss_s=20.0, wear_per_lap=0.03161,
+        available_compounds=("RS",), evidence_compound="RS",
+        compound_profiles={"RS": CompoundProfile(
+            "RS", 0.0, 0.03161, "measured", laps_measured=13,
+            stints_measured=2, longest_stint_laps=7)})
+
+
+def tonight(now: FakeMonotonic | None = None) -> RaceCoordinator:
     race = RaceCoordinator(
         PLAN,
         fuel_per_lap_l=PLANNED_BURN,
@@ -123,7 +200,10 @@ def tonight() -> RaceCoordinator:
         fuel_capacity_l=100.0,
         # No measured short-shift trade for the Shelby - the fold call must
         # name the lever without inventing a number.
-        short_shift_l_per_1000rpm=None)
+        short_shift_l_per_1000rpm=None,
+        lap_time_ms=PLANNED_LAP_MS,
+        practice_lap_samples=8, practice_fuel_samples=8,
+        now=now)
     assert race.arm(a_timed_context(), a_timed_context()) is True
     race.state.temp_window_front = WINDOW_FRONT
     race.state.temp_window_rear = WINDOW_REAR
@@ -132,25 +212,34 @@ def tonight() -> RaceCoordinator:
 
 
 def replay():
-    """Drive the race and the replan loop the way the controller wires them.
+    """Drive the race and the re-plan loop the way the controller wires them.
 
-    Returns (race, calls, offers, resolutions): every coordinator call made,
-    every offer the desk voiced, every offer it resolved without the driver.
-    The driver never answers - he is under a helmet, which is the point.
+    Returns (race, calls, spoken, clock). `spoken` is every recomputation the
+    register decided to voice - the whole point being how few there are. The
+    driver never answers a recommendation out loud: he is under a helmet,
+    which is why nothing waits for him any more.
     """
-    race = tonight()
-    desk = OfferDesk()
-    calls, offers, resolutions = [], [], []
+    now = FakeMonotonic()
+    race = tonight(now)
+    register = PlanRegister()
+    inputs = tonight_inputs()
+    calls, spoken = [], []
 
     green = race.handle(SessionEvent(EventKind.RACE_STARTED,
                                      {"laps_in_race": 0}))
     if green:
         calls.append(green)
+    # Between the green and the first crossing: the grid, the launch, and the
+    # standing start. The app clock is running through all of it.
+    now.advance(STANDING_START_S)
 
     for lap_num in range(1, 16):
+        now.advance(LAPS[lap_num][0] / 1000.0)
         call = race.handle(lap_event(lap_num))
         if call:
             calls.append(call)
+            if call.kind == STAY_OUT:
+                register.note_driver_shape(race.stops_planned(), lap=call.lap)
         verdict = assess(
             laps_done=race.state.lap,
             laps_total=race.state.laps_total,
@@ -160,19 +249,22 @@ def replay():
             lap_time_ms=race.representative_pace_ms(),
             planned_lap_time_ms=PLANNED_LAP_MS,
             current_stops=race.stops_planned(),
-            inputs=None,
+            inputs=inputs,
             fuel_capacity_l=100.0,
         )
-        spoken, resolved = desk.consider(verdict, race.state.lap)
-        resolutions.extend(resolved)
-        if spoken:
-            offers.append((race.state.lap, spoken))
-
-    finish = race.handle(SessionEvent(EventKind.RACE_FINISHED,
-                                      {"laps": 15, "position": 5}))
-    if finish:
-        calls.append(finish)
-    return race, calls, offers, resolutions
+        outcome = register.consider(
+            verdict, lap=race.state.lap,
+            burn_drift=race.expect.burn_vs_plan(),
+            race_evidence=race.observed_fuel_per_lap() is not None,
+            # **The same arbitration the controller does.** Without it this
+            # harness certifies a race the app would never run: on lap 8 both
+            # producers spoke, and the driver heard "Recommend running to the
+            # flag" followed by "Box this lap, one lap overdue".
+            may_speak=lambda candidate: PitCrewController._replan_outranks(
+                candidate, call))
+        if outcome.spoken:
+            spoken.append(outcome)
+    return race, calls, spoken, race.clock
 
 
 @pytest.fixture(scope="module")
@@ -180,32 +272,138 @@ def raced():
     return replay()
 
 
-def test_no_pace_verdict_is_built_on_the_standing_start(raced):
+def test_nothing_is_offered_before_the_race_has_shown_anything(raced):
     """The lap-1 offer of the real night - "lapping 2% slower than planned",
-    voiced two minutes in - must not exist. No offer before three
-    representative laps do."""
-    _, _, offers, _ = raced
-    assert all(lap >= 4 for lap, _ in offers)
+    voiced two minutes in - must not exist in any form.
+
+    Nor may its successor. The model prefers a 1-stop over the approved 2-stop
+    from the very first crossing, on practice numbers alone, because the
+    approved plan is the driver's choice among ranked options and not always
+    the model's favourite. Re-offering the model's favourite two minutes after
+    the green is not re-planning; it is arguing about a decision he has
+    already made."""
+    _, _, spoken, _ = raced
+    assert all(item.lap >= 8 for item in spoken)
 
 
-def test_the_burn_drift_is_offered_once_the_race_has_shown_its_burn(raced):
-    _, _, offers, _ = raced
-    lap, first = offers[0]
-    assert lap == 4
-    assert "less fuel" in first.reason
-    # And it is the burn, not the standing-start pace, that raised it.
-    assert "slower" not in first.reason
+def test_one_thing_is_said_per_crossing_across_both_producers(raced):
+    """**The defect this asserts against is in the certifying replay itself.**
+    The coordinator and the re-planner used to be voiced independently, in
+    whatever order the code ran them, and on lap 8 the driver heard "Recommend
+    running to the flag." followed by "Box this lap. RS. 1 lap overdue." -
+    two opposite instructions two hundred milliseconds apart, in the exact
+    race this engineer was rebuilt for. §5.5 allows one."""
+    _, calls, spoken, _ = raced
+    per_lap = {}
+    for call in calls:
+        per_lap.setdefault(call.lap, []).append(call.kind)
+    for item in spoken:
+        per_lap.setdefault(item.lap, []).append("replan")
+    crowded = {lap: kinds for lap, kinds in per_lap.items() if len(kinds) > 1}
+    assert crowded == {}
 
 
-def test_the_unanswered_offer_expires_and_stops_gagging(raced):
-    """The single root cause of "didn't adjust at all": one unanswered offer
-    used to block every later verdict to the flag."""
-    _, _, offers, resolutions = raced
-    assert any(res.reason == RESOLVED_EXPIRED for res in resolutions)
-    expired = next(res for res in resolutions
-                   if res.reason == RESOLVED_EXPIRED)
-    assert expired.accepted is False          # expiry never adopts anything
-    assert expired.lap == 6                   # two laps after the lap-4 offer
+def test_the_engineer_speaks_the_whole_race_in_twelve_calls(raced):
+    """Recalculating every lap did not become announcing every lap. The model
+    is re-solved at all fifteen crossings; he hears twelve things across the
+    race, none of them twice."""
+    _, calls, spoken, _ = raced
+    said = [c.spoken() for c in calls] + [
+        item.verdict.call() for item in spoken]
+    assert len(said) <= 13
+    assert len(set(said)) == len(said)
+
+
+def test_a_held_recommendation_is_not_lost(raced):
+    """Losing the lap is not the same as losing the finding. The burn crossed
+    10% under plan on lap 8 and every lap from there had something more urgent
+    on it until lap 11, where it was said - once."""
+    _, _, spoken, _ = raced
+    notes = [item for item in spoken if not item.verdict.offered]
+    assert len(notes) == 1
+    assert notes[0].lap == 11
+    assert "10% under plan" in notes[0].verdict.call()
+
+
+def test_lap_time_alone_never_moves_the_stop_count():
+    """His measured spread at this car and circuit is 2.04 s, wider than the
+    whole degradation band a stint plan is trying to see. A pace deviation of
+    four seconds a lap - twice anything a real race produces - changes
+    nothing, because pace does not enter the verdict at all."""
+    inputs = tonight_inputs()
+    steady = assess(
+        laps_done=6, laps_total=15, fuel_l=58.88,
+        planned_fuel_per_lap=PLANNED_BURN, observed_fuel_per_lap_l=None,
+        lap_time_ms=PLANNED_LAP_MS, planned_lap_time_ms=PLANNED_LAP_MS,
+        current_stops=2, inputs=inputs, fuel_capacity_l=100.0)
+    slow = assess(
+        laps_done=6, laps_total=15, fuel_l=58.88,
+        planned_fuel_per_lap=PLANNED_BURN, observed_fuel_per_lap_l=None,
+        lap_time_ms=PLANNED_LAP_MS + 4_000,
+        planned_lap_time_ms=PLANNED_LAP_MS,
+        current_stops=2, inputs=inputs, fuel_capacity_l=100.0)
+    assert steady.stops == slow.stops
+    assert steady.reason == slow.reason
+    assert "slower" not in slow.reason and "lapping" not in slow.reason
+
+
+def test_fuel_that_will_not_reach_is_urgent_from_the_first_laps():
+    """**The gate and its own exemption used to be the same predicate.** The
+    urgent branch needed a converged race burn, which needs five GREEN laps,
+    which is exactly what `race_evidence` waits for - so a genuinely short
+    tank on laps 2, 3 and 4 produced a verdict that was computed and then
+    silenced. On the replayed race, where laps 4 and 5 were incidents and did
+    not count as green, that muted the strategy layer for seven of fifteen
+    laps; in a ten-lap sprint with two incidents it would be eight of ten.
+
+    Reaching the flag is arithmetic on the fuel aboard. It does not need the
+    burn to have converged - only to exist - and the confidence says which
+    figure it used."""
+    inputs = tonight_inputs()
+    register = PlanRegister()
+    verdict = assess(
+        laps_done=2, laps_total=15, fuel_l=30.0,
+        planned_fuel_per_lap=PLANNED_BURN,
+        observed_fuel_per_lap_l=None,          # no converged burn on lap 2
+        lap_time_ms=None, planned_lap_time_ms=PLANNED_LAP_MS,
+        current_stops=0, inputs=inputs, fuel_capacity_l=100.0)
+    assert verdict.verdict == URGENT
+    assert "short of the flag on the planned burn" in verdict.reason
+    assert verdict.confidence == "medium"      # a projection, not a reading
+    # And it is not silenced by the evidence gate it used to share.
+    assert register.consider(verdict, lap=2, race_evidence=False).spoken
+
+
+def test_a_converged_burn_makes_the_same_call_a_reading():
+    inputs = tonight_inputs()
+    verdict = assess(
+        laps_done=8, laps_total=15, fuel_l=30.0,
+        planned_fuel_per_lap=PLANNED_BURN, observed_fuel_per_lap_l=6.77,
+        lap_time_ms=None, planned_lap_time_ms=PLANNED_LAP_MS,
+        current_stops=0, inputs=inputs, fuel_capacity_l=100.0)
+    assert verdict.verdict == URGENT
+    assert "on current burn" in verdict.reason
+    assert verdict.confidence == "high"
+
+
+def test_the_spoken_reason_is_one_clause():
+    """§5.5: instruction first, reason second and SHORT. The full reason
+    carries every fact for the record; the unabridged form was 145 characters
+    of three semicolon-joined clauses beginning in lower case."""
+    verdict = Replan(
+        RECOMMENDED,
+        "burning 10% less fuel than planned; 68 seconds in it; you'd be "
+        "0.3 laps short at this burn - short-shift and lift",
+        stops=0)
+    spoken = f"{verdict.call()} {verdict.spoken_reason()}"
+    assert spoken == ("Recommend running to the flag. "
+                      "Burning 10% less fuel than planned.")
+    assert len(spoken) < 80
+
+
+def test_a_verdict_with_no_stop_count_is_not_read_out_as_none():
+    assert Replan(RECOMMENDED, "something changed", stops=None).call() == (
+        "The plan needs a look.")
 
 
 def test_box_now_is_said_at_most_twice_before_the_fold(raced):
@@ -237,25 +435,72 @@ def test_the_engineer_folds_to_the_stay_out_with_the_short_shift_lever(raced):
 
 
 def test_nothing_after_the_fold_asks_him_to_box(raced):
-    _, calls, _, _ = raced
+    _, calls, spoken, _ = raced
     assert not any(c.kind in (BOX_NOW, BOX_SOON) and c.lap > 9 for c in calls)
+    # And the re-planner composes with the fold rather than fighting it: from
+    # lap 9 the model does keep finding stop shapes it likes, and the driver's
+    # own vote outranks every one of them. What he hears after the fold is a
+    # note about the burn, which asks nothing of him.
+    assert not any(item.verdict.offered and item.lap > 9 for item in spoken)
 
 
 def test_fuel_to_27_litres_is_never_said(raced):
     """The physically vacuous fill of the real night - "Fuel to 27 litres"
     with 51.9 aboard - must not survive in any call."""
-    _, calls, offers, _ = raced
-    everything = [c.spoken() for c in calls] + [o.reason for _, o in offers]
+    _, calls, spoken, _ = raced
+    everything = ([c.spoken() for c in calls]
+                  + [item.verdict.reason for item in spoken])
     assert not any("Fuel to 27" in text for text in everything)
     assert not any("27 litres" in text for text in everything)
 
 
+# ------------------------------------------------------------- the app clock
+
+def test_the_app_clock_finishes_the_race_and_gt7s_does_not(raced):
+    """A timed race never emitted RACE_FINISHED at all before the clock did
+    it, and the version that did rested on GT7's own `remaining_time_ms` -
+    which the driver measured as inaccurate. This replay sends -1 on every
+    lap, so if anything still read it the race could not end at all."""
+    race, calls, _, _ = raced
+    assert calls[-1].kind == CHEQUER
+    assert calls[-1].lap == 15
+    assert race.state.finished is True
+
+
 def test_the_chequered_flag_is_called_with_position_and_a_closing_fact(raced):
     _, calls, _, _ = raced
-    assert calls[-1].kind == CHEQUER
     assert "P5" in calls[-1].reason
     assert "1.8 litres" in calls[-1].reason
     assert "zero-stop" in calls[-1].reason
+
+
+def test_two_to_go_and_last_lap_are_said_at_the_right_crossings(raced):
+    """**What an accurate clock unlocks.** Measured on this race the call is
+    safe from two laps out - 13.3 s of margin at the end of lap 13 and 31.2 s
+    at the end of lap 14 - and the last-lap call is made at the crossing that
+    BEGINS the final lap, not after it."""
+    _, calls, _, _ = raced
+    to_go = [(c.lap, c.call) for c in calls if c.kind == LAPS_TO_GO]
+    assert to_go == [(13, "Two to go."), (14, "Last lap.")]
+
+
+def test_the_distance_estimate_lands_on_fifteen_laps(raced):
+    """Predicted from the ACHIEVED median - every lap as run, incidents
+    included - and not from the clean pace. Measured: the achieved median of
+    121.51 s predicts fifteen, which is what happened; the clean-pace median
+    of 119.62 s and the practice median both predict sixteen."""
+    race, _, _, _ = raced
+    assert race.state.laps_total == 15
+
+
+def test_the_two_measures_of_elapsed_time_agree_all_race(raced):
+    """The app timer and the sum of GT7's own exact lap times, reconciled
+    against the standing start measured at the first crossing."""
+    _, _, _, clock = raced
+    assert clock.corroborated is True
+    assert clock.elapsed_laps_s == pytest.approx(1841.28, abs=0.05)
+    assert clock.elapsed_app_s == pytest.approx(1841.28 + STANDING_START_S,
+                                                abs=0.05)
 
 
 def test_no_box_or_fuel_call_fires_on_the_final_crossing(raced):
@@ -266,130 +511,545 @@ def test_no_box_or_fuel_call_fires_on_the_final_crossing(raced):
     assert all(c.kind == CHEQUER for c in on_lap_15)
 
 
-def test_the_cold_tyre_call_and_its_confirmation(raced):
+# ------------------------------------------------------ the plan's own numbers
+
+def test_the_plan_carries_what_it_expected_and_what_it_ran(raced):
+    race, _, _, _ = raced
+    snapshot = race.snapshot()
+    assert snapshot["plannedFuelPerLapL"] == PLANNED_BURN
+    assert snapshot["plannedLapMs"] == PLANNED_LAP_MS
+    # The race replaced the practice burn outright once five green laps
+    # existed. Measured: practice was 10.7% high, and that error alone turned
+    # a zero-stop race into a two-stop plan.
+    assert snapshot["expectedFuelSource"] == RACE
+    assert snapshot["actualFuelPerLapL"] == pytest.approx(6.76, abs=0.06)
+    assert snapshot["burnVsPlanPct"] == pytest.approx(-10.6, abs=1.0)
+
+
+def test_the_pace_comparison_never_claims_more_than_it_can_see(raced):
+    """Lap time confirms and never triggers, and it is reported with the
+    noise floor it has to clear. At this car's measured spread a fifteen-lap
+    race cannot honestly show a one-second-a-lap drift."""
+    race, _, _, _ = raced
+    snapshot = race.snapshot()
+    assert snapshot["lapTimeSigmaMs"] > 900          # measured here, not 918
+    assert snapshot["paceDetectableMs"] is not None
+    assert snapshot["paceIsReal"] is False
+    line = race.expect.audit_line()
+    assert "not a finding" in line
+    assert "assumption" in line                      # wear, always
+
+
+def test_the_tyre_temperature_conserve_call_fires_once(raced):
+    """Once per stint, on the front-to-rear gap - his own measured
+    association - with the hysteresis holding it down for the rest of the race
+    even though the gap never comes back under the quiet threshold.
+
+    It lands on lap 10 rather than earlier because **one call per lap is a
+    hard rule and a box call outranks a temperature**: the gap first clears
+    the threshold on lap 5, which is a "Box in 2", and every lap from there to
+    the fold belongs to the stop conversation. Lap 10 is the first one free.
+    """
+    _, calls, _, _ = raced
+    conserve = [c for c in calls if c.kind == TYRE_TEMP and c.tag == "conserve"]
+    assert len(conserve) == 1
+    assert conserve[0].lap == 10
+    # The scope resolved for this car at this circuit, off the real event row.
+    assert raced[0].state.temp_gap_conserve_c == 8.0
+    assert "Ease the" in conserve[0].call
+    assert "over the fronts" in conserve[0].reason
+
+
+def test_no_call_ever_claims_an_optimal_tyre_window(raced):
+    """Nobody has published one for GT7, so the app may not imply one. The
+    push call the brief asked for is deliberately absent for this reason."""
+    _, calls, _, _ = raced
+    said = " ".join(c.spoken() for c in calls).lower()
+    assert "optimal" not in said
+    assert "in window" not in said
+    assert "you can push" not in said or "fuel" in said
+
+
+def test_the_cold_tyre_call_still_opens_the_race(raced):
     _, calls, _, _ = raced
     temps = [c for c in calls if c.kind == TYRE_TEMP]
     assert temps[0].lap == 1
     assert "Tyres cold" in temps[0].call
-    assert "2 laps to window" in temps[0].reason
-    assert temps[1].lap == 2
-    assert "Tyres in window" in temps[1].call
+    assert "2 laps to come up" in temps[0].reason
 
 
 def test_the_normal_rear_hot_offset_never_raises_a_trend_call(raced):
-    """Rears ran 8-11 degC hotter than fronts all race - this car's normal
+    """Rears 8-11 degC hotter than fronts all race is this car's normal
     thermal balance, not a finding."""
     _, calls, _, _ = raced
     assert not any("heating" in c.call for c in calls)
 
 
 def test_the_push_call_of_the_night_still_exists(raced):
-    """Lap 4's "You can push" - right inside the plan's frame - is not this
-    pass's target; it must simply not have been broken."""
+    """Lap 4's "You can push" - a FUEL call, about fuel in hand, and nothing
+    to do with tyre temperature - is not this pass's target."""
     _, calls, _, _ = raced
     assert any(c.kind == FUEL_LONG and c.lap == 4 for c in calls)
 
 
-def test_the_status_call_survives_where_box_now_used_to_drown_it(raced):
+def test_no_lap_is_wasted_on_a_repeated_box_call(raced):
+    """The real night said the same box call nine times, and every lap it
+    spent doing that was a lap something else could have used. Laps 9 and 10
+    are the proof: the fold, and then the temperature call the box repeats
+    used to bury."""
     _, calls, _, _ = raced
-    status = [c for c in calls if c.kind == STATUS]
-    assert any(c.lap == 10 and "P4" in c.call for c in status)
+    assert {c.kind for c in calls if c.lap in (9, 10)} == {STAY_OUT, TYRE_TEMP}
 
 
-# --------------------------------------------------------------- offer desk
+def test_the_status_call_still_reports_when_it_has_the_lap_free():
+    """It is crowded out of tonight's race by louder things, which is one
+    call per lap working. On a quiet lap it still comes round."""
+    state = RaceState(lap=10, laps_total=15, race_minutes=30.0, position=4,
+                      laps_estimate_firm=True)
+    call = next_call(state)
+    assert call.kind == STATUS
+    assert "P4" in call.call and "about 5 to go" in call.call
+
+
+# ------------------------------------------------------------ the register
 
 def an_offer(**overrides) -> Replan:
     fields = dict(verdict=RECOMMENDED, reason="burning 10% less",
-                  stops=1, stint_laps=(8,), gain_s=12.0)
+                  stops=1, stint_laps=(8,), gain_s=12.0,
+                  next_stop_lap=12, laps_to_next_stop=8)
     fields.update(overrides)
     return Replan(**fields)
 
 
-def test_an_offer_expires_after_two_unanswered_laps():
-    desk = OfferDesk()
-    spoken, _ = desk.consider(an_offer(), lap=4)
-    assert spoken is not None
-    _, resolved = desk.consider(an_offer(), lap=5)
-    assert resolved == [] and desk.pending is not None
-    _, resolved = desk.consider(an_offer(), lap=6)
-    assert len(resolved) == 1
-    assert resolved[0].reason == RESOLVED_EXPIRED
-    assert resolved[0].accepted is False
-    assert desk.pending is None
+def test_the_first_assessment_is_spoken():
+    register = PlanRegister()
+    outcome = register.consider(an_offer(), lap=4)
+    assert outcome.spoken is True
+    assert outcome.why == "first assessment of the race"
 
 
-def test_expiry_does_not_block_a_materially_different_offer():
-    desk = OfferDesk()
-    desk.consider(an_offer(stops=1), lap=4)
-    desk.consider(an_offer(stops=1), lap=6)          # lapses
-    spoken, _ = desk.consider(an_offer(stops=0), lap=8)
-    assert spoken is not None                        # different stop count
-    assert spoken.stops == 0
+def test_the_same_answer_again_is_silence():
+    """**There is no expiry and there is no repeat.** The old desk lapsed an
+    unanswered offer after two laps and could then re-voice it; the driver's
+    instruction was that an offer should not expire, because the engineer is
+    reassessing anyway. What he must never hear is the same answer twice."""
+    register = PlanRegister()
+    register.consider(an_offer(), lap=4)
+    for lap in range(5, 15):
+        assert register.consider(an_offer(), lap=lap).spoken is False
 
 
-def test_a_lapsed_offer_is_not_re_voiced_verbatim():
-    """Re-asking the identical question every two laps is the box-call
-    defect wearing a different hat."""
-    desk = OfferDesk()
-    desk.consider(an_offer(), lap=4)
-    desk.consider(an_offer(), lap=6)                 # lapses
-    spoken, _ = desk.consider(an_offer(), lap=7)
-    assert spoken is None
+def test_a_changed_stop_count_is_material():
+    register = PlanRegister()
+    register.consider(an_offer(stops=1), lap=4)
+    outcome = register.consider(an_offer(stops=0, next_stop_lap=None), lap=5)
+    assert outcome.spoken is True
+    assert outcome.why == "the stop count has changed"
 
 
-def test_an_escalation_to_urgent_replaces_the_pending_offer():
-    desk = OfferDesk()
-    desk.consider(an_offer(verdict=RECOMMENDED), lap=4)
-    spoken, resolved = desk.consider(
+def test_a_stop_that_slides_a_lap_or_two_is_not_worth_a_word():
+    register = PlanRegister()
+    register.consider(an_offer(laps_to_next_stop=8), lap=4)
+    assert register.consider(
+        an_offer(laps_to_next_stop=10), lap=5).spoken is False
+    outcome = register.consider(an_offer(laps_to_next_stop=11), lap=6)
+    assert outcome.spoken is True
+    assert "the stop has moved" in outcome.why
+
+
+def test_a_stop_that_stays_put_is_never_announced_by_the_calendar():
+    """**The comparison is laps from now, not the lap number.** Re-planning
+    the remainder restarts the first stint at the current lap every time, so a
+    tyre-limited stint of a fixed length marches the ABSOLUTE stop lap forward
+    one lap per lap while the answer has not moved at all. Compared
+    absolutely it tripped the threshold every third lap: nine announcements in
+    28 laps on a probe, the same instruction three times running."""
+    register = PlanRegister()
+    register.consider(an_offer(laps_to_next_stop=17, next_stop_lap=18), lap=1)
+    for lap in range(2, 29):
+        # The stint is tyre-limited at 17 laps, so the stop is always 17 laps
+        # away and the absolute lap climbs with the race.
+        outcome = register.consider(
+            an_offer(laps_to_next_stop=17, next_stop_lap=lap + 17), lap=lap)
+        assert outcome.spoken is False, lap
+
+
+def test_an_oscillating_verdict_does_not_swap_the_answer_every_lap():
+    """A race sitting on a stop-count boundary flips the model's answer lap to
+    lap, and the measured race sat inside 1.80% of exactly that boundary. The
+    first swap is information; swapping straight back is the model dithering
+    out loud.
+
+    `OfferDesk` had this guard and the class that replaced it did not, so a
+    probe of six consecutive laps produced six contradictory instructions -
+    "Recommend 1 stop" / "running to the flag" / "1 stop" / "running to the
+    flag". Restored here against the new class."""
+    register = PlanRegister()
+    assert register.consider(an_offer(stops=1), lap=4).spoken is True
+    assert register.consider(
+        an_offer(stops=0, laps_to_next_stop=None), lap=5).spoken is True
+    for lap in range(6, 12):
+        stops = 1 if lap % 2 == 0 else 0
+        outcome = register.consider(
+            an_offer(stops=stops,
+                     laps_to_next_stop=8 if stops else None), lap=lap)
+        assert outcome.spoken is False, (lap, stops)
+
+
+def test_an_urgent_escalation_cuts_through_the_swap_back_guard():
+    """Not a preference between plans - arithmetic about reaching the end."""
+    register = PlanRegister()
+    register.consider(an_offer(stops=1), lap=4)
+    register.consider(an_offer(stops=0, laps_to_next_stop=None), lap=5)
+    urgent = an_offer(stops=1, verdict=URGENT, confidence="high")
+    assert register.consider(urgent, lap=6).spoken is True
+
+
+def test_running_out_of_fuel_escalates_through_everything():
+    register = PlanRegister()
+    register.consider(an_offer(), lap=4)
+    outcome = register.consider(
         an_offer(verdict=URGENT, confidence="high"), lap=5)
-    assert spoken is not None and spoken.verdict == URGENT
-    assert resolved[0].reason == RESOLVED_SUPERSEDED
+    assert outcome.spoken is True
+    assert outcome.why == "the fuel no longer reaches the flag"
 
 
-def test_an_oscillating_verdict_does_not_swap_the_offer_every_lap():
-    """A race sitting on a stops boundary flips the model's answer lap to
-    lap. The first swap is information; swapping straight back is the model
-    dithering out loud, and it waits for an answer or the expiry instead."""
-    desk = OfferDesk()
-    desk.consider(an_offer(stops=1), lap=4)
-    spoken, resolved = desk.consider(an_offer(stops=0), lap=5)
-    assert spoken is not None                    # the first swap speaks
-    assert resolved[0].reason == RESOLVED_SUPERSEDED
-    spoken, resolved = desk.consider(an_offer(stops=1), lap=6)
-    assert spoken is None and resolved == []     # the swap-back waits
-    assert desk.pending is not None and desk.pending.stops == 0
+def test_the_fuel_picture_clearing_is_worth_a_word_too():
+    """He is saving fuel he may no longer need to save."""
+    register = PlanRegister()
+    register.consider(an_offer(verdict=URGENT, confidence="high"), lap=4)
+    outcome = register.consider(Replan(NONE, "on the plan"), lap=6)
+    assert outcome.spoken is True
+    assert outcome.why == "the fuel picture has cleared"
 
 
-def test_an_urgent_escalation_cuts_through_the_hysteresis():
-    desk = OfferDesk()
-    desk.consider(an_offer(stops=1), lap=4)
-    desk.consider(an_offer(stops=0), lap=5)
-    spoken, _ = desk.consider(
-        an_offer(stops=1, verdict=URGENT, confidence="high"), lap=6)
-    assert spoken is not None and spoken.verdict == URGENT
+def test_a_plan_that_says_nothing_new_is_not_a_revision():
+    """A row a lap would bury the ones that matter."""
+    register = PlanRegister()
+    outcome = register.consider(Replan(NONE, "on the plan"), lap=4)
+    assert outcome.spoken is False
 
 
-def test_draining_the_desk_records_the_race_ending_unanswered():
-    from pitcrew.race.replan import RESOLVED_RACE_ENDED
-    desk = OfferDesk()
-    desk.consider(an_offer(), lap=14)
-    resolution = desk.drain(lap=15)
-    assert resolution.reason == RESOLVED_RACE_ENDED
-    assert resolution.accepted is False          # draining adopts nothing
-    assert desk.pending is None
-    assert OfferDesk().drain(lap=15) is None
+def test_the_drivers_own_shape_outranks_the_model():
+    """He voted with the car by running past his stop. From there the
+    engineer confirms or revises THAT race - it does not keep re-proposing
+    the stop he spent two laps declining."""
+    register = PlanRegister()
+    register.note_driver_shape(0, lap=9)
+    assert register.consider(an_offer(stops=1), lap=10).spoken is False
+    assert register.consider(an_offer(stops=2), lap=11).spoken is False
+    # Arithmetic still cuts through a preference.
+    urgent = an_offer(stops=1, verdict=URGENT, confidence="high")
+    assert register.consider(urgent, lap=12).spoken is True
 
 
-def test_the_drivers_answer_still_lands():
-    desk = OfferDesk()
-    desk.consider(an_offer(), lap=4)
-    resolution = desk.resolve(accepted=False, lap=5)
+def test_nothing_is_offered_until_the_race_has_evidence():
+    register = PlanRegister()
+    assert register.consider(an_offer(), lap=2,
+                             race_evidence=False).spoken is False
+    urgent = an_offer(verdict=URGENT, confidence="high")
+    assert register.consider(urgent, lap=3,
+                             race_evidence=False).spoken is True
+
+
+def test_accepting_records_the_shape_and_keeping_records_the_refusal():
+    register = PlanRegister()
+    register.consider(an_offer(stops=0), lap=4)
+    resolution = register.answered(accepted=True, lap=5)
+    assert resolution.reason == RESOLVED_ACCEPTED
+    assert register.driver_shape_stops == 0
+
+    register = PlanRegister()
+    register.consider(an_offer(stops=0), lap=4)
+    resolution = register.answered(accepted=False, lap=5)
     assert resolution.reason == RESOLVED_KEPT
-    assert desk.pending is None
 
 
-def test_an_answer_with_nothing_pending_is_none():
-    assert OfferDesk().resolve(accepted=True, lap=5) is None
+def test_an_answer_with_nothing_told_is_none():
+    assert PlanRegister().answered(accepted=True, lap=5) is None
+
+
+def test_materially_different_needs_something_to_compare_against():
+    say, why = materially_different(an_offer(), None)
+    assert say is True and why
+
+
+# --------------------------------------------------- the burn against the plan
+
+def test_the_burn_band_needs_five_percent_to_enter_and_three_to_leave():
+    """Hysteresis, so a burn sitting on the threshold cannot announce itself
+    every other lap."""
+    assert burn_band(-0.04, BAND_ON) == BAND_ON
+    assert burn_band(-0.06, BAND_ON) == BAND_UNDER
+    assert burn_band(-0.04, BAND_UNDER) == BAND_UNDER      # still out
+    assert burn_band(-0.02, BAND_UNDER) == BAND_ON
+    assert burn_band(None, BAND_UNDER) == BAND_UNDER       # unknown changes nothing
+
+
+def test_a_band_crossing_is_said_once_and_is_not_a_question():
+    register = PlanRegister()
+    quiet = Replan(NONE, "on the plan")
+    assert register.consider(quiet, lap=4, burn_drift=-0.01).spoken is False
+    outcome = register.consider(quiet, lap=5, burn_drift=-0.10)
+    assert outcome.spoken is True
+    assert "10% under plan" in outcome.verdict.call()
+    # Not a question: nothing to accept or keep.
+    assert outcome.verdict.offered is False
+    assert register.consider(quiet, lap=6, burn_drift=-0.11).spoken is False
+
+
+# ------------------------------------------------------------- the race clock
+
+def a_clock(duration_s: float = 600.0):
+    now = FakeMonotonic()
+    clock = RaceClock(duration_s, now=now)
+    clock.start()
+    return clock, now
+
+
+def test_the_clock_measures_from_the_green():
+    clock, now = a_clock()
+    now.advance(120.0)
+    assert clock.elapsed_s == pytest.approx(120.0)
+    assert clock.remaining_s == pytest.approx(480.0)
+    assert clock.expired is False
+
+
+def test_a_pause_does_not_run_the_clock():
+    """GT7 pauses mid-race in a single-player lobby, and `SessionState.update`
+    returns early on one - so nothing but the frame watcher can see it. A
+    clock that ran through a pause would call the last lap early."""
+    clock, now = a_clock()
+    now.advance(60.0)
+    clock.note_frame(now(), paused=True)
+    now.advance(300.0)
+    # Mid-pause the clock is already holding, not catching up afterwards.
+    assert clock.elapsed_s == pytest.approx(60.0)
+    clock.note_frame(now(), paused=False)
+    now.advance(30.0)
+    assert clock.elapsed_s == pytest.approx(90.0)
+
+
+def test_the_flag_falls_on_the_first_crossing_after_the_clock():
+    clock, now = a_clock(duration_s=240.0)
+    assert clock.laps_left(120_000) == 2
+    now.advance(130.0)
+    assert clock.laps_left(120_000) == 1        # 110 s left: one more lap
+    now.advance(120.0)
+    assert clock.expired is True
+    assert clock.laps_left(120_000) == 0
+
+
+def test_no_lap_time_means_no_estimate_rather_than_a_guess():
+    clock, _ = a_clock()
+    assert clock.laps_left(None) is None
+    assert clock.laps_left(0) is None
+    assert RaceClock(None).laps_left(120_000) is None
+
+
+def test_the_margin_says_when_the_estimate_cannot_be_resolved():
+    """Measured on the real race: at the first four crossings the median only
+    had to be wrong by 0.12-0.66 s to change the answer, against a lap-to-lap
+    spread of 2.04 s."""
+    clock, now = a_clock(duration_s=1800.0)
+    now.advance(121.5)
+    tight = clock.laps_left_margin_s(119_624)
+    assert tight is not None and tight < 1.0
+    now.advance(1590.0)                          # end of lap 14, 88 s left
+    assert clock.laps_left_margin_s(121_511) > 10.0
+
+
+def test_the_lap_times_corroborate_the_app_timer():
+    clock, now = a_clock(duration_s=1800.0)
+    now.advance(44.283)                          # the standing start
+    for lap_ms in (121_511, 117_724, 117_318):
+        now.advance(lap_ms / 1000.0)
+        clock.note_lap(lap_ms)
+    assert clock.corroborated is True
+    assert clock.elapsed_s == pytest.approx(clock.elapsed_app_s)
+
+
+def test_a_pause_the_frame_watcher_missed_hands_the_clock_to_the_laps():
+    """The app timer running through something the laps did not. The lap-time
+    sum wins, because it is built from GT7's own exact figures."""
+    clock, now = a_clock(duration_s=1800.0)
+    now.advance(44.283)
+    now.advance(120.0)
+    clock.note_lap(120_000)
+    now.advance(120.0 + 90.0)                    # 90 s nobody accounted for
+    clock.note_lap(120_000)
+    assert clock.corroborated is False
+    # 44.3 s of standing start plus 240 s of laps, and not the 330 the app
+    # timer thinks it saw.
+    assert clock.elapsed_s == pytest.approx(44.283 + 240.0, abs=0.1)
+
+
+def test_the_discrepancy_is_logged_once_and_not_per_lap(caplog):
+    clock, now = a_clock(duration_s=1800.0)
+    now.advance(44.283)
+    now.advance(120.0)
+    clock.note_lap(120_000)
+    with caplog.at_level("WARNING"):
+        for _ in range(4):
+            now.advance(120.0 + 90.0)
+            clock.note_lap(120_000)
+    said = [r for r in caplog.records if "clock disagreement" in r.message]
+    assert len(said) == 1
+
+
+def test_a_dropped_lap_event_is_caught():
+    """A lap-time sum that jumps by one lap while the wall clock jumps by two
+    is a LAP_COMPLETED that never arrived - and every distance estimate
+    downstream counts laps."""
+    clock, now = a_clock(duration_s=1800.0)
+    now.advance(44.283)
+    now.advance(120.0)
+    clock.note_lap(120_000)
+    now.advance(120.0)
+    assert clock.note_lap(120_000).dropped_lap is False
+    now.advance(240.0)                           # two laps, one event
+    assert clock.note_lap(120_000).dropped_lap is True
+
+
+def test_a_lap_race_is_not_reconciled():
+    """The reconciliation protects one thing - how much racing time is left -
+    and a race run to a lap count has none."""
+    clock = RaceClock(None, now=FakeMonotonic())
+    clock.start()
+    clock.note_lap(120_000)
+    clock.note_lap(120_000)
+    assert clock.corroborated is None
+
+
+# ---------------------------------------------------- the plan's expectations
+
+def a_race_lap(lap_num: int, time_ms: int, used: float, **overrides) -> Lap:
+    fields = dict(lap_num=lap_num, lap_time_ms=time_ms, best_lap_ms=time_ms,
+                  delta_ms=0, fuel_start=90.0, fuel_end=90.0 - used,
+                  fuel_used=used, position=3, is_pit_lap=False,
+                  is_out_lap=False)
+    fields.update(overrides)
+    return Lap(**fields)
+
+
+def a_tracker() -> ExpectationTracker:
+    return ExpectationTracker(
+        planned_lap_time_ms=PLANNED_LAP_MS,
+        planned_fuel_per_lap_l=PLANNED_BURN, planned_wear_per_lap=0.03161,
+        practice_lap_samples=8, practice_fuel_samples=8)
+
+
+def test_the_plan_starts_on_practice_and_says_so():
+    tracker = a_tracker()
+    expectation = tracker.current()
+    assert expectation.fuel_per_lap_l == PLANNED_BURN
+    assert expectation.fuel_source == PRACTICE
+    assert expectation.fuel_samples == 8
+    assert tracker.burn_vs_plan() is None
+
+
+def test_the_race_burn_replaces_practice_after_five_green_laps():
+    """Five and not three: the running median is inside 2% after one lap, but
+    the zero-versus-one-stop decision at the measured race turned on 1.80%,
+    which three laps cannot resolve at 95%."""
+    tracker = a_tracker()
+    for lap_num in range(1, 6):                  # lap one never counts
+        tracker.note_lap(a_race_lap(lap_num, 119_000, 6.75))
+    assert tracker.current().fuel_source != RACE
+    tracker.note_lap(a_race_lap(6, 119_000, 6.75))
+    expectation = tracker.current()
+    assert expectation.fuel_source == RACE
+    assert expectation.fuel_per_lap_l == pytest.approx(6.75)
+    assert expectation.fuel_samples == 5
+    assert tracker.burn_vs_plan() == pytest.approx(-0.107, abs=0.005)
+
+
+def test_a_lap_he_was_saving_on_is_not_evidence_about_the_burn():
+    """Measured: a trailing window admitting his two fuel-saving laps read
+    12.17% under the real rate, and would have planned the rest of the race on
+    a burn he was only achieving by lifting."""
+    tracker = a_tracker()
+    for lap_num in range(2, 7):
+        tracker.note_lap(a_race_lap(lap_num, 119_000, 6.75))
+    for lap_num in (7, 8):
+        tracker.note_lap(a_race_lap(lap_num, 124_000, 4.44,
+                                    short_shift_rpm=500.0))
+    assert tracker.race_fuel_per_lap_l() == pytest.approx(6.75)
+
+
+def test_an_incident_lap_is_not_evidence_about_the_burn_either():
+    tracker = a_tracker()
+    for lap_num in range(2, 7):
+        tracker.note_lap(a_race_lap(lap_num, 119_000, 6.75))
+    tracker.note_lap(a_race_lap(7, 140_000, 2.10))     # a crawl, 18% over
+    assert tracker.race_fuel_per_lap_l() == pytest.approx(6.75)
+
+
+def test_the_achieved_median_includes_everything_the_clock_saw():
+    """An incident lap does not make the car slower, but it does consume the
+    clock - and the clock is what a timed race's distance is predicted from."""
+    tracker = a_tracker()
+    for lap_num in range(1, 6):
+        tracker.note_lap(a_race_lap(lap_num, 119_000, 6.75))
+    tracker.note_lap(a_race_lap(6, 140_000, 2.10))
+    assert tracker.race_lap_time_ms() == 119_000
+    assert tracker.achieved_lap_time_ms() == 119_000
+    for lap_num in (7, 8, 9, 10):
+        tracker.note_lap(a_race_lap(lap_num, 140_000, 2.10))
+    assert tracker.race_lap_time_ms() == 119_000        # the car's pace
+    assert tracker.achieved_lap_time_ms() > 119_000     # what the clock saw
+
+
+def test_the_noise_floor_is_measured_here_and_never_inherited():
+    """The 0.918 s on record is a Monza/Porsche figure over a population that
+    still contained incident laps. This car at this circuit measures 2.04 s -
+    2.7 times Monza - and a builder who inherited the recorded number would
+    over-claim detectability by about a factor of two."""
+    tracker = a_tracker()
+    assert tracker.sigma_ms() is None                # nothing to measure yet
+    for lap_num, ms in enumerate(
+            (117_724, 117_318, 120_073, 119_170, 119_557), start=2):
+        tracker.note_lap(a_race_lap(lap_num, ms, 6.75))
+    sigma = tracker.sigma_ms()
+    assert sigma is not None and 900 < sigma < 1600
+
+
+def test_no_sigma_means_no_pace_claim_at_all():
+    tracker = a_tracker()
+    tracker.note_lap(a_race_lap(2, 125_000, 6.75))
+    tracker.note_lap(a_race_lap(3, 125_100, 6.75))
+    tracker.note_lap(a_race_lap(4, 125_200, 6.75))
+    assert tracker.pace_vs_plan_ms() is not None      # the number exists
+    assert tracker.pace_detectable_ms() is None       # but it means nothing
+    assert tracker.pace_is_real() is False
+    snapshot = tracker.as_snapshot()
+    assert snapshot["paceVsPlanMs"] is None
+    assert snapshot["paceVsPlanNote"] == "not yet measurable"
+
+
+def test_the_detection_floor_matches_the_measured_pairs():
+    """Two useful pairs at this car's spread: 2.0 s/lap over 4 laps, and
+    1.0 s/lap over 16."""
+    assert detectable_delta_ms(4, 2037.0) == pytest.approx(2000, abs=30)
+    assert detectable_delta_ms(16, 2037.0) == pytest.approx(1000, abs=20)
+    assert detectable_delta_ms(1, 2037.0) is None
+    assert detectable_delta_ms(10, None) is None
+
+
+def test_wear_never_stops_being_the_plans_assumption():
+    """Confirmed on the measured race: zero gauge readings across all fifteen
+    laps. And the evidence contradicts itself - the three readings on file
+    have the FRONTS wearing faster while the temperature gap points at the
+    rear. The contradiction is surfaced, never averaged."""
+    tracker = a_tracker()
+    for lap_num in range(2, 12):
+        tracker.note_lap(a_race_lap(lap_num, 119_000, 6.75))
+    expectation = tracker.current()
+    assert expectation.wear_per_lap == 0.03161
+    assert "assumption" in expectation.wear_source
+    line = tracker.audit_line()
+    assert "no gauge reading was entered during the race" in line
+    assert "FRONTS wearing faster" in line
 
 
 # ------------------------------------------------------- representative pace
@@ -576,59 +1236,69 @@ def test_the_final_crossing_gap_is_silence_not_a_box_call():
 
 def test_the_fold_never_fires_on_the_chequered_crossing():
     """A plan whose last stop sits two laps before the end puts the fold's
-    overdue trigger exactly on the final lap - and the fold used to run
-    there, voicing "Staying out? You can make it." 200 ms before the
-    chequer and recording an accepted stay-out about a race already over."""
+    overdue trigger exactly on the final lap - and the fold used to run there,
+    voicing "Staying out? You can make it." 200 ms before the chequer and
+    recording an accepted stay-out about a race already over."""
     plan = {"stints": [
         {"laps": 13, "compound": "RS", "start_lap": 1},
         {"laps": 2, "compound": "RS", "start_lap": 14},
     ]}
+    now = FakeMonotonic()
     race = RaceCoordinator(plan, fuel_per_lap_l=PLANNED_BURN,
-                           wear_per_lap=0.03161, fuel_capacity_l=100.0)
+                           wear_per_lap=0.03161, fuel_capacity_l=100.0,
+                           lap_time_ms=PLANNED_LAP_MS, now=now)
     assert race.arm(a_timed_context(), a_timed_context()) is True
     race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 0}))
+    now.advance(STANDING_START_S)
     calls = []
     for lap_num in range(1, 16):
+        now.advance(LAPS[lap_num][0] / 1000.0)
         call = race.handle(lap_event(lap_num))
         if call:
             calls.append(call)
-    finish = race.handle(SessionEvent(EventKind.RACE_FINISHED,
-                                      {"laps": 15, "position": 5}))
-    assert finish.kind == CHEQUER
+    assert calls[-1].kind == CHEQUER
+    assert calls[-1].lap == 15
     assert not any(c.kind == STAY_OUT for c in calls)
-    assert not any(c.lap == 15 for c in calls)
 
 
-def test_a_timed_race_that_outruns_its_estimate_keeps_the_engineer_talking():
-    """A timed race's lap count is the plan's own estimate. When it runs
-    out with two minutes still on the packet clock, the driver is genuinely
-    going round again - the countdown stretches by one instead of
-    `_crossing_the_line` silencing every call on a real racing lap."""
-    race = tonight()
+def test_the_clock_and_not_the_plan_decides_how_far_a_timed_race_goes():
+    """**The whole reason the app owns a clock.** The distance used to be the
+    approved plan's own estimate, frozen at arming, patched by GT7's packet
+    clock when it ran out a lap early. Here the plan expects thirteen laps and
+    the race has time for fifteen: the countdown follows the clock and the
+    pace, and the engineer is still talking on laps 14 and 15."""
+    plan = {"stints": [{"laps": 13, "compound": "RS", "start_lap": 1}]}
+    now = FakeMonotonic()
+    race = RaceCoordinator(plan, fuel_per_lap_l=PLANNED_BURN,
+                           wear_per_lap=0.03161, fuel_capacity_l=100.0,
+                           lap_time_ms=PLANNED_LAP_MS, now=now)
+    race.arm(a_timed_context(), a_timed_context())
+    assert race.state.laps_total == 13          # the plan's own estimate
     race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 0}))
-    for lap_num in range(1, 15):
+    now.advance(STANDING_START_S)
+    for lap_num in range(1, 14):
+        now.advance(LAPS[lap_num][0] / 1000.0)
         race.handle(lap_event(lap_num))
-    event = lap_event(15)
-    event.data["remaining_time_ms"] = 120_000
-    race.handle(event)
-    assert race.state.laps_total == 16
-    assert race.state.laps_remaining() == 1
-    # And the flag still ends it in the usual way.
-    finish = race.handle(SessionEvent(EventKind.RACE_FINISHED,
-                                      {"laps": 16, "position": 5}))
-    assert finish.kind == CHEQUER
+    assert race.state.laps_total == 15          # the clock's answer
+    assert race.state.finished is False
 
 
-def test_a_final_lap_with_no_clock_left_is_not_extended():
-    """The extension needs the clock's word; the plain crossing - no
-    meaningful time remaining - stays the quiet gap before the chequer."""
-    race = tonight()
+def test_gt7s_own_race_clock_decides_nothing():
+    """The driver measured it as inaccurate. Every lap in this replay carries
+    a nonsense figure in `remaining_time_ms` and the race is unaffected - the
+    field still travels because a screen may want to show it, and nothing in
+    race control may read it."""
+    now = FakeMonotonic()
+    race = tonight(now)
     race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 0}))
+    now.advance(STANDING_START_S)
     for lap_num in range(1, 15):
-        race.handle(lap_event(lap_num))
-    event = lap_event(15)
-    event.data["remaining_time_ms"] = 0
-    assert race.handle(event) is None
+        now.advance(LAPS[lap_num][0] / 1000.0)
+        event = lap_event(lap_num)
+        # Wildly wrong, in both directions, on alternate laps.
+        event.data["remaining_time_ms"] = 0 if lap_num % 2 else 9_000_000
+        race.handle(event)
+    assert race.state.finished is False
     assert race.state.laps_total == 15
 
 
@@ -638,84 +1308,240 @@ def temp_state(**overrides) -> RaceState:
     fields = dict(lap=1, laps_total=15, position=4,
                   temp_window_front=(70.0, 77.0),
                   temp_window_rear=(77.0, 88.0),
-                  temp_laps_to_window=2)
+                  temp_laps_to_window=2, tyre_compound="RS",
+                  # The measured association for THIS car at THIS circuit.
+                  # None everywhere else, and None means no conserve call.
+                  temp_gap_conserve_c=8.0, temp_gap_quiet_c=6.7,
+                  temp_gap_front_floor_c=72.0, temp_gap_s_per_c=0.89)
     fields.update(overrides)
     return RaceState(**fields)
 
 
-def test_cold_at_the_green_needs_a_real_margin_below_the_window():
+def test_cold_at_the_green_needs_a_real_margin_below_the_range():
     cold = temp_state()
     cold.note_temps(1, 59.3, 61.5)
     call = next_call(cold)
     assert call.kind == TYRE_TEMP and "Tyres cold" in call.call
-    assert "2 laps to window" in call.reason
+    assert "2 laps to come up" in call.reason
 
     warm = temp_state()
     warm.note_temps(1, 68.1, 71.3)      # the real grid-warmed lap one
     assert next_call(warm) is None
 
 
-def test_in_window_confirms_only_a_warning_already_given():
-    state = temp_state()
-    state.note_temps(1, 59.3, 61.5)
-    state.record(next_call(state))
+def test_there_is_no_push_call_because_there_is_no_window():
+    """The driver asked to be told when the tyres are in their optimal window
+    so he can push. **No such window has ever been published for GT7** - the
+    question was put to GTPlanet in April 2025 and answered "I didn't test the
+    lower range", PD's manual documents the HUD frame as simply redder with
+    heat, and inventing a lower edge is exactly how 85-110 degC got into this
+    codebase. A set sitting squarely inside the measured running range must
+    therefore produce no licence to push."""
+    state = temp_state(lap=2)
+    state.note_temps(1, 73.0, 78.3)
     state.lap = 2
-    state.note_temps(2, 73.0, 78.3)
+    state.note_temps(2, 73.2, 78.5)
     call = next_call(state)
-    assert call.kind == TYRE_TEMP and "in window" in call.call
-
-    unwarned = temp_state()
-    unwarned.note_temps(1, 68.1, 71.3)  # no cold call was made
-    unwarned.lap = 2
-    unwarned.note_temps(2, 73.0, 78.3)
-    assert next_call(unwarned) is None
+    assert call is None or "push" not in call.spoken().lower()
 
 
-def test_each_temperature_occasion_is_said_once_per_stint():
-    state = temp_state()
-    state.note_temps(1, 59.3, 61.5)
-    state.record(next_call(state))
-    state.lap = 2
-    state.note_temps(2, 62.0, 64.0)     # still cold
+def test_the_warm_up_plateau_is_announced_instead():
+    """What CAN be measured is the warm-up curve flattening. It is a statement
+    about a curve, not a claim about grip, and it says nothing about pushing."""
+    state = temp_state(lap=0)
+    for lap_num, front, rear in ((1, 62.0, 65.0), (2, 70.0, 76.0),
+                                 (3, 73.0, 79.0), (4, 73.4, 79.3),
+                                 (5, 73.6, 79.5)):
+        state.lap = lap_num
+        state.note_temps(lap_num, front, rear)
+        call = next_call(state)
+        if call is not None:
+            state.record(call)
+    assert "up-to-temp" in state.temp_said
+    said = next(c for c in (call,) if c is not None)
+    assert said.call == "Tyres are up to temperature."
+    assert "settled" in said.reason
+    assert "window" not in said.spoken().lower()
+
+
+def test_the_conserve_call_fires_on_the_measured_gap():
+    """`rear - front` correlates with lap time at +0.89 s per degree across 17
+    of his own laps, sign-stable between practice and race. Absolute
+    temperature does not: the front is r = -0.13 within session."""
+    state = temp_state(lap=6)
+    state.note_temps(6, 76.3, 86.0)     # gap 9.7, front well up to temperature
+    call = next_call(state)
+    assert call.kind == TYRE_TEMP and call.tag == "conserve"
+    assert "Ease" in call.call
+    assert "over the fronts" in call.reason
+    # An association measured on his own laps - never a physical optimum.
+    assert "optimal" not in call.spoken().lower()
+    assert "window" not in call.spoken().lower()
+
+
+def test_a_cold_front_cannot_fake_a_hot_rear():
+    """The gap conflates two mechanisms: one practice lap reads 8.3 degC
+    because the FRONT was at 67, not because the rear was hot. Without the
+    front gate the call fires on an out lap and asks him to back off a set
+    that is still warming up."""
+    state = temp_state(lap=2)
+    state.note_temps(2, 67.0, 75.3)     # gap 8.3, front nowhere near ready
+    call = next_call(state)
+    assert call is None or call.tag != "conserve"
+
+
+def test_nothing_speaks_on_the_external_wear_threshold():
+    """Racing Soft 88 degC is stored, sourced and labelled - and untestable on
+    his own data: 0 of 318 Monza corner observations reach it at all, and
+    there are 15 gauge readings across 175 laps with none in either race. It
+    is a cross-check the export names beside the measured temperature, and no
+    live call rests on it."""
+    state = temp_state(lap=6, temp_gap_conserve_c=None,
+                       temp_gap_quiet_c=None, temp_gap_front_floor_c=None)
+    state.note_temps(6, 82.0, 92.0)     # well past the RS threshold
+    call = next_call(state)
+    assert call is None or call.tag != "conserve"
+
+
+def test_the_conserve_call_does_not_exist_where_the_gap_was_refuted():
+    """**The association is not a law.** Fitted on 17 of his own laps at Yas
+    Marina it is +0.87 s/degC at t = 3.52; tested across 95 clean laps at
+    three cars and three circuits it does not hold - Monza comes back
+    +0.011 +/- 0.077, z = -11.4 against the prior, on a WIDER gap range. So
+    the thresholds live in a scoped record and the call simply does not exist
+    where that record does not."""
+    from pitcrew.store.tyres import gap_association_for, scope_key
+
+    # **Resolved from the event row as the app stores it**, through the same
+    # `context_from_event` the controller uses. Asserting against a hand-typed
+    # "Yas Marina" is what let a scope that matched nothing pass for a whole
+    # build.
+    here = context_from_event(EVENT_ROW)
+    assert scope_key(here.car, here.track, here.layout) == (
+        "yas-marina-circuit-full-course/ford-shelby-gt350r-16")
+    assert gap_association_for(here.car, here.track, here.layout) is not None
+
+    monza = context_from_event({
+        "car_name": "Porsche 911 RSR (991) '17",
+        "track": "Autodromo Nazionale Monza", "layout": None,
+        "race_type": "time", "race_laps": 50})
+    assert gap_association_for(monza.car, monza.track, monza.layout) is None
+    assert gap_association_for(None, "Yas Marina Circuit") is None
+    assert gap_association_for("Ford Shelby GT350R '16", None) is None
+
+    unscoped = temp_state(lap=6, temp_gap_conserve_c=None,
+                          temp_gap_quiet_c=None, temp_gap_front_floor_c=None)
+    unscoped.note_temps(6, 76.3, 90.0)  # a gap of 14 degrees, and silence
+    call = next_call(unscoped)
+    assert call is None or call.tag != "conserve"
+
+
+def test_the_refuted_prior_carries_its_own_falsification():
+    """"Refuted at Monza" is a fact the app carries, not one somebody
+    remembers."""
+    from pitcrew.store.tyres import GAP_PRIOR, WEAR_ONSET_PRIOR
+
+    assert GAP_PRIOR.status == "REFUTED-OUT-OF-SCOPE"
+    assert any("REFUTED" in line for line in GAP_PRIOR.evidence)
+    assert len(GAP_PRIOR.speakable_scopes) == 1
+    # And the external threshold may be spoken nowhere at all.
+    assert WEAR_ONSET_PRIOR.speakable_scopes == ()
+
+
+def test_a_gap_under_the_measured_threshold_says_nothing():
+    state = temp_state(lap=6)
+    state.note_temps(6, 82.0, 88.5)     # gap 6.5 - under the conserve edge
     assert next_call(state) is None
 
 
+def test_conserve_is_said_once_and_re_arms_only_on_both_conditions():
+    """1.3 degC of hysteresis between the trigger and the quiet threshold,
+    plus two laps. Measured, backing off cools the rear about eight times
+    faster than pushing heats it, so two laps is a real change."""
+    state = temp_state(lap=6)
+    state.note_temps(6, 76.3, 86.0)
+    state.record(next_call(state))
+    assert state.temp_conserve_lap == 6
+
+    state.lap = 7                       # still hot, and too soon anyway
+    state.note_temps(7, 76.0, 85.5)
+    assert next_call(state) is None or next_call(state).tag != "conserve"
+
+    state.lap = 8                       # two laps on, but the gap is still 8+
+    state.note_temps(8, 75.0, 83.5)
+    assert "conserve" in state.temp_said
+
+    state.lap = 9                       # cooled back under the quiet edge
+    state.note_temps(9, 74.0, 80.0)
+    next_call(state)
+    assert "conserve" not in state.temp_said
+
+    state.lap = 10                      # and it may be said again
+    state.note_temps(10, 76.0, 85.0)
+    again = next_call(state)
+    assert again is not None and again.tag == "conserve"
+
+
 def test_the_baseline_offset_between_axles_is_never_a_finding():
-    """Rears 8-11 degC hotter than fronts, every lap, is this car's normal."""
-    state = temp_state(lap=0)
+    """Rears 8-11 degC hotter than fronts, every lap, is this car's normal -
+    but only where the gap stays under the measured conserve threshold."""
+    state = temp_state(lap=0, temp_window_front=None, temp_window_rear=None,
+                       temp_laps_to_window=None, temp_gap_conserve_c=None,
+                       temp_gap_quiet_c=None,
+                       temp_gap_front_floor_c=None)
     for lap_num, (front, rear) in enumerate(
-            [(73.0, 81.0), (74.0, 82.0), (73.5, 81.5), (73.8, 82.3),
-             (73.2, 81.8), (73.6, 82.0)], start=1):
+            [(73.0, 79.0), (74.0, 80.0), (73.5, 79.5), (73.8, 80.3),
+             (73.2, 79.8), (73.6, 80.0)], start=1):
         state.lap = lap_num
         state.note_temps(lap_num, front, rear)
         call = next_call(state)
-        assert call is None or call.kind != TYRE_TEMP
+        if call is not None:
+            state.record(call)
+        # The warm-up plateau is allowed - it is a statement about a curve,
+        # and so is the routine status call. What must never fire is anything
+        # about the balance between the axles.
+        assert (call is None or call.kind != TYRE_TEMP
+                or call.tag == "up-to-temp"), (lap_num, call)
 
 
-def test_an_axle_departing_its_own_baseline_is_called_once():
-    state = temp_state(lap=0)
-    steady = [(73.0, 81.0), (73.5, 81.5), (73.2, 81.2), (73.4, 81.4),
-              (73.1, 81.3)]
+def test_a_rear_running_away_is_the_conserve_call_where_it_is_measured():
+    """**"Rears heating" has been retired.** It compared the rear against its
+    own baseline and needed several steady laps to establish one; where the
+    gap association has been measured it says the same thing sooner and in a
+    form he can act on, and it needs no measured temperature range to do it.
+    Where the association has NOT been measured, nothing is said either way -
+    which is the honest replacement for a baseline call that would have fired
+    on a relationship the data refutes."""
+    state = temp_state(lap=0, temp_window_front=None, temp_window_rear=None,
+                       temp_laps_to_window=None)
+    # A settled gap of six degrees - this car's normal, and under the measured
+    # conserve threshold, so nothing is said about it.
+    steady = [(73.0, 79.0), (73.5, 79.5), (73.2, 79.2), (73.4, 79.4),
+              (73.1, 79.3)]
     for lap_num, (front, rear) in enumerate(steady, start=1):
         state.lap = lap_num
         state.note_temps(lap_num, front, rear)
-        next_call(state)
-    for lap_num, rear in ((6, 87.0), (7, 88.0)):
-        state.lap = lap_num
-        state.note_temps(lap_num, 73.3, rear)
         call = next_call(state)
-    assert call.kind == TYRE_TEMP
-    assert "Rears heating" in call.call
-    assert "Mind traction" in call.reason
+        if call is not None:
+            state.record(call)
+        assert call is None or call.tag != "conserve"
+    state.lap = 6
+    state.note_temps(6, 73.3, 87.0)            # the rear runs away: gap 13.7
+    call = next_call(state)
+    assert call.kind == TYRE_TEMP and call.tag == "conserve"
+    assert "heating" not in call.call
     state.record(call)
-    state.lap = 8
-    state.note_temps(8, 73.2, 88.5)
+    state.lap = 7
+    state.note_temps(7, 73.3, 88.0)
     following = next_call(state)
-    assert following is None or following.kind != TYRE_TEMP
+    assert following is None or following.tag != "conserve"
 
 
 def test_fronts_going_first_may_move_brake_balance_rearward_only():
-    state = temp_state(lap=0)
+    state = temp_state(lap=0, temp_window_front=None, temp_window_rear=None,
+                       temp_laps_to_window=None, temp_gap_conserve_c=None,
+                       temp_gap_quiet_c=None,
+                       temp_gap_front_floor_c=None)
     steady = [(73.0, 81.0), (73.5, 81.5), (73.2, 81.2), (73.4, 81.4),
               (73.1, 81.3)]
     for lap_num, (front, rear) in enumerate(steady, start=1):
@@ -732,16 +1558,17 @@ def test_fronts_going_first_may_move_brake_balance_rearward_only():
 
 
 def test_a_fresh_sets_warm_up_is_not_its_own_baseline():
-    """`clear_stint` empties the temp history on a tyre change, and the
-    trend baseline used to filter on the ABSOLUTE race lap - so after a
-    lap-10 stop every entry qualified, the fresh set's cold laps entered
-    its own baseline, and its normal steady temperature read as "heating"
-    in every race with a tyre stop. The baseline is positional within the
-    set's history: its first laps are its warm-up, excluded."""
+    """`clear_stint` empties the temp history on a tyre change, and the trend
+    baseline used to filter on the ABSOLUTE race lap - so after a lap-10 stop
+    every entry qualified, the fresh set's cold laps entered its own baseline,
+    and its normal steady temperature read as "heating" in every race with a
+    tyre stop."""
     from pitcrew.race.calls import clear_stint
-    # A longer race than tonight's, so laps 16-17 are mid-race laps rather
-    # than the final-crossing gap, where every candidate stands down anyway.
-    state = temp_state(lap=0, laps_total=25)
+    state = temp_state(lap=0, laps_total=25, temp_window_front=None,
+                       temp_window_rear=None, temp_laps_to_window=None,
+                       temp_gap_conserve_c=None,
+                       temp_gap_quiet_c=None,
+                       temp_gap_front_floor_c=None)
     for lap_num in range(1, 11):
         state.lap = lap_num
         state.note_temps(lap_num, 73.0, 81.0)
@@ -759,11 +1586,13 @@ def test_a_fresh_sets_warm_up_is_not_its_own_baseline():
         assert call is None or "heating" not in call.call, (lap_num, call)
 
 
-def test_no_window_means_no_absolute_temperature_claim():
-    """Missing is null: without a measured window the only allowed form is
+def test_no_range_means_no_absolute_temperature_claim():
+    """Missing is null: without a measured range the only allowed form is
     relative - both axles still climbing - at reduced confidence."""
     state = temp_state(temp_window_front=None, temp_window_rear=None,
-                       temp_laps_to_window=None)
+                       temp_laps_to_window=None, temp_gap_conserve_c=None,
+                       temp_gap_quiet_c=None,
+                       temp_gap_front_floor_c=None)
     state.note_temps(1, 59.3, 61.5)
     assert next_call(state) is None     # one lap proves nothing
     state.lap = 2
@@ -822,10 +1651,14 @@ def test_a_completed_lap_carries_its_axle_temperature_means():
     assert lap.tyre_temp_rear_c == pytest.approx(82.0, abs=0.5)
 
 
-def test_a_timed_race_finishes_when_the_clock_has_run_out():
-    """`laps_in_race` is 0 for a timed race, so the lap-count finish can
-    never fire - the measured 30-minute race ended with no RACE_FINISHED at
-    all and the engineer mid-box-call. The clock is the finish signal."""
+def test_the_session_state_no_longer_finishes_a_timed_race():
+    """It used to, off `remaining_time_ms` - a field the driver measured as
+    inaccurate, gated on an unverified assumption about what GT7 does with it
+    after expiry, and logged once a lap precisely because nothing had
+    certified that. **The finish moved to the race layer**, which owns a
+    monotonic timer started at the green and reconciles it against these very
+    lap times. This class sees a lap count and nothing else, and a timed race
+    has none."""
     state = SessionState(SessionKind.RACE)
     state.update(make_packet(speed_ms=0.0, remaining_time_ms=1_800_000))
     events = state.update(make_packet(speed_ms=40.0,
@@ -834,15 +1667,12 @@ def test_a_timed_race_finishes_when_the_clock_has_run_out():
     events = state.update(make_packet(speed_ms=40.0, last_lap_ms=121_511,
                                       remaining_time_ms=1_000_000))
     assert [e.kind for e in events] == [EventKind.LAP_COMPLETED]
-    # A transient -1 - the "not in race" sentinel, not an expired clock -
-    # must not finish the race on the crossing it happens to land on.
-    events = state.update(make_packet(speed_ms=40.0, last_lap_ms=120_000,
-                                      remaining_time_ms=-1))
-    assert [e.kind for e in events] == [EventKind.LAP_COMPLETED]
+    # The clock reading zero decides nothing here any more.
     events = state.update(make_packet(speed_ms=40.0, last_lap_ms=119_170,
                                       remaining_time_ms=0))
-    assert [e.kind for e in events] == [EventKind.LAP_COMPLETED,
-                                        EventKind.RACE_FINISHED]
+    assert [e.kind for e in events] == [EventKind.LAP_COMPLETED]
+    # And it still travels, for anything that only wants to show it.
+    assert events[0].data["remaining_time_ms"] == 0
 
 
 def test_a_lap_race_never_takes_the_timed_finish_branch():
@@ -871,3 +1701,54 @@ def test_the_outcome_names_the_fold():
     assert "plan called for 2 stops" in text
     assert "folded to the driver's stay-out on lap 9" in text
     assert "11 calls offered and not taken" in text
+
+
+# ------------------------------------------------- one rule for one identity
+
+def test_an_accented_car_name_folds_rather_than_fracturing():
+    """**The third identity bug of the same family, 17 Aug 2026.**
+
+    `str.isalnum()` returns True for "a-acute", so a rule written as "keep the
+    alphanumerics" kept it and wrote `lamborghini-hurac<a>n-gt3-15`, while a
+    rule written as a regex over `[a-z0-9]` treated it as a separator and
+    produced `lamborghini-hurac-n-gt3-15`. Two rules, one identity, and a
+    lookup for the Huracan could never reach its own 300 grip observations or
+    its 8 fitted models. Both sides were internally consistent, which is why
+    nothing failed loudly.
+
+    `slugify` is now the one rule and it folds to ASCII."""
+    from pitcrew.store.tyres import scope_key, slugify
+
+    assert slugify("Lamborghini Huracán GT3 '15") == (
+        "lamborghini-huracan-gt3-15")
+    assert slugify("Nürburgring") == "nurburgring"
+    assert slugify("Citroën") == "citroen"
+    # The composed scope, from the event row as the app stores it.
+    assert scope_key("Lamborghini Huracán GT3 '15",
+                     "Watkins Glen International", "Long Course") == (
+        "watkins-glen-international-long-course/lamborghini-huracan-gt3-15")
+
+
+def test_a_name_with_nothing_latin_in_it_still_gets_its_own_identity():
+    """Every such name collapsing to "" would be the same bug wearing a
+    different hat, so the fallback is a digest of the original."""
+    from pitcrew.store.tyres import slugify
+
+    suzuka, fuji = "鈴鹿", "富士"
+    assert slugify(suzuka) == slugify(suzuka)      # stable
+    assert slugify(suzuka) != slugify(fuji)        # and distinct
+    assert slugify(suzuka)
+
+
+def test_the_layout_is_part_of_the_circuit_identity():
+    """Joined before slugging, so "Yas Marina Circuit" plus "Full Course" is
+    one key. The ordering is part of the identity and not a formatting
+    choice."""
+    from pitcrew.store.tyres import scope_key
+
+    full = scope_key("car", "Yas Marina Circuit", "Full Course")
+    south = scope_key("car", "Yas Marina Circuit", "South Course")
+    bare = scope_key("car", "Yas Marina Circuit")
+    assert full != south != bare
+    assert full.startswith("yas-marina-circuit-full-course/")
+

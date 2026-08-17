@@ -36,7 +36,6 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from pitcrew.analysis.refuel import MAX_PLAUSIBLE_LPS
-from pitcrew.diagnostics import log
 from pitcrew.telemetry.packet import GT7Packet
 from pitcrew.telemetry.recorder import SAMPLE_HZ
 
@@ -94,13 +93,24 @@ TYRE_SWAP_MAX_SPEED_KPH = 10.0
 RACE_START_SPEED_KMH = 80.0
 GRID_LOW_SPEED_KMH = 30.0
 
-# A timed race is finished when a lap completes with this little on the
-# clock.  **`remaining_time_ms` is a signed field whose -1 means "not in a
-# race" (packet.py), not "expired"** - a plain `<= 0` here would let one
-# transient -1 mid-race end it on the next crossing.  Zero is what the clock
-# actually shows at expiry; the small allowance above it is jitter margin,
-# nothing more.
-TIMED_RACE_EXPIRED_MAX_MS = 1_000
+# **The GT7 race clock no longer ends a race here, and nothing in race
+# control reads it.**
+#
+# A `TIMED_RACE_EXPIRED_MAX_MS` gate used to sit at this point: a lap
+# completing with `remaining_time_ms` at or just above zero finished the race.
+# It rested on an unverified assumption - that GT7 clamps the field at zero
+# after expiry rather than going negative - and it was logged once a lap
+# precisely because nothing had certified that.
+#
+# It is gone because the assumption is not the problem. **The driver measured
+# GT7's race clock as inaccurate**, so a finish gated on it is a finish gated
+# on a number he does not trust. The race layer now runs its own monotonic
+# timer started at the green (`race/clock.py`), corroborated against the sum
+# of GT7's own exact per-lap times, and it decides the finish: a lap
+# completing with the app timer expired is the final lap.
+#
+# `remaining_time_ms` still travels on LAP_COMPLETED for anything that merely
+# wants to show it. Nothing may decide anything on it.
 
 
 class Phase(enum.Enum):
@@ -203,15 +213,11 @@ class SessionState:
         self._temp_sum_front = 0.0
         self._temp_sum_rear = 0.0
         self._temp_frames = 0
-        # Whether a race clock was ever seen counting. A timed race is the
-        # one kind whose finish the lap counter cannot see - `laps_in_race`
-        # is -1 or 0 for it, so `laps_remaining()` is None and RACE_FINISHED
-        # never fired: one measured 30-minute race ended with the engineer
-        # mid-box-call and no chequered flag, because as far as this class
-        # was concerned the race never ended at all. The clock is the finish
-        # signal there: a lap completed after `remaining_time_ms` has run out
-        # is the final lap.
-        self._timed_clock_ran = False
+        # **No race-clock state is kept here any more.** A `_timed_clock_ran`
+        # flag used to exist so that a timed race could be finished off
+        # `remaining_time_ms`; the driver measured that clock as inaccurate,
+        # and the finish moved to the race layer's own timer. Keeping a
+        # shadow of it here would only invite the dependency back.
 
     # ------------------------------------------------------------------ state
 
@@ -295,9 +301,6 @@ class SessionState:
             self._temp_sum_front += (temps[0] + temps[1]) / 2.0
             self._temp_sum_rear += (temps[2] + temps[3]) / 2.0
             self._temp_frames += 1
-        if self._phase is Phase.RACING and packet.remaining_time_ms > 0:
-            self._timed_clock_ran = True
-
         events.extend(self._update_phase(packet, now))
         events.extend(self._update_pit(packet, now))
         events.extend(self._check_lap(packet, now))
@@ -527,26 +530,14 @@ class SessionState:
             "lap": lap,
             "remaining_time_ms": p.remaining_time_ms,
         })]
-        if self._timed_clock_ran:
-            # Written down on purpose, one line per lap: nothing persists
-            # this field, and the finish gate above rests on GT7 clamping
-            # the clock at zero after expiry - a claim no recorded session
-            # has yet certified. If a post-expiry lap ever logs a negative
-            # number here, the gate is wrong and this line is the evidence.
-            log("session").info(
-                "lap %d completed with %d ms on the race clock",
-                lap.lap_num, p.remaining_time_ms)
 
         remaining = self.laps_remaining()
-        # A timed race's finish: the clock was seen running and has now run
-        # out, so the lap just completed was the final one. Gated on the lap
-        # count being unknown so a lap race - whose `remaining_time_ms` GT7
-        # reports as -1 - can never take this branch, and gated at zero
-        # rather than `<= 0` so the -1 sentinel showing transiently
-        # mid-race cannot finish it either.
-        timed_expired = (self._laps_in_race <= 0 and self._timed_clock_ran
-                         and 0 <= p.remaining_time_ms < TIMED_RACE_EXPIRED_MAX_MS)
-        if self.kind is SessionKind.RACE and (remaining == 0 or timed_expired):
+        # **A lap race finishes here; a timed race does not.** The lap count
+        # is a regulation and this class can see it. The clock is not - see
+        # the note where `TIMED_RACE_EXPIRED_MAX_MS` used to be - so a timed
+        # race's finish belongs to the race layer, which has an accurate timer
+        # of its own and reconciles it against these very lap times.
+        if self.kind is SessionKind.RACE and remaining == 0:
             self._phase = Phase.FINISHED
             events.append(SessionEvent(EventKind.RACE_FINISHED, {
                 "laps": len(self._laps),
