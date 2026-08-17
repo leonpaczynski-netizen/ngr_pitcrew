@@ -116,6 +116,24 @@ class HapticsEngine:
         self._suspended = False
         self._stopped = False
         self.error: str | None = None
+        # **Refusal: the open-time rule, arriving at runtime.**
+        #
+        # `_open` refuses a stream whose negotiated rate is not the one the
+        # mix is generated for, on the driver's own verdict that wrong output
+        # is worse than none. Until 17 Aug 2026 that check ran once, against
+        # the terms the stream opened with - and that evening's failure was a
+        # stream that opened honestly at 48 kHz and was then pulled at 30.6.
+        # Every effect arrived transposed by 0.64x, the engine and road beds
+        # landed at 20 and 24 Hz - under the amplifier's fixed 25 Hz low-cut -
+        # and the app went on driving the piston with it for nineteen minutes
+        # after it had written down exactly what was wrong. The driver felt a
+        # constant drone that tracked nothing, and had been told the haptics
+        # were finished.
+        #
+        # Same rule, same reason, now applied while the stream is running:
+        # what cannot be rendered correctly is not rendered at all.
+        self._refused: str | None = None
+        self.refusals = 0
         self.faded_out = 0
         self.callbacks = 0
         # **Frames, not only blocks.** The block count alone cannot tell a
@@ -168,6 +186,40 @@ class HapticsEngine:
         self._wanted[:] = 0.0
         self._generation += 1
 
+    def refuse(self, reason: str) -> bool:
+        """Stop sending, because what we would send is wrong.
+
+        Neither a stop nor a suspend, and the difference is the point: the
+        stream stays open and the callback goes on being handed blocks, so the
+        frame clock - the instrument that convicts a transposed stream, and
+        the only one that can see it come back - keeps being measured. What
+        changes is that nothing reaches the card.
+
+        It fades rather than mutes, by the same path and for the same reason a
+        dead telemetry feed does: an instant zero is a discontinuity, and a
+        discontinuity here is a thump.
+
+        Returns True only the first time, so the caller can say it once rather
+        than every report cycle.
+        """
+        first = self._refused is None
+        self._refused = reason
+        if first:
+            self.refusals += 1
+        return first
+
+    def allow(self) -> bool:
+        """Send again. True only if this actually lifted a refusal."""
+        if self._refused is None:
+            return False
+        self._refused = None
+        return True
+
+    @property
+    def refused(self) -> str | None:
+        """Why nothing is being sent, or None if it is."""
+        return self._refused
+
     @property
     def running(self) -> bool:
         return self._stream is not None and not self._suspended
@@ -184,6 +236,9 @@ class HapticsEngine:
     def describe(self) -> str:
         if self.error:
             return self.error
+        if self._refused is not None:
+            return (f"The transducer is open but nothing is being sent to "
+                    f"it: {self._refused}")
         if not self.running:
             return "The transducer is not running."
         limited = self._mix.limited_blocks
@@ -479,7 +534,11 @@ class HapticsEngine:
 
         stale_for = self._stale_frames / transducer.SAMPLE_RATE
         step = n / (FADE_S * transducer.SAMPLE_RATE)
-        if stale_for > STALE_S:
+        # A refusal leaves by the same door as a dead feed, because it is the
+        # same statement: there is nothing correct to send. `_refused` is a
+        # plain attribute read, like every other value this callback takes
+        # from outside - no lock, and one block of staleness costs nothing.
+        if stale_for > STALE_S or self._refused is not None:
             if self._fade > 0.0:
                 self._fade = max(0.0, self._fade - step)
                 if self._fade == 0.0:
@@ -579,6 +638,16 @@ class TransducerWatchdog:
     # well under a percent; the smallest interesting real shift - 48000
     # against 44100 - is 8%.
     CLOCK_TOLERANCE = 0.04
+    # How many consecutive cycles must read off-rate before the verdict is
+    # latched. **Two, because the verdict now silences the seat**, and a
+    # recovery is itself a hole in the frame clock: `rebuild` stands back for
+    # `REBUILD_SETTLE_S` and then reopens, so the cycle containing one reads
+    # low - 27059 Hz on 17 Aug 2026, against a stream that was really at
+    # 30611 - purely because the stream was shut for part of it. One cycle
+    # was enough when the only cost was a log line. It is not enough now.
+    # Clearing stays immediate: one good reading is proof it is being pulled
+    # correctly, and there is no reason to withhold a working transducer.
+    CLOCK_SUSPECT_CYCLES = 2
     # How long a cadence drop stays usable as corroboration for the meter.
     CORROBORATION_WINDOW_S = 120.0
     # Wedge evidence returning within this after a recovery means the fix did
@@ -612,6 +681,7 @@ class TransducerWatchdog:
         self._cadence_dropped_at: float | None = None
         self.clock_hz: float | None = None
         self.clock_suspect = False
+        self._clock_off_cycles = 0
         # Why the app cannot vouch for its own verdict, if it cannot. Each
         # entry is one honest reason - an unreadable meter, two endpoints of
         # one name, the metered endpoint changing under us, the stream
@@ -822,7 +892,10 @@ class TransducerWatchdog:
         """
         nominal = float(transducer.SAMPLE_RATE)
         off = abs(clock - nominal) / nominal > self.CLOCK_TOLERANCE
+        self._clock_off_cycles = self._clock_off_cycles + 1 if off else 0
         if off and not self.clock_suspect:
+            if self._clock_off_cycles < self.CLOCK_SUSPECT_CYCLES:
+                return
             self.clock_suspect = True
             self._doubt(
                 f"the stream is being pulled at about {clock:.0f} frames a "
@@ -972,6 +1045,21 @@ class TransducerWatchdog:
         self.degraded = True
         attempts = (f"{self._reopens} reopen(s) and {self._rebuilds} full "
                     f"rebuild(s)")
+        # **"I have stopped trying" was heard as "I have stopped sending".**
+        # On 17 Aug 2026 it meant the recovery ladder and nothing else - the
+        # engine went on feeding the piston for nineteen minutes afterwards -
+        # and the driver spent that time wondering where the vibration was
+        # coming from. The two facts are now stated separately, and which one
+        # is true is read off `clock_suspect`, because that is exactly what
+        # the controller refuses the output on.
+        # Either way it hands him the one test he can run from the seat.
+        sending = (
+            "I am no longer sending to them either - what the card would "
+            "play is transposed out of the band the amplifier passes - so "
+            "there should be nothing to feel."
+            if self.clock_suspect else
+            "I am still sending to them, so if you can still feel them, "
+            "ignore me.")
         if self._doubts:
             self._notice = (
                 f"the haptics meter has read nothing since the drop and "
@@ -984,9 +1072,8 @@ class TransducerWatchdog:
                 f"more than one endpoint on this machine is called by the "
                 f"transducer's name.",
                 "I have lost sight of the haptics rather than proved them "
-                "dead. If you can still feel them, ignore me. If not, the "
-                "amp may be in protection. Either way I have stopped "
-                "trying.")
+                "dead. " + sending + " I have stopped trying to fix them; if "
+                "they really are gone, the amp may be in protection.")
             return
         self._notice = (
             f"the haptics endpoint dropped and did not come back: "
@@ -994,8 +1081,9 @@ class TransducerWatchdog:
             f"stopped trying. The amplifier may be in protection - after the "
             f"race, power-cycle the amp, and restart the PC if the endpoint "
             f"still meters nothing.",
-            "Haptics are out and I have stopped trying to bring them back. "
-            "The amp may be in protection - deal with it after the race.")
+            "Haptics are out and I have stopped trying to fix them. "
+            + sending + " The amp may be in protection - deal with it after "
+            "the race.")
 
     def take_notice(self) -> tuple[str, str] | None:
         """The one driver notice, as (log line, spoken line). One-shot."""

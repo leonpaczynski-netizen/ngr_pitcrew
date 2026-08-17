@@ -979,6 +979,7 @@ def _rack(engine):
 
     class Rack:
         _act_on_endpoint_reading = PitCrewController._act_on_endpoint_reading
+        _climb_ladder = PitCrewController._climb_ladder
         _deliver_rig_notice = PitCrewController._deliver_rig_notice
         _endpoint_note = ""
 
@@ -1068,6 +1069,7 @@ def test_report_rig_feeds_the_engines_block_counter_to_the_watchdog():
     class Watchdog:
         degraded = False
         clock_hz = None
+        clock_suspect = False
 
         def note_cadence(self, blocks, now, frames=None):
             fed.append((blocks, now, frames))
@@ -1078,9 +1080,11 @@ def test_report_rig_feeds_the_engines_block_counter_to_the_watchdog():
 
     class Rack:
         _report_rig = PitCrewController._report_rig
+        _apply_clock_verdict = PitCrewController._apply_clock_verdict
 
         def __init__(self):
             self.bridge = Bridge()
+            self.voice = _RecordingVoice()
             self._rig_watchdog = Watchdog()
             self._endpoint_note = "endpoint not yet asked"
             self._log_haptic_state = lambda h: None
@@ -1462,3 +1466,164 @@ def test_a_bare_peak_still_means_measured_and_unambiguous():
     assert reading.peak == 0.054
     assert endpoint_meter.Reading.of(reading) is reading
     assert endpoint_meter.Reading.of(None).measured is False
+
+
+# ------------- a stream that is open, correct to hold, and wrong to send to
+
+def test_a_refusal_sends_nothing_and_allowing_brings_it_back():
+    """The rule `_open` has always had, applied while the stream is running.
+
+    17 Aug 2026: the stream opened honestly at 48 kHz and was then pulled at
+    30.6, so every effect arrived transposed by 0.64x and the two continuous
+    beds landed under the amplifier's low-cut. The app named it in the log
+    and went on driving the piston with it for nineteen minutes.
+    """
+    engine = _engine()
+    assert _peak(_pump_live(engine, 40)) > 0.05, "nothing to refuse"
+
+    engine.refuse("the card is pulling about 30611 frames a second")
+    _pump_live(engine, 40)                       # the fade-out completes
+    assert _peak(_pump_live(engine, 10)) == 0.0, "still driving the piston"
+
+    engine.allow()
+    _pump_live(engine, 40)
+    assert _peak(_pump_live(engine, 10)) > 0.05, "never came back"
+
+
+def test_a_refusal_fades_rather_than_cutting():
+    """An instant mute is a discontinuity and a discontinuity here is a
+    thump - the same reason the telemetry watchdog fades."""
+    engine = _engine()
+    _pump_live(engine, 40)
+    engine.refuse("wrong rate")
+    assert _peak(_pump_live(engine, 1)) > 0.0, "cut instead of faded"
+
+
+def test_a_refusal_is_announced_once_and_lifted_once():
+    engine = _engine()
+    assert engine.refuse("wrong rate") is True
+    assert engine.refuse("wrong rate") is False, "would repeat every cycle"
+    assert engine.refusals == 1
+    assert "nothing is being sent" in engine.describe()
+    assert engine.allow() is True
+    assert engine.allow() is False
+
+
+def test_one_off_rate_cycle_cannot_mute_the_seat():
+    """A recovery is itself a hole in the frame clock: `rebuild` stands back
+    for a second before it reopens, so the cycle containing one reads low
+    whatever the card is really doing. 27059 Hz was logged that way on 17 Aug
+    against a stream that was really at 30611. One cycle was enough when the
+    only cost was a log line; it is not enough now that it silences him."""
+    wd = haptics.TransducerWatchdog()
+    blocks = frames = 0
+    for cycle in range(5):
+        blocks += 100 * 10
+        frames += 100 * 480 * 10
+        wd.note_cadence(blocks, 10.0 * cycle, frames=frames)
+    assert wd.clock_suspect is False
+
+    blocks += 90 * 10                 # a second of the stream shut, once
+    frames += 90 * 480 * 10
+    wd.note_cadence(blocks, 50.0, frames=frames)
+    assert wd.clock_suspect is False, "a rebuild transient muted the seat"
+
+    blocks += 100 * 10
+    frames += 100 * 480 * 10
+    wd.note_cadence(blocks, 60.0, frames=frames)
+    assert wd.clock_suspect is False
+
+
+def test_the_stand_down_says_whether_it_is_still_sending():
+    """"I have stopped trying" was heard as "I have stopped sending", and on
+    17 Aug the app then fed the piston for nineteen more minutes."""
+    wd = haptics.TransducerWatchdog()
+    wd.reopened(0.0)
+    t = 10.0
+    while not wd.degraded and t < 1000.0:
+        if wd.plan_recovery(t) == "rebuild":
+            wd.rebuilt(True, t)
+        t += 10.0
+    spoken = wd.take_notice()[1]
+    assert "stopped trying to fix" in spoken
+    assert "still sending" in spoken, "left him guessing where it came from"
+
+
+def test_the_stand_down_admits_when_it_has_also_stopped_sending():
+    wd = haptics.TransducerWatchdog()
+    wd.clock_suspect = True
+    wd.reopened(0.0)
+    t = 10.0
+    while not wd.degraded and t < 1000.0:
+        if wd.plan_recovery(t) == "rebuild":
+            wd.rebuilt(True, t)
+        t += 10.0
+    spoken = wd.take_notice()[1]
+    assert "no longer sending" in spoken
+
+
+def test_a_transposed_stream_is_refused_and_he_is_told_once():
+    from pitcrew.controller import PitCrewController
+
+    class Watchdog:
+        clock_hz = 30611.0
+        clock_suspect = True
+
+    class Rack:
+        _apply_clock_verdict = PitCrewController._apply_clock_verdict
+
+        def __init__(self):
+            self.voice = _RecordingVoice()
+
+    engine, rack, wd = _engine(), Rack(), Watchdog()
+    rack._apply_clock_verdict(engine, wd)
+    assert engine.refused is not None and "30611" in engine.refused
+    assert len(rack.voice.spoken) == 1
+    assert "wrong speed" in rack.voice.spoken[0]
+
+    rack._apply_clock_verdict(engine, wd)
+    assert len(rack.voice.spoken) == 1, "repeated every ten seconds"
+
+    wd.clock_suspect, wd.clock_hz = False, 48000.0
+    rack._apply_clock_verdict(engine, wd)
+    assert engine.refused is None
+    assert len(rack.voice.spoken) == 2, "never said it was back"
+
+
+def test_the_meter_is_not_asked_about_audio_nobody_sent(monkeypatch):
+    """Polling it here would write down "it is accepting the audio and
+    playing none of it" - true, and entirely about a silence of our own
+    making. The ladder still has to climb, off the clock instead."""
+    from pitcrew.controller import PitCrewController
+    from pitcrew.engineer import endpoint_meter as meter
+
+    polled = []
+    monkeypatch.setattr(meter, "poll_briefly",
+                        lambda *a, **k: polled.append(a))
+
+    class Engine:
+        refused = "the card is pulling about 30611 frames a second"
+
+        def take_recent_peak(self):
+            return 0.5
+
+    climbed = []
+
+    class Settings:
+        haptics_device = "Speakers (ButtKicker PRO)"
+
+    class Rack:
+        _check_transducer_is_heard =             PitCrewController._check_transducer_is_heard
+        _AUDIBLE_PEAK = PitCrewController._AUDIBLE_PEAK
+        _endpoint_note = ""
+
+        def __init__(self):
+            self._rig_watchdog = haptics.TransducerWatchdog()
+            self.settings = Settings()
+            self._climb_ladder_off_thread =                 lambda h, w: climbed.append(h)
+
+    rack = Rack()
+    rack._check_transducer_is_heard(Engine())
+    assert "REFUSED" in rack._endpoint_note
+    assert polled == [], "asked a meter about audio it never got"
+    assert climbed, "the ladder stopped climbing the moment it went quiet"

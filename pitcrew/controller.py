@@ -2177,6 +2177,18 @@ class PitCrewController(QObject):
         exhausted = (" · recovery exhausted"
                      if watchdog is not None and watchdog.degraded else "")
         produced = haptics.take_recent_peak()
+        refused = getattr(haptics, "refused", None)
+        if refused is not None:
+            # **The meter cannot testify about audio nobody sent.** Asking it
+            # here would write down "it is accepting the audio and playing
+            # none of it" - true, and entirely about a silence of our own
+            # making - and the ladder would then be climbing after a fault
+            # the app had caused. The frame clock is the instrument for this
+            # one, so the ladder runs off that instead.
+            self._endpoint_note = f"output REFUSED - {refused}{exhausted}"
+            if watchdog is not None:
+                self._climb_ladder_off_thread(haptics, watchdog)
+            return
         if produced < self._AUDIBLE_PEAK:
             self._endpoint_note = (
                 f"endpoint not asked (rendered {produced:.3f}, quiet)"
@@ -2316,6 +2328,16 @@ class PitCrewController(QObject):
         # back - the "came and went" flapping - tear down and rebuild from a
         # fresh device list, a capped number of times, and then say so once
         # and stand down rather than hammer a device that is gone.
+        self._climb_ladder(haptics, watchdog, now)
+
+    def _climb_ladder(self, haptics, watchdog, now: float) -> None:
+        """One rung, whichever instrument earned it.
+
+        Inline and synchronous, so the whole ladder can still be driven in a
+        test without a sound card or a thread. Callers that are on the Qt
+        thread go through `_climb_ladder_off_thread` instead, because
+        `rebuild` stands back for a second before it reopens.
+        """
         action = watchdog.plan_recovery(now)
         if action == "reopen":
             haptics.recover()
@@ -2327,6 +2349,70 @@ class PitCrewController(QObject):
                 # not an attempt, so not spent against the cap.
                 watchdog.rebuilt(outcome, now)
         self._deliver_rig_notice(watchdog)
+
+    # A rebuild outlives the ten-second cycle that started it, and two of
+    # them racing would each tear down the other's stream.
+    _ladder_busy = False
+
+    def _climb_ladder_off_thread(self, haptics, watchdog) -> None:
+        """The same rung, for callers that must not block."""
+        if self._ladder_busy:
+            return
+        self._ladder_busy = True
+
+        def climb() -> None:
+            try:
+                self._climb_ladder(haptics, watchdog, _monotonic())
+            finally:
+                self._ladder_busy = False
+
+        threading.Thread(target=climb, name="PitCrewHapticsLadder",
+                         daemon=True).start()
+
+    def _apply_clock_verdict(self, haptics, watchdog) -> None:
+        """Refuse the output when the card is not pulling it at 48 kHz.
+
+        `HapticsEngine._open` already refuses a stream that NEGOTIATES a rate
+        the mix is not generated for, because the amplifier passes one band
+        and the driver's verdict on the alternative is that wrong output is
+        worse than not being on. This is that same rule applied to the rate
+        the card turns out to be pulling at - not the same number, and on
+        17 Aug 2026 not the same answer: the stream opened at 48000, was
+        pulled at 30611, and drove the piston with everything transposed
+        0.64x for nineteen minutes while the app logged what was wrong.
+
+        Spoken both ways, because a seat that has gone quiet on purpose is
+        indistinguishable from one that has died, and he is in a headset with
+        no way to check.
+        """
+        clock = watchdog.clock_hz
+        if watchdog.clock_suspect and clock is not None:
+            ratio = clock / float(transducer.SAMPLE_RATE)
+            reason = (f"the card is pulling about {clock:.0f} frames a "
+                      f"second against the {transducer.SAMPLE_RATE} the mix "
+                      f"is generated at, so every effect would arrive "
+                      f"transposed by {ratio:.2f}x")
+            if haptics.refuse(reason):
+                log("haptics").error(
+                    "nothing further is being sent to the transducer: %s. "
+                    "The road bed at %.0f Hz would arrive at %.0f Hz and the "
+                    "amplifier passes %.0f-%.0f Hz, so the cues would be in "
+                    "the wrong places rather than merely weak, which the "
+                    "driver has said is worse than none. The stream is left "
+                    "open so the frame clock can still be watched.",
+                    reason, 38.0, 38.0 * ratio,
+                    transducer.BAND_LOW_HZ, transducer.BAND_HIGH_HZ)
+                self.voice.say(
+                    "Haptics muted. The sound card is running them at the "
+                    "wrong speed, so every cue would land in the wrong "
+                    "place. I have stopped sending rather than give you a "
+                    "wrong one.")
+            return
+        if haptics.allow():
+            log("haptics").warning(
+                "the transducer's frame clock is back at the rate the mix is "
+                "generated for, so it is being sent to again.")
+            self.voice.say("Haptics are back.")
 
     def _deliver_rig_notice(self, watchdog) -> None:
         """The one operational instruction, where the driver will get it.
@@ -2424,6 +2510,7 @@ class PitCrewController(QObject):
             self._rig_watchdog.note_cadence(
                 haptics.callbacks, _monotonic(),
                 frames=getattr(haptics, "frames", None))
+            self._apply_clock_verdict(haptics, self._rig_watchdog)
             # The endpoint note is the PREVIOUS cycle's check - the check runs
             # after this line, on its own thread. Ten seconds stale is fine;
             # invisible was the problem.
