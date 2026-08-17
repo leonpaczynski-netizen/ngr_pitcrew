@@ -22,6 +22,7 @@ direction, are wrong.
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from itertools import product
@@ -47,9 +48,105 @@ FUEL_WEIGHT_S_PER_L_PER_LAP = 0.003
 # own pit loss.
 PIT_DEAD_TIME_S = 7.5
 
-# Fuel taken is always to the in-game diamond plus one lap of margin. The
-# diamond is accurate.
+# **The fuel margin is a COST, and at a slow refuel rate it is the whole
+# argument.** CLAUDE.md §5.4 says "to the diamond plus one lap of margin", and
+# a flat lap is the right answer when nothing about the burn has been
+# measured. It stopped being the right answer at Watkins on 17 Aug 2026.
+#
+# That race: 8 laps to run on 6.068 L/lap measured, so 48.9 L needed. The call
+# said fill to 55, he filled to 55.23, and he crossed the line with 6.31 L
+# still aboard. **At the measured 1.001 L/s that margin was 6.3 seconds of
+# standing still** - it turned a stop that would have released him six seconds
+# clear into one that released him into a fight for the place. The margin cost
+# more than everything the strategy model saved all race.
+#
+# So the margin is sized against what it actually protects, and in a LAP race
+# that is not the distance - the distance is known exactly - it is the burn
+# rate. Two ways the burn can beat its estimate, and the margin covers the
+# worse of them:
+#
+# * **Scatter**, lap to lap. Independent, so it grows as sqrt(laps): three
+#   sigma of the measured per-lap sd over the stint. On that race, sd 0.171 L
+#   over 8 laps = 1.45 L.
+# * **A systematic lift** - traffic, a defence, a wetter line - which is
+#   common-mode and grows with laps. His hardest lap of that stint burned 5.6%
+#   over the mean, so a flat 2% of the stint's own fuel is the floor under it.
+#
+# **A TIMED race keeps the full lap** and that is not a compromise: its
+# distance is an output of the plan, not an input, so an extra lap can really
+# appear and running dry on it is not a rounding error.
+#
+# Never larger than the old figure, so this can only ever take fuel out of the
+# stop, and never below `FUEL_MARGIN_MIN_L` - crossing the line on fumes is
+# not a plan, it is a coin toss.
 FUEL_MARGIN_LAPS = 1.0
+FUEL_MARGIN_SIGMAS = 3.0
+FUEL_MARGIN_SYSTEMATIC = 0.02
+FUEL_MARGIN_MIN_L = 0.5
+
+
+def consecutive_sd(groups) -> float | None:
+    """Lap-to-lap scatter, from consecutive differences within each group.
+
+    **The plain sd of every burn on file is the wrong number and it is wrong
+    by a factor of three.** Pooled across this event's ten sessions it reads
+    0.557 L, because those sessions ran at genuinely different rates - 7.3
+    L/lap in the early practices against 6.2 in the race-intent ones - and a
+    dispersion that swallows that is measuring the difference between sessions
+    rather than the scatter within one. A margin sized on it is a margin
+    bought against a fault that does not exist.
+
+    `sd(consecutive differences) / sqrt(2)` inside each group removes any
+    drift the group carries and leaves the lap-to-lap term, pooled in
+    quadrature across groups. Same estimator `analysis/tyre_model` uses for
+    `cv_consec`, and on the same data it reads 0.174 L - which is also what
+    the race's own eighteen green laps show on their own.
+
+    Groups of fewer than three contribute nothing: two laps give one
+    difference and one difference has no spread.
+    """
+    sigmas: list[float] = []
+    for values in groups:
+        series = [float(v) for v in values if v is not None]
+        if len(series) < 3:
+            continue
+        deltas = [b - a for a, b in zip(series, series[1:])]
+        try:
+            sigmas.append(statistics.stdev(deltas) / math.sqrt(2.0))
+        except statistics.StatisticsError:
+            continue
+    if not sigmas:
+        return None
+    return math.sqrt(sum(s * s for s in sigmas) / len(sigmas))
+
+
+def fuel_margin_l(laps: int | float | None, fuel_per_lap_l: float | None, *,
+                  sd_l: float | None = None,
+                  timed: bool = False) -> tuple[float | None, str]:
+    """Litres to carry beyond the stint, and the reason in one clause.
+
+    The reason travels with the number because the margin is now variable and
+    a variable margin nobody can read is worse than a fixed one. It is written
+    to the plan's notes and to the export, so a stop that cost time can be
+    audited against what the time was bought for.
+    """
+    if not fuel_per_lap_l or fuel_per_lap_l <= 0:
+        return None, "no burn rate measured"
+    full_lap = FUEL_MARGIN_LAPS * fuel_per_lap_l
+    if timed:
+        return full_lap, "one lap - a timed race can add one"
+    if not laps or laps <= 0:
+        return full_lap, "one lap - no stint length to size against"
+    if not sd_l or sd_l <= 0:
+        return full_lap, "one lap - lap-to-lap burn scatter not measured"
+    scatter = FUEL_MARGIN_SIGMAS * sd_l * math.sqrt(laps)
+    systematic = FUEL_MARGIN_SYSTEMATIC * fuel_per_lap_l * laps
+    margin = max(FUEL_MARGIN_MIN_L, scatter, systematic)
+    if margin >= full_lap:
+        return full_lap, "one lap - the measured spread asks for more"
+    driver = "scatter" if scatter >= systematic else "a systematic lift"
+    return margin, (f"{margin:.1f} L over {laps:g} laps, sized on {driver} "
+                    f"rather than a flat lap")
 
 # Fuel map: index 1..6. Multipliers on consumption and power relative to map 1.
 FUEL_MAP_CONSUMPTION = {1: 1.00, 2: 0.92, 3: 0.85, 4: 0.78, 5: 0.72, 6: 0.50}
@@ -181,6 +278,11 @@ class RaceInputs:
     # whichever is shorter.
     extra_time_s: float | None = None
     fuel_per_lap_l: float | None = None
+    # **Lap-to-lap scatter on that burn, and it is what sizes the margin.**
+    # None where too few laps exist to take an sd from, and then the margin
+    # falls back to CLAUDE.md's flat lap and says so. See `fuel_margin_l`.
+    fuel_sd_l: float | None = None
+    fuel_samples: int = 0
     fuel_capacity_l: float | None = None
     refuel_rate_lps: float = 2.5
     pit_loss_s: float = 20.0
@@ -209,6 +311,27 @@ class RaceInputs:
     # means the model has no way to tell compounds apart, and it says so
     # rather than quietly planning them all as identical.
     compound_profiles: dict[str, CompoundProfile] = field(default_factory=dict)
+
+    @property
+    def is_timed(self) -> bool:
+        """A race run to the clock, where an extra lap can really appear."""
+        return self.race_minutes is not None
+
+    def margin_for(self, laps: int | float | None) -> tuple[float | None, str]:
+        """This event's fuel margin for a stint of `laps`, and why."""
+        return fuel_margin_l(laps, self.fuel_per_lap_l,
+                             sd_l=self.fuel_sd_l, timed=self.is_timed)
+
+    def margin_cost_s(self, laps: int | float | None) -> float | None:
+        """What that margin costs in the pit lane, at this event's rate.
+
+        The number the driver actually feels. At Watkins' measured 1.001 L/s
+        a litre is a second, and it was six of them.
+        """
+        margin, _ = self.margin_for(laps)
+        if margin is None or not self.refuel_rate_lps:
+            return None
+        return margin / self.refuel_rate_lps
 
     def profile_for(self, compound: str | None) -> CompoundProfile:
         """The profile for a compound, or the reference's rate wearing its name.
@@ -722,18 +845,25 @@ def build_plan(inputs: RaceInputs, stops: int,
     for index, laps in enumerate(stint_lengths):
         fuel_needed = None
         if inputs.fuel_per_lap_l:
-            # To the diamond, plus one lap of margin. Deliberately NOT clamped
-            # to the tank: clamping made an impossible plan look cheap, because
-            # the stint was then costed as carrying a tankful rather than the
-            # 1010 L it actually needed, and paid no stop for the difference.
-            # The requirement is reported honestly and the plan is rejected.
-            fuel_needed = (laps + FUEL_MARGIN_LAPS) * inputs.fuel_per_lap_l
+            # To the diamond, plus the margin `fuel_margin_l` sizes - a flat
+            # lap only where the burn's own scatter has not been measured, or
+            # where the clock rather than the distance decides the race. At a
+            # slow refuel rate the difference is seconds in the pit lane and
+            # they are the driver's, not the model's, to spend.
+            #
+            # Deliberately NOT clamped to the tank: clamping made an impossible
+            # plan look cheap, because the stint was then costed as carrying a
+            # tankful rather than the 1010 L it actually needed, and paid no
+            # stop for the difference. The requirement is reported honestly and
+            # the plan is rejected.
+            margin_l, margin_why = inputs.margin_for(laps)
+            fuel_needed = laps * inputs.fuel_per_lap_l + (margin_l or 0.0)
             if inputs.fuel_capacity_l and fuel_needed > inputs.fuel_capacity_l:
                 feasible = False
                 notes.append(
                     f"Stint {index + 1} needs {fuel_needed:.0f} L including "
-                    f"the reserve lap, and the tank holds "
-                    f"{inputs.fuel_capacity_l:.0f} L.")
+                    f"{margin_l:.1f} L of margin ({margin_why}), and the tank "
+                    f"holds {inputs.fuel_capacity_l:.0f} L.")
 
         stints.append(Stint(laps=laps, compound=sequence[index],
                             fuel_l=fuel_needed, start_lap=start_lap))
@@ -759,6 +889,23 @@ def build_plan(inputs: RaceInputs, stops: int,
             total += inputs.pit_loss_s + inputs.pit_dead_time_s
             if fuel_needed:
                 total += refuel_time_s(fuel_needed, inputs)
+
+    # **Say what the margin is and what it costs.** CLAUDE.md §5.1 asks for a
+    # margin to be built in AND stated; the second half was missing, and a
+    # margin nobody can see is a margin nobody can argue with. At Watkins it
+    # was six seconds of standing still and the driver found out by finishing
+    # the race with it still in the tank.
+    if stints and inputs.fuel_per_lap_l:
+        longest = max(stint.laps for stint in stints)
+        margin_l, margin_why = inputs.margin_for(longest)
+        cost_s = inputs.margin_cost_s(longest)
+        if margin_l is not None:
+            said = (f"Fuel margin on the longest stint is {margin_l:.1f} L "
+                    f"({margin_why})")
+            if cost_s is not None:
+                said += (f" - {cost_s:.0f} s in the pit lane at "
+                         f"{inputs.refuel_rate_lps:g} L/s")
+            notes.append(said + ".")
 
     for note in dict.fromkeys(profile.window_note for profile in profiles
                               if profile.window_note):

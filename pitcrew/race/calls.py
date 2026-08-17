@@ -15,7 +15,10 @@ first, and two instructions at once is the same as none.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+
+from pitcrew.strategy.model import fuel_margin_l
 
 
 
@@ -259,6 +262,14 @@ class RaceState:
     race_minutes: float | None = None
     fuel_l: float | None = None
     fuel_per_lap_l: float | None = None
+    # **Lap-to-lap scatter on the burn, which is what sizes the fill.** The
+    # fill used to be the stint plus a flat lap; at Watkins on 17 Aug 2026
+    # that was 6.3 L still aboard at the flag and, at the measured 1.001 L/s,
+    # 6.3 seconds of standing still - the difference between coming out clear
+    # and coming out into a fight. None until enough green laps exist to take
+    # an sd from, and then `strategy.model.fuel_margin_l` falls back to the
+    # flat lap and says so.
+    fuel_sd_l: float | None = None
     # What the tank actually holds. Without it the engineer will ask for a
     # fuel figure the car cannot take - and it did: "Fuel to 510 litres."
     fuel_capacity_l: float | None = None
@@ -671,7 +682,15 @@ def _fuel_instruction(state: RaceState) -> str:
         after_stop = (state.laps_total or 0) - state.stint_ends_on_lap
     else:
         after_stop = state.laps_remaining()
-    litres = (after_stop + 1) * state.fuel_per_lap_l
+    # **The margin is sized, not assumed.** A flat lap is still the answer
+    # when the burn's scatter is unmeasured or the race runs to the clock -
+    # see `strategy.model.fuel_margin_l` for why those two cases differ from a
+    # lap race, where the distance is known exactly and the only thing that
+    # can beat the estimate is the burn itself.
+    margin_l, _ = fuel_margin_l(after_stop, state.fuel_per_lap_l,
+                                sd_l=state.fuel_sd_l,
+                                timed=state.race_minutes is not None)
+    litres = after_stop * state.fuel_per_lap_l + (margin_l or 0.0)
 
     # **A fill below what is already aboard is not an instruction.** "Fuel to
     # 27 litres" was voiced with 51.9 L in the tank - obeying was impossible
@@ -687,7 +706,11 @@ def _fuel_instruction(state: RaceState) -> str:
     if capacity and litres > capacity:
         short = (litres - capacity) / state.fuel_per_lap_l
         return f"Fuel to full. Still {short:.1f} laps short."
-    return f"Fuel to {litres:.0f} litres."
+    # **Round up, never to nearest.** The spoken figure is what he dials in,
+    # so rounding 50.4 down to 50 quietly spends 0.4 L of a margin that is now
+    # measured in tenths rather than in whole laps. Up costs at most a litre -
+    # one second at Watkins' rate - and down can cost the race.
+    return f"Fuel to {math.ceil(litres):.0f} litres."
 
 
 # **`fuel_map_for` was here and has been deleted, deliberately.**

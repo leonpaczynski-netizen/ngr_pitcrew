@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import pytest
+from dataclasses import replace
+from statistics import pstdev
+
+from pitcrew.strategy.model import consecutive_sd
 
 from pitcrew.race.calls import (
     BOX_NOW,
@@ -558,11 +562,86 @@ def test_no_box_now_call_ever_asks_for_more_than_the_tank():
 # was told he was short of a target nobody was aiming at.
 
 def test_the_stop_fills_for_the_next_stint_not_for_the_rest_of_the_race():
-    """Three stints of 10 laps at 3.4 L: stop 1 takes 37 L, not 71."""
+    """Three stints of 10 laps at 3.4 L: stop 1 takes 38 L, not 71.
+
+    No `fuel_sd_l`, so the margin is still CLAUDE.md's flat lap: 11 x 3.4 =
+    37.4, rounded UP because the spoken figure is what he dials in.
+    """
     state = RaceState(lap=10, laps_total=30, fuel_l=1.0, fuel_per_lap_l=3.4,
                       stint_ends_on_lap=10, next_stint_laps=10,
                       fuel_capacity_l=100.0)
-    assert _fuel_instruction(state) == "Fuel to 37 litres."
+    assert _fuel_instruction(state) == "Fuel to 38 litres."
+
+
+def said_litres(said: str) -> int:
+    return int(said.split("Fuel to ")[1].split(" litres")[0])
+
+
+# Regression for the Watkins Glen race of 17 Aug 2026. Eight laps to run on a
+# measured 6.068 L/lap, so 48.5 L of fuel and 6.7 L of margin - and he crossed
+# the line with 6.31 L of it still aboard. At the measured 1.001 L/s refuel
+# that margin was 6.3 seconds of standing still, and it turned a stop that
+# would have released him six seconds clear into a fight for the place.
+
+
+def test_the_fill_is_sized_on_measured_scatter_not_a_flat_lap():
+    """A lap race with a known distance buys margin against the BURN, not
+    against the distance - so three sigma of the measured lap-to-lap scatter,
+    not a whole lap of fuel nobody is going to use."""
+    state = RaceState(lap=12, laps_total=20, fuel_l=21.3,
+                      fuel_per_lap_l=6.068, fuel_sd_l=0.166,
+                      stint_ends_on_lap=12, next_stint_laps=8,
+                      further_stop_planned=False, fuel_capacity_l=100.0)
+    said = said_litres(_fuel_instruction(state))
+    # 8 x 6.068 = 48.5, plus 3 x 0.166 x sqrt(8) = 1.41 -> 50.
+    assert said == 50
+    # The old flat lap asked for 55.3, and every litre of the difference is a
+    # second in the pit lane at this circuit's measured rate.
+    assert said < 55
+
+
+def test_a_timed_race_still_carries_the_whole_lap():
+    """Its distance is an OUTPUT of the plan, so an extra lap can really
+    appear and running dry on it is not a rounding error."""
+    lap_race = RaceState(lap=12, laps_total=20, fuel_l=21.3,
+                         fuel_per_lap_l=6.068, fuel_sd_l=0.166,
+                         stint_ends_on_lap=12, next_stint_laps=8,
+                         further_stop_planned=False, fuel_capacity_l=100.0)
+    timed = replace(lap_race, race_minutes=35.0)
+    assert said_litres(_fuel_instruction(timed)) >         said_litres(_fuel_instruction(lap_race))
+    assert said_litres(_fuel_instruction(timed)) == 55    # 8 x 6.068 + a lap, up
+
+
+def test_an_unmeasured_spread_keeps_the_flat_lap():
+    """Missing is not zero. A burn nobody has measured the spread of gets
+    CLAUDE.md's margin, not a margin sized on a number that does not exist."""
+    state = RaceState(lap=12, laps_total=20, fuel_l=21.3,
+                      fuel_per_lap_l=6.068, fuel_sd_l=None,
+                      stint_ends_on_lap=12, next_stint_laps=8,
+                      further_stop_planned=False, fuel_capacity_l=100.0)
+    assert said_litres(_fuel_instruction(state)) == 55
+
+
+def test_the_margin_never_exceeds_the_flat_lap():
+    """A wild spread must not buy MORE than the rule it replaces."""
+    state = RaceState(lap=12, laps_total=20, fuel_l=21.3,
+                      fuel_per_lap_l=6.068, fuel_sd_l=5.0,
+                      stint_ends_on_lap=12, next_stint_laps=8,
+                      further_stop_planned=False, fuel_capacity_l=100.0)
+    assert said_litres(_fuel_instruction(state)) == 55
+
+
+def test_consecutive_sd_does_not_measure_the_gap_between_sessions():
+    """Two sessions burning 7.3 and 6.2 have a huge pooled sd and almost no
+    lap-to-lap scatter. Sizing a margin on the first is buying fuel against a
+    fault that does not exist."""
+    groups = [[7.30, 7.32, 7.28, 7.31], [6.18, 6.21, 6.17, 6.20]]
+    assert consecutive_sd(groups) < 0.05
+    flat = [v for group in groups for v in group]
+    assert pstdev(flat) > 0.5
+    # Fewer than three laps is one difference, and one difference has no
+    # spread - it contributes nothing rather than a fabricated zero.
+    assert consecutive_sd([[6.1, 6.2]]) is None
 
 
 def test_the_fill_uses_the_races_own_burn_and_not_the_planned_litres():

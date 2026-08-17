@@ -1202,7 +1202,7 @@ def test_a_stale_plan_does_not_size_a_fill_below_the_race():
                       stint_ends_on_lap=7, next_stint_laps=3,
                       further_stop_planned=False, fuel_capacity_l=100.0)
     said = _fuel_instruction(state)
-    assert said == "Fuel to 61 litres."                      # (8+1) x 6.79
+    assert said == "Fuel to 62 litres."               # (8+1) x 6.79, rounded up
 
 
 def test_a_hand_built_state_keeps_the_stints_own_figure():
@@ -1211,7 +1211,7 @@ def test_a_hand_built_state_keeps_the_stints_own_figure():
     state = RaceState(lap=7, laps_total=15, fuel_l=5.0, fuel_per_lap_l=6.79,
                       stint_ends_on_lap=7, next_stint_laps=3,
                       fuel_capacity_l=100.0)
-    assert said_litres(_fuel_instruction(state)) == 27
+    assert said_litres(_fuel_instruction(state)) == 28   # (3+1) x 6.79, up
 
 
 def said_litres(said: str) -> int:

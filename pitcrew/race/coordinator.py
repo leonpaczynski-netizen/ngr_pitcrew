@@ -84,6 +84,7 @@ class RaceCoordinator:
 
     def __init__(self, plan: dict | None = None,
                  fuel_per_lap_l: float | None = None,
+                 fuel_sd_l: float | None = None,
                  wear_per_lap: float | None = None,
                  fuel_capacity_l: float | None = None,
                  short_shift_l_per_1000rpm: float | None = None,
@@ -95,6 +96,13 @@ class RaceCoordinator:
         self.plan = plan or {}
         self.state = RaceState(
             fuel_per_lap_l=fuel_per_lap_l, wear_per_lap=wear_per_lap,
+            # **Seeded from this event's own practice, then replaced by the
+            # race.** Unlike `sigma_ms`, which may never be inherited, this
+            # prior is the same car at the same circuit on the same estimator
+            # - and without it the first stop of a short race would still be
+            # sized on a flat lap, which is precisely the stop that cost six
+            # seconds at Watkins.
+            fuel_sd_l=fuel_sd_l,
             fuel_capacity_l=fuel_capacity_l,
             # What a short-shift is worth on this car, measured from his own
             # laps. None where nobody has measured it, and the fuel call then
@@ -326,6 +334,14 @@ class RaceCoordinator:
         green = self.expect.race_fuel_per_lap_l()
         if green is not None and self.expect.green_laps() >= self.BURN_LAPS_NEEDED:
             self.state.fuel_per_lap_l = green
+        # **And the scatter beside it, because the scatter sizes the fill.**
+        # Installed on the same terms as the rate: this race's own laps, or
+        # nothing. Where it is None the fill falls back to CLAUDE.md's flat
+        # lap, which is the right answer for a burn nobody has measured the
+        # spread of - it is only the wrong answer once the spread is known.
+        measured_sd = self.expect.race_fuel_sd_l()
+        if measured_sd is not None:
+            self.state.fuel_sd_l = measured_sd
 
         # **Lap one never enters the pace record.** It carries the grid and -
         # on race day - a standing start, and it once fed the pace-vs-plan

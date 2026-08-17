@@ -35,6 +35,7 @@ from pitcrew.strategy.model import (
     SOURCE_MEASURED,
     CompoundProfile,
     RaceInputs,
+    consecutive_sd,
     laps_from_minutes,
 )
 
@@ -502,6 +503,21 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                      if lap.fuel_start > lap.fuel_end else None),
         current_sheet_id=current_sheet)
     fuel_per_lap = round(fuel_per_lap, 3) if fuel_per_lap is not None else None
+    # **The spread on that burn, and it is what decides how much fuel goes in
+    # at the stop.** Unweighted and unrounded: the weighting exists to pick a
+    # central value across sessions of different ages, and applying it to a
+    # dispersion would report a spread narrower than the laps actually show.
+    # Every lap that produced a burn counts, because a margin sized on a
+    # flattered spread is a margin that runs the car dry.
+    by_session: dict[object, list[float]] = {}
+    burns: list[float] = []
+    for lap in counted:
+        if lap.fuel_start <= lap.fuel_end:
+            continue
+        used = lap.fuel_start - lap.fuel_end
+        burns.append(used)
+        by_session.setdefault(getattr(lap, "session_id", None), []).append(used)
+    fuel_sd = consecutive_sd(by_session.values())
     # **The pace reference, not the degradation reference.** This called
     # `green_lap_reference_ms` - the best of the oldest session's opening
     # laps, kept fresh-tyre-early on purpose for the wear fit - against that
@@ -607,6 +623,8 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         extra_time_s=_extra_time_s(event),
         lap_time_ms=reference_ms or 0,
         fuel_per_lap_l=fuel_per_lap,
+        fuel_sd_l=fuel_sd,
+        fuel_samples=len(burns),
         fuel_capacity_l=capacity,
         refuel_rate_lps=refuel["rateLps"] or event["refuel_rate_lps"],
         pit_loss_s=event["pit_loss_secs"],

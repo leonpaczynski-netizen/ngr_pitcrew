@@ -323,6 +323,19 @@ class ExpectationTracker:
             return None
         return round(median(clean), 3)
 
+    def race_fuel_sd_l(self) -> float | None:
+        """Lap-to-lap scatter on the green burn, **measured on this race**.
+
+        What sizes the fill at the stop. None below `RACE_BURN_LAPS`, and
+        never inherited from another race or another circuit for the same
+        reason `sigma_ms` is not: a margin is only cheap if the number it is
+        built on belongs to the car actually running.
+        """
+        clean = [used for _, used, _ in self._clean() if used > 0]
+        if len(clean) < RACE_BURN_LAPS:
+            return None
+        return stdev(clean)
+
     # ------------------------------------------------------ on the plan?
 
     def burn_vs_plan(self) -> float | None:

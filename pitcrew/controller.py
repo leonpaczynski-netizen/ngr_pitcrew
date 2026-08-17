@@ -2844,6 +2844,9 @@ class PitCrewController(QObject):
         self.race = RaceCoordinator(
             plan,
             fuel_per_lap_l=inputs.fuel_per_lap_l if inputs else None,
+            # The lap-to-lap spread behind that burn, which is what sizes the
+            # fill at every stop. See `strategy.model.fuel_margin_l`.
+            fuel_sd_l=inputs.fuel_sd_l if inputs else None,
             wear_per_lap=inputs.wear_per_lap if inputs else None,
             fuel_capacity_l=inputs.fuel_capacity_l if inputs else None,
             # Keyed by the car the stream is showing, which `on_packet` has
