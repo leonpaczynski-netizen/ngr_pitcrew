@@ -122,7 +122,8 @@ def consecutive_sd(groups) -> float | None:
 
 def fuel_margin_l(laps: int | float | None, fuel_per_lap_l: float | None, *,
                   sd_l: float | None = None,
-                  timed: bool = False) -> tuple[float | None, str]:
+                  timed: bool = False,
+                  lap_count_firm: bool = False) -> tuple[float | None, str]:
     """Litres to carry beyond the stint, and the reason in one clause.
 
     The reason travels with the number because the margin is now variable and
@@ -133,8 +134,18 @@ def fuel_margin_l(laps: int | float | None, fuel_per_lap_l: float | None, *,
     if not fuel_per_lap_l or fuel_per_lap_l <= 0:
         return None, "no burn rate measured"
     full_lap = FUEL_MARGIN_LAPS * fuel_per_lap_l
-    if timed:
-        return full_lap, "one lap - a timed race can add one"
+    # **A timed race carries the extra lap only while it can really happen.**
+    # Its distance is an output rather than an input, so the reflex was to
+    # keep a whole lap always - but the app already works out how many laps
+    # the clock allows, and it already knows when that answer is resolvable:
+    # `laps_estimate_firm` is true when the slack before the count changes
+    # exceeds this car's own lap-time sigma. While that holds, the lap count
+    # is as known as a lap race's and a lap of fuel is the same wasted pit
+    # time it was at Watkins. While it does not, an extra lap is genuinely in
+    # play and running dry on it is not a rounding error.
+    if timed and not lap_count_firm:
+        return full_lap, ("one lap - the clock could still add one and the "
+                          "count is inside this car's lap-time noise")
     if not laps or laps <= 0:
         return full_lap, "one lap - no stint length to size against"
     if not sd_l or sd_l <= 0:
@@ -283,6 +294,11 @@ class RaceInputs:
     # falls back to CLAUDE.md's flat lap and says so. See `fuel_margin_l`.
     fuel_sd_l: float | None = None
     fuel_samples: int = 0
+    # Lap-to-lap scatter on the reference lap, seconds. Only a timed race
+    # needs it, and only to decide whether its own distance is resolvable -
+    # see `lap_count_firm`. None where too few laps exist to take one from,
+    # and then the count is treated as unresolved.
+    lap_time_sd_s: float | None = None
     fuel_capacity_l: float | None = None
     refuel_rate_lps: float = 2.5
     pit_loss_s: float = 20.0
@@ -317,10 +333,39 @@ class RaceInputs:
         """A race run to the clock, where an extra lap can really appear."""
         return self.race_minutes is not None
 
+    @property
+    def lap_count_firm(self) -> bool:
+        """Whether a timed race's distance is resolved enough to fuel to.
+
+        Always true for a lap race - the distance is the entry. For a timed
+        one it is the same test the live clock uses: how far the reference lap
+        would have to move before the count changes, against the lap-to-lap
+        noise it actually has. Inside the noise, an extra lap is real and the
+        fuel has to cover it; outside, the count is as known as a distance
+        race's and a lap of spare fuel is pit time spent on nothing.
+
+        False where nothing has measured the noise, because an unmeasured
+        margin is not a firm one.
+        """
+        if not self.is_timed:
+            return True
+        limit = self.race_limit_s
+        lap_s = self.lap_time_ms / 1000.0 if self.lap_time_ms else 0.0
+        if not limit or lap_s <= 0.0 or not self.lap_time_sd_s:
+            return False
+        laps = math.ceil(limit / lap_s)
+        # How much slower the reference lap could be before `laps` no longer
+        # fit, and how much quicker before one more does. The tighter of the
+        # two is what the noise has to clear.
+        slower = (limit / (laps - 1) - lap_s) if laps > 1 else float("inf")
+        quicker = lap_s - limit / (laps + 1)
+        return min(slower, quicker) >= self.lap_time_sd_s
+
     def margin_for(self, laps: int | float | None) -> tuple[float | None, str]:
         """This event's fuel margin for a stint of `laps`, and why."""
         return fuel_margin_l(laps, self.fuel_per_lap_l,
-                             sd_l=self.fuel_sd_l, timed=self.is_timed)
+                             sd_l=self.fuel_sd_l, timed=self.is_timed,
+                             lap_count_firm=self.lap_count_firm)
 
     def margin_cost_s(self, laps: int | float | None) -> float | None:
         """What that margin costs in the pit lane, at this event's rate.

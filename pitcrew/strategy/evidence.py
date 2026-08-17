@@ -518,6 +518,16 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         burns.append(used)
         by_session.setdefault(getattr(lap, "session_id", None), []).append(used)
     fuel_sd = consecutive_sd(by_session.values())
+    # The same estimator on lap time, and only a timed race reads it: it is
+    # what decides whether the clock's own lap count is resolvable enough to
+    # fuel exactly to. See `RaceInputs.lap_count_firm`.
+    laps_by_session: dict[object, list[float]] = {}
+    for lap in counted:
+        if lap.lap_time_ms:
+            laps_by_session.setdefault(
+                getattr(lap, "session_id", None), []).append(
+                    lap.lap_time_ms / 1000.0)
+    lap_time_sd = consecutive_sd(laps_by_session.values())
     # **The pace reference, not the degradation reference.** This called
     # `green_lap_reference_ms` - the best of the oldest session's opening
     # laps, kept fresh-tyre-early on purpose for the wear fit - against that
@@ -625,6 +635,7 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         fuel_per_lap_l=fuel_per_lap,
         fuel_sd_l=fuel_sd,
         fuel_samples=len(burns),
+        lap_time_sd_s=lap_time_sd,
         fuel_capacity_l=capacity,
         refuel_rate_lps=refuel["rateLps"] or event["refuel_rate_lps"],
         pit_loss_s=event["pit_loss_secs"],

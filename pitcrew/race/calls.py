@@ -689,7 +689,13 @@ def _fuel_instruction(state: RaceState) -> str:
     # can beat the estimate is the burn itself.
     margin_l, _ = fuel_margin_l(after_stop, state.fuel_per_lap_l,
                                 sd_l=state.fuel_sd_l,
-                                timed=state.race_minutes is not None)
+                                timed=state.race_minutes is not None,
+                                # The clock's own verdict on whether one more
+                                # lap is still in play. Already measured every
+                                # lap for the two-to-go call - reused rather
+                                # than re-derived, so the fuel and the lap
+                                # count can never disagree.
+                                lap_count_firm=state.laps_estimate_firm)
     litres = after_stop * state.fuel_per_lap_l + (margin_l or 0.0)
 
     # **A fill below what is already aboard is not an instruction.** "Fuel to

@@ -617,16 +617,26 @@ def test_the_fill_is_sized_on_measured_scatter_not_a_flat_lap():
     assert said < 55
 
 
-def test_a_timed_race_still_carries_the_whole_lap():
-    """Its distance is an OUTPUT of the plan, so an extra lap can really
-    appear and running dry on it is not a rounding error."""
+def test_a_timed_race_carries_the_lap_only_while_it_can_still_happen():
+    """Its distance is an OUTPUT, so the reflex was to keep a whole lap
+    always. But the app already works out how many laps the clock allows and
+    already knows when that answer is resolvable - `laps_estimate_firm` is
+    true once the slack before the count changes clears this car's own
+    lap-time sigma. While it holds, a timed race is as known as a lap race and
+    a lap of spare fuel is the same wasted pit time it was at Watkins."""
     lap_race = RaceState(lap=12, laps_total=20, fuel_l=21.3,
                          fuel_per_lap_l=6.068, fuel_sd_l=0.166,
                          stint_ends_on_lap=12, next_stint_laps=8,
                          further_stop_planned=False, fuel_capacity_l=100.0)
-    timed = replace(lap_race, race_minutes=35.0)
-    assert said_litres(_fuel_instruction(timed)) >         said_litres(_fuel_instruction(lap_race))
-    assert said_litres(_fuel_instruction(timed)) == 55    # 8 x 6.068 + a lap, up
+    unresolved = replace(lap_race, race_minutes=35.0,
+                         laps_estimate_firm=False)
+    firm = replace(unresolved, laps_estimate_firm=True)
+
+    # Count still inside the noise: the extra lap is real, so it is fuelled.
+    assert said_litres(_fuel_instruction(unresolved)) == 55
+    # Count resolved: fuel exactly for it, same margin as a lap race.
+    assert said_litres(_fuel_instruction(firm)) == 50
+    assert said_litres(_fuel_instruction(firm)) ==         said_litres(_fuel_instruction(lap_race))
 
 
 def test_an_unmeasured_spread_keeps_the_flat_lap():
