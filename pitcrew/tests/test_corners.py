@@ -646,6 +646,47 @@ def test_sustained_time_at_the_reference_flags_bottoming():
     assert "bottoming" in corner["flags"]
 
 
+def test_a_kerb_is_a_road_input_and_not_a_ride_height_fault():
+    """The kerb compresses the suspension by design. At Watkins T2 the driver
+    rides one deliberately, 13.7% of the corner under 64% brake, and it
+    flagged on all 17 laps. Excluded per wheel rather than dropping the
+    corner, so the rest of the window - where real contact would be - still
+    counts, and `kerb-strike` reports the kerb separately."""
+    frames = synthetic_lap(apex_positions=(600.0,))
+    for f in frames:
+        if 100.0 <= f["lap_distance_m"] <= 140.0:
+            f["susp_mm_fl"] = 95.0
+        if 595.0 <= f["lap_distance_m"] <= 610.0:
+            f["susp_mm_fl"] = 95.0
+            f["surf_fl"] = "C"
+    assert "bottoming" not in one_corner(frames)["flags"]
+
+
+def test_mean_heave_separates_a_rolling_car_from_a_grounding_one():
+    """Roll cancels in a four-wheel mean and contact does not. At Watkins T4,
+    T7 and T8 one side was down 5-8 mm and the other up 13-29 mm, and the flag
+    called it floor contact on all 17 laps."""
+    rolling = synthetic_lap(apex_positions=(600.0,))
+    grounding = synthetic_lap(apex_positions=(600.0,))
+    for f in rolling:
+        if 550.0 <= f["lap_distance_m"] <= 650.0:
+            f["susp_mm_fl"] = f["susp_mm_rl"] = 80.0   # loaded side down
+            f["susp_mm_fr"] = f["susp_mm_rr"] = 40.0   # inside side up
+    for f in grounding:
+        if 550.0 <= f["lap_distance_m"] <= 650.0:
+            for wheel in ("fl", "fr", "rl", "rr"):
+                f[f"susp_mm_{wheel}"] = 80.0
+    assert one_corner(rolling)["meanHeaveMm"] <         one_corner(grounding)["meanHeaveMm"]
+
+
+def test_mean_heave_is_null_without_a_reference_not_zero():
+    laps = [CountedLap(1, synthetic_lap(apex_positions=(600.0,),
+                                        susp_mm_fl=None))]
+    corner = aggregate_corners(
+        a_model([Corner("T1", "Turn 1", 480, 600, 720)]), laps)[0]
+    assert corner["meanHeaveMm"] is None
+
+
 def test_a_corner_short_of_the_straight_line_limit_does_not_flag():
     """And this is the case the inverted test got backwards: a corner where
     the wheel is LESS compressed than it gets on the straight is a corner

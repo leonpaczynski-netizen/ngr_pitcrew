@@ -307,6 +307,8 @@ def _measure(window: list[dict], approach: list[dict], corner: Corner,
         # boolean it replaced was measuring entry speed.
         "yaw_deficit_pct": deficit,
         "yaw_deficit_frames": deficit_frames,
+        # Roll cancels in the mean, contact does not - see `mean_heave_mm`.
+        "heave_mm": mean_heave_mm(window, bottoming_ref),
         "flags": _flags(window, interval_ms, bottoming_ref, bottoming_wheels,
                         drivetrain, wheelbase_m),
     }
@@ -672,6 +674,17 @@ def _off_track(window: list[dict]) -> bool:
 def _bottomed(window: list[dict], interval_ms: float,
               bottoming_ref: dict[str, float] | None,
               bottoming_wheels: set[str]) -> bool:
+    """Sustained compression at the straight-line limit, kerbs held out.
+
+    **A wheel on a kerb is a road input, not a ride-height fault.** The kerb
+    compresses the suspension by design and the car is not near its floor -
+    at Watkins T2 the driver rides the kerb deliberately, 13.7% of the corner
+    on it under 64% brake, and it flagged on all 17 laps. Excluding those
+    frames per wheel rather than dropping the corner keeps the rest of the
+    window, which is where any real contact would be. `kerb-strike` reports
+    the kerb separately, which is the honest division: two findings, not one
+    confounded one.
+    """
     if not bottoming_ref or not bottoming_wheels:
         return False
     needed = _frames_for_ms(thresholds.BOTTOMING_MIN_MS, interval_ms)
@@ -682,6 +695,11 @@ def _bottomed(window: list[dict], interval_ms: float,
             reference = bottoming_ref.get(wheel)
             if reference is None:
                 continue
+            # `C` is kerb in the surface channel. Only the extended packets
+            # carry it; where it is absent the wheel is judged as before,
+            # because a missing channel is not a kerb.
+            if frame.get(f"surf_{wheel}") == "C":
+                continue
             travel = frame.get(f"susp_mm_{wheel}")
             if travel is not None and travel >= reference - thresholds.BOTTOMING_BAND_MM:
                 in_band = True
@@ -690,6 +708,31 @@ def _bottomed(window: list[dict], interval_ms: float,
         if streak >= needed:
             return True
     return False
+
+
+def mean_heave_mm(window: list[dict],
+                  bottoming_ref: dict[str, float] | None) -> float | None:
+    """How far the whole car moved toward its floor, averaged over four wheels.
+
+    **Roll cancels in the mean; contact does not.** That is the whole point,
+    and it is the discriminator the per-wheel flag never had: at Watkins T4,
+    T7 and T8 one side was down 5-8 mm and the other up 13-29 mm, which is a
+    car rolling in a same-handed corner, and the mean says so. T2 was the only
+    corner on the lap with genuine four-corner heave.
+
+    Positive is closer to the floor than the straight-line reference; negative
+    is further from it. `None` without a reference, which is not zero.
+    """
+    if not bottoming_ref:
+        return None
+    deltas = []
+    for wheel in ("fl", "fr", "rl", "rr"):
+        reference = bottoming_ref.get(wheel)
+        values = _defined([f.get(f"susp_mm_{wheel}") for f in window])
+        if reference is None or not values:
+            return None
+        deltas.append(max(values) - reference)
+    return round(sum(deltas) / len(deltas), 2)
 
 
 def _kerb_struck(window: list[dict], interval_ms: float) -> bool:
@@ -799,6 +842,11 @@ def _combine(corner: Corner, per_lap: list[dict]) -> dict:
             _mean_or_none([m["yaw_deficit_pct"] for m in per_lap]), 1),
         "yawDeficitSamples": counted("yaw_deficit_pct"),
         "yawDeficitFrames": sum(m["yaw_deficit_frames"] for m in per_lap),
+        # **The number that separates roll from contact**, and the one the
+        # per-wheel flag could never provide on its own.
+        "meanHeaveMm": _round_or_none(
+            _mean_or_none([m["heave_mm"] for m in per_lap]), 2),
+        "meanHeaveSamples": counted("heave_mm"),
         "timeLossVsBestMs": round(mean(times) - best_time),
         "consistencyMs": round(pstdev(times)) if len(times) > 1 else None,
         # Modal, not mean: a mean gear of 2.6 is not a gear.

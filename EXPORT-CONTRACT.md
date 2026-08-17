@@ -331,6 +331,7 @@ section gets built, build this one.**
     "yawDeficitPct": 12.4,
     "yawDeficitSamples": 17,
     "yawDeficitFrames": 214,
+    "meanHeaveMm": -6.7,
     "suspHeightMinMm": { "fl": 34, "fr": 36, "rl": 41, "rr": 42 },
     "surfaceMix": { "T": 0.94, "C": 0.06 },
     "flags": ["countersteer", "trail-brake-instability"]
@@ -355,6 +356,7 @@ section gets built, build this one.**
 | `upshiftRpm` | Engine speed at the **first upshift after the apex**, mean across the laps that had one, rounded to whole rpm. `null` if he never upshifted in the window. Compare against `gearing.limiterRpm`: an upshift well below the limiter is a deliberate short-shift, and it costs pace to save fuel and rear tyre |
 | `yawDeficitPct` | **How far short of the rotation the steering implied the car actually turned**, median across the frames where lock was being added, mean across laps. Positive is short; negative means it rotated more than the lock implied. **Read it beside `entrySpeedKph` and nowhere else.** Expected yaw is proportional to speed while a car at its grip limit yaws as `1/v`, so this quantity carries a `1/v²` structure that is a property of the expression and not of the car — a neutral car reads worse at speed. It is a magnitude for a human to weigh against the driver's own account, and **it gates nothing**. `null` where no frame could be judged, which is not zero deficit |
 | `yawDeficitSamples` / `yawDeficitFrames` | Laps that produced a figure, and total qualifying frames behind it |
+| `meanHeaveMm` | **The four-wheel mean of peak compression against `derived.bottomingRefMm`.** Positive is closer to the floor than the car gets in a straight line; negative is further from it. **Read this before `flags: bottoming`** — roll cancels in a four-wheel mean and floor contact does not, so a corner flagging on one wheel with a negative mean heave is a car leaning, not a car grounding. `null` without a reference, which is not zero |
 | `suspHeightMinMm` | Minimum of the per-wheel suspension channel. **That channel is COMPRESSION, not height** — measured 17 Aug 2026, `body_height_mm` falls 61→50 mm from 120 to 260 km/h while every `susp_mm` rises — so this is the most **extended** the wheel got, i.e. the lightest, and the bottoming end is the maximum. The name predates the measurement and is kept for compatibility; `derived.bottomingRefMm` is now peak compression on straight-line frames and is the figure to interpret against. **Not travel remaining** — see §15 |
 | `surfaceMix` | Fraction of samples per surface character: `T` tarmac, `C` kerb, `D` dirt, `G` grass, `S` sand, `s` snow. Packet `~`/`C` only |
 
@@ -367,7 +369,7 @@ average legitimately.
 
 | Flag | Detection |
 |---|---|
-| `bottoming` | per-wheel suspension **compression** within the reference band of the straight-line peak for > 50 ms. Inferred, never measured: GT7 reports no travel-remaining channel |
+| `bottoming` | per-wheel suspension **compression** within the reference band of the straight-line peak for > 50 ms, **excluding frames where that wheel reads surface `C`** — a kerb compresses the suspension by design and is reported separately as `kerb-strike`. Inferred, never measured: GT7 reports no travel-remaining channel. Weigh it against `meanHeaveMm` |
 | `countersteer` | steering sign reversal > 10° within 300 ms |
 | `wheelspin` | driven-wheel surface speed exceeds vehicle speed by > 8% under throttle |
 | `lockup` | wheel surface speed below vehicle speed by > 15% under brake |
