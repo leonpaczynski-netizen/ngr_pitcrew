@@ -198,3 +198,109 @@ learned the hard way:
   and would unlock rotation advice.
 - Pedal force in newtons. The feed gives 0–255 of travel-or-force as GT7
   interprets it, not what his leg is doing.
+
+---
+
+## 8. Exact values — added 17 Aug 2026 from a photograph of the tuning menu
+
+The base self-identifies as **CLUBSPORT DD+ WHEEL BASE**, not "DD Extreme" as
+`CLAUDE.md` §2 records. Worth reconciling; the headroom argument in §4 is
+unchanged either way, but the DD+ has **FullForce** (`FUL`), which §3–§4 did not
+account for and which changes one recommendation materially.
+
+**`SHO` is absent from the tuning page.** On Fanatec firmware that slider is
+shown only when the attached rim exposes shaker motors. Its absence is evidence
+the Porsche rim has none — which closes the open question at the end of §3.1
+and makes that recommendation moot. The logic does not disappear, it **moves to
+`FUL`** (§8.2).
+
+### 8.1 As found (profile slot SETUP 5, ACTIVE PROFILE: none)
+
+| | SEN | FFB | FUL | NDP | NFR | NIN | INT | FEI | FOR | SPR | DPR |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| found | AUTO | 100% | 100% | 16% | 2% | OFF | 1 | 100 | 100% | 100% | 100% |
+| set to | AUTO | 100% | **0%** | **5%** | **0%** | OFF | 1 | **80** | 100% | **0%** | **0%** |
+
+Dynamic FFB tab: Speed Sensitive **Disabled**, Driving Reverse **Disabled** —
+both stay disabled (§8.3).
+
+**Nothing was saved to a profile.** ACTIVE PROFILE reads NO PROFILE LOADED, so
+these values are live-but-unpersisted. Save to a named slot.
+
+### 8.2 Reasoning, by class of claim
+
+**Deduction from measured rig facts**
+
+- `FUL` **0** — FullForce reproduces high-frequency tactile content (road,
+  ABS, engine) through the base motor. That is the ButtKicker's measured job:
+  28–34 Hz engine, 34–41 Hz road texture, 40–50 Hz brake regulation and lock,
+  52–60 Hz kerb strike, 86–104 Hz rear traction, all pinned in `synth.PROFILE`.
+  Two devices reporting one event, out of sync, is the exact fault the one-piston
+  mixing discipline exists to prevent — and here the duplicate also sits on top
+  of the self-aligning torque the wheel is now specialised for. This is §3.1's
+  argument, transplanted from the shaker motors the rim turns out not to have.
+
+**Measured-backed inference**
+
+- `NFR` **0** — natural friction is a velocity-independent force floor. His
+  measured median steering input is **0.020 of channel full scale** (129 laps,
+  893,870 frames): he lives in tiny movements, which is precisely where a static
+  friction floor does proportionally the most damage to the torque signal.
+- `NIN` **OFF**, unchanged — inertia slows the wheel's return, which is what a
+  trail-braker reads on brake release. His steering-rate p99.9 is 2.70
+  lock-fractions/s; he is not sawing and needs no simulated mass to calm him.
+
+**Preference, testable via §6**
+
+- `NDP` **5%** (from 16%) — some damping suppresses on-centre oscillation of a
+  high-torque motor; 16% is more than a driver this smooth needs, and damping
+  masks the release rate. 0 is acceptable if no oscillation appears.
+- `FEI` **80** (from 100) — §3.2. One step, not a leap; 60 if the transient
+  duplication is still audible through the rack after a controlled comparison.
+
+**Free diagnostics — strictly dominant given the stated priority**
+
+- `SPR` **0** and `DPR` **0** — these scale the spring and damper *effect types*.
+  If GT7 does not send them, zeroing changes nothing. If it does, they were
+  masking the torque channel and zeroing removes them. Either way the result is
+  information: **if the feel changes at all, GT7 sends those effects** — a fact
+  nothing else in this repo can establish.
+
+**Unchanged, with reason**
+
+- `SEN` **AUTO** — GT7 sets rotation per car. Independently, §2.1's π-normalisation
+  caveat means no measurement here can justify a manual number.
+- `FFB` **100%** and `FOR` **100%** — `FOR` scales the constant-force effect,
+  which *is* GT7's main channel, so lowering it is just a second master gain in
+  series. Keep one gain. Set absolute level in GT7's own Max Torque, and if the
+  wheel goes flat-topped in the heaviest corners, come down on `FFB` in steps
+  of 5. There is no clipping indicator — GT7 broadcasts none (§1) — so the only
+  symptom is the top of the load range going dead.
+- `INT` **1** — minimal interpolation. Higher smooths at the cost of latency,
+  and latency is paid exactly when catching a slide.
+
+**In GT7 (Options → Controllers):** Max Torque **5**, Sensitivity **1**. Max
+Torque is the stage that saturates first on a per-car basis; Sensitivity boosts
+small-force detail, which is now the seat's job, not the wheel's. Sensitivity is
+the single best GT7-side variable to A/B under §6.
+
+### 8.3 Dynamic FFB — leave both Disabled
+
+Whether the damping overlay receives a speed signal from GT7 on PS5 is
+**unverified**. A telemetry path to the base plainly exists (GT7 drives Fanatec
+rim displays), but whether this firmware module consumes it on console is not
+established here.
+
+It does not matter, because the recommendation is Disabled either way:
+
+1. Speed-sensitive damping makes wheel weight a function of **speed**, which is
+   not grip. That injects a confound into the one channel being protected.
+2. **The wind sim already carries road speed**, measured and tuned. A wheel that
+   also encodes speed is the same two-devices-one-event fault as `FUL` and `SHO`.
+
+Driving Reverse damping is inert while racing; harmless, leave Disabled.
+
+**To settle the unverified part in two minutes:** enable Speed Sensitive with
+Threshold 100 kph, Max 300 kph, Damper Effect Strength 100, and drive up a
+straight. If the wheel stiffens past 100 kph, GT7 feeds the module. If nothing
+changes, it does not. Then disable it again regardless.
