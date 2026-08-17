@@ -211,15 +211,15 @@ account for and which changes one recommendation materially.
 **`SHO` is absent from the tuning page.** On Fanatec firmware that slider is
 shown only when the attached rim exposes shaker motors. Its absence is evidence
 the Porsche rim has none — which closes the open question at the end of §3.1
-and makes that recommendation moot. The logic does not disappear, it **moves to
-`FUL`** (§8.2).
+and makes that recommendation moot. An attempt to transplant the same logic to
+`FUL` failed on driver evidence; see §8.2.
 
 ### 8.1 As found (profile slot SETUP 5, ACTIVE PROFILE: none)
 
 | | SEN | FFB | FUL | NDP | NFR | NIN | INT | FEI | FOR | SPR | DPR |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | found | AUTO | 100% | 100% | 16% | 2% | OFF | 1 | 100 | 100% | 100% | 100% |
-| set to | AUTO | 100% | **0%** | **5%** | **0%** | OFF | 1 | **80** | 100% | **0%** | **0%** |
+| set to | AUTO | 100% | 100% | **5%** | **0%** | OFF | 1 | **80** | 100% | **0%** | **0%** |
 
 Dynamic FFB tab: Speed Sensitive **Disabled**, Driving Reverse **Disabled** —
 both stay disabled (§8.3).
@@ -229,16 +229,29 @@ these values are live-but-unpersisted. Save to a named slot.
 
 ### 8.2 Reasoning, by class of claim
 
-**Deduction from measured rig facts**
+**Driver-reported evidence — it overrode the deduction that stood here**
 
-- `FUL` **0** — FullForce reproduces high-frequency tactile content (road,
-  ABS, engine) through the base motor. That is the ButtKicker's measured job:
-  28–34 Hz engine, 34–41 Hz road texture, 40–50 Hz brake regulation and lock,
-  52–60 Hz kerb strike, 86–104 Hz rear traction, all pinned in `synth.PROFILE`.
-  Two devices reporting one event, out of sync, is the exact fault the one-piston
-  mixing discipline exists to prevent — and here the duplicate also sits on top
-  of the self-aligning torque the wheel is now specialised for. This is §3.1's
-  argument, transplanted from the shaker motors the rim turns out not to have.
+- `FUL` **100%, unchanged.** The first draft of this section argued `FUL` to 0
+  as straight duplication of the ButtKicker, on the grounds that FullForce
+  renders high-frequency road, engine and ABS texture that the transducer
+  already carries in measured bands. **The driver reports that FullForce is how
+  he feels dirty air behind the car in front, and does not want to lose it.**
+  Standing rule §4.1 makes the driver's report primary evidence, and here it is
+  decisive rather than merely weighty, because the deduction's premise was
+  false.
+
+  **Pit Crew cannot see other cars.** There is no proximity, no closing speed
+  and no aero state in any of the four packet formats — `CLAUDE.md` §5.3 already
+  concedes that detecting a tow may need a manual toggle. So the ButtKicker
+  cannot render this cue at any level or in any band. For dirty air, FullForce
+  is not a duplicate channel. It is the only channel, and it is carrying
+  information the app is blind to.
+
+  The partial overlap with the transducer (road, engine, brake texture) is real
+  and unchanged. **Resolve it on the ButtKicker, not here** — the transducer's
+  levels are measurable by replaying his laps through `tools/rig_levels.py` and
+  FullForce's are not measurable at all. When two channels collide, move the one
+  you can measure.
 
 **Measured-backed inference**
 
@@ -257,6 +270,10 @@ these values are live-but-unpersisted. Save to a named slot.
   masks the release rate. 0 is acceptable if no oscillation appears.
 - `FEI` **80** (from 100) — §3.2. One step, not a leap; 60 if the transient
   duplication is still audible through the rack after a controlled comparison.
+  **⚠️ `FEI` is the one remaining change that could plausibly dull the
+  FullForce texture**, since both act on high-frequency content. Make it last,
+  make it alone, and revert it if the dirty-air cue weakens — that cue now has
+  driver evidence behind it and `FEI` 80 has none.
 
 **Free diagnostics — strictly dominant given the stated priority**
 
@@ -304,3 +321,33 @@ Driving Reverse damping is inert while racing; harmless, leave Disabled.
 Threshold 100 kph, Max 300 kph, Damper Effect Strength 100, and drive up a
 straight. If the wheel stiffens past 100 kph, GT7 feeds the module. If nothing
 changes, it does not. Then disable it again regardless.
+
+### 8.4 GT7 settings to run alongside these
+
+GT7 (PS5) → Options → Controllers exposes **two** force-feedback numbers, and
+that is the whole surface. There is no per-car FFB, no clipping meter, no
+detail/road-effect slider.
+
+| GT7 setting | value | why |
+|---|---|---|
+| Force Feedback Max. Torque | **5** | the scalar that saturates first, per car. Half of full leaves headroom on a base of this size, and headroom is the only defence against clipping when the game reports no clipping (§1) |
+| Force Feedback Sensitivity | **leave exactly as it is** | see below |
+
+**Why Sensitivity is deliberately not given a number.** Its semantics are
+disputed across sources — some describe it as a gain on small-force detail,
+others as a reduction in the game's own damping — and this repo has no way to
+settle it, because there is no FFB channel to observe (§1). Worse, if it *is* a
+small-force gain, then it is the GT7-side setting most likely to be carrying the
+dirty-air cue (§8.2). Changing it blind risks the one wheel signal with driver
+evidence behind it, to chase a number nobody can measure.
+
+So: **change it only as a deliberate single-variable test, with the aero cue as
+the acceptance criterion.** Run a few laps in traffic at one value, then the
+other, and ask whether dirty air still announces itself. That is a test he can
+run and the telemetry cannot — the same division of labour as the rest of §6,
+where the app measures what it can see and the driver adjudicates what it
+cannot.
+
+Order of operations for the whole change set: `NFR` and the two effect-strength
+diagnostics first (`SPR`, `DPR`), then `NDP`, then GT7 Max Torque, then `FEI`
+last and alone. `FUL`, `NIN`, `SEN`, `FFB`, `FOR` and `INT` are not changing.
