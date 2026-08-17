@@ -278,10 +278,23 @@ def _merged_session(sessions: list[dict]) -> dict:
     """
     ordered = sorted(sessions, key=lambda s: (s["started_at"], s["id"]))
     merged = dict(ordered[0])
-    for key in ("packet_format", "car_category",
+    for key in ("packet_format",
                 "setup_sheet_id", "practice_intent", "practice_mode"):
         merged[key] = next(
             (s[key] for s in ordered if s[key] is not None), None)
+
+    # **The class comes from a run whose car identity holds.** This took the
+    # first non-null in start order, and on event 2 that was session 11 - a
+    # `GR3` reading on an event whose car is a road car - so the payload
+    # declared `meta.carCategory: Gr.3` for the whole event. A session the
+    # store has flagged is not a witness to what the car was; a session that
+    # never answered (`identity_status` null, a row older than the column) is
+    # not accused and still counts.
+    trusted = [s for s in ordered
+               if (_session_field(s, "identity_status") or "ok") == "ok"]
+    merged["car_category"] = next(
+        (s["car_category"] for s in trusted if s["car_category"] is not None),
+        None)
     # Fuel capacity is merged on plausibility, not on presence. GT7 reports a
     # 0 L tank for an electric car *and* for a packet that arrived before the
     # car had loaded, and event 3's first session opened on the second: its

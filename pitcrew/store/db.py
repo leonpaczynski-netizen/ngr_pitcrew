@@ -40,6 +40,45 @@ _DECLARED_CONSTANTS = {
 }
 
 
+# **Which sessions a race plan may be costed on**, in one place because it is
+# one policy and it is easy to state twice and differently.
+#
+# **A contradiction disqualifies a session. An absence does not.** That is the
+# whole rule, and the two halves are different kinds of fact:
+#
+# * `car-mismatch` - the wire named a car, and it was not this event's car.
+#   That is positive evidence that these laps were turned by something else,
+#   and it is why the gate exists at all: session 11 streamed `GR3` on a road-
+#   car event and its lap 4 burn of 7.563377380371094 L became
+#   `assumptions.fuelPerLapL = 7.563` in the approved plan.
+# * `car-unknown` - the wire named a car nothing on file claims, so the session
+#   is linked to a quarantined `cars` row. Also a contradiction of a sort: the
+#   event declares a canonical car and this is provably not it.
+# * `no-reading` - the wire named nothing. GT7 was not streaming, or the packet
+#   landed before the car loaded, which is also why those runs read a 0 L tank.
+#   **This is the absence of evidence, not evidence of absence.** The event
+#   already declares its car; an unlabelled session under it is not a session
+#   contradicting it. Excluding on a field that never populated is precisely
+#   the failure CLAUDE.md rule 3 names - treating missing as a value - and it
+#   was measured to make the answer worse, not safer: event 2's burn reads
+#   7.638 L with these sessions held out and 7.178 with them in, while the race
+#   itself burned 6.57-7.00. Discarding a valid Shelby run because a packet
+#   field was empty is a real loss for no gain.
+#
+# None of the three is a deletion in any case. Every lap reads back through
+# `list_laps` and `list_event_laps` and the export still describes them; what
+# an excluded session does not do is cost a stop.
+EVIDENCE_IDENTITY_SQL = (
+    "COALESCE(sessions.identity_status, 'ok') "
+    "NOT IN ('car-mismatch', 'car-unknown')")
+
+# What a sheet is for when nobody said. Written down here because the
+# convention already existed in prose - `sheet_for` documented that a sheet
+# stored before the question was asked is a race sheet - and v8 turned it into
+# a NOT NULL column with this default, so the string has to be one string.
+DEFAULT_SHEET_PURPOSE = "race"
+
+
 def _record_declared_constants(fields: dict) -> None:
     for value_key, source_key in _DECLARED_CONSTANTS.items():
         if value_key not in fields:
@@ -80,7 +119,29 @@ class Store:
         The whole upgrade is one transaction.  A migration that raises rolls
         the file back to the version it opened at rather than leaving it
         half-converted, which is the state nothing else in the app could read.
+
+        **Foreign keys are off for the upgrade and checked afterwards.**
+        Altering a UNIQUE constraint in sqlite means rebuilding the table -
+        v8 has to, because a constraint is an implicit index that `DROP INDEX`
+        cannot reach - and `DROP TABLE` on a parent with foreign keys on runs
+        an implicit `DELETE FROM` that trips the constraint. `PRAGMA
+        foreign_keys` is a **no-op inside a transaction**, so the toggle has to
+        live out here rather than in the migration that needs it. Nothing is
+        taken on trust: `foreign_key_check` runs before the keys go back on,
+        and a reference that did not survive is raised rather than logged.
         """
+        self._conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self._upgrade()
+            broken = self._conn.execute("PRAGMA foreign_key_check").fetchall()
+            if broken:
+                raise RuntimeError(
+                    f"{self.path}: the schema upgrade left {len(broken)} "
+                    f"dangling reference(s): {broken[:5]}")
+        finally:
+            self._conn.execute("PRAGMA foreign_keys = ON")
+
+    def _upgrade(self) -> None:
         with self._write() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             if version > SCHEMA_VERSION:
@@ -167,7 +228,9 @@ class Store:
         with self._write() as conn:
             cur = conn.execute(
                 f"INSERT INTO events ({cols}) VALUES ({marks})", list(fields.values()))
-            return int(cur.lastrowid)
+            event_id = int(cur.lastrowid)
+            self._key_event(conn, event_id)
+            return event_id
 
     def update_event(self, event_id: int, **fields) -> None:
         if not fields:
@@ -195,6 +258,52 @@ class Store:
         with self._write() as conn:
             conn.execute(f"UPDATE events SET {assignments} WHERE id = ?",
                          [*fields.values(), event_id])
+            # Re-key whenever the declaration moved. A track edited from Monza
+            # to Suzuka with `layout_id` still pointing at Monza's Full Course
+            # is the same class of drift this whole change exists to remove.
+            if any(k in fields for k in ("track", "layout", "car_name")):
+                self._key_event(conn, event_id, rekey=True)
+
+    def _key_event(self, conn: sqlite3.Connection, event_id: int,
+                   *, rekey: bool = False) -> None:
+        """Resolve an event's declared car and circuit to canonical rows.
+
+        **Resolution, not enforcement.** Refusing a write that cannot resolve
+        is stage 4's job and belongs with the repair screen that would let the
+        driver do something about it; until then an unresolvable event is
+        flagged `quarantined` and keeps everything it has. Losing a saved
+        event because the catalogue was read before GT7 shipped a car is
+        exactly the loss the driver said must not happen.
+        """
+        from pitcrew.store.identity import IDENTITY_OK, IDENTITY_QUARANTINED
+
+        row = conn.execute(
+            "SELECT track, layout, car_name, car_ref, layout_id FROM events "
+            "WHERE id = ?", (event_id,)).fetchone()
+        if row is None:
+            return
+        car_ref = None if rekey else row["car_ref"]
+        layout_id = None if rekey else row["layout_id"]
+
+        if car_ref is None and row["car_name"]:
+            found = conn.execute("SELECT id FROM cars WHERE name = ? "
+                                 "AND status = 'canonical'",
+                                 (row["car_name"],)).fetchone()
+            car_ref = int(found["id"]) if found else None
+        if layout_id is None and row["track"] and row["layout"]:
+            found = conn.execute(
+                "SELECT tl.id FROM track_layouts tl JOIN tracks t "
+                "ON t.id = tl.track_id WHERE t.name = ? AND tl.layout = ? "
+                "AND tl.status = 'canonical'",
+                (row["track"], row["layout"])).fetchone()
+            layout_id = int(found["id"]) if found else None
+
+        resolved = car_ref is not None and layout_id is not None
+        conn.execute(
+            "UPDATE events SET car_ref = ?, layout_id = ?, identity_status = ? "
+            "WHERE id = ?",
+            (car_ref, layout_id,
+             IDENTITY_OK if resolved else IDENTITY_QUARANTINED, event_id))
 
     def get_event(self, event_id: int) -> dict | None:
         rows = self._query("SELECT * FROM events WHERE id = ?", (event_id,))
@@ -210,29 +319,149 @@ class Store:
         with self._write() as conn:
             conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
 
+    # ------------------------------------------------- canonical identity (v7)
+    #
+    # `cars` and `track_layouts` are the only places a car or a circuit has a
+    # stable identifier. Everything here reads the stored `slug` column; no
+    # method in this section composes a key, and no caller should either.
+
+    def list_cars(self, *, include_quarantined: bool = False) -> list[dict]:
+        """Every car that may be selected, in name order.
+
+        Quarantined rows are absent by default and that is the point: a car
+        auto-created from an id nothing recognised exists, holds its session's
+        data and is offered to nobody until the driver merges it to a real
+        name.
+        """
+        clause = "" if include_quarantined else "WHERE status = 'canonical'"
+        return [dict(r) for r in self._query(
+            f"SELECT * FROM cars {clause} ORDER BY name")]
+
+    def get_car(self, car_ref: int) -> dict | None:
+        rows = self._query("SELECT * FROM cars WHERE id = ?", (car_ref,))
+        return dict(rows[0]) if rows else None
+
+    def car_by_name(self, name: str | None) -> dict | None:
+        if not name:
+            return None
+        rows = self._query("SELECT * FROM cars WHERE name = ?", (name,))
+        return dict(rows[0]) if rows else None
+
+    def car_by_gt7_id(self, gt7_car_id: int | None) -> dict | None:
+        """The car the game's own id belongs to, or None if nothing claims it.
+
+        None is the interesting answer: it is a car the catalogue has never
+        heard of, and the session that produced it must still record in full.
+        """
+        if gt7_car_id is None:
+            return None
+        rows = self._query("SELECT * FROM cars WHERE gt7_car_id = ?",
+                           (int(gt7_car_id),))
+        return dict(rows[0]) if rows else None
+
+    def list_track_layouts(self, *, track: str | None = None,
+                           include_quarantined: bool = False) -> list[dict]:
+        where, params = [], []
+        if not include_quarantined:
+            where.append("tl.status = 'canonical'")
+        if track is not None:
+            where.append("t.name = ?")
+            params.append(track)
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        return [dict(r) for r in self._query(
+            "SELECT tl.*, t.name AS track_name, t.slug AS track_slug "
+            "FROM track_layouts tl JOIN tracks t ON t.id = tl.track_id "
+            f"{clause} ORDER BY t.name, tl.id", params)]
+
+    def get_track_layout(self, layout_id: int | None) -> dict | None:
+        if layout_id is None:
+            return None
+        rows = self._query(
+            "SELECT tl.*, t.name AS track_name, t.slug AS track_slug "
+            "FROM track_layouts tl JOIN tracks t ON t.id = tl.track_id "
+            "WHERE tl.id = ?", (layout_id,))
+        return dict(rows[0]) if rows else None
+
+    def log_identity_repair(self, *, table: str, row_id, field: str,
+                            old_value=None, new_value=None, reason: str,
+                            resolved_by: str) -> int:
+        """Record one identity assignment the app derived, or the driver made."""
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO identity_repairs (table_name, row_id, field, "
+                "old_value, new_value, reason, resolved_by, resolved_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (table, str(row_id), field,
+                 None if old_value is None else str(old_value),
+                 None if new_value is None else str(new_value),
+                 reason, resolved_by, _now()))
+            return int(cur.lastrowid)
+
+    def list_identity_repairs(self, *, table: str | None = None) -> list[dict]:
+        if table is None:
+            return [dict(r) for r in self._query(
+                "SELECT * FROM identity_repairs ORDER BY id")]
+        return [dict(r) for r in self._query(
+            "SELECT * FROM identity_repairs WHERE table_name = ? ORDER BY id",
+            (table,))]
+
+    def list_unresolved_identities(self) -> list[dict]:
+        """Everything the driver has to answer, for the repair screen.
+
+        Stage 4 builds the screen; this is the query it reads. It exists now
+        because a quarantine nobody can see is indistinguishable from a
+        deletion, and the whole justification for quarantining rather than
+        dropping is that the row stays reachable.
+        """
+        out = [dict(r) for r in self._query(
+            "SELECT 'event' AS scope, id, name AS label, identity_status "
+            "FROM events WHERE COALESCE(identity_status, 'ok') != 'ok'")]
+        out += [dict(r) for r in self._query(
+            "SELECT 'session' AS scope, id, started_at AS label, "
+            "identity_status FROM sessions "
+            "WHERE COALESCE(identity_status, 'ok') NOT IN ('ok', 'no-reading')")]
+        out += [dict(r) for r in self._query(
+            "SELECT 'car' AS scope, id, name AS label, status AS identity_status "
+            "FROM cars WHERE status = 'quarantined'")]
+        return out
+
     # ----------------------------------------------------- setup (app state)
 
     def save_setup_sheet(self, sheet) -> int:
-        """Insert or update a sheet by (car, name).  Returns its id."""
+        """Insert or update a sheet by (car, name, **purpose**).  Returns its id.
+
+        The purpose is in the conflict target because it is in the key, and it
+        is in the key because it was not: the driver reported that loading a
+        race sheet and then a qualifying sheet kept only the last one. It was
+        not keeping the last one - it was overwriting the first and flipping
+        its label, because `ON CONFLICT(car_name, sheet_name)` matched a sheet
+        that answers a different question.
+
+        `purpose` is normalised rather than allowed through as None. Sqlite
+        counts two NULLs as distinct in a UNIQUE index, so an untagged sheet
+        would stop matching its own row and accumulate a new one on every
+        save - the same shape of bug in the opposite direction.
+        """
         sheet.validate()
+        purpose = (sheet.purpose or DEFAULT_SHEET_PURPOSE).strip()
         with self._write() as conn:
             conn.execute(
                 "INSERT INTO setup_sheets (car_name, sheet_name, values_json, "
                 "gears_json, performance_json, build_json, notes, purpose, "
                 "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(car_name, sheet_name) DO UPDATE SET "
+                "ON CONFLICT(car_name, sheet_name, purpose) DO UPDATE SET "
                 "values_json=excluded.values_json, gears_json=excluded.gears_json, "
                 "performance_json=excluded.performance_json, "
                 "build_json=excluded.build_json, notes=excluded.notes, "
-                "purpose=excluded.purpose, "
                 "updated_at=excluded.updated_at",
                 (sheet.car_name, sheet.sheet_name, json.dumps(sheet.values),
                  json.dumps(sheet.gears), json.dumps(sheet.performance),
-                 json.dumps(sheet.build), sheet.notes, sheet.purpose,
+                 json.dumps(sheet.build), sheet.notes, purpose,
                  _now(), _now()))
             row = conn.execute(
-                "SELECT id FROM setup_sheets WHERE car_name = ? AND sheet_name = ?",
-                (sheet.car_name, sheet.sheet_name)).fetchone()
+                "SELECT id FROM setup_sheets WHERE car_name = ? "
+                "AND sheet_name = ? AND purpose = ?",
+                (sheet.car_name, sheet.sheet_name, purpose)).fetchone()
             return int(row["id"])
 
     def get_setup_sheet(self, sheet_id: int):
@@ -242,14 +471,18 @@ class Store:
     def sheet_for(self, car_name: str, purpose: str):
         """The car's most recent sheet for this purpose, or None.
 
-        A sheet with no purpose on it is a candidate for `race` only. It
-        predates the question, and every sheet stored before it was asked
-        was a race sheet - a qualifying sheet that was never labelled as
-        one has to be labelled rather than assumed.
+        **None means none, and never the other purpose's sheet.** A qualifying
+        run measured against the race sheet files a symptom on a setup that
+        was not on the car. The caller decides what to do about a missing
+        sheet; substituting one here would hide the question.
+
+        Every sheet now carries a purpose - v8 made the column NOT NULL and
+        back-filled the seven untagged rows to `race`, which is the convention
+        this method already documented - so there is no null case left to
+        interpret.
         """
         wanted = [sheet for sheet in self.list_setup_sheets(car_name)
-                  if sheet.purpose == purpose
-                  or (purpose == "race" and sheet.purpose is None)]
+                  if sheet.purpose == purpose]
         return wanted[0] if wanted else None
 
     def list_setup_sheets(self, car_name: str | None = None) -> list:
@@ -396,13 +629,22 @@ class Store:
                       practice_mode: str | None = None,
                       practice_intent: str | None = None,
                       rehearsal: bool = False) -> int:
+        from pitcrew.store.identity import IDENTITY_OK
+
         with self._write() as conn:
             cur = conn.execute(
                 "INSERT INTO sessions (event_id, kind, tune_label, setup_sheet_id, "
-                "practice_mode, practice_intent, rehearsal, started_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "practice_mode, practice_intent, rehearsal, identity_status, "
+                "started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (event_id, kind, tune_label, setup_sheet_id, practice_mode,
-                 practice_intent, int(rehearsal), _now()))
+                 practice_intent, int(rehearsal),
+                 # A session opens carrying the event's declaration. Only the
+                 # stream can contradict it, and until a packet lands there is
+                 # nothing to contradict it with - opening at anything else
+                 # would accuse a run of being the wrong car before it has
+                 # turned a wheel, and would hide every session recorded with
+                 # GT7 switched off.
+                 IDENTITY_OK, _now()))
             return int(cur.lastrowid)
 
     def record_measured_clock(self, event_id: int, start_hour: float | None,
@@ -453,14 +695,125 @@ class Store:
 
     def note_stream_facts(self, session_id: int, *, packet_format: str | None = None,
                           car_category: str | None = None,
-                          fuel_capacity_l: float | None = None) -> None:
-        """Record what the stream actually delivered, once it is known."""
+                          fuel_capacity_l: float | None = None,
+                          car_id: int | None = None,
+                          game_version: str | None = None) -> str | None:
+        """Record what the stream actually delivered, once it is known.
+
+        Returns the session's identity status where the car id moved it, so
+        the caller can say so on screen while the run is happening.
+        """
         with self._write() as conn:
             conn.execute(
                 "UPDATE sessions SET packet_format = COALESCE(?, packet_format), "
                 "car_category = COALESCE(?, car_category), "
                 "fuel_capacity_l = COALESCE(?, fuel_capacity_l) WHERE id = ?",
                 (packet_format, car_category, fuel_capacity_l, session_id))
+            if car_id is None:
+                return None
+            return self._observe_car_id(conn, session_id, int(car_id),
+                                        game_version)
+
+    def _observe_car_id(self, conn: sqlite3.Connection, session_id: int,
+                        car_id: int, game_version: str | None) -> str | None:
+        """Reconcile one observed packet car id against the event's declaration.
+
+        **This is the gate bug 1 walked through.** Session 11 streamed a Gr.3
+        class on an event whose car is a road car, and nothing in the app
+        compared the two - so its lap 4 fuel burn became the approved race
+        plan's `fuelPerLapL`. The comparison now happens while the run is
+        happening, on the packet's own car id rather than on the class token,
+        because a class is shared by dozens of cars and an id is not.
+
+        Four outcomes, and none of them stops the session recording:
+
+        * the event's car has no id yet - **learn it**, and note where from;
+        * the id agrees - nothing to say;
+        * the id belongs to a different known car - `car-mismatch`, which the
+          archive already had **two** of and not one (sessions 11 and 5), so
+          this is a class of defect rather than an incident;
+        * the id belongs to nothing on file - a **quarantined** car row is
+          created for it so the session has a distinct id immediately. Not
+          selectable, not pooled into any fit, not lost.
+        """
+        from pitcrew.store.identity import (
+            IDENTITY_NO_READING,
+            IDENTITY_OK,
+            STATUS_QUARANTINED,
+            car_slug,
+            reconcile_car_id,
+            unknown_car_name,
+        )
+
+        event_car = conn.execute(
+            "SELECT c.* FROM sessions s JOIN events e ON e.id = s.event_id "
+            "JOIN cars c ON c.id = e.car_ref WHERE s.id = ?",
+            (session_id,)).fetchone()
+        owner = conn.execute("SELECT * FROM cars WHERE gt7_car_id = ?",
+                             (car_id,)).fetchone()
+        outcome = reconcile_car_id(car_id, event_car=event_car,
+                                   car_by_gt7_id=owner)
+
+        if outcome.status == IDENTITY_NO_READING:
+            # 0 is "the car has not loaded", not a car. Nothing is written and
+            # nothing is accused; a later packet with a real id resolves it.
+            current = conn.execute(
+                "SELECT identity_status FROM sessions WHERE id = ?",
+                (session_id,)).fetchone()
+            return current["identity_status"] if current else None
+
+        car_ref_observed = outcome.car_ref_observed
+
+        if outcome.learn_gt7_id_for is not None:
+            conn.execute(
+                "UPDATE cars SET gt7_car_id = ?, gt7_id_source = "
+                "'observed-on-stream', gt7_id_game_version = ? WHERE id = ?",
+                (car_id, game_version, outcome.learn_gt7_id_for))
+            conn.execute(
+                "INSERT INTO identity_repairs (table_name, row_id, field, "
+                "old_value, new_value, reason, resolved_by, resolved_at) "
+                "VALUES ('cars',?,'gt7_car_id',NULL,?,?,'observed-on-stream',?)",
+                (str(outcome.learn_gt7_id_for), str(car_id),
+                 f"first seen driving in session {session_id}", _now()))
+
+        if outcome.create_quarantined_id is not None:
+            # The slug comes off the name through the one slug function, even
+            # here where the name is generated and the answer is obvious. A
+            # second way of composing a key is how all three of these bugs
+            # started.
+            name = unknown_car_name(car_id)
+            conn.execute(
+                "INSERT OR IGNORE INTO cars (gt7_car_id, name, slug, "
+                "gt7_id_source, gt7_id_game_version, status, created_at) "
+                "VALUES (?,?,?,'observed-on-stream',?,?,?)",
+                (car_id, name, car_slug(name), game_version,
+                 STATUS_QUARANTINED, _now()))
+            created = conn.execute("SELECT id FROM cars WHERE gt7_car_id = ?",
+                                   (car_id,)).fetchone()
+            car_ref_observed = int(created["id"]) if created else None
+            conn.execute(
+                "INSERT INTO identity_repairs (table_name, row_id, field, "
+                "old_value, new_value, reason, resolved_by, resolved_at) "
+                "VALUES ('cars',?,'status',NULL,?,?,'observed-on-stream',?)",
+                (str(car_ref_observed), STATUS_QUARANTINED,
+                 outcome.note or "unknown car id on the wire", _now()))
+
+        conn.execute(
+            "UPDATE sessions SET car_id_observed = ?, car_ref_observed = ?, "
+            "identity_status = ? WHERE id = ?",
+            (car_id, car_ref_observed, outcome.status, session_id))
+
+        if outcome.status != IDENTITY_OK:
+            log("store").warning("session %s identity is %s: %s", session_id,
+                                 outcome.status, outcome.note)
+            conn.execute(
+                "INSERT INTO identity_repairs (table_name, row_id, field, "
+                "old_value, new_value, reason, resolved_by, resolved_at) "
+                "VALUES ('sessions',?,'identity_status',?,?,?, "
+                "'observed-on-stream',?)",
+                (str(session_id), IDENTITY_OK, outcome.status,
+                 outcome.note or "", _now()))
+        return outcome.status
 
     def end_session(self, session_id: int, *, at: str | None = None) -> None:
         """Close a session.  `at` is for closing one the app never got to
@@ -569,6 +922,28 @@ class Store:
         survives a cold out-lap are all measured there rather than assumed.
         Recording one and then not reading it, which is what the app did until
         now, is the whole feature missing its point.
+
+        **And no laps whose car the stream contradicted.** This is the gate
+        that closes bug 1. On 17 Aug 2026 session 11 was found carrying
+        `car_category='GR3'` on event 2, whose car is a road car GT7 streams
+        as `GR.N`. This query scoped on `event_id` alone - no car predicate
+        anywhere - so its lap 4 burn of 7.563377380371094 L became
+        `assumptions.fuelPerLapL = 7.563` in the **approved** race plan. The
+        plan was not influenced by the wrong car's session; that one lap was
+        the figure.
+
+        The predicate is on the identity, not on the class: two Gr.3 cars
+        share a class and do not share an id, so filtering on
+        `car_category` would still have let the wrong Gr.3 car through.
+
+        `EVIDENCE_IDENTITY_SQL` states which statuses disqualify and why - the
+        short version is that a contradiction does and an absent reading does
+        not. `COALESCE` so that a row written before the column existed is not
+        accused of anything: missing is null, and null is not a mismatch.
+
+        **Excluded is not lost.** Every one of session 11's laps and frames
+        reads back in full through `list_laps` and `list_event_laps`, and the
+        export still describes them. They just do not cost a race plan.
         """
         rows = self._query(
             "SELECT laps.*, sessions.started_at AS session_started, "
@@ -580,9 +955,27 @@ class Store:
             "FROM laps JOIN sessions ON sessions.id = laps.session_id "
             "WHERE sessions.event_id = ? "
             "  AND (sessions.kind = 'practice' OR sessions.rehearsal = 1) "
+            f"  AND {EVIDENCE_IDENTITY_SQL} "
             "ORDER BY sessions.started_at, sessions.id, laps.lap_num",
             (event_id,))
         return [dict(r) for r in rows]
+
+    def excluded_evidence_sessions(self, event_id: int) -> list[dict]:
+        """Sessions this event has that no plan may be built on, and why.
+
+        The counterpart to the gate above: a session held out of the evidence
+        set silently is the same failure as one wrongly let in. The strategy
+        screen names these so the driver can see what his plan is *not* costed
+        on, and the repair screen can act on them.
+        """
+        return [dict(r) for r in self._query(
+            "SELECT sessions.*, COUNT(laps.id) AS lap_count "
+            "FROM sessions LEFT JOIN laps ON laps.session_id = sessions.id "
+            "WHERE sessions.event_id = ? "
+            "  AND (sessions.kind = 'practice' OR sessions.rehearsal = 1) "
+            f"  AND NOT ({EVIDENCE_IDENTITY_SQL}) "
+            "GROUP BY sessions.id ORDER BY sessions.started_at, sessions.id",
+            (event_id,))]
 
     def list_event_laps(self, event_id: int, kind: str = "practice") -> list[dict]:
         rows = self._query(

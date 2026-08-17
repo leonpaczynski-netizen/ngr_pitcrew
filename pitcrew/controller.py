@@ -66,7 +66,8 @@ from pitcrew.prompts.templates import PROMPT_VERSION
 from pitcrew.setup.parse import parse_reply
 from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
 from pitcrew.store import catalogs
-from pitcrew.store.db import Store
+from pitcrew.store.db import DEFAULT_SHEET_PURPOSE, Store
+from pitcrew.store.identity import IDENTITY_OK
 from pitcrew.race.calls import STAY_OUT
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.race.expectations import PRACTICE, Expectation
@@ -205,6 +206,11 @@ class TelemetryBridge(QObject):
         # `_apply_shift_points`.
         self._shift_points = None
         self._car_id = None
+        # Whether a REAL car id has been announced yet, as distinct from
+        # `_announced`, which only says a packet arrived. The first packet
+        # routinely carries id 0 - the car has not loaded - and that is not an
+        # identity.
+        self._car_announced = False
         # The largest short-shift drop in force at any point during the lap
         # being driven. None until a packet arrives - a lap nobody watched
         # makes no claim about how it was driven.
@@ -264,6 +270,9 @@ class TelemetryBridge(QObject):
             SessionKind.RACE if race else SessionKind.PRACTICE)
         self.recorder.discard()
         self._announced = False
+        # A new session asks the identity question again from scratch: the
+        # car may well have changed between one run and the next.
+        self._car_announced = False
         # A session boundary ends the lap in progress, so the shift mode
         # accumulated for it belongs to nothing.
         self._lap_short_shift_rpm = None
@@ -335,6 +344,25 @@ class TelemetryBridge(QObject):
             # looked up. It overrides both the game's shift light and the
             # driver's single number, because it is the only one of the three
             # measured on this gearbox.
+            self._car_id = packet.car_id
+            self._car_announced = bool(packet.car_id)
+            self._apply_shift_points()
+            self.stream_seen.emit({
+                "packet_format": packet.packet_format,
+                "car_category": packet.car_category,
+                "fuel_capacity_l": packet.fuel_capacity,
+                "car_id": packet.car_id,
+            })
+        elif not self._car_announced and packet.car_id:
+            # **The first packet is often too early to know what the car is.**
+            # `car_id` 0 is GT7's "not loaded yet" sentinel and it arrives with
+            # `car_category` null and a 0 L tank - measured on 16 Aug 2026 at
+            # 19:51:14, which is session 42's `started_at` to the second. That
+            # session recorded no car class at all and none of its three laps
+            # can be attributed. Announcing once and never again is what made
+            # the miss permanent, so the facts are re-sent the moment the car
+            # actually loads.
+            self._car_announced = True
             self._car_id = packet.car_id
             self._apply_shift_points()
             self.stream_seen.emit({
@@ -824,7 +852,7 @@ class PitCrewController(QObject):
                 gears.append(float(chunk))
             except ValueError:
                 continue
-        purpose = data.get("sheet_purpose") or "race"
+        purpose = data.get("sheet_purpose") or DEFAULT_SHEET_PURPOSE
         name = data["sheet_name"] or f"{data['name']} sheet"
         sheet = SetupSheet(
             car_name=data["car_name"],
@@ -838,13 +866,21 @@ class PitCrewController(QObject):
         sheet_id = self.store.save_setup_sheet(sheet)
 
         for other_purpose, parsed in (data.get("other_sheets") or {}).items():
-            # Named after the sheet on the form where the reply did not name
-            # it, so two sheets from one paste never collide on (car, name) -
-            # which would silently make the second overwrite the first.
+            # **The name is kept, and the purpose keeps them apart.**
+            #
+            # This used to rename the second sheet to "<name> (qualifying)"
+            # because the store's key was `(car_name, sheet_name)` and two
+            # sheets of one name could not coexist - the comment here called
+            # the collision out and then worked around it. The workaround only
+            # covered the half of the case where the reply gave no name of its
+            # own; where it did, and the names matched, the second sheet still
+            # overwrote the first and relabelled it. That is the defect the
+            # driver reported. The key carries `purpose` now, so the two are
+            # two rows and re-pasting the same reply updates both in place
+            # instead of breeding a third.
             self.store.save_setup_sheet(SetupSheet(
                 car_name=data["car_name"],
-                sheet_name=(parsed.sheet_name
-                            or f"{name} ({other_purpose})"),
+                sheet_name=parsed.sheet_name or name,
                 values=dict(parsed.values),
                 gears=list(parsed.gears),
                 purpose=other_purpose,
@@ -1457,15 +1493,28 @@ class PitCrewController(QObject):
         # **The sheet that matches what he is about to practise.** A
         # qualifying run on the race sheet is a measurement of the race
         # sheet, and filing it against the qualifying one would put a
-        # symptom on the wrong car. Falls back to the most recent sheet
-        # of any purpose, because a car with one sheet on file is the
-        # normal case and refusing to open a session over it would be
-        # bureaucracy.
+        # symptom on the wrong car.
+        #
+        # Where the car has exactly ONE sheet on file, that is the sheet that
+        # is on the car whatever it was labelled, and the session records it -
+        # a car with one sheet is the normal case and refusing to open a
+        # session over it would be bureaucracy. Where it has several and none
+        # of them is for this purpose, the honest answer is that the app does
+        # not know which one is fitted, so **the session records no sheet at
+        # all rather than the wrong one**. Missing is null, never a
+        # substitute: a `setup_sheet_id` that names a sheet he was not running
+        # is worse than one that names none, because the export presents it as
+        # the setup as run.
         intent = self.practice.practice_intent()
         sheet = self.store.sheet_for(event["car_name"] or "", intent)
         if sheet is None:
             sheets = self.store.list_setup_sheets(event["car_name"] or "")
-            sheet = sheets[0] if sheets else None
+            sheet = sheets[0] if len(sheets) == 1 else None
+            if sheet is None and sheets:
+                self.practice.set_status(
+                    f"No {intent} sheet on file for this car, and it has "
+                    f"{len(sheets)} others - this run is recorded without one. "
+                    f"Load the {intent} sheet on the Event screen.")
         sheet_id = sheet.id if sheet else None
 
         self.bridge.reset()
@@ -1773,11 +1822,26 @@ class PitCrewController(QObject):
     def _on_stream_seen(self, facts: dict) -> None:
         if self.session_id is None:
             return
-        self.store.note_stream_facts(
+        status = self.store.note_stream_facts(
             self.session_id,
             packet_format=facts["packet_format"],
             car_category=facts["car_category"],
-            fuel_capacity_l=facts["fuel_capacity_l"])
+            fuel_capacity_l=facts["fuel_capacity_l"],
+            car_id=facts.get("car_id"),
+            # Stamped on the id the moment it is learned, because packet-id
+            # stability across a GT7 version bump is **unproven** - one car,
+            # one version. A renumbering has to be visible as a flagged
+            # session rather than as a silent reassignment.
+            game_version=self.settings.game_version)
+        if status and status != IDENTITY_OK:
+            # **Said while the run is happening.** Session 11's mismatch was
+            # discovered three days later, by which time its fuel figure was
+            # in an approved race plan. A flag nobody sees until the
+            # post-mortem is the same as no flag.
+            self.practice.set_status(
+                f"Connected, but this run is flagged: {status}. Its laps will "
+                "not be used to cost a race plan until you resolve it.")
+            return
         self.practice.set_status(
             f"Connected. Packet {facts['packet_format'] or '?'}"
             f"{', ' + facts['car_category'] if facts['car_category'] else ''}."

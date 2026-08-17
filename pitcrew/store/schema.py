@@ -37,6 +37,19 @@ Versions, and what upgrading means here:
   below already expresses, and a no-op entry in `MIGRATIONS` would only suggest
   otherwise.  The version number moves so that the guard in
   `Store._init_schema` still refuses to open a file this build predates.
+* **v7** adds `tracks`, `track_layouts`, `cars` and `identity_repairs`: one
+  canonical row per car and per circuit, with an integer key.  The tables are
+  new, so `CREATE TABLE IF NOT EXISTS` covers them and the four columns on
+  `events` and `sessions` are pure `ADDED_COLUMNS` — but the **seed and the
+  back-fill** are work neither can express, so `_migrate_v7_canonical_identity`
+  exists.  `laps` is not read, written, altered or rebuilt: it has no identity
+  column, and `lap_frames` cascades off it.
+* **v8** moves `purpose` inside `setup_sheets`' uniqueness key.  A race sheet
+  and a qualifying sheet of the same name were one row, because the upsert's
+  conflict target did not include the column that tells them apart — so
+  loading the second overwrote the first and relabelled it.  This is the only
+  migration here that rebuilds a table; see its docstring for why that is safe
+  for `setup_sheets` and would not be for `laps`.
 
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
@@ -46,9 +59,10 @@ than in one more `IF NOT EXISTS`.
 """
 from __future__ import annotations
 
+import datetime
 import sqlite3
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -126,6 +140,23 @@ CREATE TABLE IF NOT EXISTS setup_sheets (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     car_name     TEXT    NOT NULL,
     sheet_name   TEXT    NOT NULL,
+    -- **`race` or `qualifying`, and it is part of the key.**
+    --
+    -- It was outside it, and that lost sheets. The prompts ask the tune
+    -- builder for both sheets in one reply and `parse_reply` returns both, so
+    -- one paste routinely carries two - and with `UNIQUE(car_name,
+    -- sheet_name)` the second upserted over the first and flipped its
+    -- purpose. Load a race sheet then a qualifying sheet of the same name and
+    -- only the qualifying one exists; the race sheet is gone, not shadowed.
+    --
+    -- NOT NULL with a default rather than nullable, and that is the whole
+    -- reason the rebuild was worth it: **sqlite counts two NULLs as distinct
+    -- in a UNIQUE constraint**, so a nullable column in the key would let an
+    -- untagged sheet accumulate a new row on every save while the upsert
+    -- silently stopped matching. 'race' is the right default because it is
+    -- already the convention `sheet_for` documents - a sheet stored before
+    -- the question was asked is a race sheet.
+    purpose      TEXT    NOT NULL DEFAULT 'race',
     values_json  TEXT    NOT NULL DEFAULT '{}',
     gears_json   TEXT,                      -- JSON array, 1st..nth
     performance_json TEXT,                  -- restrictor, ECU, ballast
@@ -133,7 +164,7 @@ CREATE TABLE IF NOT EXISTS setup_sheets (
     notes        TEXT,
     created_at   TEXT    NOT NULL,
     updated_at   TEXT    NOT NULL,
-    UNIQUE(car_name, sheet_name)
+    UNIQUE(car_name, sheet_name, purpose)
 );
 
 -- Mid-session changes, structured rather than prose: they are exactly what
@@ -484,6 +515,119 @@ CREATE TABLE IF NOT EXISTS tyre_models (
 );
 CREATE INDEX IF NOT EXISTS idx_tyre_models_scope
     ON tyre_models(car_key, circuit_key, model_kind);
+
+-- --------------------------------------------------- canonical identity (v7)
+--
+-- Before these three tables, nothing in the app had a stable identifier for a
+-- car or a circuit. Every identity was a display string or a slug composed
+-- from one, by one of four incompatible rules, and three bugs of that family
+-- landed inside a single day: a Gr.3-tagged session feeding an approved road-
+-- car race plan its fuel figure, a tyre call that never fired because its
+-- scope named a circuit the events table does not contain, and one car slugged
+-- two ways because `str.isalnum()` keeps an accent.
+--
+-- The rule these tables enforce: **the slug is a COLUMN, written once, and
+-- every later use reads it.** Nothing recomposes a key. That is what makes the
+-- family of bug structurally impossible rather than merely fixed.
+
+CREATE TABLE IF NOT EXISTS tracks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL UNIQUE,   -- 'Autodromo Nazionale Monza'
+    kind       TEXT,                      -- 'Real' | 'Original' | 'City' | ...
+    slug       TEXT    NOT NULL UNIQUE,
+    -- A track constant, not a car variable (CLAUDE.md 5.4). It lives here
+    -- rather than on the layout because it is measured once per circuit; it
+    -- is nullable because unmeasured is null and never a default 20 s.
+    pit_loss_secs REAL,
+    created_at TEXT    NOT NULL
+);
+
+-- **The layout is the circuit identity, and it is its own row.**
+--
+-- Not a suffix concatenated onto a track key, for three reasons in order of
+-- weight. A corner model belongs to a layout: Monza Full Course and Monza No
+-- Chicane share nothing at the corner level. A NULL layout was representable
+-- in the old shape and event 1 carried one for weeks, with 763 grip
+-- observations and a corner model keyed off its absence - making the layout a
+-- mandatory column of its own row makes "Monza, layout unstated"
+-- unrepresentable rather than merely discouraged. And a reversed
+-- configuration shares its track's name and length while needing its own
+-- corner sequence.
+CREATE TABLE IF NOT EXISTS track_layouts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id   INTEGER NOT NULL REFERENCES tracks(id),
+    layout     TEXT    NOT NULL,          -- 'Full Course'; never null
+    reverse    INTEGER NOT NULL DEFAULT 0,
+    length_m   REAL,                      -- catalogue figure, for the +/-50 m check
+    -- Null means the catalogue does not say, which is not the same claim as
+    -- "it cannot rain here".
+    rain       INTEGER,
+    -- `slugify(track + ' ' + layout)`. **This spelling is load-bearing**: it
+    -- is exactly what `corner_models.circuit_key`, `track_clock.circuit_key`
+    -- and 1,459 `grip_observations` rows already hold on disk, so stage 3
+    -- resolves them against this column by plain equality.
+    slug       TEXT    NOT NULL UNIQUE,
+    -- 'canonical' is selectable. 'quarantined' exists, holds its data, and is
+    -- offered to nobody.
+    status     TEXT    NOT NULL DEFAULT 'canonical',
+    created_at TEXT    NOT NULL,
+    UNIQUE(track_id, layout)
+);
+CREATE INDEX IF NOT EXISTS idx_layouts_track ON track_layouts(track_id);
+
+-- **The natural key is `gt7_car_id`; the primary key is the surrogate `id`.**
+--
+-- Deliberate, and it resolves most of the tension in this design by itself.
+-- The 608 catalogue cars are known by name and none of them has a verified
+-- packet id, so they seed with `gt7_car_id = NULL` and are all immediately
+-- selectable. The id is filled in the first time the car is driven -
+-- **learned from the stream, never imported.** `data/car_id_map.json` looks
+-- like the game's id space and is not: the Shelby streams 3391, that file
+-- says 473, and its whole range stops at 712. Because every foreign key
+-- points at the surrogate, learning or correcting a `gt7_car_id` later
+-- rewrites nothing.
+CREATE TABLE IF NOT EXISTS cars (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    gt7_car_id  INTEGER UNIQUE,           -- the PACKET's id. NULL until observed.
+    name        TEXT    NOT NULL UNIQUE,  -- GT7's own spelling
+    category    TEXT,                     -- 'Gr.3' | 'Road Car' | ...
+    maker       TEXT,
+    year        TEXT,
+    drivetrain  TEXT,
+    pp_rating   REAL,
+    slug        TEXT    NOT NULL UNIQUE,
+    -- 'observed-on-stream' or NULL. There is no 'catalogue' source and there
+    -- must never be one: the only file that carries ids carries wrong ones.
+    gt7_id_source       TEXT,
+    -- Which GT7 version the id was seen under. Packet id stability across a
+    -- version bump is **unproven** - one car, one version (1.70) - so a
+    -- renumbering has to show up as a flagged session rather than silently.
+    gt7_id_game_version TEXT,
+    status      TEXT    NOT NULL DEFAULT 'canonical',
+    created_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cars_status ON cars(status);
+
+-- Every identity assignment the app derived rather than was told, and every
+-- repair the driver later made. This is what makes v7 reversible in the sense
+-- that matters: no column is dropped, renamed or retyped anywhere in it, so
+-- the schema rolls back by being ignored - and every value it *derived* can be
+-- read back off this table row by row.
+CREATE TABLE IF NOT EXISTS identity_repairs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_name  TEXT NOT NULL,
+    row_id      TEXT NOT NULL,
+    field       TEXT NOT NULL,
+    old_value   TEXT,
+    new_value   TEXT,
+    reason      TEXT NOT NULL,
+    -- 'migration-v7' | 'observed-on-stream' | 'driver'. Never blank: an
+    -- assignment with no author cannot be audited.
+    resolved_by TEXT NOT NULL,
+    resolved_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_identity_repairs_row
+    ON identity_repairs(table_name, row_id);
 """
 
 # Columns added to tables that already existed in an earlier version.
@@ -522,6 +666,23 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # it, so the fact lives beside the number rather than in it.
         ("refuel_rate_source", "TEXT"),
         ("pit_loss_source", "TEXT"),
+        # **The hub, at last with keys.** `events.id` was already what
+        # `sessions`, `strategies`, `race_runs` and `prompt_issues` hang off;
+        # what it lacked was any link of its own to a canonical car or
+        # circuit. `car_name` and `track`/`layout` stay beside these and are
+        # written from the canonical row on every future write - they become
+        # derived display columns rather than the identity. Dropping them
+        # would mean rebuilding `events`, and four tables cascade off it.
+        #
+        # `car_id` (already present, NULL on every row, written by nothing)
+        # is NOT this. It is a dead column from an older shape; `car_ref`
+        # points at `cars.id`, which is a surrogate, not the packet's id.
+        ("car_ref", "INTEGER"),
+        ("layout_id", "INTEGER"),
+        # 'ok' | 'quarantined'. Quarantined means the event could not be
+        # resolved to canonical rows - a car or a layout the catalogue does
+        # not carry. The event keeps every one of its sessions and laps.
+        ("identity_status", "TEXT"),
     ),
     "laps": (
         ("gear_ratios", "TEXT"),
@@ -599,6 +760,25 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # comes from - but it is not the league race, and an outcome
         # post-mortem must not read it as one.
         ("rehearsal", "INTEGER"),
+        # **What the wire said the car was.** `packet.car_id` is in the base
+        # 296-byte struct, so it arrives in every packet format A/B/~/C - it
+        # costs nothing to record and it is the only automatically-verifiable
+        # identity in the system. Null on every archived session because
+        # nothing wrote it; 0 is never stored, because 0 is GT7's "the car has
+        # not loaded" sentinel and not a car.
+        ("car_id_observed", "INTEGER"),
+        # The `cars.id` that observation resolved to. Null where it resolved
+        # to nothing, which is a real state and not a failure.
+        ("car_ref_observed", "INTEGER"),
+        # 'ok' | 'car-mismatch' | 'car-unknown' | 'no-reading'.
+        #
+        # **This is the column that closes bug 1.** Session 11 streamed GR3 on
+        # a Road Car event and its lap 4 burn became the approved plan's
+        # `fuelPerLapL` of 7.563, because `list_evidence_laps` scoped on the
+        # event alone and no code anywhere compared a session's car to its
+        # event's. Nothing is deleted: the session, its 7 laps and its frames
+        # all stay, and it is excluded from evidence rather than lost.
+        ("identity_status", "TEXT"),
     ),
 }
 
@@ -752,9 +932,249 @@ def _migrate_v5_incident_evidence(conn: sqlite3.Connection) -> None:
             (seen.crawl_s, seen.off_track_s, seen.spin_s, lap_id))
 
 
+def _repair(conn: sqlite3.Connection, now: str, table: str, row_id,
+            field: str, old, new, reason: str,
+            by: str = "migration-v7") -> None:
+    """Log one derived identity assignment, so it can be read back."""
+    conn.execute(
+        "INSERT INTO identity_repairs (table_name, row_id, field, old_value, "
+        "new_value, reason, resolved_by, resolved_at) VALUES (?,?,?,?,?,?,?,?)",
+        (table, str(row_id), field,
+         None if old is None else str(old),
+         None if new is None else str(new), reason, by, now))
+
+
+def _migrate_v7_canonical_identity(conn: sqlite3.Connection) -> None:
+    """Seed the canonical car and circuit tables, and key the archive to them.
+
+    **Nothing is dropped, guessed or discarded.** Every existing row is
+    mapped, and anything that does not map is flagged where it stands rather
+    than deleted - the project's own precedent is quarantine, never delete.
+
+    Three back-fills, in order:
+
+    1. **Seed.** 41 tracks, 121 layout rows (84 catalogue layouts plus 37
+       reverse configurations) and 608 cars, every car with `gt7_car_id NULL`
+       because no verified packet id exists for any of them yet.
+    2. **Events.** Resolve `car_name` against `cars.name` and `(track, layout)`
+       against `track_layouts`, both by exact string equality - the catalogue
+       is where those strings came from. An event that resolves neither half
+       is `identity_status = 'quarantined'` and keeps everything it has.
+    3. **Sessions.** Here the migration is working with one hand tied:
+       **`car_id` was never recorded on any archived session**, so the only
+       evidence of what car actually ran is `car_category`, the class token
+       off the stream. A class is shared by dozens of cars, so this can catch
+       a road car tagged Gr.3 and cannot tell two Gr.3 cars apart. That is a
+       real limit and it is why the fix going forward is the id, not the
+       class. A flagged session **cannot be identified retroactively** and is
+       not guessed at: it is quarantined, and stays quarantined until the
+       driver says what it was.
+
+    **The mismatch class had TWO instances at migration time, not one.**
+    Session 11 is the expensive one - `GR3` on event 2's road car, 7 laps, and
+    its lap 4 is the approved plan's fuel figure - and it is the one every
+    write-up names. Session 5 is the other: `GRN` on event 1, whose Porsche
+    911 RSR is Gr.3. It has zero laps, so it cost nothing and nobody noticed,
+    which is exactly why it is written down here. **This is a class of defect
+    with more than one member, not an incident with a name.** Nothing
+    downstream may special-case session 11.
+
+    `laps` is not read, written, altered or rebuilt anywhere in here.
+    """
+    from pitcrew.store.identity import (
+        IDENTITY_MISMATCH,
+        IDENTITY_NO_READING,
+        IDENTITY_OK,
+        IDENTITY_QUARANTINED,
+        expected_stream_token,
+        seed_catalogue,
+    )
+
+    if "car_ref" not in _columns(conn, "events"):
+        return                          # ADDED_COLUMNS has not run yet
+
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    seed_catalogue(conn, now)
+
+    # --- events -------------------------------------------------------------
+    for event in conn.execute(
+            "SELECT id, track, layout, car_name, car_ref, layout_id, "
+            "identity_status FROM events").fetchall():
+        event_id, track, layout, car_name = event[0], event[1], event[2], event[3]
+        car_ref, layout_id, status = event[4], event[5], event[6]
+        if car_ref is not None and layout_id is not None and status:
+            continue                    # already keyed; the migration is idempotent
+
+        if car_ref is None and car_name:
+            row = conn.execute(
+                "SELECT id FROM cars WHERE name = ?", (car_name,)).fetchone()
+            if row is not None:
+                car_ref = int(row[0])
+                _repair(conn, now, "events", event_id, "car_ref", None, car_ref,
+                        f"exact name match on {car_name!r}")
+
+        if layout_id is None and track and layout:
+            row = conn.execute(
+                "SELECT tl.id FROM track_layouts tl JOIN tracks t "
+                "ON t.id = tl.track_id WHERE t.name = ? AND tl.layout = ?",
+                (track, layout)).fetchone()
+            if row is not None:
+                layout_id = int(row[0])
+                _repair(conn, now, "events", event_id, "layout_id", None,
+                        layout_id, f"exact match on {track!r} / {layout!r}")
+
+        # **A layout the event never stated is not resolved here.** Which of
+        # Monza's two layouts a run was on is a fact about the world, and
+        # `CLAUDE.md` 4.1 says a disagreement between sources is the finding.
+        # It goes to the driver, quarantined, with its data intact.
+        resolved = car_ref is not None and layout_id is not None
+        conn.execute(
+            "UPDATE events SET car_ref = ?, layout_id = ?, identity_status = ? "
+            "WHERE id = ?",
+            (car_ref, layout_id,
+             IDENTITY_OK if resolved else IDENTITY_QUARANTINED, event_id))
+        if not resolved:
+            _repair(conn, now, "events", event_id, "identity_status", status,
+                    IDENTITY_QUARANTINED,
+                    "no canonical car" if car_ref is None else "no canonical layout")
+
+    # --- sessions -----------------------------------------------------------
+    for session in conn.execute(
+            "SELECT s.id, s.car_category, s.identity_status, c.category, c.name "
+            "FROM sessions s LEFT JOIN events e ON e.id = s.event_id "
+            "LEFT JOIN cars c ON c.id = e.car_ref "
+            "WHERE s.identity_status IS NULL").fetchall():
+        session_id, observed_token = session[0], session[1]
+        declared_category, declared_name = session[3], session[4]
+        expected = expected_stream_token(declared_category)
+
+        if observed_token is None:
+            # **`no-reading` is not `car-mismatch`, and conflating them would
+            # accuse five sessions of something no evidence supports.** GT7
+            # streamed no class here: either it never streamed at all
+            # (sessions 4 and 21 have no packet format) or the packet landed
+            # before the car loaded (13, 36 and 42 all read a 0 L tank too).
+            status = IDENTITY_NO_READING
+            reason = "GT7 reported no car class for this run"
+        elif expected is None or observed_token.strip().upper() == expected:
+            status, reason = IDENTITY_OK, ""
+        else:
+            status = IDENTITY_MISMATCH
+            reason = (f"the stream reported class {observed_token}; "
+                      f"{declared_name} is {declared_category}, which GT7 "
+                      f"streams as {expected}")
+
+        conn.execute("UPDATE sessions SET identity_status = ? WHERE id = ?",
+                     (status, session_id))
+        if status != IDENTITY_OK:
+            _repair(conn, now, "sessions", session_id, "identity_status",
+                    None, status, reason)
+
+
+def _migrate_v8_sheet_purpose(conn: sqlite3.Connection) -> None:
+    """Put `purpose` inside `setup_sheets`' uniqueness key.
+
+    **The defect, in the driver's words:** "trying to load both a race setup
+    and quali setup into app it only accepts the last setup you add even
+    though you can select race or quali."
+
+    Exactly that. `UNIQUE(car_name, sheet_name)` left `purpose` outside the
+    key while `save_setup_sheet` upserted on that key and assigned
+    `purpose=excluded.purpose`, so the qualifying sheet did not become a
+    second row - it overwrote the race sheet and relabelled it. And all seven
+    archived sheets carried `purpose IS NULL`, so even where two survived,
+    `sheet_for`'s documented "an untagged sheet predates the question and is
+    therefore a race sheet" rule made both of them race candidates.
+
+    **This is the one migration in this file that rebuilds a table**, and it
+    is worth stating why that is allowed here when the note at the top of the
+    migrations section forbids it. That warning is about `laps`: `lap_frames`
+    references it `ON DELETE CASCADE`, so dropping it destroys every recorded
+    telemetry blob. `sessions.setup_sheet_id` references `setup_sheets` with
+    **no ON DELETE clause at all**, so nothing cascades - and the ids are
+    copied across verbatim, so every reference still resolves. A UNIQUE
+    constraint cannot be altered in sqlite any other way: it is an implicit
+    index that `DROP INDEX` will not touch.
+
+    Foreign keys are off for the whole upgrade pass (see `_init_schema`) and
+    `PRAGMA foreign_key_check` runs after it, so a reference that failed to
+    survive would be loud rather than silent.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='setup_sheets'"
+    ).fetchone()
+    if row is None or "sheet_name, purpose" in (row[0] or ""):
+        return                          # already v8, or built fresh from the DDL
+
+    columns = _columns(conn, "setup_sheets")
+    if "purpose" not in columns:        # ADDED_COLUMNS has not run yet
+        return
+
+    before = conn.execute("SELECT COUNT(*), COALESCE(MAX(id), 0) "
+                          "FROM setup_sheets").fetchone()
+
+    conn.execute("""
+        CREATE TABLE setup_sheets_v8 (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            car_name     TEXT    NOT NULL,
+            sheet_name   TEXT    NOT NULL,
+            purpose      TEXT    NOT NULL DEFAULT 'race',
+            values_json  TEXT    NOT NULL DEFAULT '{}',
+            gears_json   TEXT,
+            performance_json TEXT,
+            build_json   TEXT,
+            notes        TEXT,
+            created_at   TEXT    NOT NULL,
+            updated_at   TEXT    NOT NULL,
+            UNIQUE(car_name, sheet_name, purpose)
+        )""")
+    # **`id` is copied, not regenerated.** Five sessions on file point at
+    # sheets 1, 3, 5, 9 and 12; renumbering would silently re-point every one
+    # of them at a different setup, which is precisely the "which sheet
+    # produced these symptoms" ambiguity the sheet-as-run section exists to
+    # remove.
+    conn.execute("""
+        INSERT INTO setup_sheets_v8
+            (id, car_name, sheet_name, purpose, values_json, gears_json,
+             performance_json, build_json, notes, created_at, updated_at)
+        SELECT id, car_name, sheet_name, COALESCE(purpose, 'race'),
+               values_json, gears_json, performance_json, build_json, notes,
+               created_at, updated_at
+          FROM setup_sheets""")
+
+    after = conn.execute("SELECT COUNT(*), COALESCE(MAX(id), 0) "
+                         "FROM setup_sheets_v8").fetchone()
+    if tuple(before) != tuple(after):
+        # Refuse rather than half-convert. A row or an id lost here is a
+        # session pointing at a setup that is not the one it ran.
+        raise RuntimeError(
+            f"setup_sheets rebuild would lose data: {tuple(before)} -> "
+            f"{tuple(after)}")
+
+    # **The AUTOINCREMENT high-water mark is carried across too.** Dropping the
+    # table takes its `sqlite_sequence` row with it, and re-inserting rows 1-12
+    # would reset the mark to 12 - so the next sheet saved would be handed id
+    # 13, which three deleted sheets already used. Ids that have been issued
+    # once are not issued again; that is the whole reason the column is
+    # AUTOINCREMENT rather than a plain rowid.
+    sequence = conn.execute(
+        "SELECT seq FROM sqlite_sequence WHERE name = 'setup_sheets'").fetchone()
+
+    conn.execute("DROP TABLE setup_sheets")
+    conn.execute("ALTER TABLE setup_sheets_v8 RENAME TO setup_sheets")
+
+    if sequence is not None:
+        conn.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = ? "
+                     "AND seq < ?",
+                     (sequence[0], "setup_sheets", sequence[0]))
+
+
 MIGRATIONS: dict[int, tuple[str, object]] = {
     3: ("per-corner tyre wear", _migrate_v3_wear_per_corner),
     4: ("the game clock onto the lap, and the readings taken through a keyhole",
         _migrate_v4_lap_clock),
     5: ("the off-and-spin evidence onto the lap", _migrate_v5_incident_evidence),
+    7: ("canonical car and circuit identity", _migrate_v7_canonical_identity),
+    8: ("a race sheet and a qualifying sheet are two sheets",
+        _migrate_v8_sheet_purpose),
 }

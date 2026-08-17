@@ -145,8 +145,17 @@ def test_saving_keeps_both_and_tags_them(store: Store, event_id, qt_app):
 
 
 def test_two_sheets_from_one_paste_never_collide(store: Store, qt_app):
-    """`setup_sheets` is unique on (car, name). Two sheets saved under one
-    name would make the second silently overwrite the first."""
+    """Two sheets of one name coexist, because the purpose is in the key.
+
+    **This test used to assert the workaround instead.** `setup_sheets` was
+    unique on `(car_name, sheet_name)`, so the save path renamed the second
+    sheet to "<name> (qualifying)" and this asserted that the names differed.
+    That only covered the half of the case where the reply named neither
+    sheet; where the reply named both the same - which is what the tune
+    builder does - the second still overwrote the first and relabelled it,
+    and the driver reported exactly that. v8 put `purpose` in the key, so the
+    names may match and the rename is gone.
+    """
     from pitcrew.controller import PitCrewController
     from pitcrew.ui.practice_screen import PracticeScreen
 
@@ -164,5 +173,9 @@ def test_two_sheets_from_one_paste_never_collide(store: Store, qt_app):
 
     car = "Porsche 911 RSR (991) '17"
     sheets = store.list_setup_sheets(car)
-    assert len({sheet.sheet_name for sheet in sheets}) == len(sheets) == 2
+    assert len(sheets) == 2
+    assert {sheet.purpose for sheet in sheets} == {FOR_RACE, FOR_QUALIFYING}
+    # Same name, two rows, neither one shadowing the other.
+    assert {sheet.sheet_name for sheet in sheets} == {"unnamed"}
+    assert store.sheet_for(car, FOR_RACE).values["rh_f"] == 60.0
     assert store.sheet_for(car, FOR_QUALIFYING).values["rh_f"] == 55.0

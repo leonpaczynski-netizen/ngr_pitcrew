@@ -98,7 +98,21 @@ def _legacy_track_names() -> tuple[str, ...]:
 
 @functools.lru_cache(maxsize=1)
 def cars_by_id() -> dict[int, str]:
-    """GT7 car id -> car name.  The id is what the telemetry packet carries."""
+    """An ordinal -> car name, out of `car_id_map.json`.
+
+    **These are NOT the ids the telemetry packet carries**, whatever this
+    docstring used to say. Measured 17 Aug 2026: the Ford Shelby GT350R '16
+    streams `car_id = 3391` - logged to the second at the start of sessions
+    42, 43 and 44 - while this file maps `473` to that car and its whole id
+    space stops at 712. It is almost certainly an ordinal from an older
+    catalogue.
+
+    So nothing may write these numbers into `cars.gt7_car_id`. The game's own
+    id is **learned from the stream** the first time a car is driven, and the
+    canonical `cars` table starts every row at NULL rather than importing a
+    number that measured false. What survives here is the display-name
+    fallback, which is all this file was ever reliable for.
+    """
     if not CARS_FILE.exists():
         return {}
     with CARS_FILE.open(encoding="utf-8") as handle:
