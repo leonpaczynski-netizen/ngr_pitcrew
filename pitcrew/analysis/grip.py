@@ -12,25 +12,58 @@ frames above 15 m/s. Measured over 95 clean laps at three circuits:
 * **It is no noisier than the stopwatch.** Lap-to-lap CV, from consecutive-lap
   differences so a stint's own drift is not counted as noise: 0.72 % at Monza,
   1.10 % at Yas, 1.54 % at Watkins, against lap time's 0.81 / 1.17 / 1.52 %.
-* **It is far less deaf.** A friction-envelope percentile has an elasticity to
-  grip of 1.0 by construction. Lap time's measured elasticity is **0.07 to
-  0.30** — straights do not scale with grip, so most of the signal is thrown
-  away before anything is measured. Resolving a 1 % grip change needs **16 to
-  74 laps** on this observable and **478 to 4,204** on lap time.
 * **It orders compounds and lap time does not.** Monza / Porsche, clean laps:
-  RH 1.848, RM 1.896, RS 1.968 — monotone in compound softness, Welch t = 9.4.
+  RH 1.848, RM 1.896, RS 1.968 — monotone in compound softness, Welch t = 8.65.
   Lap time puts RS *slower* than RM and separates RS from RH at t = 0.72.
+
+**WHAT IT ACTUALLY MEASURES, and this is not what it was first sold as.** A
+percentile sweep settles it, and the two headline claims turn out to rest on
+different physics:
+
+* **Compound ordering is a ceiling effect, and it is real.** The separation
+  survives all the way to the top of the distribution — at Monza the *p99*
+  orders RH 2.144 / RM 2.194 / RS 2.215 at Welch t = 8.6, and `top240` (a
+  fixed-count high-end mean, immune to how much of the lap was spent near the
+  limit) orders them at t = 7.8. A softer tyre genuinely raises the friction
+  ceiling and this observable sees it.
+* **Within-stint degradation is NOT a ceiling effect.** Slope t by percentile
+  at Monza RH: p80 −0.1, p85 −1.9, **p90 −5.9, p93 −7.8, p95 −6.4**, p97 −3.0,
+  **p99 +0.1**. The signal lives in a band and vanishes at the top. Every
+  fixed-count statistic — `top30` −0.8, `top60` −0.5, `top120` −0.6, `top240`
+  −1.4 — shows nothing, with per-stint slopes of mixed sign. Corroborating:
+  `comb_p95` correlates **+0.91** with the *count* of frames above 1.8 g and
+  only weakly with the ceiling.
+
+  So what declines through a stint is **how much of the lap he could hold near
+  the limit, not how high the limit was.** That is consistent with CLAUDE.md
+  §5.1 — balance shifts before the stopwatch does — and it is equally
+  consistent with him simply tapering his effort. The data cannot separate
+  those two, which is why **the magnitude is not speakable and the fitted
+  models say only that the direction is down.**
+
+  **Do not "fix" this by moving to p90 or p93.** They have the larger t, but
+  they also have the *higher* correlation with time-near-the-limit (+0.73 and
+  +0.95), so they are more of the confounded quantity rather than less. There
+  is no percentile that escapes the band, and the statistics that do escape it
+  carry no signal. The statistic is not the thing to change; the claim is.
 
 Three constructions in here are not obvious and are all measured findings:
 
-* **A percentile, never a maximum.** `comb_max` has a CV of 26-28 %: one frame
-  of a kerb strike owns it.
-* **The fuel confound runs the safe way.** a_lat = mu(mg + D)/m, so
-  d a/d m <= 0: burning fuel can only raise this observable. Every declining
-  trend is therefore a **lower bound** on the grip decline, and no magnitude
-  correction is specified because none can be justified.
-* **Effort is filtered, not corrected.** `comb_p95` is a ceiling *achieved*, and
-  a ceiling not attempted is not measured — session 44's deliberate fuel-save
+* **A percentile, never a maximum.** `comb_max` has a CV of 26-28 %. Not
+  because of kerb strikes — that explanation was wrong — but because the speed
+  channel drops to exactly 0.0 for runs of frames mid-straight on 35 of the 175
+  archived laps. See `MAX_PLAUSIBLE_COMB_G`.
+* **The fuel direction is NOT known, and this module used to claim it was.**
+  The argument was a_lat = mu(mg + D)/m, so d a/d m <= 0, therefore burning
+  fuel can only raise the observable and every decline is a lower bound. The
+  data does not agree: the partial fuel coefficient is **+0.00059 g/L at
+  t = +1.73**, the opposite sign to the prediction, and it is unidentifiable
+  anyway because `corr(lap_in_stint, fuel) = −0.946` within a stint. What can
+  be said is narrower and is worth more: substituting lap time for fuel leaves
+  the trend essentially unchanged (−0.00406 g/lap, t = −5.46 against −0.00415,
+  t = −6.42), so the decline is not simply the tank emptying.
+* **Effort is filtered, not corrected.** `comb_p95` is a level *achieved*, and
+  a level not attempted is not measured — session 44's deliberate fuel-save
   lap read 5.3 % low. Two commitment covariates were tried and moved the fitted
   coefficients by under 7 %, so they are recorded and not trusted. What keeps
   the fit honest is the push-lap filter below.
@@ -55,6 +88,15 @@ the count look better.** Nothing downstream is harmed: the corner is
 deliberately not the fit unit, so the effect is confined to which corner rows
 carry `counts_toward_fit = 1`. If it should move, move it on purpose.
 
+Its one genuine perversity, recorded so the next reader is not surprised by it:
+**the rule is sample-size perverse.** The observed-apex sd is estimated from
+whatever clean laps exist, and more laps estimate a wider one, so the same
+corner reads `stable` on 16 laps and `unstable` on 53 - the evidence improved
+and the verdict got worse. That is the wrong way round for a stability test,
+and it is a reason to replace the rule rather than retune it: the right shape
+is a bound on the *standard error* of the apex, or a flat metre tolerance,
+neither of which punishes a corner for being well measured.
+
 **2. The apex anchor lives on the observation, not on `corner_models`.** The
 design pass asked for `apex_m_observed` beside `apex_m` in the stored corner
 model. It is here instead, and on reflection this is the better home rather
@@ -69,11 +111,22 @@ than upserting - and `export/build.py` reads `Corner`, so it moves with them.
 
 **3. The push-lap filter makes this module's figures differ from the design
 pass's, in the filter's favour.** Session 19's two stint slopes come out
--0.00196 and -0.00678 g/lap here against the pass's -0.00297 and -0.00635, and
-the grip step at the stop is +2.91 % against its +3.5 %. The difference is
-entirely that **the pass's windows kept the spin laps and this filter drops
-them**; a lap he spun on is not a measurement of what the tyre would give. The
-figures here are the ones to trust.
+-0.00196 and -0.00678 g/lap here against the pass's -0.00297 and -0.00635. The
+difference is entirely that **the pass's windows kept the spin laps and this
+filter drops them**; a lap he spun on is not a measurement of what the tyre
+would give. The figures here are the ones to trust.
+
+**4. The "+3.5 % step at the tyre change" does not survive a fair comparison,
+and neither did the +2.91 % this module first reported.** Both compare one lap
+- lap 17, which is the *peak of the second stint's warm-up* - against a
+stint-1 line extrapolated four laps past its own data. Both stints of session
+19 started on fresh sets, so the fair comparison is mean to mean over matched
+`lap_in_stint` ranges, and that gives **1.8384 against 1.8384 — zero, to four
+figures, on 8 laps against 7.** Last-lap-before against first-lap-after gives
++1.76 %, and that one is a warm-up too. **There is no measured
+grip step at the stop in this archive.** Session 19 still shows a warm-up, a
+decline, a stop and a second decline - the shape is real - but the size of the
+reset is not established and must not be quoted.
 """
 from __future__ import annotations
 
@@ -114,6 +167,24 @@ FRAMES_GATE_TOLERANCE = 0.02
 # rotating are allowed none.
 MAX_OFF_TRACK_S = 2.0
 
+# **A combined-g reading above this is not a measurement, it is a dropout.**
+# Measured: 35 of the 175 archived laps carry frames above 3 g, one peaking at
+# 138.6 g. The mechanism was traced and it is not a kerb strike - it is the
+# speed channel reading **exactly 0.0 for a run of frames in the middle of a
+# straight**, at 268 km/h, so the differencing stencil spans the cliff and
+# reports a deceleration no car can produce. That is CLAUDE.md §7's warning
+# exactly: zeros are the one failure mode that survives into a recommendation.
+#
+# Frames above the ceiling are **discarded, not clipped**: a clipped frame is a
+# fabricated measurement at the bound, and the honest reading of a dropout is
+# that the lap was not measured there. They are counted and reported, because a
+# lap that loses many of them has a stream problem worth knowing about.
+#
+# 3.0 g is chosen as a physical bound rather than a statistical one - no Gr.3
+# car on slicks reaches it - so it cannot move with the data. It discards
+# nothing real: the highest genuine per-lap p99 in the archive is 2.4 g.
+MAX_PLAUSIBLE_COMB_G = 3.0
+
 # A corner window under this many usable frames is not an observation of a
 # corner. Eight frames is 133 ms.
 MIN_CORNER_FRAMES = 8
@@ -151,15 +222,34 @@ def yaw_source_for(frame_schema_version: int | None) -> str:
 
     v1 blobs stored the roll rate where the yaw rate belonged, and
     `repair_frames` recovers ground-track yaw by differencing the stored path.
-    That reconstruction is a +-0.1 s smoothing stencil and it **attenuates the
-    peak of the acceleration distribution by 3-4 %** against a v2 lap carrying
-    the packet's own `angvel_y`. Measured on identical setup sheets: Yas sheet
-    12 read 1.694 on v1 against 1.729-1.766 on v2; Monza sheet 3 read 1.848 on
-    v1 against 1.915 on v2.
+    v2 laps carry the packet's own `angvel_y`. Measured on identical setup
+    sheets, v2 reads **3-4 % higher**: Yas sheet 12 read 1.694 on v1 against
+    1.729-1.766 on v2; Monza sheet 3 read 1.848 on v1 against 1.915 on v2.
 
     **That offset is the same size as the compound step the model exists to
-    detect.** A fit that pooled across it would read a change of storage format
-    as a change in the car.
+    detect**, so a fit that pooled across it would read a change of storage
+    format as a change in the car. The refusal to pool stands on that
+    measurement alone and needs no mechanism.
+
+    **The mechanism previously stated here was wrong, and it mattered.** The
+    claim was that the +-0.1 s path stencil "attenuates" the peak, i.e. that v1
+    is a smoothed version of v2. Two things are against it. First the size:
+    inflating `lat_g` by the full 4 % moves Monza's `comb_p95` by only +1.77 %,
+    under half the observed gap - and the observed gap rests on **one** v2 lap
+    at that circuit. Second, and more important, **the two are not the same
+    quantity**. Path-reconstructed yaw is the rate of change of the direction
+    of travel; `angvel_y` is the rate of rotation of the body, and they differ
+    by the rate of change of sideslip. A cornering car has a non-zero one. So
+    it is not settled which of the two is the biased estimate of the lateral
+    acceleration the tyre actually produced - **v2 may be the biased one.**
+
+    **The way out, and it retires this whole problem.** `vel_x/y/z` are stored
+    on 39 of the 175 archived laps and on everything recorded from now on.
+    Differencing world velocity gives a lateral acceleration directly, with no
+    yaw rate in it at all - identical in construction across both schema
+    versions, and closer to what a tyre is doing than either. Once enough laps
+    carry it, derive the observable that way, compare on the laps that carry
+    both, and this refusal can be retired rather than lived with.
     """
     return YAW_FROM_PATH if (frame_schema_version or 1) < 2 else YAW_FROM_PACKET
 
@@ -169,9 +259,15 @@ def frames_gate(lap_time_ms: int | None, frame_count: int | None,
     """Do the frames we hold account for the lap time GT7 claimed?
 
     Returns `(passed, error_fraction)`. `error_fraction` is None when the
-    question cannot be asked at all — no lap time, no frames — and None is not
-    a failure, it is an absence, so the caller says so rather than inventing a
-    verdict.
+    question cannot be asked at all — no lap time, no frames.
+
+    **An unanswerable gate returns `passed = False`, and that is deliberate
+    rather than a conflation.** The two states are distinguishable by the
+    caller — `error_fraction is None` says the question could not be put — but
+    they get the same verdict, because a lap whose frames cannot be checked
+    against its claimed time has not been shown to be a lap. Letting an
+    unverifiable lap into the fit on the grounds that nothing disproved it is
+    how a phantom gets counted.
     """
     if not lap_time_ms or not frame_count or not sample_hz:
         return False, None
@@ -231,6 +327,8 @@ class LapTrace:
     throttle: array
     kerb: array
     kerb_measured: bool = False
+    # Frames discarded as physically impossible; see `MAX_PLAUSIBLE_COMB_G`.
+    implausible_frames: int = 0
 
     @property
     def yaw_source(self) -> str:
@@ -290,6 +388,7 @@ def trace_lap(frames: list[dict], sample_hz: float, *, lap_id: int,
                   if v is not None]
         smoothed.append(sum(window) / len(window) if window else None)
 
+    implausible = 0
     for index in range(DIFF_HALF_FRAMES, count - DIFF_HALF_FRAMES):
         ahead = smoothed[index + DIFF_HALF_FRAMES]
         behind = smoothed[index - DIFF_HALF_FRAMES]
@@ -298,14 +397,18 @@ def trace_lap(frames: list[dict], sample_hz: float, *, lap_id: int,
         if math.isnan(speed[index]) or speed[index] < MIN_SPEED_KPH:
             continue
         long_g = (ahead - behind) / (2 * DIFF_HALF_FRAMES * dt) / G
-        comb[index] = math.hypot(lat[index], long_g)
+        magnitude = math.hypot(lat[index], long_g)
+        if magnitude > MAX_PLAUSIBLE_COMB_G:
+            implausible += 1
+            continue                    # a dropout, left unmeasured
+        comb[index] = magnitude
 
     return LapTrace(lap_id=lap_id, session_id=session_id, lap_num=lap_num,
                     sample_hz=rate, frame_schema_version=frame_schema_version,
                     frame_count=count, dist=dist, speed=speed, lat=lat,
                     comb=comb, temp_front=temp_front, temp_rear=temp_rear,
                     brake=brake, throttle=throttle, kerb=kerb,
-                    kerb_measured=kerb_measured)
+                    kerb_measured=kerb_measured, implausible_frames=implausible)
 
 
 # ------------------------------------------------------------ apex anchoring
@@ -691,6 +794,10 @@ class DerivationReport:
     skipped: list[str] = field(default_factory=list)
     anchors: dict[str, dict[str, ApexAnchor]] = field(default_factory=dict)
     sessions: set[int] = field(default_factory=set)
+    # Frames discarded as physically impossible. Not stored on the row - that
+    # would need a column in a table another agent currently holds - but
+    # reported, because a lap losing many of them has a stream problem.
+    implausible_frames: int = 0
 
     @property
     def lap_rows(self) -> list[dict]:
@@ -706,7 +813,8 @@ class DerivationReport:
                 f"({len(self.counted_lap_rows)} counting toward a fit), "
                 f"{corners} corner observations, "
                 f"{len(self.sessions)} session(s), "
-                f"{len(self.skipped)} lap(s) skipped")
+                f"{len(self.skipped)} lap(s) skipped, "
+                f"{self.implausible_frames} frame(s) discarded as implausible")
 
 
 def _clock_frozen(lap: dict) -> bool:
@@ -801,34 +909,51 @@ def derive_event(store, event: dict, *, session_ids: set[int] | None = None,
     circuit = event_circuit_key(event)
     corner_model = store.get_corner_model(circuit)
 
+    # **The apex anchors are computed over the whole circuit, always, even when
+    # only one session is being written.** They were not, and the consequence
+    # was silent: `--session 19 --apply` re-anchored on 16 laps instead of 53
+    # and rewrote 156 corner rows at the SAME derivation version - 61 grip
+    # values changed, `identity_stable` flipped on 26 corners and
+    # `counts_toward_fit` on 16. Two rows written under one version then meant
+    # two different windows, which is exactly the reproducibility the version
+    # number exists to promise. Tracing every lap costs a minute; a version
+    # whose rows disagree with each other costs the model.
+    anchor_traced: list[tuple[LapTrace, dict, SessionContext]] = []
     traced: list[tuple[LapTrace, dict, SessionContext]] = []
     for session in store.list_sessions(event["id"]):
-        if session_ids is not None and session["id"] not in session_ids:
+        selected = session_ids is None or session["id"] in session_ids
+        if not selected and corner_model is None:
             continue
         laps = store.list_laps(session["id"])
         if not laps:
             continue
         context = _session_context(store, event, session, laps)
-        report.sessions.add(session["id"])
+        if selected:
+            report.sessions.add(session["id"])
         for lap in laps:
             stored = store.get_lap_frames(lap["id"])
             if stored is None:
-                report.skipped.append(
-                    f"s{session['id']} lap {lap['lap_num']}: no frames stored")
+                if selected:
+                    report.skipped.append(
+                        f"s{session['id']} lap {lap['lap_num']}: no frames stored")
                 continue
             trace = trace_lap(
                 stored["frames"], stored["sample_hz"], lap_id=lap["id"],
                 session_id=session["id"], lap_num=lap["lap_num"],
                 frame_schema_version=stored["frame_schema_version"])
-            traced.append((trace, lap, context))
+            anchor_traced.append((trace, lap, context))
+            if selected:
+                traced.append((trace, lap, context))
+            report.implausible_frames += trace.implausible_frames
             if progress is not None:
                 progress(lap["id"])
 
     anchors: dict[str, ApexAnchor] = {}
     if corner_model is not None:
         # Anchored on the clean laps only. A lap he spun on is not evidence
-        # about where the apex is.
-        clean = [t for t, lap, context in traced
+        # about where the apex is. Every session at the circuit, not only the
+        # selected ones - see the note above.
+        clean = [t for t, lap, context in anchor_traced
                  if lap_eligibility(
                      lap, frame_count=t.frame_count, sample_hz=t.sample_hz,
                      is_pit_lap=lap["lap_num"] in context.pit_laps,

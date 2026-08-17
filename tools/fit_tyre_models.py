@@ -71,9 +71,15 @@ def _print_scope(scope, evidence, models: list[dict]) -> None:
             print(f"    mean {_number(body['mean_grip_g'])} g, "
                   f"CV {_number(body['cv_pct'], 2)} %, n {body['n']}")
         elif model["model_kind"] == "degradation":
+            between = body.get("between_stint") or {}
             print(f"    {_number(body['grip_g_per_lap'], 5)} g/lap, "
-                  f"se {_number(body['se'], 5)}, t {_number(body['t'], 2)}, "
-                  f"pooled over {body['pooled_over_stints']} stint(s)")
+                  f"se {_number(body['se'], 5)}, t {_number(body['t'], 2)} on "
+                  f"{body.get('dof')} df, p {_number(body.get('p'), 4)} "
+                  f"[{body.get('estimator')}]")
+            pooled = body.get("pooled_within_stint") or {}
+            print(f"      per-stint signs {between.get('signs') or 'n/a'}; "
+                  f"within-stint pooled t {_number(pooled.get('t'), 2)} "
+                  f"(reported, never gated on)")
             for key, per in sorted(body["per_stint"].items()):
                 print(f"      stint {key}: "
                       f"{_number(per['slope_g_per_lap'], 5)} g/lap, "
@@ -161,11 +167,11 @@ def main() -> int:
         seen.add(key)
         print(f"  {key}")
         for prior in priors_for_scope(scope):
-            print(f"    {prior['id']}: {prior['status']}, "
-                  f"speakable here: {prior['speakable_here']}")
-            if not prior["speakable_here"] and prior["speakable_scopes"]:
-                print(f"      (its only speakable scope is "
-                      f"{list(prior['speakable_scopes'])})")
+            print(f"    {prior['id']}: {prior['status']}, in scope: "
+                  f"{prior['in_scope']}, speakable here: "
+                  f"{prior['speakable_here']}")
+            for blocker in prior["blockers"]:
+                print(f"      blocked: {blocker}")
 
     if not args.apply:
         print("\nNothing written. Re-run with --apply.")

@@ -17,6 +17,7 @@ the real archive that skips cleanly when it is absent.
 from __future__ import annotations
 
 import math
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -41,6 +42,8 @@ from pitcrew.analysis.tyre_model import (
     STAGE0_LINE,
     STAGE2_MIN_PUSH_LAPS_PER_STINT,
     STAGE2_MIN_STINTS,
+    SETTLED_LAP_IN_STINT,
+    STAGE2_MAX_P,
     STAGE2_MIN_TOTAL_PUSH_LAPS,
     PoolingRefused,
     Scope,
@@ -48,12 +51,14 @@ from pitcrew.analysis.tyre_model import (
     consecutive_lap_cv,
     fit_archive,
     fit_degradation,
+    gate_stage1_warmup,
     gate_stage2_degradation,
     gate_stage3_conserve,
     group_by_scope,
     may_i_say,
     ols,
     prior_scope_key,
+    student_t_p,
     priors_for_scope,
     refuse_to_pool,
 )
@@ -350,32 +355,52 @@ def test_the_degradation_gate_needs_three_contributing_stints():
 
 
 def test_a_stint_too_short_to_carry_a_trend_does_not_contribute():
-    short = _evidence(stints=6, laps_each=STAGE2_MIN_PUSH_LAPS_PER_STINT - 1,
-                      slope=-0.004)
+    """A stint contributes on its SETTLED laps, so a short one drops out even
+    though its raw lap count looks adequate."""
+    short = _evidence(stints=6, laps_each=SETTLED_LAP_IN_STINT
+                      + STAGE2_MIN_PUSH_LAPS_PER_STINT - 1, slope=-0.004,
+                      fresh=True)
     assert short.contributing_stints == {}
     verdict = gate_stage2_degradation(short, fit_degradation(short))
     assert verdict.met is False
     assert any("0 contributing stint(s)" in why for why in verdict.failures)
 
 
+def test_the_warm_up_laps_are_out_of_the_degradation_fit():
+    """A warm-up is a rising process; pooled with a declining one it produces a
+    slope that describes neither. The two fits used to disagree about this."""
+    evidence = _evidence(stints=3, laps_each=10, slope=-0.004, fresh=True)
+    for laps in evidence.contributing_stints.values():
+        assert min(r["lap_in_stint"] for r in laps) >= SETTLED_LAP_IN_STINT
+    assert all(r["lap_in_stint"] >= SETTLED_LAP_IN_STINT
+               for r in evidence.settled())
+
+
 def test_three_short_stints_still_need_the_total_lap_count():
     """The per-stint count is a floor, not the evidence condition. Three stints
-    of five laps is fifteen observations and that is not enough to stand
-    behind, which the total clause says out loud."""
-    sparse = _evidence(stints=3, laps_each=STAGE2_MIN_PUSH_LAPS_PER_STINT,
-                       slope=-0.004)
+    of five settled laps is fifteen observations, one short of what a 1 % effect
+    needs at the measured CV, and the total clause says so out loud."""
+    sparse = _evidence(stints=3,
+                       laps_each=SETTLED_LAP_IN_STINT
+                       + STAGE2_MIN_PUSH_LAPS_PER_STINT, slope=-0.004,
+                       fresh=True)
+    assert sparse.contributing_laps == 15
     verdict = gate_stage2_degradation(sparse, fit_degradation(sparse))
     assert verdict.met is False
-    assert any("15 push lap(s) across the contributing stints; 24 needed" in why
-               for why in verdict.failures)
+    assert any(f"15 settled push lap(s)" in why for why in verdict.failures)
 
 
 def test_the_degradation_gate_opens_on_enough_stints_and_enough_laps():
-    enough = _evidence(stints=STAGE2_MIN_STINTS, laps_each=8, slope=-0.004)
+    enough = _evidence(stints=STAGE2_MIN_STINTS, laps_each=9, slope=-0.004)
     assert enough.contributing_laps >= STAGE2_MIN_TOTAL_PUSH_LAPS
     opened = gate_stage2_degradation(enough, fit_degradation(enough))
     assert opened.met is True
-    assert "measured off your own laps" in opened.says
+    # Direction only. A percentage here would be a magnitude the percentile
+    # band cannot carry.
+    assert "going away" in opened.says
+    assert "per cent" not in opened.says
+    assert "measured" not in opened.says
+    assert opened.asks_for == "tyre-gauge-reading"
 
 
 def test_laps_spread_unevenly_across_stints_no_longer_shut_the_gate():
@@ -385,13 +410,12 @@ def test_laps_spread_unevenly_across_stints_no_longer_shut_the_gate():
     because those 40 laps fell 10, 9, 7, 7, 7 instead of evenly. The evidence
     was never thin; the proxy was wrong."""
     rows = []
-    for stint, laps in enumerate((10, 9, 7, 7, 7)):
+    for stint, laps in enumerate((13, 12, 10, 10, 10)):
         for lap in range(laps):
             rows.append(_lap_row(lap + 1, grip=1.871 - 0.004 * lap
                                  + (0.0009 if lap % 3 else -0.0007),
                                  session=stint + 1, stint=f"{stint + 1}:0"))
     evidence = ScopeEvidence.build(rows)
-    assert evidence.samples == 40
     assert len(evidence.contributing_stints) == 5
     verdict = gate_stage2_degradation(evidence, fit_degradation(evidence))
     assert verdict.met is True
@@ -403,7 +427,66 @@ def test_long_enough_stints_that_show_no_trend_keep_the_gate_shut():
     flat = _evidence(stints=4, laps_each=10, slope=0.0)
     verdict = gate_stage2_degradation(flat, fit_degradation(flat))
     assert verdict.met is False
-    assert any("|t|" in why for why in verdict.failures)
+    assert any("p = " in why or "RISING" in why or "disagree in sign" in why
+               for why in verdict.failures)
+
+
+def test_a_rising_trend_is_never_announced_as_a_loss():
+    """**C-1, and it was one Yas session away from shipping.**
+
+    Nothing in the gate required the slope to be negative: it tested `abs(t)`
+    and then formatted `abs(slope)` into "Grip's down". A scope whose own fit
+    says grip is RISING would have announced a loss. Yas / Shelby / RS already
+    fits +0.0109 g/lap at t = +2.68 and was held out only by its stint count.
+    """
+    rising = _evidence(stints=4, laps_each=10, slope=+0.006)
+    fit = fit_degradation(rising)
+    assert fit["grip_g_per_lap"] > 0
+    assert abs(fit["t"]) > 3.0                 # it WOULD clear a |t| bar
+    verdict = gate_stage2_degradation(rising, fit)
+    assert verdict.met is False
+    assert any("RISING" in why for why in verdict.failures)
+    assert "down" not in verdict.says
+    assert "going away" not in verdict.says
+
+
+def test_stints_that_disagree_in_sign_do_not_speak():
+    """A trend that reverses between stints is not this car's tyre. Monza is
+    5 of 5 negative, so this clause costs nothing today and closes the case
+    where one long stint drags a mixed population negative."""
+    rows = []
+    for stint, slope in enumerate((-0.010, -0.009, +0.008, -0.008)):
+        for lap in range(10):
+            rows.append(_lap_row(lap + 1, grip=1.87 + slope * lap
+                                 + (0.0006 if lap % 3 else -0.0004),
+                                 session=stint + 1, stint=f"{stint + 1}:0"))
+    evidence = ScopeEvidence.build(rows)
+    fit = fit_degradation(evidence)
+    assert fit["grip_g_per_lap"] < 0           # the mean still points down
+    verdict = gate_stage2_degradation(evidence, fit)
+    assert verdict.met is False
+    assert any("disagree in sign" in why for why in verdict.failures)
+
+
+def test_the_gate_is_judged_on_the_between_stint_estimator():
+    """**M-3.** Laps inside a stint are not independent draws — fuel, heat and
+    track state all drift smoothly through one — so a pooled within-stint t
+    is miscalibrated in the dangerous direction. The gate reads the mean of the
+    per-stint slopes at df = stints - 1."""
+    evidence = _evidence(stints=4, laps_each=10, slope=-0.004)
+    fit = fit_degradation(evidence)
+    assert fit["estimator"].startswith("between-stint")
+    assert fit["dof"] == 3
+    assert fit["p"] == pytest.approx(
+        student_t_p(fit["t"], fit["dof"]), rel=1e-9)
+    # The pooled figure is still reported — it is just not what decides.
+    # (Which of the two is larger depends on how alike the stints are, so no
+    # assertion is made about that; what matters is that they are separate and
+    # the gate reads the between-stint one.)
+    assert fit["pooled_within_stint"]["t"] is not None
+    assert fit["pooled_within_stint"]["t"] != fit["t"]
+    verdict = gate_stage2_degradation(evidence, fit)
+    assert verdict.requirements["p_two_sided"]["required"] == STAGE2_MAX_P
 
 
 def test_the_conserve_gate_is_shut_and_names_the_gauge_as_the_blocker():
@@ -432,7 +515,10 @@ def test_every_fitted_model_states_what_it_cannot_say():
     for model in fit_archive(rows)["models"]:
         joined = " ".join(model["unknowns"])
         assert "no tyre wear channel" in joined
-        assert "LOWER BOUND" in joined
+        # M-9: this used to assert "LOWER BOUND", which was a claim to know the
+        # fuel direction. The data says otherwise, so the unknown now states
+        # that the direction is unknown.
+        assert "direction is NOT known" in joined
         assert model["samples"] and model["sessions"] and model["stints"]
 
 
@@ -443,6 +529,53 @@ def test_the_consecutive_lap_noise_figure_ignores_a_stints_own_decline():
     noise = consecutive_lap_cv(rows)
     assert noise["cv_pct"] == pytest.approx(0.0, abs=1e-6)
     assert noise["laps"] == 12
+
+
+def test_the_warm_up_call_will_not_speak_when_the_plateau_moves():
+    """**The clause that had been specified and left out.** Counting sequences
+    is not the test — where the plateau lands is. On the real archive Monza's
+    three fresh sets plateau on laps 5, 9 and 5, so this gate stays shut, and
+    without the clause it would have announced a warm-up it could not locate.
+    """
+    scattered = _warmup_evidence(plateaus=(2, 6, 2))
+    verdict = gate_stage1_warmup(scattered)
+    assert verdict.met is False
+    assert any("plateau lands on lap" in why for why in verdict.failures)
+
+    agreed = _warmup_evidence(plateaus=(2, 2, 3))
+    opened = gate_stage1_warmup(agreed)
+    assert opened.met is True
+    assert "up to temperature" in opened.says
+
+
+def test_a_warm_up_is_found_even_though_its_first_lap_never_counts():
+    """**M-4, and it was a structural dead end.** Every one of the 16 rows in
+    the archive marked as a fresh set fails the frames gate — the first lap on
+    a new set leaves the pits and recording starts mid-lap. Keying the warm-up
+    off the first *counted* row therefore found nothing, ever, in any scope."""
+    evidence = _warmup_evidence(plateaus=(2, 2, 2), first_lap_counts=False)
+    assert len(evidence.fresh_started_stints) == 3
+    assert len(evidence.warmups) == 3
+    assert gate_stage1_warmup(evidence).met is True
+
+
+def test_a_stint_of_unknown_age_keeps_its_opening_laps():
+    """Warm-up laps are dropped where a warm-up is known to be, and only there.
+    A blanket exclusion cut the opening laps off stints nothing says were
+    fresh, which did not move the estimate and halved its precision."""
+    rows = []
+    for lap in range(8):
+        rows.append(_lap_row(lap + 1, grip=1.87 - 0.004 * lap, session=1,
+                             stint="1:0"))
+    unknown = ScopeEvidence.build(rows)
+    assert unknown.fresh_started_stints == set()
+    assert len(unknown.contributing_stints["1:0"]) == 8
+
+    fresh = ScopeEvidence.build(
+        [{**r, "laps_on_set": 0 if r["lap_in_stint"] == 0 else None}
+         for r in rows])
+    assert fresh.fresh_started_stints == {"1:0"}
+    assert len(fresh.contributing_stints["1:0"]) == 8 - SETTLED_LAP_IN_STINT
 
 
 def test_may_i_say_answers_stage_zero_when_nothing_has_been_fitted(store):
@@ -537,6 +670,16 @@ def test_the_priors_are_consumed_from_the_store_not_restated_here():
     priors = {p["id"]: p for p in priors_for_scope(scope)}
     assert set(priors) == {"gap-laptime-0.89", "digitalrelay-wear-onset"}
     assert priors["gap-laptime-0.89"]["status"].startswith("REFUTED")
+    # **M-6: a refuted prior is never speakable, scope list or not.** This was
+    # a second door into the same room with no lock on it - `speakable_here`
+    # came back True on n=17 with no gate in front of it, while every fitted
+    # model went through a counted sample. One vocabulary now.
+    assert priors["gap-laptime-0.89"]["in_scope"] is True
+    assert priors["gap-laptime-0.89"]["speakable_here"] is False
+    assert any("refuted prior is never speakable" in b
+               for b in priors["gap-laptime-0.89"]["blockers"])
+    assert any("below the" in b
+               for b in priors["digitalrelay-wear-onset"]["blockers"])
     # The wear-onset threshold has no speakable scope anywhere, and a prior
     # with no scope cannot reach a voice line no matter what imports it.
     assert priors["digitalrelay-wear-onset"]["speakable_scopes"] == []
@@ -548,26 +691,85 @@ def test_the_priors_are_consumed_from_the_store_not_restated_here():
 
 @pytest.mark.skipif(not Path(DEFAULT_DB_PATH).exists(),
                     reason="no recorded archive on this machine")
-def test_integration_the_backfilled_archive_reproduces_the_compound_ordering():
-    """**Integration check against `data/pitcrew.db`.** Skips cleanly when the
-    archive is absent, and asserts the one result that validates the observable
-    against a known-sign grip step: a softer compound must read higher.
+def test_integration_the_backfilled_archive_reproduces_the_compound_ordering(
+        tmp_path):
+    """**Integration check against a COPY of `data/pitcrew.db`.**
+
+    Two things here were wrong and both are the kind that make a suite lie.
+
+    **It opened his live race data read-write.** `Store(DEFAULT_DB_PATH)` runs
+    schema init, which creates tables and can run a migration, against the
+    file holding every lap he has ever recorded - inside a test run. This
+    project already has a guardrail against a smoke test writing to the real
+    config for the same reason. The archive is copied to `tmp_path` first now,
+    and nothing in this test can reach the original.
+
+    **It hard-coded a circuit key that had since changed**, so it hit
+    `pytest.skip` and the suite went green with the headline claim unverified -
+    `CLAUDE.md` §7's exact failure mode. The scope is discovered from the data
+    now, and a missing scope **fails** rather than skips: the only honest
+    reasons to skip are "no archive on this machine" and "the archive has not
+    been derived yet", and neither of those is "I could not find what I was
+    looking for".
     """
-    store = Store(DEFAULT_DB_PATH)
+    copied = tmp_path / "archive.db"
+    shutil.copy(DEFAULT_DB_PATH, copied)
+    store = Store(copied)
     try:
         rows = store.list_grip_observations(unit_kind="LAP")
         if not rows:
             pytest.skip("archive holds no derived observations yet")
         result = fit_archive(rows)
-        monza = [o for o in result["compound_ordering"]
-                 if o["circuit_key"] == "autodromo-nazionale-monza"
-                 and o["yaw_source"] == YAW_FROM_PATH]
-        if not monza:
-            pytest.skip("no multi-compound Monza scope in this archive")
-        levels = {lv["compound"]: lv["mean_grip_g"] for lv in monza[0]["levels"]}
+
+        # Discovered, not hard-coded: the multi-compound path-reconstructed
+        # scope with the most laps behind it.
+        candidates = [o for o in result["compound_ordering"]
+                      if o["yaw_source"] == YAW_FROM_PATH
+                      and len(o["levels"]) >= 3]
+        assert candidates, (
+            "no three-compound scope in the archive — the compound ordering "
+            "is this observable's only validation against a known-sign grip "
+            "step, so its absence is a failure, not a reason to skip. "
+            f"Scopes present: "
+            f"{[(o['circuit_key'], [lv['compound'] for lv in o['levels']]) for o in result['compound_ordering']]}")
+        best = max(candidates, key=lambda o: sum(lv["n"] for lv in o["levels"]))
+        levels = {lv["compound"]: lv["mean_grip_g"] for lv in best["levels"]}
         assert levels["RH"] < levels["RM"] < levels["RS"]
-        assert monza[0]["monotone_in_softness"] is True
-        assert monza[0]["welch_t"] > 3.0
+        assert best["monotone_in_softness"] is True
+        assert best["welch_t"] > 3.0
+        # The caveat travels into the export, so it has to keep naming every
+        # confound rather than only the first one anybody thought of.
+        for confound in ("SESSION", "LAP-IN-STINT", "CHRONOLOGY", "SETUP SHEET"):
+            assert confound in best["caveat"]
+    finally:
+        store.close()
+
+
+@pytest.mark.skipif(not Path(DEFAULT_DB_PATH).exists(),
+                    reason="no recorded archive on this machine")
+def test_integration_no_scope_speaks_a_rising_trend(tmp_path):
+    """Nothing in the real archive may announce a loss while its own fit rises.
+
+    The guard that makes this more than a restatement of the unit test: it runs
+    against whatever is actually on disk, including scopes nobody thought to
+    construct by hand.
+    """
+    copied = tmp_path / "archive.db"
+    shutil.copy(DEFAULT_DB_PATH, copied)
+    store = Store(copied)
+    try:
+        rows = store.list_grip_observations(unit_kind="LAP")
+        if not rows:
+            pytest.skip("archive holds no derived observations yet")
+        for model in fit_archive(rows)["models"]:
+            if model["model_kind"] != "degradation" or not model["speakable"]:
+                continue
+            slope = model["model"]["grip_g_per_lap"]
+            assert slope is not None and slope < 0, (
+                f"{model['circuit_key']}/{model['compound']} is speakable with "
+                f"a rising slope of {slope}")
+            assert model["model"]["between_stint"]["all_negative"]
+            assert "per cent" not in model["gate"]["says"]
     finally:
         store.close()
 
@@ -666,7 +868,31 @@ def _lap_row(lap_num: int, *, grip: float, yaw_source: str = YAW_FROM_PATH,
     return row
 
 
-def _evidence(*, stints: int, laps_each: int, slope: float) -> ScopeEvidence:
+def _warmup_evidence(*, plateaus: tuple[int, ...],
+                     first_lap_counts: bool = True) -> ScopeEvidence:
+    """Fresh-set stints whose rear axle stops climbing at a chosen lap each.
+
+    `first_lap_counts=False` reproduces the archive: the lap that carries the
+    fresh-set mark is itself unmeasurable, because recording starts mid-lap on
+    the way out of the pits.
+    """
+    rows = []
+    for stint, plateau in enumerate(plateaus):
+        for lap in range(6):
+            temp = 70.0 + 4.0 * min(lap, plateau)
+            rows.append(_lap_row(
+                lap + 1, grip=1.87, session=stint + 1, stint=f"{stint + 1}:0",
+                temp_rear_c=temp,
+                laps_on_set=0 if lap == 0 else None,
+                counts_toward_fit=0 if (lap == 0 and not first_lap_counts) else 1,
+                exclusion_reason=("frames-gate" if (lap == 0
+                                                    and not first_lap_counts)
+                                  else None)))
+    return ScopeEvidence.build(rows)
+
+
+def _evidence(*, stints: int, laps_each: int, slope: float,
+              fresh: bool = False) -> ScopeEvidence:
     """Stints with a chosen trend and a deterministic sprinkle of scatter.
 
     The scatter is not decoration. A noiseless line has zero residual, which
@@ -683,5 +909,6 @@ def _evidence(*, stints: int, laps_each: int, slope: float) -> ScopeEvidence:
             rows.append(_lap_row(
                 lap + 1,
                 grip=1.87 + slope * lap + wobble[(stint * 3 + lap) % len(wobble)],
-                session=stint + 1, stint=f"{stint + 1}:0"))
+                session=stint + 1, stint=f"{stint + 1}:0",
+                laps_on_set=0 if (fresh and lap == 0) else None))
     return ScopeEvidence.build(rows)

@@ -42,8 +42,17 @@ _ALWAYS_UNKNOWN = (
     "not a measured coefficient of friction",
     "it cannot be converted to a wear fraction: GT7 broadcasts no tyre wear "
     "channel in any packet format",
-    "fuel is not separated - a lighter car reads higher, so any decline here "
-    "is a LOWER BOUND on the grip decline",
+    # M-9: this used to assert the fuel direction was known and safe. It is not.
+    "fuel is NOT separated and its direction is NOT known: the partial fuel "
+    "coefficient is +0.00059 g/L (t +1.73), the opposite sign to the "
+    "theoretical prediction, and it is unidentifiable within a stint where "
+    "corr(lap_in_stint, fuel) = -0.946. What can be said: substituting lap "
+    "time for fuel leaves the trend intact (-0.00406 g/lap, t -5.46)",
+    "the DIRECTION is what is fitted, not the magnitude: the within-stint "
+    "signal lives in a percentile band (t -5.9 at p90, -6.4 at p95, +0.1 at "
+    "p99) and every fixed-count high-end statistic is flat, so what declines "
+    "is time spent near the limit and not the limit itself - which this data "
+    "cannot separate from the driver easing off",
     "the wear multiplier is whatever the event ran; it is NOT convertible to "
     "another multiplier (CLAUDE.md 5.2 - linearity is assumed, not proven)",
 )
@@ -86,11 +95,53 @@ SETTLED_LAP_IN_STINT = 3
 # about whether the trend is *measurable*, not about which direction it errs in.
 STAGE2_MIN_PUSH_LAPS_PER_STINT = 5
 STAGE2_MIN_STINTS = 3
-STAGE2_MIN_TOTAL_PUSH_LAPS = 24
-STAGE2_MIN_ABS_T = 2.5
+
+# **Derived, not retrofitted.** The two-group sample size for 80 % power at
+# 95 % two-sided is N = 31.4 * sigma^2 / delta^2, and with a percentile
+# observable both sides scale together, so in CV terms N = 31.4 * (CV/D)^2 for
+# a fractional effect D. Stated effect size: **D = 1 % of grip**, which is the
+# currency the whole design pass costed in and is roughly a fifth of the
+# compound step this observable resolves.
+#
+# At the measured consecutive-lap CVs that gives: Monza 0.71 % -> 16 laps,
+# Yas 1.14 % -> 41, Watkins 1.54 % -> 74. The floor here is the **Monza**
+# figure rounded up to the nearest whole stint of his running, because Monza is
+# the only scope with enough data to have produced a CV worth trusting and a
+# per-circuit floor would let a noisy circuit set itself an easier bar than a
+# quiet one. A scope at Watkins' CV therefore needs its own laps to clear the
+# significance clause, which is where its extra noise is properly charged.
+STAGE2_EFFECT_SIZE_PCT = 1.0
+STAGE2_MIN_TOTAL_PUSH_LAPS = 16
+
+# **The gate names a confidence, not a t.** A fixed `|t| >= 2.5` is the wrong
+# shape once the estimator is the between-stint one: at 4 degrees of freedom
+# 2.5 is p = 0.067 and at 30 it is p = 0.018, so one constant means two
+# different claims depending on how many stints happen to exist.
+#
+# It also has to be **evaluated on the between-stint estimator**, not on the
+# pooled within-stint t. Laps inside a stint are not independent draws - fuel,
+# temperature and track state all drift smoothly through it - and a pooled t
+# that assumes they are is miscalibrated in the dangerous direction: simulated
+# on pure noise with AR(1) residuals the false-open rate runs 2.5 % at rho = 0,
+# 6.4 % at 0.3, **16.1 % at 0.6** and 23.1 % at 0.8. Positive rho is the
+# default here, not the exception.
+#
+# The mean of the per-stint slopes with df = stints - 1 treats each stint as
+# the one independent observation it is. On Monza / Porsche / RH that is
+# t = -5.59 on 4 df, p = 0.005 - still comfortably inside this bar, which is
+# the point: the claim survives being tested properly.
+STAGE2_MAX_P = 0.01
 # Stage 1's: a warm-up is one observation per stint, not one per lap.
 STAGE1_MIN_WARMUPS = 3
 STAGE1_MIN_LAPS_PER_WARMUP = 4
+# The plateau has to land in the same place each time, to within a lap, or the
+# call cannot say when the tyres are up.
+STAGE1_PLATEAU_TOLERANCE_LAPS = 1
+# Within this of the sequence's peak rear-axle temperature counts as "up".
+# 1.5 degC because that is roughly one lap's worth of climb at settled pace
+# (measured: +0.25 degC/min at race pace against 1.3-1.6 degC/min warming up),
+# so a tighter figure would be reading noise as a still-climbing axle.
+PLATEAU_TEMP_TOLERANCE_C = 1.5
 # Stage 3's, on wear grounds. Blocked on gauge readings, not on code: there are
 # 15 in 175 archived laps and none at all in either race.
 STAGE3_MIN_STINTS = 12
@@ -208,6 +259,64 @@ def ols(xs: list[float], ys: list[float], *, dof_penalty: int = 2) -> Fit:
     return Fit(slope, intercept, se, (slope / se if se else None), n, r)
 
 
+def _betacf(a: float, b: float, x: float) -> float:
+    """Continued fraction for the incomplete beta function (Lentz's method)."""
+    tiny = 1e-30
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c, d = 1.0, 1.0 - qab * x / qap
+    if abs(d) < tiny:
+        d = tiny
+    d = 1.0 / d
+    h = d
+    for m in range(1, 200):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        c = 1.0 + aa / c
+        if abs(d) < tiny:
+            d = tiny
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        c = 1.0 + aa / c
+        if abs(d) < tiny:
+            d = tiny
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < 3e-12:
+            break
+    return h
+
+
+def student_t_p(t: float | None, dof: int) -> float | None:
+    """Two-sided p for Student's t. None where the question cannot be asked.
+
+    Written out rather than imported because `pitcrew/analysis` carries no
+    numerical dependency and this is the only distribution the fitting layer
+    needs. **It exists because a fixed `|t| >= 2.5` is the wrong shape for a
+    gate evaluated on four degrees of freedom**: at df = 4 that is p = 0.067,
+    and at df = 30 it is p = 0.018. A gate should name the confidence it wants
+    and let the degrees of freedom decide the critical value, not the other way
+    round.
+    """
+    if t is None or dof <= 0:
+        return None
+    x = dof / (dof + t * t)
+    a, b = dof / 2.0, 0.5
+    # Regularised incomplete beta I_x(a, b), which is the two-sided tail.
+    front = math.exp(a * math.log(x) + b * math.log(1.0 - x)
+                     + math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b))
+    if x < (a + 1.0) / (a + b + 2.0):
+        return min(1.0, front * _betacf(a, b, x) / a)
+    return min(1.0, 1.0 - front * _betacf(b, a, 1.0 - x) / b)
+
+
 def _sd(values: list[float]) -> float | None:
     if len(values) < 2:
         return None
@@ -240,6 +349,11 @@ class ScopeEvidence:
     scope: Scope
     rows: list[dict]
     stints: dict[str, list[dict]] = field(default_factory=dict)
+    # **Every row, counted or not.** The push-lap filter decides what may enter
+    # a grip fit; it is the wrong filter for asking whether a stint began on a
+    # fresh set, and keeping only its survivors is what made the warm-up stage
+    # unreachable. See `warmups`.
+    all_rows: list[dict] = field(default_factory=list)
 
     @classmethod
     def build(cls, rows: list[dict]) -> "ScopeEvidence":
@@ -251,7 +365,8 @@ class ScopeEvidence:
             stints[row["stint_key"] or f"session:{row['session_id']}"].append(row)
         for laps in stints.values():
             laps.sort(key=lambda r: r["lap_num"])
-        return cls(scope=scope_of(rows[0]), rows=counted, stints=dict(stints))
+        return cls(scope=scope_of(rows[0]), rows=counted, stints=dict(stints),
+                   all_rows=list(rows))
 
     @property
     def samples(self) -> int:
@@ -272,9 +387,38 @@ class ScopeEvidence:
         Not "long enough to carry the claim on their own" - that was the old
         eight-lap reading and it threw away five- and six-lap stints whose only
         defect was where the driver happened to stop.
+
+        **Warm-up laps are dropped from stints that are known to have one, and
+        only from those.** The opening laps of a stint were previously in the
+        degradation fit and out of the temperature fit, which is two
+        populations under one sample count - and worse than untidy, because a
+        warm-up is a *rising* process and pooling it with a declining one
+        produces a slope describing neither.
+
+        The first repair of that was a blanket exclusion, and it was wrong in
+        the other direction: it also cut the opening laps off stints where
+        nothing says the set was fresh, so there was no warm-up there to
+        remove. Measured, that cost precision and bought nothing - across the
+        five Monza RH stints the mean slope moved -0.00438 -> -0.00477, well
+        inside noise, while the spread between stints nearly doubled (sd
+        0.00176 -> 0.00323) because two seven-lap stints were cut to five and
+        six. A filter that does not move the estimate and halves its precision
+        is removing signal, not bias.
+
+        So the exclusion follows the evidence: a stint the driver marked fresh,
+        or one where the frames show a tyre change, loses its warm-up. A stint
+        of unknown set age keeps every counted lap, and the model says which
+        rule it applied rather than pretending it knows.
         """
-        return {key: laps for key, laps in self.stints.items()
-                if len(laps) >= STAGE2_MIN_PUSH_LAPS_PER_STINT}
+        fresh = self.fresh_started_stints
+        out = {}
+        for key, laps in self.stints.items():
+            usable = ([r for r in laps
+                       if (r["lap_in_stint"] or 0) >= SETTLED_LAP_IN_STINT]
+                      if key in fresh else list(laps))
+            if len(usable) >= STAGE2_MIN_PUSH_LAPS_PER_STINT:
+                out[key] = usable
+        return out
 
     @property
     def contributing_laps(self) -> int:
@@ -289,15 +433,36 @@ class ScopeEvidence:
                    >= STAGE3_MIN_GAUGE_READINGS_PER_STINT)
 
     @property
+    def fresh_started_stints(self) -> set[str]:
+        """Stints known to have begun on a fresh set, from ANY row.
+
+        **Deliberately reads uncounted rows too, and that is the fix for a
+        structural dead end.** This used to ask whether the first *counted* row
+        of a stint had `laps_on_set == 0`, and the answer was no for every
+        stint in the archive: all 16 known-fresh rows fail the frames gate,
+        because the first lap on a new set leaves the pits and the recording
+        starts mid-lap, so the frames cannot account for the lap time GT7
+        claims. The push-lap filter was doing its job; it was simply being
+        asked the wrong question. Whether a set was fresh is a fact about the
+        set, not about whether that lap is fit to measure grip on.
+        """
+        fresh = set()
+        for row in self.all_rows:
+            if row.get("laps_on_set") == 0 and row.get("stint_key"):
+                fresh.add(row["stint_key"])
+        return fresh
+
+    @property
     def warmups(self) -> list[list[dict]]:
-        """Stints that began on a set whose age is actually known to be zero."""
-        out = []
-        for laps in self.stints.values():
-            if not laps or laps[0].get("laps_on_set") != 0:
-                continue
-            if len(laps) >= STAGE1_MIN_LAPS_PER_WARMUP:
-                out.append(laps)
-        return out
+        """Fresh-set stints with enough measurable laps to see a warm-up in.
+
+        The opening lap itself is usually unmeasurable and is not required to
+        be: what a warm-up sequence needs is a known starting point and then
+        laps that can be read.
+        """
+        fresh = self.fresh_started_stints
+        return [laps for key, laps in self.stints.items()
+                if key in fresh and len(laps) >= STAGE1_MIN_LAPS_PER_WARMUP]
 
     def settled(self) -> list[dict]:
         return [r for r in self.rows
@@ -392,35 +557,81 @@ def fit_degradation(evidence: ScopeEvidence) -> dict:
     they are what says whether the effect reproduces or whether one long stint
     is carrying the whole result.
     """
+    # **The same population the gate counts.** These two used to disagree -
+    # the gate required five laps a stint and the fit pooled anything with two
+    # - so the sample count reported beside a coefficient was not the sample
+    # count behind it.
+    stints = evidence.contributing_stints
+
     per_stint = {}
-    for key, laps in evidence.stints.items():
+    slopes: list[float] = []
+    for key, laps in stints.items():
         fit = ols([float(r["lap_in_stint"] or 0) for r in laps],
                   [r["grip_g"] for r in laps])
         per_stint[key] = {"slope_g_per_lap": fit.slope, "se": fit.se,
                           "t": fit.t, "laps": fit.n}
+        if fit.slope is not None:
+            slopes.append(fit.slope)
 
     xs: list[float] = []
     ys: list[float] = []
-    for laps in evidence.stints.values():
-        if len(laps) < 2:
-            continue
+    for laps in stints.values():
         mean_x = sum(float(r["lap_in_stint"] or 0) for r in laps) / len(laps)
         mean_y = sum(r["grip_g"] for r in laps) / len(laps)
         for row in laps:
             xs.append(float(row["lap_in_stint"] or 0) - mean_x)
             ys.append(row["grip_g"] - mean_y)
-    usable_stints = sum(1 for laps in evidence.stints.values() if len(laps) >= 2)
-    pooled = ols(xs, ys, dof_penalty=usable_stints + 1)
+    pooled = ols(xs, ys, dof_penalty=len(stints) + 1)
+
+    # **The estimator the gate is judged on.** One slope per stint, then the
+    # mean of those - so a stint is one observation, which is what it is. The
+    # pooled figure is reported beside it because it is the more precise
+    # estimate of the same quantity when the within-stint residuals really are
+    # independent; it is simply not the one that decides whether to speak.
+    between = None
+    if len(slopes) >= 2:
+        mean_slope = sum(slopes) / len(slopes)
+        spread = _sd(slopes)
+        # `_sd` is the population sd; the standard error of a mean wants the
+        # sample sd, hence the Bessel correction spelled out here.
+        sample_sd = (spread * math.sqrt(len(slopes) / (len(slopes) - 1))
+                     if spread is not None else None)
+        se = (sample_sd / math.sqrt(len(slopes))
+              if sample_sd is not None else None)
+        t = mean_slope / se if se else None
+        between = {
+            "grip_g_per_lap": mean_slope,
+            "se": se,
+            "t": t,
+            "dof": len(slopes) - 1,
+            "p": student_t_p(t, len(slopes) - 1),
+            "stints": len(slopes),
+            "all_negative": all(s < 0 for s in slopes),
+            "signs": "".join("-" if s < 0 else "+" for s in slopes),
+        }
 
     return {
-        "grip_g_per_lap": pooled.slope,
-        "se": pooled.se,
-        "t": pooled.t,
+        # The headline coefficient is the between-stint one. The gate reads it,
+        # and anything quoting `grip_g_per_lap` gets the honest estimator
+        # rather than the flattering one.
+        "grip_g_per_lap": (between or {}).get("grip_g_per_lap"),
+        "se": (between or {}).get("se"),
+        "t": (between or {}).get("t"),
+        "p": (between or {}).get("p"),
+        "dof": (between or {}).get("dof"),
+        "estimator": "between-stint mean of per-stint OLS slopes",
+        "between_stint": between,
+        "pooled_within_stint": {
+            "grip_g_per_lap": pooled.slope, "se": pooled.se, "t": pooled.t,
+            "note": ("assumes laps inside a stint are independent draws, which "
+                     "they are not; reported, never gated on"),
+        },
         "intercept_g": fit_baseline(evidence)["mean_grip_g"],
-        "pooled_over_stints": usable_stints,
+        "pooled_over_stints": len(stints),
         "per_stint": per_stint,
-        "method": ("OLS of comb_p95 on lap-in-stint, demeaned within stint; "
-                   "degrees of freedom charged for every stint mean"),
+        "method": (f"per-stint OLS of comb_p95 on lap-in-stint over settled "
+                   f"laps (lap {SETTLED_LAP_IN_STINT} of a stint onward), then "
+                   f"the mean of those slopes with df = stints - 1"),
     }
 
 
@@ -507,11 +718,48 @@ def compound_ordering(scopes: dict[Scope, ScopeEvidence]) -> list[dict]:
                 100.0 * (levels[-1]["mean_grip_g"] - levels[0]["mean_grip_g"])
                 / levels[0]["mean_grip_g"] if levels[0]["mean_grip_g"] else None),
             "welch_t": _welch_t(softest, hardest),
-            "caveat": ("compound is confounded with session: no session in the "
-                       "archive ran two compounds. Protocol P1 is what makes "
-                       "this controlled."),
+            "mean_lap_in_stint": {c: (sum(r["lap_in_stint"] or 0
+                                          for r in by_compound[c].rows)
+                                      / max(1, by_compound[c].samples))
+                                  for c in present},
+            "sessions_per_compound": {c: by_compound[c].sessions
+                                      for c in present},
+            # **Four confounds, not one.** The stored caveat used to name only
+            # "session", and this string travels into the export, so the
+            # omissions were being read as absences.
+            "caveat": (
+                "NOT a controlled comparison, on four counts. (1) Compound is "
+                "confounded with SESSION: no session in the archive ran two "
+                "compounds, so a compound difference and a session difference "
+                "are the same number here. (2) It is confounded with "
+                "LAP-IN-STINT: the softer compound's laps sit earlier in the "
+                "stint at both circuits, which is where this model's own "
+                "fitted trend says grip is highest - correcting for it takes "
+                "Monza RS-RH from 6.50 % to 5.35 % and HALVES Watkins RM-RS "
+                "from 1.77 % to 0.88 %. (3) It is confounded with CHRONOLOGY: "
+                "the archive drifts -0.45 %/day, and the ordering only "
+                "survives at Monza because RS sits +5.6 % above the drift "
+                "line. (4) It is confounded with SETUP SHEET, though at Monza "
+                "the ordering does hold within sheet 1 alone. Protocol P1 - "
+                "two compounds in one session - is what makes this controlled."),
+            # The Welch t above treats every lap as an independent draw, which
+            # it is not when 19 laps come from 5 sessions. This is the same
+            # test on session means, which is the honest denominator.
+            "welch_t_on_session_means": _welch_t(
+                _session_means(by_compound[present[-1]]),
+                _session_means(by_compound[present[0]])),
+            "independent_validation": (
+                len(set(by_compound[c].sessions for c in present)) > 0
+                and min(by_compound[c].sessions for c in present) >= 2),
         })
     return out
+
+
+def _session_means(evidence: ScopeEvidence) -> list[float]:
+    by_session: dict[int, list[float]] = defaultdict(list)
+    for row in evidence.rows:
+        by_session[row["session_id"]].append(row["grip_g"])
+    return [sum(v) / len(v) for v in by_session.values()]
 
 
 # ------------------------------------------------------------------ the gates
@@ -532,11 +780,16 @@ class GateVerdict:
     requirements: dict
     failures: tuple[str, ...]
     says: str
+    # **What this call needs back from the driver, if anything.** A structured
+    # seam rather than a caller parsing the sentence: the end-of-stint gauge
+    # prediction that will score this model's accuracy hangs off exactly this.
+    asks_for: str | None = None
 
     def as_dict(self) -> dict:
         return {"stage": self.stage, "name": self.name, "met": self.met,
                 "requirements": self.requirements,
                 "failures": list(self.failures), "says": self.says,
+                "asks_for": self.asks_for,
                 "scope": self.scope.as_dict() if self.scope else None}
 
 
@@ -545,6 +798,34 @@ class GateVerdict:
 STAGE0_LINE = ("I can't see tyre wear. No wear channel exists in any GT7 "
                "packet, there's no gauge reading this stint, and lap time "
                "can't resolve it at your spread.")
+
+
+def plateau_lap(warmup: list[dict]) -> int | None:
+    """Which lap of a fresh set the rear axle stops climbing on.
+
+    Read off **temperature**, not grip: a warm-up announcement is a statement
+    about heat, and grip is the thing the app is explicitly not allowed to
+    claim at this stage. The plateau is the first lap whose rear-axle mean is
+    within `PLATEAU_TEMP_TOLERANCE_C` of the sequence's maximum - the point
+    past which more laps stop buying temperature.
+
+    None where the sequence carries no temperature at all, or where it never
+    stops climbing, because a warm-up whose end is off the end of the data has
+    not been observed.
+    """
+    laps = [r for r in sorted(warmup, key=lambda r: r["lap_in_stint"] or 0)
+            if r.get("temp_rear_c") is not None]
+    if len(laps) < 3:
+        return None
+    peak = max(r["temp_rear_c"] for r in laps)
+    for row in laps:
+        if row["temp_rear_c"] >= peak - PLATEAU_TEMP_TOLERANCE_C:
+            # The last lap being the first one within tolerance means the axle
+            # was still climbing when the stint ended.
+            if row is laps[-1]:
+                return None
+            return int(row["lap_in_stint"] or 0)
+    return None
 
 
 def gate_stage1_warmup(evidence: ScopeEvidence) -> GateVerdict:
@@ -559,23 +840,62 @@ def gate_stage1_warmup(evidence: ScopeEvidence) -> GateVerdict:
     the exact failure `analysis/tyre_window.py` exists to document.
     """
     warmups = evidence.warmups
+    plateaus = [plateau_lap(w) for w in warmups]
+    found = [p for p in plateaus if p is not None]
+    # **The clause that was specified and had been left out.** Counting warm-up
+    # sequences is not the test - the test is whether the plateau lands in the
+    # same place each time, because that is the thing the call would be
+    # announcing. Without it this gate opened on three sequences whose plateaus
+    # had never been compared, which is a state announcement resting on nothing.
+    consistent = (len(found) >= STAGE1_MIN_WARMUPS
+                  and max(found) - min(found) <= STAGE1_PLATEAU_TOLERANCE_LAPS)
     requirements = {
         "warmup_sequences": {"required": STAGE1_MIN_WARMUPS,
                              "observed": len(warmups)},
         "laps_per_sequence": {"required": STAGE1_MIN_LAPS_PER_WARMUP,
                               "observed": [len(w) for w in warmups]},
+        "plateau_lap_agrees_within": {
+            "required": STAGE1_PLATEAU_TOLERANCE_LAPS,
+            "observed": (max(found) - min(found)) if len(found) > 1 else None,
+            "plateau_laps": found},
     }
+    fresh = evidence.fresh_started_stints
+    requirements["fresh_started_stints"] = {"observed": len(fresh)}
     failures = []
     if len(warmups) < STAGE1_MIN_WARMUPS:
+        detail = (
+            f"{len(fresh)} stint(s) here are known to have started fresh, and "
+            f"{len(warmups)} of those carry {STAGE1_MIN_LAPS_PER_WARMUP}+ "
+            f"measurable laps")
+        if not fresh:
+            # Do not promise that driving fixes this when it may not. Whether a
+            # stint is known to be fresh depends on the driver marking it, and
+            # nothing in the stream says so - GT7 broadcasts no tyre-change
+            # event at all.
+            detail += (". Nothing in the archive marks a fresh set in this "
+                       "scope: GT7 broadcasts no tyre-change event, so it "
+                       "comes from him saying so or from a stop the frames "
+                       "show. Protocol P3 supplies these ONLY if the fresh set "
+                       "is recorded as fresh")
         failures.append(
-            f"{len(warmups)} warm-up sequence(s) on a set of known age; "
-            f"{STAGE1_MIN_WARMUPS} needed. A warm-up is one observation per "
-            f"stint, not one per lap - protocol P3 supplies three in an evening.")
+            f"{len(warmups)} warm-up sequence(s); {STAGE1_MIN_WARMUPS} needed. "
+            f"A warm-up is one observation per stint, not one per lap. {detail}")
+    elif not consistent:
+        failures.append(
+            f"the plateau lands on lap {found} across the sequences, which is "
+            f"wider than the +/-{STAGE1_PLATEAU_TOLERANCE_LAPS} laps this call "
+            f"would be claiming. A warm-up announcement that cannot say WHEN "
+            f"is not an announcement"
+            if len(found) > 1 else
+            "the plateau lap could not be identified in enough sequences: a "
+            "warm-up whose end cannot be located is not a warm-up observation")
     met = not failures
     return GateVerdict(
         stage=1, name="warm-up plateau", met=met, scope=evidence.scope,
         requirements=requirements, failures=tuple(failures),
-        says=("Tyres are up to temperature." if met else
+        says=(f"Tyres are up to temperature - that's lap {found[0] + 1} of a "
+              f"fresh set on this car, from {len(warmups)} sets."
+              if met else
               "Not yet: I can't tell you when your tyres are warm. "
               + failures[0]))
 
@@ -589,7 +909,9 @@ def gate_stage2_degradation(evidence: ScopeEvidence, fit: dict) -> GateVerdict:
     other way, and it is **not** a wear fraction.
     """
     contributing = evidence.contributing_stints
-    t = fit.get("t")
+    slope = fit.get("grip_g_per_lap")
+    p = fit.get("p")
+    between = fit.get("between_stint") or {}
     requirements = {
         "contributing_stints": {
             "required": STAGE2_MIN_STINTS,
@@ -600,8 +922,14 @@ def gate_stage2_degradation(evidence: ScopeEvidence, fit: dict) -> GateVerdict:
                     "degradation trend from a fuel-load artefact")},
         "total_push_laps": {"required": STAGE2_MIN_TOTAL_PUSH_LAPS,
                             "observed": evidence.contributing_laps},
-        "abs_t": {"required": STAGE2_MIN_ABS_T,
-                  "observed": abs(t) if t is not None else None},
+        "p_two_sided": {"required": STAGE2_MAX_P, "observed": fit.get("p"),
+                        "estimator": fit.get("estimator"),
+                        "dof": fit.get("dof")},
+        "slope_is_negative": {"required": True,
+                              "observed": None if slope is None else slope < 0},
+        "per_stint_signs_agree": {"required": True,
+                                  "observed": between.get("all_negative"),
+                                  "signs": between.get("signs")},
         "single_yaw_source": {"required": True,
                               "observed": evidence.scope.yaw_source},
     }
@@ -609,39 +937,67 @@ def gate_stage2_degradation(evidence: ScopeEvidence, fit: dict) -> GateVerdict:
     if len(contributing) < STAGE2_MIN_STINTS:
         failures.append(
             f"{len(contributing)} contributing stint(s) of at least "
-            f"{STAGE2_MIN_PUSH_LAPS_PER_STINT} push laps; "
+            f"{STAGE2_MIN_PUSH_LAPS_PER_STINT} settled push laps; "
             f"{STAGE2_MIN_STINTS} needed (this scope holds "
             f"{evidence.stint_count} stint(s) in total, "
             f"{evidence.samples} push laps)")
     if evidence.contributing_laps < STAGE2_MIN_TOTAL_PUSH_LAPS:
         failures.append(
-            f"{evidence.contributing_laps} push lap(s) across the contributing "
-            f"stints; {STAGE2_MIN_TOTAL_PUSH_LAPS} needed")
-    if t is None:
+            f"{evidence.contributing_laps} settled push lap(s) across the "
+            f"contributing stints; {STAGE2_MIN_TOTAL_PUSH_LAPS} needed for a "
+            f"{STAGE2_EFFECT_SIZE_PCT:.0f} % effect at the measured CV")
+    if p is None:
         failures.append("the trend has no testable slope on this population")
-    elif abs(t) < STAGE2_MIN_ABS_T:
-        failures.append(f"trend |t| = {abs(t):.2f}, {STAGE2_MIN_ABS_T} needed")
+    elif p > STAGE2_MAX_P:
+        failures.append(
+            f"between-stint p = {p:.3f} on {fit.get('dof')} df; "
+            f"{STAGE2_MAX_P} needed")
+    # **The sign clauses, and they are not decoration.** Without them a RISING
+    # trend passes every count-and-significance test and is announced as a
+    # loss: a scope fitting +0.0062 g/lap at t = +4.4 would have said "grip's
+    # down". That is not hypothetical - Yas / Shelby / RS already fits
+    # **+0.0109 g/lap at t = +2.68** and is held out only by its stint count,
+    # so two more Yas sessions would have shipped it. A model whose own fit
+    # says grip is rising has no business reporting a loss; it has a puzzle.
+    if slope is None:
+        failures.append("no slope to take the sign of")
+    elif slope >= 0:
+        failures.append(
+            f"the fitted trend is RISING ({slope:+.5f} g/lap). Nothing is said "
+            f"about a set getting better - that is a measurement problem, not "
+            f"a tyre finding")
+    elif not between.get("all_negative", False):
+        failures.append(
+            f"the per-stint slopes disagree in sign ({between.get('signs')}); "
+            f"a trend that reverses between stints is not this car's tyre")
     met = not failures
-    slope = fit.get("grip_g_per_lap")
-    intercept = fit.get("intercept_g")
-    if met and slope is not None and intercept:
-        # **The horizon is a stint he actually drives, not a gate constant.**
-        # This line used to quote the decline over `STAGE2_MIN_PUSH_LAPS_PER_
-        # STINT` laps, which silently rescaled the number the day that
-        # threshold moved from 8 to 5. The median contributing stint is a fact
-        # about his running; the gate's floor is a fact about the gate.
-        lengths = sorted(len(laps) for laps in contributing.values())
-        horizon = lengths[len(lengths) // 2]
-        over = abs(slope) * horizon / intercept * 100.0
-        says = (f"Grip's down about {over:.0f} per cent over a {horizon}-lap "
-                f"stint on this set. That's measured off your own laps, not "
-                f"off the stopwatch.")
+
+    if met:
+        # **Direction only. The magnitude is not speakable and this is where
+        # that is enforced.** A percentile sweep showed the within-stint signal
+        # lives in a band - t of -5.9 at p90, -6.4 at p95, **+0.1 at p99** -
+        # and every fixed-count high-end statistic is flat. So what is measured
+        # is that he holds the limit for less of the lap as the stint goes on,
+        # which the data cannot separate from him easing off. The direction
+        # survives that; a percentage does not.
+        #
+        # And the line asks for the gauge, because the gauge is the only bridge
+        # to a wear number that exists - 15 readings in 175 laps, none in
+        # either race - and a call that converts the model's biggest gap into
+        # its own next input is worth more than one that quotes a figure.
+        says = (f"I think this set is going away - your combined-g is trending "
+                f"down across {len(contributing)} stints on this car here. I "
+                f"can't tell you by how much. Read me your gauge.")
     else:
         says = ("Not yet: I can see your grip trend but I can't stand behind "
                 "it. " + (failures[0] if failures else ""))
     return GateVerdict(stage=2, name="degradation", met=met,
                        scope=evidence.scope, requirements=requirements,
-                       failures=tuple(failures), says=says)
+                       failures=tuple(failures), says=says,
+                       # **The seam for the end-of-stint gauge prediction.** A
+                       # caller that can prompt reads this rather than parsing
+                       # the sentence for a question mark.
+                       asks_for="tyre-gauge-reading" if met else None)
 
 
 def gate_stage3_conserve(evidence: ScopeEvidence) -> GateVerdict:
@@ -775,10 +1131,19 @@ def group_by_scope(rows: list[dict]) -> dict[Scope, ScopeEvidence]:
 
 
 def _confidence(met: bool, fit: dict, evidence: ScopeEvidence) -> str:
-    t = fit.get("t")
+    """How much this fit is worth, and **never more than its gate allows.**
+
+    An unmet gate used to return "low" whenever |t| >= 2, which read as a
+    quiet endorsement of exactly the fits the gate had just refused - a scope
+    with two stints and a large t looked more trustworthy than one with five
+    stints and a modest one, which is backwards. An unmet gate is "none": the
+    evidence did not reach the bar, and the t that did not reach it is not a
+    consolation.
+    """
     if not met:
-        return "low" if t is not None and abs(t) >= 2.0 else "none"
-    if t is not None and abs(t) >= 4.0 and evidence.stint_count >= 4:
+        return "none"
+    p = fit.get("p")
+    if p is not None and p <= 0.005 and evidence.stint_count >= 4:
         return "high"
     return "medium"
 
@@ -896,10 +1261,14 @@ def fit_archive(rows: list[dict], *,
             derivation_version=derivation_version, game_version=game_version,
             wear_multiplier=(wear_multipliers or {}).get(scope.circuit_key)))
 
+    # **Split by yaw_source, not just by circuit.** This is the figure the
+    # whole sample-size argument rests on, and pooling it across the one
+    # boundary this module refuses to pool across everywhere else was the
+    # inconsistency most likely to be copied.
     by_circuit: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         if row["unit_kind"] == "LAP":
-            by_circuit[row["circuit_key"]].append(row)
+            by_circuit[f"{row['circuit_key']} [{row['yaw_source']}]"].append(row)
 
     return {
         "scopes": scopes,
@@ -969,13 +1338,43 @@ def priors_for_scope(scope: Scope) -> list[dict]:
     key = prior_scope_key(scope)
     out = []
     for prior in tyres.PRIORS:
+        # **A prior's own scope list is necessary and NOT sufficient.** It used
+        # to be the whole test, which gave the app two speakability
+        # vocabularies - `tyre_models.speakable`, decided at fit time against a
+        # counted sample, and a prior's `speakable_here`, decided against
+        # nothing at all. The refuted gap association came back
+        # `speakable_here=True` on n=17 with no gate in front of it, which is a
+        # second door into the same room with no lock on it.
+        #
+        # So a prior is speakable only where its scope allows it AND its status
+        # is not a refutation AND it clears the same sample floor a fitted
+        # model would have to. A REFUTED prior is never speakable anywhere,
+        # whatever its scope list says - that is what refuted means.
+        refuted = "REFUTED" in prior.status.upper()
+        untested = "UNTESTED" in prior.status.upper()
+        thin = prior.n < STAGE2_MIN_TOTAL_PUSH_LAPS
+        blockers = []
+        if not prior.speakable_at(key):
+            blockers.append(f"not in this prior's speakable scopes ({key})")
+        if refuted:
+            blockers.append(f"status is {prior.status}: a refuted prior is "
+                            f"never speakable, in any scope")
+        if untested:
+            blockers.append(f"status is {prior.status}: untested is not a "
+                            f"licence and never ages into one")
+        if thin:
+            blockers.append(
+                f"rests on n={prior.n}, below the {STAGE2_MIN_TOTAL_PUSH_LAPS} "
+                f"observations a fitted model needs to say anything")
         out.append({
             "id": prior.id,
             "claim": prior.claim,
             "status": prior.status,
             "source": prior.source,
             "n": prior.n,
-            "speakable_here": prior.speakable_at(key),
+            "in_scope": prior.speakable_at(key),
+            "speakable_here": not blockers,
+            "blockers": blockers,
             "speakable_scopes": list(prior.speakable_scopes),
             "evidence": list(prior.evidence),
             "caveats": list(prior.caveats),
@@ -1026,10 +1425,22 @@ def may_i_say(store, *, stage: int, car_key: str, circuit_key: str,
         return {"may_speak": bool(model["speakable"]),
                 "stage": stage,
                 "say": gate.get("says") or STAGE0_LINE,
+                # What this call wants back, so the caller does not have to
+                # read the sentence to find out.
+                "asks_for": gate.get("asks_for"),
                 "samples": model["samples"], "stints": model["stints"],
                 "sessions": model["sessions"],
                 "confidence": model["confidence"],
                 "unknowns": model["unknowns"],
+                # **Staleness is the caller's to judge, so it has to be
+                # returned.** A model fitted at derivation version 1 against 40
+                # laps is a different claim once 60 laps exist, and a caller
+                # holding only a boolean cannot tell. These are what let it ask
+                # "is this still current?" without re-fitting.
+                "derivation_version": model["derivation_version"],
+                "fitted_at": model["fitted_at"],
+                "provenance": model["provenance"],
                 "why": gate.get("failures", [])}
     return {"may_speak": False, "stage": stage, "say": STAGE0_LINE,
+            "asks_for": None,
             "why": [f"no {kind} model fitted for this scope"]}
