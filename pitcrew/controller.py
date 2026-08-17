@@ -2841,6 +2841,8 @@ class PitCrewController(QObject):
         # not the same claim, and the driver is about to be told one of them.
         practice_laps = len(counted_laps(
             event_lap_inputs(self.store, event["id"], "practice")))
+        # What the plan expects to execute, as stored when it was approved.
+        expects = (plan or {}).get("expects") or {}
         self.race = RaceCoordinator(
             plan,
             fuel_per_lap_l=inputs.fuel_per_lap_l if inputs else None,
@@ -2856,6 +2858,13 @@ class PitCrewController(QObject):
             # What the plan was built to run: the practice median lap and the
             # practice burn. The race is compared against these every lap.
             lap_time_ms=inputs.lap_time_ms if inputs else None,
+            # **The reference comes off the approved plan, not off today's
+            # evidence.** `expects` was stamped when he approved it; anything
+            # driven since then changes what the app would plan now, not what
+            # this plan is. Reading the fresh figure instead is how "burning
+            # 8% under plan" was said against a burn no plan ever held.
+            planned_fuel_per_lap_l=expects.get("expected_fuel_per_lap_l"),
+            planned_lap_time_ms=expects.get("expected_lap_time_ms"),
             practice_lap_samples=practice_laps,
             practice_fuel_samples=practice_laps)
 

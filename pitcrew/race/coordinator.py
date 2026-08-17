@@ -84,11 +84,25 @@ class RaceCoordinator:
 
     def __init__(self, plan: dict | None = None,
                  fuel_per_lap_l: float | None = None,
+                 # **What the APPROVED plan was costed on**, which is not
+                 # always what the evidence says today. At Watkins the plan
+                 # was approved at 19:52 on 6.214 L/lap; a qualifying session
+                 # ran before the 20:21 green, `build_inputs` re-weighted to
+                 # about 6.70, and the engineer then told him he was "burning
+                 # 8% under plan" on lap 7 - against a number the plan had
+                 # never seen. Against the plan he was 1.6% under, which is
+                 # on it. "Under plan" has to mean under THE PLAN, so the
+                 # reference is the plan's own stored expectation and the
+                 # fresh figure only seeds the working burn.
+                 planned_fuel_per_lap_l: float | None = None,
                  fuel_sd_l: float | None = None,
                  wear_per_lap: float | None = None,
                  fuel_capacity_l: float | None = None,
                  short_shift_l_per_1000rpm: float | None = None,
                  lap_time_ms: int | None = None,
+                 # Same separation as the burn above: the plan's own stored
+                 # figure is the reference, the fresh one only seeds.
+                 planned_lap_time_ms: int | None = None,
                  practice_lap_samples: int = 0,
                  practice_fuel_samples: int = 0,
                  now=None) -> None:
@@ -109,8 +123,12 @@ class RaceCoordinator:
             # names the lever without a number - see `calls.short_shift_for`.
             short_shift_l_per_1000rpm=short_shift_l_per_1000rpm)
         self.refusal: str | None = None
-        self.planned_fuel_per_lap_l = fuel_per_lap_l
-        self.planned_lap_time_ms = lap_time_ms
+        self.planned_fuel_per_lap_l = (
+            planned_fuel_per_lap_l if planned_fuel_per_lap_l is not None
+            else fuel_per_lap_l)
+        self.planned_lap_time_ms = (
+            planned_lap_time_ms if planned_lap_time_ms is not None
+            else lap_time_ms)
         self._burns: list[float] = []
         # Lap times fit to judge pace against the plan - see
         # `representative_pace_ms` for what is kept out and why.
@@ -127,8 +145,8 @@ class RaceCoordinator:
         # from the practice figures the plan was costed with and refreshed by
         # every completed lap - the lap-to-lap reference the driver asked for.
         self.expect = ExpectationTracker(
-            planned_lap_time_ms=lap_time_ms,
-            planned_fuel_per_lap_l=fuel_per_lap_l,
+            planned_lap_time_ms=self.planned_lap_time_ms,
+            planned_fuel_per_lap_l=self.planned_fuel_per_lap_l,
             planned_wear_per_lap=wear_per_lap,
             practice_lap_samples=practice_lap_samples,
             practice_fuel_samples=practice_fuel_samples)

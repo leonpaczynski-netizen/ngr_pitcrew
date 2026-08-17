@@ -573,6 +573,23 @@ def test_the_stop_fills_for_the_next_stint_not_for_the_rest_of_the_race():
     assert _fuel_instruction(state) == "Fuel to 38 litres."
 
 
+def test_under_plan_means_under_the_plan_not_under_todays_evidence():
+    """Watkins, lap 7. The plan was approved at 19:52 on 6.214 L/lap; a
+    qualifying session ran before the 20:21 green and re-weighted the evidence
+    to about 6.70. He was told "burning 8% under plan" - true against 6.70,
+    and against the plan he was 1.6% under, which is on it."""
+    plan_costed_on = RaceCoordinator(
+        {}, fuel_per_lap_l=6.70, planned_fuel_per_lap_l=6.214)
+    assert plan_costed_on.planned_fuel_per_lap_l == 6.214
+    # The fresh figure still seeds the working burn - it is the better
+    # estimate of what the car will actually drink until the race says.
+    assert plan_costed_on.state.fuel_per_lap_l == 6.70
+    # And where no plan expectation was stored, the fresh figure is all there
+    # is and it stands rather than becoming None.
+    hand_built = RaceCoordinator({}, fuel_per_lap_l=6.70)
+    assert hand_built.planned_fuel_per_lap_l == 6.70
+
+
 def said_litres(said: str) -> int:
     return int(said.split("Fuel to ")[1].split(" litres")[0])
 
