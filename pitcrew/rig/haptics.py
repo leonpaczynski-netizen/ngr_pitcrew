@@ -144,6 +144,36 @@ class HapticsEngine:
         # tone in the mix. On 17 Aug 2026 the log recorded only the blocks,
         # and thirteen minutes of evidence could not distinguish them.
         self.frames = 0
+        # **Whether the card asked for frames we failed to supply, and this
+        # is the one instrument the 17 Aug race did not have.**
+        #
+        # That evening the frame count fell to 30.7 kHz against the 48 kHz the
+        # mix is generated at and stayed there for the whole race, and the
+        # verdict drawn from it was "the card's clock moved, so every effect
+        # is transposed by 0.64x". The frame count alone cannot support that
+        # verdict, because two different faults produce exactly the same
+        # number:
+        #
+        # * **The card really is consuming 30.7 kframes a second.** Then the
+        #   mix is transposed, the road bed lands at 24 Hz under the amp's
+        #   fixed 25 Hz low-cut, and refusing is right.
+        # * **The card still wants 48 kframes a second and we are only
+        #   handing it 30.7 k.** Then nothing is transposed - the cues are in
+        #   the right places and merely gapped, 480 frames of signal followed
+        #   by silence until the next wake-up.
+        #
+        # The measured ratio is 480 / 750 = 0.64 to three figures, which is
+        # exactly one 480-frame block written per 15.625 ms wake-up, so the
+        # second reading is at least as well supported as the first. PortAudio
+        # already knows which it is and says so in `status.output_underflow`,
+        # and this callback was throwing that away.
+        #
+        # Counting it costs one bool test on the common path - `status` is
+        # falsy when nothing is wrong - and it is what makes the bench test
+        # conclusive rather than another evening of inference.
+        self.underflows = 0
+        self._underflows_taken = 0
+        self.status_blocks = 0
         self.recoveries = 0
         self.rebuilds = 0
 
@@ -171,6 +201,20 @@ class HapticsEngine:
         stopping the session to judge a number.
         """
         self._mix.master = max(0.0, min(4.0, float(gain)))
+
+    def take_underflows(self) -> int:
+        """How many blocks underran since this was last asked.
+
+        A delta rather than a total, and by the same pattern as
+        `take_recent_peak`: the question the report line asks is "is the card
+        starving NOW", and a lifetime count answers that only by subtraction
+        somewhere else. Keeping the subtraction here keeps the reader
+        stateless.
+        """
+        seen = self.underflows
+        delta = seen - self._underflows_taken
+        self._underflows_taken = seen
+        return delta
 
     def take_recent_peak(self) -> float:
         """The loudest sample rendered since this was last asked.
@@ -507,11 +551,19 @@ class HapticsEngine:
     def _callback(self, outdata, frames, _time, status) -> None:
         """PortAudio's thread. No allocation, no logging, no locks.
 
-        `status` is deliberately not logged: writing to a file from here is
+        `status` is deliberately not LOGGED - writing to a file from here is
         exactly the blocking call that causes the underrun it would be
-        reporting.
+        reporting - but it is now COUNTED, which costs nothing and is the
+        only thing that can tell a card running slow from a card being
+        underfed. See `self.underflows`.
         """
         self.callbacks += 1
+        # `status` is falsy on a healthy block, so the common path is one
+        # bool test and no attribute access at all.
+        if status:
+            self.status_blocks += 1
+            if status.output_underflow:
+                self.underflows += 1
         # Frames as well as blocks. Divided by wall-clock seconds upstairs
         # this is a direct measurement of the rate the card is actually
         # consuming at, which is the one number that separates "PortAudio

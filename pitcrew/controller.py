@@ -2515,14 +2515,29 @@ class PitCrewController(QObject):
             # after this line, on its own thread. Ten seconds stale is fine;
             # invisible was the problem.
             clock = self._rig_watchdog.clock_hz
+            # **The underrun count sits next to the frame clock because it
+            # is the control on it.** A frame clock below nominal says only
+            # that fewer frames went out than the mix generated; it does not
+            # say whose fault that was. PortAudio's own `output_underflow`
+            # does: underruns rising alongside a low clock means the card
+            # still wants 48 kHz and we are failing to fill it - the cues are
+            # gapped, not transposed - while a low clock with NO underruns is
+            # a card genuinely consuming slower, which is the transposition
+            # the refusal was written for. On 17 Aug 2026 the app spent a
+            # whole race asserting the second without being able to rule out
+            # the first.
+            underruns = haptics.take_underflows()
             log("haptics").info(
                 "blocks %d · %s · fades %d · limited %d · running %s · %s · "
+                "underruns %d this cycle (%d total, %d flagged blocks) · "
                 "recoveries %d · rebuilds %d",
                 haptics.callbacks,
                 f"clock {clock:.0f}Hz" if clock is not None else "clock -",
                 haptics.faded_out,
                 haptics._mix.limited_blocks, haptics.running,
-                self._endpoint_note, haptics.recoveries, haptics.rebuilds)
+                self._endpoint_note, underruns, haptics.underflows,
+                haptics.status_blocks,
+                haptics.recoveries, haptics.rebuilds)
             # **What the mix was doing, not just that it was running.**
             #
             # "I felt something odd in turn four" is unanswerable an hour
