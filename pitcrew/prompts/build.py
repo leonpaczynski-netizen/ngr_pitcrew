@@ -1065,9 +1065,16 @@ def _calls_section(lines: Lines, context: ctx.PromptContext) -> None:
     lines.add(template["callsLead"], "")
     lines.add(*template["callsTableHead"])
     for call in calls:
+        # **`disposition` first, because `accepted` cannot hold what most
+        # calls are.** A statement - "Green, green, green.", "Chequered flag."
+        # - was never a question, and rendering it as "declined" told the
+        # knowledge base the driver had refused the chequered flag. On the
+        # Watkins race that was all fourteen calls, which left the only
+        # feedback channel on the strategy engine saying nothing.
         accepted = call.get("accepted")
-        outcome = ("accepted" if accepted else
-                   "declined" if accepted is False else "not recorded")
+        outcome = call.get("disposition") or (
+            "accepted" if accepted else
+            "declined" if accepted is False else "not recorded")
         lines.add(f"| {call.get('lap', '—')} | {call.get('call', '—')} "
                   f"| {call.get('confidence', 'unstated')} | {outcome} |")
     lines.add("")

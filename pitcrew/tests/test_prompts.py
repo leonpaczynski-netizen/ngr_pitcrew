@@ -505,6 +505,22 @@ def test_declined_calls_survive_to_the_prompt(store, raced_event):
     assert "| 9 | Brake balance one click rearward | medium | accepted |" in text
 
 
+def test_a_statement_is_not_a_refusal(store, raced_event):
+    """`accepted` cannot hold what a statement is. "Green, green, green." and
+    "Chequered flag." were never questions, and recording them as declined
+    told the knowledge base the driver had refused the chequered flag - which
+    on the Watkins race was all fourteen calls."""
+    from pitcrew.export.build import _disposition
+    said = {"plan": {"kind": "chequer", "informational": True},
+            "accepted": 0, "lap_num": 20}
+    assert _disposition(said, set()) == ("informational", None)
+    instruction = {"plan": {"kind": "box-now"}, "accepted": 0, "lap_num": 12}
+    assert _disposition(instruction, {13}) == ("taken", None)
+    assert _disposition(instruction, {17}) == ("not-taken", None)
+    offer = {"plan": {"resolution": "expired"}, "accepted": 0, "lap_num": 8}
+    assert _disposition(offer, set()) == ("expired", False)
+
+
 def test_wear_is_never_presented_as_measured(store, raced_event):
     text = prompt_for(store, raced_event, OUTCOME).text
     assert "GT7 exposes no tyre wear channel in any packet format" in text

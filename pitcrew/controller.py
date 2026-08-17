@@ -3409,6 +3409,13 @@ class PitCrewController(QObject):
         if self.race_run_id is not None:
             payload = spoken.as_plan()
             payload["why_spoken"] = outcome.why
+            # **Said, not asked.** This path records what the engineer spoke;
+            # nothing here was ever an offer, so the `accepted=False` the
+            # column forces is the absence of a question. Marking it keeps
+            # the export from reading it back as a refusal - which is how the
+            # Watkins race came to report all fourteen calls declined,
+            # including the chequered flag.
+            payload["informational"] = True
             self.store.append_revision(
                 self.race_run_id, outcome.lap,
                 spoken.call() or spoken.reason, payload, accepted=False)

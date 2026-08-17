@@ -678,8 +678,9 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
     "compoundDeltaSPerLap": 0.153
   },
   "callsMade": [
-    { "lap": 4,  "call": "Map 3 down the back straight",     "reason": "1.2 laps short on fuel", "confidence": "high" },
-    { "lap": 9,  "call": "Brake balance one click rearward", "reason": "front temps +6C over rear", "confidence": "medium" }
+    { "lap": 4,  "call": "Map 3 down the back straight",     "reason": "1.2 laps short on fuel", "accepted": false, "disposition": "declined", "confidence": "high" },
+    { "lap": 12, "call": "Box this lap. RS.",                "reason": "fuel is the constraint", "accepted": null, "disposition": "taken", "confidence": "high" },
+    { "lap": 20, "call": "Chequered flag. P1.",              "reason": "race complete", "accepted": null, "disposition": "informational", "confidence": "high" }
   ],
   "outcome": "Stopped lap 11. Fuel to the diamond +1 lap. Tyres had 2 laps left — stint was fuel-limited, not tyre-limited."
 }
@@ -691,6 +692,21 @@ whether the next setup should chase durability or pace.
 
 `callsMade` exists so live advice can be checked against what actually happened.
 An app that gives calls and never records them cannot be improved.
+
+**`accepted` is null for every call that was never a question, and
+`disposition` is the field to read.** Most calls are statements — "Green,
+green, green.", "P2. 5 to go.", "Chequered flag." — and a boolean cannot hold
+what became of a statement. Recording those as `accepted: false` is not a
+missing value, it is the claim that the driver refused them; on the Watkins
+race of 17 Aug 2026 it made **all fourteen calls read as declined**, which left
+the only feedback channel on the strategy engine saying nothing at all.
+
+| `disposition` | Meaning |
+|---|---|
+| `informational` | Said, never asked. `accepted` is null and means nothing here |
+| `taken` / `not-taken` | An instruction, and whether a pit lap followed it within two laps. **Derived from the laps, not from an answer** — an instruction is never offered and never answered |
+| `accepted` / `kept` / `expired` / `superseded` | A re-plan offer and how it left the desk. `accepted` is a real boolean for these |
+| `declined` | A record from before the marker existed, where the stored boolean was all there was |
 
 #### 10.0 A timed race is not a lap race
 

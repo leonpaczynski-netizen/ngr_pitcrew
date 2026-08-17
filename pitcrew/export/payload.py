@@ -1104,7 +1104,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "breakEvenSPerLap", "restsOnAssumption", "outsideTyreWindow",
         "verdict", "source"}),
     "strategy.callsMade[]": frozenset({
-        "lap", "call", "reason", "accepted", "confidence"}),
+        "lap", "call", "reason", "accepted", "disposition", "confidence"}),
     "derived": frozenset({
         "thresholds", "steerSource", "steerRotationDeg", "steerRotationSource",
         "bottomingRefMm", "bottomingRefSource", "observedMinHeightMm",

@@ -582,7 +582,8 @@ def _strategy_section(store, event_id: int) -> dict | None:
         # audit reads them.
         section["callsMade"] = [
             {key: value for key, value in call.items()
-             if key in ("lap", "call", "reason", "accepted", "confidence")}
+             if key in ("lap", "call", "reason", "accepted", "disposition",
+                        "confidence")}
             for call in calls]
 
     outcome = _outcome(store, event_id, calls, section, expects)
@@ -653,19 +654,84 @@ def _outcome(store, event_id: int, calls: list[dict], section: dict,
     return " ".join(part for part in parts if part).strip()
 
 
+# **Which calls were ever a question.** `accepted` is only a fact about a call
+# that asked something, and most calls do not: "Green, green, green.", "P2. 5
+# to go." and "Chequered flag." are statements. Recording those as
+# `accepted: false` is not a missing value, it is a fabricated claim that the
+# driver refused them - and on the Watkins race it made all fourteen calls
+# read as declined, which left the only feedback channel on the strategy
+# engine saying nothing at all.
+#
+# CLAUDE.md rule 3: missing is null, never a substitute. So `accepted` is now
+# null wherever the call was not an offer, and `disposition` carries what
+# actually became of it.
+_INSTRUCTION_KINDS = frozenset({"box-now", "box-soon"})
+# How many laps after an instruction a stop still counts as acting on it. A
+# "box next lap" obeyed is a pit lap on the very next crossing; two covers the
+# in-lap arriving a lap later than the call named, which is the normal case
+# for "box in 2".
+_INSTRUCTION_WINDOW_LAPS = 2
+
+DISPOSITION_INFORMATIONAL = "informational"
+DISPOSITION_TAKEN = "taken"
+DISPOSITION_NOT_TAKEN = "not-taken"
+
+
+def _disposition(revision: dict, pit_laps: set[int]) -> tuple[str, bool | None]:
+    """What became of one call, and whether `accepted` means anything for it.
+
+    Returns `(disposition, accepted)`. `accepted` is None for everything that
+    never asked a question - which is most of them.
+    """
+    plan = revision["plan"]
+    resolution = plan.get("resolution")
+    if resolution:
+        # An offer that was resolved. The replan layer's own vocabulary -
+        # accepted, kept, expired, superseded - travels unchanged rather than
+        # being flattened into a bool that cannot hold four states.
+        return resolution, bool(revision["accepted"])
+    if plan.get("informational"):
+        # Said, never asked. The path that records these passes
+        # `accepted=False` because the column has no third state, and that
+        # false is the absence of a question rather than a refusal.
+        return DISPOSITION_INFORMATIONAL, None
+    if plan.get("kind") in _INSTRUCTION_KINDS:
+        # **Derived, and from the laps rather than from an answer.** An
+        # instruction is not offered and is never answered; what says whether
+        # it was followed is whether a pit lap turned up. Stated here rather
+        # than inferred by a reader.
+        lap = revision["lap_num"]
+        if lap is None:
+            return DISPOSITION_NOT_TAKEN, None
+        taken = any(lap <= pit <= lap + _INSTRUCTION_WINDOW_LAPS
+                    for pit in pit_laps)
+        return (DISPOSITION_TAKEN if taken else DISPOSITION_NOT_TAKEN), None
+    if plan.get("kind"):
+        return DISPOSITION_INFORMATIONAL, None
+    # **No kind at all is a record from before the marker existed**, and there
+    # the stored boolean is the only thing that ever meant anything - a plan
+    # offered and refused is evidence about the model, so it keeps saying so.
+    return ("accepted" if revision["accepted"] else "declined",
+            bool(revision["accepted"]))
+
+
 def _calls_made(store, event_id: int) -> list[dict]:
     """Every call, including the ones declined.
 
     A plan offered and refused is evidence about the model; dropping it makes
     the model look better than it was.
     """
+    pit_laps = {lap.lap_num for lap in event_lap_inputs(store, event_id, "race")
+                if lap.is_pit_lap and lap.lap_num is not None}
     calls: list[dict] = []
     for run in store.list_race_runs(event_id):
         for revision in store.list_revisions(run["id"]):
+            disposition, accepted = _disposition(revision, pit_laps)
             entry = {
                 "lap": revision["lap_num"],
                 "call": revision["reason"],
-                "accepted": revision["accepted"],
+                "accepted": accepted,
+                "disposition": disposition,
                 "confidence": revision["plan"].get("confidence", "unstated"),
             }
             # The structured kind, where the revision recorded one. It is
