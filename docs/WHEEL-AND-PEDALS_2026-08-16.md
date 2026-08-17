@@ -330,16 +330,37 @@ detail/road-effect slider.
 
 | GT7 setting | value | why |
 |---|---|---|
-| Force Feedback Max. Torque | **5** | the scalar that saturates first, per car. Half of full leaves headroom on a base of this size, and headroom is the only defence against clipping when the game reports no clipping (§1) |
-| Force Feedback Sensitivity | **leave exactly as it is** | see below |
+| Force Feedback Max. Torque | **5**, drop to 4 on the symptom below | the scalar that saturates first, per car. Half of full leaves headroom on a base of this size, and headroom is the only defence against clipping when the game reports no clipping (§1). With Sensitivity at 9 these are two gains in series, so this is the one that yields |
+| Force Feedback Sensitivity | **9 — as found, do not move it** | see below |
 
-**Why Sensitivity is deliberately not given a number.** Its semantics are
-disputed across sources — some describe it as a gain on small-force detail,
-others as a reduction in the game's own damping — and this repo has no way to
-settle it, because there is no FFB channel to observe (§1). Worse, if it *is* a
-small-force gain, then it is the GT7-side setting most likely to be carrying the
-dirty-air cue (§8.2). Changing it blind risks the one wheel signal with driver
-evidence behind it, to chase a number nobody can measure.
+**Sensitivity as found: 9 of 10.** That is high, and it is very probably not
+incidental. Its semantics are disputed across sources — some describe it as a
+gain on small-force detail, others as a reduction in the game's own damping —
+and this repo cannot settle it, because there is no FFB channel to observe (§1).
+But under *either* reading, 9 is the plausible reason the dirty-air cue is
+legible at all (§8.2): aero buffeting is a small force, and a setting that
+either amplifies small forces or strips the damping sitting on them would
+surface it. **It is now treated as load-bearing and protected**, on the same
+footing as `FUL`.
+
+Two consequences follow, and both are conditional on which reading is true.
+
+- **If Sensitivity is a small-force gain, it compresses the top of the range.**
+  Amplifying low-level content relative to high-level content costs resolution
+  exactly at peak load — which is where a trail-braker reads the front axle
+  (§3). That is a real trade and he is currently taking it. It does not argue
+  for lowering Sensitivity; it argues for **keeping Max Torque conservative so
+  the compressed top of the curve still has headroom.** The symptom to watch is
+  the wheel going flat or light precisely when load is highest — heavy braking,
+  mid-corner — rather than everywhere.
+- **If Sensitivity is a damping reduction, then `NDP` at 16% was a
+  contradiction** — damping removed in the game and re-added on the base. The
+  move to 5% resolves it in the direction everything else here points.
+
+**When these two settings collide, move Max Torque, not Sensitivity** — the same
+rule as `FUL` versus the ButtKicker. Sensitivity has driver evidence attached to
+it; Max Torque has only reasoning, and its effect is one he can judge in a
+corner.
 
 So: **change it only as a deliberate single-variable test, with the aero cue as
 the acceptance criterion.** Run a few laps in traffic at one value, then the
@@ -348,6 +369,8 @@ run and the telemetry cannot — the same division of labour as the rest of §6,
 where the app measures what it can see and the driver adjudicates what it
 cannot.
 
-Order of operations for the whole change set: `NFR` and the two effect-strength
+Neither GT7 number changes as part of the sweep below; Max Torque moves only if
+the flat-at-peak-load symptom appears. Order of operations for the whole change
+set: `NFR` and the two effect-strength
 diagnostics first (`SPR`, `DPR`), then `NDP`, then GT7 Max Torque, then `FEI`
 last and alone. `FUL`, `NIN`, `SEN`, `FFB`, `FOR` and `INT` are not changing.
