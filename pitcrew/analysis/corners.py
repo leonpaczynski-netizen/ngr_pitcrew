@@ -136,11 +136,32 @@ def _straight_line_frames(lap: CountedLap,
     return out
 
 
-def _minima(frames: list[dict]) -> dict[str, float] | None:
+# **`susp_mm_*` is COMPRESSION, not height, and everything here read it
+# backwards until 17 Aug 2026.** Measured on session 49's own frames, two ways
+# that need no sign convention to interpret:
+#
+# * Under heavy braking against full throttle, the fronts read +6.2 and
+#   +7.5 mm and the rears -11.7 and -9.8. A car pitches FORWARD under braking,
+#   so the end that reads higher is the end that compressed.
+# * Straight-line frames from 120 to 260 km/h: `body_height_mm` falls 61.5 ->
+#   50.5 mm as downforce builds, while every `susp_mm_*` RISES, 257 -> 269
+#   front and 279 -> 289 rear. Two channels, the same frames, opposite signs.
+#   `body_height_mm` is a height. `susp_mm_*` is not.
+#
+# So the bottoming end of the trace is the MAXIMUM, and taking `min` took the
+# most EXTENDED the wheel ever got. The flag fired on a wheel going light and
+# called it floor contact - which is exactly why it fired 17 laps out of 17 at
+# T4, T7 and T8 on the inside wheels of the same-handed corners, and why
+# raising the car 5 mm made the reported depth worse rather than better. A
+# contact detector cannot do that. An extension detector must.
+
+
+def _most_compressed(frames: list[dict]) -> dict[str, float] | None:
+    """Per wheel, the most compressed the trace got over these frames."""
     seen = _suspension_by_wheel(frames)
     if not all(seen.values()):
         return None
-    return {wheel: round(min(values), 2) for wheel, values in seen.items()}
+    return {wheel: round(max(values), 2) for wheel, values in seen.items()}
 
 
 def observed_minimum(laps: list[CountedLap]) -> dict[str, float] | None:
@@ -152,7 +173,7 @@ def observed_minimum(laps: list[CountedLap]) -> dict[str, float] | None:
     is a measurement rather than an inference — which is why it travels
     separately.
     """
-    return _minima([f for lap in laps for f in lap.frames])
+    return _most_compressed([f for lap in laps for f in lap.frames])
 
 
 def bottoming_reference(laps: list[CountedLap],
@@ -170,7 +191,7 @@ def bottoming_reference(laps: list[CountedLap],
     circular reference and it is the best available in that case.
     """
     frames = [f for lap in laps for f in _straight_line_frames(lap, model)]
-    return _minima(frames) or observed_minimum(laps)
+    return _most_compressed(frames) or observed_minimum(laps)
 
 
 def bottoming_references(laps: list[CountedLap],
@@ -195,20 +216,23 @@ def bottoming_inferable(laps: list[CountedLap],
                         reference: dict[str, float] | None) -> set[str]:
     """Wheels whose trace actually moves enough to infer bottoming from.
 
-    A suspension height that never varies sits in the band on every frame of
+    A suspension trace that never varies sits in the band on every frame of
     every corner. A trace that does not move cannot tell you the car reached
     its bump stops — it tells you nothing.
+
+    Measured from the compressed end, so the test is how far the typical frame
+    sits BELOW the reference rather than above it. See `_most_compressed`.
     """
     if not reference:
         return set()
     inferable = set()
     frames = [f for lap in laps for f in lap.frames]
     for wheel, values in _suspension_by_wheel(frames).items():
-        floor = reference.get(wheel)
-        if floor is None or not values:
+        limit = reference.get(wheel)
+        if limit is None or not values:
             continue
         typical = median(values)
-        if typical - floor > thresholds.BOTTOMING_BAND_MM:
+        if limit - typical > thresholds.BOTTOMING_BAND_MM:
             inferable.add(wheel)
     return inferable
 
@@ -633,8 +657,8 @@ def _bottomed(window: list[dict], interval_ms: float,
             reference = bottoming_ref.get(wheel)
             if reference is None:
                 continue
-            height = frame.get(f"susp_mm_{wheel}")
-            if height is not None and height <= reference + thresholds.BOTTOMING_BAND_MM:
+            travel = frame.get(f"susp_mm_{wheel}")
+            if travel is not None and travel >= reference - thresholds.BOTTOMING_BAND_MM:
                 in_band = True
                 break
         streak = streak + 1 if in_band else 0

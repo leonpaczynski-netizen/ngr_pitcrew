@@ -442,16 +442,20 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         if bottoming_ref is not None:
             sheets = {lap.setup_sheet_id for lap in reference_laps}
             bottoming_ref_source = (
-                f"steady-state minimum: lowest suspension height per wheel "
-                f"over the straight-line frames of the {len(reference_laps)} "
-                f"counted lap{'' if len(reference_laps) == 1 else 's'} that "
-                f"carried them, keyed on the setup sheet each lap ran "
+                f"peak compression per wheel over the straight-line frames "
+                f"of the {len(reference_laps)} counted "
+                f"lap{'' if len(reference_laps) == 1 else 's'} that carried "
+                f"them, keyed on the setup sheet each lap ran "
                 f"({len(sheets)} sheet{'' if len(sheets) == 1 else 's'}). "
-                f"Laps with an off or a spin are held out - they reach "
-                f"heights no clean lap does and would set the floor every "
-                f"bottoming flag is judged against. observedMinHeightMm is "
-                f"the raw minimum, which is a measurement rather than this "
-                f"inference")
+                f"**susp_mm is travel, not height** - measured 17 Aug 2026, "
+                f"body height falls 61 to 50 mm from 120 to 260 km/h while "
+                f"every susp_mm rises - so the bottoming end of the trace is "
+                f"the maximum. Laps with an off or a spin are held out: they "
+                f"reach compressions no clean lap does and would set the "
+                f"limit every bottoming flag is judged against. "
+                f"observedMinHeightMm is the raw minimum of the same channel, "
+                f"which is the EXTENDED end and a measurement rather than "
+                f"this inference")
         corners = aggregate_corners(model, counted_with_frames, bottoming_ref)
 
     setup = None

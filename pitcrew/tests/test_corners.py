@@ -524,11 +524,15 @@ def test_surface_mix_is_a_fraction_per_character():
 
 # --------------------------------------------------------------- bottoming
 
-def test_bottoming_reference_is_the_straight_line_minimum():
+def test_bottoming_reference_is_the_straight_line_peak_compression():
+    """**`susp_mm_*` is compression, not height** - measured on session 49,
+    where `body_height_mm` falls 61 -> 50 mm from 120 to 260 km/h while every
+    `susp_mm_*` rises. So the bottoming end of the trace is the maximum, and
+    taking the minimum took the most EXTENDED the wheel ever got."""
     frames = synthetic_lap(apex_positions=(600.0,))
-    frames[100]["susp_mm_fl"] = 31.0        # lap distance 200 m, on the straight
+    frames[100]["susp_mm_fl"] = 89.0        # lap distance 200 m, on the straight
     reference = bottoming_reference([CountedLap(1, frames)])
-    assert reference["fl"] == 31.0
+    assert reference["fl"] == 89.0
     assert reference["rl"] == 65.0
 
 
@@ -542,17 +546,17 @@ def test_the_reference_is_held_out_of_the_corner_windows():
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
         if 560.0 <= f["lap_distance_m"] <= 640.0:
-            f["susp_mm_fl"] = 45.0
+            f["susp_mm_fl"] = 75.0
     laps = [CountedLap(1, frames)]
     model = a_model([Corner("T1", "Turn 1", 480, 600, 720)])
     assert bottoming_reference(laps, model)["fl"] == 60.0
     # The excursion is still exported - separately, and as a measurement.
-    assert observed_minimum(laps)["fl"] == 45.0
+    assert observed_minimum(laps)["fl"] == 75.0
 
 
 def test_each_setup_sheet_gets_its_own_reference():
-    """Ride height and spring rate are setup values, so the height a wheel
-    bottoms at belongs to the sheet, not to the event."""
+    """Ride height and spring rate are setup values, so the compression a
+    wheel bottoms at belongs to the sheet, not to the event."""
     laps = [
         CountedLap(1, synthetic_lap(apex_positions=(600.0,), susp_mm_fl=40.0),
                    setup_sheet_id=1),
@@ -571,8 +575,8 @@ def test_bottoming_reference_is_none_without_suspension_data():
 
 
 def test_a_suspension_trace_that_never_moves_cannot_infer_bottoming():
-    """Otherwise the inference is circular: the floor is the observed minimum,
-    so a constant height sits in the band on every frame of every corner."""
+    """Otherwise the inference is circular: the limit is the observed peak, so
+    a constant trace sits in the band on every frame of every corner."""
     laps = [CountedLap(1, synthetic_lap(apex_positions=(600.0,)))]
     reference = bottoming_reference(laps)
     assert reference is not None
@@ -583,32 +587,36 @@ def test_a_wheel_that_moves_is_inferable():
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
         if 595.0 <= f["lap_distance_m"] <= 610.0:
-            f["susp_mm_fl"] = 30.0
+            f["susp_mm_fl"] = 90.0
     laps = [CountedLap(1, frames)]
     assert bottoming_inferable(laps, bottoming_reference(laps)) == {"fl"}
 
 
 def test_sustained_time_at_the_reference_flags_bottoming():
-    """Reaching in a corner the depth the car only reaches on the straight."""
+    """Reaching in a corner the compression the car only reaches on the
+    straight - where `susp_mm_*` runs HIGH, because it is travel and not
+    height. See `corners._most_compressed`."""
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
-        # The straight-line floor: the dive under braking, outside the window.
+        # The straight-line limit: the dive under braking, outside the window.
         if 100.0 <= f["lap_distance_m"] <= 140.0:
-            f["susp_mm_fl"] = 30.0
+            f["susp_mm_fl"] = 95.0
         if 595.0 <= f["lap_distance_m"] <= 610.0:
-            f["susp_mm_fl"] = 30.0
+            f["susp_mm_fl"] = 95.0
     corner = one_corner(frames)
     assert "bottoming" in corner["flags"]
-    assert corner["suspHeightMinMm"]["fl"] == 30.0
 
 
-def test_a_corner_above_the_straight_line_floor_does_not_flag():
+def test_a_corner_short_of_the_straight_line_limit_does_not_flag():
+    """And this is the case the inverted test got backwards: a corner where
+    the wheel is LESS compressed than it gets on the straight is a corner
+    nowhere near the floor. Under the old direction that was the flag."""
     frames = synthetic_lap(apex_positions=(600.0,))
     for f in frames:
         if 100.0 <= f["lap_distance_m"] <= 140.0:
-            f["susp_mm_fl"] = 30.0
+            f["susp_mm_fl"] = 95.0
         if 595.0 <= f["lap_distance_m"] <= 610.0:
-            f["susp_mm_fl"] = 50.0
+            f["susp_mm_fl"] = 75.0
     assert "bottoming" not in one_corner(frames)["flags"]
 
 
