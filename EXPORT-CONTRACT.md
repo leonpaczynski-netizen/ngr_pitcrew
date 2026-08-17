@@ -328,6 +328,9 @@ section gets built, build this one.**
     "gearAtExit": 3,
     "shiftsInCorner": 1.22,
     "upshiftRpm": 8410,
+    "yawDeficitPct": 12.4,
+    "yawDeficitSamples": 17,
+    "yawDeficitFrames": 214,
     "suspHeightMinMm": { "fl": 34, "fr": 36, "rl": 41, "rr": 42 },
     "surfaceMix": { "T": 0.94, "C": 0.06 },
     "flags": ["countersteer", "trail-brake-instability"]
@@ -350,7 +353,9 @@ section gets built, build this one.**
 | `gearAtExit` | Gear at the last frame of the corner window, modal across laps |
 | `shiftsInCorner` | Gear changes inside the window, **mean across laps, so a fraction is meaningful** — `0.4` means he shifted on four laps in ten, which is the inconsistency worth seeing. This is what answers "does 2nd cover all three chicanes without an upshift" |
 | `upshiftRpm` | Engine speed at the **first upshift after the apex**, mean across the laps that had one, rounded to whole rpm. `null` if he never upshifted in the window. Compare against `gearing.limiterRpm`: an upshift well below the limiter is a deliberate short-shift, and it costs pace to save fuel and rear tyre |
-| `suspHeightMinMm` | Minimum **absolute** suspension height reached, per wheel. **Not travel remaining** — see §15. Interpret against `derived.bottomingRefMm` |
+| `yawDeficitPct` | **How far short of the rotation the steering implied the car actually turned**, median across the frames where lock was being added, mean across laps. Positive is short; negative means it rotated more than the lock implied. **Read it beside `entrySpeedKph` and nowhere else.** Expected yaw is proportional to speed while a car at its grip limit yaws as `1/v`, so this quantity carries a `1/v²` structure that is a property of the expression and not of the car — a neutral car reads worse at speed. It is a magnitude for a human to weigh against the driver's own account, and **it gates nothing**. `null` where no frame could be judged, which is not zero deficit |
+| `yawDeficitSamples` / `yawDeficitFrames` | Laps that produced a figure, and total qualifying frames behind it |
+| `suspHeightMinMm` | Minimum of the per-wheel suspension channel. **That channel is COMPRESSION, not height** — measured 17 Aug 2026, `body_height_mm` falls 61→50 mm from 120 to 260 km/h while every `susp_mm` rises — so this is the most **extended** the wheel got, i.e. the lightest, and the bottoming end is the maximum. The name predates the measurement and is kept for compatibility; `derived.bottomingRefMm` is now peak compression on straight-line frames and is the figure to interpret against. **Not travel remaining** — see §15 |
 | `surfaceMix` | Fraction of samples per surface character: `T` tarmac, `C` kerb, `D` dirt, `G` grass, `S` sand, `s` snow. Packet `~`/`C` only |
 
 **Gears are modal, never mean.** A mean gear of 2.6 is not a gear, and a reader
@@ -362,12 +367,11 @@ average legitimately.
 
 | Flag | Detection |
 |---|---|
-| `bottoming` | suspension height within the bottoming reference band for > 50 ms |
+| `bottoming` | per-wheel suspension **compression** within the reference band of the straight-line peak for > 50 ms. Inferred, never measured: GT7 reports no travel-remaining channel |
 | `countersteer` | steering sign reversal > 10° within 300 ms |
 | `wheelspin` | driven-wheel surface speed exceeds vehicle speed by > 8% under throttle |
 | `lockup` | wheel surface speed below vehicle speed by > 15% under brake |
 | `trail-brake-instability` | countersteer inside the trail-brake window |
-| `understeer-mid` | steering angle rising while yaw rate flat or falling |
 | `off-track` | any wheel on a surface other than `T` or `C` |
 | `kerb-strike` | suspension height step change > 20 mm in < 100 ms |
 

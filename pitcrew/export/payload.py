@@ -1039,6 +1039,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "exitSpeedKph", "brakePeakPct", "brakePointM", "brakePointSamples",
         "trailBrakeMs", "trailBrakeSamples", "steerPeakDeg", "steerPeakNorm",
         "steerPeakSamples", "throttleOnPct", "throttleOnSamples",
+        "yawDeficitPct", "yawDeficitSamples", "yawDeficitFrames",
         "timeLossVsBestMs", "consistencyMs", "gearMin", "gearAtApex",
         "gearAtExit", "shiftsInCorner", "upshiftRpm", "upshiftRpmSamples",
         "suspHeightMinMm", "surfaceMix",

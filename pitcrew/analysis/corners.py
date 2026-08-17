@@ -284,6 +284,7 @@ def _measure(window: list[dict], approach: list[dict], corner: Corner,
     brakes = [f["brake_pct"] for f in window]
     throttles = [f["throttle_pct"] for f in window]
 
+    deficit, deficit_frames = yaw_deficit_pct(window, interval_ms, wheelbase_m)
     measurement = {
         "time_ms": window[-1]["t_ms"] - window[0]["t_ms"],
         "entry_kph": speeds[0],
@@ -302,6 +303,10 @@ def _measure(window: list[dict], approach: list[dict], corner: Corner,
         "upshift_rpm": _first_upshift_rpm(window),
         "susp_min_mm": _suspension_minima(window),
         "surface_counts": _surface_counts(window),
+        # A magnitude, and it gates nothing. See `yaw_deficit_pct` for why the
+        # boolean it replaced was measuring entry speed.
+        "yaw_deficit_pct": deficit,
+        "yaw_deficit_frames": deficit_frames,
         "flags": _flags(window, interval_ms, bottoming_ref, bottoming_wheels,
                         drivetrain, wheelbase_m),
     }
@@ -491,8 +496,6 @@ def _flags(window: list[dict], interval_ms: float,
                for k in range(start, end + 1)):
             flags.add("trail-brake-instability")
 
-    if _understeers_mid(window, interval_ms, wheelbase_m):
-        flags.add("understeer-mid")
 
     if _off_track(window):
         flags.add("off-track")
@@ -599,40 +602,62 @@ def _expected_yaw_rad_s(frame: dict, wheelbase_m: float) -> float | None:
             * abs(steer) / 180.0 / wheelbase_m)
 
 
-def _understeers_mid(window: list[dict], interval_ms: float,
-                     wheelbase_m: float | None) -> bool:
-    """Adding lock while the car rotates well below what the lock implies.
+def yaw_deficit_pct(window: list[dict], interval_ms: float,
+                    wheelbase_m: float | None) -> tuple[float | None, int]:
+    """How far short of the lock's implied rotation the car turned, in percent.
 
-    The v2 test was "steering rising while yaw is flat or falling" with a
-    magnitude on neither side. It fired on 49.4% of 923 real corner windows and
-    on all 25 corner objects, and hardwiring its yaw term to True still fired
-    on ~95% — the steering term alone could not fail, because a five-frame
-    0.5°/frame rise is just turn-in. Both sides now carry a stated magnitude
-    and both constants live in `thresholds`, so the export can declare them.
+    **This replaced the `understeer-mid` flag, which measured entry speed.**
+    The rule was: flag when steering rises while yaw sits below
+    `UNDERSTEER_YAW_DEFICIT` of `GAIN * speed * steer/180 / wheelbase`. Expected
+    yaw in that expression is proportional to speed; achieved yaw for a car at
+    its grip limit is `v/R`, and with `v^2/R = mu*g` that is `mu*g/v` -
+    INVERSELY proportional. So the achieved/expected ratio falls as 1/v^2 for
+    any car driven at the limit, whatever its balance, and unless downforce
+    raises mu as fast as v^2 **a perfectly neutral car flags more at speed by
+    construction.** The gain was calibrated as a median over 154,714 frames
+    across all speeds, so it is right at the median speed and wrong at both
+    ends in opposite directions.
+
+    Sorted by entry speed, Watkins over 17 laps: T2 204 km/h 15/17, T8 194
+    15/17, T9 170 12/17, T4 153 7/17, T1 144 7/17, T6 134 0/17, T5 133 0/17,
+    T7 120 0/17. Near-monotone, switching off entirely below 135 km/h, with
+    T3 the lone outlier - and T3 is the one fast corner taken with no brake
+    and the least steering. A genuine front-grip fault would track LOAD, not
+    raw speed. The driver reported no understeer across four sessions while
+    the flag fired at six or seven corners of nine in every one of them.
+
+    So the boolean is gone and the magnitude is exported instead. A lap count
+    at six of nine corners is not tunable; "twelve percent short of the lock's
+    implied rotation, at 204 km/h entry" is something a reader can weigh
+    against the speed beside it and against what the driver actually felt.
+    **It gates nothing.** Nothing downstream may turn it back into a flag
+    without first removing the speed structure above.
+
+    Returns `(median percent short, qualifying frames)`. Positive is short of
+    expectation; negative means the car rotated MORE than the lock implied.
+    `(None, 0)` where no frame in the window could be judged - which is not
+    zero deficit, and must not be read as one.
     """
     wheelbase_m = wheelbase_m or thresholds.DEFAULT_WHEELBASE_M
-    needed = _frames_for_ms(thresholds.UNDERSTEER_MIN_MS, interval_ms)
     rise_per_frame = thresholds.UNDERSTEER_STEER_RISE_DEG_S * interval_ms / 1000.0
 
-    streak = 0
+    deficits: list[float] = []
     previous_steer = None
     for frame in window:
         steer = frame.get("steering_deg")
         yaw = frame.get("yaw_rate")
-        pushing = False
         # A None yaw is "the car was not moving enough to say", not "the car
-        # was not rotating" — the second reading would make a standstill the
-        # strongest understeer signal the detector has.
+        # was not rotating" - the second reading would make a standstill the
+        # strongest understeer signal there is.
         if steer is not None and yaw is not None and previous_steer is not None:
             expected = _expected_yaw_rad_s(frame, wheelbase_m)
             adding_lock = abs(steer) - abs(previous_steer) >= rise_per_frame
-            pushing = (expected is not None and adding_lock
-                       and abs(yaw) < thresholds.UNDERSTEER_YAW_DEFICIT * expected)
-        streak = streak + 1 if pushing else 0
-        if streak >= needed:
-            return True
+            if expected and adding_lock:
+                deficits.append(100.0 * (1.0 - abs(yaw) / expected))
         previous_steer = steer
-    return False
+    if not deficits:
+        return None, 0
+    return round(median(deficits), 1), len(deficits)
 
 
 def _off_track(window: list[dict]) -> bool:
@@ -764,6 +789,16 @@ def _combine(corner: Corner, per_lap: list[dict]) -> dict:
         "throttleOnPct": _round_or_none(
             _mean_or_none([m["throttle_on_pct"] for m in per_lap])),
         "throttleOnSamples": counted("throttle_on_pct"),
+        # **The rotation shortfall, as a number, gating nothing.** Positive is
+        # short of what the lock implied; negative means the car rotated more.
+        # Read it beside `entrySpeedKph`, because the expression behind it has
+        # a 1/v^2 structure that the flag it replaced could not survive - see
+        # `yaw_deficit_pct`. Null where no frame in any lap could be judged,
+        # which is not zero deficit.
+        "yawDeficitPct": _round_or_none(
+            _mean_or_none([m["yaw_deficit_pct"] for m in per_lap]), 1),
+        "yawDeficitSamples": counted("yaw_deficit_pct"),
+        "yawDeficitFrames": sum(m["yaw_deficit_frames"] for m in per_lap),
         "timeLossVsBestMs": round(mean(times) - best_time),
         "consistencyMs": round(pstdev(times)) if len(times) > 1 else None,
         # Modal, not mean: a mean gear of 2.6 is not a gear.

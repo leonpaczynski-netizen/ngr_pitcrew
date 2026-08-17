@@ -495,27 +495,48 @@ def rising_lock(yaw_rate, *, rise_deg_per_frame: float = 0.5) -> list[dict]:
     return frames
 
 
-def test_understeer_needs_the_car_to_be_short_of_the_rotation_the_lock_implies():
-    assert "understeer-mid" in one_corner(rising_lock(0.05))["flags"]
+def test_the_rotation_shortfall_is_a_magnitude_and_not_a_flag():
+    """**`understeer-mid` is gone and this replaced it.**
+
+    Expected yaw goes as speed; a car at its grip limit yaws as `mu*g/v`. The
+    ratio therefore falls as 1/v^2 for any car driven at the limit, whatever
+    its balance - so the boolean was ordering corners by entry speed. Sorted
+    that way over 17 Watkins laps it read 15/17 at 204 km/h and 0/17 at 120,
+    switching off entirely below 135, while the driver reported no understeer
+    across four sessions.
+    """
+    corner = one_corner(rising_lock(0.05))
+    assert "understeer-mid" not in corner["flags"]
+    # A car turning far less than the lock implies is a large positive number.
+    assert corner["yawDeficitPct"] > 50
+    assert corner["yawDeficitFrames"] > 0
 
 
-def test_adding_lock_alone_is_not_understeer():
+def test_a_car_rotating_freely_reads_a_small_or_negative_shortfall():
     """The v2 detector had a magnitude on neither side, so the steering term
     could not fail: it fired on 49% of the owner's real corner windows and on
     every corner object in the export."""
-    assert "understeer-mid" not in one_corner(rising_lock(2.0))["flags"]
+    assert one_corner(rising_lock(2.0))["yawDeficitPct"] < 0
 
 
-def test_a_slow_steering_input_is_not_understeer():
-    assert "understeer-mid" not in one_corner(
-        rising_lock(0.05, rise_deg_per_frame=0.05))["flags"]
+def test_a_slow_steering_input_is_barely_judged_at_all():
+    """The shortfall is only measured while lock is being ADDED faster than
+    `UNDERSTEER_STEER_RISE_DEG_S`. A gentle input leaves almost nothing to
+    judge, and the frame count says so rather than the median hiding it -
+    which is why the count is exported beside the number."""
+    gentle = one_corner(rising_lock(0.05, rise_deg_per_frame=0.05))
+    brisk = one_corner(rising_lock(0.05, rise_deg_per_frame=0.5))
+    assert gentle["yawDeficitFrames"] == 1
+    assert brisk["yawDeficitFrames"] > 50
 
 
-def test_an_unmeasurable_yaw_is_not_understeer():
+def test_an_unmeasurable_yaw_yields_no_shortfall():
     """Heading is undefined when the car is not moving. Reading that as
-    'not rotating any harder' makes a standstill the strongest understeer
-    signal the detector has."""
-    assert "understeer-mid" not in one_corner(rising_lock(None))["flags"]
+    'not rotating any harder' would make a standstill the strongest understeer
+    signal there is."""
+    corner = one_corner(rising_lock(None))
+    assert corner["yawDeficitPct"] is None
+    assert corner["yawDeficitFrames"] == 0
 
 
 def test_flags_are_null_safe_without_steering_or_surface():
