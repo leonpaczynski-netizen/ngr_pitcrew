@@ -731,26 +731,213 @@ class Store:
         return [r["circuit_key"] for r in rows]
 
     def get_lap_frames(self, lap_id: int) -> dict | None:
-        """Return {sample_hz, frame_count, frames: [dict, ...]} or None."""
+        """Return {sample_hz, frame_count, frame_schema_version, frames} or None.
+
+        `frame_schema_version` is the blob's own stamp, lifted out before
+        `repair_frames` strips it. It is here because a v1 lap's yaw rate is
+        reconstructed from the stored path and a v2 lap's comes off the packet,
+        and the two differ by 3-4% at the top of the acceleration distribution -
+        the same size as the compound step the tyre model exists to detect. A
+        caller that cannot tell them apart will read a storage-format change as
+        a physics finding, so the fact travels with the frames.
+        """
         rows = self._query("SELECT * FROM lap_frames WHERE lap_id = ?", (lap_id,))
         if not rows:
             return None
-        from pitcrew.telemetry.recorder import decode_frames, repair_frames
+        from pitcrew.telemetry.recorder import (
+            FRAME_SCHEMA_VERSION,
+            _VERSION_KEY,
+            decode_frames,
+            repair_frames,
+        )
         row = rows[0]
+        decoded = decode_frames(row["blob"])
+        version = (decoded[0].get(_VERSION_KEY, FRAME_SCHEMA_VERSION)
+                   if decoded else FRAME_SCHEMA_VERSION)
         return {
             "sample_hz": row["sample_hz"],
             "frame_count": row["frame_count"],
+            "frame_schema_version": int(version),
             # Laps recorded before the lap-distance channel existed, and
             # before the clock was taken off GT7's time of day, are repaired
             # here - so a session captured last week still yields corners
             # rather than having to be run again.
-            "frames": repair_frames(decode_frames(row["blob"]),
-                                    row["sample_hz"]),
+            "frames": repair_frames(decoded, row["sample_hz"]),
         }
 
     def has_frames(self, lap_id: int) -> bool:
         return bool(self._query(
             "SELECT 1 FROM lap_frames WHERE lap_id = ?", (lap_id,)))
+
+    # ---------------------------------------------------- the tyre model
+    #
+    # Two tables, both written only by the offline pipeline. Nothing on the
+    # telemetry thread reaches either of them: the frames are already on disk
+    # and re-aggregating them is what `CLAUDE.md` §6 kept them for.
+
+    # Every column `write_grip_observations` will accept. A whitelist rather
+    # than a free-form insert because the caller builds a dict per row, and a
+    # misspelled key would otherwise be dropped in silence - which for a
+    # covariate reads downstream as "not measured" and is indistinguishable
+    # from the truth.
+    GRIP_OBSERVATION_COLUMNS = (
+        "lap_id", "unit_kind", "unit_id",
+        "derivation_version", "frame_schema_version", "yaw_source",
+        "corner_model_version", "sample_frames",
+        "car_key", "circuit_key", "compound", "session_id", "lap_num",
+        "stint_key", "lap_in_stint",
+        "grip_g", "grip_stat", "lat_p95_g", "decel_p90_g", "min_speed_kph",
+        "lap_time_ms",
+        "temp_front_c", "temp_rear_c", "temp_front_max_c", "temp_rear_max_c",
+        "entry_temp_front_c", "entry_temp_rear_c",
+        "fuel_l", "laps_on_set", "gauge_worst_frac",
+        "tod_ms", "clock_frozen", "session_elapsed_s",
+        "commit_brake_pct", "commit_full_thr_frac", "kerb_frac",
+        "apex_m_model", "apex_m_observed", "apex_anchor_laps",
+        "apex_anchor_sd_m", "identity_stable",
+        "counts_toward_fit", "exclusion_reason",
+    )
+
+    def write_grip_observations(self, rows: list[dict]) -> int:
+        """Store derived grip observations, replacing any of the same version.
+
+        Idempotent by `(lap_id, unit_kind, unit_id, derivation_version)`: a
+        second run at the same derivation version overwrites its own rows and
+        leaves every other version alone. That is what makes a fitted model
+        still resolvable - it names a derivation version, and the observations
+        it was fitted on are still there under it.
+        """
+        if not rows:
+            return 0
+        unknown: set[str] = set()
+        for row in rows:
+            unknown |= set(row) - set(self.GRIP_OBSERVATION_COLUMNS)
+        if unknown:
+            raise ValueError(
+                f"not a grip observation column: {', '.join(sorted(unknown))}")
+
+        columns = [*self.GRIP_OBSERVATION_COLUMNS, "derived_at"]
+        marks = ", ".join("?" for _ in columns)
+        stamp = _now()
+        with self._write() as conn:
+            for row in rows:
+                values = [row.get(name) for name in
+                          self.GRIP_OBSERVATION_COLUMNS]
+                conn.execute(
+                    f"INSERT OR REPLACE INTO grip_observations "
+                    f"({', '.join(columns)}) VALUES ({marks})",
+                    [*values, stamp])
+        return len(rows)
+
+    def list_grip_observations(self, *, derivation_version: int | None = None,
+                               unit_kind: str | None = None,
+                               car_key: str | None = None,
+                               circuit_key: str | None = None,
+                               counted_only: bool = False) -> list[dict]:
+        """Stored observations, narrowed by scope.
+
+        Nothing here filters by `yaw_source` — that is the fitting layer's
+        refusal to make, and hiding it behind a default here would turn a
+        deliberate refusal into an invisible one.
+        """
+        where, params = [], []
+        if derivation_version is not None:
+            where.append("derivation_version = ?")
+            params.append(derivation_version)
+        if unit_kind is not None:
+            where.append("unit_kind = ?")
+            params.append(unit_kind)
+        if car_key is not None:
+            where.append("car_key = ?")
+            params.append(car_key)
+        if circuit_key is not None:
+            where.append("circuit_key = ?")
+            params.append(circuit_key)
+        if counted_only:
+            where.append("counts_toward_fit = 1")
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        return [dict(r) for r in self._query(
+            f"SELECT * FROM grip_observations {clause} "
+            f"ORDER BY session_id, lap_num, unit_kind, unit_id", params)]
+
+    def grip_derivation_versions(self) -> list[int]:
+        return [int(r["derivation_version"]) for r in self._query(
+            "SELECT DISTINCT derivation_version FROM grip_observations "
+            "ORDER BY derivation_version")]
+
+    def save_tyre_model(self, model: dict) -> int:
+        """Write one fitted model, replacing the same scope at the same version.
+
+        Deleted-then-inserted rather than upserted because `compound` is
+        nullable and sqlite counts two NULLs as distinct in a UNIQUE index — so
+        a compound-agnostic fit would accumulate a new row on every run and the
+        newest would not be findable by the constraint.
+        """
+        keys = ("car_key", "circuit_key", "compound", "yaw_source",
+                "model_kind", "derivation_version")
+        missing = [k for k in keys if k not in model]
+        if missing:
+            raise ValueError(f"a tyre model needs {', '.join(missing)}")
+        payload = {
+            **{k: model[k] for k in keys},
+            "model_json": json.dumps(model.get("model", {})),
+            "samples": int(model["samples"]),
+            "sessions": int(model["sessions"]),
+            "stints": int(model["stints"]),
+            "confidence": model["confidence"],
+            "speakable": int(bool(model.get("speakable"))),
+            "gate_json": json.dumps(model.get("gate", {})),
+            "unknowns_json": json.dumps(list(model.get("unknowns", ()))),
+            "provenance_json": json.dumps(model.get("provenance", {})),
+            "game_version": model.get("game_version"),
+            "fitted_at": _now(),
+        }
+        with self._write() as conn:
+            conn.execute(
+                "DELETE FROM tyre_models WHERE car_key = ? AND circuit_key = ? "
+                "AND compound IS ? AND yaw_source = ? AND model_kind = ? "
+                "AND derivation_version = ?",
+                [model[k] for k in keys])
+            cur = conn.execute(
+                f"INSERT INTO tyre_models ({', '.join(payload)}) "
+                f"VALUES ({', '.join('?' for _ in payload)})",
+                list(payload.values()))
+            return int(cur.lastrowid)
+
+    def clear_tyre_models(self, derivation_version: int) -> int:
+        """Drop every model fitted at one derivation version.
+
+        A fit is regenerated wholesale from the observations at its version, so
+        the previous run's rows are not history worth keeping - and if a scope
+        key has changed between runs, they are worse than that. **A stale row
+        under an old key does not collide with the new one and is not deleted
+        by the upsert**, so it survives as a second answer to the same
+        question. That is exactly what happened when one car was keyed two
+        ways, so the regeneration is explicit rather than incremental.
+        """
+        with self._write() as conn:
+            cur = conn.execute(
+                "DELETE FROM tyre_models WHERE derivation_version = ?",
+                (derivation_version,))
+            return int(cur.rowcount or 0)
+
+    def list_tyre_models(self, *, car_key: str | None = None,
+                         circuit_key: str | None = None,
+                         model_kind: str | None = None,
+                         speakable_only: bool = False) -> list[dict]:
+        where, params = [], []
+        for column, value in (("car_key", car_key), ("circuit_key", circuit_key),
+                              ("model_kind", model_kind)):
+            if value is not None:
+                where.append(f"{column} = ?")
+                params.append(value)
+        if speakable_only:
+            where.append("speakable = 1")
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self._query(
+            f"SELECT * FROM tyre_models {clause} ORDER BY fitted_at DESC, id DESC",
+            params)
+        return [_tyre_model_row(r) for r in rows]
 
     # ------------------------------------------------------------ strategies
 
@@ -858,6 +1045,16 @@ def _setup_sheet(row: sqlite3.Row):
         purpose=row["purpose"] if "purpose" in row.keys() else None,
         id=row["id"],
     )
+
+
+def _tyre_model_row(row: sqlite3.Row) -> dict:
+    item = dict(row)
+    item["model"] = json.loads(item.pop("model_json"))
+    item["gate"] = json.loads(item.pop("gate_json"))
+    item["unknowns"] = json.loads(item.pop("unknowns_json"))
+    item["provenance"] = json.loads(item.pop("provenance_json"))
+    item["speakable"] = bool(item["speakable"])
+    return item
 
 
 def _strategy_row(row: sqlite3.Row) -> dict:

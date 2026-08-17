@@ -91,11 +91,24 @@ class CornerModel:
 
 
 def model_id_for(track: str, layout: str | None = None) -> str:
-    parts = [track or "unknown"]
-    if layout:
-        parts.append(layout)
-    joined = "-".join(parts).lower()
-    return "".join(ch if ch.isalnum() else "-" for ch in joined).strip("-")
+    """The circuit's identity, under the app's one slug rule.
+
+    **This used to carry its own rule** - `ch if ch.isalnum() else "-"`, with no
+    run collapsing and no unicode folding - and that made it the fourth
+    independent way this codebase turned a name into an identity. Two of the
+    four disagreed on accented characters (`str.isalnum()` is True for "a"
+    with an acute), which is how one car came to be keyed two ways and a scope
+    lookup could not reach its own observations.
+
+    It delegates to `store.tyres.slugify` now. Verified byte-identical on every
+    circuit in the archive before the change, so no stored `corner_models` row
+    is orphaned by it; the point is that circuit identity and scope identity
+    can no longer drift apart, because there is only one rule left to drift.
+    """
+    from pitcrew.store.tyres import slugify
+
+    circuit = f"{track or 'unknown'} {layout}" if layout else (track or "unknown")
+    return slugify(circuit)
 
 
 def _smooth(values: list[float], window: int) -> list[float]:

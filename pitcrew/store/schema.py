@@ -28,6 +28,15 @@ Versions, and what upgrading means here:
   corners at different rates and shows them separately on its own gauge; an
   axle pair could not express a car eating its front-left in particular, which
   is exactly the finding an open-tuning no-BoP setup produces.
+* **v6** adds `grip_observations` and `tyre_models`: the app's own longitudinal
+  tyre model, derived offline from frames already on disk.  **Two new tables and
+  nothing else** — `laps` is not touched, and it must never be, because
+  `lap_frames` cascades off it and rebuilding it would destroy every recorded
+  blob in the file.  There is deliberately **no migration function for v6**: two
+  brand-new tables are exactly what `CREATE TABLE IF NOT EXISTS` in the DDL
+  below already expresses, and a no-op entry in `MIGRATIONS` would only suggest
+  otherwise.  The version number moves so that the guard in
+  `Store._init_schema` still refuses to open a file this build predates.
 
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
@@ -39,7 +48,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -326,6 +335,155 @@ CREATE TABLE IF NOT EXISTS prompt_issues (
 );
 CREATE INDEX IF NOT EXISTS idx_prompt_issues_event
     ON prompt_issues(event_id, issued_at DESC);
+
+-- ------------------------------------------------------------------ the tyre model
+--
+-- GT7 broadcasts no tyre wear channel, in any packet format. The app's answer
+-- is to measure the *effect* instead: `grip_g` is a percentile of the combined
+-- acceleration vector over a lap, which is a friction envelope the driver
+-- actually reached. It is **derived, never measured** - `grip_stat` names the
+-- derivation on every single row so no reader can forget that.
+--
+-- Why this observable and not lap time: measured over 95 clean laps, lap time's
+-- elasticity to grip is 0.07-0.30 where a friction-envelope percentile's is 1.0
+-- by construction, at a comparable lap-to-lap CV. Resolving a 1% grip change
+-- needs 16-74 laps here against 478-4204 on the stopwatch. Lap time is not
+-- noisy, it is deaf.
+--
+-- One row per (lap, unit). `unit_kind='LAP'` carries `unit_id='LAP'`;
+-- `unit_kind='CORNER'` carries the corner model's stable id, 'T7'.
+CREATE TABLE IF NOT EXISTS grip_observations (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    lap_id                INTEGER NOT NULL REFERENCES laps(id) ON DELETE CASCADE,
+    unit_kind             TEXT    NOT NULL,        -- 'LAP' | 'CORNER'
+    unit_id               TEXT    NOT NULL,
+
+    -- WHAT MAKES A ROW REPRODUCIBLE. Bump `derivation_version` and rebuild
+    -- wholesale; never patch a row in place, or a fitted model stops resolving
+    -- the observations it was actually fitted on.
+    derivation_version    INTEGER NOT NULL,
+    frame_schema_version  INTEGER NOT NULL,        -- 1 or 2, read off the blob
+    -- **Mandatory, and the reason is a measurement.** v1 blobs stored the roll
+    -- rate where the yaw rate belonged; `repair_frames` reconstructs ground-
+    -- track yaw from the stored path, and that stencil attenuates the peak of
+    -- the acceleration distribution by 3-4% against a v2 lap that carries the
+    -- packet's own `angvel_y`. Measured on identical setup sheets: Yas +2.5 to
+    -- +4.3%, Monza +3.7%. **That offset is the same size as the compound step
+    -- this table exists to detect**, so a fit that pooled across it would read
+    -- a storage-format change as a physics finding.
+    yaw_source            TEXT    NOT NULL,        -- 'packet-angvel-y' | 'path-reconstructed'
+    corner_model_version  INTEGER,                 -- NULL on a LAP row
+    sample_frames         INTEGER NOT NULL,        -- frames behind this row (rule 4)
+
+    -- SCOPE. Denormalised onto the row because these are the keys a fit may
+    -- never pool across, and a join is one more place to forget one.
+    car_key               TEXT    NOT NULL,
+    circuit_key           TEXT    NOT NULL,
+    compound              TEXT,                    -- NULL where he never tagged it
+    session_id            INTEGER NOT NULL,
+    lap_num               INTEGER NOT NULL,
+    -- `session_id:ordinal`, the ordinal rising at each observed tyre change.
+    -- NULL where the set's identity is genuinely unknown, which is most of the
+    -- archive: GT7 broadcasts no tyre-change event.
+    stint_key             TEXT,
+    lap_in_stint          INTEGER,
+
+    -- THE OBSERVABLE. Derived. `grip_stat` says which derivation.
+    grip_g                REAL,                    -- comb_p95 (LAP) | comb_p90 (CORNER)
+    grip_stat             TEXT    NOT NULL,
+    lat_p95_g             REAL,
+    decel_p90_g           REAL,
+    min_speed_kph         REAL,
+    lap_time_ms           INTEGER,
+
+    -- THE COVARIATES, each NULL when unmeasured. Never 0.
+    --
+    -- Both temperature aggregates are stored, and that is deliberate: the one
+    -- external wear-onset figure in existence (RS 88 / RM 90 / RH 93 degC) never
+    -- states whether it means an axle mean or the hottest moment, and the answer
+    -- decides everything - on lap-axle means this driver reaches 88 degC on 1 of
+    -- 76 laps, on corner windows on 18 of 719 observations. **A threshold whose
+    -- aggregate is unstated is not a threshold**, so both are on the row and any
+    -- claim has to name one.
+    temp_front_c          REAL,   temp_rear_c          REAL,
+    temp_front_max_c      REAL,   temp_rear_max_c      REAL,
+    entry_temp_front_c    REAL,   entry_temp_rear_c    REAL,   -- CORNER only
+    fuel_l                REAL,
+    laps_on_set           INTEGER,                 -- NULL when the set's age is unknown
+    -- The driver's own gauge reading on this lap, worst corner, fraction
+    -- consumed. **The only wear number anchored to the game's own figure, and
+    -- the only bridge to a wear dependent variable that exists** - there is no
+    -- wear channel, so without this the model can measure grip falling and can
+    -- never say what fraction of the tyre that is. NULL on the 160 of 175
+    -- archived laps where he did not read it.
+    gauge_worst_frac      REAL,
+    -- GT7's in-game clock. **A STRATIFIER, NEVER A TEMPERATURE.** There is no
+    -- ambient or track temperature channel in any packet format - the full
+    -- 368-byte struct is accounted for and there is no unclaimed float where one
+    -- could hide. The clock says when an observation was taken and nothing more.
+    tod_ms                INTEGER,
+    -- 1 where the clock stopped advancing while the car kept driving. A circuit
+    -- runs its day to the end of its range and holds it there; reading that as a
+    -- multiplier of zero is how a poisoned `track_clock` row got cached once.
+    clock_frozen          INTEGER,
+    session_elapsed_s     REAL,
+    commit_brake_pct      REAL,   commit_full_thr_frac REAL,
+    kerb_frac             REAL,                    -- NULL on packet formats 'A'/'B'
+
+    -- CORNER IDENTITY, anchored on the apex he actually drove rather than the
+    -- one auto-segmentation guessed. The anchor is stored per row so a row can
+    -- always be explained by the window that produced it.
+    apex_m_model          REAL,
+    apex_m_observed       REAL,
+    apex_anchor_laps      INTEGER,
+    apex_anchor_sd_m      REAL,
+    identity_stable       INTEGER,
+
+    -- ELIGIBILITY, and the reason, so an exclusion can be explained rather than
+    -- guessed at. A lap that does not count is still written: a fuel-save lap is
+    -- a measurement of something, just not of grip.
+    counts_toward_fit     INTEGER NOT NULL DEFAULT 0,
+    exclusion_reason      TEXT,
+
+    derived_at            TEXT    NOT NULL,
+    UNIQUE(lap_id, unit_kind, unit_id, derivation_version)
+);
+CREATE INDEX IF NOT EXISTS idx_grip_obs_lap ON grip_observations(lap_id);
+CREATE INDEX IF NOT EXISTS idx_grip_obs_fit
+    ON grip_observations(counts_toward_fit, unit_kind);
+CREATE INDEX IF NOT EXISTS idx_grip_obs_scope
+    ON grip_observations(car_key, circuit_key, compound, yaw_source);
+
+-- ONE ROW PER FITTED MODEL. The scope keys are what may never be pooled: a
+-- coefficient fitted at one car and circuit is a local measurement, and this
+-- table's shape is what stops it being promoted to a law by accident.
+CREATE TABLE IF NOT EXISTS tyre_models (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    car_key            TEXT    NOT NULL,
+    circuit_key        TEXT    NOT NULL,   -- matches corner_models.circuit_key
+    compound           TEXT,               -- NULL = a compound-agnostic fit
+    yaw_source         TEXT    NOT NULL,   -- a fit spans exactly ONE source
+    model_kind         TEXT    NOT NULL,   -- 'baseline' | 'degradation'
+                                           -- | 'warmup' | 'temperature-response'
+    model_json         TEXT    NOT NULL,   -- coefficients and their standard errors
+    -- Rule 4 as columns rather than as a habit.
+    samples            INTEGER NOT NULL,
+    sessions           INTEGER NOT NULL,
+    stints             INTEGER NOT NULL,
+    confidence         TEXT    NOT NULL,   -- 'none' | 'low' | 'medium' | 'high'
+    -- **Written here, at fit time, by the code that checked the sample counts.**
+    -- The voice layer reads a boolean; it does not get to decide.
+    speakable          INTEGER NOT NULL DEFAULT 0,
+    gate_json          TEXT    NOT NULL,   -- which staged gate, its thresholds, what failed
+    unknowns_json      TEXT    NOT NULL,   -- what this model explicitly cannot say
+    provenance_json    TEXT    NOT NULL,   -- derivation_version, lap ids, multipliers
+    game_version       TEXT,
+    derivation_version INTEGER NOT NULL,
+    fitted_at          TEXT    NOT NULL,
+    UNIQUE(car_key, circuit_key, compound, yaw_source, model_kind, derivation_version)
+);
+CREATE INDEX IF NOT EXISTS idx_tyre_models_scope
+    ON tyre_models(car_key, circuit_key, model_kind);
 """
 
 # Columns added to tables that already existed in an earlier version.
