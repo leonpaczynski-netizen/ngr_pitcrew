@@ -2,8 +2,9 @@
 
 SimHub's formula is compiled and unpublished, so none of this is a port. What
 is asserted here is that the *shape* matches the driver's tuning while the
-*scale* comes from the car - which is the one thing this can do that SimHub
-structurally cannot, because SimHub does not know what he is driving.
+*scale* is measured - the circuit's own recorded top speed where the event has
+one, the car's broadcast maximum otherwise. Which is the one thing this can do
+that SimHub structurally cannot, because SimHub knows neither.
 """
 from __future__ import annotations
 
@@ -281,3 +282,39 @@ def test_a_smaller_rig_can_still_be_given_a_ceiling():
     genuinely cannot do both fans at full should not mean editing the curve."""
     curve = WindCurve(WindProfile(max_duty=0.5))
     assert settled(curve, at(299.0), racing=True) <= 128
+
+
+# ------------------------------------------------- scaled to the circuit
+
+
+def test_the_scale_is_the_circuits_top_speed_where_the_event_has_one():
+    """`car_max_speed_raw` is the CAR's top speed and the circuit is always
+    slower. The Huracan broadcasts 299 and the quickest frame of the whole
+    Watkins race was 273.5, so the top 6% of the fan range could never be
+    reached - measured over that race's 113k green-lap frames, duty peaked at
+    240 of 255 and sat above 200 for 29.5% of the lap.
+    """
+    curve = WindCurve()
+    curve.observed_top_kph = 273.5
+    assert curve.target(at(273.5), racing=True) == pytest.approx(1.0)
+    # Against the car's 299 the same frame falls short of full.
+    car_scaled = WindCurve()
+    assert car_scaled.target(at(273.5), racing=True) < 0.95
+
+
+def test_without_a_recorded_top_speed_the_car_still_sets_the_scale():
+    """Missing is not zero, and it is not another circuit's figure either."""
+    curve = WindCurve()
+    curve.target(at(200.0), racing=True)
+    assert curve.observed_top_kph is None
+    assert curve.scale_kph == 299
+    assert "no recorded top speed" in curve.describe()
+
+
+def test_a_recorded_top_speed_above_the_car_is_a_bad_reading():
+    """Not a faster car. Clamped, so one spiked frame cannot put the fans at
+    full halfway down the straight for every session that follows."""
+    curve = WindCurve()
+    curve.observed_top_kph = 480.0
+    curve.target(at(200.0), racing=True)
+    assert curve.scale_kph == 299

@@ -1658,6 +1658,16 @@ class PitCrewController(QObject):
         sim = WindSim()
         sim.start()
         self.bridge.wind_curve.reset()
+        # **Scale the fans to the circuit, not to the car.** An event is one
+        # car at one circuit, so its recorded top speed is the pair's and it
+        # is the speed the fans should reach full at. NULL on an event nobody
+        # has driven yet, and the curve then falls back to the car's broadcast
+        # maximum and says which it used - see `WindCurve.scale_kph`.
+        event = self.active_event()
+        self.bridge.wind_curve.observed_top_kph = (
+            event["observed_top_kph"]
+            if event is not None and "observed_top_kph" in event.keys()
+            else None)
         self.bridge.wind = sim
         return True
 

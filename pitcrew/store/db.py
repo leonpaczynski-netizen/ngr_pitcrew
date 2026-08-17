@@ -904,7 +904,39 @@ class Store:
                     "INSERT OR REPLACE INTO lap_frames "
                     "(lap_id, sample_hz, frame_count, blob) VALUES (?,?,?,?)",
                     (lap_id, frames.sample_hz, frames.frame_count, frames.blob))
+                self._note_top_speed(conn, session_id, frames)
             return lap_id
+
+    # The fastest a frame has ever gone at this event. Ratcheted up only, and
+    # only off a lap that was actually completed - a max taken from live
+    # packets would include the garage, the replay and anything the stream
+    # showed while nobody was driving.
+    #
+    # 500 km/h is the sanity bound. `analysis/grip` records that the speed
+    # channel drops to exactly 0.0 for runs of frames mid-straight, which a
+    # maximum is immune to; a spike upward is not, and one bad frame would
+    # move a divisor every lap of every future session at this circuit.
+    MAX_PLAUSIBLE_KPH = 500.0
+
+    def _note_top_speed(self, conn: sqlite3.Connection, session_id: int,
+                        frames) -> None:
+        blob = getattr(frames, "blob", None)
+        if not blob:
+            return
+        try:
+            from pitcrew.telemetry.recorder import decode_frames
+            speeds = [f.get("speed_kph") for f in decode_frames(blob)]
+        except Exception:                                   # noqa: BLE001
+            return
+        seen = [v for v in speeds
+                if v is not None and 0.0 < v < self.MAX_PLAUSIBLE_KPH]
+        if not seen:
+            return
+        conn.execute(
+            "UPDATE events SET observed_top_kph = MAX(?, "
+            "COALESCE(observed_top_kph, 0)) WHERE id = "
+            "(SELECT event_id FROM sessions WHERE id = ?)",
+            (round(max(seen), 1), session_id))
 
     def list_laps(self, session_id: int) -> list[dict]:
         rows = self._query(

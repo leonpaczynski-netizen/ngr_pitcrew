@@ -110,6 +110,25 @@ class WindCurve:
         self.profile = profile or WindProfile()
         self._level = 0.0
         self.max_kph = FALLBACK_MAX_KPH
+        # **The speed the fans reach full at, measured where it is known.**
+        #
+        # `car_max_speed_raw` is the car's top speed, not the circuit's, and
+        # the two are not close: the Huracan broadcasts 299 and the fastest
+        # frame of the whole Watkins race was 273.5. Scaling to 299 means the
+        # top of the fan range is unreachable by construction - measured over
+        # the race's 113k green-lap frames the duty peaked at 240 of 255 and
+        # sat above 200 for 29.5% of the lap. Against the circuit's own 273.5
+        # it peaks at 255 and sits above 200 for 44.3%.
+        #
+        # That is also what his own SimHub tuning was doing by hand:
+        # `MaximumSpeed 281.08` is not any car's top speed, it is a reachable
+        # number he arrived at over eight days.
+        #
+        # None until a session at this event has been recorded, and then the
+        # highest speed that event has ever shown. Never a guess and never
+        # another circuit's: a divisor from somewhere else would put the fans
+        # at full on a straight he is still accelerating down.
+        self.observed_top_kph: float | None = None
 
     def reset(self) -> None:
         self._level = 0.0
@@ -136,7 +155,7 @@ class WindCurve:
                 return self.profile.static_gain
             return 0.0
 
-        fraction = min(1.0, speed / self.max_kph)
+        fraction = min(1.0, speed / self.scale_kph)
         shaped = fraction ** self.profile.gamma
         span = self.profile.max_gain - self.profile.min_gain
         return self.profile.min_gain + span * shaped
@@ -161,6 +180,19 @@ class WindCurve:
         return tuple([duty] * CHANNELS)
 
     @property
+    def scale_kph(self) -> float:
+        """The speed the curve reaches full at.
+
+        The circuit's measured top speed where this event has ever recorded
+        one, the car's broadcast maximum otherwise. Clamped to the car's
+        figure because a measured top speed above what the car can do is a
+        bad reading, not a faster car.
+        """
+        if self.observed_top_kph and self.observed_top_kph > 0.0:
+            return min(self.observed_top_kph, self.max_kph)
+        return self.max_kph
+
+    @property
     def level(self) -> float:
         """The smoothed 0-1 the fans are currently being driven at."""
         return self._level
@@ -169,5 +201,10 @@ class WindCurve:
         percent = self._level * 100.0
         duty = snap_duty(round(self._level * 255))
         moving = "off" if duty < MIN_MOVING_DUTY else f"{duty}/255"
-        return (f"Wind at {percent:.0f}% ({moving}), scaled to a "
-                f"{self.max_kph:.0f} km/h car.")
+        if self.observed_top_kph:
+            against = (f"the {self.scale_kph:.0f} km/h this circuit has "
+                       f"actually shown")
+        else:
+            against = (f"a {self.max_kph:.0f} km/h car - no recorded top "
+                       f"speed for this circuit yet")
+        return f"Wind at {percent:.0f}% ({moving}), scaled to {against}."

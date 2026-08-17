@@ -683,6 +683,15 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # resolved to canonical rows - a car or a layout the catalogue does
         # not carry. The event keeps every one of its sessions and laps.
         ("identity_status", "TEXT"),
+        # **The fastest frame this event has ever recorded**, which is the
+        # speed the wind fans should reach full at. `car_max_speed_raw` is the
+        # CAR's top speed and the circuit is always slower: the Huracan
+        # broadcasts 299 and the quickest frame of the whole Watkins race was
+        # 273.5, so the top 6% of fan range was unreachable by construction.
+        # An event is one car at one circuit, so the pair's measured maximum
+        # belongs here. NULL until a lap has been recorded, and then the wind
+        # curve falls back to the car's figure and says which it used.
+        ("observed_top_kph", "REAL"),
     ),
     "laps": (
         ("gear_ratios", "TEXT"),
