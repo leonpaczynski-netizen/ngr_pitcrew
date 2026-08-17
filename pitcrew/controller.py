@@ -2188,19 +2188,19 @@ class PitCrewController(QObject):
             from pitcrew.engineer import endpoint_meter
 
             try:
-                heard = endpoint_meter.poll_briefly(device, seconds=0.4)
+                reading = endpoint_meter.poll_briefly(device, seconds=0.4)
             except Exception as exc:                        # noqa: BLE001
                 self._endpoint_note = f"endpoint unreadable{exhausted}"
                 log("haptics").debug("could not read the endpoint: %s", exc)
                 return
-            self._act_on_endpoint_reading(haptics, device, produced, heard,
+            self._act_on_endpoint_reading(haptics, device, produced, reading,
                                           _monotonic())
 
         threading.Thread(target=ask, name="PitCrewHapticsMeter",
                          daemon=True).start()
 
     def _act_on_endpoint_reading(self, haptics, device: str, produced: float,
-                                 heard: float, now: float) -> None:
+                                 reading, now: float) -> None:
         """Judge one endpoint reading and run the recovery ladder it earns.
 
         Separated from the worker thread that takes the reading so the whole
@@ -2210,16 +2210,41 @@ class PitCrewController(QObject):
         reading the SAME number every check while what we render varies. The
         old detector only knew the first, so a meter that froze at 0.054 was
         read as healthy for twenty minutes of dead haptics.
+
+        `reading` is an `endpoint_meter.Reading`; a bare float is accepted as
+        the plain "this is the peak, no doubt about it" case. The distinction
+        that matters is `measured`: a meter that could not be opened used to
+        arrive here as `0.0` and be convicted as silence, which is how the
+        app came to tell the driver his haptics were dead on the strength of
+        an instrument that was never there.
         """
         if self.bridge.haptics is not haptics:
             # A poll still in flight from a session that has since been
             # stopped. It must not deposit its reading into - or lazily
             # create - the next session's watchdog.
             return
+        reading = endpoint_meter.Reading.of(reading)
         watchdog = self._rig_watchdog
         if watchdog is None:
             watchdog = self._rig_watchdog = TransducerWatchdog()
         exhausted = " · recovery exhausted" if watchdog.degraded else ""
+        if not reading.measured:
+            # **"Cannot measure" is not "failed", and no rung of the ladder
+            # is earned by it.** Written down so a driver reporting dead
+            # haptics against a silent log still lands on the right line.
+            watchdog.unmeasurable(reading.detail)
+            self._endpoint_note = (
+                f"rendered {produced:.2f} · endpoint UNREADABLE "
+                f"({reading.detail}){exhausted}")
+            log("haptics").warning(
+                "the transducer rendered a peak of %.3f and the endpoint "
+                "meter for %s could not be read (%s). That is a fact about "
+                "the meter and none at all about the device - nothing is "
+                "being recovered off it.", produced, device, reading.detail)
+            return
+        watchdog.note_endpoint(reading.endpoint, reading.matches)
+        watchdog.note_stream_changed(getattr(haptics, "last_open_changed", ()))
+        heard = reading.peak
         if heard > endpoint_meter.SILENT_PEAK:
             verdict = watchdog.judge(produced, heard, now)
             if verdict == "live":
@@ -2273,10 +2298,18 @@ class PitCrewController(QObject):
             # see this screen, and a transducer that is accepting audio and
             # playing none of it is indistinguishable from a working one by
             # every other measure the app has.
+            #
+            # **Hedged when it has to be.** A silent meter is only a claim
+            # about the transducer when there was one endpoint it could have
+            # meant and the stream is still on the terms it opened with.
             log("haptics").error(
                 "the transducer rendered a peak of %.3f here and %s metered "
-                "nothing - it is accepting the audio and playing none of it.",
-                produced, device)
+                "nothing - it is accepting the audio and playing none of "
+                "it.%s", produced, device,
+                (" This cannot be relied on: " + "; ".join(watchdog.doubts())
+                 + ". If the seat is still working, the meter is not "
+                   "watching what the stream is feeding."
+                 if watchdog.uncertain else ""))
         # **And then do something about it.** This exact wedge has needed a
         # laptop restart from the seat more than once, and a log line is not
         # a recovery. Reopen in place first; if the evidence comes straight
@@ -2385,15 +2418,22 @@ class PitCrewController(QObject):
                 self._rig_watchdog = TransducerWatchdog()
             # The callback count once per cycle is the cadence watchdog's
             # whole diet: the rate falling and staying fallen is the
-            # endpoint's audio pump being rebuilt under the stream.
-            self._rig_watchdog.note_cadence(haptics.callbacks, _monotonic())
+            # endpoint's audio pump being rebuilt under the stream. The frame
+            # count beside it is what says whether the buffer got longer or
+            # the clock got slower, which the block count alone cannot.
+            self._rig_watchdog.note_cadence(
+                haptics.callbacks, _monotonic(),
+                frames=getattr(haptics, "frames", None))
             # The endpoint note is the PREVIOUS cycle's check - the check runs
             # after this line, on its own thread. Ten seconds stale is fine;
             # invisible was the problem.
+            clock = self._rig_watchdog.clock_hz
             log("haptics").info(
-                "blocks %d · fades %d · limited %d · running %s · %s · "
+                "blocks %d · %s · fades %d · limited %d · running %s · %s · "
                 "recoveries %d · rebuilds %d",
-                haptics.callbacks, haptics.faded_out,
+                haptics.callbacks,
+                f"clock {clock:.0f}Hz" if clock is not None else "clock -",
+                haptics.faded_out,
                 haptics._mix.limited_blocks, haptics.running,
                 self._endpoint_note, haptics.recoveries, haptics.rebuilds)
             # **What the mix was doing, not just that it was running.**

@@ -1054,9 +1054,11 @@ def test_a_poll_from_a_stopped_session_cannot_touch_the_watchdog():
 
 
 def test_report_rig_feeds_the_engines_block_counter_to_the_watchdog():
-    """The cadence watchdog's whole diet is `haptics.callbacks` once per
-    report cycle. Wiring it to any other counter would silently blind the
-    corroboration."""
+    """The cadence watchdog's diet is `haptics.callbacks` AND `haptics.frames`
+    once per report cycle. Wiring either to another counter would silently
+    blind the corroboration - and without the frames the cadence line cannot
+    tell a longer buffer from a slower clock, which is the distinction the
+    session of 17 Aug 2026 needed and did not have."""
     from pitcrew.controller import PitCrewController
 
     engine = _engine()
@@ -1065,9 +1067,10 @@ def test_report_rig_feeds_the_engines_block_counter_to_the_watchdog():
 
     class Watchdog:
         degraded = False
+        clock_hz = None
 
-        def note_cadence(self, blocks, now):
-            fed.append((blocks, now))
+        def note_cadence(self, blocks, now, frames=None):
+            fed.append((blocks, now, frames))
 
     class Bridge:
         haptics = engine
@@ -1086,6 +1089,7 @@ def test_report_rig_feeds_the_engines_block_counter_to_the_watchdog():
     Rack()._report_rig()
     assert len(fed) == 1
     assert fed[0][0] == engine.callbacks == 7
+    assert fed[0][2] == engine.frames == 7 * 512
 
 
 def test_a_wedge_the_reopen_fixes_stays_quiet():
@@ -1112,3 +1116,349 @@ def test_a_wedge_the_reopen_fixes_stays_quiet():
     assert "endpoint 0.0" in rack._endpoint_note
     assert not rack._rig_watchdog.degraded
 
+
+# ---------------------- what the stream became, and whether it is a recovery
+#
+# **The session of 17 Aug 2026, which the record could not settle.** The meter
+# read silent for thirteen minutes and the app said so out loud; the driver
+# felt the seat working, badly. Both cannot be true of one stream on one
+# endpoint, and nothing was written down that could tell which had moved -
+# `_open` logged the name it had ASKED for and nothing about what came back.
+
+
+class _IndexedPortAudio:
+    """A device table `describe_stream` can look a route up in."""
+
+    def __init__(self):
+        self.hostapis = [{"name": "Windows WASAPI"}, {"name": "MME"}]
+        self.devices = [
+            {"name": transducer.DEVICE_NAME, "hostapi": 0,
+             "max_output_channels": 2, "max_input_channels": 0},
+            {"name": transducer.DEVICE_NAME, "hostapi": 1,
+             "max_output_channels": 8, "max_input_channels": 0},
+        ]
+
+    def query_devices(self, index=None):
+        return self.devices if index is None else self.devices[index]
+
+    def query_hostapis(self, index=None):
+        return self.hostapis if index is None else self.hostapis[index]
+
+    def _terminate(self):
+        pass
+
+    def _initialize(self):
+        pass
+
+
+class _NegotiatedStream(_FakeStream):
+    """A started stream that answers for itself, as PortAudio's does."""
+
+    def __init__(self, *, samplerate=48000.0, blocksize=480, channels=2,
+                 dtype="float32", device=0, latency=0.021):
+        self.samplerate = samplerate
+        self.blocksize = blocksize
+        self.channels = channels
+        self.dtype = dtype
+        self.device = device
+        self.latency = latency
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def _routed(monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "sounddevice", _IndexedPortAudio())
+
+
+def test_a_stream_at_the_wrong_rate_is_named_and_refused(monkeypatch):
+    """The one fault the log could not see. The mix is generated at a fixed
+    48 kHz; a stream clocked at 44.1 transposes every effect by 0.92, and the
+    amplifier passes 25-160 Hz, so the road bed and the engine tone walk out
+    of the band the rig can deliver. That is "the vibrations were all wrong",
+    and it opened, started and reported success.
+
+    Refused rather than followed, for the same reason `strict=True` refuses
+    the default card: wrong output into a 150 W piston is worse than none,
+    which is the driver's own verdict.
+    """
+    _routed(monkeypatch)
+    opened = []
+
+    def open_output(*args, **kwargs):
+        stream = _NegotiatedStream(samplerate=44100.0, blocksize=441)
+        opened.append(stream)
+        return stream
+
+    monkeypatch.setattr(haptics.audio_devices, "open_output", open_output)
+    monkeypatch.setattr(haptics.audio_devices, "register_sustained",
+                        lambda e: None)
+    engine = _engine()
+
+    assert engine.start() is False, "it took a stream it cannot render for"
+    assert engine.running is False
+    assert engine.format_refusals == 1
+    assert opened[0].closed, "the refused stream was left open"
+    assert "44100" in engine.error and "48000" in engine.error
+    # And it says what the consequence is, not only that a number differs.
+    assert "amplifier" in engine.error
+
+
+def test_an_open_that_matches_the_request_is_unremarkable(monkeypatch):
+    """The whole check has to be invisible when nothing has moved."""
+    _routed(monkeypatch)
+    monkeypatch.setattr(haptics.audio_devices, "open_output",
+                        lambda *a, **k: _NegotiatedStream())
+    monkeypatch.setattr(haptics.audio_devices, "register_sustained",
+                        lambda e: None)
+    engine = _engine()
+
+    assert engine.start() is True
+    assert engine.error is None
+    assert engine.format_refusals == 0
+    assert engine.last_open_changed == ()
+    assert engine.facts.host_api == "Windows WASAPI"
+    assert "Windows WASAPI" in engine.describe()
+
+
+def test_a_rebuild_onto_another_route_is_not_counted_as_a_recovery(
+        monkeypatch):
+    """`recover` and `rebuild` used to declare success the moment a stream
+    opened. Opening is the one thing a wedged endpoint still does perfectly -
+    and a stream that opens on a DIFFERENT route is a different output. Two
+    of the routes to this card cannot be verified at all: DirectSound buffers
+    and discards, WDM-KS renders underneath the audio engine the endpoint
+    meter reads. Counting either as a fix is how the app comes to believe it
+    repaired what it had just broken.
+    """
+    _routed(monkeypatch)
+    routes = iter([0, 1])                       # WASAPI first, then MME
+
+    def open_output(*args, **kwargs):
+        return _NegotiatedStream(device=next(routes), blocksize=1024)
+
+    engine = _engine()
+    _patch_rebuild_plumbing(monkeypatch, engine, open_output)
+
+    assert engine.start() is True
+    assert engine.rebuild() is False, "a different route was called a recovery"
+    # The stream IS open - it may be all he has - but it is not the one that
+    # was working, so the ladder must escalate rather than stand down happy.
+    assert engine.running is True
+    assert engine.route_changes == 1
+    assert any("host_api" in line for line in engine.last_open_changed)
+
+
+def test_a_rebuild_onto_the_same_terms_is_still_a_recovery(monkeypatch):
+    """The other half, and the one that must not regress: nothing differs, so
+    the ladder behaves exactly as it did."""
+    _routed(monkeypatch)
+    engine = _engine()
+    _patch_rebuild_plumbing(monkeypatch, engine,
+                            lambda *a, **k: _NegotiatedStream())
+
+    assert engine.start() is True
+    assert engine.rebuild() is True
+    assert engine.route_changes == 0
+    assert engine.last_open_changed == ()
+
+
+def test_a_stream_that_says_nothing_about_itself_changes_nothing(monkeypatch):
+    """`_FakeStream` and a real stream that will not answer are the same
+    case: unknown is not a difference, and must not escalate a recovery that
+    was fine."""
+    engine = _engine()
+    _patch_rebuild_plumbing(monkeypatch, engine,
+                            lambda *a, **k: _FakeStream())
+    assert engine.start() is True
+    assert engine.rebuild() is True
+    assert engine.route_changes == 0
+
+
+# -------------------------------- the frame clock, beside the block cadence
+
+def test_the_frame_clock_tells_a_longer_buffer_from_a_slower_one(caplog):
+    """100 blocks a second falling to 64 and staying there is what the log
+    held on 16 and 17 Aug, and it is two different faults wearing one number:
+    PortAudio handing us 750-frame blocks instead of 480, or the card
+    consuming a third fewer samples a second and transposing the whole mix.
+    Frames per second separates them in one line."""
+    import logging
+
+    wd = haptics.TransducerWatchdog()
+    blocks = frames = 0
+    with caplog.at_level(logging.WARNING, logger="pitcrew.haptics"):
+        for cycle in range(8):
+            # 100/s at 480 frames for the first four cycles, then 64/s at 750
+            # frames - the same 48000 frames a second throughout.
+            per_second, block = (100, 480) if cycle < 4 else (64, 750)
+            blocks += per_second * 10
+            frames += per_second * block * 10
+            wd.note_cadence(blocks, 10.0 * cycle, frames=frames)
+
+    assert wd.clock_hz is not None
+    assert abs(wd.clock_hz - transducer.SAMPLE_RATE) < 1.0
+    assert wd.clock_suspect is False, "a longer buffer read as a bad clock"
+    dropped = [r.message for r in caplog.records
+               if "cadence fell" in r.message]
+    assert dropped, "the cadence drop was not noticed at all"
+    assert "longer buffer" in dropped[0]
+    assert "still in tune" in dropped[0]
+    # And nothing that cannot be vouched for: a longer buffer is not a doubt.
+    assert wd.uncertain is False
+
+
+def test_a_clock_that_moved_with_the_cadence_is_convicted(caplog):
+    """The other half: the block size held and the rate fell, so every effect
+    is transposed and the road bed no longer lands where the amp passes it."""
+    import logging
+
+    wd = haptics.TransducerWatchdog()
+    blocks = frames = 0
+    with caplog.at_level(logging.ERROR, logger="pitcrew.haptics"):
+        for cycle in range(8):
+            per_second = 100 if cycle < 4 else 64
+            blocks += per_second * 10
+            frames += per_second * 480 * 10     # 480 frames throughout
+            wd.note_cadence(blocks, 10.0 * cycle, frames=frames)
+
+    assert wd.clock_suspect is True
+    assert abs(wd.clock_hz - 64 * 480) < 1.0
+    named = [r.message for r in caplog.records if "frame clock" in r.message]
+    assert named, "a transposed mix was never named"
+    assert "transposed" in named[0]
+    # And it is a reason the app cannot vouch for a silent-meter verdict.
+    assert wd.uncertain is True
+
+
+def test_a_cadence_drop_with_no_frame_count_says_it_cannot_tell(caplog):
+    """The state the log was in on 17 Aug: blocks only. It must admit that
+    rather than assert the harmless reading."""
+    import logging
+
+    wd = haptics.TransducerWatchdog()
+    blocks = 0
+    with caplog.at_level(logging.WARNING, logger="pitcrew.haptics"):
+        for cycle in range(8):
+            blocks += (100 if cycle < 4 else 64) * 10
+            wd.note_cadence(blocks, 10.0 * cycle)
+
+    dropped = [r.message for r in caplog.records
+               if "cadence fell" in r.message]
+    assert dropped
+    assert "cannot say" in dropped[0]
+    assert wd.clock_hz is None
+
+
+# ----------------- the meter and the stream disagreeing, and what he is told
+
+def _reading(peak, **kwargs):
+    from pitcrew.engineer import endpoint_meter
+    kwargs.setdefault("matches", 1)
+    return endpoint_meter.Reading(peak=peak, **kwargs)
+
+
+def test_a_meter_that_could_not_be_read_never_runs_the_ladder():
+    """`poll_briefly` used to answer 0.0 when the meter could not be opened
+    at all, and the controller read that as "the card played nothing" - an
+    ERROR, three device rebuilds, and a spoken notice that the haptics were
+    gone, on the strength of an instrument that was never there. "Cannot
+    measure" is not "failed"; it is this module's oldest rule."""
+    engine = _WedgedForGood()
+    rack = _rack(engine)
+    for i in range(40):
+        rack._act_on_endpoint_reading(
+            engine, "ButtKicker", 0.5,
+            _reading(None, detail="no peak meter for this device"), 10.0 * i)
+
+    assert engine.reopens == 0
+    assert engine.rebuilds_called == 0
+    assert rack.voice.spoken == []
+    assert not rack._rig_watchdog.degraded
+    assert "UNREADABLE" in rack._endpoint_note
+
+
+def test_two_endpoints_of_one_name_make_the_verdict_an_admission():
+    """**The contradiction of 17 Aug, reproduced.** The meter resolves an
+    endpoint by friendly name and takes the first match; PortAudio resolves
+    the stream separately, walking its own list in its own order. Two active
+    endpoints spelling themselves identically - one card on two USB ports, or
+    a re-enumeration whose old endpoint has not left the ACTIVE list - and
+    the two can disagree. "It played nothing" is then a true statement about
+    an endpoint nobody was feeding, and the driver hears it while the seat is
+    working.
+    """
+    engine = _WedgedForGood()
+    rack = _rack(engine)
+    rendered = (0.30, 0.55, 0.42, 0.51, 0.38, 0.47)
+    for i in range(60):
+        rack._act_on_endpoint_reading(
+            engine, transducer.DEVICE_NAME, rendered[i % len(rendered)],
+            _reading(0.054, matches=2, endpoint="{0.0.0}.ButtKicker#1"),
+            10.0 * i)
+
+    assert rack._rig_watchdog.degraded
+    assert len(rack.voice.spoken) == 1
+    spoken = rack.voice.spoken[0]
+    assert "lost sight" in spoken, spoken
+    assert "if you can still feel them" in spoken.lower(), spoken
+    # The confident claim is exactly what it must NOT make.
+    assert "Haptics are out" not in spoken
+    assert any("2 active endpoints" in d
+               for d in rack._rig_watchdog.doubts())
+
+
+def test_one_endpoint_and_a_readable_meter_still_gets_the_plain_verdict():
+    """The confident line survives for the case the app can stand behind -
+    one endpoint of that name, a meter it could read, a stream still on the
+    terms it opened with. Hedging a verdict that IS sound would cost the
+    driver the one instruction he can act on."""
+    engine = _WedgedForGood()
+    rack = _rack(engine)
+    rendered = (0.30, 0.55, 0.42, 0.51, 0.38, 0.47)
+    for i in range(60):
+        rack._act_on_endpoint_reading(
+            engine, transducer.DEVICE_NAME, rendered[i % len(rendered)],
+            _reading(0.054, matches=1, endpoint="{0.0.0}.ButtKicker"),
+            10.0 * i)
+
+    assert rack._rig_watchdog.degraded
+    assert rack._rig_watchdog.uncertain is False
+    assert len(rack.voice.spoken) == 1
+    assert "Haptics are out" in rack.voice.spoken[0]
+
+
+def test_the_metered_endpoint_changing_under_us_is_recorded():
+    """Same name, different endpoint ID between two polls: whatever the meter
+    said before was about a different device."""
+    wd = haptics.TransducerWatchdog()
+    wd.note_endpoint("{0.0.0}.ButtKicker#1", 1)
+    assert wd.uncertain is False
+    wd.note_endpoint("{0.0.0}.ButtKicker#2", 1)
+    assert wd.uncertain is True
+    assert any("changed mid-session" in d for d in wd.doubts())
+
+
+def test_a_stream_that_reopened_differently_hedges_the_verdict_too():
+    """A route change is the app's own half of the same ambiguity: the meter
+    may be perfectly correct about an endpoint the stream no longer feeds."""
+    wd = haptics.TransducerWatchdog()
+    wd.note_stream_changed(())
+    assert wd.uncertain is False
+    wd.note_stream_changed(("host_api was Windows WASAPI and is now MME",))
+    assert wd.uncertain is True
+
+
+def test_a_bare_peak_still_means_measured_and_unambiguous():
+    """Every existing caller hands a float. It must keep meaning what it
+    always meant, or the ladder changes behaviour where nothing differs."""
+    from pitcrew.engineer import endpoint_meter
+
+    reading = endpoint_meter.Reading.of(0.054)
+    assert reading.measured is True
+    assert reading.ambiguous is False
+    assert reading.peak == 0.054
+    assert endpoint_meter.Reading.of(reading) is reading
+    assert endpoint_meter.Reading.of(None).measured is False

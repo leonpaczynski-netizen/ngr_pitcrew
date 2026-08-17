@@ -93,6 +93,16 @@ class HapticsEngine:
         self._fade = 0.0
 
         self._stream = None
+        # **What the stream actually turned out to be, and what it was when
+        # it was known to be working.** See `audio_devices.StreamFacts`. The
+        # baseline is set by the first open of a session and never moved: a
+        # reopen is measured against the configuration that was rendering
+        # into the seat, not against the last thing that happened to open.
+        self.facts: audio_devices.StreamFacts | None = None
+        self.baseline: audio_devices.StreamFacts | None = None
+        self.last_open_changed: tuple[str, ...] = ()
+        self.format_refusals = 0
+        self.route_changes = 0
         # Reentrant, and it has to be: `recover` holds this lock while it
         # reopens, and `audio_devices.open_output` may decide the device list
         # is stale and rebuild it - which calls straight back into `suspend`
@@ -108,6 +118,14 @@ class HapticsEngine:
         self.error: str | None = None
         self.faded_out = 0
         self.callbacks = 0
+        # **Frames, not only blocks.** The block count alone cannot tell a
+        # longer buffer from a slower clock: 100 blocks a second falling to
+        # 64 is either PortAudio handing us 750-frame blocks instead of 480,
+        # or the card consuming samples a third slower than the synthesiser
+        # makes them. The first is harmless and the second transposes every
+        # tone in the mix. On 17 Aug 2026 the log recorded only the blocks,
+        # and thirteen minutes of evidence could not distinguish them.
+        self.frames = 0
         self.recoveries = 0
         self.rebuilds = 0
 
@@ -170,8 +188,10 @@ class HapticsEngine:
             return "The transducer is not running."
         limited = self._mix.limited_blocks
         note = f", {limited} blocks limited" if limited else ""
+        # The negotiated terms, not the requested ones - see `_open`.
+        route = f" [{self.facts.describe()}]" if self.facts else ""
         return (f"Transducer on {self._device}, {self.callbacks} blocks"
-                f"{note}.")
+                f"{note}.{route}")
 
     def recover(self) -> bool:
         """Close and reopen the stream in place, because the endpoint wedged.
@@ -187,6 +207,13 @@ class HapticsEngine:
         user space. If the device is too far gone even for that, the reopen
         fails or the meter stays silent, the count says so, and the log can
         then say "power-cycle it" with evidence rather than guessing.
+
+        **"Recovered" means the stream that was working came back, not that
+        a stream came back.** A reopen that lands on a different host API, a
+        different rate or a different card is a different output, and
+        counting it as a fix is how the app would come to believe it had
+        repaired the very thing it had just broken. It returns False, so the
+        ladder escalates - and `_open` has already written down what changed.
 
         Thread-safe: called from the health check's own thread, same lock as
         `suspend`/`resume`. **The enumeration lock is taken first, and the
@@ -207,12 +234,13 @@ class HapticsEngine:
                 self._close()
                 self._fade = 0.0
                 opened = self._open()
+                changed = self.last_open_changed
         self.recoveries += 1
-        if opened:
+        if opened and not changed:
             log("haptics").warning(
                 "the transducer stream was reopened in place (recovery %d) - "
                 "the endpoint had wedged", self.recoveries)
-        return opened
+        return opened and not changed
 
     def rebuild(self) -> bool | None:
         """Tear everything down and reacquire the card from scratch.
@@ -249,13 +277,14 @@ class HapticsEngine:
                 if self._stopped or self._suspended:
                     return None
                 opened = self._open()
+                changed = self.last_open_changed
         self.rebuilds += 1
-        if opened:
+        if opened and not changed:
             log("haptics").warning(
                 "the transducer stream was torn down and rebuilt from a fresh "
                 "device list (rebuild %d) - reopening in place had not "
                 "cleared the wedge", self.rebuilds)
-        return opened
+        return opened and not changed
 
     # ------------------------------------------------------------ lifecycle
 
@@ -275,13 +304,46 @@ class HapticsEngine:
         audio_devices.unregister_sustained(self)
 
     def _open(self) -> bool:
+        """Open, then check that what opened is what was asked for.
+
+        **The open succeeding is not the same as the stream being right, and
+        until 17 Aug 2026 this logged only the name it had asked for.** The
+        synthesiser generates at a fixed 48 kHz; if the stream is clocked at
+        anything else every tone in the mix is transposed by that ratio, and
+        the amplifier passes 25-160 Hz, so even a modest shift walks the road
+        bed and the engine tone out of the band the rig can deliver. That is
+        precisely "the vibrations were all wrong", and nothing here could
+        name it.
+
+        **A stream at the wrong rate is refused rather than followed.** The
+        synthesiser could be rebuilt at whatever rate came back - `HapticMix`
+        takes its rate as an argument - and that was the tempting option. It
+        is the wrong one, for three reasons, and they are the same reason
+        `strict=True` is on the open below:
+
+        * Every band in `transducer.BAND_PLAN` was placed against a response
+          measured on this rig at this rate, and every gain is a fraction of
+          a reference tone somebody actually felt. A rate the app has never
+          rendered at is an untested output into a 150 W piston.
+        * Rebuilding the mix mid-race throws away the phase and smoothing
+          state of every voice, and a discontinuity here is a thump.
+        * The driver's own verdict on the alternative: wrong output "is worse
+          than not being on". Silence is the correct answer for a transducer
+          that cannot be driven correctly, exactly as it is for one that is
+          not connected.
+
+        So a mismatch closes the stream, says why, and leaves the engine
+        stopped - which puts the failure in front of the recovery ladder,
+        where the next rung re-enumerates and may find a route that will take
+        48 kHz.
+        """
         if self._stream is not None:
             return True
         try:
             # Shared, not exclusive. Exclusive opens on this transducer,
             # reports a plausible latency, and renders nothing at all - see
             # `audio_devices.open_exclusive_output`.
-            self._stream = audio_devices.open_output(
+            stream = audio_devices.open_output(
                 transducer.SAMPLE_RATE,
                 channels=transducer.CHANNELS,
                 dtype="float32",
@@ -300,10 +362,53 @@ class HapticsEngine:
             log("haptics").warning(self.error)
             self._stream = None
             return False
+
+        facts = audio_devices.describe_stream(
+            stream, samplerate=transducer.SAMPLE_RATE, blocksize=BLOCKSIZE,
+            channels=transducer.CHANNELS, dtype="float32",
+            device=self._device)
+        wrong = facts.mismatches()
+        if wrong:
+            self.format_refusals += 1
+            self.error = (
+                f"The transducer opened on {self._device} but not on the "
+                f"terms it was asked for - {'; '.join(wrong)}. The mix is "
+                f"generated at {transducer.SAMPLE_RATE} Hz and the amplifier "
+                f"passes {transducer.BAND_LOW_HZ:.0f}-"
+                f"{transducer.BAND_HIGH_HZ:.0f} Hz, so playing it through "
+                f"this stream would transpose every effect out of the band "
+                f"the rig can deliver. Refusing it: got {facts.describe()}.")
+            log("haptics").error(self.error)
+            self._stream = stream
+            self._close()
+            return False
+
+        self._stream = stream
         self.error = None
         self._suspended = False
+        self.facts = facts
+        changed = facts.differences(self.baseline)
+        self.last_open_changed = tuple(changed)
+        if self.baseline is None:
+            self.baseline = facts
         audio_devices.register_sustained(self)
-        log("haptics").info("transducer running on %s", self._device)
+        log("haptics").info("transducer running on %s - %s",
+                            self._device, facts.describe())
+        if changed:
+            self.route_changes += 1
+            # **Loud, because this is the case the record could not see.** A
+            # stream on a different host API is a different path to the
+            # hardware with different properties: DirectSound buffers and
+            # discards, WDM-KS renders underneath the Windows audio engine
+            # where the endpoint meter cannot see it at all. Either would
+            # produce the contradiction of 17 Aug - a meter reading silence
+            # while the seat works.
+            log("haptics").error(
+                "the transducer reopened onto a DIFFERENT stream from the "
+                "one that was working: %s. This is not the configuration "
+                "that was rendering into the seat, so it is not a recovery, "
+                "and the endpoint meter may no longer be watching what the "
+                "stream is feeding.", "; ".join(changed))
         return True
 
     def _close(self) -> None:
@@ -352,6 +457,12 @@ class HapticsEngine:
         reporting.
         """
         self.callbacks += 1
+        # Frames as well as blocks. Divided by wall-clock seconds upstairs
+        # this is a direct measurement of the rate the card is actually
+        # consuming at, which is the one number that separates "PortAudio
+        # chose a longer buffer" from "the clock moved and every tone with
+        # it". Both look identical in a block count.
+        self.frames += frames
         n = min(frames, MAX_BLOCK)
 
         # **The watchdog, and the reason it lives here.** If the telemetry
@@ -401,10 +512,29 @@ class TransducerWatchdog:
     live signal jitters; the same float five checks running is a dead meter,
     and a dead meter is wedge evidence of exactly the same rank as silence.
 
+    **0.054 is not a special number and nothing here should be tuned to it.**
+    It read as one for a while, because it was also the first reading of the
+    session of 17 Aug - which then went on varying normally, so it was a live
+    value that day. Two things settle it: that session's own freeze latched
+    at 0.163, not 0.054, and the log holds live readings below it (0.038,
+    0.046, 0.051). It is neither a quantisation floor nor a default the
+    meter falls back to; it is whatever the endpoint's last real peak
+    happened to be when the pump stopped. The detector is right to key on
+    repetition rather than on any particular value.
+
     The block cadence dropping and staying down - 100/s to 64/s that night,
     at the same moment the meter froze - is the endpoint's audio pump being
     rebuilt, a device-side event. It is not proof on its own, so it
     corroborates the meter verdict rather than triggering on its own.
+
+    **And the cadence alone cannot say WHAT was rebuilt**, which is why the
+    frame clock is fed in beside it. 100 blocks a second becoming 64 is
+    either a longer buffer at the same rate - harmless - or the same buffer
+    at a lower rate, which transposes every effect in the mix and is exactly
+    what "the vibrations were all wrong" would feel like. Frames per second
+    is the same number the synthesiser generates at when nothing has moved,
+    so the two hypotheses stop being indistinguishable the moment it is
+    written down.
 
     This class holds no threads and touches no audio. Observations arrive
     from two threads - cadence from the report cycle, meter readings from the
@@ -443,6 +573,12 @@ class TransducerWatchdog:
     CADENCE_BASELINE_CYCLES = 3
     CADENCE_DROP_FRACTION = 0.20
     CADENCE_LOW_CYCLES = 2
+    # How far the measured frame clock may sit from the rate the synthesiser
+    # generates at before it is a different rate rather than scheduling
+    # jitter. A report cycle is ten seconds, so a few late blocks are worth
+    # well under a percent; the smallest interesting real shift - 48000
+    # against 44100 - is 8%.
+    CLOCK_TOLERANCE = 0.04
     # How long a cadence drop stays usable as corroboration for the meter.
     CORROBORATION_WINDOW_S = 120.0
     # Wedge evidence returning within this after a recovery means the fix did
@@ -466,13 +602,23 @@ class TransducerWatchdog:
         self._matched: dict | None = None
         self._matched_needed = self.STALE_POLLS
         self._matched_first = False
-        # The block cadence.
+        # The block cadence, and the frame clock beside it.
         self._last_blocks: int | None = None
         self._last_blocks_at: float | None = None
+        self._last_frames: int | None = None
         self._baseline_rates: list[float] = []
         self._baseline: float | None = None
         self._low_cycles = 0
         self._cadence_dropped_at: float | None = None
+        self.clock_hz: float | None = None
+        self.clock_suspect = False
+        # Why the app cannot vouch for its own verdict, if it cannot. Each
+        # entry is one honest reason - an unreadable meter, two endpoints of
+        # one name, the metered endpoint changing under us, the stream
+        # reopening onto different terms. Any of them turns the stand-down
+        # notice from an assertion into an admission.
+        self._doubts: list[str] = []
+        self._last_endpoint: str | None = None
         # The recovery ladder.
         self._reopens = 0
         self._rebuilds = 0
@@ -587,7 +733,8 @@ class TransducerWatchdog:
                 self._rebuilds = 0
                 self._last_attempt_at = None
 
-    def note_cadence(self, blocks: int, now: float) -> None:
+    def note_cadence(self, blocks: int, now: float,
+                     frames: int | None = None) -> None:
         """The engine's lifetime block count, once per report cycle.
 
         The callback rate is the sound card's own clock, and a sustained fall
@@ -595,16 +742,32 @@ class TransducerWatchdog:
         the night of the drop as 100/s falling to 64/s at the same moment
         the meter froze. Named in the log, and kept as corroboration; it does
         not trigger a recovery by itself.
+
+        `frames` is the lifetime frame count from the same callback, and it
+        is what makes the cadence line mean something. Divided by the same
+        elapsed seconds it is the rate the card is really consuming at, so a
+        block cadence that halves while the frame clock holds is a longer
+        buffer, and one that halves with it is a transposed mix. Optional
+        only so that a caller written before it existed still works.
         """
         with self._guard:
             last, last_at = self._last_blocks, self._last_blocks_at
+            last_frames = self._last_frames
             self._last_blocks, self._last_blocks_at = blocks, now
+            self._last_frames = frames
             if last is None or last_at is None or now <= last_at \
                     or blocks < last:
                 # First cycle, or the counter went backwards because the
                 # engine was replaced under us. No rate to read either way.
                 return
-            rate = (blocks - last) / (now - last_at)
+            elapsed = now - last_at
+            rate = (blocks - last) / elapsed
+            clock = None
+            if (frames is not None and last_frames is not None
+                    and frames >= last_frames):
+                clock = (frames - last_frames) / elapsed
+                self.clock_hz = clock
+                self._judge_clock(clock)
             if self._baseline is None:
                 self._baseline_rates.append(rate)
                 if len(self._baseline_rates) >= self.CADENCE_BASELINE_CYCLES:
@@ -621,7 +784,8 @@ class TransducerWatchdog:
                         "there. That is the endpoint's audio pump being "
                         "rebuilt - a device-side event, not an app fault - "
                         "so the endpoint meter is now under suspicion of "
-                        "wedging.", self._baseline, rate)
+                        "wedging.%s", self._baseline, rate,
+                        self._clock_verdict(clock))
                     # The new rate is the new normal: a rebuilt pump
                     # renegotiates its block size, and holding the old
                     # baseline would repeat this warning to the flag.
@@ -629,6 +793,108 @@ class TransducerWatchdog:
                     self._low_cycles = 0
             else:
                 self._low_cycles = 0
+
+    def _clock_verdict(self, clock: float | None) -> str:
+        """The sentence that tells a longer buffer from a slower clock."""
+        if clock is None:
+            return (" The frame clock was not recorded, so this cannot say "
+                    "whether the block size changed or the sample rate did.")
+        nominal = float(transducer.SAMPLE_RATE)
+        drift = abs(clock - nominal) / nominal
+        if drift <= self.CLOCK_TOLERANCE:
+            return (f" The frame clock held at about {clock:.0f} Hz against "
+                    f"{nominal:.0f}, so this is a longer buffer and not a "
+                    f"changed sample rate - the mix is still in tune.")
+        return (f" The frame clock moved with it, to about {clock:.0f} Hz "
+                f"against the {nominal:.0f} the mix is generated at, so "
+                f"every effect is transposed by {clock / nominal:.2f}x and "
+                f"the road bed no longer lands where the amplifier can pass "
+                f"it.")
+
+    def _judge_clock(self, clock: float) -> None:
+        """Latch and name a frame clock that is not the one we generate for.
+
+        Separate from the cadence drop because the two do not have to happen
+        together: a stream can be pulled at the wrong rate from the moment it
+        opens, with a perfectly steady block cadence, and that is the case
+        where the driver feels a working transducer producing the wrong
+        thing - which he has told us is worse than none.
+        """
+        nominal = float(transducer.SAMPLE_RATE)
+        off = abs(clock - nominal) / nominal > self.CLOCK_TOLERANCE
+        if off and not self.clock_suspect:
+            self.clock_suspect = True
+            self._doubt(
+                f"the stream is being pulled at about {clock:.0f} frames a "
+                f"second against the {nominal:.0f} the mix is generated at")
+            log("haptics").error(
+                "the transducer's frame clock is about %.0f Hz but the mix "
+                "is generated at %.0f Hz. Every effect is transposed by "
+                "%.2fx - the road bed at %.0f Hz arrives at %.0f Hz - and "
+                "the amplifier only passes %.0f-%.0f Hz. This is a stream "
+                "that opened on terms the app does not render for.",
+                clock, nominal, clock / nominal, 38.0, 38.0 * clock / nominal,
+                transducer.BAND_LOW_HZ, transducer.BAND_HIGH_HZ)
+        elif not off and self.clock_suspect:
+            self.clock_suspect = False
+            log("haptics").warning(
+                "the transducer's frame clock is back at about %.0f Hz, "
+                "which is what the mix is generated for.", clock)
+
+    # --------------------------------------- what the app cannot vouch for
+
+    def _doubt(self, reason: str) -> None:
+        """Record one reason the meter's verdict may not be about the
+        transducer. Not called under the guard by every caller, so it takes
+        no lock of its own - the list is only ever appended to."""
+        if reason not in self._doubts:
+            self._doubts.append(reason)
+
+    def unmeasurable(self, detail: str = "") -> None:
+        """The meter could not be read at all.
+
+        **Not a failure, and it must never run the ladder.** This is the
+        module's oldest rule arriving where it was missing: `poll_briefly`
+        answered `0.0` for an unopenable meter, the controller read that as
+        "the card played nothing", and the driver was told through the
+        headset that his haptics were gone on the strength of an instrument
+        that was never there.
+        """
+        self._doubt("the endpoint meter could not be read"
+                    + (f" ({detail})" if detail else ""))
+
+    def note_endpoint(self, identity: str | None, matches: int) -> None:
+        """Which endpoint the reading came from, and how many share its name.
+
+        Two active endpoints of one name is the mechanism that would make the
+        whole verdict false: this meter takes the first of them and PortAudio
+        may have opened the other, so a silent reading is then a true
+        statement about an endpoint nobody is feeding. The metered endpoint
+        changing between polls says the same thing after the fact.
+        """
+        with self._guard:
+            if matches > 1:
+                self._doubt(
+                    f"{matches} active endpoints answer to that name, so the "
+                    f"stream may be feeding one the meter is not reading")
+            if (identity is not None and self._last_endpoint is not None
+                    and identity != self._last_endpoint):
+                self._doubt("the endpoint being metered changed mid-session")
+            if identity is not None:
+                self._last_endpoint = identity
+
+    def note_stream_changed(self, changed) -> None:
+        """The stream reopened onto different terms - see `_open`."""
+        if changed:
+            self._doubt("the stream reopened onto different terms ("
+                        + "; ".join(changed) + ")")
+
+    @property
+    def uncertain(self) -> bool:
+        return bool(self._doubts)
+
+    def doubts(self) -> tuple[str, ...]:
+        return tuple(self._doubts)
 
     def corroborated(self, now: float) -> bool:
         """Whether a recent cadence drop backs the meter's verdict up."""
@@ -683,16 +949,51 @@ class TransducerWatchdog:
                 self._degrade()
 
     def _degrade(self) -> None:
+        """The ladder is spent. Say what is true, and only what is true.
+
+        **The old line asserted "the haptics endpoint dropped and did not
+        come back", and on 17 Aug 2026 it may have been false while it was
+        being spoken.** The meter read silent for thirteen minutes; the
+        driver, in the seat, felt the transducer working - badly, but
+        working. One of those is wrong and the app cannot tell which, because
+        the meter watches an endpoint resolved by friendly name and the
+        stream is resolved separately, by PortAudio, in its own order.
+
+        A confident wrong instruction is the worst thing this can produce
+        under a helmet, and the driver has no way to check it mid-race. So
+        the confident line survives only for the case the app can actually
+        stand behind - one endpoint of that name, a meter it could read, and
+        a stream still on the terms it opened with. The moment any of those
+        is in doubt it says so instead, and hands him the one test he can do
+        from the seat without looking at anything: whether he can feel it.
+        """
         if self.degraded:
             return
         self.degraded = True
+        attempts = (f"{self._reopens} reopen(s) and {self._rebuilds} full "
+                    f"rebuild(s)")
+        if self._doubts:
+            self._notice = (
+                f"the haptics meter has read nothing since the drop and "
+                f"{attempts} did not change it, so the app has stopped "
+                f"trying - but it cannot prove the transducer is silent: "
+                f"{'; '.join(self._doubts)}. If the seat is still doing "
+                f"something, the reading is wrong rather than the rig, and "
+                f"what is being felt is not what the meter is watching. "
+                f"After the race: check the amplifier, and check whether "
+                f"more than one endpoint on this machine is called by the "
+                f"transducer's name.",
+                "I have lost sight of the haptics rather than proved them "
+                "dead. If you can still feel them, ignore me. If not, the "
+                "amp may be in protection. Either way I have stopped "
+                "trying.")
+            return
         self._notice = (
             f"the haptics endpoint dropped and did not come back: "
-            f"{self._reopens} reopen(s) and {self._rebuilds} full rebuild(s) "
-            f"later the meter is still dead, so the app has stopped trying. "
-            f"The amplifier may be in protection - after the race, "
-            f"power-cycle the amp, and restart the PC if the endpoint still "
-            f"meters nothing.",
+            f"{attempts} later the meter is still dead, so the app has "
+            f"stopped trying. The amplifier may be in protection - after the "
+            f"race, power-cycle the amp, and restart the PC if the endpoint "
+            f"still meters nothing.",
             "Haptics are out and I have stopped trying to bring them back. "
             "The amp may be in protection - deal with it after the race.")
 

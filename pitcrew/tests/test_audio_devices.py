@@ -637,3 +637,150 @@ def test_isolation_does_not_depend_on_exclusive_mode():
     shaker = audio_devices.lock_for("Speakers (ButtKicker PRO)")
     default = audio_devices.lock_for(None)
     assert shaker is not default
+
+
+# ------------------------------- what the stream actually turned out to be
+#
+# The session of 17 Aug 2026 ended unresolvable because the only thing written
+# down at every open was the name that had been ASKED for. These cover the
+# record that closes it.
+
+
+class _IndexedPortAudio:
+    """A device table that can be looked up by index, as `describe_stream`
+    does. `FakePortAudio` above answers `query_devices()` with the whole list
+    and nothing else, which is all the resolution paths need."""
+
+    def __init__(self, devices, hostapis):
+        self._devices = devices
+        self._hostapis = hostapis
+
+    def query_devices(self, index=None):
+        return self._devices if index is None else self._devices[index]
+
+    def query_hostapis(self, index=None):
+        return self._hostapis if index is None else self._hostapis[index]
+
+    def _terminate(self):
+        pass
+
+    def _initialize(self):
+        pass
+
+
+class _OpenedStream:
+    """A started stream that answers for itself, the way PortAudio's does."""
+
+    def __init__(self, **facts):
+        for name, value in facts.items():
+            setattr(self, name, value)
+
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def _rig_table():
+    hostapis = [{"name": "Windows WASAPI"}, {"name": "MME"}]
+    devices = [
+        {"name": "Speakers (ButtKicker PRO)", "hostapi": 0,
+         "max_output_channels": 2, "max_input_channels": 0},
+        {"name": "Speakers (ButtKicker PRO)", "hostapi": 1,
+         "max_output_channels": 8, "max_input_channels": 0},
+    ]
+    return _IndexedPortAudio(devices, hostapis)
+
+
+def test_an_open_records_the_route_it_actually_took(monkeypatch):
+    """`"transducer running on Speakers (ButtKicker PRO)"` was the whole
+    record of an open, and it is the name that was requested - true of a
+    stream on any host API, at any rate, on either of two cards sharing a
+    name."""
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", _rig_table())
+    facts = audio_devices.describe_stream(
+        _OpenedStream(samplerate=48000.0, blocksize=480, channels=2,
+                      dtype="float32", latency=0.021, device=0),
+        samplerate=48000, blocksize=0, channels=2, dtype="float32",
+        device="Speakers (ButtKicker PRO)")
+
+    assert facts.host_api == "Windows WASAPI"
+    assert facts.index == 0
+    assert facts.samplerate == 48000.0
+    assert facts.blocksize == 480
+    described = facts.describe()
+    for expected in ("48000 Hz", "block 480", "2ch", "float32",
+                     "Windows WASAPI", "index 0"):
+        assert expected in described, described
+
+
+def test_a_rate_that_came_back_different_is_named(monkeypatch):
+    """The mix is generated at a fixed 48 kHz and the amp passes 25-160 Hz,
+    so a stream clocked anywhere else transposes the whole vocabulary out of
+    the band. It has to be nameable before it can be refused."""
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", _rig_table())
+    facts = audio_devices.describe_stream(
+        _OpenedStream(samplerate=44100.0, blocksize=441, channels=2,
+                      dtype="float32", device=0),
+        samplerate=48000, blocksize=0, channels=2, dtype="float32",
+        device="Speakers (ButtKicker PRO)")
+
+    wrong = facts.mismatches()
+    assert len(wrong) == 1
+    assert "48000" in wrong[0] and "44100" in wrong[0]
+
+
+def test_a_stream_that_matches_the_request_has_nothing_to_report(monkeypatch):
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", _rig_table())
+    facts = audio_devices.describe_stream(
+        _OpenedStream(samplerate=48000.0, blocksize=750, channels=2,
+                      dtype="float32", device=0),
+        samplerate=48000, blocksize=0, channels=2, dtype="float32",
+        device="Speakers (ButtKicker PRO)")
+    # A block size PortAudio chose for itself is never a mismatch: zero was
+    # asked for, which means "you choose", and 750 instead of 480 is the
+    # longer buffer that the frame clock proves harmless.
+    assert facts.mismatches() == []
+
+
+def test_the_same_card_by_another_route_is_a_difference_not_a_mismatch(
+        monkeypatch):
+    """A reopen that lands on MME rather than WASAPI asked for nothing it did
+    not get - and it is still not the stream that was working. DirectSound
+    buffers and discards; WDM-KS renders underneath the audio engine where
+    the endpoint meter cannot see it at all."""
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", _rig_table())
+    common = dict(samplerate=48000, blocksize=0, channels=2, dtype="float32",
+                  device="Speakers (ButtKicker PRO)")
+    was = audio_devices.describe_stream(
+        _OpenedStream(samplerate=48000.0, blocksize=480, channels=2,
+                      dtype="float32", device=0), **common)
+    now = audio_devices.describe_stream(
+        _OpenedStream(samplerate=48000.0, blocksize=1024, channels=2,
+                      dtype="float32", device=1), **common)
+
+    assert now.mismatches() == []
+    changed = now.differences(was)
+    assert len(changed) == 1
+    assert "host_api" in changed[0]
+    assert "MME" in changed[0]
+    # And the same stream again is no difference at all - the index moving is
+    # PortAudio renumbering, which is why the device is named and not indexed.
+    assert now.differences(now) == []
+
+
+def test_an_unknown_field_is_never_reported_as_a_change(monkeypatch):
+    """A stream that will not answer a question leaves it None, and an
+    unknown must not escalate a recovery that was fine. Missing is null."""
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", _rig_table())
+    common = dict(samplerate=48000, blocksize=0, channels=2, dtype="float32",
+                  device="Speakers (ButtKicker PRO)")
+    was = audio_devices.describe_stream(
+        _OpenedStream(samplerate=48000.0, channels=2, dtype="float32",
+                      device=0), **common)
+    silent = audio_devices.describe_stream(_OpenedStream(), **common)
+
+    assert silent.mismatches() == []
+    assert silent.differences(was) == []
+    assert was.differences(None) == []

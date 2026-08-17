@@ -30,9 +30,28 @@ who is about to go racing on it:
   When Windows re-routes a stream off a dead endpoint the audio is audible
   somewhere, and reporting that as success is how this went unnoticed. The
   question is whether the chosen card played it.
+
+**And the fourth rule, learned on 17 Aug 2026: it says WHICH endpoint it
+read.** That session ended with the meter reporting silence on
+`Speakers (ButtKicker PRO)` for thirteen minutes while the driver felt the
+seat working. Both cannot be true of one endpoint, and the record could not
+say whether they were one endpoint, because a device is resolved here by its
+**friendly name** and Windows does not promise that a friendly name is
+unique. Two instances of one card, or a card that re-enumerated onto a
+different USB port while the old endpoint had not yet left the ACTIVE list,
+give two endpoints spelling themselves identically - and this module took the
+first match while PortAudio, walking its own list in its own order, may have
+opened the other. The verdict "it played nothing" would then be a true
+statement about an endpoint nobody was feeding.
+
+So every match is counted, every endpoint ID is named in the log when there
+is more than one, and the reading carries the identity of the endpoint it
+came from. A single match is the ordinary case and reads exactly as before;
+more than one is an admission that the answer is not safe to act on.
 """
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 
@@ -46,6 +65,50 @@ SILENT_PEAK = 0.001
 # peak since the last read, so this only has to be fast enough not to miss a
 # short beep - 60 ms of square wave at 20 Hz is sampled three times.
 POLL_S = 0.05
+
+
+@dataclasses.dataclass(frozen=True)
+class Reading:
+    """One look at an endpoint, and everything needed to weigh it.
+
+    `peak is None` means **could not measure**, which is the distinction this
+    module was written to defend and which `poll_briefly` used to throw away
+    by answering `0.0` for both. That collapse is not cosmetic: the caller
+    treats a zero as "the card accepted the audio and played none of it",
+    says so to the driver in a headset, and runs a recovery ladder against a
+    device that may be working perfectly. A meter that cannot be opened is
+    evidence about the meter and none at all about the transducer.
+    """
+
+    peak: float | None = None
+    endpoint: str | None = None
+    matches: int = 0
+    detail: str = ""
+
+    @property
+    def measured(self) -> bool:
+        return self.peak is not None
+
+    @property
+    def ambiguous(self) -> bool:
+        """More than one active endpoint answers to the name asked for, so
+        the stream may be feeding one of the others."""
+        return self.matches > 1
+
+    @classmethod
+    def of(cls, value) -> "Reading":
+        """A `Reading` from either a reading or a bare peak.
+
+        Callers that have only a number - the settings screen's own probe,
+        and the tests that drive the ladder without a sound card - hand one
+        in, and it means the ordinary case: measured, one endpoint, no doubt
+        about which.
+        """
+        if isinstance(value, cls):
+            return value
+        if value is None:
+            return cls(peak=None, detail="not measured")
+        return cls(peak=float(value), matches=1)
 
 
 def confirm_reached_endpoint(play, *, device: str | None,
@@ -107,9 +170,16 @@ def confirm_reached_endpoint(play, *, device: str | None,
 class _Meter:
     """A live `IAudioMeterInformation` on one render or capture endpoint."""
 
-    def __init__(self, meter, uninitialise) -> None:
+    def __init__(self, meter, uninitialise, endpoint: str | None = None,
+                 matches: int = 1) -> None:
         self._meter = meter
         self._uninitialise = uninitialise
+        # Which endpoint this is reading, and how many carried the name it
+        # was asked for. Both travel out with the reading, because "the
+        # endpoint metered nothing" is only a claim about the transducer when
+        # there was exactly one endpoint it could have meant.
+        self.endpoint = endpoint
+        self.matches = matches
 
     @classmethod
     def open(cls, device: str | None, kind: str) -> "_Meter | None":
@@ -216,8 +286,37 @@ class _Meter:
         RENDER, CAPTURE = 0, 1
         MULTIMEDIA = 1
         ACTIVE = 0x01
+        ALL_STATES = 0x0F
+        STATE_NAMES = {0x01: "active", 0x02: "disabled",
+                       0x04: "not present", 0x08: "unplugged"}
 
         flow = RENDER if kind == "output" else CAPTURE
+
+        def named(collection, wanted):
+            """Every endpoint in `collection` whose friendly name matches."""
+            found = []
+            for index in range(collection.GetCount()):
+                candidate = collection.Item(index)
+                try:
+                    value = candidate.OpenPropertyStore(0).GetValue(
+                        byref(FRIENDLY_NAME))
+                    name = cast(value.pwszVal, c_wchar_p).value or ""
+                except Exception:               # noqa: BLE001
+                    # An endpoint that will not name itself cannot be the
+                    # one that was asked for by name.
+                    continue
+                if endpoint_key(name) != wanted:
+                    continue
+                try:
+                    identity = str(candidate.GetId())
+                except Exception:               # noqa: BLE001
+                    identity = None
+                try:
+                    state = int(candidate.GetState())
+                except Exception:               # noqa: BLE001
+                    state = None
+                found.append((candidate, identity, state))
+            return found
 
         comtypes.CoInitialize()
         uninitialise = comtypes.CoUninitialize
@@ -227,29 +326,52 @@ class _Meter:
                 IMMDeviceEnumerator, CLSCTX_ALL)
 
             endpoint = None
+            identity = None
+            matches = 1
             if device:
                 wanted = endpoint_key(device)
-                collection = enumerator.EnumAudioEndpoints(flow, ACTIVE)
-                for index in range(collection.GetCount()):
-                    candidate = collection.Item(index)
-                    try:
-                        value = candidate.OpenPropertyStore(0).GetValue(
-                            byref(FRIENDLY_NAME))
-                        name = cast(value.pwszVal, c_wchar_p).value or ""
-                    except Exception:           # noqa: BLE001
-                        # An endpoint that will not name itself cannot be the
-                        # one that was asked for by name.
-                        continue
-                    if endpoint_key(name) == wanted:
-                        endpoint = candidate
-                        break
-                if endpoint is None:
+                found = named(enumerator.EnumAudioEndpoints(flow, ACTIVE),
+                              wanted)
+                matches = len(found)
+                if not found:
+                    # **Say why, not just that.** A name that matches nothing
+                    # active is a different fault from a name that matches a
+                    # disabled or unplugged endpoint, and the second one is
+                    # the driver switching the amp off at the wall.
+                    others = named(
+                        enumerator.EnumAudioEndpoints(flow, ALL_STATES),
+                        wanted)
+                    where = ", ".join(
+                        STATE_NAMES.get(state, f"state {state}")
+                        for _c, _i, state in others) or "not present at all"
                     log("audio").info(
-                        "no active endpoint named %r to meter", device)
+                        "no active endpoint named %r to meter - %d endpoint(s"
+                        ") of that name on this machine: %s",
+                        device, len(others), where)
                     uninitialise()
                     return None
+                endpoint, identity, _state = found[0]
+                if matches > 1:
+                    # **The reading is not safe to act on.** The stream is
+                    # resolved by PortAudio walking its own list in its own
+                    # order; this walks the MMDevice list in Windows'. Two
+                    # endpoints of one name, and the two can disagree - the
+                    # meter reads a dead instance, the stream feeds a live
+                    # one, and the app tells a driver who can feel the seat
+                    # working that it has stopped.
+                    log("audio").warning(
+                        "%d active %s endpoints answer to the name %r: %s. "
+                        "Metering the first of them - the stream may be "
+                        "feeding another, so a silent reading here is not "
+                        "proof that the device is silent.",
+                        matches, kind, device,
+                        "; ".join(str(i) for _c, i, _s in found))
             else:
                 endpoint = enumerator.GetDefaultAudioEndpoint(flow, MULTIMEDIA)
+                try:
+                    identity = str(endpoint.GetId())
+                except Exception:               # noqa: BLE001
+                    identity = None
 
             meter = endpoint.Activate(
                 byref(IAudioMeterInformation._iid_), CLSCTX_ALL,
@@ -257,7 +379,7 @@ class _Meter:
         except Exception:
             uninitialise()
             raise
-        return cls(meter, uninitialise)
+        return cls(meter, uninitialise, endpoint=identity, matches=matches)
 
     def read(self) -> float:
         try:
@@ -276,15 +398,25 @@ class _Meter:
             pass
 
 
-def poll_briefly(device: str | None, seconds: float = 0.4) -> float:
-    """The highest peak seen on a card over a short window, or 0.0.
+def poll_briefly(device: str | None, seconds: float = 0.4) -> Reading:
+    """The highest peak seen on a card over a short window.
 
     For a caller that wants to know whether anything at all is coming out of a
     device without making a sound itself.
+
+    **It used to answer `0.0` when the meter could not be opened at all**, and
+    that one line is the difference between "the card played nothing" and "I
+    could not look". The transducer's health check reads a zero as the first,
+    writes an ERROR the driver cannot see, runs three device rebuilds and
+    then tells him through the headset that the haptics are gone. Every one of
+    those steps is wrong if the meter simply was not there - and the meter not
+    being there is the ordinary case on a machine without `comtypes`, on a
+    non-Windows box, and on the exact device event this whole module is
+    watching for. `peak is None` now says so.
     """
     watcher = _Meter.open(device, "output")
     if watcher is None:
-        return 0.0
+        return Reading(peak=None, detail="no peak meter for this device")
     deadline = time.monotonic() + seconds
     peak = 0.0
     try:
@@ -293,4 +425,5 @@ def poll_briefly(device: str | None, seconds: float = 0.4) -> float:
             time.sleep(POLL_S)
     finally:
         watcher.close()
-    return peak
+    return Reading(peak=peak, endpoint=watcher.endpoint,
+                   matches=watcher.matches)

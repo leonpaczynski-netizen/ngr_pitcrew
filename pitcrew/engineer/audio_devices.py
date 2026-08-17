@@ -33,6 +33,7 @@ that can only be reported.
 """
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 
@@ -780,3 +781,214 @@ def _retry_once(sd, attempt, kind: str):
                 "once more", kind, exc)
             _reinitialise(sd)
             return attempt()
+
+
+# ----------------------------- what the stream actually turned out to be
+#
+# **The gap this closes cost a whole session to find and was still not
+# settled at the end of it.** On 17 Aug 2026 the transducer's endpoint meter
+# read silent for thirteen minutes, the app said so out loud, and the driver
+# felt the seat working - badly, but working. Those two cannot both be true of
+# the same stream on the same endpoint, and nothing in the record could
+# separate them, because the only thing written down at every open was
+# `"transducer running on Speakers (ButtKicker PRO)"` - the name that was
+# ASKED for. Not the route taken to it, not the index, not the rate that came
+# back, not the block size PortAudio chose. A stream that opened on a
+# different host API, or at a rate the synthesiser is not generating for, is
+# indistinguishable in that line from the one that was working a second
+# earlier.
+#
+# So every open now records what it got and compares it to what it wanted.
+# Two different questions, and they are answered separately:
+#
+# * **`mismatches`** - the stream is not what was asked for. A rate that came
+#   back different means every tone is transposed by that ratio, and this
+#   amp passes 25-160 Hz, so a modest shift walks the road bed out of the
+#   band entirely. That is a failed open, not a working one.
+# * **`differences`** - the stream is not what was working before. Same
+#   format, different route, is not a fault on its own; it is also not a
+#   recovery, because the route decides whether the audio is audible
+#   (DirectSound buffers and discards) and whether the endpoint meter can
+#   even see it.
+
+# The fields that make two opens the same stream. The index is deliberately
+# not among them - PortAudio renumbers between enumerations and the whole
+# reason the device is named rather than indexed is that the number moves.
+# Nor is the block size: `BLOCKSIZE = 0` asks PortAudio to choose, so a
+# different choice is its business, and it is reported rather than judged.
+IDENTITY_FIELDS = ("samplerate", "channels", "dtype", "host_api", "endpoint")
+
+# How far the negotiated rate may sit from the requested one before the
+# stream is a different stream. Rates come back as floats; anything past this
+# is a real renegotiation rather than a representation wobble.
+RATE_TOLERANCE_HZ = 1.0
+
+
+@dataclasses.dataclass(frozen=True)
+class StreamFacts:
+    """What an open stream IS, beside what it was asked to be.
+
+    Every field is optional because this must never be able to fail an open
+    that succeeded: a stream object that does not answer a question leaves
+    that question `None`, which reads as *not known* rather than as a
+    mismatch. Missing is null, never zero, here as everywhere.
+    """
+
+    samplerate: float | None = None
+    blocksize: int | None = None
+    channels: int | None = None
+    dtype: str | None = None
+    latency: float | None = None
+    index: int | None = None
+    host_api: str | None = None
+    name: str | None = None
+
+    asked_samplerate: float | None = None
+    asked_blocksize: int | None = None
+    asked_channels: int | None = None
+    asked_dtype: str | None = None
+    asked_name: str | None = None
+
+    @property
+    def endpoint(self) -> str | None:
+        """The card, independent of the route - the same key `_candidates`
+        matches on, so two routes to one piece of hardware compare equal."""
+        return None if self.name is None else endpoint_key(self.name)
+
+    def describe(self) -> str:
+        """One line naming the whole negotiation, for the log."""
+        parts = [
+            f"{self.samplerate:.0f} Hz" if self.samplerate is not None
+            else "rate unknown",
+            f"block {self.blocksize}" if self.blocksize is not None
+            else "block unknown",
+            f"{self.channels}ch" if self.channels is not None
+            else "channels unknown",
+            str(self.dtype) if self.dtype is not None else "dtype unknown",
+            self.host_api or "host API unknown",
+            f"index {self.index}" if self.index is not None
+            else "index unknown",
+        ]
+        if self.latency is not None:
+            parts.append(f"{self.latency * 1000:.1f} ms")
+        if self.name:
+            parts.append(repr(self.name))
+        return " · ".join(parts)
+
+    def mismatches(self) -> list[str]:
+        """Where the stream differs from what was requested.
+
+        The block size is never in here: zero means "PortAudio chooses", so
+        whatever it chose is the right answer by construction.
+        """
+        wrong: list[str] = []
+        if (self.samplerate is not None and self.asked_samplerate is not None
+                and abs(self.samplerate - self.asked_samplerate)
+                > RATE_TOLERANCE_HZ):
+            wrong.append(
+                f"asked for {self.asked_samplerate:.0f} Hz and got "
+                f"{self.samplerate:.0f} Hz")
+        if (self.channels is not None and self.asked_channels is not None
+                and self.channels != self.asked_channels):
+            wrong.append(f"asked for {self.asked_channels} channels and got "
+                         f"{self.channels}")
+        if (self.dtype is not None and self.asked_dtype is not None
+                and str(self.dtype) != str(self.asked_dtype)):
+            wrong.append(f"asked for {self.asked_dtype} samples and got "
+                         f"{self.dtype}")
+        if (self.endpoint is not None and self.asked_name
+                and self.endpoint != endpoint_key(self.asked_name)):
+            wrong.append(f"asked for {self.asked_name!r} and landed on "
+                         f"{self.name!r}")
+        return wrong
+
+    def differences(self, other: "StreamFacts | None") -> list[str]:
+        """Where this stream differs from one that was previously working.
+
+        `None` on either side of a field is *not known*, and an unknown is
+        never reported as a change: inventing a difference out of a stream
+        that would not answer the question would escalate a recovery that
+        was fine.
+        """
+        if other is None:
+            return []
+        changed: list[str] = []
+        for field in IDENTITY_FIELDS:
+            was, now = getattr(other, field), getattr(self, field)
+            if was is None or now is None:
+                continue
+            if field == "samplerate":
+                if abs(float(now) - float(was)) <= RATE_TOLERANCE_HZ:
+                    continue
+            elif str(now) == str(was):
+                continue
+            changed.append(f"{field} was {was} and is now {now}")
+        return changed
+
+
+def describe_stream(stream, *, samplerate=None, blocksize=None, channels=None,
+                    dtype=None, device=None) -> StreamFacts:
+    """Read back what PortAudio actually gave us. Never raises.
+
+    Called immediately after an open, with the arguments the open was made
+    with, so the comparison is against the request rather than against a
+    remembered constant that may have drifted from it.
+    """
+    def attr(name):
+        try:
+            value = getattr(stream, name)
+        except Exception:                       # noqa: BLE001
+            return None
+        return value
+
+    index = attr("device")
+    if not isinstance(index, int):
+        # A `device=None` stream reports PortAudio's own default, which may
+        # come back as a pair. Neither is a route we can name.
+        index = None
+    host_api = name = None
+    if index is not None:
+        try:
+            import sounddevice as sd
+
+            with _ENUMERATE_LOCK:
+                info = sd.query_devices(index)
+                name = str(info["name"])
+                host_api = _host_api_names(sd).get(info.get("hostapi"))
+        except Exception as exc:                # noqa: BLE001
+            # Reading the device list back is a convenience, not the open.
+            log("audio").debug("could not name stream route %r: %s: %s",
+                               index, type(exc).__name__, exc)
+
+    def number(value):
+        try:
+            return None if value is None else float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def whole(value):
+        try:
+            return None if value is None else int(value)
+        except (TypeError, ValueError):
+            return None
+
+    latency = attr("latency")
+    if isinstance(latency, (tuple, list)):
+        latency = latency[-1] if latency else None
+
+    asked_dtype = None if dtype is None else str(dtype)
+    got_dtype = attr("dtype")
+    return StreamFacts(
+        samplerate=number(attr("samplerate")),
+        blocksize=whole(attr("blocksize")),
+        channels=whole(attr("channels")),
+        dtype=None if got_dtype is None else str(got_dtype),
+        latency=number(latency),
+        index=index,
+        host_api=host_api,
+        name=name,
+        asked_samplerate=number(samplerate),
+        asked_blocksize=whole(blocksize),
+        asked_channels=whole(channels),
+        asked_dtype=asked_dtype,
+        asked_name=device if isinstance(device, str) else None)
