@@ -481,6 +481,177 @@ def test_a_call_that_plays_clears_the_count():
     assert voice.silent_calls == 0
 
 
+# ------------------------------- a line the app's own device rebuild cut off
+
+class _Cut:
+    """An engine whose first line is truncated by a device rebuild.
+
+    What really happens: `audio_devices._reinitialise` waits `DEFER_CAP_S` for
+    the line to finish, runs out of patience, marks the playback interrupted,
+    and `sd._terminate()` closes the stream in the middle of the word. The
+    engine sees it on the way out and raises.
+    """
+
+    name = "cut"
+
+    def __init__(self, cuts: int = 1) -> None:
+        self.attempts: list[str] = []
+        self.completed: list[str] = []
+        self._cuts = cuts
+
+    def speak(self, text: str) -> None:
+        self.attempts.append(text)
+        if self._cuts > 0:
+            self._cuts -= 1
+            raise voice_module.LineCut(
+                "a device rebuild closed the stream mid-line")
+        self.completed.append(text)
+
+
+def test_a_line_cut_by_a_device_rebuild_is_said_again():
+    """Half a sentence from a race engineer is worse than none, and the driver
+    cannot ask a screen what the other half was."""
+    engine = _Cut()
+    voice = Voice(engine)
+    voice.say("Box this lap.")
+    _drain(voice)
+    assert engine.completed == ["Box this lap."], "the cut line was never said"
+    assert engine.attempts == ["Box this lap."] * 2
+
+
+def test_a_cut_line_that_the_race_has_overtaken_is_dropped_not_said_late():
+    """Reusing the staleness rule rather than inventing a second one: a box
+    call re-spoken ten seconds late is worse than silence."""
+    engine = _Cut()
+    voice = Voice(engine)
+    # Queued as if the call had been made a full stale window ago and the
+    # deferral had spent the last of it - which is the case the cap exists to
+    # keep rare, not to make impossible.
+    voice._queue.put((voice_module._now() - voice_module.STALE_AFTER_S - 1.0,
+                      "Box this lap."))
+    _drain(voice)
+    assert engine.completed == []
+    assert engine.attempts == [], "a stale call was spoken anyway"
+
+
+def test_a_cut_line_reaching_the_engine_stale_is_never_repeated(monkeypatch,
+                                                                 caplog):
+    """The other end of the same rule: it started fresh, the deferral and the
+    truncation between them took it past the window, and it must not go round
+    again. The window is shortened here so the test does not take eight
+    seconds; the code path is the same one."""
+    import time
+
+    monkeypatch.setattr(voice_module, "STALE_AFTER_S", 0.2)
+
+    class _SlowCut(_Cut):
+        def speak(self, text: str) -> None:
+            time.sleep(0.3)
+            super().speak(text)
+
+    engine = _SlowCut()
+    voice = Voice(engine)
+    with caplog.at_level("INFO", logger="pitcrew.voice"):
+        voice.say("Box this lap.")
+        deadline = time.monotonic() + 3.0
+        while (not engine.attempts) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        _drain(voice)
+        time.sleep(0.1)
+    assert engine.attempts == ["Box this lap."], "it was said late"
+    assert engine.completed == []
+    assert "dropped rather than said late" in caplog.text
+
+
+def test_a_cut_line_is_not_counted_against_the_silence_tally():
+    """`silent_calls` is the driver-facing "the engineer has gone quiet"
+    number. A line the app itself cut is not a dead card, and reporting it as
+    one would send him looking at the wrong thing."""
+    engine = _Cut()
+    voice = Voice(engine)
+    voice.say("Box this lap.")
+    _drain(voice)
+    assert voice.silent_calls == 0
+    assert voice.health() is None
+
+
+def test_the_cut_and_the_repeat_are_each_said_once_in_the_log(caplog):
+    engine = _Cut()
+    voice = Voice(engine)
+    with caplog.at_level("INFO", logger="pitcrew.voice"):
+        voice.say("Box this lap.")
+        _drain(voice)
+    cut = [r for r in caplog.records if "cut" in r.getMessage()]
+    assert len(cut) == 1
+    assert cut[0].levelname == "WARNING"
+
+
+def test_a_cut_pack_line_is_a_hit_and_is_passed_up_not_resynthesised(
+        pack, monkeypatch):
+    """The pack carried the line and played it; the app's own rebuild cut it.
+    Synthesising it here would say the same sentence twice in two voices, and
+    counting it as a playback fault would put a covered line in the miss log.
+    """
+    folder, clips = pack
+    spy = Spy()
+    engine = VoicePackEngine(folder, clips, spy)
+
+    def cut(_segments):
+        raise voice_module.LineCut("a device rebuild closed the stream")
+
+    monkeypatch.setattr(engine, "_play", cut)
+    with pytest.raises(voice_module.LineCut):
+        engine.speak("Box this lap.")
+    assert spy.spoken == [], "the fallback said it a second time"
+    assert engine.hits == 1 and engine.misses == 0
+
+
+def test_the_gate_is_raised_after_the_open_never_before(pack, monkeypatch):
+    """Lock order, and it is the whole reason this is not a deadlock.
+
+    A rebuild waits for the gate while holding the enumeration lock, and every
+    open goes through that same lock. A playback declared BEFORE its open
+    would be holding the gate against a rebuild holding the lock its open
+    needs - the AB-BA that `enumeration_lock`'s docstring is about, reopened
+    from a new direction.
+    """
+    import threading
+
+    from pitcrew.engineer import audio_devices
+
+    folder, clips = pack
+    engine = VoicePackEngine(folder, clips, None)
+    order: list[str] = []
+    # This thread's events only - a beep or a voice thread left over from
+    # another test would otherwise interleave its own open into the list.
+    mine = threading.get_ident()
+
+    def note(event):
+        if threading.get_ident() == mine:
+            order.append(event)
+
+    class _Stream:
+        def write(self, _samples):
+            note("write")
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(voice_module, "open_output",
+                        lambda _rate: note("open") or _Stream())
+    monkeypatch.setattr(audio_devices, "begin_playback",
+                        lambda what: note("gate up")
+                        or audio_devices.Playback(what))
+    monkeypatch.setattr(audio_devices, "end_playback",
+                        lambda p: note("gate down"))
+
+    engine.speak("Box this lap.")
+    assert order == ["open", "gate up", "write", "gate down"]
+
+
 def _drain(voice, timeout: float = 2.0) -> None:
     """Wait for the voice thread to work through the queue."""
     import time
@@ -518,6 +689,7 @@ def test_an_unreadable_pack_is_skipped_rather_than_fatal(tmp_path,
     assert load_voice_pack(Spy()) is None
 
 
+@pytest.mark.engine_resolution
 def test_the_pack_sits_in_front_of_the_live_engine(tmp_path, monkeypatch):
     """pack -> Piper -> SAPI -> silent, with the pack wrapping, not replacing."""
     from pitcrew.engineer import voice as voice_module

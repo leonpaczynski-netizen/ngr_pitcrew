@@ -409,6 +409,7 @@ def test_a_backlog_is_dropped_rather_than_read_out_late():
 
 # ------------------------------------------------------------------- piper
 
+@pytest.mark.engine_resolution
 def test_piper_is_preferred_over_sapi():
     """Piper sounds like a race engineer; SAPI sounds like a screen reader."""
     import inspect
