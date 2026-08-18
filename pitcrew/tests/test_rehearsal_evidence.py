@@ -8,8 +8,15 @@ Recording the rehearsal was half the feature. The strategy model read
 under race conditions — at race fuel load, at race pace, in traffic, at the
 race's time of day — never reached the plan it was run to prove.
 
-The league race is deliberately still excluded. It is the thing being planned
-for, and a plan built on the race it is planning is not a plan.
+**The league race is now included too**, on the driver's instruction: *"race
+fuel and pace should be included from race sims and actual race data too - it
+all combines with practice session data for the full picture."* The
+circularity the old exclusion guarded against does not arise - the in-race
+re-planner reads inputs captured once at arming and never rebuilds them - and
+what the exclusion actually did was discard the best evidence in the database
+at the moment it was gathered. `LapInput.counted` is what keeps a race honest,
+and it always did: out-laps, in-laps, struck laps and incident laps are
+dropped from pace and fuel on every session kind alike.
 """
 from __future__ import annotations
 
@@ -45,14 +52,38 @@ def test_a_rehearsal_reaches_the_plan(store: Store, event_id):
     assert any(row["rehearsal"] for row in rows)
 
 
-def test_the_league_race_never_does(store: Store, event_id):
-    """It is the thing being planned for. A plan built on the race it is
-    planning is not a plan."""
+def test_the_league_race_reaches_the_plan_too(store: Store, event_id):
+    """His instruction: it all combines with practice for the full picture.
+
+    A race is the only place some of this is measurable at all - §5.2 wants
+    the wear rate taken at the multiplier actually being raced, from a run at
+    genuine race pace on a full tank, which is a description of a race stint.
+    """
     a_session(store, event_id, "practice", laps=4)
     a_session(store, event_id, "race", laps=6)          # not a rehearsal
     rows = store.list_evidence_laps(event_id)
-    assert len(rows) == 4
-    assert not any(row["rehearsal"] for row in rows)
+    assert len(rows) == 10
+    assert {row["session_kind"] for row in rows} == {"practice", "race"}
+
+
+def test_a_race_lap_is_still_held_to_the_same_bar(store: Store, event_id):
+    """Opening the scope did not open the gate. What keeps a race honest is
+    `counted`, which drops in-laps, out-laps and incidents on every session
+    kind alike - and a race has more of all three than practice does."""
+    from pitcrew.analysis.session import counted_laps
+    from pitcrew.strategy.evidence import _lap_inputs
+
+    session_id = store.start_session(event_id, "race")
+    for lap_num in range(1, 5):
+        store.add_lap(session_id, a_lap(lap_num))
+    pit = Lap(lap_num=5, lap_time_ms=183_000, best_lap_ms=109_000, delta_ms=0,
+              fuel_start=76.0, fuel_end=90.0, fuel_used=0.0, position=1,
+              is_pit_lap=True, is_out_lap=False, compound="RH")
+    store.add_lap(session_id, pit)
+
+    laps = _lap_inputs(store, event_id)
+    assert len(laps) == 5
+    assert len(counted_laps(laps)) == 4, "the pit lap must not be a pace sample"
 
 
 def test_practice_alone_is_unchanged(store: Store, event_id):

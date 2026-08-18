@@ -300,11 +300,12 @@ def wear_rate_by_compound(laps: list[LapInput]) -> dict[str, dict]:
     """Fraction consumed per lap, per compound, from the driver's readings.
 
     A rate measured on one compound describes that compound and no other, so
-    they are never pooled across compounds. Within a compound they are averaged
-    across the runs that produced one, and **`stints` is how many runs were
-    actually run on that compound** — not how many produced a number. A
-    compound run three times and readable once is a thinner claim than one run
-    once and read once, and the pair of counts is what says so.
+    they are never pooled across compounds. Within a compound they are combined
+    by `combined_rate` - the lap-weighted median, for the reasons set out
+    there - and **`stints` is how many runs were actually run on that
+    compound**, not how many produced a number. A compound run three times and
+    readable once is a thinner claim than one run once and read once, and the
+    pair of counts is what says so.
     """
     records = run_wear(laps)
     by_compound: dict[str, list[RunWear]] = {}
@@ -322,8 +323,9 @@ def wear_rate_by_compound(laps: list[LapInput]) -> dict[str, dict]:
             # names and a section keyed by code cannot otherwise be checked
             # against what the session recorded.
             "compound": _compound_name(code),
-            "wearPerLap": (round(mean([run.rate for run in rated]), 5)
-                           if rated else None),
+            # The same arithmetic `headline_wear` uses: one tyre must not
+            # have two figures inside one payload computed two different ways.
+            "wearPerLap": (round(combined_rate(rated), 5) if rated else None),
             "stints": len(runs),
             "stintsMeasured": len(rated),
             "runIds": [run.run_id for run in runs],
@@ -474,9 +476,53 @@ def headline_wear(laps: list[LapInput], *,
     return _headline(rated, code, blank)
 
 
+def combined_rate(used: list[RunWear]) -> float:
+    """One rate from several runs: the **lap-weighted median**, not the mean.
+
+    Each run contributes a rate of `wear / laps`, and those rates are not
+    equally well measured. The gauge is coarse - a step of the bar is about
+    3.3% of tyre life - so a run's rate carries roughly that uncertainty
+    divided by its own length: a five-lap run resolves the rate about a fifth
+    as well as a twenty-five-lap one, and a run read fifteen times supports a
+    slope where a run read once supports only an endpoint.
+
+    A flat mean ignores all of that, and on this driver's Monza RH set it was
+    wrong by three laps of stint:
+
+        run  laps   rate    read
+          5    15  0.0560   once
+          6    15  0.0593   once
+          7    14  0.0579   once
+          8    26  0.0315   once
+         16     5  0.0380   once
+         17     5  0.0220   once
+         18    16  0.0595   fifteen times, off the HUD
+         19    10  0.0578   ten times, off the HUD
+
+        mean 0.0478 -> 17.8 laps      weighted median 0.0579 -> 14.7 laps
+
+    The wear gauge read straight off the race video says 0.0558 and 0.0561 on
+    the two stints it covers, so the weighted median lands on the measurement
+    and the mean does not. Two five-lap runs and one long run disagreeing with
+    five others is what a median is for.
+
+    **And the direction of the error is the reason this matters rather than
+    being a tidy-up.** §5.1: the cliff's onset is sharp and overshooting it
+    costs far more than undershooting, so a statistic that one optimistic run
+    can drag downward is the wrong statistic for this number specifically. The
+    mean put the stint limit at 17.8 laps; he came in at 15.9 and the gauge
+    read 0.93, already past the cliff.
+    """
+    weighted = []
+    for record in used:
+        laps = max(1, record.last_lap - record.first_lap + 1)
+        weighted.extend([record.rate] * laps)
+    return median(weighted)
+
+
 def _headline(used: list[RunWear], compound: str | None, blank: dict) -> dict:
     return {**blank,
-            "wearPerLap": round(mean([record.rate for record in used]), 5),
+            "wearPerLap": round(combined_rate(used), 5),
             "compound": compound,
             "runIds": [record.run_id for record in used]}
 

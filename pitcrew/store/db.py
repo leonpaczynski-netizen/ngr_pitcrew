@@ -972,17 +972,40 @@ class Store:
     def list_evidence_laps(self, event_id: int) -> list[dict]:
         """Every lap that says something about how this event will go.
 
-        Practice, **and any race run as a rehearsal**. Not the league race
-        itself: that is the thing being planned for, and a plan built on the
-        race it is planning is not a plan.
+        Practice, rehearsals, **and the league race itself**. The driver's
+        instruction, in as many words: *"race fuel and pace should be included
+        from race sims and actual race data too - it all combines with
+        practice session data for the full picture."*
 
-        A rehearsal is the better evidence of the two and it is the only place
-        some of it comes from at all. It is run at race fuel load, at race
-        pace, in traffic, at the race's time of day, and it makes a real pit
-        stop - so the refuel rate, the pit loss and whether a stint length
-        survives a cold out-lap are all measured there rather than assumed.
-        Recording one and then not reading it, which is what the app did until
-        now, is the whole feature missing its point.
+        This used to stop at `kind = 'practice' OR rehearsal = 1`, on the
+        argument that the race is the thing being planned for and a plan built
+        on the race it is planning is not a plan. **That argument protects
+        against a circularity that does not happen here**: the in-race
+        re-planner reads `RaceInputs` captured once at arming and never
+        rebuilds them, so a race can never be costed on its own laps while it
+        is being run. What the exclusion actually did was throw away the best
+        evidence in the database the moment it was gathered.
+
+        And it is the best evidence, on every channel:
+
+        * **Wear.** CLAUDE.md §5.2 wants `w` measured "at the multiplier
+          actually being raced, from a run at genuine race pace from a full
+          tank" - which is a description of a race stint and not of a practice
+          one. The Monza race of 18 Aug 2026 read 0.056/lap against a model
+          that said 0.04412, and the model's stint limit was four laps long.
+        * **Fuel.** Race pace, race fuel map, real traffic, real defending.
+        * **Pace.** The same, and the achieved-lap figure a timed race's
+          distance rests on is explicitly meant to be laps as they were
+          actually driven.
+
+        **What keeps a race honest is `LapInput.counted`, not this predicate.**
+        It already drops out-laps, in-laps, anything the driver struck, and any
+        lap with an incident in it - which is exactly the difference between a
+        race lap and a practice lap, and it was always applied to both. On
+        session 52 that removes the pit lap and leaves the twenty-five green
+        ones. Recency weighting does the rest: a race is the most recent
+        session by construction, so it leads the picture it joins without
+        being the only thing in it.
 
         **And no laps whose car the stream contradicted.** This is the gate
         that closes bug 1. On 17 Aug 2026 session 11 was found carrying
@@ -1015,7 +1038,6 @@ class Store:
             "       COALESCE(sessions.rehearsal, 0) AS rehearsal "
             "FROM laps JOIN sessions ON sessions.id = laps.session_id "
             "WHERE sessions.event_id = ? "
-            "  AND (sessions.kind = 'practice' OR sessions.rehearsal = 1) "
             f"  AND {EVIDENCE_IDENTITY_SQL} "
             "ORDER BY sessions.started_at, sessions.id, laps.lap_num",
             (event_id,))
@@ -1033,7 +1055,6 @@ class Store:
             "SELECT sessions.*, COUNT(laps.id) AS lap_count "
             "FROM sessions LEFT JOIN laps ON laps.session_id = sessions.id "
             "WHERE sessions.event_id = ? "
-            "  AND (sessions.kind = 'practice' OR sessions.rehearsal = 1) "
             f"  AND NOT ({EVIDENCE_IDENTITY_SQL}) "
             "GROUP BY sessions.id ORDER BY sessions.started_at, sessions.id",
             (event_id,))]
