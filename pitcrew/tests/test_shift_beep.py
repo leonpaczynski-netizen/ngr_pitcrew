@@ -8,6 +8,10 @@ not.
 """
 from __future__ import annotations
 
+import time
+
+import pytest
+
 from pitcrew.engineer import shift_beep as SB
 from pitcrew.engineer.shift_beep import ShiftBeep
 
@@ -321,3 +325,153 @@ def test_a_beep_cut_by_a_rebuild_is_not_fired_again(monkeypatch):
     monkeypatch.setattr(audio_devices, "begin_playback", cut)
     SB._TonePlayer(ms=1)._render()          # raises nothing, retries nothing
     assert stream.writes == 1
+
+
+# ---------------------------------------------------------------- top gear
+#
+# There is no seventh gear in a six-speed. A beep there is an instruction that
+# cannot be obeyed, and it lands on the fastest part of the lap.
+
+
+def test_top_gear_is_silent_and_the_gear_below_it_is_not():
+    beep, played = beeper(rpm=8000.0, top_gear=6)
+    assert not beep.update(Packet(gear=6, rpm=8600.0), 100.0)
+    assert played == []
+    # Same rpm, one gear down: this one has somewhere to go.
+    beep, played = beeper(rpm=8000.0, top_gear=6)
+    assert beep.update(Packet(gear=5, rpm=8600.0), 100.0)
+    assert played == [1]
+
+
+def test_an_unknown_gearbox_beeps_in_every_gear():
+    """None is not "no gears" - it is "not read yet", and going quiet on it
+    would be a silence nobody could account for."""
+    beep, played = beeper(rpm=8000.0, top_gear=None)
+    assert beep.update(Packet(gear=8, rpm=8600.0), 100.0)
+    assert played == [1]
+
+
+def test_the_top_gear_does_not_re_time_the_beeps_after_it():
+    """Suppressing the sound must not disturb the hysteresis.
+
+    The top gear arms `shift_above` exactly as it would have done had it
+    beeped, so that the next gear the driver takes behaves identically whether
+    or not the lap passed through top. A version that returned early left the
+    state stale and made sixth gear silently change when fourth beeped.
+    """
+    def sequence(top):
+        beep, _ = beeper(rpm=8000.0, top_gear=top)
+        frames = [Packet(gear=6, rpm=8600.0),      # top: no sound either way
+                  Packet(gear=6, rpm=8600.0),
+                  Packet(gear=4, rpm=6000.0),      # downshift
+                  *[Packet(gear=4, rpm=6000.0)] * 30,   # clear the mute
+                  Packet(gear=4, rpm=8600.0)]      # due again
+        return run(beep, frames)
+
+    assert [f[1:] for f in sequence(6)] == [f[1:] for f in sequence(None)][1:]
+
+
+def test_the_gear_count_is_read_off_the_packet():
+    beep, played = beeper(rpm=8000.0)
+    packet = Packet(gear=6, rpm=8600.0)
+    packet.gear_ratios = [2.7, 1.9, 1.5, 1.2, 1.1, 1.0, None, None]
+    assert not beep.update(packet, 100.0)
+    assert beep.top_gear == 6
+    assert played == []
+
+
+def test_an_empty_ratio_table_keeps_the_gearbox_it_had():
+    """The car has not loaded yet. Forgetting the gearbox every time the
+    session pauses would let the top gear beep again on the way back in."""
+    beep, _ = beeper(rpm=8000.0)
+    loaded = Packet(gear=3, rpm=5000.0)
+    loaded.gear_ratios = [2.7, 1.9, 1.5, 1.2, 1.1, 1.0, None, None]
+    beep.update(loaded, 100.0)
+    blank = Packet(gear=3, rpm=5000.0)
+    blank.gear_ratios = [None] * 8
+    beep.update(blank, 100.1)
+    assert beep.top_gear == 6
+
+
+# --------------------------------------------------------------- priority
+#
+# The beep and the engineer share one card. Until now the beep WAITED for the
+# sentence, which meant a two-second call did not delay the beep so much as
+# destroy it: a beep played late names an rpm the engine has already left, and
+# it sounds exactly like a beep that arrived on time.
+
+
+def test_the_beep_asks_for_the_card_while_it_waits():
+    """The claim has to be up while the beep is blocked, not after - the voice
+    reads it between chunks and would otherwise never see it."""
+    import threading
+
+    from pitcrew.engineer import audio_devices
+
+    device = audio_devices.output_device()
+    lock = audio_devices.lock_for(device)
+    seen = threading.Event()
+    released = threading.Event()
+
+    player = SB._TonePlayer()
+    player._render_locked = lambda: None
+
+    lock.acquire()
+    try:
+        worker = threading.Thread(target=player._render, daemon=True)
+        worker.start()
+        # The voice's inner loop, standing in for a chunk boundary.
+        for _ in range(200):
+            if audio_devices.priority_wanted(device):
+                seen.set()
+                break
+            time.sleep(0.001)
+    finally:
+        lock.release()
+        released.set()
+    worker.join(timeout=2.0)
+    assert seen.is_set(), "the beep never asked for the card"
+    assert not audio_devices.priority_wanted(device), "the claim outlived it"
+
+
+def test_a_beep_that_cannot_be_played_on_time_is_dropped_not_queued():
+    """`PRIORITY_WAIT_S` is a deadline, and past it the beep is wrong rather
+    than late. The count is what makes the trade-off visible."""
+    import threading
+
+    from pitcrew.engineer import audio_devices
+
+    lock = audio_devices.lock_for(audio_devices.output_device())
+    player = SB._TonePlayer()
+    player._render_locked = lambda: pytest.fail("played after the deadline")
+
+    lock.acquire()
+    try:
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            player._render()
+        waited = time.monotonic() - started
+    finally:
+        lock.release()
+    assert player.dropped == 1
+    assert waited < SB.PRIORITY_WAIT_S + 0.5
+
+
+def test_the_voice_stands_aside_for_a_pending_beep():
+    """It marks the line cut rather than dropping it - `LineCut` re-queues it
+    with its original timestamp, so staleness decides whether it is still
+    true. And it closes its OWN stream: a beep reaching into another thread's
+    blocking write is the close-from-send deadlock."""
+    from pitcrew.engineer import audio_devices, voice
+
+    class Line:
+        interrupted = False
+
+    line = Line()
+    assert voice._yield_to_priority(line) is False
+    assert line.interrupted is False
+
+    with audio_devices.priority_on(audio_devices.output_device()):
+        assert voice._yield_to_priority(line) is True
+    assert line.interrupted is True
+    assert voice._yield_to_priority(None) is False

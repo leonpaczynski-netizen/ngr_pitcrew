@@ -14,6 +14,12 @@ Three of them cost real sessions to learn:
 * **Hysteresis, not a level.** It re-arms only once rpm falls back below 95%
   of the threshold, so sitting on the limiter beeps once rather than sixty
   times a second.
+* **Nothing is beeped in the top gear.** There is no seventh gear in a
+  six-speed, so a beep there is an instruction that cannot be obeyed - and it
+  arrives on the fastest part of the lap, which is where a meaningless sound
+  is most expensive. The car's gear count is read off the packet's own ratio
+  table rather than configured, because it is already broadcast and a number
+  the driver has to keep in step with his gearbox is a number that goes stale.
 
 **The threshold is per gear, and it is measured.** One number for every gear
 is a compromise between shift points that are genuinely different, and it was
@@ -63,6 +69,14 @@ DEFAULT_SHORT_SHIFT_DROP_RPM = 500.0
 # What the beep calls itself while it holds a stream open, for the log line a
 # deferred device rebuild writes. See `audio_devices.begin_playback`.
 BEEP = "the shift beep"
+# How long the beep will wait for the card once it has asked the engineer to
+# stand aside. The voice yields between written chunks, so the real wait is
+# one clip - a few hundred milliseconds at worst. This is the backstop for a
+# chunk that runs long, and it is short on purpose: past it the beep is no
+# longer describing the rpm the engine is at. **A beep that cannot be played
+# on time is dropped, not queued** - the same rule `_TonePlayer.__call__`
+# already applies to an overlapping beep, for the same reason.
+PRIORITY_WAIT_S = 0.4
 # No threshold may be dragged below this by a short-shift request. Short-
 # shifting out of the powerband is not fuel saving, it is driving badly, and
 # an engineer that asks for it has stopped being useful.
@@ -83,7 +97,8 @@ def driving_gate(car_on_track: bool, paused: bool, loading: bool) -> bool:
 def should_beep(*, prev_gear: int, cur_gear: int, rpm: float,
                 threshold: float, shift_above: bool, enabled: bool,
                 downshift_muted_until: float,
-                now: float) -> tuple[bool, bool, float]:
+                now: float,
+                top_gear: int | None = None) -> tuple[bool, bool, float]:
     """Decide whether to beep this packet.
 
     Returns `(beep, shift_above, downshift_muted_until)` - the caller keeps the
@@ -108,6 +123,14 @@ def should_beep(*, prev_gear: int, cur_gear: int, rpm: float,
 
     if (rpm >= threshold and not re_armed
             and now >= downshift_muted_until):
+        if top_gear is not None and cur_gear >= top_gear:
+            # Top gear: there is nothing to shift into. The hysteresis is
+            # still armed exactly as it would have been, so that suppressing
+            # the sound cannot change when the NEXT beep - after a downshift,
+            # in a gear that does have one above it - falls due. Returning
+            # early from higher up would have left `shift_above` stale and
+            # made the top gear silently re-time the rest of the lap.
+            return False, True, downshift_muted_until
         return True, True, downshift_muted_until
 
     return False, re_armed, downshift_muted_until
@@ -118,9 +141,16 @@ class ShiftBeep:
 
     def __init__(self, *, rpm: float = DEFAULT_RPM, enabled: bool = True,
                  tone=None, per_gear: dict[int, float] | None = None,
-                 short_shift_drop_rpm: float | None = None) -> None:
+                 short_shift_drop_rpm: float | None = None,
+                 top_gear: int | None = None) -> None:
         self.rpm = rpm
         self.enabled = enabled
+        # The highest gear the fitted gearbox has, or None while it is not
+        # known. **None means beep in every gear**, which is what this did
+        # before the top gear was read at all: a car whose ratios have not
+        # arrived yet is not a reason to go quiet, and a wrong silence is
+        # harder to notice than a wrong beep.
+        self.top_gear = top_gear
         # Measured per-gear thresholds, keyed by gear. A gear with no measured
         # figure falls back to `rpm` rather than to a default: a made-up number
         # for one gear inside a measured table is the worst of both, because it
@@ -157,7 +187,25 @@ class ShiftBeep:
             int(gear), self.short_shift_drop_rpm)
         return max(MIN_THRESHOLD_RPM, base - drop)
 
+    def note_gear_ratios(self, ratios) -> None:
+        """Learn the top gear from the ratio table the packet broadcasts.
+
+        GT7 sends eight slots and zeroes the ones the gearbox does not have,
+        so the count of non-zero ratios is the gear count. Read every packet
+        rather than once: the driver changes cars without restarting the app,
+        and a stale gear count would silence a real beep in the new car's
+        fifth gear.
+
+        A table that is entirely zero - the car has not loaded yet - leaves
+        the last known count alone rather than clearing it, so the beep does
+        not lose the gearbox every time the session pauses.
+        """
+        fitted = [r for r in (ratios or []) if r]
+        if fitted:
+            self.top_gear = len(fitted)
+
     def update(self, packet, now: float) -> bool:
+        self.note_gear_ratios(getattr(packet, "gear_ratios", None))
         if not driving_gate(packet.car_on_track, packet.paused, packet.loading):
             self._prev_gear = packet.current_gear
             return False
@@ -171,6 +219,7 @@ class ShiftBeep:
             enabled=self.enabled,
             downshift_muted_until=self._muted_until,
             now=now,
+            top_gear=self.top_gear,
         )
         self._prev_gear = packet.current_gear
         if beep:
@@ -250,6 +299,10 @@ class _TonePlayer:
         # Held for the duration of a beep. Non-blocking acquisition is what
         # makes an overlapping beep a drop rather than a queue.
         self._busy = threading.Lock()
+        # Beeps that were due and did not sound, for the settings screen and
+        # the per-session log line. A number nobody can see is a number that
+        # cannot be traded off against `PRIORITY_WAIT_S`.
+        self.dropped = 0
 
     def __call__(self) -> None:
         """Fire and forget, for the telemetry thread."""
@@ -283,37 +336,60 @@ class _TonePlayer:
         # The same lock the engineer's voice holds: overlapping PortAudio
         # streams crash the host rather than mixing, and a beep landing on top
         # of a call is exactly when that would happen.
-        with audio_devices.lock_for(audio_devices.output_device()):
-            # The beep is behind the same gate as the engineer's line, so a
-            # device-list rebuild waits for it too - see
-            # `audio_devices.begin_playback` for why the open and the
-            # declaration are one step.
-            #
-            # Its exposure is smaller than the voice's in every direction and
-            # worth stating rather than assuming. The stream is open for the
-            # sixty milliseconds of the tone instead of a whole sentence, so a
-            # rebuild has to land in a much narrower window to catch it, and
-            # holding a rebuild for sixty milliseconds costs the caller
-            # nothing worth naming. It never overlaps a spoken line - both
-            # take `lock_for(output_device())` first - so it can only ever be
-            # the one thing a rebuild is waiting on.
-            #
-            # **A cut beep is not fired again**, unlike a cut line. A beep is
-            # an instruction about the rpm the engine is at right now; played
-            # late it names the wrong shift point, which is worse than the
-            # missed one. `_TonePlayer.__call__` already drops an overlapping
-            # beep for the same reason, so this is the existing rule and not a
-            # second one. `interrupted` is therefore read by nobody here - the
-            # gate exists to make the rebuild wait, and the marking is only
-            # of interest to a caller that can act on it.
-            stream, _beep = audio_devices.open_and_declare(
-                BEEP, lambda: audio_devices.open_output(self._rate))
+        #
+        # **Taken with priority, and with a deadline.** Waiting on it plainly
+        # is what used to make a spoken line swallow a shift point: the beep
+        # arrived a whole sentence late, naming an rpm the engine had left.
+        # `priority_on` asks the voice to close after its current chunk - see
+        # `audio_devices.priority_on` for why the voice closes its own stream
+        # and the beep never touches it - and the deadline below is what
+        # happens when even that is too slow.
+        device = audio_devices.output_device()
+        lock = audio_devices.lock_for(device)
+        with audio_devices.priority_on(device):
+            if not lock.acquire(timeout=PRIORITY_WAIT_S):
+                self.dropped += 1
+                raise TimeoutError(
+                    f"the card was still busy {PRIORITY_WAIT_S:.1f}s after "
+                    f"the beep asked for it - dropped rather than played at "
+                    f"the wrong rpm")
             try:
-                stream.write(self._samples)
+                self._render_locked()
             finally:
-                stream.stop()
-                stream.close()
-                audio_devices.end_playback(_beep)
+                lock.release()
+
+    def _render_locked(self) -> None:
+        """Play it, with the card already held."""
+        # The beep is behind the same gate as the engineer's line, so a
+        # device-list rebuild waits for it too - see
+        # `audio_devices.begin_playback` for why the open and the
+        # declaration are one step.
+        #
+        # Its exposure is smaller than the voice's in every direction and
+        # worth stating rather than assuming. The stream is open for the
+        # sixty milliseconds of the tone instead of a whole sentence, so a
+        # rebuild has to land in a much narrower window to catch it, and
+        # holding a rebuild for sixty milliseconds costs the caller
+        # nothing worth naming. It never overlaps a spoken line - both
+        # take `lock_for(output_device())` first - so it can only ever be
+        # the one thing a rebuild is waiting on.
+        #
+        # **A cut beep is not fired again**, unlike a cut line. A beep is
+        # an instruction about the rpm the engine is at right now; played
+        # late it names the wrong shift point, which is worse than the
+        # missed one. `_TonePlayer.__call__` already drops an overlapping
+        # beep for the same reason, so this is the existing rule and not a
+        # second one. `interrupted` is therefore read by nobody here - the
+        # gate exists to make the rebuild wait, and the marking is only
+        # of interest to a caller that can act on it.
+        stream, _beep = audio_devices.open_and_declare(
+            BEEP, lambda: audio_devices.open_output(self._rate))
+        try:
+            stream.write(self._samples)
+        finally:
+            stream.stop()
+            stream.close()
+            audio_devices.end_playback(_beep)
 
 
 def _square_wave(freq: float, ms: int, rate: int):

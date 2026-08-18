@@ -48,6 +48,27 @@ from pitcrew.engineer.audio_devices import open_output
 def _play_lock():
     return audio_devices.lock_for(audio_devices.output_device())
 
+
+def _yield_to_priority(line) -> bool:
+    """True when the line should stop here and let the shift beep through.
+
+    Checked between written chunks, never inside one: the only thread allowed
+    to close this stream is the one writing to it, and a beep reaching in
+    mid-`write` would be the close-from-send deadlock in a new costume - see
+    `audio_devices.priority_on`.
+
+    Marking the line `interrupted` is what makes this a deferral rather than a
+    loss. The caller raises `LineCut`, the worker re-queues the text with its
+    original timestamp, and `STALE_AFTER_S` decides whether it is still true.
+    A call worth making survives a beep; one that is no longer worth making
+    was going to be dropped anyway.
+    """
+    if line is None or not audio_devices.priority_wanted(
+            audio_devices.output_device()):
+        return False
+    line.interrupted = True
+    return True
+
 PACK_ROOT = Path(__file__).resolve().parent / "voice_pack"
 PACK_MANIFEST = "manifest.json"
 
@@ -379,6 +400,8 @@ class PiperEngine:
                         stream, line = audio_devices.open_and_declare(
                             SPOKEN_LINE, lambda: open_output(rate))
                     stream.write(samples)
+                    if _yield_to_priority(line):
+                        break
             finally:
                 if stream is not None:
                     # stop() drains what is already queued; close() would cut
@@ -512,6 +535,8 @@ class VoicePackEngine:
                         stream, line = audio_devices.open_and_declare(
                             SPOKEN_LINE, lambda: open_output(rate))
                     stream.write(samples)
+                    if _yield_to_priority(line):
+                        break
             finally:
                 if stream is not None:
                     stream.stop()

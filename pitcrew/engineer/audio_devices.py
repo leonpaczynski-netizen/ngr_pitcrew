@@ -33,6 +33,7 @@ that can only be reported.
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import threading
 import time
@@ -100,6 +101,68 @@ def lock_for(device: object | None) -> threading.Lock:
     key = endpoint_key(device) if isinstance(device, str) else repr(device)
     with _DEVICE_LOCKS_GUARD:
         return _DEVICE_LOCKS.setdefault(key, threading.Lock())
+
+
+# **The beep goes first, and the line it cuts is said again.**
+#
+# The voice and the beep share one card, so they share one `lock_for` - which
+# until now meant a beep arriving mid-sentence WAITED for the sentence. That
+# is the wrong way round twice over. A spoken call is a paragraph the driver
+# can hear a second late and still act on; the beep is an instruction about
+# the rpm the engine is at *right now*, and `shift_beep`'s own rule is that a
+# beep played late names a shift point that has already gone past. So a
+# two-second line did not delay the beep, it destroyed it - and the driver
+# heard nothing wrong, because a beep that arrives at the wrong rpm sounds
+# exactly like a beep.
+#
+# So the beep raises a flag on the card it wants, the voice reads that flag
+# BETWEEN writes, and a voice that sees it closes its own stream and gets out
+# of the way. **Only the thread that opened a stream ever closes it** - the
+# beep never reaches into the voice's stream, because a close landing inside
+# another thread's blocking `write` is the SimHub close-from-send deadlock
+# this codebase has already paid for once.
+#
+# The cut line is not lost: it is marked `interrupted`, which raises
+# `voice.LineCut`, which re-queues it with its ORIGINAL timestamp - so the
+# staleness rule decides whether it is still worth saying, exactly as it does
+# for a line cut by a device rebuild. The cost of a pre-empted call is
+# therefore one clip of silence and a repeat, and the cost of not pre-empting
+# is a shift point.
+_PRIORITY: dict[str, int] = {}
+_PRIORITY_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def priority_on(device: object | None):
+    """Ask whoever holds `device` to finish early. Released on the way out.
+
+    A counter rather than a flag because two beeps a corner apart can overlap
+    with a long line, and the first one to leave must not clear the second
+    one's claim.
+    """
+    key = endpoint_key(device) if isinstance(device, str) else repr(device)
+    with _PRIORITY_GUARD:
+        _PRIORITY[key] = _PRIORITY.get(key, 0) + 1
+    try:
+        yield
+    finally:
+        with _PRIORITY_GUARD:
+            remaining = _PRIORITY.get(key, 0) - 1
+            if remaining > 0:
+                _PRIORITY[key] = remaining
+            else:
+                _PRIORITY.pop(key, None)
+
+
+def priority_wanted(device: object | None) -> bool:
+    """True when something more urgent is waiting for `device`.
+
+    Read by a long write loop between chunks. Cheap on purpose: it is on the
+    voice's inner loop and must not cost more than the check is worth.
+    """
+    key = endpoint_key(device) if isinstance(device, str) else repr(device)
+    with _PRIORITY_GUARD:
+        return _PRIORITY.get(key, 0) > 0
 
 
 # Streams that outlive the sound they are making. A spoken line opens a stream
@@ -197,10 +260,12 @@ class Playback:
     def __init__(self, what: str) -> None:
         self.what = what
         self.thread = threading.get_ident()
-        # Set when a rebuild ran out of patience and tore the stream down
-        # anyway. Read by the caller after its write loop: the voice re-speaks
-        # the line if it is still true, the shift beep does not - a beep said
-        # late is a wrong shift point, and the next one is a corner away.
+        # Set when the stream was ended before its sound finished - either a
+        # rebuild ran out of patience and tore it down, or the caller stood
+        # aside for something more urgent on the same card (`priority_on`).
+        # Read by the caller after its write loop: the voice re-speaks the
+        # line if it is still true, the shift beep does not - a beep said late
+        # is a wrong shift point, and the next one is a corner away.
         self.interrupted = False
 
 
