@@ -743,6 +743,21 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # calls hunt for, so a pace series that cannot see this measures the
         # app's own radio calls and then boxes him for them.
         ("short_shift_rpm", "REAL"),
+        # **Where the wear reading came from.** `driver` is his own eyes on
+        # the in-game gauge, `hud-video` is the same gauge read off an OBS
+        # capture by `tools/read_hud_wear.py`. Null on every reading taken
+        # before this column existed, which means `driver` by construction -
+        # nothing else could write one.
+        #
+        # It exists because CLAUDE.md §5 is absolute that every wear number
+        # carries its source, and because the two are not interchangeable: the
+        # driver's is a glance at a moving car and lands once or twice a
+        # stint; the video's is quantised to the gauge's 30 px (3.3% a step)
+        # and lands as often as the capture is sampled. Both are the same
+        # instrument and neither is derived, but a model that cannot tell them
+        # apart cannot explain why one stint has eighty readings and another
+        # has one.
+        ("wear_source", "TEXT"),
     ),
     "setup_sheets": (
         # `race` or `qualifying`. Two sheets for one car are two different

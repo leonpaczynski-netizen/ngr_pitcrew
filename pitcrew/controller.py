@@ -72,6 +72,7 @@ from pitcrew.race.calls import STAY_OUT, fuel_target_l
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.race.expectations import PRACTICE, Expectation
 from pitcrew.race.hud_calibration import note_frame_red
+from pitcrew.race.colour import ColourCalls
 from pitcrew.race.refuel import RefuelAdviser
 from pitcrew.race.replan import (
     REPLAN_BUDGET_S,
@@ -553,6 +554,8 @@ class PitCrewController(QObject):
         # 6.35 s on a shape that is one compound profile away.
         self._replan_max_stops = REPLAN_MAX_STOPS
         self._replan_over_budget = 0
+        # The quiet-lap radio, armed with the race. None outside one.
+        self._colour: ColourCalls | None = None
         # Whether the engineer talks during the race in progress. True outside
         # a race so nothing that speaks for another reason is silenced by it.
         self._engineer_speaks = True
@@ -2092,6 +2095,38 @@ class PitCrewController(QObject):
         if coach is not None:
             coach.set_speak(self.voice.say if speaks else None)
 
+    def _voice_colour(self, lap) -> None:
+        """The radio for a quiet lap, or nothing - usually nothing."""
+        race = self.race
+        if race is None or not race.running or self._colour is None:
+            return
+        state = race.state
+        sigma_ms = race.expect.sigma_ms()
+        call = self._colour.consider(
+            lap=state.lap,
+            lap_time_ms=lap.lap_time_ms,
+            laps_remaining=state.laps_remaining(),
+            laps_total=state.laps_total,
+            stint_ends_on_lap=state.stint_ends_on_lap,
+            # Measured from the race in progress, never inherited - so it is
+            # None until enough clean laps exist, and the consistency call
+            # stays silent rather than inventing a band.
+            sigma_s=(sigma_ms / 1000.0) if sigma_ms else None,
+            # Laps on the current set. **No wear reading is captured live at
+            # all**, which is exactly why the prompt is worth making: GT7
+            # broadcasts no wear channel and he read the gauge zero times in
+            # the Monza race.
+            wear_reading_age=state.laps_since_stop,
+        )
+        if call is None:
+            return
+        spoken = call.spoken()
+        if self._engineer_speaks:
+            self.voice.say(spoken)
+        self.ptt.last_call = spoken
+        if self.race_screen is not None:
+            self.race_screen.set_status(spoken)
+
     def _tag_race_compound(self, lap_id: int) -> None:
         """A race lap's compound comes from the approved plan.
 
@@ -3051,6 +3086,7 @@ class PitCrewController(QObject):
         # two-stop race gets a clean one for its second stop.
         self.bridge.refuel = RefuelAdviser(
             context=self._refuel_context, speak=self._voice_refuel)
+        self._colour = ColourCalls(level=self.settings.colour_calls)
         self._replan_max_stops = REPLAN_MAX_STOPS
         self._replan_over_budget = 0
         self._replans.reset()
@@ -3148,10 +3184,16 @@ class PitCrewController(QObject):
         # which is the whole reason to say it here rather than three laps
         # later when the running estimate finally crosses a threshold. Then a
         # clean watch, so a second stop is not judged against the first.
-        if event.kind is EventKind.PIT_EXIT and self.bridge.refuel is not None:
-            self.bridge.refuel.note_pit_exit(
-                self.bridge.last_packet.fuel_level
-                if self.bridge.last_packet else None)
+        if event.kind is EventKind.PIT_EXIT:
+            if self.bridge.refuel is not None:
+                self.bridge.refuel.note_pit_exit(
+                    self.bridge.last_packet.fuel_level
+                    if self.bridge.last_packet else None)
+            if self._colour is not None:
+                # A new set and a new stint: "5 to the stop" and the gauge
+                # prompt are news again, and the consistency window must not
+                # straddle a pit stop.
+                self._colour.new_stint()
         call = self.race.handle(event)
         replan = None
         if event.kind is EventKind.LAP_COMPLETED:
@@ -3161,6 +3203,13 @@ class PitCrewController(QObject):
         if replan is not None:
             self._voice_replan(replan)
         if call is None:
+            # **Colour calls rank below everything.** They only ever reach the
+            # voice on a crossing that had nothing real to say - an engineer
+            # who says "nice lap" over the top of a box call has actively hurt
+            # the race, and the register that stopped the nine-box-calls
+            # defect must not be undone by adding a second mouth to it.
+            if event.kind is EventKind.LAP_COMPLETED and replan is None:
+                self._voice_colour(event.data["lap"])
             return
 
         # Spoken unless the re-planner won the lap. Everything below the voice

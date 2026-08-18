@@ -24,6 +24,19 @@ from pitcrew.store.schema import ADDED_COLUMNS, DDL, MIGRATIONS, SCHEMA_VERSION
 
 DEFAULT_DB_PATH = DATA_DIR / "pitcrew.db"
 
+# **Where a tyre-wear reading came from.** Both are the same instrument - the
+# in-game gauge - and neither is derived, so neither is second-class evidence.
+# They are kept apart because they have different shapes: the driver's is a
+# glance at a moving car that lands once or twice a stint, the video's is
+# quantised to the gauge's 30 pixels and lands as often as the capture is
+# sampled. A model that could not tell them apart could not explain why one
+# stint carries eighty readings and another carries one.
+#
+# Null in the column means `driver`: nothing else could have written a reading
+# before the column existed.
+WEAR_DRIVER = "driver"
+WEAR_HUD_VIDEO = "hud-video"
+
 
 def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
@@ -1093,21 +1106,39 @@ class Store:
                 (0 if reason is None else 1, reason, lap_id))
 
     def set_lap_wear(self, lap_id: int, fl: float | None, fr: float | None,
-                     rl: float | None, rr: float | None) -> None:
-        """Record the driver's tyre-gauge reading per corner, consumed 0-1.
+                     rl: float | None, rr: float | None, *,
+                     source: str = WEAR_DRIVER) -> None:
+        """Record a tyre-gauge reading per corner, consumed 0-1.
 
         A corner he did not read stays null.  Null here has to survive: a zero
         would read as a fresh tyre and would be believed, which is the failure
         mode CLAUDE.md calls absolute.
+
+        `source` is `driver` for his own eyes on the gauge and `hud-video` for
+        the same gauge read off an OBS capture.  **A driver reading is never
+        overwritten by a video one**: CLAUDE.md §4.1 makes his report primary
+        evidence and the video corroboration, so where the two disagree the
+        disagreement has to stay visible rather than be resolved by whichever
+        was written last.  A video reading may replace an earlier video
+        reading, which is just a re-run of the same tool.
         """
         for name, value in (("fl", fl), ("fr", fr), ("rl", rl), ("rr", rr)):
             if value is not None and not 0.0 <= value <= 1.0:
                 raise ValueError(
                     f"wear is a fraction consumed, 0-1, got {value} for {name}")
         with self._write() as conn:
+            if source != WEAR_DRIVER:
+                row = conn.execute(
+                    "SELECT wear_source, wear_fl, wear_fr, wear_rl, wear_rr "
+                    "FROM laps WHERE id = ?", (lap_id,)).fetchone()
+                held = row is not None and any(
+                    row[i] is not None for i in range(1, 5))
+                if held and (row[0] or WEAR_DRIVER) == WEAR_DRIVER:
+                    return
             conn.execute(
                 "UPDATE laps SET wear_fl = ?, wear_fr = ?, wear_rl = ?, "
-                "wear_rr = ? WHERE id = ?", (fl, fr, rl, rr, lap_id))
+                "wear_rr = ?, wear_source = ? WHERE id = ?",
+                (fl, fr, rl, rr, source, lap_id))
 
     # --------------------------------------------------------- corner models
 

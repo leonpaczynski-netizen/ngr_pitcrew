@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, fields
 
+from pitcrew.race import colour
+
 # Where the beep threshold comes from.
 RPM_FROM_GT7 = "gt7"        # the car's own shift-light rpm, off the packet
 
@@ -79,6 +81,14 @@ FEED_SOURCES = (FEED_SIMHUB, FEED_PS5)
 # `telemetry/listener.py`, and CLAUDE.md 3.1 on why the pair is checked by a
 # self-test rather than trusted.
 DEFAULT_UDP_PORT = 33741
+
+# How much the engineer says on the laps that carry no instruction. Re-exported
+# from `race.colour` so a settings screen has one import for the whole choice
+# and cannot drift from the module that acts on it.
+COLOUR_QUIET = colour.QUIET
+COLOUR_NORMAL = colour.NORMAL
+COLOUR_CHATTY = colour.CHATTY
+COLOUR_LEVELS = colour.LEVELS
 
 
 @dataclass
@@ -222,7 +232,18 @@ class Settings:
     voice_noise_scale: float = 0.60        # timbre variation
     voice_noise_w_scale: float = 0.55      # duration jitter - the big one
 
+    # **How much the engineer fills the quiet laps.** `quiet` is off and means
+    # off, not "less often"; `normal` and `chatty` differ only in how much
+    # silence they keep between colour calls. Strategy is unaffected at every
+    # level - this governs the radio that is not an instruction. See
+    # `race/colour.py` for why the budget matters more than the calls do.
+    colour_calls: str = COLOUR_NORMAL
+
     def validate(self) -> None:
+        if self.colour_calls not in COLOUR_LEVELS:
+            raise ValueError(
+                f"colour_calls is one of {', '.join(COLOUR_LEVELS)}, "
+                f"got {self.colour_calls!r}")
         if not 1024 <= self.udp_port <= 65535:
             raise ValueError(
                 f"a UDP port of {self.udp_port} is not one this app can bind - "

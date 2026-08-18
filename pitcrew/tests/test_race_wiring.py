@@ -542,6 +542,42 @@ def test_a_stood_down_replan_leaves_the_plan_alone(raced, monkeypatch):
     assert controller._replans.told is None
 
 
+# ------------------------------------------------------- colour calls
+
+def test_colour_calls_never_speak_over_a_real_call(raced, voice, monkeypatch):
+    """**They rank below everything.** An engineer who says "nice lap" over
+    the top of a box call has actively hurt the race, and the register that
+    stopped the nine-box-calls defect must not be undone by a second mouth."""
+    from pitcrew.race.colour import ColourCall, MILESTONE
+
+    controller, _, _, _ = raced
+    controller.start_race()
+    green(controller)
+    # Anything the colour register is asked for, it offers.
+    monkeypatch.setattr(
+        type(controller._colour), "consider",
+        lambda self, **kw: ColourCall(MILESTONE, "Halfway.", ""))
+    for lap_num in range(1, 12):
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+
+    said = voice.spoken
+    box = [i for i, line in enumerate(said) if "Box" in line]
+    assert box, "the box call should still have been made"
+    for i in box:
+        assert "Halfway" not in said[i]
+
+
+def test_the_quiet_level_says_nothing(raced, voice):
+    controller, _, _, _ = raced
+    controller.settings.colour_calls = "quiet"
+    controller.start_race()
+    green(controller)
+    for lap_num in range(1, 10):
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+    assert not any("to go" in line or "best lap" in line.lower()
+                   for line in voice.spoken)
+
+
 # ------------------------------------------ the race lap's compound
 
 def test_race_laps_are_tagged_with_the_plan_s_compound(raced, store):
