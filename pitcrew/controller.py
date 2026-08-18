@@ -3501,6 +3501,14 @@ class PitCrewController(QObject):
             current_stops=self.race.stops_planned(),
             inputs=inputs,
             fuel_capacity_l=inputs.fuel_capacity_l if inputs else None,
+            # **What this race has shown, refreshed every crossing.** The plan
+            # approved before the green is the fallback for each of these and
+            # not the source: he asked for the remainder to be re-solved on
+            # what is actually happening, and a margin sized off practice
+            # scatter is a margin sized off another car's day.
+            observed_fuel_sd_l=self.race.expect.race_fuel_sd_l(),
+            achieved_lap_ms=self.race.expect.achieved_lap_time_ms(),
+            lap_sigma_s=((self.race.expect.sigma_ms() or 0) / 1000.0) or None,
             max_stops=self._replan_max_stops,
         )
         self._note_replan_cost(_monotonic() - started)

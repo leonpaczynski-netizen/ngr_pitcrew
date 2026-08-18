@@ -51,13 +51,21 @@ honest, but it means the first laps of every race are mute on pace even at a
 circuit measured a dozen times. Storing it is the outstanding half.)
 
 There is a standing rule in this project's history: *never route a lap-time
-trigger through `recommend()`*. It is honoured here. Lap time may refine a
-timed race's distance estimate (how many laps fit in the time left is a
-question about lap times) and it feeds the "are we on the plan's expectation"
-comparison, which is reported with its own noise floor. It may not move a stop
-count and it may not raise a spoken strategy change. Stop-count changes are
-routed off fuel burn - the low-noise channel - and the wear assumption, which
-is labelled an assumption because GT7 broadcasts no wear at all.
+TRIGGER through `recommend()`*. It is honoured here, and the word doing the
+work is "trigger". Lap time may not raise a finding and may not be the reason
+a stop count changes; those are routed off fuel burn - the low-noise channel -
+and off the wear assumption, which is labelled an assumption because GT7
+broadcasts no wear at all.
+
+**Lap time as a unit is a different thing from lap time as a signal**, and the
+rule was never about the unit. How many laps fit in the time left is a
+question about lap times and always was; so is what a nineteen-second pit stop
+costs in laps. `_remaining_race` therefore prices the remainder in the median
+lap this race has actually run, and sets out there why the distance cannot
+move on it: the laps left are counted upstream against that same median and
+handed in, so converting them back into minutes round-trips exactly whatever
+the figure is. A faster median cannot invent or remove a stop. It can only
+stop a stop looking cheaper than it is.
 """
 from __future__ import annotations
 
@@ -621,6 +629,9 @@ def assess(*, laps_done: int, laps_total: int | None,
            current_stops: int,
            inputs: RaceInputs | None = None,
            fuel_capacity_l: float | None = None,
+           observed_fuel_sd_l: float | None = None,
+           achieved_lap_ms: int | None = None,
+           lap_sigma_s: float | None = None,
            max_stops: int = REPLAN_MAX_STOPS) -> Replan:
     """Rebuild the rest of the race and solve it. Called every lap.
 
@@ -630,12 +641,19 @@ def assess(*, laps_done: int, laps_total: int | None,
     inputs to solve with, and the decision about whether to open the
     engineer's mouth is `PlanRegister`'s, one layer up.
 
-    `lap_time_ms` is the race's representative pace and it is accepted here
-    for one purpose only: to be ignored by the verdict. **It never raises a
-    finding and never enters `recommend`** - see the module docstring, and the
-    standing rule it cites. It stays in the signature because the caller has
-    it and because a future reader should find the guard rather than the
-    absence of one.
+    `lap_time_ms` is the race's representative CLEAN pace and it is accepted
+    here for one purpose only: to be ignored by the verdict. **It never raises
+    a finding** - see the module docstring and the standing rule it cites. It
+    stays in the signature because the caller has it and because a future
+    reader should find the guard rather than the absence of one.
+
+    `achieved_lap_ms` is a different figure and is used: the median lap as
+    actually run, incidents included, which is what the coordinator already
+    predicts the distance from. It enters `recommend` as the unit a timed
+    race's laps are priced in, never as a signal - `_remaining_race` sets out
+    why that distinction holds and why the distance cannot move on it.
+    `observed_fuel_sd_l` and `lap_sigma_s` are this race's own scatter, which
+    is what sizes every fill from here.
     """
     if laps_total is None or laps_done >= laps_total:
         return Replan(NONE, "race is over or its length is unknown")
@@ -696,7 +714,10 @@ def assess(*, laps_done: int, laps_total: int | None,
         return Replan(RECOMMENDED, "; ".join(reasons), confidence="low")
 
     rest = _remaining_race(inputs, laps_left, observed_fuel_per_lap_l,
-                           fuel_capacity_l)
+                           fuel_capacity_l,
+                           observed_fuel_sd=observed_fuel_sd_l,
+                           achieved_lap_ms=achieved_lap_ms,
+                           lap_sigma_s=lap_sigma_s)
     try:
         plans = recommend(rest, max_stops=max_stops)
     except StrategyImpossible as exc:
@@ -837,36 +858,75 @@ def _worth_stopping(plan, laps_left: int) -> bool:
 
 def _remaining_race(inputs: RaceInputs, laps_left: int,
                     observed_fuel: float | None,
-                    fuel_capacity_l: float | None) -> RaceInputs:
+                    fuel_capacity_l: float | None,
+                    observed_fuel_sd: float | None = None,
+                    achieved_lap_ms: int | None = None,
+                    lap_sigma_s: float | None = None) -> RaceInputs:
     """The rest of the race as its own planning problem.
 
     Re-planning the whole race would recommend a stop already taken. What is
-    left is a shorter race starting now, on the fuel rate this race is actually
-    showing rather than the one practice suggested.
+    left is a shorter race starting now, **on what this race has shown rather
+    than on what practice suggested** - the driver's instruction: *"at the end
+    of every lap in a race the planner should be recalculating the plan for
+    optimal based on what has and is happening in the race, current fuel
+    usage, lap times."*
+
+    Four figures are taken from the race in progress and each falls back to
+    the plan's only where the race has not yet produced one:
+
+    * **The burn.** Green laps only, and none of it until enough of them
+      exist - `observed_fuel_per_lap` owns that gate.
+    * **The burn's scatter**, which is what sizes every fill from here. It was
+      practice's, and a margin is only cheap when the number under it belongs
+      to the car actually running: at Watkins a lap of inherited margin was
+      6.3 L still aboard at the flag and 6.3 seconds parked.
+    * **The lap**, achieved and incidents-in - the same figure the coordinator
+      already predicts the distance from, so the two can no longer disagree
+      about how long a lap takes inside one crossing.
+    * **The lap's sigma**, so `lap_count_firm` inside `recommend` is answered
+      by this race rather than by practice. `state.laps_estimate_firm` was
+      already live and the two were split-brained: the spoken fill and the
+      modelled fill could size their margins off different noise floors.
 
     **A timed race has to have its clock shortened too.** `race_minutes` was
     left at the full limit while the lap count came down, so the model planned
     another whole race inside the remainder of this one: ten laps left came
     back as stints of 14 and 11. Adopted, that put the next stop on lap 29 of
-    a 24-lap race and no box call was ever made again. The clock left is the
-    laps left at the reference pace - still a timed problem, because a stop in
-    one is paid for in laps and not in seconds.
+    a 24-lap race and no box call was ever made again.
 
-    **The reference pace here is the PLAN's lap time, never the race's.** The
-    difference matters: feeding the race's measured pace in would let a lap
-    time move a stop count through `recommend`, which is the one thing this
-    module forbids. The laps left have already been counted by the app clock;
-    turning them back into minutes only needs a stable per-lap figure.
+    ### Why the achieved lap may be used here, when lap time may not trigger
+
+    The standing rule is that lap time never moves a stop count, because his
+    lap-to-lap sigma is wider than the whole degradation band - a pace-derived
+    verdict is a coin flip dressed as a finding. **That rule is about pace as
+    a signal, and this is pace as a unit.**
+
+    The laps left are counted upstream, by the app clock against this same
+    achieved median, and handed in as `laps_left`. Converting them back into
+    minutes with the same figure round-trips exactly: `minutes / lap` returns
+    the laps that were put in, whatever the figure is. So the distance cannot
+    move on pace here, and a faster median cannot invent or remove a stop.
+
+    What it does correct is the price of a stop **in laps**, which is the
+    currency a timed race is actually decided in. `clock_bound_stints` takes
+    the pit loss out of the clock before dividing, so a 19-second stop costs
+    more laps when the laps are quicker. Costing that against a practice lap
+    the race has already beaten is a real distortion, and it always ran in the
+    direction of making stops look cheaper than they were.
     """
+    lap_ms = achieved_lap_ms or inputs.lap_time_ms
     minutes = None
-    if inputs.is_timed and inputs.lap_time_ms > 0:
-        minutes = laps_left * (inputs.lap_time_ms / 1000.0) / 60.0
+    if inputs.is_timed and lap_ms > 0:
+        minutes = laps_left * (lap_ms / 1000.0) / 60.0
 
     return replace(
         inputs,
         race_laps=laps_left,
         race_minutes=minutes,
+        lap_time_ms=lap_ms,
+        lap_time_sd_s=lap_sigma_s or inputs.lap_time_sd_s,
         fuel_per_lap_l=observed_fuel or inputs.fuel_per_lap_l,
+        fuel_sd_l=observed_fuel_sd or inputs.fuel_sd_l,
         fuel_capacity_l=fuel_capacity_l or inputs.fuel_capacity_l,
         mandatory_stops=0,      # already satisfied, or not reachable now
     )

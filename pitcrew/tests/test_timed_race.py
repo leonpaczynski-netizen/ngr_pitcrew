@@ -420,6 +420,51 @@ def test_the_rest_of_a_timed_race_is_a_shorter_timed_race():
     assert sum(stint.laps for stint in recommend(rest)[0].stints) <= 11
 
 
+def test_the_remainder_is_priced_on_what_the_race_has_shown():
+    """*"At the end of every lap in a race the planner should be
+    recalculating the plan for optimal based on what has and is happening in
+    the race, current fuel usage, lap times."*
+
+    Four figures come from the race and each falls back to the plan's only
+    where the race has not produced one yet.
+    """
+    plan = an_input()
+    rest = _remaining_race(plan, 10, 7.4, 100.0,
+                           observed_fuel_sd=0.31, achieved_lap_ms=105_000,
+                           lap_sigma_s=1.4)
+    assert rest.fuel_per_lap_l == 7.4          # the race's burn, not 6.6
+    assert rest.fuel_sd_l == 0.31              # sizes every fill from here
+    assert rest.lap_time_ms == 105_000         # achieved, incidents in
+    assert rest.lap_time_sd_s == 1.4           # this race's own noise floor
+
+
+def test_the_distance_cannot_move_on_pace():
+    """**The guard that lets the achieved lap be used at all.** The laps left
+    are counted upstream against that same median and handed in, so turning
+    them back into minutes round-trips exactly whatever the figure is - a
+    faster median cannot invent or remove a lap of race."""
+    plan = an_input()
+    for achieved in (98_000, LAP_MS, 118_000):
+        rest = _remaining_race(plan, 10, 6.6, 100.0,
+                               achieved_lap_ms=achieved)
+        assert rest.race_laps == 10
+        assert rest.race_minutes == pytest.approx(
+            10 * achieved / 1000.0 / 60.0)
+        # minutes / lap returns exactly the laps that went in
+        assert (rest.race_minutes * 60.0) / (rest.lap_time_ms / 1000.0) == \
+            pytest.approx(10.0)
+
+
+def test_the_plan_s_figures_stand_where_the_race_has_none_yet():
+    """Lap one has shown nothing. Falling back is not the same as ignoring."""
+    plan = an_input()
+    rest = _remaining_race(plan, 20, None, None)
+    assert rest.fuel_per_lap_l == plan.fuel_per_lap_l
+    assert rest.lap_time_ms == plan.lap_time_ms
+    assert rest.fuel_sd_l == plan.fuel_sd_l
+    assert rest.fuel_capacity_l == plan.fuel_capacity_l
+
+
 def test_a_mid_race_replan_never_plans_past_the_flag():
     replan = assess(laps_done=18, laps_total=28, fuel_l=60.0,
                     planned_fuel_per_lap=6.6, observed_fuel_per_lap_l=7.6,
