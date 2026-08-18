@@ -2015,6 +2015,7 @@ class PitCrewController(QObject):
             # **And it stops here.** The rack is his count of what he drove;
             # a lap that never crossed the line does not belong on it.
             return
+        self._tag_race_compound(lap_id)
         self.refresh_nav_state()
         # Race laps belong to the race session, not to the practice rack.
         # They were pushed on here numbered as a continuation of the practice
@@ -2090,6 +2091,37 @@ class PitCrewController(QObject):
         coach = self.bridge.quali
         if coach is not None:
             coach.set_speak(self.voice.say if speaks else None)
+
+    def _tag_race_compound(self, lap_id: int) -> None:
+        """A race lap's compound comes from the approved plan.
+
+        **The compound is app state, not telemetry** - GT7 broadcasts no tyre
+        code in any packet format - and in a race the app already knows it
+        exactly: the plan names a compound per stint, and `_apply_stint`
+        advances it at every pit exit as the stops are taken. Nothing was
+        writing it down.
+
+        The cost of not writing it down is that the race contributes nothing
+        to the tyre model. Every one of the 26 laps of Monza on 18 Aug 2026
+        landed with `compound` NULL, and so did the Watkins race the day
+        before - the two hardest, most representative stints on record, both
+        invisible to the compound profiles that size every stint of the next
+        plan. Practice laps get tagged because the practice rack has a column
+        he fills in by hand; a race has no rack and nobody to fill it in.
+
+        Only where the plan actually named one. A re-plan adopted mid-race
+        carries no compound and `_apply_stint` deliberately leaves the rubber
+        on the car alone, so None here means nobody said - and a guessed
+        compound would be worse than a missing one, because a wear rate
+        attributed to the wrong tyre is not a gap in the model, it is a
+        corruption of it.
+        """
+        race = self.race
+        if race is None or not race.running:
+            return
+        compound = race.state.tyre_compound
+        if compound:
+            self.store.set_lap_compound(lap_id, compound)
 
     def _on_lap_changed(self, lap_id: int) -> None:
         """Persist a mark the moment it is made."""

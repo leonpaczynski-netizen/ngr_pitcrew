@@ -542,6 +542,42 @@ def test_a_stood_down_replan_leaves_the_plan_alone(raced, monkeypatch):
     assert controller._replans.told is None
 
 
+# ------------------------------------------ the race lap's compound
+
+def test_race_laps_are_tagged_with_the_plan_s_compound(raced, store):
+    """**The compound is app state, and in a race the app already knows it.**
+
+    GT7 broadcasts no tyre code in any packet format, but the approved plan
+    names one per stint. Nothing wrote it down, so every lap of Monza on
+    18 Aug 2026 and of Watkins the day before landed with `compound` NULL -
+    the two hardest stints on record, both invisible to the compound profiles
+    that size every stint of the next plan.
+    """
+    controller, _, store_, event_id = raced
+    controller.start_race()
+    green(controller)
+    for lap_num in range(1, 5):
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+
+    session_id = controller.session_id
+    rows = store_.list_laps(session_id)
+    assert rows, "the race stored no laps"
+    tagged = [r["compound"] for r in rows]
+    assert all(c == "RM" for c in tagged), tagged
+
+
+def test_a_lap_outside_a_race_is_not_tagged_from_a_plan(raced, store):
+    """Practice keeps its hand-marking path. A plan that is not being raced
+    has no claim about what is on the car."""
+    controller, _, store_, _ = raced
+    session_id = controller.open_practice_session()
+    controller.bridge.on_packet(raw(speed_ms=50.0, fuel_level=90.0))
+    controller.bridge.on_packet(
+        raw(speed_ms=50.0, fuel_level=86.6, last_lap_ms=94_000))
+    rows = store_.list_laps(session_id)
+    assert all(r["compound"] is None for r in rows)
+
+
 # ------------------------------------------------ the in-box refuel readout
 
 def test_the_engineer_calls_the_target_and_the_release_in_the_box(raced, voice):
