@@ -1,6 +1,8 @@
 """The race, driven through the controller with a fake voice."""
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from pitcrew.controller import PitCrewController
@@ -483,6 +485,52 @@ def test_the_replan_narrows_and_then_stands_down_rather_than_blocking(raced):
     assert controller._replan_max_stops == 0
 
 
+def test_an_oversized_search_narrows_before_it_stands_down(raced):
+    """**The pre-solve guard used to skip the narrowing rung entirely.**
+
+    It cost the Monza race of 18 Aug 2026 its whole adaptation. A third
+    compound had acquired a profile since the cap was calibrated, so `calls`
+    went from 2**s to 3**s: 3000 units against the 1200 cap on lap 1, refused,
+    re-planning off for the rest of the race, and the last stop still being
+    fuelled by the plan approved before the green. The narrowed search that
+    was never tried was 975 units and cost 19 ms against a 50 ms budget - the
+    full one cost 161.
+    """
+    from pitcrew.race.replan import (
+        REPLAN_MAX_STOPS,
+        REPLAN_MAX_WORK,
+        REPLAN_NARROWED_MAX_STOPS,
+        replan_work,
+    )
+
+    controller, _, _, _ = raced
+    controller.start_race()
+    green(controller)
+    inputs = controller._race_inputs
+    assert inputs is not None
+
+    # The shape that refused: three profiled compounds and a race long enough
+    # that the full search is over the cap while the narrowed one is not.
+    laps_left = 25
+    profiles = dict(inputs.compound_profiles)
+    reference = next(iter(profiles.values()))
+    for code in ("RH", "RM", "RS"):
+        profiles.setdefault(code, dataclasses.replace(reference, code=code))
+    controller._race_inputs = dataclasses.replace(
+        inputs, compound_profiles=profiles)
+    inputs = controller._race_inputs
+    assert len(inputs.planning_compounds()) == 3
+    assert replan_work(inputs, laps_left, REPLAN_MAX_STOPS) > REPLAN_MAX_WORK
+    assert (replan_work(inputs, laps_left, REPLAN_NARROWED_MAX_STOPS)
+            <= REPLAN_MAX_WORK)
+
+    controller.race.state.laps_total = controller.race.state.lap + laps_left
+    a_lap(controller, controller.race.state.lap + 1, 88.6)
+
+    # Narrowed, not stood down: the engineer is still re-planning.
+    assert controller._replan_max_stops == REPLAN_NARROWED_MAX_STOPS
+
+
 def test_a_stood_down_replan_leaves_the_plan_alone(raced, monkeypatch):
     controller, _, store, event_id = raced
     controller.start_race()
@@ -492,6 +540,65 @@ def test_a_stood_down_replan_leaves_the_plan_alone(raced, monkeypatch):
                         lambda **kwargs: pytest.fail("must not be called"))
     a_lap(controller, 1, 88.6)
     assert controller._replans.told is None
+
+
+# ------------------------------------------------ the in-box refuel readout
+
+def test_the_engineer_calls_the_target_and_the_release_in_the_box(raced, voice):
+    """The driver asked for this: *"pick up when fuel is going up and read out
+    again what fuel volume (calculated from current race) what litres I need
+    to leave the pits with."*
+
+    The box call is made a lap and a half before the fuel moves and is sized
+    by the plan's picture of the race. This one is said with the hose in, off
+    the burn the race has actually shown.
+    """
+    controller, _, _, _ = raced
+    controller.start_race()
+    green(controller)
+    for lap_num in range(1, 6):
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+    voice.spoken.clear()
+
+    # Down to the fumes he would actually arrive on, then into the box.
+    for fuel in (30.0, 20.0, 12.0, 8.0):
+        controller.bridge.on_packet(
+            raw(speed_ms=50.0, fuel_level=fuel, laps_in_race=20))
+    fuel = 8.0
+    # Stopped, hose not in: the measured dead time is 5.3 s and nothing is
+    # said across it.
+    for _ in range(int(5.3 * 60)):
+        controller.bridge.on_packet(
+            raw(speed_ms=0.0, fuel_level=fuel, laps_in_race=20))
+    assert controller.bridge.refuel.filling is False, "not filling yet"
+    assert voice.spoken == []
+
+    while fuel < 99.0:
+        fuel += 1.0
+        controller.bridge.on_packet(
+            raw(speed_ms=0.0, fuel_level=fuel, laps_in_race=20))
+
+    said = " ".join(voice.spoken)
+    assert "Fuel to" in said, said
+    assert "Go." in said, said
+    assert said.index("Fuel to") < said.index("Go."), said
+    assert controller.bridge.refuel.filling is True
+
+
+def test_the_watch_says_nothing_while_the_car_is_driving(raced, voice):
+    """Fuel only ever falls under green. A rise while moving is not a fill,
+    and the engineer must not talk about the tank on a flying lap."""
+    controller, _, _, _ = raced
+    controller.start_race()
+    green(controller)
+    voice.spoken.clear()
+    fuel = 40.0
+    for _ in range(200):
+        fuel += 0.5
+        controller.bridge.on_packet(
+            raw(speed_ms=50.0, fuel_level=fuel, laps_in_race=20))
+    assert controller.bridge.refuel.filling is False
+    assert not any("Fuel to" in line or line == "Go." for line in voice.spoken)
 
 
 # ----------------------------------------- the HUD colour calibration bridge

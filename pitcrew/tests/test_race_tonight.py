@@ -42,7 +42,7 @@ from pitcrew.race.calls import (
     next_call,
     stay_out_call,
 )
-from pitcrew.race.clock import RaceClock
+from pitcrew.race.clock import STREAM_HZ, RaceClock
 from pitcrew.race.coordinator import (
     PlanContext,
     RaceCoordinator,
@@ -897,18 +897,92 @@ def test_the_discrepancy_is_logged_once_and_not_per_lap(caplog):
     assert len(said) == 1
 
 
+def stream(clock, now, seconds: float) -> None:
+    """Advance the clock with telemetry arriving under it, as a race does.
+
+    The frame count is what separates a dropped lap from a pause nobody saw -
+    both look identical in the wall clock alone - so a test that asserts one
+    or the other has to say which it is driving.
+    """
+    frames = int(seconds * STREAM_HZ)
+    for _ in range(frames):
+        now.advance(seconds / frames)
+        clock.note_frame(now(), paused=False)
+
+
 def test_a_dropped_lap_event_is_caught():
-    """A lap-time sum that jumps by one lap while the wall clock jumps by two
-    is a LAP_COMPLETED that never arrived - and every distance estimate
-    downstream counts laps."""
+    """A lap-time sum that jumps by one lap while the wall clock jumps by two,
+    **with telemetry arriving throughout**, is a LAP_COMPLETED that never
+    arrived - and every distance estimate downstream counts laps."""
     clock, now = a_clock(duration_s=1800.0)
     now.advance(44.283)
-    now.advance(120.0)
+    stream(clock, now, 120.0)
     clock.note_lap(120_000)
-    now.advance(120.0)
+    stream(clock, now, 120.0)
     assert clock.note_lap(120_000).dropped_lap is False
-    now.advance(240.0)                           # two laps, one event
+    stream(clock, now, 240.0)                    # two laps, one event
     assert clock.note_lap(120_000).dropped_lap is True
+
+
+def test_a_dropped_lap_keeps_the_app_timer_as_the_reference():
+    """**The lap-time sum is the one measure that is definitely wrong** - it
+    is short by exactly the lap nobody recorded. Preferring it is what told
+    the Monza engineer of 18 Aug 2026 it had 136 s more race than it did.
+    """
+    clock, now = a_clock(duration_s=1800.0)
+    now.advance(44.283)
+    stream(clock, now, 120.0)
+    clock.note_lap(120_000)
+    stream(clock, now, 240.0)                    # two laps, one event
+    result = clock.note_lap(120_000)
+    assert result.dropped_lap is True
+    assert clock.laps_dropped == 1
+    # The missing lap is folded into the offset, so the two measures agree
+    # again and the app timer - which was right all along - still governs.
+    assert clock.corroborated is True
+    assert clock.elapsed_s == pytest.approx(clock.elapsed_app_s)
+    assert clock.elapsed_s == pytest.approx(44.283 + 360.0, abs=0.1)
+
+
+def test_the_monza_pit_lap_is_a_dropped_lap_and_not_a_clock_disagreement():
+    """Session 52, 18 Aug 2026, the only stop of the race.
+
+    319.0 s of wall clock between the lap-15 and lap-16 crossings against
+    GT7's 183.094 s for lap 16, with 19117 frames under it - the car streaming
+    continuously the whole time. The tank was filled to 73.82 L and read
+    68.31 L at the next crossing, 5.50 L gone against a 5.553 L lap: the
+    out-lap was never counted. The app used to call this a clock disagreement
+    and hand the reference to the lap-time sum.
+    """
+    clock, now = a_clock(duration_s=3000.0)
+    now.advance(31.317)                          # standing_start_ms, lap 1
+    for lap_ms in (118_779, 109_437, 110_450, 109_661, 109_303):
+        stream(clock, now, lap_ms / 1000.0)
+        assert clock.note_lap(lap_ms).dropped_lap is False
+    assert clock.corroborated is True
+
+    stream(clock, now, 319.0)                    # the stop, and the out-lap
+    result = clock.note_lap(183_094, is_pit_lap=True)
+    assert result.dropped_lap is True
+    assert clock.corroborated is True
+    # 135.9 s of racing the lap-time sum will never contain.
+    assert clock.elapsed_s == pytest.approx(clock.elapsed_app_s)
+
+
+def test_a_pause_is_not_reported_as_a_dropped_lap():
+    """The counterpart, and the reason the frame count exists: the same span
+    with no telemetry under it is time the car did not race, and there the
+    lap-time sum really is the better measure."""
+    clock, now = a_clock(duration_s=1800.0)
+    now.advance(44.283)
+    stream(clock, now, 120.0)
+    clock.note_lap(120_000)
+    stream(clock, now, 120.0)
+    now.advance(90.0)                            # 90 s nobody accounted for
+    result = clock.note_lap(120_000)
+    assert result.dropped_lap is False
+    assert clock.laps_dropped == 0
+    assert clock.corroborated is False
 
 
 def test_a_lap_race_is_not_reconciled():

@@ -642,6 +642,38 @@ def _box_soon(state: RaceState) -> Call | None:
     )
 
 
+def fuel_target_l(state: RaceState) -> float | None:
+    """What the tank should read at pit exit, or None if nothing can size it.
+
+    Split out of `_fuel_instruction` so the number and the sentence cannot
+    drift apart. The in-box refuel watch needs the figure itself - it says it
+    again with the hose in, and then calls the release when the tank reaches
+    it - and a second copy of this arithmetic is how the engineer ends up
+    telling him two different numbers about the same stop.
+
+    Unclamped: the caller decides what to do about a target the tank cannot
+    hold or one already covered, because those two produce different sentences
+    and the watch and the box call answer them differently.
+    """
+    if not state.fuel_per_lap_l or state.laps_remaining() is None:
+        return None
+    if state.next_stint_laps is not None:
+        after_stop = state.next_stint_laps
+        remaining = state.laps_remaining()
+        if (state.further_stop_planned is False and remaining is not None
+                and remaining > after_stop):
+            after_stop = remaining
+    elif state.stint_ends_on_lap is not None:
+        after_stop = (state.laps_total or 0) - state.stint_ends_on_lap
+    else:
+        after_stop = state.laps_remaining()
+    margin_l, _ = fuel_margin_l(after_stop, state.fuel_per_lap_l,
+                                sd_l=state.fuel_sd_l,
+                                timed=state.race_minutes is not None,
+                                lap_count_firm=state.laps_estimate_firm)
+    return after_stop * state.fuel_per_lap_l + (margin_l or 0.0)
+
+
 def _fuel_instruction(state: RaceState) -> str:
     """How much to take, in litres, to the diamond plus a lap.
 
@@ -660,43 +692,21 @@ def _fuel_instruction(state: RaceState) -> str:
     two laps short" is something he can plan around; "fuel to 510 litres" is
     not.
     """
-    if not state.fuel_per_lap_l or state.laps_remaining() is None:
+    # **The sizing lives in `fuel_target_l`**, because the in-box refuel watch
+    # says the same figure again with the hose in and two copies of this
+    # arithmetic is how the engineer tells him two different numbers about one
+    # stop. What stays here is everything about the SENTENCE: the clamps, and
+    # what each of them means when it binds.
+    #
+    # The pieces it folds in, kept here because this is where a reader looks
+    # for them: a stale plan must not size the fill - when no further stop is
+    # planned the next stint runs to the flag, so a stint shorter than the
+    # laps actually remaining would send him back out to run dry - and the
+    # margin is sized rather than assumed, a flat lap only where the burn's
+    # scatter is unmeasured or the race runs to the clock.
+    litres = fuel_target_l(state)
+    if litres is None:
         return ""
-    if state.next_stint_laps is not None:
-        after_stop = state.next_stint_laps
-        # **A stale plan must not size the fill.** When no further stop is
-        # planned after the next stint, that stint runs to the flag - so if
-        # the plan has drifted and the stint is now shorter than the laps
-        # actually remaining, sizing the fill to it sends him back out to
-        # run dry. `further_stop_planned` is None where nobody said (state
-        # built by hand), and then the stint's own figure is taken at its
-        # word.
-        remaining = state.laps_remaining()
-        if (state.further_stop_planned is False and remaining is not None
-                and remaining > after_stop):
-            after_stop = remaining
-    elif state.stint_ends_on_lap is not None:
-        # A stop is planned but how long the stint after it runs is unknown.
-        # Fuelling to the flag is the safe direction to be wrong in, and the
-        # clamp still reports what the tank cannot cover.
-        after_stop = (state.laps_total or 0) - state.stint_ends_on_lap
-    else:
-        after_stop = state.laps_remaining()
-    # **The margin is sized, not assumed.** A flat lap is still the answer
-    # when the burn's scatter is unmeasured or the race runs to the clock -
-    # see `strategy.model.fuel_margin_l` for why those two cases differ from a
-    # lap race, where the distance is known exactly and the only thing that
-    # can beat the estimate is the burn itself.
-    margin_l, _ = fuel_margin_l(after_stop, state.fuel_per_lap_l,
-                                sd_l=state.fuel_sd_l,
-                                timed=state.race_minutes is not None,
-                                # The clock's own verdict on whether one more
-                                # lap is still in play. Already measured every
-                                # lap for the two-to-go call - reused rather
-                                # than re-derived, so the fuel and the lap
-                                # count can never disagree.
-                                lap_count_firm=state.laps_estimate_firm)
-    litres = after_stop * state.fuel_per_lap_l + (margin_l or 0.0)
 
     # **A fill below what is already aboard is not an instruction.** "Fuel to
     # 27 litres" was voiced with 51.9 L in the tank - obeying was impossible

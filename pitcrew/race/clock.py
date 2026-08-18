@@ -51,11 +51,47 @@ from pitcrew.diagnostics import log
 # with room on both sides.
 RECONCILE_MARGIN_S = 3.0
 
-# A lap whose app-clock span exceeds its own recorded time by this fraction,
-# on a lap that was not a pit lap, is very likely a LAP_COMPLETED that never
-# arrived: two laps of wall clock against one lap of recorded time. Worth one
-# warning, because every distance estimate downstream counts laps.
+# A lap whose app-clock span exceeds its own recorded time by this fraction is
+# very likely a LAP_COMPLETED that never arrived: two laps of wall clock
+# against one lap of recorded time. Worth one warning, because every distance
+# estimate downstream counts laps.
+#
+# **It applies to pit laps too, and it used to be switched off for exactly
+# them.** The guard read `not is_pit_lap`, on the theory that a stop makes a
+# lap long in wall clock without making it long in recorded time. GT7 does not
+# work that way: at Monza on 18 Aug 2026 the stop itself - 69.3 s stationary,
+# 62.9 L in - was inside GT7's own 183.094 s figure for the lap. What was
+# outside it was a whole extra crossing, and the one lap of the race where a
+# crossing is most likely to be missed is the one that spends a minute
+# stationary in a pit box. The guard hid the event it was most needed for.
+#
+# The threshold has room on both sides of that race. A genuine single pit lap
+# there would have been 212 s of clock against 183.1 s recorded, a ratio of
+# 1.16; what actually happened was 319.0 against 183.1, a ratio of 1.74.
 DROPPED_LAP_FRACTION = 0.6
+
+# **The ratio alone cannot tell a missed crossing from a missed pause**, and
+# the two want opposite answers. A pause the frame watcher did not see means
+# the app timer ran through time the car did not race, and the lap-time sum is
+# the better measure. A missed LAP_COMPLETED means the lap-time sum is short by
+# a whole lap, and the app timer is the better measure. Both look identical
+# from `app - app_before` against `lap_time_ms`: 210 s of clock on a 120 s lap
+# is either one.
+#
+# What separates them is whether telemetry was arriving the whole time.
+# `note_frame` is called for every packet, and it accrues paused time, so
+# counting the frames it saw between two crossings measures how much of the
+# span the car was actually live. At Monza the block between the lap-15 and
+# lap-16 crossings held 19117 frames - 318.6 s against a 319.0 s span, the car
+# streaming continuously throughout - so nothing was paused and the only thing
+# the span can be is a lap nobody counted. A real pause produces the opposite:
+# wall clock with no frames under it.
+#
+# Measured stream rate is 59.88 Hz (SimHub absorption, 15 Aug 2026). The
+# fraction is loose because it only has to separate "streaming throughout"
+# from "a minute and a half of nothing".
+STREAM_HZ = 59.88
+LIVE_SPAN_FRACTION = 0.9
 
 
 @dataclass(frozen=True)
@@ -105,6 +141,10 @@ class RaceClock:
         self._app_at_last_lap: float | None = None
         self._discrepancy_logged = False
         self._dropped_logged = False
+        # Live packets seen since the last crossing. Written on the telemetry
+        # thread, read on the Qt one, and only ever compared against a span -
+        # a frame either side of the boundary changes nothing it decides.
+        self._frames_since_lap = 0
         # How many LAP_COMPLETED events look to have been missed. Surfaced on
         # the snapshot rather than only logged: every distance estimate
         # downstream counts laps, so a dropped one is a fact the pit wall has
@@ -135,6 +175,10 @@ class RaceClock:
             if self._paused_since is None:
                 self._paused_since = now
             return
+        # Live frames only, and the pause returns above without counting one.
+        # This is the discriminator between a dropped lap and a pause nobody
+        # saw - see `LIVE_SPAN_FRACTION`.
+        self._frames_since_lap += 1
         since = self._paused_since
         if since is not None:
             self._paused_total_s += max(0.0, now - since)
@@ -210,6 +254,13 @@ class RaceClock:
         the standing start, the formation portion, whatever sits between the
         green and the first line crossing. Every lap after it is checked
         against that offset.
+
+        `is_pit_lap` is accepted and **deliberately gates nothing**. It used to
+        switch the dropped-lap check off, which is how a missed crossing in
+        the pit lane went unreported for a whole race - see
+        `DROPPED_LAP_FRACTION`. It stays in the signature because the caller
+        has it and because a reader who goes looking for the old guard should
+        find this sentence rather than its absence.
         """
         if self._started_at is None or lap_time_ms <= 0:
             return None
@@ -218,6 +269,21 @@ class RaceClock:
         self._laps_ms += int(lap_time_ms)
         self._laps_counted += 1
         self._app_at_last_lap = app
+
+        # **Taken here, with the crossing, and not further down.** Two of the
+        # branches below return early - the first lap, and a lap race - and a
+        # counter reset after them keeps accumulating across the boundary, so
+        # the second crossing sees the first crossing's frames too and every
+        # span looks streamed. Read and cleared on the same line as the lap it
+        # belongs to, which is the only place both are true.
+        #
+        # Zero frames is "nobody told me", not "nothing arrived": a caller
+        # that never wires `note_frame` gets the old, conservative answer.
+        span = (app - app_before) if app_before is not None else 0.0
+        live_s = self._frames_since_lap / STREAM_HZ
+        self._frames_since_lap = 0
+        streamed_throughout = (span > 0.0
+                               and live_s >= span * LIVE_SPAN_FRACTION)
 
         if self._offset_s is None:
             # The first crossing. Everything between the green and here is
@@ -253,6 +319,45 @@ class RaceClock:
             # produce a warning about a discrepancy that decides nothing.
             return Reconciliation(app, self.elapsed_laps_s, 0.0, None)
 
+        # **The dropped lap is tested FIRST, because it explains the drift.**
+        # Measured at Monza on 18 Aug 2026: 319.0 s of wall clock between the
+        # lap-15 and lap-16 crossings against GT7's 183.094 s for lap 16, and
+        # every other lap of that race agreed with the app timer to within
+        # 0.74 s. The frame block for that lap ran 318.6 s and covered 1.94
+        # laps of distance, the tank was filled to 73.82 L and read 68.31 L at
+        # the next crossing - 5.50 L gone against a 5.553 L lap. One crossing
+        # was missed, the out-lap after the stop.
+        #
+        # Order matters. The drift check ran first and handed the reference to
+        # the lap-time sum, which is the one measure that was DEFINITELY wrong
+        # - it is short by exactly the lap nobody recorded. The app timer had
+        # been right all race. Preferring the sum told the engineer it had
+        # 136 s more race than it did, which is why a 27-lap plan was still
+        # being fuelled on the last stop.
+        # **Streaming throughout is what makes it a dropped lap rather than a
+        # pause.** Without it the same span means the app timer ran through
+        dropped = False
+        if (app_before is not None and streamed_throughout
+                and app - app_before
+                > lap_time_ms / 1000.0 * (1.0 + DROPPED_LAP_FRACTION)):
+            dropped = True
+            self.laps_dropped += 1
+            # **The missing lap is a measured quantity, not drift.** Folded
+            # into the offset for the same reason the standing start is: it is
+            # racing time the sum will never contain, and leaving it in the
+            # drift makes a known gap look like an unexplained one.
+            missed_s = (app - app_before) - lap_time_ms / 1000.0
+            self._offset_s += missed_s
+            if not self._dropped_logged:
+                self._dropped_logged = True
+                log("race").warning(
+                    "a lap took %.1f s of clock against a recorded %.1f s - a "
+                    "LAP_COMPLETED was probably missed, so the lap count and "
+                    "every distance estimate built on it are one lap light. "
+                    "The %.1f s it accounts for is folded into the standing-"
+                    "start offset and the app timer stays the reference.",
+                    app - app_before, lap_time_ms / 1000.0, missed_s)
+
         self._drift_s = app - self.elapsed_laps_s - self._offset_s
         self._corroborated = abs(self._drift_s) <= RECONCILE_MARGIN_S
         if not self._corroborated and not self._discrepancy_logged:
@@ -266,19 +371,6 @@ class RaceClock:
                 "own exact lap figures.",
                 app, self.elapsed_laps_s, self._offset_s, self._drift_s)
 
-        dropped = False
-        if (app_before is not None and not is_pit_lap
-                and app - app_before
-                > lap_time_ms / 1000.0 * (1.0 + DROPPED_LAP_FRACTION)):
-            dropped = True
-            self.laps_dropped += 1
-            if not self._dropped_logged:
-                self._dropped_logged = True
-                log("race").warning(
-                    "a lap took %.1f s of clock against a recorded %.1f s - a "
-                    "LAP_COMPLETED was probably missed, so the lap count and "
-                    "every distance estimate built on it are one lap light.",
-                    app - app_before, lap_time_ms / 1000.0)
         return Reconciliation(app, self.elapsed_laps_s, self._drift_s,
                               self._corroborated, dropped)
 

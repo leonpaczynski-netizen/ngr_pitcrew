@@ -68,10 +68,11 @@ from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
 from pitcrew.store import catalogs
 from pitcrew.store.db import DEFAULT_SHEET_PURPOSE, Store
 from pitcrew.store.identity import IDENTITY_OK
-from pitcrew.race.calls import STAY_OUT
+from pitcrew.race.calls import STAY_OUT, fuel_target_l
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.race.expectations import PRACTICE, Expectation
 from pitcrew.race.hud_calibration import note_frame_red
+from pitcrew.race.refuel import RefuelAdviser
 from pitcrew.race.replan import (
     REPLAN_BUDGET_S,
     REPLAN_MAX_STOPS,
@@ -184,6 +185,11 @@ class TelemetryBridge(QObject):
         # like the shift beep, because the out-lap and delta calls are about
         # the frame they were computed from; its voice is a queue put.
         self.quali = None
+        # The in-box refuel adviser, handed over when a race is armed. On the
+        # telemetry thread for the same reason the beep is: the tank climbing
+        # is a fact about the frame, and the release call is only worth
+        # anything at the moment the tank actually reaches the target.
+        self.refuel = None
         # The app's own race clock, handed over when a race is armed. It is
         # ticked here rather than from the race layer because a PAUSE is only
         # visible on the frames: `SessionState.update` returns early on one
@@ -284,6 +290,9 @@ class TelemetryBridge(QObject):
         # A coach armed for the previous session would speak about laps that
         # belong to nothing. Whoever opens the next session re-arms it.
         self.quali = None
+        # A watch armed for the race just closed would judge the next race's
+        # first stop against the last one's target.
+        self.refuel = None
         # And a clock belonging to the race just closed would keep accruing
         # paused time against a race that no longer exists.
         self.race_clock = None
@@ -434,6 +443,22 @@ class TelemetryBridge(QObject):
                     type(exc).__name__, exc, exc_info=True)
                 if self.quali is coach:
                     self.quali = None
+
+        # **The in-box refuel watch**, under the same doctrine as the coach
+        # above: guarded, and dropped for the session on its first exception.
+        # It does nothing at all until the tank starts climbing, which is once
+        # or twice a race, and the target is only sized when the car is slow
+        # enough to be in a pit box - so the 60 Hz cost is one comparison.
+        refuel = self.refuel
+        if refuel is not None:
+            try:
+                refuel.note_frame(packet.fuel_level, packet.speed_kmh)
+            except Exception as exc:                        # noqa: BLE001
+                log("race").error(
+                    "the refuel watch raised on the telemetry thread and has "
+                    "been stopped for this race: %s: %s",
+                    type(exc).__name__, exc, exc_info=True)
+                self.refuel = None
 
         # **Last, and unable to hurt anything above it.** This is an output,
         # and CLAUDE.md is clear that the app observes and advises - so a
@@ -2990,6 +3015,10 @@ class PitCrewController(QObject):
             self.ptt.start()
         self._race_inputs = inputs
         self._race_burns = []
+        # A fresh watch per race. Reset again on every pit exit, so a
+        # two-stop race gets a clean one for its second stop.
+        self.bridge.refuel = RefuelAdviser(
+            context=self._refuel_context, speak=self._voice_refuel)
         self._replan_max_stops = REPLAN_MAX_STOPS
         self._replan_over_budget = 0
         self._replans.reset()
@@ -3082,6 +3111,15 @@ class PitCrewController(QObject):
         """
         if self.race is None:
             return
+        # **Pit exit, before the coordinator clears the stint.** Leaving short
+        # of the target is a lift-and-coast he can start on the next straight,
+        # which is the whole reason to say it here rather than three laps
+        # later when the running estimate finally crosses a threshold. Then a
+        # clean watch, so a second stop is not judged against the first.
+        if event.kind is EventKind.PIT_EXIT and self.bridge.refuel is not None:
+            self.bridge.refuel.note_pit_exit(
+                self.bridge.last_packet.fuel_level
+                if self.bridge.last_packet else None)
         call = self.race.handle(event)
         replan = None
         if event.kind is EventKind.LAP_COMPLETED:
@@ -3336,10 +3374,37 @@ class PitCrewController(QObject):
         laps_left = (self.race.state.laps_remaining() or 0)
         work = replan_work(inputs, laps_left, self._replan_max_stops)
         if work > REPLAN_MAX_WORK:
-            self._stand_down_replan(
-                f"the search would be {work} units against a {REPLAN_MAX_WORK} "
-                f"cap - refused without being attempted")
-            return None
+            # **Narrow first, stand down second - the same ladder the post-hoc
+            # backstop already climbs.** This branch used to go straight to a
+            # full stand-down, so an oversized FULL search took the narrowed
+            # one down with it, and the two guards disagreed about how to fail.
+            #
+            # It cost the Monza race of 18 Aug 2026 its entire adaptation. A
+            # third compound had acquired a profile since the cap was
+            # calibrated, so `calls` went 2**s to 3**s: 3000 units against the
+            # 1200 cap on lap 1, refused, re-planning off for the rest of the
+            # race, and the last stop was still being fuelled by the plan
+            # approved before the green. The narrowed search that was never
+            # tried was 975 units, and measured on that race's own shape it
+            # cost 19 ms against the 50 ms budget - the full one cost 161.
+            if self._replan_max_stops > REPLAN_NARROWED_MAX_STOPS:
+                narrowed = replan_work(inputs, laps_left,
+                                       REPLAN_NARROWED_MAX_STOPS)
+                if narrowed <= REPLAN_MAX_WORK:
+                    self._replan_max_stops = REPLAN_NARROWED_MAX_STOPS
+                    log("race").warning(
+                        "the per-lap re-plan would be %d units against a %d "
+                        "cap - narrowing the search to %d stops rather than "
+                        "standing down (%d units). Cost is superlinear in "
+                        "profiled compounds.",
+                        work, REPLAN_MAX_WORK, REPLAN_NARROWED_MAX_STOPS,
+                        narrowed)
+                    work = narrowed
+            if work > REPLAN_MAX_WORK:
+                self._stand_down_replan(
+                    f"the search would be {work} units against a "
+                    f"{REPLAN_MAX_WORK} cap - refused without being attempted")
+                return None
 
         started = _monotonic()
         verdict = assess(
@@ -3453,6 +3518,41 @@ class PitCrewController(QObject):
             self.store.append_revision(
                 self.race_run_id, outcome.lap,
                 spoken.call() or spoken.reason, payload, accepted=False)
+
+    def _refuel_context(self):
+        """What the fill should be sized to, for the race right now.
+
+        **Recomputed here rather than reused from the box call.** That call is
+        made a lap and a half before the fuel moves and is sized by the plan's
+        picture of the race; this is sized by the race, off the burn it has
+        actually shown and the laps that are actually left. At Monza on
+        18 Aug 2026 the gap between those two was about twelve litres, which
+        at the measured 1.002 L/s is twelve seconds parked.
+        """
+        race = self.race
+        if race is None or not race.running:
+            return None
+        return fuel_target_l(race.state), race.state.fuel_per_lap_l
+
+    def _voice_refuel(self, call) -> None:
+        """Say it, show it, and file it with the rest of the race's calls."""
+        spoken = call.spoken()
+        if self._engineer_speaks:
+            self.voice.say(spoken)
+        self.ptt.last_call = spoken
+        self.last_call = spoken
+        if self.race_screen is not None:
+            self.race_screen.set_status(spoken)
+        if self.race_run_id is not None and self.race is not None:
+            # Recorded like every other call, because the post-race audit has
+            # to be able to ask what the engineer said in the box and what it
+            # was sized on - CLAUDE.md §5.5.
+            self.store.append_revision(
+                self.race_run_id, self.race.state.lap, spoken,
+                {"call": {"kind": call.kind, "call": call.call,
+                          "reason": call.reason},
+                 "confidence": "high", "informational": True},
+                accepted=False)
 
     def _note_replan_cost(self, seconds: float) -> None:
         """The backstop, for a shape `replan_work` did not anticipate.
