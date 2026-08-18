@@ -819,8 +819,8 @@ def _open_first_that_works(sd, chosen, kind: str, build):
             if position == len(routes) - 1:
                 raise
             log("audio").info(
-                "%s device %r would not open (%s) - trying the next route",
-                kind, device, exc)
+                "%s device %s would not open (%s) - trying the next route",
+                kind, _name_of(sd, device), exc)
             continue
         if isinstance(chosen, str):
             _WORKING[(endpoint_key(chosen), kind)] = device
@@ -828,6 +828,30 @@ def _open_first_that_works(sd, chosen, kind: str, build):
     # `_candidates` returns [None] rather than [], so this is unreachable
     # unless it is changed to return nothing.
     raise RuntimeError(f"no {kind} route to {describe(chosen)}")
+
+
+def _name_of(sd, device) -> str:
+    """`3 'Speakers (Thing)' via MME`, for a log line about one route.
+
+    **The index alone is not an identity and must never be read as one.** It
+    is a position in a list this process rebuilt at every `_reinitialise`, so
+    the same number means a different card in a later process - or in the same
+    process ten minutes on. On 18 Aug 2026 a "device 25 would not open" line
+    from the beep was read against a fresh enumeration in which 25 was the
+    transducer, and became a diagnosis that the shift beep had been playing
+    into the ButtKicker. It had not: 25 was the headset's WASAPI route, and
+    the line is the routine discovery that WASAPI will not take 44100. The
+    name is what settles it, so the name is what gets logged.
+    """
+    if device is None:
+        return "the system default"
+    try:
+        info = sd.query_devices(device)
+        api = _host_api_names(sd).get(info.get("hostapi"), "?")
+        return f"{device} {info.get('name', '?')!r} via {api}"
+    except Exception:                                       # noqa: BLE001
+        # Never let a log line be the thing that raises.
+        return repr(device)
 
 
 def _retry_once(sd, attempt, kind: str):
