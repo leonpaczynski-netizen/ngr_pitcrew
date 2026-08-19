@@ -359,6 +359,14 @@ class RaceState:
     # 2.04 s. False means no lap count is spoken - not a count with a hedge on
     # it, no count.
     laps_estimate_firm: bool = False
+    # **Laps still to run once the stops still to come are out of the clock.**
+    # `laps_total` counts crossings and a crossing still happens on the lap a
+    # stop is taken, so the flag and the run-in keep reading that. This is the
+    # fuel path's own figure: a stop is a minute of clock that covers no
+    # ground, and counting it as racing buys a lap of fuel that gets parked.
+    # None where no stop is pending or nothing measured the loss, and then the
+    # fill falls back to `laps_remaining` exactly as before.
+    laps_after_stops: int | None = None
     said: list[str] = field(default_factory=list)
     # Tags of the tagged calls already made, for the kinds that have several
     # distinct occasions. `temp_said` is the per-stint version for tyre
@@ -655,7 +663,8 @@ def _laps_after_this_stop(state: RaceState) -> int | None:
     this was the second of the two reasons - the clock's late green was the
     first. One litre is one second stationary at the measured 1.002 L/s.
     """
-    remaining = state.laps_remaining()
+    remaining = (state.laps_after_stops if state.laps_after_stops is not None
+                 else state.laps_remaining())
     if remaining is None:
         return None
     return max(0, remaining - 1) if state.in_pit else remaining

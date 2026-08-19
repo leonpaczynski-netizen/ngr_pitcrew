@@ -105,6 +105,10 @@ class RaceCoordinator:
                  planned_lap_time_ms: int | None = None,
                  practice_lap_samples: int = 0,
                  practice_fuel_samples: int = 0,
+                 # **The stop's own time loss, ex fuel - a TRACK constant**
+                 # (CLAUDE.md 5.4), off `events.pit_loss_secs`. Only the fuel
+                 # path reads it. None leaves every figure exactly as it was.
+                 pit_loss_s: float | None = None,
                  now=None) -> None:
         self.phase = RacePhase.IDLE
         self.plan = plan or {}
@@ -129,6 +133,7 @@ class RaceCoordinator:
         self.planned_lap_time_ms = (
             planned_lap_time_ms if planned_lap_time_ms is not None
             else lap_time_ms)
+        self.pit_loss_s = pit_loss_s
         self._burns: list[float] = []
         # **Laps completed after arming but before the green was detected.**
         # `session_state` emits LAP_COMPLETED from `ON_TRACK` onward, so these
@@ -440,6 +445,21 @@ class RaceCoordinator:
             return folded
         return self._emit()
 
+    def _laps_after_stops(self, lap_ms: int | None,
+                          left: int | None) -> int | None:
+        """`laps_left` again, with the stops still to come out of the clock.
+
+        Pending stops are the stints still ahead of the one being run. During
+        the stop itself `stint_index` has not advanced yet - `_apply_stint`
+        moves it on PIT_EXIT - so the stop in progress still counts, which is
+        right: the clock has not absorbed its time at a crossing yet, and the
+        in-box refuel call is made squarely inside that window.
+        """
+        pending = max(0, len(self._stints) - 1 - self.state.stint_index)
+        if not pending or not self.pit_loss_s:
+            return left
+        return self.clock.laps_left(lap_ms, less_s=pending * self.pit_loss_s)
+
     def _update_clock_distance(self) -> Call | None:
         """A timed race's distance, from the app clock and the median lap.
 
@@ -481,6 +501,17 @@ class RaceCoordinator:
             # there is, and it stands rather than being replaced by a guess.
             return None
         self.state.laps_total = self.state.lap + left
+        # **What the fuel path counts, which is not what the flag counts.**
+        # A stop is a minute of clock that covers no ground. `laps_total`
+        # ceilings over the whole window including it, so before a stop is
+        # taken the distance reads one lap long and the fill at that stop is
+        # sized for a lap that will never be driven - 6 L at Monza, and one
+        # litre is one second stationary at the measured 1.002 L/s.
+        #
+        # Only the *ex-fuel* loss is taken off, and deliberately: the discount
+        # cuts the fill, so an overstated one runs him dry. The refuel time is
+        # the larger half and it is left in, which errs toward a litre spare.
+        self.state.laps_after_stops = self._laps_after_stops(lap_ms, left)
         # The two-to-go and last-lap calls read this. They are safe from two
         # laps out - measured margins of 13.3 s and 31.2 s at the end of laps
         # 13 and 14 - which is well clear of anything the median can be wrong

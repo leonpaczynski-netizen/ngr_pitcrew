@@ -3028,6 +3028,10 @@ class PitCrewController(QObject):
             # 8% under plan" was said against a burn no plan ever held.
             planned_fuel_per_lap_l=expects.get("expected_fuel_per_lap_l"),
             planned_lap_time_ms=expects.get("expected_lap_time_ms"),
+            # **A track constant, measured once** (CLAUDE.md 5.4). Read by the
+            # fuel path only, to keep a stop's own minute of clock out of the
+            # distance the next fill is sized against.
+            pit_loss_s=event.get("pit_loss_secs"),
             practice_lap_samples=practice_laps,
             practice_fuel_samples=practice_laps)
 

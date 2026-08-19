@@ -503,7 +503,8 @@ class RaceClock:
 
     # ------------------------------------------------------------- estimates
 
-    def laps_left(self, lap_time_ms: int | None) -> int | None:
+    def laps_left(self, lap_time_ms: int | None,
+                  less_s: float = 0.0) -> int | None:
         """How many more laps fit in the time left. **An estimate, always.**
 
         GT7 drops the flag at the first line crossing after the clock expires,
@@ -511,10 +512,23 @@ class RaceClock:
         ceiling, never a rounding. None where there is no clock or no lap time
         to divide by - missing is None, and a distance guessed from nothing
         would be read as a count.
+
+        `less_s` is time inside the window that will not be spent covering
+        distance - a pit stop still to come. **It has to come off before the
+        ceiling, not after.** Subtracting whole laps from an answer that has
+        already been rounded up throws away the fraction the rounding was
+        about: at Monza on 19 Aug 2026 the raw figure was 14.07 laps, a 19 s
+        stop makes it 13.89, and both ceiling to 14 - but 15 minus a rounded
+        stop is 14 only by luck and 15 the rest of the time.
+
+        Default zero, so the flag, "two to go" and the last lap are untouched:
+        they count crossings, and a crossing still happens on the lap the stop
+        is taken. Only the fuel path passes this.
         """
         remaining = self.remaining_s
         if remaining is None or not lap_time_ms or lap_time_ms <= 0:
             return None
+        remaining -= max(0.0, less_s)
         if remaining <= 0:
             return 0
         return max(1, math.ceil(remaining / (lap_time_ms / 1000.0)))

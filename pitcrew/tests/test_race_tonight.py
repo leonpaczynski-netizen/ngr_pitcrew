@@ -1960,3 +1960,55 @@ def test_a_negative_drift_never_hands_the_reference_to_the_lap_sum():
     assert rec.corroborated is False and rec.drift_s < 0
     # The timer, not the sum: 220 s of clock, not 330 s of lap times.
     assert clock.elapsed_s == pytest.approx(220.0, abs=0.01)
+
+
+# ------------------------------------- the stop that is clock but not distance
+
+
+def test_the_stop_comes_off_the_clock_before_the_ceiling_not_after():
+    """Subtracting whole laps from an already-rounded answer throws away the
+    fraction the rounding was about. 14.07 laps minus a 19 s stop is 13.89,
+    and both ceiling to 14 - but 15 minus a rounded stop is 14 only by luck."""
+    clock, now = a_late_green()
+    clock.note_lap(REHEARSAL_LAPS_MS[1], lap_num=2)
+    for index, lap_ms in enumerate(REHEARSAL_LAPS_MS[2:], start=3):
+        now.advance(lap_ms / 1000.0)
+        clock.note_lap(lap_ms, lap_num=index)
+    lap_ms = REHEARSAL_LAPS_MS[-1]
+    assert clock.laps_left(lap_ms) == 15
+    assert clock.laps_left(lap_ms, less_s=19.0) == 14
+
+
+def test_the_flag_still_counts_crossings():
+    """A crossing still happens on the lap the stop is taken, so the flag,
+    'two to go' and the last lap must not see the discount."""
+    clock, now = a_clock(duration_s=240.0)
+    assert clock.laps_left(120_000) == 2
+    assert clock.laps_left(120_000, less_s=0.0) == 2
+
+
+def test_the_fill_is_sized_on_laps_that_are_actually_driven():
+    """Monza, 19 Aug 2026. He was told 94 L for a stint that needed 78."""
+    burn = 5.529
+    common = dict(lap=13, in_pit=True, fuel_per_lap_l=burn, race_minutes=50,
+                  next_stint_laps=13, further_stop_planned=False,
+                  laps_estimate_firm=False, laps_total=28)
+    # The flag's own count, with the stop still inside it.
+    assert fuel_target_l(RaceState(**common)) == pytest.approx(82.9, abs=0.1)
+    # The fuel path's count, with the stop taken out of the clock.
+    sized = fuel_target_l(RaceState(laps_after_stops=14, **common))
+    assert sized == pytest.approx(77.4, abs=0.1)
+    # Still covers the stint the plan asked for, plus the timed race's lap.
+    assert sized >= 13 * burn
+
+
+def test_no_pending_stop_means_no_discount():
+    """The last stint runs to the flag. Nothing is coming off the clock, and
+    the fill must not be cut for a stop that is not going to happen."""
+    burn = 5.529
+    state = RaceState(lap=20, fuel_per_lap_l=burn, race_minutes=50,
+                      next_stint_laps=None, further_stop_planned=False,
+                      laps_estimate_firm=False, laps_total=28,
+                      laps_after_stops=None)
+    # Falls through to `laps_remaining` exactly as it did before the field.
+    assert fuel_target_l(state) == pytest.approx(8 * burn + burn, abs=0.1)
