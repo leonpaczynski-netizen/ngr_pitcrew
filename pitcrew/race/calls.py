@@ -353,6 +353,12 @@ class RaceState:
     # None before a second lap can corroborate the first; False means the
     # estimate rests on the lap-time sum and the call says so.
     clock_corroborated: bool | None = None
+    # **Crossings the clock believes were missed.** Non-zero changes what the
+    # lap-count calls should say about themselves: the clock folds a dropped
+    # lap into its offset and keeps the APP TIMER as the reference, so a call
+    # that blames the disagreement on the two measures drifting is describing
+    # the wrong fault - and naming the pit lane is something he can weigh.
+    laps_dropped: int = 0
     # Whether the lap-count estimate is resolvable at all. Measured: in the
     # first four crossings of a 30-minute race the median only had to be wrong
     # by 0.12-0.66 s to change the answer, against a lap-time spread of
@@ -578,7 +584,18 @@ def _laps_to_go(state: RaceState) -> Call | None:
     if to_go is None or not 1 <= to_go <= 2:
         return None
     call = "Last lap." if to_go == 1 else "Two to go."
-    if state.clock_corroborated is False:
+    if state.laps_dropped:
+        # **A missed crossing, not a drift.** The clock folds the missing lap
+        # into its offset and stays on the app timer, so "on lap times" would
+        # name the measure it is NOT using. Both races so far missed the
+        # crossing in the pit lane, so this is the likely branch, and on the
+        # last lap he needs to know the count is sound rather than wonder.
+        # MEDIUM, not HIGH: the count is sound but the lap NUMBER is one
+        # light, and a call that sounded like a regulation would be claiming
+        # more than the clock knows.
+        reason = "A crossing was missed in the box - counted on the timer."
+        confidence = MEDIUM
+    elif state.clock_corroborated is False:
         # The two measures have diverged and the estimate now rests on the
         # lap-time sum. Said out loud: "unconfirmed" is a word he can act on.
         reason = "On lap times - the race clock and the laps disagree."

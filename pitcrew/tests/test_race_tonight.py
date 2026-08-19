@@ -39,6 +39,7 @@ from pitcrew.race.calls import (
     TYRE_TEMP,
     RaceState,
     _fuel_instruction,
+    _laps_to_go,
     fuel_target_l,
     next_call,
     stay_out_call,
@@ -2012,3 +2013,47 @@ def test_no_pending_stop_means_no_discount():
                       laps_after_stops=None)
     # Falls through to `laps_remaining` exactly as it did before the field.
     assert fuel_target_l(state) == pytest.approx(8 * burn + burn, abs=0.1)
+
+
+def test_a_dropped_lap_names_the_pit_lane_rather_than_the_two_measures():
+    """The clock folds a missed crossing into its offset and stays on the app
+    timer, so "on lap times" would name the measure it is NOT using. Both
+    races so far missed the crossing in the pit lane.
+
+    This branch also had no `confidence` bound at all - an UnboundLocalError
+    on the two calls made at the very end of a race, which no test covered
+    and which a replay of the rehearsal found."""
+    state = RaceState(lap=25, laps_to_go_estimate=1, laps_dropped=1,
+                      clock_corroborated=False)
+    call = _laps_to_go(state)
+    assert call is not None
+    assert call.call == "Last lap."
+    assert "crossing was missed" in call.reason
+    assert call.confidence == MEDIUM
+
+
+def test_a_drift_with_no_dropped_lap_still_names_the_lap_times():
+    state = RaceState(lap=25, laps_to_go_estimate=2, laps_dropped=0,
+                      clock_corroborated=False)
+    call = _laps_to_go(state)
+    assert "lap times" in call.reason and call.confidence == MEDIUM
+
+
+def test_a_clock_that_agrees_says_so_plainly():
+    state = RaceState(lap=25, laps_to_go_estimate=1, laps_dropped=0,
+                      clock_corroborated=True)
+    call = _laps_to_go(state)
+    assert call.reason == "On the clock." and call.confidence == HIGH
+
+
+def test_the_fill_never_asks_for_more_than_the_tank_holds():
+    """"Fuel to 510 litres" was voiced once. An instruction the car cannot
+    execute is worse than none: he acts on it, finds the fill stops short and
+    has to work the shortfall out himself at pit-exit speed."""
+    state = RaceState(lap=1, fuel_per_lap_l=5.5, fuel_capacity_l=100.0,
+                      fuel_l=10.0, laps_total=60, race_minutes=50,
+                      laps_estimate_firm=False)
+    said = _fuel_instruction(state)
+    assert "510" not in said
+    numbers = [float(n) for n in __import__("re").findall(r"\d+\.?\d*", said)]
+    assert all(n <= 100.0 for n in numbers), said

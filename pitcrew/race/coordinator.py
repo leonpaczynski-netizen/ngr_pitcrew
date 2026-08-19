@@ -486,6 +486,9 @@ class RaceCoordinator:
         lap_ms = self.expect.achieved_lap_time_ms() or self.planned_lap_time_ms
         left = self.clock.laps_left(lap_ms)
         self.state.clock_corroborated = self.clock.corroborated
+        # Carried onto the state so the lap-count calls can say which fault
+        # they are living with - see `calls._laps_to_go`.
+        self.state.laps_dropped = self.clock.laps_dropped
         # **How wrong the median may be before the answer changes.** Measured
         # on that race, the first four crossings had 0.12-0.66 s of margin
         # against a lap-time spread of 2.04 s - the prediction there is not
