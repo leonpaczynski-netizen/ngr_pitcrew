@@ -50,6 +50,19 @@ LEVELS = (QUIET, NORMAL, CHATTY)
 # is about what a real engineer does when nothing is happening.
 GAP_LAPS = {QUIET: None, NORMAL: 6, CHATTY: 3}
 
+# **The run-in speaks every lap, and it is the one exemption from the gap.**
+# The driver asked for it in as many words: *"I want each lap updates in the
+# last 5 laps to keep me pushing to the end and aware of what is going on."*
+#
+# It does not undo the budget that stopped the nine-box-calls defect. That
+# register exists to stop a call REPEATING when nothing has changed, and in
+# the run-in something changes every crossing: the laps left go down by one.
+# Each call is new news, which is the same test every other call here passes.
+# It still ranks below every real call - the controller only reaches colour on
+# a crossing that had nothing else to say - so it cannot talk over a box call.
+RUN_IN_LAPS = 5
+RUN_IN = "colour-run-in"
+
 BEST_LAP = "colour-best-lap"
 CONSISTENCY = "colour-consistency"
 STINT_COUNTDOWN = "colour-stint-countdown"
@@ -105,7 +118,9 @@ class ColourCalls:
                  laps_remaining: int | None, laps_total: int | None = None,
                  stint_ends_on_lap: int | None = None,
                  sigma_s: float | None = None,
-                 wear_reading_age: int | None = None) -> ColourCall | None:
+                 wear_reading_age: int | None = None,
+                 position: int | None = None,
+                 laps_firm: bool = True) -> ColourCall | None:
         """One crossing. Returns at most one call, and usually None.
 
         `wear_reading_age` is laps since the tyre gauge was last read, or None
@@ -113,11 +128,24 @@ class ColourCalls:
         lap scatter for this car and circuit, or None before enough clean laps
         exist - and then the consistency call stays silent rather than
         inventing a band.
+
+        `laps_firm` is whether the remaining-lap count is resolvable at all.
+        In a timed race the distance is an OUTPUT of the plan and the count
+        can be inside this car's own lap-time noise, so the run-in hedges to
+        "about three to go" rather than quoting a figure it cannot stand
+        behind. `position` is GT7's own, off the packet.
         """
         if self.level == QUIET:
             return None
         if lap_time_ms and lap_time_ms > 0:
             self._times.append(lap_time_ms)
+
+        run_in = self._run_in(laps_remaining, lap_time_ms, position,
+                              laps_firm)
+        if run_in is not None:
+            self._record_only(lap_time_ms)
+            self._last_lap = lap
+            return run_in
 
         gap = GAP_LAPS[self.level]
         if self._last_lap is not None and lap - self._last_lap < gap:
@@ -160,6 +188,41 @@ class ColourCalls:
         return ColourCall(BEST_LAP, "That's the best lap of the race.",
                           f"{gained:.1f} up on your own." if gained >= 0.1
                           else "")
+
+    def _run_in(self, laps_remaining: int | None, lap_time_ms: int | None,
+                position: int | None, laps_firm: bool) -> ColourCall | None:
+        """Every lap of the run-in, counting down.
+
+        **Everything in it is measured.** The lap count is the app's own
+        estimate and says so when it cannot be resolved; the position is
+        GT7's; the lap time and the best are GT7's own exact figures. No gap
+        to the car ahead - there is no proximity channel in any packet format
+        - and no pace verdict, because his lap-to-lap sigma is wider than the
+        whole degradation band. "Two tenths off your best" is arithmetic on
+        two exact numbers, which is a different thing from a judgement.
+        """
+        if laps_remaining is None or not 1 <= laps_remaining <= RUN_IN_LAPS:
+            return None
+        if laps_remaining == 1:
+            head = "Last lap."
+        else:
+            about = "" if laps_firm else "about "
+            head = f"{about}{laps_remaining} to go."
+            head = head[0].upper() + head[1:]
+        where = f"P{position}. " if position else ""
+
+        best = self._best_ms
+        if lap_time_ms and lap_time_ms > 0:
+            if best is None or lap_time_ms <= best:
+                return ColourCall(RUN_IN, head,
+                                  f"{where}That's your best of the race.")
+            off = (lap_time_ms - best) / 1000.0
+            # Under a tenth is inside the resolution of anything he can act
+            # on, and "0.0 off your best" is a number that means nothing.
+            if off < 0.1:
+                return ColourCall(RUN_IN, head, f"{where}On your best pace.")
+            return ColourCall(RUN_IN, head, f"{where}{off:.1f} off your best.")
+        return ColourCall(RUN_IN, head, where.strip())
 
     def _consistency(self, sigma_s: float | None) -> ColourCall | None:
         if sigma_s is None or not self._fresh(CONSISTENCY):

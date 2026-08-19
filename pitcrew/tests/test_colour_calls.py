@@ -9,6 +9,7 @@ from pitcrew.race.colour import (
     MILESTONE,
     NORMAL,
     QUIET,
+    RUN_IN,
     STINT_COUNTDOWN,
     ColourCalls,
 )
@@ -161,3 +162,84 @@ def test_nothing_is_said_about_a_car_the_feed_cannot_see():
     words = " ".join(c.spoken().lower() for _, c in said)
     for banned in ("ahead", "behind", "gap", "catching", "pulling away"):
         assert banned not in words, words
+
+
+# ------------------------------------------------------------- the run-in
+#
+# *"I want each lap updates in the last 5 laps to keep me pushing to the end
+# and aware of what is going on."* - the driver, 19 Aug 2026.
+
+
+def run_in_laps(calls, count=6, ms=110_000, **kw):
+    """The closing laps, counting down to the flag."""
+    said = []
+    for index in range(count):
+        remaining = count - index
+        out = calls.consider(lap=20 + index, lap_time_ms=ms,
+                             laps_remaining=remaining, **kw)
+        said.append((remaining, out))
+    return said
+
+
+def test_the_run_in_speaks_every_lap():
+    calls = ColourCalls(level=NORMAL)
+    said = run_in_laps(calls, count=5, sigma_s=0.7, wear_reading_age=1)
+    assert all(out is not None for _, out in said)
+    assert [out.kind for _, out in said] == [RUN_IN] * 5
+
+
+def test_the_run_in_counts_down_and_names_the_last_lap():
+    calls = ColourCalls(level=NORMAL)
+    said = run_in_laps(calls, count=5, sigma_s=0.7, wear_reading_age=1)
+    spoken = [out.call for _, out in said]
+    assert spoken[0].startswith("5 to go")
+    assert spoken[-1] == "Last lap."
+
+
+def test_the_run_in_does_not_start_early():
+    """Six laps out is not the run-in, and the gap still governs there."""
+    calls = ColourCalls(level=NORMAL)
+    out = calls.consider(lap=10, lap_time_ms=110_000, laps_remaining=6,
+                         sigma_s=0.7, wear_reading_age=1)
+    assert out is None or out.kind != RUN_IN
+
+
+def test_quiet_still_means_off_in_the_run_in():
+    """He can turn the engineer down, and that must hold everywhere."""
+    calls = ColourCalls(level=QUIET)
+    said = run_in_laps(calls, count=5, sigma_s=0.7, wear_reading_age=1)
+    assert all(out is None for _, out in said)
+
+
+def test_the_run_in_hedges_a_lap_count_it_cannot_resolve():
+    """A timed race's distance is an output of the plan, and the count can sit
+    inside this car's own lap-time noise. Quoting it flat is inventing
+    precision - see the 2.04 s spread measured at Yas Marina."""
+    firm = ColourCalls(level=NORMAL)
+    loose = ColourCalls(level=NORMAL)
+    said_firm = run_in_laps(firm, count=3, laps_firm=True, sigma_s=0.7,
+                            wear_reading_age=1)
+    said_loose = run_in_laps(loose, count=3, laps_firm=False, sigma_s=0.7,
+                             wear_reading_age=1)
+    assert said_firm[0][1].call == "3 to go."
+    assert said_loose[0][1].call == "About 3 to go."
+
+
+def test_the_run_in_carries_position_and_pace_against_his_own_best():
+    calls = ColourCalls(level=NORMAL)
+    # A quick lap sets the best, then the run-in reports against it.
+    calls.consider(lap=18, lap_time_ms=108_000, laps_remaining=8)
+    said = run_in_laps(calls, count=3, ms=109_500, position=4, sigma_s=0.7,
+                       wear_reading_age=1)
+    reason = said[0][1].reason
+    assert reason.startswith("P4.")
+    assert "1.5 off your best" in reason
+
+
+def test_the_run_in_says_nothing_it_did_not_measure():
+    """No gap to the car ahead - there is no proximity channel in any packet
+    format. With no position and no best, it still counts the laps down."""
+    calls = ColourCalls(level=NORMAL)
+    out = calls.consider(lap=20, lap_time_ms=None, laps_remaining=3)
+    assert out is not None and out.call == "3 to go."
+    assert out.reason == ""

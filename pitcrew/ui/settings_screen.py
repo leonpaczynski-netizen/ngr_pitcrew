@@ -37,6 +37,9 @@ from dataclasses import replace
 from pitcrew.engineer import audio_devices
 
 from pitcrew.settings import (
+    COLOUR_CHATTY,
+    COLOUR_NORMAL,
+    COLOUR_QUIET,
     FEED_PS5,
     FEED_SIMHUB,
     COMMON_KEYS,
@@ -642,6 +645,22 @@ class SettingsScreen(QWidget):
         grid.addWidget(Field("Jitter", self.noise_w_scale,
                              hint="Lower is calmer."), 1, 0)
         plate.body.addLayout(grid)
+
+        # **How much he fills the quiet laps.** The setting has existed since
+        # the colour calls were written and nothing ever exposed it, so the
+        # engineer has only ever run at `normal` - there was no way to ask him
+        # for more. Strategy is unaffected at every level: this governs the
+        # radio that is not an instruction. See `race/colour.py`.
+        plate.body.addWidget(self._rule_label("How much he says"))
+        self.colour_calls = QComboBox()
+        self.colour_calls.addItem("Quiet — instructions only", COLOUR_QUIET)
+        self.colour_calls.addItem("Normal", COLOUR_NORMAL)
+        self.colour_calls.addItem("Chatty", COLOUR_CHATTY)
+        block_wheel(self.colour_calls)
+        plate.body.addWidget(Field(
+            "On the laps that carry no instruction", self.colour_calls,
+            hint="Strategy calls are unaffected. Quiet means off, not less "
+                 "often."))
         return plate
 
     def _tuning_box(self, low: float, high: float, step: float,
@@ -705,6 +724,8 @@ class SettingsScreen(QWidget):
         self._shift_points = dict(settings.beep_shift_points or {})
         self._shift_car_shown = None
         self._show_shift_points(self.shift_car.currentData())
+        index = self.colour_calls.findData(settings.colour_calls)
+        self.colour_calls.setCurrentIndex(max(0, index))
         self.length_scale.setValue(settings.voice_length_scale)
         self.noise_scale.setValue(settings.voice_noise_scale)
         self.noise_w_scale.setValue(settings.voice_noise_w_scale)
@@ -741,6 +762,7 @@ class SettingsScreen(QWidget):
             beep_enabled=self.beep_enabled.isChecked(),
             beep_rpm_source=self.rpm_source.currentData() or RPM_FROM_GT7,
             beep_rpm=self.beep_rpm.value(),
+            colour_calls=self.colour_calls.currentData() or COLOUR_NORMAL,
             voice_length_scale=self.length_scale.value(),
             voice_noise_scale=self.noise_scale.value(),
             voice_noise_w_scale=self.noise_w_scale.value(),

@@ -709,6 +709,11 @@ class PitCrewController(QObject):
         approved = (self.store.get_approved_strategy(event["id"])
                     if event else None)
         self.race_screen.set_plan_available(approved is not None)
+        # **And what that plan actually is.** The picker only ever said
+        # whether one existed; the stops, the box laps and the compounds were
+        # nowhere on the screen the race is started from, so the only way to
+        # check the engineer was holding tonight's race was to run it.
+        self.race_screen.set_plan(approved)
 
     def load_active_event(self) -> None:
         event = self.active_event()
@@ -1017,6 +1022,11 @@ class PitCrewController(QObject):
                 self.settings_screen.note(f"Refused: {exc}", warn=True)
             return
 
+        # **The colour level is read when the race is built**, so a change
+        # made during one would otherwise not arrive until the next race -
+        # which is exactly when he is reaching for it.
+        if self._colour is not None:
+            self._colour.level = new.colour_calls
         rebind = new.ptt_key != self.settings.ptt_key
         # Everything that decides where the stream comes from. Port and
         # filter were the only two checked, so switching between SimHub and
@@ -2117,6 +2127,14 @@ class PitCrewController(QObject):
             # broadcasts no wear channel and he read the gauge zero times in
             # the Monza race.
             wear_reading_age=state.laps_since_stop,
+            # GT7's own, off the packet - the run-in is the one place a
+            # position is worth repeating every lap.
+            position=state.position,
+            # **Whether the lap count can be resolved at all.** A timed race's
+            # distance is an output of the plan, and the count can sit inside
+            # this car's own lap-time noise; the run-in then says "about three
+            # to go" rather than quoting a figure it cannot stand behind.
+            laps_firm=state.laps_estimate_firm or not state.race_minutes,
         )
         if call is None:
             return

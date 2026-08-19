@@ -107,6 +107,15 @@ class RaceScreen(QWidget):
                                       colour=theme.STENCIL, tracking=6.0))
         self.subtitle = BodyLabel("No plan armed.", colour=theme.STENCIL_DIM)
         titles.addWidget(self.subtitle)
+        # **What the engineer is actually going to run, before the green.**
+        # The subtitle cannot carry it: `set_status` owns that line and
+        # overwrites it with the last call the moment the race starts, so the
+        # plan was only ever visible as the word "armed". A plan that cannot
+        # be read is a plan that cannot be checked, and the one thing worth
+        # catching on the grid is the engineer holding a different race to the
+        # one about to be driven.
+        self.plan_line = BodyLabel("", size=13, colour=theme.CHALK)
+        titles.addWidget(self.plan_line)
         header.addLayout(titles, 1)
 
         # **Three independent choices about how this race runs**, in the
@@ -256,6 +265,52 @@ class RaceScreen(QWidget):
             # A plan exists and he has not said otherwise, so use it. This is
             # the state the screen was in before the choice existed.
             self.plan_picker.setCurrentIndex(index)
+
+    def set_plan(self, strategy: dict | None) -> None:
+        """Show the approved plan, or say plainly that there is none.
+
+        Everything here is read straight off the stored plan - the same
+        `plan_json` the coordinator arms from - so what is on the screen is
+        what will be run rather than a second rendering of the same idea.
+        """
+        if not strategy:
+            self.plan_line.setText(
+                "No plan approved — the engineer will call fuel only.")
+            self.plan_line.setStyleSheet(
+                f"color: {theme.STENCIL_DIM};background: transparent;")
+            return
+        plan = strategy.get("plan") or {}
+        stints = plan.get("stints") or []
+        stops = plan.get("stops")
+        parts: list[str] = []
+        if stops is not None:
+            parts.append(f"{stops} stop" if stops == 1 else f"{stops} stops")
+        pit_laps = [str(lap) for lap in (plan.get("pit_laps") or [])]
+        if pit_laps:
+            word = "box lap" if len(pit_laps) == 1 else "box laps"
+            parts.append(f"{word} {', '.join(pit_laps)}")
+        if stints:
+            parts.append(" + ".join(str(st.get("laps", "?")) for st in stints)
+                         + " laps")
+            compounds = [st.get("compound") for st in stints]
+            if any(compounds):
+                parts.append(" → ".join(c or "?" for c in compounds))
+            fuel = [st.get("fuel_l") for st in stints]
+            if any(f is not None for f in fuel):
+                parts.append(" + ".join(
+                    f"{f:.0f} L" if f is not None else "? L" for f in fuel))
+        # **The constraint is the half of the plan that explains it.** "Fuel"
+        # and "tyre" are different races, and which one binds is the first
+        # thing to check against the evidence he actually has.
+        binding = plan.get("binding_constraint")
+        if binding:
+            parts.append(f"{binding}-limited")
+        label = strategy.get("label")
+        head = f"{label}: " if label and parts and label not in parts[0] else ""
+        self.plan_line.setText(head + " · ".join(parts) if parts
+                               else "A plan is approved but carries no stints.")
+        self.plan_line.setStyleSheet(
+            f"color: {theme.CHALK};background: transparent;")
 
     def _on_start(self) -> None:
         if self._armed:
