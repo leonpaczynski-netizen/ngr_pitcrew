@@ -39,6 +39,7 @@ from pitcrew.race.calls import (
     TYRE_TEMP,
     RaceState,
     _fuel_instruction,
+    fuel_target_l,
     next_call,
     stay_out_call,
 )
@@ -1826,3 +1827,136 @@ def test_the_layout_is_part_of_the_circuit_identity():
     assert full != south != bare
     assert full.startswith("yas-marina-circuit-full-course/")
 
+
+
+# ------------------------------------- the green that arrived after the race
+#
+# Monza, 19 Aug 2026, session 53 - the final rehearsal. The launch detector
+# fired at the **lap-2 crossing**, 112 s after the car had actually launched,
+# so the clock started with a lap and a half of racing already behind it. Both
+# of its measures were short by the same racing, which is why the
+# reconciliation could not see it: it compares them against each other.
+#
+# What followed: drift read -110.7 s, the reference went to the lap sum (the
+# measure missing lap 1), elapsed race time ran ~117 s light to the flag, and
+# the in-box refuel call asked for **94 L against a stint that needed 78**.
+# The driver ignored it and finished on 1.15 L.
+
+REHEARSAL_LAPS_MS = [116947, 110958, 114024, 111458, 109411, 110818, 111276,
+                     110235, 111421, 110116, 109294, 109554, 110418]
+REHEARSAL_DURATION_S = 50 * 60.0
+
+
+def a_late_green(laps_before_green: int = 1):
+    """The rehearsal's own opening, driven on a fake monotonic clock.
+
+    `session_state` emits RACE_STARTED before LAP_COMPLETED for the same
+    packet, so a green detected ON a crossing does not capture that lap before
+    the green - only the ones fully completed ahead of it. One is the measured
+    case: lap 1 captured, lap 2 the first crossing the clock ever sees.
+    """
+    now = FakeMonotonic()
+    clock = RaceClock(REHEARSAL_DURATION_S, now=now)
+    captured = REHEARSAL_LAPS_MS[:laps_before_green]
+    # The green fires where the racing had already reached.
+    now.advance(sum(captured) / 1000.0)
+    clock.start(sum(captured), laps_before=len(captured))
+    return clock, now
+
+
+def test_a_green_detected_late_still_counts_elapsed_from_lap_one():
+    clock, now = a_late_green()
+    # Lap 2 completes on the same packet as the green, so it is the first
+    # crossing the clock sees rather than something it was handed.
+    clock.note_lap(REHEARSAL_LAPS_MS[1], lap_num=2)
+    two_laps_s = sum(REHEARSAL_LAPS_MS[:2]) / 1000.0
+    assert clock.elapsed_s == pytest.approx(two_laps_s, abs=0.01)
+    assert clock.laps_before_clock == 1
+    # No standing start is measurable on a green this late, and the app timer
+    # must not be left carrying one it did not observe.
+    assert clock.as_snapshot()["greenToFirstCrossingS"] == pytest.approx(0.0)
+
+
+def test_the_two_measures_agree_for_the_rest_of_a_late_started_race():
+    """The whole failure was that both measures were short by the same racing,
+    so they corroborated each other all the way to the flag."""
+    clock, now = a_late_green()
+    clock.note_lap(REHEARSAL_LAPS_MS[1], lap_num=2)
+    for index, lap_ms in enumerate(REHEARSAL_LAPS_MS[2:], start=3):
+        now.advance(lap_ms / 1000.0)
+        rec = clock.note_lap(lap_ms, lap_num=index)
+    assert rec.corroborated is True
+    assert abs(rec.drift_s) < 1.0
+    # Thirteen laps of the real race, counted from lap 1 rather than from the
+    # green. The broken clock read 1329.0 s here - a whole lap light.
+    assert clock.elapsed_s == pytest.approx(
+        sum(REHEARSAL_LAPS_MS) / 1000.0, abs=0.01)
+
+
+def test_the_late_green_no_longer_buys_an_extra_lap_of_fuel():
+    """The number the driver actually heard, and the one he should have."""
+    clock, now = a_late_green()
+    clock.note_lap(REHEARSAL_LAPS_MS[1], lap_num=2)
+    for index, lap_ms in enumerate(REHEARSAL_LAPS_MS[2:], start=3):
+        now.advance(lap_ms / 1000.0)
+        clock.note_lap(lap_ms, lap_num=index)
+
+    burn = 5.529
+    state = RaceState(
+        lap=13, in_pit=True, fuel_per_lap_l=burn, race_minutes=50,
+        next_stint_laps=13, further_stop_planned=False,
+        laps_estimate_firm=False,
+        laps_total=13 + clock.laps_left(REHEARSAL_LAPS_MS[-1]))
+    target = fuel_target_l(state)
+    # 94 L was the call. Anything at or above it is the bug reappearing.
+    assert target is not None and target < 90.0
+    # And it still covers the stint the plan asked for, with the timed race's
+    # deliberate lap of margin on top - never less than the plan's own 13.
+    assert target >= 14 * burn
+
+
+def test_the_backstop_back_dates_from_the_lap_number_alone():
+    """When nothing was captured before the green - the coordinator was armed
+    mid-lap, or an older caller passed no figures - GT7's own lap number still
+    says racing happened. Estimated at this lap's pace, and flagged as an
+    estimate rather than passed off as a reading."""
+    now = FakeMonotonic()
+    clock = RaceClock(REHEARSAL_DURATION_S, now=now)
+    clock.start()
+    clock.note_lap(110958, lap_num=3)
+    assert clock.laps_before_clock == 2
+    assert clock.start_estimated is True
+    assert clock.as_snapshot()["startEstimated"] is True
+    # Three laps of racing, the two missing ones estimated at this lap's pace.
+    assert clock.elapsed_s == pytest.approx(3 * 110.958, abs=0.01)
+
+
+def test_a_normal_green_measures_its_standing_start_untouched():
+    """The repair must not fire on the race it was not written for."""
+    now = FakeMonotonic()
+    clock = RaceClock(REHEARSAL_DURATION_S, now=now)
+    clock.start()
+    now.advance(6.0 + 116.947)                   # grid period, then lap one
+    clock.note_lap(116947, lap_num=1)
+    assert clock.laps_before_clock == 0
+    assert clock.start_estimated is False
+    # The standing start is still measured, and still the whole of the offset.
+    assert clock.as_snapshot()["greenToFirstCrossingS"] == pytest.approx(6.0)
+
+
+def test_a_negative_drift_never_hands_the_reference_to_the_lap_sum():
+    """The handover defends against the app timer running LONG - a pause it
+    did not see. A lap sum that is AHEAD of the timer is the opposite fault
+    and the sum is the measure at fault, so preferring it rewards the wrong
+    one. This is the guard for a late start the back-dating did not catch."""
+    now = FakeMonotonic()
+    clock = RaceClock(REHEARSAL_DURATION_S, now=now)
+    clock.start()
+    now.advance(110.0)
+    clock.note_lap(110_000, lap_num=1)           # offset 0, both agree
+    # A lap arrives carrying far more time than the timer ran through.
+    now.advance(110.0)
+    rec = clock.note_lap(220_000, lap_num=2)
+    assert rec.corroborated is False and rec.drift_s < 0
+    # The timer, not the sum: 220 s of clock, not 330 s of lap times.
+    assert clock.elapsed_s == pytest.approx(220.0, abs=0.01)

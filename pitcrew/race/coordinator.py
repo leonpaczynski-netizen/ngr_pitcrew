@@ -130,6 +130,12 @@ class RaceCoordinator:
             planned_lap_time_ms if planned_lap_time_ms is not None
             else lap_time_ms)
         self._burns: list[float] = []
+        # **Laps completed after arming but before the green was detected.**
+        # `session_state` emits LAP_COMPLETED from `ON_TRACK` onward, so these
+        # arrive here and used to be dropped on the floor by the RUNNING gate.
+        # They are the racing the clock would otherwise never learn about -
+        # see `_on_green` and `race/clock.start`.
+        self._pre_green_laps: list = []
         # Lap times fit to judge pace against the plan - see
         # `representative_pace_ms` for what is kept out and why.
         self._pace_ms: list[int] = []
@@ -158,6 +164,9 @@ class RaceCoordinator:
             actual: PlanContext | None) -> bool:
         """Ready the race. Returns False, with a reason, if the plan does not fit."""
         self.refusal = None
+        # A re-arm starts the count again: laps from a previous attempt are
+        # not this race's.
+        self._pre_green_laps = []
         if planned is not None and actual is not None:
             ok, why = planned.matches(actual)
             if not ok:
@@ -260,6 +269,18 @@ class RaceCoordinator:
         """Feed one telemetry event. Returns the call to make, if any."""
         if event.kind is EventKind.RACE_STARTED:
             return self._on_green(event)
+        if (event.kind is EventKind.LAP_COMPLETED
+                and self.phase is RacePhase.ARMED):
+            # **Armed but not green: keep the lap, make no call.** The race is
+            # under way and the detector has not noticed yet, which is not a
+            # state this app can call a race from - but the lap time is GT7's
+            # own and exact, and at the green it is the difference between a
+            # clock that counts from lap 1 and one that is a lap light for the
+            # whole race. Nothing else here acts on it.
+            lap = event.data.get("lap")
+            if lap is not None and getattr(lap, "lap_time_ms", 0) > 0:
+                self._pre_green_laps.append(lap)
+            return None
         if self.phase is not RacePhase.RUNNING:
             return None
         if event.kind is EventKind.LAP_COMPLETED:
@@ -292,7 +313,23 @@ class RaceCoordinator:
         # this is the moment the race actually began. Everything about time
         # remaining derives from here and from the laps, never from GT7's own
         # clock, which the driver measured as inaccurate.
-        self.clock.start()
+        # **Started from lap 1, not from here.** The detector is gated on the
+        # car being seen slow and then fast, or on the lap counter moving, and
+        # it can fire long after the car has actually launched: at Monza on
+        # 19 Aug 2026 it fired at the lap-2 crossing, 112 s into the race. A
+        # clock started there is short by every lap already run, and so is its
+        # lap sum, so the two agree with each other and the reconciliation
+        # sees nothing wrong. That race then ran 117 s light to the flag and
+        # the stop was fuelled for 17 laps against 13 - 16 L parked.
+        #
+        # These are GT7's own exact figures for those laps, so the back-dating
+        # is a measurement rather than the estimate `note_lap` falls back to.
+        # **A caveat worth knowing:** any lap run in this session after arming
+        # counts, so arming before a warm-up lap would back-date too far. The
+        # clock logs what it did and the snapshot carries `lapsBeforeClock`,
+        # because a reconstructed zero point is not an observed one.
+        before_ms = sum(int(lap.lap_time_ms) for lap in self._pre_green_laps)
+        self.clock.start(before_ms, laps_before=len(self._pre_green_laps))
         # GT7 sends `laps_in_race = -1` for a timed race and session_state
         # clamps that to 0, so this guard never fired there anyway - but a
         # figure that did arrive would be a lap count for a race that has
@@ -335,7 +372,11 @@ class RaceCoordinator:
         # but no race-control decision may rest on it: the driver measured
         # GT7's race clock as inaccurate, and an app timer started at the
         # green is the reference.
-        self.clock.note_lap(lap.lap_time_ms, is_pit_lap=bool(lap.is_pit_lap))
+        # `lap_num` is the clock's backstop for a green detected late - it can
+        # see that its first crossing was lap 4 and back-date itself even when
+        # nothing was captured before the green. See `race/clock.note_lap`.
+        self.clock.note_lap(lap.lap_time_ms, is_pit_lap=bool(lap.is_pit_lap),
+                            lap_num=lap.lap_num)
         self.expect.note_lap(lap)
 
         # Fuel calls must use what this race is actually burning, not what

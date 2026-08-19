@@ -642,6 +642,25 @@ def _box_soon(state: RaceState) -> Call | None:
     )
 
 
+def _laps_after_this_stop(state: RaceState) -> int | None:
+    """Laps still to run **once the car leaves the box**, or None.
+
+    `laps_remaining` counts every lap the flag is still waiting on, and while
+    the car is stationary in a pit box the lap in progress is one of them - it
+    is the lap the stop is happening on. The fill does not have to cover it:
+    most of it is already behind the car, and what is left of it is the exit.
+
+    Counting it is a whole lap of fuel the driver parks for. At Monza on
+    19 Aug 2026 the in-box call asked for 94 L where the stint needed 78, and
+    this was the second of the two reasons - the clock's late green was the
+    first. One litre is one second stationary at the measured 1.002 L/s.
+    """
+    remaining = state.laps_remaining()
+    if remaining is None:
+        return None
+    return max(0, remaining - 1) if state.in_pit else remaining
+
+
 def fuel_target_l(state: RaceState) -> float | None:
     """What the tank should read at pit exit, or None if nothing can size it.
 
@@ -659,7 +678,7 @@ def fuel_target_l(state: RaceState) -> float | None:
         return None
     if state.next_stint_laps is not None:
         after_stop = state.next_stint_laps
-        remaining = state.laps_remaining()
+        remaining = _laps_after_this_stop(state)
         if (state.further_stop_planned is False and remaining is not None
                 and remaining > after_stop):
             after_stop = remaining

@@ -150,6 +150,18 @@ class RaceClock:
         # downstream counts laps, so a dropped one is a fact the pit wall has
         # to be able to show.
         self.laps_dropped = 0
+        # **Laps that were already run when this clock started.** The green is
+        # detected, not received, and the detector can fire after racing has
+        # begun - at Monza on 19 Aug 2026 it fired at the lap-2 crossing, 112 s
+        # into the race. Those laps are real racing time that the app timer
+        # never ran through and the lap sum never contained, so both measures
+        # were short by the same lap and neither could see it. Non-zero means
+        # the zero point was reconstructed rather than observed.
+        self.laps_before_clock = 0
+        # Whether that reconstruction used estimated lap times rather than the
+        # real ones. An estimate is good to a few seconds; it is not exact,
+        # and the lap count it feeds must not read as though it were.
+        self.start_estimated = False
 
     # ---------------------------------------------------------------- timing
 
@@ -157,10 +169,45 @@ class RaceClock:
     def running(self) -> bool:
         return self._started_at is not None
 
-    def start(self) -> None:
-        """The green flag. Idempotent - a second green does not restart it."""
-        if self._started_at is None:
-            self._started_at = self._now()
+    def start(self, already_raced_ms: int = 0, *, laps_before: int = 0) -> None:
+        """The green flag. Idempotent - a second green does not restart it.
+
+        `already_raced_ms` is the sum of GT7's own times for laps completed
+        **before this clock started**, and `laps_before` is how many there
+        were. Both default to zero, which is the normal race: the detector
+        fires at lights out and nothing has been run yet.
+
+        They exist because the detector is not always on time. It is gated on
+        the car being seen slow and then fast, or on the lap counter moving,
+        and at Monza on 19 Aug 2026 neither condition was met until the
+        **lap-2 crossing** - 112 s after the car had actually launched. The
+        clock then started at zero with a whole lap already in the books, so
+        the app timer was short by that lap and `_laps_ms` never contained it
+        either. Both measures were wrong by the same 117 s, which is why the
+        reconciliation could not see it: it compares them against each other.
+
+        The repair is to **retro-date the timer and seed the sum by the same
+        amount**, so the two stay indexed from lap 1 and the offset that gets
+        measured at the first crossing is still the standing start rather than
+        a lap of racing. Seeding only one of them would trade a silent error
+        for a loud one.
+        """
+        if self._started_at is not None:
+            return
+        self._started_at = self._now()
+        if already_raced_ms <= 0:
+            return
+        self._started_at -= already_raced_ms / 1000.0
+        self._laps_ms += int(already_raced_ms)
+        self._laps_counted += laps_before
+        self.laps_before_clock += laps_before
+        log("race").warning(
+            "the green was detected %.1f s into the race, with %d lap(s) "
+            "already run. The clock has been back-dated to the first of them "
+            "using GT7's own times, so elapsed race time counts from lap 1. "
+            "Without this both the timer and the lap sum are short by those "
+            "laps and every remaining-lap and fuel figure reads one lap long.",
+            already_raced_ms / 1000.0, laps_before)
 
     def note_frame(self, now: float, *, paused: bool) -> None:
         """One packet, on the telemetry thread. Accrues paused time only.
@@ -227,8 +274,26 @@ class RaceClock:
         can silently run through a pause. The measured offset - the standing
         start - is carried back on, because the lap sum starts at the first
         crossing and the race started before it.
+
+        **Only when the drift is positive.** The handover defends against one
+        specific failure - the app timer running through time the car did not
+        race - and that failure can only ever make the timer read LONG, which
+        is a positive drift. A negative drift is the opposite fault and wants
+        the opposite answer: it means the lap sum contains racing the timer
+        never ran through, and the only thing that does that is a clock which
+        started after the race did. Handing the reference to the sum there
+        rewards the measure that is missing a lap.
+
+        Monza, 19 Aug 2026, measured: the green was detected at the lap-2
+        crossing, so the sum was missing lap 1 and the drift read -110.7 s.
+        The reference went to the sum, elapsed race time ran 117 s light for
+        the whole race, and the refuel call asked for 94 L against a real
+        requirement of 78 - 16 L of dead fuel, 16 s parked at the measured
+        1.002 L/s. `start()` now back-dates that case so it should not arise;
+        this is the guard for the one it does not catch.
         """
-        if self._corroborated is False and self._offset_s is not None:
+        if (self._corroborated is False and self._offset_s is not None
+                and self._drift_s > 0):
             return self.elapsed_laps_s + self._offset_s
         return self.elapsed_app_s
 
@@ -245,8 +310,8 @@ class RaceClock:
 
     # -------------------------------------------------------- reconciliation
 
-    def note_lap(self, lap_time_ms: int, *, is_pit_lap: bool = False
-                 ) -> Reconciliation | None:
+    def note_lap(self, lap_time_ms: int, *, is_pit_lap: bool = False,
+                 lap_num: int | None = None) -> Reconciliation | None:
         """One completed lap, with GT7's own figure for it.
 
         Returns the reconciliation, or None before the clock has started or
@@ -261,6 +326,16 @@ class RaceClock:
         `DROPPED_LAP_FRACTION`. It stays in the signature because the caller
         has it and because a reader who goes looking for the old guard should
         find this sentence rather than its absence.
+
+        `lap_num` is GT7's own number for this lap, and it is the **backstop
+        for a clock that started late**. If the first crossing this clock sees
+        is lap 4, three laps of racing happened before it started and are in
+        neither of its measures. `start()` takes the exact figures where the
+        caller has them; this catches the case where nobody passed them, and
+        it has to estimate the missing laps at this lap's pace. An estimate a
+        few seconds out is worth having - the error it replaces is a whole
+        lap - but it is flagged as one, because a lap count built on it is not
+        a reading.
         """
         if self._started_at is None or lap_time_ms <= 0:
             return None
@@ -286,6 +361,58 @@ class RaceClock:
                                and live_s >= span * LIVE_SPAN_FRACTION)
 
         if self._offset_s is None:
+            # **Did racing start before this clock did?** `_laps_counted`
+            # already includes this lap and any that `start()` was told about,
+            # so anything GT7's own numbering has beyond that reached neither
+            # measure. Zero for the normal race, where the green is detected
+            # at lights out and this is lap 1.
+            missed = (max(0, lap_num - self._laps_counted)
+                      if lap_num is not None else 0)
+            if missed > 0:
+                # Estimated at this lap's pace, the only pace this clock has
+                # ever seen. It joins the sum so that both measures cover the
+                # same racing - the timer is squared up against the sum just
+                # below, so seeding one without the other cannot leak out.
+                est_ms = missed * int(lap_time_ms)
+                self._laps_ms += est_ms
+                self._laps_counted += missed
+                self.laps_before_clock += missed
+                self.start_estimated = True
+                log("race").warning(
+                    "the first crossing this clock saw was lap %d, so %d "
+                    "lap(s) ran before it started and reached neither of its "
+                    "measures. They have been ESTIMATED at this lap's %.1f s "
+                    "so that elapsed race time counts from lap 1. It is an "
+                    "estimate, not a reading, and the lap count it feeds "
+                    "carries that.",
+                    lap_num, missed, lap_time_ms / 1000.0)
+            if self.laps_before_clock:
+                # **A late green leaves no standing start to measure.** On a
+                # normal race the gap between the green and this crossing is
+                # the grid period, and `_offset_s` below is exactly that. When
+                # racing began first, the same gap is not a grid period - it
+                # is racing this timer never ran through, and the lap sum is
+                # the only measure that contains all of it.
+                #
+                # So the timer is squared up against the sum here rather than
+                # trusted. This also catches the ordering that `start()` alone
+                # cannot: `session_state` emits RACE_STARTED before
+                # LAP_COMPLETED for the same packet, so when the green is
+                # detected ON a crossing that lap is never captured before the
+                # green and only this arrives to account for it. At Monza on
+                # 19 Aug 2026 that was lap 2's 111.0 s, on top of lap 1's
+                # 116.9 s that `start()` did carry.
+                behind = self.elapsed_laps_s - app
+                if behind > 0:
+                    self._started_at -= behind
+                    app = self.elapsed_app_s
+                    self._app_at_last_lap = app
+                    log("race").warning(
+                        "the app timer was %.1f s behind the racing already "
+                        "run when it started and has been squared up against "
+                        "the lap sum. Elapsed race time counts from lap 1; "
+                        "no standing start is measurable on a green this "
+                        "late.", behind)
             # The first crossing. Everything between the green and here is
             # the offset, and it is a measurement, not an error.
             self._offset_s = max(0.0, app - self.elapsed_laps_s)
@@ -444,6 +571,12 @@ class RaceClock:
             # Non-zero means the lap count - and every distance built on it -
             # is light by that many.
             "lapsDropped": self.laps_dropped,
+            # Laps already run when the clock started, and whether their times
+            # had to be estimated. Non-zero means the zero point was
+            # reconstructed - the export has to be able to say so, because
+            # every remaining-lap figure in the race rests on it.
+            "lapsBeforeClock": self.laps_before_clock,
+            "startEstimated": self.start_estimated,
             # How late the launch detector fired relative to the first
             # crossing. None before that crossing. It is not the flag drop,
             # and the countdown is long by the part of it that is detection
