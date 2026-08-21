@@ -611,3 +611,71 @@ def test_a_real_deviation_is_still_said():
     laps[23] = a_race_lap(24, is_pit_lap=True)
     text = race_outcome(laps, planned_stops=2, planned_pit_laps=[11, 22])
     assert "against a planned lap 11, lap 22" in text
+
+
+# ------------------------------------------- the two intents that were missing
+
+def test_how_are_my_tyres_answers_the_tyres_and_not_the_compound():
+    """**It used to answer the wrong question confidently.** "How are my
+    tyres" is the question this whole app exists for, and there was no intent
+    for it - it matched BOX_WHAT and came back with the compound planned for
+    the stop, which is a different question with a different answer."""
+    from pitcrew.engineer.intents import TYRES
+    reply = answer(TYRES, {"wearWorst": 0.36, "wearCorner": "rl",
+                           "lapsToStop": 4})
+    assert reply.answered
+    assert "RL 36 percent" in reply.text
+    assert "4 laps to the box" in reply.text
+
+
+def test_with_no_gauge_it_says_so_rather_than_modelling_one():
+    """CLAUDE.md §3.3: there is no tyre wear channel. A number invented in
+    reply to a direct question is the worst kind there is - he asked precisely
+    because he wanted to know."""
+    from pitcrew.engineer.intents import TYRES
+    reply = answer(TYRES, {})
+    assert not reply.answered
+    assert "read it to me" in reply.text
+    assert not any(ch.isdigit() for ch in reply.text)
+
+
+def test_pace_inside_the_noise_is_not_reported_as_a_finding():
+    """His lap-to-lap spread puts the detection floor above the whole
+    degradation band. A pace figure that has not cleared it is not a finding
+    and must not be spoken like one."""
+    from pitcrew.engineer.intents import PACE
+    reply = answer(PACE, {"paceVsPlanMs": 400, "paceIsReal": False})
+    assert "inside the noise" in reply.text
+    assert "0.4" not in reply.text
+
+
+def test_a_real_pace_delta_is_given_with_its_direction():
+    from pitcrew.engineer.intents import PACE
+    up = answer(PACE, {"paceVsPlanMs": -1200, "paceIsReal": True})
+    down = answer(PACE, {"paceVsPlanMs": 900, "paceIsReal": True})
+    assert up.text == "1.2 up on the plan."
+    assert down.text == "0.9 down on the plan."
+
+
+def test_the_vocabulary_is_written_the_way_he_talks():
+    """**The measurement that prompted the rewrite.** The phrase list was
+    SAPI's closed grammar - "fuel", "keep", "again" - and doubled as the
+    reference points a semantic matcher measures natural speech against. Six
+    of twenty real questions landed outside the act band because nothing in
+    the list was near how he says things."""
+    from pitcrew.engineer.intents import PHRASES
+    natural = [p for phrases in PHRASES.values() for p in phrases
+               if " " in p and len(p.split()) >= 4]
+    assert len(natural) >= 50, (
+        "the vocabulary is still telegraphic - a nearest-neighbour matcher is "
+        "only as good as what it is near")
+
+
+def test_no_phrase_is_a_word_that_appears_inside_a_sentence_about_the_car():
+    """**The bug the rewrite introduced and this caught.** A bare "no" added
+    to KEEP matched "I have no grip at the rear" - the literal matcher works on
+    whole words, so a one-word phrase in common speech swallows real sentences.
+    Yes and no are resolved by the confirmation path and were never needed."""
+    for heard in ("i have no grip at the rear", "yes but the rears are gone",
+                  "no grip on entry"):
+        assert match_intent(heard) == UNKNOWN, heard

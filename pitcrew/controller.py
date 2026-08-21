@@ -1927,6 +1927,11 @@ class PitCrewController(QObject):
         corroboration, so where the two disagree the disagreement stays visible
         instead of being settled by whichever arrived last.
         """
+        # Kept for the radio as well as the store: "how are my tyres" is asked
+        # mid-lap and cannot wait for the lap to be written and read back.
+        present = {c: wear.get(c) for c in ("fl", "fr", "rl", "rr")
+                   if wear.get(c) is not None}
+        self._wear_now = present or None
         try:
             self.store.set_lap_wear(
                 lap_id, wear.get("fl"), wear.get("fr"),
@@ -3545,6 +3550,17 @@ class PitCrewController(QObject):
         index = self.race.state.stint_index + 1
         if index < len(stints):
             snapshot["stopFuelL"] = stints[index].get("fuel_l")
+        # **The gauge, so "how are my tyres" has a measured answer.** It is the
+        # question this app is about and it had no intent at all - it matched
+        # BOX_WHAT and came back with the compound planned for the stop. Absent
+        # keys stay absent: `intents.TYRES` answers "no tyre gauge" rather than
+        # a number, because §3.3 gives the feed no wear channel and a figure
+        # invented in reply to a direct question is the worst kind there is.
+        wear = getattr(self, "_wear_now", None)
+        if wear:
+            corner, worst = max(wear.items(), key=lambda kv: kv[1])
+            snapshot["wearWorst"] = worst
+            snapshot["wearCorner"] = corner
         return snapshot
 
     def _on_ptt_answer(self, heard: str, said: str) -> None:

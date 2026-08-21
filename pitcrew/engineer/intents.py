@@ -34,6 +34,14 @@ TYRES_RED = "tyres-red"
 # executing. The fuel half is actionable; the pace half is confirmation only
 # and is withheld entirely until it clears his own measured noise floor.
 ON_PLAN = "on-plan"
+# **The question this whole app is about, and it had no intent.** "How are my
+# tyres" matched BOX_WHAT and was answered with the compound planned for the
+# stop - a confident answer to a question he did not ask. It is answerable now
+# because the live gauge reads wear off the HUD; when it is not reading, the
+# honest answer is that it is not reading.
+TYRES = "tyres"
+# "What's my best lap" matched LAPS_LEFT, which answered "twelve to go".
+PACE = "pace"
 UNKNOWN = "unknown"
 
 # Phrases the driver actually uses, mapped to intent. Matching is on whole
@@ -46,24 +54,81 @@ UNKNOWN = "unknown"
 # declined. They are gone, and matching is now what the line above always
 # claimed it was.
 PHRASES: dict[str, tuple[str, ...]] = {
-    FUEL: ("fuel", "how much fuel", "fuel left", "enough fuel"),
-    POSITION: ("position", "where am i", "what position"),
+    # **Two jobs, and they used to be one.** These are the closed grammar SAPI
+    # recognises *and* the reference points the semantic matcher measures
+    # against, and they were written only for the first: terse keyword forms
+    # like "fuel", "keep", "again" that a grammar matches exactly.
+    #
+    # Measured against the driver's own phrasing, that cost him the radio. Six
+    # of twenty real questions landed beyond the act band and came back as
+    # "did you mean...?", and the gap between real questions and unrelated
+    # speech had gone **negative** - real questions reached 0.380 while "the
+    # dog wants to go out" sat at 0.330. Nearest-neighbour matching is only as
+    # good as what it is near, and nothing here was near how he talks.
+    #
+    # So every intent now carries the natural forms as well as the terse ones.
+    # The terse forms stay: they are what the grammar needs, and they cost
+    # nothing.
+    FUEL: ("fuel", "how much fuel", "fuel left", "enough fuel",
+           "how's my fuel", "hows my fuel", "how is my fuel",
+           "how much fuel have i got", "give me a fuel update",
+           "what's my fuel", "where's my fuel", "fuel update",
+           "have i got enough fuel", "am i ok on fuel"),
+    POSITION: ("position", "where am i", "what position",
+               "what position am i in", "where am i running"),
     LAPS_LEFT: ("laps left", "how long", "how many laps", "time left",
-                "laps remaining", "to go"),
+                "laps remaining", "to go", "how many laps left",
+                "how many laps to go", "how much longer",
+                "how many laps are left", "what lap am i on",
+                "what lap is this", "how far into the race are we"),
     BOX_WHEN: ("when do i box", "when box", "box when", "pit when",
-               "when do i pit", "when am i boxing"),
+               "when do i pit", "when am i boxing", "when am i stopping",
+               "how far to the stop", "how many laps to the stop",
+               "when's my stop", "whens my stop", "do i box this lap",
+               "box this lap", "am i boxing soon", "when's the pit stop",
+               "when do i come in", "what lap do i come in",
+               "do i come in soon", "am i coming in"),
     BOX_WHAT: ("what tyres", "which tyres", "what tires", "which compound",
-               "what compound"),
+               "what compound", "what tyres am i taking",
+               "which tyres at the stop", "what am i fitting",
+               "what compound at the stop", "what's going on the car"),
     BOX_FUEL: ("how much fuel do i take", "fuel to take", "how much to take",
-               "fuel in the stop"),
-    PLAN: ("what's the plan", "whats the plan", "the plan", "strategy"),
-    ACCEPT: ("accept", "do it", "yes do it", "agreed", "copy that"),
-    KEEP: ("keep", "stay out", "negative", "keep the plan"),
-    REPEAT: ("say again", "repeat", "again"),
+               "fuel in the stop", "how much fuel at the stop",
+               "how many litres do i take", "what's my fuel target",
+               "how much am i putting in"),
+    PLAN: ("what's the plan", "whats the plan", "the plan", "strategy",
+           "remind me of the plan", "what's the strategy",
+           "run me through the plan", "tell me the plan",
+           "what are we doing", "what's my race plan"),
+    ACCEPT: ("accept", "do it", "yes do it", "agreed", "copy that",
+             "go ahead", "let's do it", "confirmed", "affirmative",
+             "yeah do that"),
+    KEEP: ("keep", "stay out", "negative", "keep the plan",
+           "i'll stay out", "staying out", "leave it",
+           "stick with the plan", "no change"),
+    REPEAT: ("say again", "repeat", "again", "say that again",
+             "i missed that", "come again", "one more time"),
     TYRES_RED: ("tyres are red", "tires are red", "tyres red", "tires red",
-                "gone red", "went red", "frame is red"),
+                "gone red", "went red", "frame is red",
+                "the gauge has gone red", "tyres are in the red",
+                "my tyres are red"),
+    TYRES: ("how are my tyres", "how are my tires", "tyre wear",
+            "how are the tyres", "what's my tyre wear",
+            "how much wear have i got", "what's the tyre situation",
+            "are the tyres going off", "talk to me about the tyres",
+            "how are the tyres holding up", "how worn are my tyres",
+            "tyre update", "give me a tyre update", "worst tyre",
+            "how much life is in the tyres", "how much life is left",
+            "have the tyres got life left"),
+    PACE: ("what's my pace", "how's my pace", "hows my pace",
+           "what's my best lap", "am i quick enough", "how's my lap time",
+           "am i on pace", "what's my lap time", "how am i doing on pace",
+           "am i losing time"),
     ON_PLAN: ("are we on the plan", "on the plan", "how's the burn",
-              "hows the burn", "fuel burn", "on target"),
+              "hows the burn", "fuel burn", "on target",
+              "am i saving enough", "is the saving working",
+              "am i on target", "how's the burn looking",
+              "do i need to save fuel", "am i where i should be"),
 }
 
 # Longest phrases first: "how much fuel do i take" must win over "fuel".
@@ -211,6 +276,37 @@ def answer(intent: str, snapshot: dict, *,
         if not _has_plan(snapshot):
             return Answer(NO_PLAN, intent, answered=False)
         return Answer(_plan_summary(snapshot), intent)
+
+    if intent == TYRES:
+        worst = snapshot.get("wearWorst")
+        if worst is None:
+            # **Never modelled here.** `CLAUDE.md` §3.3: there is no tyre wear
+            # channel, and a number invented in answer to a direct question is
+            # the worst place in the app to invent one - he asked precisely
+            # because he wanted to know.
+            return Answer("No tyre gauge - read it to me.", intent,
+                          answered=False)
+        corner = (snapshot.get("wearCorner") or "").upper()
+        where = f"{corner} " if corner else "Worst "
+        said = f"{where}{worst * 100:.0f} percent."
+        stint = snapshot.get("lapsToStop")
+        if stint is not None and stint > 0:
+            said += f" {_laps(stint)} to the box."
+        return Answer(said, intent)
+
+    if intent == PACE:
+        # `paceIsReal` is the noise gate: his lap-to-lap spread puts the
+        # detection floor above the whole degradation band, so a pace figure
+        # that has not cleared it is not a finding and must not sound like one.
+        delta = snapshot.get("paceVsPlanMs")
+        if delta is None:
+            return Answer("No pace reference yet.", intent, answered=False)
+        if not snapshot.get("paceIsReal"):
+            return Answer("Pace is inside the noise - nothing to call.",
+                          intent)
+        seconds = abs(delta) / 1000.0
+        way = "up on" if delta < 0 else "down on"
+        return Answer(f"{seconds:.1f} {way} the plan.", intent)
 
     return Answer("Say again.", UNKNOWN, answered=False)
 

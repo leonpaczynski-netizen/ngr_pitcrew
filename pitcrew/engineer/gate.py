@@ -108,24 +108,46 @@ MAX_WORDS_PER_SECOND = 6.5
 # nothing in the UI ever shows a cosine value, because it would mean nothing
 # to the person reading it.
 #
-# **Measured, not guessed.** Against embeddinggemma-300m q4 and the forty-six
-# phrases in `intents.PHRASES`, over the transcripts Moonshine actually
-# produced for this vocabulary plus paraphrases of them:
+# **Re-measured 22 Aug, and the old numbers no longer described anything.**
+# They were calibrated against forty-six phrases; the list had grown to
+# fifty-seven and had never been re-measured, and it has since been rewritten
+# for natural speech and grown two intents. Measured against the rewritten
+# vocabulary, over phrasing deliberately held out of it:
 #
-#   real questions    0.028 - 0.244   ("what's the plan?" 0.028, "say out." 0.244)
-#   unrelated speech  0.416 - 0.473   ("turn the heating up please" 0.447)
+#   real questions    0.066 - 0.505
+#   unrelated speech  0.170 - 0.573
 #
-# A gap of 0.172 with nothing in it. The bands sit inside that gap, so at
-# `medium` every real question acts and every unrelated sentence is refused.
+# There is no gap. There is no threshold that separates them, either, because
+# the overlap is not noise: "remind me to buy milk" sits at 0.170 for the same
+# reason "remind me of the plan" does, and no distance rule tells those apart.
+# A best-versus-second-best margin was measured too and separates them no
+# better - the collision has a *larger* margin than most real questions.
+#
+# **So the band is set on the cost of being wrong, not on a separation that
+# does not exist.** Two measurements decide it:
+#
+# * On sixteen fresh held-out questions the intent was right thirteen times,
+#   and being close was almost no guide to being right: **9 of 11 correct at or
+#   below 0.34, and 4 of 5 correct above it.** 82% against 80%. A tight band
+#   buys essentially no accuracy - it just refuses questions it would have
+#   answered correctly. "How shot are the fronts" is 0.505 and matches `tyres`.
+# * At the old medium band only **four of those sixteen would have acted.** The
+#   other twelve came back as "did you mean...?", which is the driver's actual
+#   complaint in his own words: it doesn't understand what he is saying.
+#
+# And the premise underneath both: **he pressed a button to talk to his race
+# engineer.** He is not asking about milk. Answering a stray sentence costs him
+# one line he ignores; refusing a real question costs him asking twice, at
+# racing speed, with both hands on the wheel. Those are not the same price.
+#
 # Re-measure if the phrase list or the embedding model changes: these numbers
 # describe those two things and nothing else.
 SENSITIVITIES: dict[str, tuple[float, float]] = {
     # (act at or below this, confirm at or below this)
-    "high":   (0.38, 0.50),   # acts readily - unrelated speech asks rather
-                              # than refuses, costing him one syllable
-    "medium": (0.30, 0.40),   # inside the measured gap, clear both sides
-    "low":    (0.22, 0.35),   # acts only when sure - a mis-heard word like
-                              # "say out" for "stay out" asks first
+    "high":   (0.52, 0.70),   # acts on almost anything said into the button
+    "medium": (0.42, 0.58),   # acts on 14 of 16 held-out questions, confirms
+                              # the rest - nothing measured was refused outright
+    "low":    (0.32, 0.48),   # acts only when close, and asks about the rest
 }
 DEFAULT_SENSITIVITY = "medium"
 

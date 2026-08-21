@@ -427,6 +427,13 @@ def spoken_openers() -> tuple[str, ...]:
         "Tyre gauge when you get a straight.",
         # engineer/intents.py - acknowledge, never analyse
         "Copy, noted with the temperatures.",
+        # engineer/intents.py - the two intents the vocabulary was missing.
+        # "How are my tyres" used to match BOX_WHAT and be answered with the
+        # compound planned for the stop; "what's my best lap" matched
+        # LAPS_LEFT and was answered "twelve to go".
+        "No tyre gauge - read it to me.",
+        "No pace reference yet.",
+        "Pace is inside the noise - nothing to call.",
         # race/brief.py - the arming brief. Spoken on the grid rather than at
         # racing speed, so latency matters less here than anywhere - but these
         # are the lines that define what every later silence means, and a
