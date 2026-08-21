@@ -30,7 +30,8 @@ catalogued there.
 
 | Question | File |
 |---|---|
-| How does this driver drive, and what will he refuse? | `01-driver-profile-leon.md`, then `08-playbook-leon.md` |
+| **What will he refuse outright?** | **`brain/driver.md` — read this first, every time** |
+| How does this driver drive? | `01-driver-profile-leon.md`, then `08-playbook-leon.md` |
 | What does this slider do, and what fixes this symptom? | `02-gt7-setup-parameters.md` §10 |
 | Compounds, wear, fuel maps, multipliers, pit stops | `03-gt7-tyre-and-fuel-model.md` — **worst affected by 1.71** |
 | Race setup vs qualifying setup | `04-race-vs-qualifying.md` |
@@ -42,6 +43,14 @@ catalogued there.
 | What a car's sliders actually range over | `11-car-slider-ranges.md` — **re-read post-1.71 before issuing any sheet** |
 | What the telemetry flags actually measure | `15-pitcrew-detector-audit.md` + `RECONCILIATION.md` §C1 |
 | What a previous event concluded, and why | `_inbox/setups/` |
+
+## The one that gets broken most
+
+**Fuel map 1. Always. Never recommend a map change.** `02` §9.6 calls fuel map
+"the primary endurance-strategy lever" and it is — for other drivers. He has
+tested it: other maps lose more lap time than they save. His fuel levers are
+**short-shift → lift-and-coast → slipstream**, in that order. `brain/driver.md`
+carries the rest of the standing refusals.
 
 ## The rules that outrank convenience
 

@@ -17,6 +17,7 @@ found a mechanism the knowledge base had wrong. Neither record knew.
 |---|---|
 | `_inbox/` | **The raw export, unedited, under its original names.** Not authoritative — it is the record of what the Project actually said, so every later decision can be traced to a source rather than to a memory of one. The `NN-` numbering is the KB's own and is preserved. |
 | `_inbox/setups/` | Event outputs — the dated, car-and-circuit documents. These carry the *reasoning* behind every value on a sheet, which `setup_sheets_v8` has nowhere to store. **All pre-1.71.** |
+| `driver.md` | **The standing refusals and the measurement limits** — what he will not do, and what his own data cannot show. Started 21 Aug 2026 for facts that were true and written down nowhere. Every line sourced. |
 | `RECONCILIATION.md` | Where the knowledge base and the code disagree, with verdicts and the open questions. **Read this before trusting either record on anything app-facing.** |
 
 ## The entry points, in the KB's own order
