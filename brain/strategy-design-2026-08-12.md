@@ -1,3 +1,25 @@
+> **Provenance note, added 21 Aug 2026.** This document was **not** in the
+> Project export. It was loose in `~/Downloads`, and the export's own `06` is
+> `06-car-building-and-pp.md` — so its numbering belongs to a different set and
+> its origin could not be established.
+>
+> **Kept, and moved out of `_inbox/`.** Kept because it is the design rationale
+> behind `pitcrew/strategy/` and nothing else in the repository records it: the
+> v1→v2 amendment table listing six recommendations that "did not survive
+> contact with the code", the measurement that settled enumeration against
+> dynamic programming (6.7 M DP states versus 3,905 candidates scored in 106 ms),
+> and the decision that the tyre gauge is primary evidence and the lap-time fit
+> only corroboration. Losing that would mean re-deriving it or, worse,
+> re-litigating it.
+>
+> Moved because `_inbox/` is the faithful record of what the Project actually
+> contained, and a file that was never in it does not belong there.
+>
+> **Written against v1.70.** Its mechanism is version-independent; its numbers
+> are not.
+
+---
+
 # Race strategy — how it should be calculated
 
 **NGR Pit Crew · target design and evidence base · 12 August 2026 · v2**
