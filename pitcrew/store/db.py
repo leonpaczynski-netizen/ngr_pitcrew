@@ -695,6 +695,22 @@ class Store:
                 (start_hour, multiplier, _now(), event_id))
         return True
 
+    def set_session_sheet(self, session_id: int, sheet_id: int | None) -> None:
+        """Correct which setup sheet a recorded session was run on.
+
+        **The app could file a sheet and never re-attach one**, so a revision
+        that arrived after a session was recorded left that session pointing at
+        the older sheet - or, where no sheet for the purpose existed at all, at
+        nothing. Both were then presented as the setup as run.
+
+        This is a repair, not a workflow: the session already happened and only
+        the driver knows what was in the car. Nothing in the app calls it
+        automatically, and nothing should.
+        """
+        with self._write() as conn:
+            conn.execute("UPDATE sessions SET setup_sheet_id = ? WHERE id = ?",
+                         (sheet_id, session_id))
+
     def set_practice_intent(self, session_id: int, intent: str | None) -> None:
         """Say what this session was for, or unsay it."""
         with self._write() as conn:

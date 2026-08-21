@@ -340,6 +340,30 @@ def test_an_event_with_no_version_exports_on_the_app_setting(store: Store, recor
     assert payload["meta"]["gameVersion"] == "1.70"
 
 
+def test_a_session_can_be_told_which_sheet_it_actually_ran(store: Store,
+                                                           recorded):
+    """A revision that arrives after the session has to be attachable.
+
+    The app could file a sheet and never re-point a session at one, so a
+    session recorded before a revision landed kept reporting the older sheet -
+    and a session with no sheet for its purpose reported none at all, which is
+    what both league races on file did.
+    """
+    later = store.start_session(recorded["event_id"], "practice",
+                                game_version="1.71")
+    assert store.get_session(later)["setup_sheet_id"] is None
+
+    sheet_id = store.save_setup_sheet(SetupSheet(
+        car_name="Porsche 911 RSR (991) '17", sheet_name="Fuji race Rev C",
+        values={"rh_f": 68, "rh_r": 75}))
+    store.set_session_sheet(later, sheet_id)
+    assert store.get_session(later)["setup_sheet_id"] == sheet_id
+
+    # And it must be able to say "actually, none of them" again.
+    store.set_session_sheet(later, None)
+    assert store.get_session(later)["setup_sheet_id"] is None
+
+
 def test_the_catalogue_supplies_a_drivetrain_nobody_declared(store: Store):
     """GT7 sends no drivetrain channel, so it is told or it is looked up.
 
