@@ -17,6 +17,9 @@ from dataclasses import dataclass
 from pitcrew.race.calls import (
     BOX_IGNORED_LAPS,
     BOX_NOW,
+    HIGH,
+    LOW,
+    SAVING_RESPONSE,
     STAY_OUT,
     Call,
     RaceState,
@@ -626,11 +629,44 @@ class RaceCoordinator:
             self.state.position = event.data["position"]
         return self._emit()
 
+    # Laps to wait after asking for a saving before judging it. Two, because
+    # one lap is a lap and not a trend - and because the shortfall the
+    # instruction was meant to cover is still there while nobody has said.
+    SAVING_RESPONSE_AFTER = 2
+
     def _emit(self) -> Call | None:
         call = next_call(self.state)
         if call is not None:
             self.state.record(call)
-        return call
+            if call.short_shift_drop_rpm:
+                # The loop opens here. It has never closed.
+                self._saving_asked_lap = self.state.lap
+                self._saving_answered = False
+            return call
+
+        # **Nothing else won the lap, so close the loop if one is open.**
+        # Ranked below every real call and above the colour tier: it is not an
+        # instruction, but it is the answer to one the engineer gave.
+        answer = self._saving_response()
+        if answer is not None:
+            self.state.record(answer)
+        return answer
+
+    def _saving_response(self) -> Call | None:
+        asked = getattr(self, "_saving_asked_lap", None)
+        if asked is None or getattr(self, "_saving_answered", False):
+            return None
+        if self.state.lap - asked < self.SAVING_RESPONSE_AFTER:
+            return None
+        response = self.expect.saving_response(asked)
+        if response is None:
+            return None
+        # Said once per instruction. Asking again gets a fresh answer; this
+        # one is closed whatever it found, including "cannot resolve" - which
+        # is an answer, and repeating it every lap would be chatter.
+        self._saving_answered = True
+        return Call(SAVING_RESPONSE, self.state.lap, response.call(),
+                    "", confidence=HIGH if response.measurable else LOW)
 
     def stops_planned(self) -> int:
         """Stops still in the plan from here, for the re-plan comparison."""

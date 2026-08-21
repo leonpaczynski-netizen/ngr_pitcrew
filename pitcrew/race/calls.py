@@ -37,6 +37,11 @@ TYRE_TEMP = "tyre-temp"
 STATUS = "status"
 GREEN = "green"
 STAY_OUT = "stay-out"
+# **The answer to a saving the engineer asked for.** Not an
+# instruction, so it is ranked below every call that is one - but it
+# closes a loop the engineer opened, and an unclosed loop leaves the
+# driver believing a shortfall was covered when it was not.
+SAVING_RESPONSE = "saving-response"
 CHEQUER = "chequer"
 # **"Two to go" and "Last lap", which only an accurate clock makes sayable.**
 # GT7's own race clock is not accurate - the driver measured it - so a timed

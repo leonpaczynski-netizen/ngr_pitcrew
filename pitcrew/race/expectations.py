@@ -155,6 +155,36 @@ def detectable_delta_ms(laps: int, sigma_ms: float | None) -> float | None:
     return sigma_ms * DETECT_K / math.sqrt(laps)
 
 
+@dataclass(frozen=True)
+class SavingResponse:
+    """What the burn did after a saving instruction, and whether that is real."""
+
+    before_l: float
+    after_l: float
+    #: Signed fraction. Negative is a saving.
+    change: float
+    #: What the change had to clear to be measurable at all, same units.
+    floor: float
+    laps_after: int
+
+    @property
+    def measurable(self) -> bool:
+        return abs(self.change) > self.floor
+
+    @property
+    def saved(self) -> bool:
+        return self.measurable and self.change < 0
+
+    def call(self) -> str:
+        """One sentence: instruction or fact first, the numbers second."""
+        if not self.measurable:
+            return "I can't resolve a change that small yet."
+        if self.saved:
+            return f"That's working. {abs(self.change) * 100:.0f} percent down."
+        return (f"Not enough - the burn hasn't moved. "
+                f"{self.after_l:.2f} against {self.before_l:.2f}.")
+
+
 class ExpectationTracker:
     """The plan's expectations, refreshed each lap by what the race shows.
 
@@ -183,7 +213,7 @@ class ExpectationTracker:
         # green populations. Filtered at read time against the race's own
         # best, because a lap is only an outlier relative to laps that came
         # after it as well as before.
-        self._green: list[tuple[int, float, bool]] = []
+        self._green: list[tuple[int, float, bool, int]] = []
 
     # ------------------------------------------------------------------ feed
 
@@ -208,8 +238,11 @@ class ExpectationTracker:
         if pit or lap.lap_num <= 1 or lap.lap_time_ms <= 0:
             return
         saving = bool(getattr(lap, "short_shift_rpm", None))
+        # **The lap number rides along.** Without it there is no way to split
+        # the burn at the lap an instruction was given, which is the only way
+        # to answer "did the saving work" - see `saving_response`.
         self._green.append((int(lap.lap_time_ms), float(lap.fuel_used or 0.0),
-                            saving))
+                            saving, int(lap.lap_num)))
 
     def _clean(self) -> list[tuple[int, float, bool]]:
         """The laps that are evidence: no incident, no saving instruction.
@@ -221,9 +254,72 @@ class ExpectationTracker:
         """
         if not self._green:
             return []
-        cutoff = min(ms for ms, _, _ in self._green) * (
+        cutoff = min(row[0] for row in self._green) * (
             1.0 + BURN_OUTLIER_FRACTION)
         return [row for row in self._green if row[0] <= cutoff and not row[2]]
+
+    # ------------------------------------------------- did the saving work
+
+    def saving_response(self, instructed_at_lap: int, *,
+                        minimum_after: int = 2) -> "SavingResponse | None":
+        """Whether the burn actually moved after a saving instruction.
+
+        **The engineer opens this loop every time he asks for a short-shift or
+        a lift, and has never closed it.** A real one comes back two or three
+        laps later and says whether it worked - and if it did not, the shortfall
+        the instruction was meant to cover is still there and the driver needs
+        to know while he can still box.
+
+        A split of the green burns at the instruction lap, not a second
+        population: the laps are already here and the instruction lap is
+        already recorded.
+
+        **Three answers, never two.** Saved, did not save, or *cannot yet
+        tell* - and the third is the honest one for the first couple of laps,
+        because a difference smaller than the detection floor is not a small
+        effect, it is no measurement. Run retrospectively on the race of 19
+        Aug, where the engineer asked for a short-shift on lap 14: the burn
+        moved 5.478 to 5.422 L, **-1.0% against a floor of 0.9%** - at the
+        floor, indistinguishable from nothing, against a measured short-shift
+        effect of -21.6%. He did not save, and the engineer could have said so
+        on lap 17.
+        """
+        from statistics import median, pstdev
+
+        before = [row[1] for row in self._clean_any()
+                  if row[3] <= instructed_at_lap and row[1] > 0]
+        after = [row[1] for row in self._clean_any()
+                 if row[3] > instructed_at_lap and row[1] > 0]
+        if len(before) < 2 or len(after) < minimum_after:
+            return None
+
+        was, now = median(before), median(after)
+        if was <= 0:
+            return None
+        change = (now - was) / was
+
+        # The floor is what a difference has to clear to be a difference at
+        # all: the 95% interval on the median of the laps since. Stated, not
+        # applied silently - "I can't resolve a change this small" is a
+        # different claim from "you did not save".
+        spread = pstdev(after) if len(after) > 1 else 0.0
+        floor = (1.96 * spread / (len(after) ** 0.5) / was) if was else 0.0
+        return SavingResponse(before_l=round(was, 3), after_l=round(now, 3),
+                              change=change, floor=floor,
+                              laps_after=len(after))
+
+    def _clean_any(self) -> list[tuple[int, float, bool, int]]:
+        """`_clean`, but keeping the saving laps.
+
+        `_clean` drops them on purpose - they are evidence about the
+        instruction and not about the car, so they must never reach the burn
+        the plan is costed on. Here they are exactly what is being measured.
+        """
+        if not self._green:
+            return []
+        cutoff = min(row[0] for row in self._green) * (
+            1.0 + BURN_OUTLIER_FRACTION)
+        return [row for row in self._green if row[0] <= cutoff]
 
     # --------------------------------------------------------------- answers
 
@@ -249,7 +345,7 @@ class ExpectationTracker:
             wear_per_lap=self._planned_wear)
 
     def _fuel_now(self) -> tuple[float | None, int, str]:
-        clean = [used for _, used, _ in self._clean() if used > 0]
+        clean = [used for _, used, _, _ in self._clean() if used > 0]
         if len(clean) >= RACE_BURN_LAPS:
             # The race replaces practice outright. Averaging the two would
             # dilute the only low-noise evidence about THIS race with a figure
@@ -259,7 +355,7 @@ class ExpectationTracker:
         return self._planned_fuel, self._practice_fuel_samples, source
 
     def _pace_now(self) -> tuple[int | None, int, str]:
-        clean = [ms for ms, _, _ in self._clean()]
+        clean = [row[0] for row in self._clean()]
         if len(clean) >= RACE_PACE_LAPS:
             # Practice pace was measured 1.6 s/lap optimistic against the race
             # it was meant to describe, and a pooled blend was still 0.5 s
@@ -271,7 +367,7 @@ class ExpectationTracker:
 
     def race_lap_time_ms(self) -> int | None:
         """The clean pace this race is running, or None before it has one."""
-        clean = [ms for ms, _, _ in self._clean()]
+        clean = [row[0] for row in self._clean()]
         if len(clean) < RACE_PACE_LAPS:
             return None
         return int(median(clean))
@@ -300,7 +396,7 @@ class ExpectationTracker:
         2.7 times Monza - and a builder who used the recorded figure would
         over-claim detectability by a factor of about two.
         """
-        clean = [ms for ms, _, _ in self._clean()]
+        clean = [row[0] for row in self._clean()]
         if len(clean) < SIGMA_MIN_LAPS:
             return None
         return float(stdev(clean))
@@ -318,7 +414,7 @@ class ExpectationTracker:
 
     def race_fuel_per_lap_l(self) -> float | None:
         """The green burn this race is showing, whether or not it has taken over."""
-        clean = [used for _, used, _ in self._clean() if used > 0]
+        clean = [used for _, used, _, _ in self._clean() if used > 0]
         if not clean:
             return None
         return round(median(clean), 3)
@@ -331,7 +427,7 @@ class ExpectationTracker:
         reason `sigma_ms` is not: a margin is only cheap if the number it is
         built on belongs to the car actually running.
         """
-        clean = [used for _, used, _ in self._clean() if used > 0]
+        clean = [used for _, used, _, _ in self._clean() if used > 0]
         if len(clean) < RACE_BURN_LAPS:
             return None
         return stdev(clean)
@@ -345,7 +441,7 @@ class ExpectationTracker:
         green laps exist: the decision this feeds turned on 1.80% at the
         measured race, and fewer laps than this cannot resolve it.
         """
-        clean = [used for _, used, _ in self._clean() if used > 0]
+        clean = [used for _, used, _, _ in self._clean() if used > 0]
         observed = self.race_fuel_per_lap_l()
         if (observed is None or not self._planned_fuel
                 or len(clean) < RACE_BURN_LAPS):
