@@ -184,8 +184,32 @@ sheets. On the day it was written it found two:
 | Porsche 911 RSR | `2026-08-21-rsr-monza-revC.md` | `Monza race v2`, 14 Aug | **7 days** — sessions 59 and 60 affected, which are the two the v1.71 results were measured from |
 | Ford Shelby | `2026-08-16-shelby-yas-marina-revC.md` | `Yas Marina race v2`, 13 Aug | **3 days** — 4 sessions affected **including the race, session 44** |
 
-The Shelby row is `15` §4's scenario exactly: a race whose post-mortem would be
-computed against a setup that was not on the car.
+### E6 amended — the first version of this compared dates and cried wolf
+
+Comparing dates said all three cars were behind. **Comparing values says
+something much sharper**, and one of the three alarms was false:
+
+| Car | Verdict |
+|---|---|
+| **Porsche 911 RSR** | **Identical.** Rev C's own first line says *"UNCHANGED from Rev B"*, and all 22 values match what the app already holds under the older name. **Nothing to file.** |
+| **Ford Shelby** | **`rh_f` 80 → 89, `rh_r` 98 → 107.** Everything else matches. 4 sessions affected, **one of them the race.** |
+| **Lamborghini Huracán** | **`rh_f` 65 → 68, `rh_r` 72 → 75.** Everything else matches. 5 sessions affected, **one of them the race.** |
+
+**Both real differences are ride height and nothing else** — and the Huracán's
++3/+3 is the raise that `15` §1's `bottoming` flag bought, whose rationale was
+withdrawn but which he won the race on. The app has never had it.
+
+`tools/read_setup_document.py` does the extraction. Two things it had to get
+right, both found by checking rather than by shipping:
+
+* **The reply parser cannot read these documents.** Handed one it returned three
+  values and all three were wrong, because the range table further down the page
+  also contains numbers. These are presentation tables with a race column and a
+  qualifying column side by side; the reply parser expects a reply.
+* **A negative toe is written with U+2212**, not a hyphen. Left alone the number
+  regex skipped it and read the Shelby's front toe of −0.05° as **+0.05°** — a
+  sign error on a parameter whose sign is the whole setting, arriving silently.
+
 
 ## What was not checked
 

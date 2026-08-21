@@ -32,8 +32,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pitcrew.store.db import Store                           # noqa: E402
+from read_setup_document import read_race_sheet              # noqa: E402
 
 SETUPS = REPO / "brain" / "_inbox" / "setups"
 
@@ -105,38 +107,69 @@ def main() -> int:
                      f"({len(sheets)} sheet{'' if len(sheets) == 1 else 's'})"
                      if newest_sheet else "no sheets"))
 
-            if newest_doc and newest_sheet and \
-                    newest_doc[0].isoformat() > newest_sheet[0]:
-                problems += 1
-                gap = (newest_doc[0] - dt.date.fromisoformat(newest_sheet[0])).days
-                print(f"  ** NEVER FILED: {newest_doc[1]} is {gap} day"
-                      f"{'' if gap == 1 else 's'} newer than anything the app "
-                      f"holds.")
-                # The sessions that were recorded against the stale sheet, and
-                # are therefore exporting the wrong setup as run.
-                affected = [
-                    s for s in _sessions_for_car(store, car)
-                    if s["started_at"][:10] >= newest_doc[0].isoformat()]
-                if affected:
-                    print(f"     {len(affected)} session"
-                          f"{'' if len(affected) == 1 else 's'} recorded since "
-                          f"it was issued, all reporting the older sheet:")
-                    for s in affected[:6]:
-                        print(f"       session {s['id']}  {s['kind']:<8} "
-                              f"{s['started_at']}")
+            if not (newest_doc and newest_sheet):
+                continue
+
+            # **Compare the VALUES, not the dates.** The first version of this
+            # compared dates alone and cried wolf on the RSR: its Rev C says in
+            # its own first line "UNCHANGED from Rev B", and every one of its
+            # 22 values already matched what the app held under the older name.
+            # A checker that raises a false alarm gets ignored, and then it
+            # misses the real one.
+            doc_values, doc_gears, _ = read_race_sheet(
+                (SETUPS / newest_doc[1]).read_text(encoding="utf-8"))
+            stored = store.get_setup_sheet(_sheet_id(store, car))
+            if len(doc_values) < 18 or stored is None:
+                print(f"  ?? could not read the sheet out of {newest_doc[1]} "
+                      f"({len(doc_values)} of 22 values) - not compared")
+                continue
+
+            keys = sorted(set(doc_values) | set(stored.values))
+            diffs = [(k, stored.values.get(k), doc_values.get(k)) for k in keys
+                     if doc_values.get(k) is None or stored.values.get(k) is None
+                     or abs(float(stored.values[k]) - doc_values[k]) > 1e-6]
+
+            if not diffs:
+                print(f"  values identical - the app holds this revision's "
+                      f"numbers under the older name. Nothing to file.")
+                continue
+
+            problems += 1
+            print(f"  ** {len(diffs)} value{'' if len(diffs) == 1 else 's'} differ "
+                  f"from {newest_doc[1]}:")
+            for key, app_value, doc_value in diffs:
+                print(f"       {key:<8} app has {app_value!r:>8}   "
+                      f"the revision says {doc_value!r:>8}")
+            affected = [
+                s for s in _sessions_for_car(store, car)
+                if s["started_at"][:10] >= newest_doc[0].isoformat()]
+            if affected:
+                print(f"     {len(affected)} session"
+                      f"{'' if len(affected) == 1 else 's'} recorded since, all "
+                      f"exporting the older values:")
+                for s in affected[:6]:
+                    print(f"       session {s['id']}  {s['kind']:<8} "
+                          f"{s['started_at']}")
 
         print()
         if problems:
-            print(f"{problems} car{'' if problems == 1 else 's'} carrying a "
-                  f"revision the app never received.")
-            print("File it on the Event screen before diagnosing anything from "
-                  "these sessions - the export presents the stored sheet as "
+            print(f"{problems} car{'' if problems == 1 else 's'} whose stored "
+                  f"sheet does not match the revision that was issued.")
+            print("Confirm which values were actually in the car, then file them "
+                  "on the Event screen - the export presents the stored sheet as "
                   "the setup as run.")
         else:
-            print("Every issued revision is on file.")
+            print("Every stored sheet matches the revision issued for it.")
         return 1 if problems else 0
     finally:
         store.close()
+
+
+def _sheet_id(store, car: str) -> int | None:
+    rows = store._query(
+        "SELECT id FROM setup_sheets WHERE car_name = ? AND purpose = 'race' "
+        "ORDER BY updated_at DESC, id DESC LIMIT 1", (car,))
+    return rows[0]["id"] if rows else None
 
 
 def _newest_sheet(store, car: str) -> tuple[str, str] | None:
