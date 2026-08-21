@@ -190,14 +190,29 @@ def test_no_fuel_call_without_a_burn_rate():
 
 # -------------------------------------------------------------------- tyres
 
-def test_the_tyre_call_is_always_low_confidence():
-    """Wear is modelled, never measured. It must never sound like a reading."""
+def test_the_modelled_tyre_call_is_gone():
+    """**Retired 22 Aug 2026, by agreement between a research pass and an
+    adversarial review of it.**
+
+    It said *"Tyres are at the end of their window. Modelled at 92%."* - a
+    sentence whose first clause is a flat assertion about the tyres, built on
+    wear-per-lap times laps-since-stop. `CLAUDE.md` §3.3 says there is no wear
+    channel and §4.5 says nothing derived may be presented as measured; the
+    word "Modelled" was carrying all of that on its own. It was also the only
+    call that stacked three hedges at once.
+
+    Retiring it cost nothing measurable: across the five races on file it
+    fired **zero times in 74 recorded calls**. And it is no longer the best
+    available - `telemetry/hud.py` reads the gauge itself.
+    """
     state = a_state(lap=18, wear_per_lap=0.05, laps_since_stop=18,
                     stint_ends_on_lap=None, fuel_l=40.0)
     call = next_call(state)
-    assert call.kind == TYRE
-    assert call.confidence == LOW
-    assert "Modelled" in call.reason
+    assert call is None or call.kind != TYRE
+
+    from pitcrew.race.calls import URGENCY, WORSE_BY
+    assert TYRE not in URGENCY
+    assert TYRE not in WORSE_BY
 
 
 def test_no_tyre_call_without_a_wear_rate():
@@ -215,9 +230,14 @@ def test_fresh_tyres_raise_nothing():
 
 # ------------------------------------------------------------------- status
 
-def test_a_status_call_comes_round_occasionally():
-    # Last stint, fuel on target for the 15 laps remaining.
+def test_a_status_call_comes_round_after_a_stretch_of_silence():
+    """**A heartbeat, not a metronome.** It fired on `lap % 5` regardless of
+    whether anything else had been said, which collided with the run-in - that
+    speaks every lap of the last five - and spent a call on two numbers he can
+    already read. What it is for is proving the engineer is still there, and
+    that is a function of silence."""
     state = a_state(lap=5, fuel_l=15 * 3.4 + 1.0, stint_ends_on_lap=None)
+    state.last_said_lap = 0
     call = next_call(state)
     assert call.kind == STATUS
     assert "P3" in call.call
@@ -257,15 +277,19 @@ def test_a_fuel_only_stop_does_not_reset_the_tyre_model():
     assert state.laps_since_stop == 10          # but the set is the same set
 
 
-def test_a_stop_that_says_nothing_about_the_tyres_says_so_out_loud():
+def test_a_stop_that_says_nothing_about_the_tyres_leaves_the_count_alone():
+    """The count survives a stop that did not say whether tyres changed.
+
+    This used to be asserted through the modelled tyre call's wording. That
+    call is retired, but the state rule it rested on is not: GT7 lets you take
+    fuel without taking tyres, so a stop that says nothing either way must not
+    reset the set - treating every stop as fresh halves every wear rate that
+    spans one.
+    """
     state = a_state(lap=18, laps_since_stop=18, wear_per_lap=0.05,
                     stint_ends_on_lap=None, fuel_l=40.0)
     clear_stint(state)
     assert state.laps_since_stop == 18
-    call = next_call(state)
-    assert call.kind == TYRE
-    assert "may have changed" in call.reason
-    assert "Unconfirmed." in call.spoken()
 
 
 # --------------------------------------------------------------- coordinator
@@ -806,10 +830,16 @@ def test_the_status_call_comes_round_more_than_once():
     """`STATUS_EVERY_LAPS` is this call's rate limiter, and it could only
     ever match once while the kind was suppressed for the whole stint."""
     state = a_state(lap=5, fuel_l=15 * 3.4 + 1.0, stint_ends_on_lap=None)
+    state.last_said_lap = 0
     first = next_call(state)
     assert first.kind == STATUS
     state.record(first)
 
-    state.lap = 10
+    # Straight after speaking it must go quiet again - the silence it measures
+    # has just been broken by itself.
+    state.lap = 6
+    assert next_call(state) is None or next_call(state).kind != STATUS
+
+    state.lap = 11
     state.fuel_l = 10 * 3.4 + 1.0
     assert next_call(state).kind == STATUS

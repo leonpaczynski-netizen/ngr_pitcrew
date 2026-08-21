@@ -58,7 +58,7 @@ LAPS_TO_GO = "laps-to-go"
 # 1.79: under a ranking that puts the countdown first, "short-shift and lift"
 # could not have been voiced on either of them. He can count laps himself; he
 # cannot see the fuel arithmetic.
-URGENCY = (CHEQUER, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON, TYRE,
+URGENCY = (CHEQUER, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            FUEL_LONG, TYRE_TEMP, GREEN, STATUS)
 
 # A status call every few laps, so silence means "nothing to report" rather
@@ -205,7 +205,6 @@ TEMP_BASELINE_MIN_LAPS = 3
 WORSE_BY = {
     FUEL_SHORT: 0.5,     # half a lap further short
     FUEL_LONG: 1.0,      # another lap in hand
-    TYRE: 0.10,          # ten more points of modelled life gone
     BOX_NOW: 1.0,        # another lap overdue at the stop
     BOX_SOON: 1.0,       # a lap closer to it
 }
@@ -424,12 +423,34 @@ class RaceState:
         return (self.stint_ends_on_lap is not None
                 and self.lap >= self.stint_ends_on_lap)
 
+    # The last lap on which the engineer said anything at all. None until he
+    # has: a race that has not started is not a race that has gone quiet.
+    last_said_lap: int | None = None
+
     def note_temps(self, lap: int, front_c: float, rear_c: float) -> None:
         """One completed lap's measured axle means, in order driven."""
         self.temp_history.append((lap, front_c, rear_c))
 
+    def laps_since_anything_said(self) -> int | None:
+        """Laps since the engineer last spoke, or None if he never has.
+
+        **The heartbeat's measure.** `_status` used to fire on `lap % 5`,
+        which is a metronome: it spoke whether or not anything else had, and
+        it collided with the run-in, which speaks every lap of the last five.
+        What it is for is proving the engineer is still there - and that is a
+        function of silence, not of the lap number.
+        """
+        if self.last_said_lap is None:
+            return None
+        return max(0, self.lap - self.last_said_lap)
+
     def record(self, call: Call) -> None:
         """Remember a call was made, and how bad it was when it was."""
+        # **Every kind, including the ones that say nothing new.** The
+        # heartbeat measures silence, so a lap on which anything at all was
+        # said is not silent - otherwise the status call would answer a
+        # quietness that never happened.
+        self.last_said_lap = call.lap
         if call.kind not in self.said:
             self.said.append(call.kind)
         if call.severity is not None:
@@ -528,7 +549,17 @@ def _candidates(state: RaceState) -> list[Call | None]:
         _box_now(state),
         _box_soon(state),
         _fuel(state),
-        _tyre(state),
+        # **`_tyre` is not here, deliberately.** It said "Tyres are at the end
+        # of their window. Modelled at 92%." - a sentence whose first clause is
+        # a flat assertion about the tyres, built on wear-per-lap times laps.
+        # CLAUDE.md §3.3 says there is no wear channel and §4.5 says nothing
+        # derived may be presented as measured; the word "Modelled" was doing
+        # all the work in between. It was also the only call that stacked three
+        # hedges at once.
+        #
+        # Retiring it costs nothing measurable: across the five races on file
+        # it fired **zero times in 74 recorded calls**. And it is no longer the
+        # best available - `telemetry/hud.py` reads the gauge itself.
         _tyre_temp(state),
         _status(state),
     ]
@@ -1222,10 +1253,21 @@ def _rearm_conserve(state: RaceState, front: float, rear: float) -> None:
 
 
 def _status(state: RaceState) -> Call | None:
-    """Proactive reassurance, rarely. Silence should mean nothing to report."""
+    """Proactive reassurance, rarely. Silence should mean nothing to report.
+
+    **On silence, not on a clock.** This fired every fifth lap regardless, which
+    made it a metronome rather than a heartbeat: it collided with the run-in,
+    which speaks every lap of the last five, and it spent a call saying two
+    numbers he can already read on a lap where something else may well have
+    been said. Now it speaks only when nothing has been said for a while, which
+    is the thing it was always for - proving the engineer is still there.
+    """
     if state.lap < 1 or state.finished or state.in_pit:
         return None
-    if state.lap % STATUS_EVERY_LAPS != 0 or _crossing_the_line(state):
+    if _crossing_the_line(state):
+        return None
+    since = state.laps_since_anything_said()
+    if since is None or since < STATUS_EVERY_LAPS:
         return None
     remaining = state.laps_remaining()
     where = f"P{state.position}." if state.position else ""

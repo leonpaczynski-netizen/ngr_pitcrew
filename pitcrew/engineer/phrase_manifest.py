@@ -337,17 +337,28 @@ def _call_states() -> list:
     The small enumerations that genuinely are rendered whole - the stop number
     in a box-soon call, the compound in a box-now - are swept properly.
     """
+    # **The status states carry a silence behind them.** `_status` became a
+    # heartbeat on 22 Aug - it fires on laps since anything was said rather
+    # than on `lap % 5` - so a freshly built state never reaches it, and the
+    # moment it stopped being reachable the manifest stopped declaring its
+    # clips. "10 to go." lost its "to go." fragment and would have fallen
+    # through to live synthesis, silently.
+    def _quiet(**fields):
+        state = _state(**fields)
+        state.last_said_lap = 0
+        return state
+
     states = [
         _state(lap=0),                                        # bare green
         _state(lap=0, laps_total=20),                         # green + laps
         _state(lap=6, finished=True),                         # bare chequer
         _state(lap=6, finished=True, position=4),             # chequer + place
-        _state(lap=5, laps_total=20, position=4),             # status, both
-        _state(lap=5, position=4),                            # status, place
-        _state(lap=5, laps_total=20),                         # status, laps
-        _state(lap=5, laps_total=20, position=4,              # timed: "about"
+        _quiet(lap=5, laps_total=20, position=4),             # status, both
+        _quiet(lap=5, position=4),                            # status, place
+        _quiet(lap=5, laps_total=20),                         # status, laps
+        _quiet(lap=5, laps_total=20, position=4,              # timed: "about"
                race_minutes=45.0),
-        _state(lap=5, laps_total=20, race_minutes=45.0),
+        _quiet(lap=5, laps_total=20, race_minutes=45.0),
         # Box now: on the plan, to a fuel figure, and clamped to the tank.
         _state(lap=6, stint_ends_on_lap=6),
         _state(lap=6, laps_total=20, stint_ends_on_lap=6,

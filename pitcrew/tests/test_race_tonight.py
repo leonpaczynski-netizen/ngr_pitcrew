@@ -608,6 +608,8 @@ def test_the_status_call_still_reports_when_it_has_the_lap_free():
     call per lap working. On a quiet lap it still comes round."""
     state = RaceState(lap=10, laps_total=15, race_minutes=30.0, position=4,
                       laps_estimate_firm=True)
+    # The heartbeat measures silence: nothing has been said for ten laps.
+    state.last_said_lap = 0
     call = next_call(state)
     assert call.kind == STATUS
     assert "P4" in call.call and "about 5 to go" in call.call

@@ -358,6 +358,9 @@ def test_a_timed_race_says_its_lap_count_is_an_estimate():
     """The distance follows from the clock and the pace, so it is 'about'."""
     state = RaceState(lap=5, laps_total=24, race_minutes=45.0, position=3,
                       laps_estimate_firm=True)
+    # The status call is a heartbeat now: it needs a stretch of silence
+    # behind it rather than a lap number divisible by five.
+    state.last_said_lap = 0
     call = next_call(state)
     assert call.kind == STATUS
     assert call.call == "P3. about 19 to go."
@@ -370,6 +373,9 @@ def test_a_lap_count_that_cannot_be_resolved_is_not_spoken_at_all():
     not uncertain, it is unresolvable - and a coin toss with "about" in front
     of it is still a number he will plan around."""
     state = RaceState(lap=5, laps_total=24, race_minutes=45.0, position=3)
+    # The status call is a heartbeat now: it needs a stretch of silence
+    # behind it rather than a lap number divisible by five.
+    state.last_said_lap = 0
     call = next_call(state)
     assert call.kind == STATUS
     assert call.call == "P3."
