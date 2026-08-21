@@ -500,3 +500,47 @@ Two things make a straight import wrong:
    with the supersessions *recorded* rather than deleted, the same way §8 keeps
    the withdrawn VR conclusion visible.
 
+---
+
+## 10. Spikes S2 and S4 — run 21 Aug 2026
+
+### S2 — the NPU is reachable, but not by the cheap route
+
+**The NPU enumerates from this Python.** OpenVINO 2026.3 has a `cp314-win_amd64`
+wheel and finds it:
+
+```
+devices: ['CPU', 'GPU', 'NPU']
+  NPU: Intel(R) AI Boost
+```
+
+**But the drop-in path does not exist.** Moonshine runs on `onnxruntime`, and
+moving it to the NPU means the OpenVINO *execution provider* —
+`onnxruntime-openvino`, which publishes **cp311, cp312 and cp313 wheels and no
+cp314**. Its PyPI classifiers claim 3.14; the classifiers are self-declared and
+the wheels are the truth. `onnxruntime-directml` does ship cp314, but DirectML
+on this machine addresses the Intel GPU, not AI Boost.
+
+So the only route is converting the model to OpenVINO IR and running it under
+`openvino` directly — **replacing the ASR runtime rather than setting a flag.**
+
+**Verdict: deferred, and it costs nothing to defer.** The plan's own rule was
+*"if the win is not measurable, the NPU work stops here"* — and the win cannot
+be measured without doing the work first, which inverts the test. Push-to-talk
+on CPU is not currently a complaint. **Revisit when either `onnxruntime-openvino`
+ships a 3.14 wheel, or CPU during a race becomes a measured problem rather than
+a theoretical one.**
+
+*This does not change §2.1's reframe. The NPU was never going to host the race
+engineer on 11 TOPS; it was going to do perception, and perception currently
+runs.*
+
+### S4 — moot, by the decision already taken
+
+S4 was to measure an Anthropic API round-trip during a race. **The MCP-first
+decision made it unnecessary:** the brain now reads the database directly over
+stdio, with no network in the path at all, and the race path never touches
+either. There is nothing to measure until somebody wants unattended calls —
+and by then the question is about a debrief that can take as long as it likes,
+not about a lap.
+
