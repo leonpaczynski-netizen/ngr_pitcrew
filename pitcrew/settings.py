@@ -129,7 +129,16 @@ class Settings:
     # is what "the GT7 version just blocks the output" was. An event may still
     # carry its own, for a measurement taken under a version that is no longer
     # the one installed, and that overrides this.
-    game_version: str = "1.70"
+    #
+    # **Empty by default, deliberately, and it used to read "1.70".** A
+    # hard-coded version is right for exactly as long as it takes the console
+    # to patch itself, and then it is silently wrong on every measurement
+    # taken afterwards. 1.71 landed on 20 Aug 2026 and reworked the tyre
+    # model, so a run recorded on the 21st and stamped 1.70 is not a small
+    # error - it files post-patch evidence under the pre-patch physics and
+    # nothing downstream can tell. Empty means unset; the export refuses a
+    # payload with no version, which is a failure somebody notices.
+    game_version: str = ""
 
     # --- push to talk
     ptt_enabled: bool = True

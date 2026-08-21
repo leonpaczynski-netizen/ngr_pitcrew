@@ -768,6 +768,21 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("purpose", "TEXT"),
     ),
     "sessions": (
+        # **The GT7 version this session was RECORDED under.**
+        #
+        # It lived on the event and in settings, and neither can be right: on
+        # 20 Aug 2026 update 1.71 reworked the tyre model, per-car steering
+        # geometry, damper attenuation and the adjustment ranges of suspension,
+        # differential and aero. Event 1 holds 44 sessions spanning 11 to 21
+        # August, so it straddles that patch - and whichever single version the
+        # event carries, it mislabels one side of it. A version is a property of
+        # the MOMENT A MEASUREMENT WAS TAKEN, which is the session.
+        #
+        # Null on every session recorded before the column existed. Null means
+        # "not recorded", never "the current one" - a session dated before a
+        # patch that reports the version installed after it is worse than one
+        # that says nothing, because it will be believed.
+        ("game_version", "TEXT"),
         # **Which kind of practice this was**, because it decides whether the
         # session's opening lap is an out-lap. Out of the box in a lobby it
         # always is. In a time trial the car starts on the track ahead of the

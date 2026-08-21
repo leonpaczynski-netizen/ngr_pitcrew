@@ -641,16 +641,23 @@ class Store:
                       setup_sheet_id: int | None = None,
                       practice_mode: str | None = None,
                       practice_intent: str | None = None,
-                      rehearsal: bool = False) -> int:
+                      rehearsal: bool = False,
+                      game_version: str | None = None) -> int:
         from pitcrew.store.identity import IDENTITY_OK
 
         with self._write() as conn:
             cur = conn.execute(
                 "INSERT INTO sessions (event_id, kind, tune_label, setup_sheet_id, "
-                "practice_mode, practice_intent, rehearsal, identity_status, "
-                "started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "practice_mode, practice_intent, rehearsal, game_version, "
+                "identity_status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (event_id, kind, tune_label, setup_sheet_id, practice_mode,
                  practice_intent, int(rehearsal),
+                 # **Stamped now, at the moment of recording, and never
+                 # inferred later.** An empty setting stores NULL rather than a
+                 # guess: the export refuses a payload with no version, which
+                 # is the loud failure. A version filled in afterwards from
+                 # whatever happens to be installed is the quiet one.
+                 (game_version or "").strip() or None,
                  # A session opens carrying the event's declaration. Only the
                  # stream can contradict it, and until a packet lands there is
                  # nothing to contradict it with - opening at anything else

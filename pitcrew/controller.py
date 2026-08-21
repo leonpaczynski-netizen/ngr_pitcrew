@@ -1601,7 +1601,8 @@ class PitCrewController(QObject):
         self.session_id = self.store.start_session(
             event["id"], "practice", setup_sheet_id=sheet_id,
             practice_mode=self.practice.practice_mode(),
-            practice_intent=intent)
+            practice_intent=intent,
+            game_version=self.settings.game_version)
         self.session_kind = "practice"
         # The rack is NOT cleared. Going out again adds to the session's
         # evidence; it does not replace it. Three runs at one circuit are one
@@ -3080,7 +3081,7 @@ class PitCrewController(QObject):
                     f"the Event screen.", warn=True)
         self.session_id = self.store.start_session(
             event["id"], "race", setup_sheet_id=sheet.id if sheet else None,
-            rehearsal=rehearsal)
+            rehearsal=rehearsal, game_version=self.settings.game_version)
         self.session_kind = "race"
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)

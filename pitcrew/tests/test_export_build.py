@@ -6,6 +6,7 @@ import json
 import pytest
 
 from pitcrew.export.build import (
+    _merged_session,
     build_event_export,
     build_session_export,
     multiplier_factor,
@@ -335,6 +336,81 @@ def test_an_event_with_no_version_exports_on_the_app_setting(store: Store, recor
     payload = build_event_export(store, recorded["event_id"],
                                  game_version="1.70")
     assert payload["meta"]["gameVersion"] == "1.70"
+
+
+def test_the_session_stamp_outranks_the_event_and_the_setting():
+    """The version belongs to the moment the measurement was taken.
+
+    An event can straddle a patch; a session cannot. Event 1 on the real
+    database holds 44 sessions spanning 11 to 21 August 2026 and 1.71 landed on
+    the 20th, so whichever single version the event carries is wrong for one
+    side of it, and the app's setting is wrong for everything recorded before
+    the console updated.
+    """
+    merged = _merged_session([
+        {"id": 1, "started_at": "2026-08-21T17:00:00", "game_version": "1.71",
+         "packet_format": "C", "setup_sheet_id": None, "practice_intent": None,
+         "practice_mode": None, "car_category": "GR3", "fuel_capacity_l": 100.0,
+         "identity_status": "ok"},
+    ])
+    assert merged["game_version"] == "1.71"
+
+
+def test_an_event_that_straddles_a_patch_refuses_to_export():
+    """Pre- and post-patch laps are not one body of evidence about one car.
+
+    Everything else in the merge picks the first run that had an answer, which
+    is right for a packet format. For the game version it would flatten two
+    physics models into one array with nothing marking the join, and
+    `CLAUDE.md` §7 would rather refuse than emit that.
+    """
+    sessions = [
+        {"id": 58, "started_at": "2026-08-19T20:40:23", "game_version": "1.70",
+         "packet_format": "C", "setup_sheet_id": None, "practice_intent": None,
+         "practice_mode": None, "car_category": "GR3", "fuel_capacity_l": 100.0,
+         "identity_status": "ok"},
+        {"id": 60, "started_at": "2026-08-21T17:14:02", "game_version": "1.71",
+         "packet_format": "C", "setup_sheet_id": None, "practice_intent": None,
+         "practice_mode": None, "car_category": "GR3", "fuel_capacity_l": 100.0,
+         "identity_status": "ok"},
+    ]
+    with pytest.raises(ValueError) as raised:
+        _merged_session(sessions)
+    message = str(raised.value)
+    # The refusal has to say which sessions are on which side, or he cannot act
+    # on it without going to the database himself.
+    assert "1.70" in message and "1.71" in message
+    assert "session 58" in message and "session 60" in message
+
+
+def test_sessions_with_no_version_recorded_leave_the_merge_open():
+    """Null is honest and must fall through to the event or the setting.
+
+    Every session recorded before the column existed says nothing, and that
+    has to keep working rather than becoming a refusal.
+    """
+    merged = _merged_session([
+        {"id": 1, "started_at": "2026-08-11T15:31:08", "game_version": None,
+         "packet_format": "C", "setup_sheet_id": None, "practice_intent": None,
+         "practice_mode": None, "car_category": "GR3", "fuel_capacity_l": 100.0,
+         "identity_status": "ok"},
+    ])
+    assert merged["game_version"] is None
+
+
+def test_an_unset_version_is_stored_as_null_not_as_a_guess(store: Store,
+                                                           recorded):
+    """Empty means unrecorded, and must not become whatever is installed.
+
+    The setting used to default to the literal `"1.70"`, which was right until
+    the console patched itself and silently wrong on every measurement after.
+    A session that says nothing gets noticed downstream - the export refuses a
+    payload with no version at all. One that confidently reports the wrong
+    physics does not.
+    """
+    bare = store.start_session(recorded["event_id"], "practice",
+                               game_version="   ")
+    assert store.get_session(bare)["game_version"] is None
 
 
 def test_a_version_on_the_event_still_wins(store: Store, recorded):

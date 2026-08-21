@@ -278,6 +278,34 @@ def _merged_session(sessions: list[dict]) -> dict:
     """
     ordered = sorted(sessions, key=lambda s: (s["started_at"], s["id"]))
     merged = dict(ordered[0])
+
+    # **An event may not span two versions of the game.** Everything else here
+    # merges by picking the first run that had an answer, and for a packet
+    # format or a fuel capacity that is right. For the GT7 version it would be
+    # a lie: this export says "three runs at one circuit are one body of
+    # evidence about one car", and laps taken either side of a physics update
+    # are not one body of evidence about anything.
+    #
+    # 1.71 (20 Aug 2026) reworked the tyre model, per-car steering geometry,
+    # damper attenuation and the adjustment ranges of suspension, differential
+    # and aero. Event 1 holds 44 sessions from 11 to 21 August. Flattening
+    # those into one payload under a single `meta.gameVersion` would hand the
+    # tune builder pre- and post-patch wear in one array with nothing marking
+    # the join - and CLAUDE.md §7 would rather refuse than emit that.
+    seen = sorted({v for v in (_session_field(s, "game_version") for s in ordered)
+                   if v})
+    if len(seen) > 1:
+        where = "; ".join(
+            f"{v}: " + ", ".join(
+                f"session {s['id']} ({str(s['started_at'])[:10]})"
+                for s in ordered if _session_field(s, "game_version") == v)
+            for v in seen)
+        raise ValueError(
+            f"this event spans {len(seen)} GT7 versions and cannot be exported "
+            f"as one body of evidence - {where}. Export the sides separately, "
+            f"or exclude the sessions recorded under the other version.")
+    merged["game_version"] = seen[0] if seen else None
+
     for key in ("packet_format",
                 "setup_sheet_id", "practice_intent", "practice_mode"):
         merged[key] = next(
@@ -395,10 +423,15 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         session_type=session["kind"],
         packet=session["packet_format"],
         car_category=_car_category(session["car_category"]),
-        # The event's own version where it has one - a measurement taken
-        # under a version that is no longer installed keeps the version it was
-        # taken under - and the app's otherwise.
-        game_version=event["game_version"] or game_version,
+        # **The session's own stamp first.** It is the only one of the three
+        # that is a property of when the measurement was actually taken, and
+        # an event can straddle a patch: event 1 holds 44 sessions spanning
+        # 11 to 21 Aug 2026 and 1.71 landed on the 20th, so its single event
+        # value is wrong for one side of it whichever way it is set. The
+        # event's declaration is next, for a run filed under a version no
+        # longer installed, and the app's setting last.
+        game_version=(_session_field(session, "game_version")
+                      or event["game_version"] or game_version),
         practice_intent=_session_field(session, "practice_intent"),
         practice_mode=_session_field(session, "practice_mode"),
         rehearsal=bool(_session_field(session, "rehearsal")),

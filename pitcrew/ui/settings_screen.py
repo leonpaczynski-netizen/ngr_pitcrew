@@ -224,7 +224,7 @@ class SettingsScreen(QWidget):
         # an event created without one produced, with nothing on screen to
         # connect the empty box to the refusal.
         self.game_version = QLineEdit()
-        self.game_version.setPlaceholderText("1.70")
+        self.game_version.setPlaceholderText("e.g. 1.71 - required, and no default is assumed")
         plate.body.addWidget(Field(
             "GT7 version", self.game_version,
             hint="Filed with every measurement. The physics have been "
@@ -755,7 +755,10 @@ class SettingsScreen(QWidget):
             feed_source=self.feed_source.currentData(),
             ps5_ip=self.ps5_ip.text().strip(),
             banner_enabled=self.banner_enabled.isChecked(),
-            game_version=self.game_version.text().strip() or "1.70",
+            # **No fallback.** Coercing an empty box to "1.70" was the same
+            # hard-coded default wearing a different hat, and it outlived the
+            # patch that made it wrong.
+            game_version=self.game_version.text().strip(),
             ptt_enabled=self.ptt_enabled.isChecked(),
             ptt_key=self.ptt_key.currentText().strip().lower(),
             ptt_in_practice=self.ptt_in_practice.isChecked(),
