@@ -71,12 +71,21 @@ it costs. Optimum shift point ≈1200 rpm below the limiter; **his own habitual
 
 ## Where the records disagree
 
-**The wheel base.** `00-INDEX.md` and `CLAUDE.md` §2 both say **"Fanatec DD
-Extreme (18 Nm)"**. Session memory records it as a **ClubSport DD+**, established
-by checking the settings menu — and that the rim has **no shaker motors** (`SHO`
-absent), which closed a question about rendering cues through the wheel.
-**Unresolved. It matters because it decides what the rig can render**, and both
-canonical documents carry the other name.
+**The wheel base — settled 21 Aug 2026, and it was never a hardware
+disagreement.** He runs a **Fanatec DD Extreme (18 Nm) with ClubSport V3
+pedals** — his own words, and what `CLAUDE.md` §2 and `00-INDEX.md` say.
+`docs/WHEEL-AND-PEDALS_2026-08-16.md` §8 records that the base's own tuning
+menu, photographed on 17 Aug, reads **`CLUBSPORT DD+ WHEEL BASE`**.
+
+**Both are right. It is one 18 Nm direct-drive base under two names**, and the
+functional readings taken off that menu stand: **FullForce (`FUL`) is present**
+— which is what he feels dirty air through, and which the feed can never render
+because it carries no proximity or aero channel — and **`SHO` is absent, so the
+rim has no shaker motors.** Nothing about what the rig can render changes.
+
+*Recorded rather than deleted because the earlier note had it as a
+contradiction and concluded the documents were wrong. They were not, and a
+naming difference is not grounds to discard a photograph.*
 
 **FullForce stays on.** He feels dirty air through it, and the telemetry feed has
 no proximity or aero channel — so the ButtKicker can never render that cue. **GT7
@@ -97,8 +106,13 @@ Sensitivity 9 is load-bearing for it: never lower it. Max Torque yields instead.
 
 ## Open questions for him
 
-1. **Wheel base model** — DD Extreme or ClubSport DD+? Two documents say one
-   thing and the measurement says another.
+1. **Job 7a from the 1.71 protocol, and it is now urgent.** 1.71 adjusted
+   force feedback, understeer vibration **and Fanatec Auto Setup parameters**.
+   `08` and `07` both warn that **on an 18 Nm base an FFB change reads exactly
+   like a grip change** — and the first 1.71 session came in 2.5 s off the
+   pre-patch median. **Confirm the wheel settings are where you left them
+   before diagnosing anything about grip.** Five minutes, and it separates "the
+   wheel feels different" from "the car has less grip".
 2. Does the fuel-map rule survive 1.71? It was established pre-patch, and 1.71
    changed the torque map. The *rule* is his call either way; the *evidence*
    behind it is now pre-patch like everything else.
