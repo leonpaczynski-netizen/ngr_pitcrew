@@ -21,6 +21,7 @@ from pitcrew.analysis.refuel import refuel_evidence
 from pitcrew.analysis.resolve import circuit_key
 from pitcrew.strategy.model import is_wet_compound
 from pitcrew.analysis.recency import weighted
+from pitcrew.analysis.modes import find_split
 from pitcrew.analysis.version import prefer_current
 from pitcrew.analysis.runs import split_runs
 from pitcrew.analysis.weather import wet_evidence
@@ -556,6 +557,13 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         burns.append(used)
         by_session.setdefault(getattr(lap, "session_id", None), []).append(used)
     fuel_sd = consecutive_sd(by_session.values())
+    # **Two disciplines look like one number unless somebody checks.** On
+    # session 60 ten laps were deliberately short-shifted and two run at full
+    # RPM: 5.15-5.36 L against 6.66-6.81 L, a clean 27% step. `short_shift_rpm`
+    # reads 0.0 on all twelve, so nothing downstream can separate them and the
+    # weighted median lands on the short-shifted figure. A plan costed on it
+    # goes into a full-RPM race a quarter light on fuel.
+    fuel_split = find_split(burns)
     # The same estimator on lap time, and only a timed race reads it: it is
     # what decides whether the clock's own lap count is resolvable enough to
     # fuel exactly to. See `RaceInputs.lap_count_firm`.
@@ -758,6 +766,16 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     # pre-patch laps looks exactly like one built on current ones, and the
     # whole point of holding the old laps back is that somebody knows it
     # happened.
+    # **Above the plan, because it invalidates the number the plan is costed
+    # on.** Not a correction: the app cannot tell which population the race
+    # will be run at, and choosing for him would be inventing the answer.
+    if fuel_split is not None:
+        evidence.insert(0, Evidence(
+            "Fuel burn is split",
+            f"{fuel_split.low:.3g} / {fuel_split.high:.3g} L per lap",
+            ASSUMED,
+            fuel_split.describe()))
+
     if selection.note:
         evidence.insert(0, Evidence(
             "Evidence version",
