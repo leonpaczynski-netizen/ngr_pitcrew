@@ -35,10 +35,10 @@ KB should be amended**; no app work follows.
 
 | # | Defect | Evidence today | Severity |
 |---|---|---|---|
-| B1 | `15` §5.4: `fuelMap` null | **79 of 333 laps populated (24%).** The whole fuel model is expressed per map, and `04`/`03` reason in map steps throughout | high — cheapest field on the sheet |
+| B1 | `15` §5.4: `fuelMap` null | **Not a code defect.** Laps inherit the event's declared map and do so perfectly: event 3 declares `1` and all 79 of its laps carry it; events 1 and 2 declare nothing and 0 of 254 do. **It has simply never been entered on two events.** See E5 | data entry, not code |
 | B2 | `15` §1 fixes 1–3: per-speed-band reference, mean heave reported alongside per-wheel minima, kerb frames excluded | Not implemented. See C1 — the underlying mechanism turned out to be different, but these three remain good ideas independently | medium |
 | B3 | `15` §2 fixes 2–3: normalise the yaw deficit for speed; report a continuous magnitude rather than a boolean | The `1/v²` structural bias argument stands and is analytic | medium |
-| B4 | `15` §4: the `setup` / `performance` / PP block is stale | Not re-checked in this pass — needs a session to confirm against | **high if still live** |
+| B4 | `15` §4: the `setup` / `performance` / PP block is stale | **CONFIRMED LIVE, and the cause is upstream of the app.** `Store.sheet_for` correctly returns the newest sheet it holds; the fault is that revisions are issued, typed into GT7, and never filed. `tools/check_setup_sheets.py` now detects it — see E6 | **high** |
 
 ---
 
@@ -160,6 +160,32 @@ the test and strike the row.
 a fix lands, nobody updates the knowledge base, and a document goes on telling a
 race engineer to work around something that stopped happening. That is precisely
 how §C1 came about. Commit `d08fde4`.
+
+**E5. `fuelMap` — the mechanism works; the declaration is missing.** Laps
+inherit the event's declared fuel map, and where one is declared every lap
+carries it (event 3: 79 of 79). Events 1 and 2 have never had one entered, so
+0 of 254 laps do. **This is yours to declare, not the app's to infer** — and
+worth noting, the knowledge base does not record your fuel-map discipline
+anywhere either. That belongs in the driver file whenever Phase 1 writes one.
+
+**E6. The stale setup block — confirmed, with a detector.** `Store.sheet_for`
+is not at fault: it returns the newest sheet it holds, and does. The fault is
+that a revision is written, typed into GT7 and **never filed into Pit Crew**,
+so the app faithfully reports the newest sheet it has — which is not the newest
+that exists. Nothing inside the app could see that, because the missing sheet
+is missing.
+
+`brain/` being in the repository makes it visible for the first time.
+`tools/check_setup_sheets.py` compares issued setup documents against stored
+sheets. On the day it was written it found two:
+
+| Car | Knowledge base | App holds | Gap |
+|---|---|---|---|
+| Porsche 911 RSR | `2026-08-21-rsr-monza-revC.md` | `Monza race v2`, 14 Aug | **7 days** — sessions 59 and 60 affected, which are the two the v1.71 results were measured from |
+| Ford Shelby | `2026-08-16-shelby-yas-marina-revC.md` | `Yas Marina race v2`, 13 Aug | **3 days** — 4 sessions affected **including the race, session 44** |
+
+The Shelby row is `15` §4's scenario exactly: a race whose post-mortem would be
+computed against a setup that was not on the car.
 
 ## What was not checked
 
