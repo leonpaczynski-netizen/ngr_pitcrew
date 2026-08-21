@@ -461,6 +461,42 @@ the analysis conversation, which Claude Code already does better.
    Project is reachable from anywhere.** If setup work away from the rig matters,
    the Project stays and the MCP connector matters more than this suggests.
 
-**Still open:** whether the Project's knowledge can be exported to files —
-uploaded documents and artifacts may not come out cleanly.
+### What is actually in the Project
+
+Answered: **the Project's knowledge is essentially all markdown**, so nothing is
+trapped in a format that will not come out. Four of the files are already on disk
+in `~/Downloads`, and their names show the shape of the whole set:
+
+| File | What it is |
+|---|---|
+| `06-race-strategy-design-research-2026-08-12.md` (61 KB) | **Doctrine** — how strategy *should* be calculated, with a v1→v2 amendment table recording six recommendations that "did not survive contact with the code" |
+| `15-pitcrew-detector-audit.md` | **Doctrine about this app** — what the detector flags actually measure |
+| `2026-08-11-rsr-monza.md` (35 KB) | **An event output** — the sheet, the reasoning per value, the gearing derivation, the fuel arithmetic, the tests to run |
+| `2026-08-10_Huracan_LagunaSeca.md` | Same, for a different event |
+
+Two categories, and they belong in different places:
+
+- **Numbered doctrine files (at least 01–15)** → `brain/`, versioned, loaded as a
+  skill. This is the reusable knowledge.
+- **Dated event documents** → alongside the sheets they produced. **These carry
+  far more than `setup_sheets_v8` stores** — the *why* behind every value, which
+  is exactly what makes the next revision good, and today it exists only in
+  Downloads and the Project. This is the other half of the provenance gap.
+
+### Phase 1 is a merge, not a copy
+
+Two things make a straight import wrong:
+
+1. **Some of the doctrine is already superseded.** The detector audit's
+   `bottoming` finding, for instance, has since been withdrawn — the flag fires
+   on the most *extended* wheel because GT7's suspension channel reads
+   larger-is-more-compressed, and the rationale it bought for a ride-height raise
+   went with it. Importing that as-is would re-import a known-wrong rule.
+   **Corrections learned since have accumulated in session memory, not in the
+   Project documents.**
+2. **Volume.** One doctrine file is 61 KB. Fifteen of them cannot all be
+   always-loaded context. Phase 1 needs a triage into a small always-loaded core,
+   an on-demand reference tier, and an archive of what has been superseded —
+   with the supersessions *recorded* rather than deleted, the same way §8 keeps
+   the withdrawn VR conclusion visible.
 
