@@ -4,9 +4,10 @@
 `brain/_inbox/`. Every claim the knowledge base makes *about the Pit Crew app* has
 been checked against the code and the database as they stand today.
 
-**Nothing here has been decided unilaterally.** Where the two disagree, both sides
-are stated with their evidence and the verdict is marked. Section D is the part
-that needs your ruling.
+**Nothing here was decided unilaterally.** Where the two disagree, both sides are
+stated with their evidence and the verdict is marked. Section E carried the four
+questions that were the driver's to answer; all four were answered on the day and
+the reasoning is recorded there with the outcome.
 
 `CLAUDE.md` §4.1: *where the driver's report and the telemetry disagree, that
 disagreement is the finding.* The same applies to two written records of the same
