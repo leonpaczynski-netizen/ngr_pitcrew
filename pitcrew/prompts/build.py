@@ -863,6 +863,7 @@ def _build_outcome(context: ctx.PromptContext, report: DriverReport,
 
     _strategy_section(lines, context, warnings)
     _calls_section(lines, context)
+    _radio_section(lines, context)
     _wear_section(lines, context)
     _gearing_section(lines, gearing)
 
@@ -1077,6 +1078,41 @@ def _calls_section(lines: Lines, context: ctx.PromptContext) -> None:
             "declined" if accepted is False else "not recorded")
         lines.add(f"| {call.get('lap', '—')} | {call.get('call', '—')} "
                   f"| {call.get('confidence', 'unstated')} | {outcome} |")
+    lines.add("")
+
+
+def _radio_section(lines, context) -> None:
+    """What was said on the radio, both ways, in order.
+
+    **The calls ledger is one side of a conversation.** It records what the
+    engineer said and whether a pit stop followed, which cannot tell a call
+    that was right and ignored from a call that was noise and ignored - and
+    that difference is the whole of "which calls help".
+
+    Verbatim, and his words are not tidied. `CLAUDE.md` §4.1 makes the driver's
+    report primary evidence, and a paraphrase of primary evidence is secondary.
+    An exchange the gate refused to classify is included with its refusal
+    showing: the vocabulary missing him is a finding about the vocabulary.
+    """
+    exchanges = list(getattr(context, "radio", None) or [])
+    if not exchanges:
+        return
+    lines.add("## Radio")
+    lines.add("")
+    lines.add("Both sides, verbatim and in order. The engineer's calls and "
+              "whether they were taken are in the section above; this is what "
+              "the driver said back.")
+    lines.add("")
+    for item in exchanges:
+        lap = item.get("lap_num")
+        where = f"Lap {lap}" if lap else "Lap unknown"
+        kind = item.get("session_kind") or "session"
+        intent = item.get("intent")
+        tag = f" [{intent}]" if intent and intent != "unknown" else (
+            " [not understood]" if not intent or intent == "unknown" else "")
+        lines.add(f"- **{where}, {kind}**{tag}")
+        lines.add(f'  - Driver: "{(item.get("heard") or "").strip()}"')
+        lines.add(f'  - Engineer: "{(item.get("said") or "").strip()}"')
     lines.add("")
 
 

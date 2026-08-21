@@ -538,6 +538,35 @@ class Store:
                             from_value=r["from_value"], to_value=r["to_value"])
                 for r in rows]
 
+    def log_radio(self, session_id: int | None, *, heard: str, said: str,
+                  lap_num: int | None = None, intent: str | None = None) -> None:
+        """Record one push-to-talk exchange, both sides.
+
+        **Never raises into the caller.** This is written from the answer
+        callback while the driver is on track, and a database hiccup must not
+        cost him the reply he already heard.
+        """
+        try:
+            with self._write() as conn:
+                conn.execute(
+                    "INSERT INTO radio (session_id, lap_num, heard, said, "
+                    "intent, created_at) VALUES (?,?,?,?,?,?)",
+                    (session_id, lap_num, heard, said, intent, _now()))
+        except sqlite3.Error:
+            log("store").exception("radio exchange not recorded")
+
+    def list_radio(self, session_id: int) -> list[dict]:
+        return [dict(r) for r in self._query(
+            "SELECT * FROM radio WHERE session_id = ? ORDER BY id",
+            (session_id,))]
+
+    def event_radio(self, event_id: int) -> list[dict]:
+        """Every exchange across the event's sessions, oldest first."""
+        return [dict(r) for r in self._query(
+            "SELECT radio.*, sessions.kind AS session_kind "
+            "FROM radio JOIN sessions ON sessions.id = radio.session_id "
+            "WHERE sessions.event_id = ? ORDER BY radio.id", (event_id,))]
+
     def save_range_record(self, record) -> None:
         record.validate()
         with self._write() as conn:

@@ -183,6 +183,28 @@ CREATE INDEX IF NOT EXISTS idx_changes_session ON setup_changes(session_id);
 -- The car's slider limits, read off its settings screen once and never
 -- re-entered.  Worth more than the setup values themselves: they are what
 -- makes a returned recommendation enterable without clamping.
+-- **What was said on the radio, both ways.**
+--
+-- The calls ledger records what the engineer said and whether it was taken.
+-- It has never recorded what the DRIVER said - and "learn what feedback I
+-- like and when" cannot be answered from one side of a conversation. A call
+-- that was right and ignored, and a call that was noise and ignored, look
+-- identical in the ledger; the difference is usually in the reply.
+--
+-- Kept per session rather than per race run, because he uses push-to-talk in
+-- practice too and that is where the vocabulary gets learned.
+CREATE TABLE IF NOT EXISTS radio (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    lap_num     INTEGER,
+    heard       TEXT,
+    said        TEXT,
+    -- The intent the gate settled on, or null where it refused to guess.
+    -- A refusal is evidence too: it says the vocabulary missed him.
+    intent      TEXT,
+    created_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS range_records (
     car_name      TEXT PRIMARY KEY,
     measured_date TEXT NOT NULL,

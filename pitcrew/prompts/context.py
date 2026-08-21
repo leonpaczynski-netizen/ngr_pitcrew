@@ -98,6 +98,14 @@ class PromptContext:
     # lengthens a stint and can leave a harder compound below its working
     # range - all of which is setup information before it is strategy.
     clock_note: str | None = None
+    # **Both sides of the radio, for the debrief only.**
+    #
+    # The calls ledger says what the engineer said and whether it was taken. It
+    # cannot say whether a call HELPED: a call that was right and ignored and a
+    # call that was noise and ignored look identical in it, and the difference
+    # is almost always in what the driver said back. Learning to be a better
+    # engineer needs the reply.
+    radio: list[dict] = field(default_factory=list)
     payload_refusal: str | None = None
     # Set only where exactly one compound ran, so the prose can say what the
     # payload says. `compounds_run` carries the rest, in order.
@@ -284,6 +292,13 @@ def gather(store, *, event_id: int | None = None, kind: str = "brief",
     context.ranges = resolve_ranges(store, context.car, context.car_spec)
     context.history = combination_history(store, event, context.sheet)
     context.clock_note = _clock_note(store, event)
+    if kind == "outcome":
+        # Read only for the debrief. A refinement is about the car; this is
+        # about how the engineer spoke and whether it landed.
+        try:
+            context.radio = store.event_radio(event["id"])
+        except Exception:                                    # noqa: BLE001
+            context.radio = []
 
     if kind == "brief":
         return context

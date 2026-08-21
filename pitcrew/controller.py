@@ -3416,6 +3416,18 @@ class PitCrewController(QObject):
         """
         self.bridge.ptt_answered.emit(heard, said)
 
+    def _current_lap(self) -> int | None:
+        """The lap he is on, or None if nothing on the wire says.
+
+        `laps_completed` is the count behind him, so the lap in progress is one
+        more. None rather than a guess when there is no packet: an exchange
+        filed against a lap that was not being driven is worse than one filed
+        against no lap at all.
+        """
+        packet = getattr(self.bridge, "last_packet", None)
+        done = getattr(packet, "laps_completed", None) if packet else None
+        return int(done) + 1 if isinstance(done, int) and done >= 0 else None
+
     def _show_ptt_answer(self, heard: str, said: str) -> None:
         if self.race_screen is not None:
             self.race_screen.show_exchange(heard, said)
@@ -3428,6 +3440,17 @@ class PitCrewController(QObject):
             match_intent,
         )
         intent = match_intent(heard)
+
+        # **Both sides of the exchange, on the record.** The calls ledger has
+        # only ever held what the engineer said and whether it was taken. A
+        # call that was right and ignored, and a call that was noise and
+        # ignored, look identical there - the difference is almost always in
+        # what he said back. Learning which calls help cannot be done from one
+        # side of a conversation.
+        self.store.log_radio(
+            self.session_id, heard=heard, said=said,
+            lap_num=self._current_lap(), intent=intent)
+
         if intent == TYRES_RED:
             self._note_tyre_frame_red()
             return
