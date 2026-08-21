@@ -298,9 +298,77 @@ Carried from `CLAUDE.md` and from things already learned the hard way.
 
 ### Still open
 
-1. **In PSVR2, does the capture still show the HUD wear gauge?** Answered by
-   spike S3. If the mirrored VR view drops or distorts it, live wear reading
-   works on flat-screen races only — and that is worth knowing before the plan
-   leans on it.
-2. **Is there anything in the Project that cannot be exported to files** —
+1. **Is there anything in the Project that cannot be exported to files** —
    uploaded documents, artifacts, chat history you rely on? Blocks Phase 1 only.
+
+---
+
+## 8. Spike S3 — run 21 Aug 2026
+
+### Transport: works, and it is cheap enough
+
+obs-websocket 5.7.4 on OBS 32.2.2, port 4455. Measured against a control
+window, so the figure is the screenshot's cost and not OBS's own render load:
+
+| | |
+|---|---|
+| OBS alone, rendering and capturing as usual | 16.1% of one core |
+| OBS + one screenshot per second | 67.4% of one core |
+| Cost attributable to one screenshot | ~537 ms CPU, 520 ms round-trip |
+| **At one screenshot per 90-second lap** | **0.60% of one core, sustained** |
+
+Two things production must inherit:
+
+- **A 1720x916 PNG is ~2 MB and `websockets` caps frames at 1 MB by default.**
+  It does not truncate — it closes the socket with a 1009. Mid-race that reads
+  as "OBS went away" rather than "the frame was large". Set `max_size`.
+- Screenshot **the scene, not the `PS5` source.** The scene renders at the
+  canvas resolution; the source returns the card's own, and every calibrated
+  constant would need re-probing.
+
+### Flat screen: the calibrated geometry still lands
+
+The canvas is **1720x916 — exactly** what `LAYOUT_1720x916` was derived from,
+and the four bars sit on the calibrated rectangles. No re-probing needed.
+
+**The pause menu dims and desaturates by ~45%**: every bar peaks at
+`(137,137,137)` where production needs `>150` for white and `r>110` for red, so
+all four read `None`. That is the correct refusal, and it gives the live sampler
+a firm rule: **detect the dim and skip the frame — never relax the thresholds to
+compensate.** Relaxing them lets a dimmed frame produce a number, and a wrong
+wear figure is far worse than a missing one.
+
+*Not yet proven:* an unpaused flat-screen read end to end. Every flat frame
+captured was a pause menu.
+
+### VR: the gauge IS there — and it moves
+
+**An earlier reading of this was wrong and is withdrawn.** The gauge box was
+empty in VR and no HUD was visible in the frames to hand, so it was recorded as
+"GT7 draws no HUD in VR". The 48-second recording
+`C:\Users\leons\Videos\2026-08-21 16-50-36.mp4` shows otherwise:
+
+- **In VR the HUD is drawn on the car's dashboard in 3D**, not as a screen-space
+  overlay. It is present, complete with the four-bar tyre cluster.
+- **So it translates and skews with head position.** Located across the drive,
+  the cluster moved roughly **x 1240 → 1453, y 360 → 455** — about 200 px
+  horizontally — during ordinary driving. *A fixed rectangle tracks nothing.*
+- **It is much smaller: bars are 18–20 px tall against 30 px flat.** One pixel is
+  therefore **~5.6% of tyre life, which at Monza is about one full lap** —
+  against 3.3% flat.
+- A first-cut locator (find a short vertical strip that is red over white, then
+  demand a 2×2 cluster) found it on **2 frames in 15**. That number is about the
+  detector, not the ceiling. **The quantisation floor is the fundamental part.**
+
+Consequence for Phase 3: **live wear reading is materially harder in VR than on
+a flat screen, but it is not out of reach.** It needs
+
+1. a **per-frame locator** rather than fixed geometry — anchor on the car icon;
+2. **many samples per lap**, since the hit rate will never be 100%;
+3. **fitting a slope across a stint rather than trusting any single reading** —
+   which is exactly how the offline tool already reaches 0.5% accuracy from a
+   gauge quantised at 3.3%. That discipline is what makes the coarser VR gauge
+   survivable, and it is already the design.
+
+**Neither mode is proven end to end yet.** Flat needs one unpaused driving
+frame; VR needs a locator worth the name.
