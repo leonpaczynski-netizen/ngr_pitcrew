@@ -22,6 +22,7 @@ from pitcrew.settings import (
 from pitcrew.store.db import Store
 from pitcrew.ui.event_screen import EventScreen
 from pitcrew.ui.practice_screen import PracticeScreen
+from pitcrew.settings import HUD_SOURCE_OBS, HUD_SOURCE_SCREEN
 from pitcrew.ui.settings_screen import SettingsScreen
 
 from .test_controller import raw
@@ -706,3 +707,107 @@ def test_the_strength_can_be_changed_without_restarting_the_stream():
     assert engine._mix.master == 2.5
     engine.set_master(99.0)
     assert engine._mix.master == 4.0, "the master gain is not bounded"
+
+
+# ------------------------------------------- the gauge and the talk button
+#
+# Both were settings with no control at all: the tyre gauge was built, tested
+# and switched off, and tap-to-talk became the default with no way back to hold
+# except editing the config by hand.
+
+
+def test_the_gauge_settings_survive_a_round_trip_through_the_screen(qt_app):
+    """Every new box has to reach `values()`.
+
+    The failure this guards is the one the screen already documents: building a
+    fresh Settings from the widgets meant a Save silently rewrote whatever had
+    no control back to its default. A half-wired box is that bug again.
+    """
+    screen = SettingsScreen()
+    screen.load(Settings(hud_wear_enabled=True, hud_source=HUD_SOURCE_SCREEN,
+                         obs_host="10.0.0.9", obs_port=4460,
+                         obs_password="secret", hud_sample_interval_s=2.5,
+                         ptt_toggle=False))
+    got = screen.values()
+    assert got.hud_wear_enabled is True
+    assert got.hud_source == HUD_SOURCE_SCREEN
+    assert got.obs_host == "10.0.0.9"
+    assert got.obs_port == 4460
+    assert got.obs_password == "secret"
+    assert got.hud_sample_interval_s == pytest.approx(2.5)
+    assert got.ptt_toggle is False
+
+
+def test_the_defaults_are_unchanged_by_having_controls(qt_app):
+    """Adding a switch must not flip it. The gauge opens a socket to another
+    process, and that may not start happening because the app was updated."""
+    screen = SettingsScreen()
+    screen.load(Settings())
+    got = screen.values()
+    assert got.hud_wear_enabled is False
+    assert got.hud_source == HUD_SOURCE_OBS
+    assert got.hud_sample_interval_s == 0.0
+    assert got.ptt_toggle is True
+
+
+def test_the_obs_connection_is_hidden_where_it_is_not_read(qt_app):
+    """The rule the feed plate already follows: leaving an unread box enabled
+    is how somebody comes to believe a password is doing something."""
+    screen = SettingsScreen()
+    screen.load(Settings(hud_source=HUD_SOURCE_OBS))
+    assert screen.obs_host_field.isVisibleTo(screen)
+    assert not screen.hud_projector_note.isVisibleTo(screen)
+
+    screen.load(Settings(hud_source=HUD_SOURCE_SCREEN))
+    assert not screen.obs_host_field.isVisibleTo(screen)
+    assert not screen.obs_password_field.isVisibleTo(screen)
+    assert screen.hud_projector_note.isVisibleTo(screen)
+
+
+def test_a_password_keeps_its_trailing_space(qt_app):
+    """Stripped, it would be a wrong password that looks right on screen."""
+    screen = SettingsScreen()
+    screen.load(Settings(obs_password="pass "))
+    assert screen.values().obs_password == "pass "
+
+
+def test_the_gauge_test_reports_a_missing_source_rather_than_raising(wired):
+    """The rehearsal the gauge has never had. With nothing to read it must say
+    so on the screen - not raise into a settings page, and not stay silent."""
+    controller, screen, _ = wired
+    screen.load(Settings(hud_source=HUD_SOURCE_SCREEN))
+    assert controller.test_gauge() is False
+    assert screen.gauge_note.text()
+    # And the button it disabled is given back, whatever happened.
+    assert screen.test_gauge_button.isEnabled()
+
+
+def test_the_gauge_test_reads_a_frame_and_says_the_numbers(wired, monkeypatch):
+    """A readable frame is reported as four numbers and a worst corner - the
+    only thing that proves the whole path, source to transcription."""
+    from pitcrew.telemetry import hud
+    from pitcrew.tests.test_hud_wear import a_canvas
+
+    controller, screen, _ = wired
+    screen.load(Settings(hud_source=HUD_SOURCE_SCREEN))
+    png = a_canvas({"fl": 0.4, "fr": 0.2, "rl": 0.6, "rr": 0.4})
+    monkeypatch.setattr(hud.ScreenSource, "grab", lambda self: (png, None))
+    assert controller.test_gauge() is True
+    note = screen.gauge_note.text()
+    assert "RL 60%" in note and "FR 20%" in note
+    assert "Worst corner 60%" in note
+
+
+def test_the_gauge_test_survives_a_source_that_raises(wired, monkeypatch):
+    """Nothing in a settings screen may take the app down with it."""
+    from pitcrew.telemetry import hud
+
+    def explode(self):
+        raise RuntimeError("the socket went away")
+
+    controller, screen, _ = wired
+    screen.load(Settings(hud_source=HUD_SOURCE_SCREEN))
+    monkeypatch.setattr(hud.ScreenSource, "grab", explode)
+    assert controller.test_gauge() is False
+    assert "RuntimeError" in screen.gauge_note.text()
+    assert screen.test_gauge_button.isEnabled()

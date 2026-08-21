@@ -647,6 +647,8 @@ class PitCrewController(QObject):
             self.settings_screen.test_haptics_requested.connect(
                 self.test_haptics)
             self.settings_screen.test_feed_requested.connect(self.test_feed)
+            self.settings_screen.test_gauge_requested.connect(
+                self.test_gauge)
             self.settings_screen.capture_toggled.connect(self.toggle_capture)
             self.settings_screen.listen_toggled.connect(self.probe_button)
             self.settings_screen.load(self.settings)
@@ -1247,6 +1249,84 @@ class PitCrewController(QObject):
             self.settings_screen.set_feed_testing(False)
         self.settings_screen.note_feed(report.as_text(), warn=not report.ok)
         return report.ok
+
+    def test_gauge(self) -> bool:
+        """Read the wear gauge once, now, and say exactly what happened.
+
+        **The gauge has never been read during a live race** - only against
+        recorded video and synthetic frames - so the first time it is asked to
+        work must not be a race. This is that rehearsal: it grabs one frame
+        through the source in the boxes, transcribes it, and reports the four
+        numbers or the reason there are none.
+
+        Tested against the values on screen rather than the saved ones, like
+        the feed test beside it, so the answer is about the change he is
+        considering. It builds its own source and touches the live sampler not
+        at all: `ObsSource` opens and closes per grab and `ScreenSource` holds
+        nothing, so neither can disturb a session already running.
+        """
+        if self.settings_screen is None:
+            return False
+        from pitcrew.settings import HUD_SOURCE_SCREEN
+        from pitcrew.telemetry.hud import ObsSource, ScreenSource, read_gauge
+
+        wanted = self.settings_screen.values()
+        if wanted.hud_source == HUD_SOURCE_SCREEN:
+            source = ScreenSource()
+            where = "the screen"
+        else:
+            source = ObsSource(wanted.obs_host, wanted.obs_port,
+                               wanted.obs_password)
+            where = f"OBS at {wanted.obs_host}:{wanted.obs_port}"
+
+        # **Say it is working before it blocks**, for the reason the feed test
+        # does: a websocket grab can sit on its connect timeout for four
+        # seconds, and an undisabled button over an unresponsive window is how
+        # a working test gets pressed five times.
+        self.settings_screen.set_gauge_testing(True)
+        QApplication.processEvents()
+        try:
+            frame, why = source.grab()
+            reading = read_gauge(frame) if frame is not None else None
+        except Exception as exc:                             # noqa: BLE001
+            # Nothing in a settings screen may take the app down with it.
+            self.settings_screen.set_gauge_testing(False)
+            self.settings_screen.note_gauge(
+                f"Reading from {where} raised {type(exc).__name__}: {exc}",
+                warn=True)
+            return False
+        finally:
+            self.settings_screen.set_gauge_testing(False)
+
+        if frame is None:
+            self.settings_screen.note_gauge(f"No frame from {where}. {why}",
+                                            warn=True)
+            return False
+        if reading is None or not reading.ok:
+            # A frame arrived and could not be read. That is a different fault
+            # from no frame at all, and usually a benign one - a paused game,
+            # a menu, a transition - so it is said as what it is.
+            self.settings_screen.note_gauge(
+                f"A frame arrived from {where}, but the gauge was not "
+                f"readable. {reading.reason if reading else ''} "
+                f"Try again with the car on track and the game running.",
+                warn=True)
+            return False
+
+        worst = max((v for v in reading.wear.values() if v is not None),
+                    default=None)
+        cells = ", ".join(
+            f"{corner.upper()} " + ("--" if value is None
+                                    else f"{value * 100:.0f}%")
+            for corner, value in sorted(reading.wear.items()))
+        note = f"Read from {where}: {cells}."
+        if worst is not None:
+            note += f" Worst corner {worst * 100:.0f}%."
+        if reading.reason:
+            # A located reading carries how coarse it is. That travels.
+            note += f" {reading.reason}"
+        self.settings_screen.note_gauge(note)
+        return True
 
     def _chosen_output(self) -> str:
         return self.settings.audio_output_device or ""

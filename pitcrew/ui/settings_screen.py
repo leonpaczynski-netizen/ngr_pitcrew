@@ -44,6 +44,8 @@ from pitcrew.settings import (
     FEED_SIMHUB,
     COMMON_KEYS,
     DEFAULT_UDP_PORT,
+    HUD_SOURCE_OBS,
+    HUD_SOURCE_SCREEN,
     Settings,
 )
 from pitcrew.ui import theme
@@ -81,6 +83,7 @@ class SettingsScreen(QWidget):
     test_voice_requested = pyqtSignal()
     test_haptics_requested = pyqtSignal()
     test_feed_requested = pyqtSignal()
+    test_gauge_requested = pyqtSignal()
     capture_toggled = pyqtSignal(bool)      # raw session capture
     listen_toggled = pyqtSignal(bool)
 
@@ -124,7 +127,11 @@ class SettingsScreen(QWidget):
         left = QVBoxLayout()
         left.setSpacing(theme.GAP_WIDE)
         left.addWidget(self._feed_plate())
-        left.addWidget(self._ptt_plate(), 1)
+        # No stretch factor: the trailing stretch takes the slack, as it does
+        # on the right. The factor was harmless while push-to-talk was last in
+        # the column, but it is the gauge plate that is last now.
+        left.addWidget(self._ptt_plate())
+        left.addWidget(self._gauge_plate())
         left.addStretch(1)
         columns.addLayout(left, 1)
 
@@ -294,6 +301,23 @@ class SettingsScreen(QWidget):
             "lets you check the button works without racing to find out.")
         plate.body.addWidget(self.ptt_in_practice)
 
+        # **Tap is the default, and hold is the fallback.** *"I do not have
+        # time to hold the button. One press, hear a radio static sound so I
+        # know it is recording, then it records, I talk, radio static to
+        # confirm to me recording has stopped."* - the driver, 22 Aug. Holding
+        # occupies a hand that is on a wheel; the two static bursts are what
+        # tells him the microphone is open, since he cannot look.
+        #
+        # It stays a setting because tap has one failure hold does not: a press
+        # nobody closes leaves the radio open. The bursts are the guard, and if
+        # they are ever inaudible at the rig this is the way back.
+        self.ptt_toggle = QCheckBox("Tap to talk, rather than hold")
+        self.ptt_toggle.setToolTip(
+            "Tap once to open the radio and again to close it, with a static "
+            "burst at each end. Unticked, the button must be held down for as "
+            "long as you are speaking.")
+        plate.body.addWidget(self.ptt_toggle)
+
         plate.body.addWidget(self._rule_label("What this machine has"))
         self.engine_note = Measured("—", size=14)
         plate.body.addWidget(self.engine_note)
@@ -310,6 +334,143 @@ class SettingsScreen(QWidget):
         plate.body.addWidget(self.ptt_note)
         plate.body.addStretch(1)
         return plate
+
+    def _gauge_plate(self) -> Plate:
+        """Tyre wear, read off the picture, because the feed does not carry it.
+
+        **GT7 broadcasts no tyre wear channel in any packet format** - CLAUDE.md
+        3.3 calls that the single most consequential fact in the document. The
+        app models wear and asks the driver to corroborate it from the in-game
+        gauge, and across five sessions running he read it zero times. The gauge
+        is on screen for the whole race and OBS is already pointed at it, so
+        this transcribes the instrument he was being asked to read.
+
+        It is off by default and stays off until switched on here: the OBS
+        source reaches out to another process on a port, and that is not
+        something that should start happening because the app was updated.
+        """
+        plate = Plate("Tyre wear off the video")
+        plate.body.addWidget(BodyLabel(
+            "The feed carries no wear channel, so the gauge in the corner of "
+            "the screen is the only measurement there is. This reads it — the "
+            "game's own number, transcribed, not a model.",
+            size=13, colour=theme.STENCIL_DIM))
+
+        self.hud_wear_enabled = QCheckBox("Read the wear gauge")
+        plate.body.addWidget(self.hud_wear_enabled)
+
+        self.hud_source = QComboBox()
+        self.hud_source.addItem("OBS, over the websocket", HUD_SOURCE_OBS)
+        self.hud_source.addItem("The screen, off an OBS projector window",
+                                HUD_SOURCE_SCREEN)
+        block_wheel(self.hud_source)
+        self.hud_source.currentIndexChanged.connect(self._sync_hud_source)
+        plate.body.addWidget(Field(
+            "Read from", self.hud_source,
+            hint="Both need OBS running. The websocket does not care whether "
+                 "it is visible; the screen reads what the monitor shows."))
+
+        # **The measured cost, because it is the whole reason there are two.**
+        # Stencilled rather than crayon: these are measurements, not choices.
+        plate.body.addWidget(self._rule_label("What each one costs"))
+        self.hud_cost = Measured("—", size=14)
+        self.hud_cost.setWordWrap(True)
+        plate.body.addWidget(self.hud_cost)
+
+        # --- the OBS connection, shown only where it is used
+        self.obs_host = QLineEdit()
+        self.obs_host_field = Field(
+            "OBS host", self.obs_host,
+            hint="Where OBS is. The same machine, normally.")
+        plate.body.addWidget(self.obs_host_field)
+
+        self.obs_port = QSpinBox()
+        self.obs_port.setRange(1, 65535)
+        block_wheel(self.obs_port)
+        self.obs_port_field = Field(
+            "OBS port", self.obs_port,
+            hint="Tools, WebSocket Server Settings. 4455 unless it was moved.")
+        plate.body.addWidget(self.obs_port_field)
+
+        self.obs_password = QLineEdit()
+        self.obs_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.obs_password_field = Field(
+            "OBS password", self.obs_password,
+            hint="Blank if authentication is off.")
+        plate.body.addWidget(self.obs_password_field)
+
+        # --- what the screen source needs instead
+        self.hud_projector_note = BodyLabel(
+            "In OBS, right click the preview and choose Windowed Projector "
+            "(Program), then size the window until its client area is exactly "
+            "1720x916. It is found by title, so it can sit anywhere — but it "
+            "must be visible. A covered or minimised projector reads nothing, "
+            "and this says so rather than guessing.",
+            size=13, colour=theme.STENCIL_DIM)
+        self.hud_projector_note.setWordWrap(True)
+        plate.body.addWidget(self.hud_projector_note)
+
+        self.hud_interval = QDoubleSpinBox()
+        self.hud_interval.setRange(0.0, 30.0)
+        self.hud_interval.setSingleStep(0.5)
+        self.hud_interval.setDecimals(1)
+        block_wheel(self.hud_interval)
+        plate.body.addWidget(Field(
+            "Sample every", self.hud_interval, suffix="s",
+            hint="0 reads the gauge only as you cross the line. Above 0 it "
+                 "also samples in between, and the crossing then files the "
+                 "last reading taken before it — so a paused frame on the "
+                 "line no longer costs the lap, and a stint gets a series to "
+                 "fit a slope across. Leave it at 0 on the OBS source."))
+
+        row = QHBoxLayout()
+        row.setSpacing(theme.GAP)
+        self.test_gauge_button = MarkButton("Read the gauge now", compact=True)
+        self.test_gauge_button.clicked.connect(self.test_gauge_requested.emit)
+        row.addWidget(self.test_gauge_button)
+        row.addStretch(1)
+        plate.body.addLayout(row)
+
+        self.gauge_note = BodyLabel("", size=13, colour=theme.CHALK)
+        self.gauge_note.setWordWrap(True)
+        plate.body.addWidget(self.gauge_note)
+        return plate
+
+    def _sync_hud_source(self) -> None:
+        """Show only the fields the chosen source actually reads.
+
+        The same rule the feed plate follows: leaving an unread box enabled is
+        how somebody comes to believe a password is doing something.
+        """
+        screen = self.hud_source.currentData() == HUD_SOURCE_SCREEN
+        for field in (self.obs_host_field, self.obs_port_field,
+                      self.obs_password_field):
+            field.setVisible(not screen)
+        self.hud_projector_note.setVisible(screen)
+        # Measured 22 Aug 2026 on this PC. The gap is what makes sampling
+        # between crossings affordable on one source and not the other.
+        self.hud_cost.setText(
+            "0.21 ms of CPU a reading — a projector window is copied, not "
+            "encoded. Sampling every 2 s costs 0.01% of one core."
+            if screen else
+            "about 537 ms of OBS CPU a reading — the whole canvas is "
+            "rendered, PNG-encoded and sent over the socket. Affordable once "
+            "a lap; not affordable faster.")
+
+    def set_gauge_testing(self, testing: bool) -> None:
+        """The seconds a websocket grab can take, said out loud."""
+        self.test_gauge_button.setEnabled(not testing)
+        self.test_gauge_button.setText(
+            "Reading…" if testing else "Read the gauge now")
+        if testing:
+            self.note_gauge("Asking for a frame. This can take a few seconds "
+                            "on the OBS source.")
+
+    def note_gauge(self, text: str, *, warn: bool = False) -> None:
+        self.gauge_note.setText(text)
+        self.gauge_note.setStyleSheet(
+            f"color: {theme.WARNING if warn else theme.CHALK};"
+            "background: transparent;")
 
     def _beep_plate(self) -> Plate:
         plate = Plate("Shift beep")
@@ -544,6 +705,15 @@ class SettingsScreen(QWidget):
         self.ptt_enabled.setChecked(settings.ptt_enabled)
         self.ptt_key.setCurrentText(settings.ptt_key)
         self.ptt_in_practice.setChecked(settings.ptt_in_practice)
+        self.ptt_toggle.setChecked(settings.ptt_toggle)
+        self.hud_wear_enabled.setChecked(settings.hud_wear_enabled)
+        index = self.hud_source.findData(settings.hud_source)
+        self.hud_source.setCurrentIndex(max(0, index))
+        self.obs_host.setText(settings.obs_host)
+        self.obs_port.setValue(settings.obs_port)
+        self.obs_password.setText(settings.obs_password)
+        self.hud_interval.setValue(settings.hud_sample_interval_s)
+        self._sync_hud_source()
         self.beep_enabled.setChecked(settings.beep_enabled)
         index = self.colour_calls.findData(settings.colour_calls)
         self.colour_calls.setCurrentIndex(max(0, index))
@@ -576,6 +746,15 @@ class SettingsScreen(QWidget):
             ptt_enabled=self.ptt_enabled.isChecked(),
             ptt_key=self.ptt_key.currentText().strip().lower(),
             ptt_in_practice=self.ptt_in_practice.isChecked(),
+            ptt_toggle=self.ptt_toggle.isChecked(),
+            hud_wear_enabled=self.hud_wear_enabled.isChecked(),
+            hud_source=self.hud_source.currentData() or HUD_SOURCE_OBS,
+            obs_host=self.obs_host.text().strip(),
+            obs_port=self.obs_port.value(),
+            # Not stripped: a password may legitimately end in a space,
+            # and silently trimming one is a failure nobody can see.
+            obs_password=self.obs_password.text(),
+            hud_sample_interval_s=self.hud_interval.value(),
             beep_enabled=self.beep_enabled.isChecked(),
             colour_calls=self.colour_calls.currentData() or COLOUR_NORMAL,
             voice_length_scale=self.length_scale.value(),
