@@ -1041,6 +1041,10 @@ class Store:
             "       sessions.practice_mode AS practice_mode, "
             "       sessions.practice_intent AS practice_intent, "
             "       sessions.setup_sheet_id AS setup_sheet_id, "
+            # **Which physics produced this lap.** 1.71 reworked the
+            # tyre model, so a lap either side of it is not evidence
+            # about the same car - see `analysis/version`.
+            "       sessions.game_version AS game_version, "
             "       sessions.kind AS session_kind, "
             "       COALESCE(sessions.rehearsal, 0) AS rehearsal "
             "FROM laps JOIN sessions ON sessions.id = laps.session_id "
@@ -1072,6 +1076,10 @@ class Store:
             "       sessions.practice_mode AS practice_mode, "
             "       sessions.practice_intent AS practice_intent, "
             "       sessions.setup_sheet_id AS setup_sheet_id, "
+            # **Which physics produced this lap.** 1.71 reworked the
+            # tyre model, so a lap either side of it is not evidence
+            # about the same car - see `analysis/version`.
+            "       sessions.game_version AS game_version, "
             "       sessions.kind AS session_kind, "
             "       COALESCE(sessions.rehearsal, 0) AS rehearsal "
             "FROM laps JOIN sessions ON sessions.id = laps.session_id "

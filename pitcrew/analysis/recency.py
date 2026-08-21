@@ -35,6 +35,14 @@ reweighting a measurement rather than an estimate, and there is nothing to
 gain: a gauge reading from three weeks ago is exactly as true as one from
 today.
 
+> **Amended 21 Aug 2026, and the amendment matters.** That paragraph holds
+> only while the wear model is the same model. **GT7 v1.71 changed it.** A
+> gauge reading from three weeks ago is exactly as true as one from today
+> *about the game it was taken on*, and that game no longer exists. The
+> exemption stands **within** a version and is void **across** one — which is
+> not a recency term either, because a patch is a discontinuity and not a
+> decay. See `analysis/version`.
+
 **Not the best lap.** A personal best is a fact about a lap, not an average of
 several, and there is nothing to weight.
 

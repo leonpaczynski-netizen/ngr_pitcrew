@@ -50,6 +50,9 @@ class LapInput:
     # Which recorded session this lap came from. A stop-and-restart means the
     # car went back to the garage, so laps either side are not one stint.
     session_id: int | None = None
+    # The GT7 version the lap was RECORDED under, off its session.
+    # None on laps recorded before the column existed.
+    game_version: str | None = None
     # The driver's declaration that this lap started on a fresh set. `None`
     # means he has not said — never `False`, which would claim the set carried
     # over. His word is primary evidence and outranks everything below it.

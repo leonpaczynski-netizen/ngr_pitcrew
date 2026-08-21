@@ -21,6 +21,7 @@ from pitcrew.analysis.refuel import refuel_evidence
 from pitcrew.analysis.resolve import circuit_key
 from pitcrew.strategy.model import is_wet_compound
 from pitcrew.analysis.recency import weighted
+from pitcrew.analysis.version import prefer_current
 from pitcrew.analysis.runs import split_runs
 from pitcrew.analysis.weather import wet_evidence
 from pitcrew.analysis.session import LapInput, counted_laps, reference_pace_ms
@@ -43,6 +44,30 @@ MEASURED = "measured"      # off the telemetry stream
 DECLARED = "declared"      # the driver entered it
 ASSUMED = "assumed"        # the app's own working figure
 MISSING = "missing"        # not known, and not invented
+
+
+# How many laps on the installed version before the plan is built on them
+# alone. One lap is a lap; it is not a stint, a fuel burn or a degradation
+# rate. Below this the plan falls back to pre-patch evidence and says so,
+# which is more useful than a set too small for any downstream check to accept.
+MIN_LAPS_ON_VERSION = 3
+
+
+def _planning_version(store, event) -> str | None:
+    """The GT7 version this plan is being built for.
+
+    The event's own declaration where it has one - a round being prepared
+    under a version that is not the one installed - and the installed version
+    otherwise, because that is what the car will be racing on.
+    """
+    declared = (event or {}).get("game_version")
+    if declared:
+        return declared
+    from pitcrew import settings as _settings
+    try:
+        return _settings.load(store).game_version or None
+    except Exception:                                        # noqa: BLE001
+        return None
 
 
 @dataclass(frozen=True)
@@ -484,6 +509,19 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         raise ValueError(f"no event with id {event_id}")
 
     laps = _lap_inputs(store, event_id)
+
+    # **A physics update is not an age.** `analysis/recency` weights old laps
+    # down because the driver got faster and the setup moved on; that is a
+    # decay and a weight expresses it. A patch is a discontinuity: laps either
+    # side of GT7 1.71 are not weaker and stronger evidence about one car, they
+    # are evidence about two. So the current version's laps are used alone
+    # where there are enough of them, everything older is held back rather
+    # than blended in, and where there is not enough the plan says out loud
+    # that it rests on pre-patch evidence.
+    selection = prefer_current(laps, _planning_version(store, event),
+                               minimum=MIN_LAPS_ON_VERSION)
+    laps = selection.laps
+
     counted = counted_laps(laps)
 
     # **Later laps count for more**, because he is getting faster and the
@@ -716,6 +754,17 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                  f"{FUEL_WEIGHT_S_PER_L_PER_LAP:.3f} s/L/lap", ASSUMED,
                  "derived, not measured - overwrite it if you measure it"),
     ]
+    # **Said out loud, at the top of the list.** A plan quietly built on
+    # pre-patch laps looks exactly like one built on current ones, and the
+    # whole point of holding the old laps back is that somebody knows it
+    # happened.
+    if selection.note:
+        evidence.insert(0, Evidence(
+            "Evidence version",
+            selection.version or "mixed",
+            ASSUMED if selection.stale else MEASURED,
+            selection.note))
+
     return inputs, evidence
 
 

@@ -140,6 +140,7 @@ def _rows_to_laps(store, rows, *, hydrate: set[int] | None = None) -> list[LapIn
             gear_ratios=_ratios(row),
             frames=frames,
             session_id=row["session_id"],
+            game_version=_column(row, "game_version"),
             tyres_fresh=_tyres_fresh(row),
             tyres_changed=_tri_state(row, "tyres_changed"),
             tod_start_ms=_column(row, "tod_start_ms"),
