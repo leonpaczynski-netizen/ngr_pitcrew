@@ -544,3 +544,27 @@ either. There is nothing to measure until somebody wants unattended calls —
 and by then the question is about a debrief that can take as long as it likes,
 not about a lap.
 
+---
+
+## 11. Where the plan stands, end of 21 Aug 2026
+
+| | | |
+|---|---|---|
+| **S1** brain seam | **done** | The transport already existed — Claude Code Desktop is wired to the repo. The brain was the gap. |
+| **S2** NPU | **done, deferred** | NPU enumerates from 3.14 via OpenVINO. No `onnxruntime-openvino` wheel for 3.14, so it is a runtime replacement rather than a flag. |
+| **S3** OBS | **done** | Flat screen proven end to end; VR needs a locator, and now has one. |
+| **S4** API latency | **moot** | MCP-first took the network out of the path. |
+| **Phase 1** brain in git | **done** | `brain/`, `driver.md`, `RECONCILIATION.md`, loadable skill. |
+| **Phase 2** MCP seam | **done** | `pitcrew/mcp/server.py`. Reads open, writes propose. |
+| **Phase 3** live wear | **done** | Flat screen at the calibrated layout; VR by a per-frame locator, 28% of frames, RL worst in 8 of 8. |
+| **Phase 4** strategy inverted | **done** | `strategy/certify.py`. Claude proposes, the engine certifies, nothing uncertified arms. |
+| **Phase 5** qualifying | **done** | Coach already existed; the gap was the fuel load, now spoken and priced in seconds. |
+| **Phase 6** engineer that learns | **part done** | Calls ledger with dispositions, and both sides of the radio now recorded. The wider vocabulary is under review. |
+| **Phase 7** debrief | **done** | The outcome prompt carries laps, measured wear, plan-as-run, calls, and the radio verbatim. |
+
+**Still open and deliberately so:** the two disagreeing RSR shift tables and the
+orphan that matches no car; six practice sessions still pointing at older
+sheets; the six large reference documents unread line by line; and the
+seconds-per-1000-rpm coefficient, which is the highest-value measurement
+outstanding because it gates a fuel-saving lap-time target.
+
