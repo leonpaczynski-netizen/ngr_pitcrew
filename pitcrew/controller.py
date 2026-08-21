@@ -87,6 +87,7 @@ from pitcrew.race.replan import (
 )
 from pitcrew.race.qualifying import QualifyingCoach, reference_lap
 from pitcrew.race.temps import measured_temp_window
+from pitcrew.strategy.certify import certify
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.selftest import LISTEN_S, check_feed
@@ -3065,6 +3066,26 @@ class PitCrewController(QObject):
             inputs, _ = build_inputs(self.store, event["id"])
         except ValueError:
             inputs = None
+
+        # **The last gate, and it is here because this is the last moment.**
+        # A plan the app's own optimiser built is feasible by construction, but
+        # a plan can also arrive from the race engineer the driver is talking
+        # to, and prose cannot be trusted to have done arithmetic. The 12 Aug
+        # audit is what that costs: the app ranked the most impossible plan
+        # cheapest and asked for 510 litres of fuel into a 100 litre tank.
+        #
+        # Refused rather than warned about. A plan that cannot be executed is
+        # not a plan with a caveat.
+        if plan is not None and inputs is not None:
+            certificate = certify(plan, inputs)
+            if not certificate.certified:
+                self.race_screen.set_status(
+                    f"Plan refused: {certificate.describe()}", warn=True)
+                return False
+            for warning in certificate.warnings:
+                log("race").warning("approved plan: %s", warning)
+            for gap in certificate.unchecked:
+                log("race").info("approved plan, not checked: %s", gap)
 
         # How many practice laps stand behind the two figures the plan
         # expects to execute. Every aggregate carries its sample count

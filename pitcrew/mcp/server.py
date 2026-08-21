@@ -252,12 +252,28 @@ def propose_strategy(event_id: int, plan: str, label: str = "") -> str:
     except json.JSONDecodeError as exc:
         return _dump({"saved": False, "error": f"plan is not JSON: {exc}"})
     try:
-        strategy_id = store.save_strategy(event_id, payload,
-                                          label=label or "proposed over MCP")
-        return _dump({"saved": True, "strategyId": strategy_id,
-                      "approved": False,
-                      "note": "saved as a candidate. It has to be approved in "
-                              "the app before anything can arm it."})
+        from pitcrew.strategy.certify import certify_for_event
+
+        certificate = certify_for_event(store, event_id, payload)
+        strategy_id = store.save_strategy(
+            event_id, payload,
+            label=label or "proposed over MCP",
+            evidence={"certified": certificate.certified,
+                      "refusals": certificate.refusals,
+                      "warnings": certificate.warnings,
+                      "unchecked": certificate.unchecked})
+        return _dump({
+            "saved": True, "strategyId": strategy_id, "approved": False,
+            "certified": certificate.certified,
+            "refusals": certificate.refusals,
+            "warnings": certificate.warnings,
+            "unchecked": certificate.unchecked,
+            "verdict": certificate.describe(),
+            "note": ("saved as a candidate. It has to be approved in the app "
+                     "before anything can arm it"
+                     + ("" if certificate.certified else
+                        " - and as it stands the car cannot execute it")),
+        })
     except Exception as exc:                                 # noqa: BLE001
         return _dump({"saved": False, "error": f"{type(exc).__name__}: {exc}"})
     finally:
