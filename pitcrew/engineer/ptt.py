@@ -31,6 +31,8 @@ import threading
 
 from pitcrew.diagnostics import log
 from pitcrew.engineer import audio_devices, gate
+from pitcrew.engineer import radio as radio_static
+from pitcrew.settings import SPEECH_SAPI
 from pitcrew.engineer.audio_devices import open_input
 from pitcrew.engineer.intents import (
     PHRASES,
@@ -139,7 +141,8 @@ class PushToTalk:
 
     def __init__(self, *, snapshot, speak, recogniser=None, listener=None,
                  on_answer=None, matcher=None,
-                 sensitivity: str = gate.DEFAULT_SENSITIVITY) -> None:
+                 sensitivity: str = gate.DEFAULT_SENSITIVITY,
+                 toggle: bool = True, bursts=None) -> None:
         self._snapshot = snapshot          # callable -> dict
         self._speak = speak                # callable(str)
         self._recogniser = recogniser
@@ -160,6 +163,28 @@ class PushToTalk:
         # and now spoken rather than only stored.
         self.last_reason: str | None = None
         self._listening = False
+        # **Tap to open, tap to close.** "I don't have time to hold the
+        # button" - and he is right: holding it occupies a hand that is on a
+        # wheel through a corner, which is where the questions happen.
+        self._toggle = toggle
+        self._recording = False
+        self._deadline: threading.Timer | None = None
+        # Never built under pytest: rendering one opens a real PortAudio
+        # output stream, which `conftest` forbids and is right to. A test that
+        # wants the bursts injects them.
+        opening, closing = (bursts if bursts is not None
+                            else (None, None) if _under_pytest()
+                            else radio_static.bursts())
+        # With the button no longer held, nothing else tells him the
+        # microphone is open. These are that signal, and they are why toggle
+        # mode is usable without a screen at all.
+        self._open_burst, self._close_burst = opening, closing
+
+    @property
+    def recording(self) -> bool:
+        """Whether the radio is open right now. False in hold mode between
+        presses, and in toggle mode until he taps."""
+        return self._recording
 
     @property
     def available(self) -> bool:
@@ -195,8 +220,90 @@ class PushToTalk:
 
     def start(self) -> None:
         if self._listener is not None:
-            self._listener.start(self.begin, self.end)
+            if self._toggle:
+                # Button-up does nothing: one tap opens, the next closes.
+                self._listener.start(self.tap, lambda: None)
+            else:
+                self._listener.start(self.begin, self.end)
             self._listening = True
+
+    def tap(self) -> None:
+        """One press of the button, in toggle mode.
+
+        Open the radio, or close it and answer. Guarded the same way `begin`
+        and `end` are, because this is the outermost frame on pynput's hook
+        thread and an escaping exception there kills the button for the race.
+        """
+        try:
+            if self._recording:
+                self._close_radio()
+            else:
+                self._open_radio()
+        except Exception as exc:                # noqa: BLE001 - see above
+            log("ptt").error("push to talk failed: %s: %s",
+                             type(exc).__name__, exc, exc_info=True)
+            self._recording = False
+            self._cancel_deadline()
+            try:
+                self.rejected(gate.FAILED)
+            except Exception:                   # noqa: BLE001
+                log("ptt").error("could not report the failure either",
+                                 exc_info=True)
+
+    def _open_radio(self) -> None:
+        """The static first, then the microphone.
+
+        In that order on purpose: the burst plays into a microphone that is
+        not open yet, so it cannot end up in the transcript.
+        """
+        self._burst(self._open_burst)
+        self.begin()
+        if self.last_reason is not None:
+            # The stream never opened. Say so now rather than leaving him
+            # talking to a radio that is not on.
+            self.rejected(self.last_reason)
+            return
+        self._recording = True
+        # **He may never press again.** In hold mode the button coming up is
+        # guaranteed; here it is not, and a radio left open would swallow the
+        # capture cap and then sit there. The cap closes it and answers.
+        self._cancel_deadline()
+        self._deadline = threading.Timer(MAX_CAPTURE_S + 0.5, self._expired)
+        self._deadline.daemon = True
+        self._deadline.start()
+
+    def _close_radio(self) -> None:
+        self._recording = False
+        self._cancel_deadline()
+        self.end()
+
+    def _expired(self) -> None:
+        """The capture cap reached with no second press."""
+        if not self._recording:
+            return
+        log("ptt").info("radio closed on the %.0fs cap - no second press",
+                        MAX_CAPTURE_S)
+        self._close_radio()
+
+    @staticmethod
+    def _burst(tone) -> None:
+        """Play a static burst, and never let it cost him an answer.
+
+        Confirmation is not the question. A card that will not render 130 ms
+        of noise must still deliver the radio call it was asked for.
+        """
+        if tone is None:
+            return
+        try:
+            tone.play_blocking()
+        except Exception as exc:                # noqa: BLE001
+            log("ptt").warning("radio static did not play: %s: %s",
+                               type(exc).__name__, exc)
+
+    def _cancel_deadline(self) -> None:
+        if self._deadline is not None:
+            self._deadline.cancel()
+            self._deadline = None
 
     def stop(self) -> None:
         if self._listener is not None:
@@ -260,6 +367,10 @@ class PushToTalk:
             return
         try:
             heard = self._recogniser.end() or ""
+            # The microphone is shut at this point and the answer has not been
+            # spoken yet, which is the one moment the closing burst belongs
+            # in: it confirms the radio is off, and it does not get recorded.
+            self._burst(self._close_burst)
             reason = getattr(self._recogniser, "last_reason", None)
             if not heard and reason:
                 self.rejected(reason)
@@ -311,6 +422,15 @@ class PushToTalk:
             self._reply(question, heard)
             return question
 
+        # **Every outcome, including the good one.** Only failures were logged,
+        # so a 1.3 MB log covering ten days held three press outcomes and all
+        # three were failures - which made "it doesn't understand me"
+        # impossible to investigate after the fact. A press that worked is the
+        # measurement that says the rest of them should have.
+        log("ptt").info("%s %r as %s (distance %s)", verdict.action.lower(),
+                        heard, verdict.intent,
+                        f"{verdict.distance:.3f}" if verdict.distance
+                        is not None else "literal")
         return self._answer(verdict.intent, heard)
 
     def _match(self, heard: str):
@@ -805,13 +925,74 @@ def _under_pytest() -> bool:
     return "PYTEST_CURRENT_TEST" in os.environ
 
 
-def build_within(factory, timeout_s: float, *args):
-    """Construct on a side thread, or give up when the deadline passes.
+class LateArrival:
+    """A recogniser that is still loading, and will be usable when it lands.
 
-    The thread is deliberately left running when it times out. A blocked COM
-    call cannot be cancelled from outside, so the only honest options are to
-    abandon it or to hang with it - and it is a daemon, so abandoning it does
-    not keep the process alive at exit.
+    **The deadline was discarding work that finished a second later.** Over ten
+    days of logs, `MoonshineRecogniser` timed out thirteen times - and it loads
+    in 2.3 to 2.7 seconds every time it is measured on its own. What beat it
+    was boot contention, not the model: a five second race lost by half a
+    second left push-to-talk dead for the whole session, while the loaded model
+    sat in an abandoned thread with nobody holding it.
+
+    So the deadline now stops the app *blocking*. It does not stop the load.
+    The probe thread keeps going, and the first press after it finishes gets a
+    working recogniser - which is the difference between a race with no radio
+    and a race whose radio works from lap two.
+    """
+
+    #: Factory name -> the `name` the built recogniser will report. Callers
+    #: branch on that name (`free_dictation`, `CLOSED_GRAMMAR`), so answering
+    #: with the factory's name while it loads would build the wrong matcher.
+    NAMES = {"MoonshineRecogniser": "moonshine",
+             "SapiGrammarRecogniser": "sapi-grammar"}
+
+    def __init__(self, outcome: dict, thread, name: str) -> None:
+        self._outcome = outcome
+        self._thread = thread
+        self._name = self.NAMES.get(name, name)
+        self._announced = False
+
+    @property
+    def _real(self):
+        got = self._outcome.get("value")
+        if got is not None and not self._announced:
+            self._announced = True
+            log("ptt").info("%s arrived late and is now available", self._name)
+        return got
+
+    @property
+    def name(self) -> str:
+        real = self._real
+        return getattr(real, "name", self._name) if real else self._name
+
+    @property
+    def last_reason(self):
+        real = self._real
+        return getattr(real, "last_reason", None) if real else gate.NOT_READY
+
+    def begin(self) -> None:
+        real = self._real
+        if real is not None:
+            real.begin()
+
+    def end(self):
+        """The transcript, or nothing and a reason he can act on."""
+        real = self._real
+        if real is None:
+            return ""
+        return real.end()
+
+
+def build_within(factory, timeout_s: float, *args):
+    """Construct on a side thread, or hand back one that is still coming.
+
+    The thread is deliberately left running when the deadline passes. A blocked
+    COM call cannot be cancelled from outside, so the only honest options are
+    to abandon the *wait* or to hang with it - and it is a daemon, so leaving
+    it running does not keep the process alive at exit.
+
+    What it no longer does is abandon the *result*. See `LateArrival`.
     """
     outcome: dict = {}
 
@@ -826,9 +1007,7 @@ def build_within(factory, timeout_s: float, *args):
     probe.start()
     probe.join(timeout_s)
     if probe.is_alive():
-        raise TimeoutError(
-            f"{factory.__name__} did not come up within {timeout_s:.0f}s "
-            f"and was abandoned")
+        return LateArrival(outcome, probe, factory.__name__)
     if "error" in outcome:
         raise outcome["error"]
     return outcome.get("value")
@@ -837,26 +1016,48 @@ def build_within(factory, timeout_s: float, *args):
 def best_recogniser_for(backend: str, phrases=None):
     """The recogniser the driver asked for, or the next one that loads.
 
-    Moonshine first when it is chosen, then SAPI, then nothing - and nothing
-    is a running app that says "speech isn't available on this machine"
-    rather than one that will not start.
+    ### What ten days of logs say
 
-    Each candidate is built under a deadline, because "will not start" turned
-    out to include the case this fallback chain was written to prevent: SAPI
-    hanging rather than raising meant the chain never advanced to Moonshine
-    and the app never opened a window.
+    `SapiGrammarRecogniser` was tried first on **fifty-nine consecutive
+    launches and came up on none of them.** It does not raise: measured here,
+    `Dispatch("SAPI.SpSharedRecognizer")` was still blocked after four minutes
+    with no Qt event loop involved. `MoonshineRecogniser`, measured on its own,
+    comes up in 2.3 to 2.7 seconds every time.
+
+    So SAPI is no longer tried first for anyone who has not asked for it by
+    name. Trying it first cost five seconds of every launch and then handed
+    Moonshine a contended machine to load on - which is how a model that takes
+    2.3 seconds managed to miss a five second deadline thirteen times.
+
+    ### Why a candidate that is still loading does not win
+
+    `build_within` now returns a `LateArrival` rather than raising, so a
+    candidate that is merely slow is kept. But a `LateArrival` from SAPI would
+    otherwise pre-empt a Moonshine that is ready **now**, and SAPI's late
+    arrival never comes. So the loop prefers anything that is genuinely up, and
+    falls back to the first still-loading candidate only when nothing is.
     """
     if _under_pytest():
         return None
 
-    order = ((MoonshineRecogniser, SapiGrammarRecogniser)
-             if backend == "moonshine"
-             else (SapiGrammarRecogniser, MoonshineRecogniser))
+    order = ((SapiGrammarRecogniser, MoonshineRecogniser)
+             if backend == SPEECH_SAPI
+             else (MoonshineRecogniser, SapiGrammarRecogniser))
+    still_coming = None
     for factory in order:
         args = (phrases,) if factory is SapiGrammarRecogniser else ()
         try:
-            return build_within(factory, RECOGNISER_TIMEOUT_S, *args)
-        except Exception as exc:                 # noqa: BLE001
+            built = build_within(factory, RECOGNISER_TIMEOUT_S, *args)
+        except Exception as exc:                  # noqa: BLE001
             log("ptt").warning("%s unavailable: %s: %s", factory.__name__,
                                type(exc).__name__, exc)
-    return None
+            continue
+        if isinstance(built, LateArrival):
+            log("ptt").info("%s is still loading after %.0fs - keeping it and "
+                            "trying the next one", factory.__name__,
+                            RECOGNISER_TIMEOUT_S)
+            still_coming = still_coming or built
+            continue
+        if built is not None:
+            return built
+    return still_coming

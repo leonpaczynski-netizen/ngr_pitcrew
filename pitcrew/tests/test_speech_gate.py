@@ -867,25 +867,62 @@ def test_a_factory_that_raises_still_raises():
         ptt.build_within(broken, 5.0)
 
 
-def test_a_factory_that_never_returns_is_abandoned():
-    """The case that stopped the app starting."""
+def test_a_factory_that_never_returns_stops_the_wait_not_the_load():
+    """The case that stopped the app starting - and the case that then killed
+    push-to-talk for a whole session.
+
+    **The deadline binds on the wait only.** It used to discard the result too,
+    and `MoonshineRecogniser` - which loads in 2.3 s measured on its own -
+    lost the five second race thirteen times under boot contention. Each of
+    those was a race with no radio, while the loaded model sat in an abandoned
+    thread with nobody holding it.
+    """
     forever = threading.Event()          # never set
 
     def blocks():
         forever.wait()
 
     started = time.perf_counter()
-    with pytest.raises(TimeoutError, match="did not come up"):
-        ptt.build_within(blocks, 0.2)
+    got = ptt.build_within(blocks, 0.2)
     assert time.perf_counter() - started < 3.0, "the deadline did not bind"
+    assert isinstance(got, ptt.LateArrival)
+    assert got.last_reason == gate.NOT_READY, (
+        "a recogniser that is still loading must say so, not fail silently")
+
+
+def test_a_late_arrival_becomes_usable_when_the_load_finishes():
+    """Ask again in a moment, and it works."""
+    landed = threading.Event()
+
+    class Ready:
+        name = "ready"
+        last_reason = None
+
+        def begin(self): pass
+
+        def end(self): return "how are my tyres"
+
+    def slow():
+        landed.wait(5.0)
+        return Ready()
+
+    got = ptt.build_within(slow, 0.1)
+    assert isinstance(got, ptt.LateArrival)
+    assert got.end() == "", "not ready yet"
+    landed.set()
+    for _ in range(200):                          # let the probe finish
+        if got.last_reason is None:
+            break
+        time.sleep(0.01)
+    assert got.end() == "how are my tyres"
+    assert got.name == "ready"
 
 
 def test_the_abandoned_thread_is_a_daemon_and_cannot_hold_the_process_open():
     """A blocked COM call cannot be cancelled, so it is abandoned deliberately."""
     forever = threading.Event()
     before = {t.name for t in threading.enumerate()}
-    with pytest.raises(TimeoutError):
-        ptt.build_within(lambda: forever.wait(), 0.1)
+    ptt.build_within(lambda: forever.wait(), 0.1)
     leaked = [t for t in threading.enumerate()
               if t.name not in before and t.name.startswith("probe-")]
     assert leaked and all(t.daemon for t in leaked)
@@ -907,3 +944,47 @@ def test_speech_is_not_constructed_under_pytest():
     assert ptt._under_pytest() is True
     assert ptt.best_recogniser_for("sapi") is None
     assert ptt.best_recogniser_for("moonshine") is None
+
+
+# ---------------------------------------------------------- which one wins
+
+def test_a_candidate_still_loading_never_beats_one_that_is_ready(monkeypatch):
+    """**The regression `LateArrival` would otherwise have introduced.**
+
+    SAPI is tried first for anyone who asked for it, and on this machine it
+    blocks forever - fifty-nine launches, fifty-nine hangs. Now that a slow
+    candidate is kept rather than discarded, the first one must not win by
+    merely being first: SAPI's late arrival never comes, and returning it would
+    leave push-to-talk permanently dead with a working Moonshine untried.
+    """
+    forever = threading.Event()
+
+    class Ready:
+        name = "moonshine"
+
+    monkeypatch.setattr(ptt, "_under_pytest", lambda: False)
+    monkeypatch.setattr(ptt, "SapiGrammarRecogniser",
+                        lambda *a: forever.wait())
+    monkeypatch.setattr(ptt, "MoonshineRecogniser", Ready)
+    monkeypatch.setattr(ptt, "RECOGNISER_TIMEOUT_S", 0.1)
+
+    got = ptt.best_recogniser_for("sapi")
+    assert isinstance(got, Ready), (
+        "a recogniser that hangs pre-empted one that was ready")
+
+
+def test_nothing_ready_falls_back_to_the_one_still_coming(monkeypatch):
+    """Better a radio that works from lap two than no radio at all."""
+    forever = threading.Event()
+    monkeypatch.setattr(ptt, "_under_pytest", lambda: False)
+    monkeypatch.setattr(ptt, "SapiGrammarRecogniser",
+                        lambda *a: forever.wait())
+    monkeypatch.setattr(ptt, "MoonshineRecogniser",
+                        lambda: forever.wait())
+    monkeypatch.setattr(ptt, "RECOGNISER_TIMEOUT_S", 0.1)
+    assert isinstance(ptt.best_recogniser_for("moonshine"), ptt.LateArrival)
+
+
+def test_the_default_backend_is_the_one_that_has_ever_come_up():
+    from pitcrew.settings import SPEECH_MOONSHINE, Settings
+    assert Settings().speech_backend == SPEECH_MOONSHINE

@@ -142,6 +142,11 @@ class Settings:
     # it in practice too is how you find out whether the button works at all
     # without committing to a race to test it.
     ptt_in_practice: bool = False
+    # **Tap to open, tap to close, static both ways.** "I don't have time to
+    # hold the button." Holding it occupies a hand that is on a wheel through
+    # a corner, which is exactly where the questions come from. Hold-to-talk
+    # is still there for anyone who wants it.
+    ptt_toggle: bool = True
     # **Which sound card, by name.** Empty means "whatever Windows calls the
     # default", which is what the app always did - and what put the engineer's
     # calls into a headset that was not connected, silently, because PortAudio
@@ -151,7 +156,11 @@ class Settings:
     audio_output_device: str = ""
     audio_input_device: str = ""
 
-    speech_backend: str = SPEECH_SAPI
+    # **Moonshine, because SAPI has never once come up.** Fifty-nine
+    # consecutive launches, fifty-nine hangs - it does not raise, it
+    # blocks forever, and being the default meant every launch spent
+    # five seconds on it before trying the one that works.
+    speech_backend: str = SPEECH_MOONSHINE
     # low  - acts only when sure, asks more often
     # high - acts readily, asks rarely
     speech_sensitivity: str = "medium"

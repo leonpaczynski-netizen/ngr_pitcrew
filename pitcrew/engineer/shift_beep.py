@@ -316,9 +316,14 @@ class _TonePlayer:
     """
 
     def __init__(self, *, freq: float = 1800.0, ms: int = 60,
-                 rate: int = 44100) -> None:
+                 rate: int = 44100, samples=None) -> None:
         self._rate = rate
-        self._samples = _square_wave(freq, ms, rate)
+        # `samples` lets a caller supply its own waveform and inherit the rest:
+        # the shared audio lock, the drop-rather-than-queue rule, and the
+        # fire-and-forget thread. The radio static that brackets a push-to-talk
+        # question uses it - same machinery, different sound.
+        self._samples = (_square_wave(freq, ms, rate) if samples is None
+                         else samples)
         # Held for the duration of a beep. Non-blocking acquisition is what
         # makes an overlapping beep a drop rather than a queue.
         self._busy = threading.Lock()

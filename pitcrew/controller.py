@@ -591,7 +591,8 @@ class PitCrewController(QObject):
             listener=best_listener(self.settings.ptt_key),
             on_answer=self._on_ptt_answer,
             matcher=best_semantic_matcher() if free_dictation else None,
-            sensitivity=self.settings.speech_sensitivity)
+            sensitivity=self.settings.speech_sensitivity,
+            toggle=self.settings.ptt_toggle)
         self._plans: list = []
         self._inputs = None
         self._plans_event_id: int | None = None

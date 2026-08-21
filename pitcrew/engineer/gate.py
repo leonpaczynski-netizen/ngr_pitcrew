@@ -65,6 +65,10 @@ NOTHING_HEARD = "nothing transcribed"
 REPEAT_LOOP = "the recogniser lost its place"
 NOT_UNDERSTOOD = "no phrase close enough in meaning"
 FAILED = "push to talk failed"
+# The recogniser lost its start-up race and is still loading. Not a
+# failure - a "not yet", and the only reason on this list that fixes
+# itself if he asks again in a moment.
+NOT_READY = "the recogniser is still loading"
 
 # What the driver hears for each. §5.5 form: the instruction he can act on
 # first, the reason second and short. The first two are the ones that were
@@ -81,13 +85,14 @@ SPOKEN: dict[str, str] = {
     REPEAT_LOOP: "I didn't catch that. Say again.",
     NOT_UNDERSTOOD: "Say again.",
     FAILED: "Push to talk failed. Check the log.",
+    NOT_READY: "Still starting up. Ask me again in a moment.",
 }
 
 # Every reason, in the order the stages produce them. For the phrase pack,
 # which renders `SPOKEN[reason]` for each one.
 ALL_REASONS: tuple[str, ...] = (
     NO_INPUT, NO_DEVICE, NO_SPEECH, TOO_SHORT, TOO_LONG, NOTHING_HEARD,
-    REPEAT_LOOP, NOT_UNDERSTOOD, FAILED,
+    REPEAT_LOOP, NOT_UNDERSTOOD, FAILED, NOT_READY,
 )
 
 # Under this much detected speech, treat the capture as a brushed button.
