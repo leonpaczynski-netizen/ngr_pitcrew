@@ -100,33 +100,65 @@ Worth recording, because agreement from two directions is stronger than either a
 
 ---
 
-## E. Needs your ruling
+## E. Ruled on, 21 Aug 2026
 
-**E1. Two cars have no drivetrain declared.** `events.drivetrain` is `MR` for the
-Huracán and **NULL for the RSR and the Shelby**. The KB's own settled facts say the
-911 RSR '17 is MR; the Shelby GT350R is front-engine rear-drive (FR). Setting both
-closes the contaminated `wheelspin` channel on two more cars — but they are *your*
-declarations to make, and the app is explicit that drivetrain is declared or
-unknown, never guessed. **Shall I set RSR = MR and Shelby = FR?**
+**E1. Drivetrain — answered "yes, and it should be derived from known car
+details."** `cars.drivetrain` is already seeded from GT7's own car list, so the
+catalogue now answers whenever nobody has declared: the RSR resolves to MR and
+the Shelby to FR, matching the KB's settled facts. It travels with its source,
+because the catalogue describes the car as shipped and cannot know about an
+engine swap that open tuning permits — so a declaration on the event still wins.
+Commit `41bdf0c`.
 
-**E2. `06-race-strategy-design-research-2026-08-12.md` is not in the Project
-export.** It was loose in Downloads, and the export's own `06` is
-`06-car-building-and-pp.md`. It is a 61 KB strategy-design document whose provenance
-I cannot establish. **Keep it in the brain, or set it aside?**
+**E2. The orphan strategy document — kept, and moved.** Now
+`brain/strategy-design-2026-08-12.md` with a provenance header. Kept because it
+is the only record of why `pitcrew/strategy/` enumerates rather than solving
+(6.7 M DP states against 3,905 candidates scored in 106 ms) and why the tyre
+gauge is primary evidence rather than a lap-time fit. Moved out of `_inbox/`
+because that directory is the faithful record of what the Project contained, and
+this was never in it.
 
-**E3. Pre-1.71 data — archive or leave live?** 58 of 60 sessions and two of three
-slider registers are pre-patch. The KB says they are a control group, not values to
-tune from. The app now refuses to export event 1 whole, which enforces that at the
-boundary — but the aggregates, compound profiles and wear models still read every
-lap regardless of version. **Should the analysis layer filter by game version too,
-or is the export refusal enough for now?**
+**E3. Version precedence — answered "use it as a guide but new version date
+trumps old data."** Implemented as `analysis/version.py` and applied in
+`strategy/evidence.build_inputs`, which is the single point where a race plan's
+evidence is assembled.
 
-**E4. Which record is authoritative when they drift again?** This pass found six
-places where the KB was stale and one where the code was. Nothing keeps them in
-step. Options: regenerate the KB's app-facing sections from the code, have the
-debrief write back into `brain/`, or accept drift and re-reconcile per patch.
+The design decision worth recording: **a patch is a discontinuity, not a decay.**
+`analysis/recency` weights old laps down because the driver gets faster and the
+setup moves on — that is a decay and a weight expresses it. Laps either side of
+1.71 are not weaker and stronger evidence about one car; they are evidence about
+two, and no weighting turns the first into the second. So version is a
+*precedence tier*: current-version laps are used alone where there are at least
+three, older ones are held back rather than blended, and where there are too few
+the plan says out loud that it rests on pre-patch evidence.
 
----
+**This withdrew an exemption `recency.py` states in its own words** — *"a gauge
+reading from three weeks ago is exactly as true as one from today."* That was
+right, and right for a good reason: a gauge reading measures GT7's own wear model
+rather than estimating it, so age cannot erode it. It holds only while the wear
+model is the same model, and 1.71 changed it. **The exemption stands within a
+version and is void across one.**
+
+Effect on the live database: the Monza plan now builds on the 12 laps recorded
+since the patch and holds back 206, and the reference lap moves from 1:49.2 to
+1:52.0. A materially different plan, which is the point. Commit `6007ed6`.
+
+**E4. Keeping the two records in step — `pitcrew/tests/test_brain_reconciliation.py`.**
+Asked to design it, and the answer is a test rather than a process, because a
+process needs somebody to remember and a test does not.
+
+Each claim in sections A and B above is encoded as an assertion. **A failure
+there is not necessarily a bug** — it means the code moved and this document is
+stale, and the message says which section to amend. It runs in both directions:
+section A asserts things the code *does* do, so a regression to a state the KB
+already calls a defect fails loudly; section B asserts things the code *does
+not yet* do, so when one is fixed the test fails and the news is good — delete
+the test and strike the row.
+
+**Asserting that a defect still exists is deliberate.** The alternative is that
+a fix lands, nobody updates the knowledge base, and a document goes on telling a
+race engineer to work around something that stopped happening. That is precisely
+how §C1 came about. Commit `d08fde4`.
 
 ## What was not checked
 
