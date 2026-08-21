@@ -57,8 +57,19 @@ happening". **Never route a lap-time trigger through `recommend()`.**
 moves with the track. At Watkins Glen (σ 0.68 s) lap time genuinely can carry
 degradation.*
 
-**Rear-left is his worst-wearing corner** — nine gauge readings, never once a
-front. *Eight prior, plus the live OBS sampler on 21 Aug 2026.*
+**Rear-left is his worst-wearing corner once wear has developed** — but the
+flat "never once a front" this file carried on 21 Aug was **wrong, and the
+database refutes it.** Of 45 four-corner readings on file, **5 have a front
+worst**: FL/FR 0.18 vs RL/RR 0.13, 0.15 vs 0.10, and three more.
+
+*Every one of them is early-stint and low: the largest is 18% worn.* So the
+honest statement is that the rears take over as the stint develops, and a
+front-worst reading in the first laps of a set is normal rather than a
+contradiction. It matters because an axle-asymmetry conclusion drawn from lap 2
+of a stint would be drawn from the part of the stint where it does not hold.
+
+*Source: 45 readings across driver reports and the OBS sampler. The earlier
+claim came from counting only the readings somebody had written down.*
 
 **Short-shifting pays, and the figure is measured in-house.**
 −21.6% fuel on v1.71 (`17` §4), −24.9% in an earlier controlled A/B, for about
