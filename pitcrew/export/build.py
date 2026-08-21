@@ -262,6 +262,32 @@ def build_event_export(store, event_id: int, *, kind: str = "practice",
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
 
 
+def drivetrain_of(store, event) -> tuple[str | None, str | None]:
+    """Which wheels are driven, and on whose authority.
+
+    GT7 broadcasts no drivetrain channel and the torque vectors that might have
+    inferred one read zero on this stream, so it is told or it is unknown.
+    Asking per event meant it was usually unknown: two of three events on file
+    have never been told, and `wheelspin` was watching all four wheels on both.
+
+    **The catalogue closes that without inventing anything.** `cars.drivetrain`
+    is seeded from GT7's own car list, so the model of car is known even when
+    nobody has said. It is a weaker claim than a declaration - it describes the
+    car as shipped and cannot know about an engine swap, which this league's
+    open tuning permits - so it is returned with its source and the export says
+    which it had. A declaration on the event always wins.
+    """
+    declared = (event or {}).get("drivetrain")
+    if declared:
+        return declared, "declared"
+    name = (event or {}).get("car_name")
+    if not name:
+        return None, None
+    car = store.car_by_name(name)
+    value = (car or {}).get("drivetrain")
+    return (value, "catalogue") if value else (None, None)
+
+
 def _session_field(session, name):
     """A session column that may predate the row it is read from."""
     if hasattr(session, "keys"):
@@ -404,6 +430,11 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     if event is None:
         raise ValueError("session has no event")
 
+    # Resolved once, and used by both the corner aggregation and the
+    # thresholds block, so a payload can never say one thing in `wheelspin`
+    # and another in `derived`.
+    drivetrain, drivetrain_source = drivetrain_of(store, event)
+
     # Applied before anything is aggregated, so `lapsCounted`, `bestLapMs`,
     # the wear rates and the gearing all see one set of counted laps rather
     # than each deciding for itself which laps were real.
@@ -518,9 +549,10 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
             # this stream.** Without it `wheelspin` watches all four wheels,
             # so a front wheel lifted over a kerb under throttle counts: at
             # Watkins T2 that was 15 laps of 17 with a kerb strike on all 17.
-            # None where nobody has said, and the payload goes on disclosing
-            # that it is watching all four.
-            drivetrain=(event or {}).get("drivetrain"))
+            # None where nobody has said and the catalogue does not carry the
+            # car either, and the payload goes on disclosing that it is
+            # watching all four.
+            drivetrain=drivetrain)
 
     setup = None
     driver_changes = None
@@ -566,7 +598,7 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         strategy=strategy,
         derived=Derived(
             {**thresholds.as_export(
-                drivetrain=(event or {}).get("drivetrain"),
+                drivetrain=drivetrain, drivetrain_source=drivetrain_source,
                 wheelbase_m=_session_field(session, "wheelbase_m")),
              **incident_thresholds()},
             bottoming_ref_mm=bottoming_ref,

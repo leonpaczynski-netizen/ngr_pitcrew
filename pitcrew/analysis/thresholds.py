@@ -157,7 +157,17 @@ def wheelspin_wheels(drivetrain: str | None) -> tuple[str, ...]:
     return DRIVEN_WHEELS.get(drivetrain.strip().lower(), ALL_WHEELS)
 
 
-def wheelspin_wheels_note(drivetrain: str | None) -> str:
+def wheelspin_wheels_note(drivetrain: str | None,
+                          source: str | None = None) -> str:
+    """Which wheels were watched, and **on whose authority.**
+
+    GT7 broadcasts no drivetrain channel, so the value is either declared by
+    the driver or looked up in the car catalogue. Those are different claims
+    and CLAUDE.md §4.5 says so: the catalogue is a property of the model of car
+    and cannot know about an engine swap, which this league's open tuning
+    allows. So a catalogue answer says it is a catalogue answer, and a
+    declaration still overrides it.
+    """
     wheels = wheelspin_wheels(drivetrain)
     if (drivetrain is None
             or drivetrain.strip().lower() not in DRIVEN_WHEELS):
@@ -165,7 +175,12 @@ def wheelspin_wheels_note(drivetrain: str | None) -> str:
                 "declared, so the contract's driven-wheel test could not be "
                 "applied. A front wheel light over a kerb under throttle reads "
                 "as wheelspin on a rear-driven car")
-    return (f"{drivetrain.strip().upper()}, declared - driven wheels "
+    how = {
+        "catalogue": ("from the car catalogue, not declared - correct for the "
+                      "model as shipped, and blind to an engine swap"),
+        "declared": "declared",
+    }.get(source or "declared", "declared")
+    return (f"{drivetrain.strip().upper()}, {how} - driven wheels "
             f"({', '.join(wheels)})")
 
 
@@ -227,7 +242,8 @@ SPEED_SMOOTHING_MS = 250.0
 ON_TRACK_SURFACES = frozenset({"T", "C"})   # tarmac and kerb
 
 
-def as_export(drivetrain: str | None = None,
+def as_export(drivetrain: str | None = None, *,
+              drivetrain_source: str | None = None,
               wheelbase_m: float | None = None) -> dict:
     """The `derived.thresholds` object.
 
@@ -242,7 +258,8 @@ def as_export(drivetrain: str | None = None,
         "wheelspinPct": WHEELSPIN_PCT,
         # Contract 7.1 says driven wheels. Whether that is what happened
         # depends on whether anyone told the app what drives this car.
-        "wheelspinWheels": wheelspin_wheels_note(drivetrain),
+        "wheelspinWheels": wheelspin_wheels_note(drivetrain,
+                                                 drivetrain_source),
         "lockupPct": LOCKUP_PCT,
         "countersteerDeg": COUNTERSTEER_DEG,
         "countersteerWindowMs": COUNTERSTEER_WINDOW_MS,

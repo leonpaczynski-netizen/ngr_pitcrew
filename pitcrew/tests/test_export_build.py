@@ -5,8 +5,10 @@ import json
 
 import pytest
 
+from pitcrew.analysis import thresholds
 from pitcrew.export.build import (
     _merged_session,
+    drivetrain_of,
     build_event_export,
     build_session_export,
     multiplier_factor,
@@ -336,6 +338,39 @@ def test_an_event_with_no_version_exports_on_the_app_setting(store: Store, recor
     payload = build_event_export(store, recorded["event_id"],
                                  game_version="1.70")
     assert payload["meta"]["gameVersion"] == "1.70"
+
+
+def test_the_catalogue_supplies_a_drivetrain_nobody_declared(store: Store):
+    """GT7 sends no drivetrain channel, so it is told or it is looked up.
+
+    Asking per event meant it was usually neither: two of the three events on
+    file had never been told, so `wheelspin` watched all four wheels on both
+    and a front wheel lifted over a kerb under throttle counted. The catalogue
+    knows the model of car, which is a weaker claim than a declaration but a
+    great deal better than nothing.
+    """
+    event_id = store.create_event(
+        name="Monza round", track="Autodromo Nazionale Monza", layout="Full",
+        car_name="Porsche 911 RSR (991) '17", race_type="laps", race_laps=20,
+        game_version="1.71")
+    event = store.get_event(event_id)
+    assert event["drivetrain"] is None
+    assert drivetrain_of(store, event) == ("MR", "catalogue")
+
+    # And the export has to say which it had, because the catalogue describes
+    # the car as shipped and cannot know about an engine swap.
+    note = thresholds.wheelspin_wheels_note("MR", "catalogue")
+    assert "from the car catalogue" in note and "engine swap" in note
+    assert "declared" in thresholds.wheelspin_wheels_note("MR", "declared")
+
+
+def test_a_declared_drivetrain_beats_the_catalogue(store: Store):
+    """Open tuning permits an engine swap; the catalogue cannot know."""
+    event_id = store.create_event(
+        name="Swapped", track="Autodromo Nazionale Monza", layout="Full",
+        car_name="Porsche 911 RSR (991) '17", race_type="laps", race_laps=20,
+        game_version="1.71", drivetrain="4WD")
+    assert drivetrain_of(store, store.get_event(event_id)) == ("4WD", "declared")
 
 
 def test_the_session_stamp_outranks_the_event_and_the_setting():
