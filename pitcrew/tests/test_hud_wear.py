@@ -180,3 +180,77 @@ def test_requests_before_start_are_ignored_rather_than_queued():
     sampler = LiveWearSampler(FakeSource((None, "x")), lambda lap, wear: None)
     sampler.request(1)                       # must not raise
     sampler.stop()                           # nor must this
+
+
+# --------------------------------------------------- the gauge that moves
+
+def a_moved_canvas(worn: dict[str, float], at: tuple[int, int],
+                   bar: tuple[int, int] = (9, 18)) -> bytes:
+    """The VR case: the same four bars, somewhere else, and smaller.
+
+    GT7 draws the HUD on the car's dashboard in 3D there, so it translates with
+    head position - measured at about 200 px across one recording - and the
+    bars are 18-20 px rather than 30.
+    """
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    frame = np.zeros((CANVAS[1], CANVAS[0], 3), dtype=np.uint8)
+    frame[:] = 18
+    width, height = bar
+    x, y = at
+    for index, corner in enumerate(("fl", "rl", "fr", "rr")):
+        bx = x + (0 if corner in ("fl", "rl") else 60)
+        by = y + (0 if corner in ("fl", "fr") else height + 8)
+        red_rows = round(worn.get(corner, 0.0) * height)
+        frame[by:by + red_rows, bx:bx + width] = (170, 25, 25)
+        frame[by + red_rows:by + height, bx:bx + width] = (215, 215, 215)
+    buffer = io.BytesIO()
+    Image.fromarray(frame).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_a_gauge_that_moved_is_found_and_read():
+    """Measured on the real recording: 21% of VR driving frames read. That is
+    low and it is enough - the design fits a slope across a stint rather than
+    trusting any single reading, and a missed frame costs one screenshot."""
+    got = read_gauge(a_moved_canvas(
+        {"fl": 0.35, "fr": 0.22, "rl": 0.5, "rr": 0.3}, at=(1380, 400)))
+    assert got.ok
+    assert got.wear["rl"] > got.wear["fl"] > got.wear["fr"]
+
+
+def test_the_same_gauge_is_found_somewhere_else_entirely():
+    """The whole point: a fixed rectangle tracks nothing when the panel moves
+    with his head."""
+    first = read_gauge(a_moved_canvas({"fl": 0.4, "fr": 0.4, "rl": 0.4,
+                                       "rr": 0.4}, at=(1240, 360)))
+    second = read_gauge(a_moved_canvas({"fl": 0.4, "fr": 0.4, "rl": 0.4,
+                                        "rr": 0.4}, at=(1450, 455)))
+    assert first.ok and second.ok
+    assert first.wear["fl"] == pytest.approx(second.wear["fl"], abs=0.06)
+
+
+def test_a_located_reading_says_how_coarse_it_is():
+    """One pixel of an 18 px bar is 5.6% of tyre life - about a lap at Monza.
+    A number that coarse must not travel without saying so."""
+    got = read_gauge(a_moved_canvas(
+        {"fl": 0.35, "fr": 0.22, "rl": 0.5, "rr": 0.3}, at=(1380, 400)))
+    assert got.ok and got.reason
+    assert "one pixel is" in got.reason and "slope" in got.reason
+
+
+def test_an_empty_frame_still_reports_dimmed_rather_than_locating_noise():
+    """The locator must not turn a dark frame into a reading."""
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    frame = np.zeros((CANVAS[1], CANVAS[0], 3), dtype=np.uint8)
+    buffer = io.BytesIO()
+    Image.fromarray(frame).save(buffer, format="PNG")
+    got = read_gauge(buffer.getvalue())
+    assert not got.ok and "dimmed" in got.reason

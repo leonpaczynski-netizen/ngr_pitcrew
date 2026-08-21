@@ -132,23 +132,186 @@ def read_gauge(png: bytes, layout: dict | None = None) -> Reading:
     peak = max(int(frame[y0:y1 + 1, x0:x1 + 1].max())
                for (x0, x1, y0, y1) in layout.values())
     if peak <= LIVE_PEAK:
+        # **Before calling it dimmed, check whether the gauge simply is not
+        # there.** In VR it is drawn on the dashboard and moves with head
+        # position, so the calibrated rectangle is looking at trim. A located
+        # gauge is read; a genuinely dark frame still says so.
+        moved = locate_gauge(frame)
+        if moved is not None:
+            return _read_bars(frame, moved, quantisation_note=True)
         return Reading(None, f"frame is dimmed (gauge peaks at {peak}) - paused, "
-                             f"in a menu, or mid-transition")
+                             f"in a menu, or the HUD is drawn in 3D and the "
+                             f"gauge is not where the flat layout expects it")
 
+    return _read_bars(frame, layout)
+
+
+def _read_bars(frame, layout: dict, *,
+               quantisation_note: bool = False) -> Reading:
+    """Red rows over classified rows, per bar. The transcription itself."""
     out: dict[str, float | None] = {}
+    shortest = None
     for corner, (x0, x1, y0, y1) in layout.items():
         bar = frame[y0:y1 + 1, x0:x1 + 1]
+        rows = bar.shape[0]
+        shortest = rows if shortest is None else min(shortest, rows)
         r, g, b = bar[..., 0], bar[..., 1], bar[..., 2]
-        red = (r > RED_MIN) & (r - g > RED_SEPARATION) & (r - b > RED_SEPARATION)
-        white = (r > WHITE_MIN) & (g > WHITE_MIN) & (b > WHITE_MIN)
+        # A located gauge is dimmer and smaller, so it is classified on the
+        # looser thresholds it was found with. The fixed layout keeps the
+        # strict ones, which is what the 0.5% verification was taken on.
+        if quantisation_note:
+            red = ((r > VR_RED_MIN) & (r - g > VR_RED_SEPARATION)
+                   & (r - b > VR_RED_SEPARATION))
+            white = ((r > VR_WHITE_MIN) & (g > VR_WHITE_MIN)
+                     & (b > VR_WHITE_MIN))
+            floor = max(4, rows // 2)
+        else:
+            red = ((r > RED_MIN) & (r - g > RED_SEPARATION)
+                   & (r - b > RED_SEPARATION))
+            white = (r > WHITE_MIN) & (g > WHITE_MIN) & (b > WHITE_MIN)
+            floor = MIN_CLASSIFIED_ROWS
         n_red = int((red.mean(axis=1) > 0.5).sum())
         n_white = int((white.mean(axis=1) > 0.5).sum())
         total = n_red + n_white
-        out[corner] = n_red / total if total >= MIN_CLASSIFIED_ROWS else None
+        out[corner] = n_red / total if total >= floor else None
 
     if all(v is None for v in out.values()):
         return Reading(out, "no bar showed enough classified rows to read")
+    if quantisation_note and shortest:
+        # **Said, because it changes what the number is worth.** One pixel of
+        # an 18 px bar is 5.6% of tyre life - about a lap at Monza - against
+        # 3.3% on the flat HUD's 30 px.
+        return Reading(out, f"located on a moving HUD; bars are {shortest} px, "
+                            f"so one pixel is {100 / shortest:.1f}% of tyre "
+                            f"life - fit a slope across the stint rather than "
+                            f"trusting one reading")
     return Reading(out)
+
+
+# --- finding the gauge when it will not hold still -------------------------
+#
+# **In VR the HUD is drawn on the car's dashboard in 3D**, so it translates and
+# skews with head position: measured across one 48-second recording, the
+# cluster moved about 200 px horizontally and 95 px vertically during ordinary
+# driving. A fixed rectangle tracks nothing there.
+#
+# It is also smaller. The bars are 18-20 px tall against 30 on the flat HUD, so
+# one pixel is about 5.6% of tyre life - roughly a whole lap at Monza, against
+# 3.3% flat. **That quantisation is fundamental and the locator cannot improve
+# it**; what makes it survivable is the same discipline the offline tool
+# already uses, fitting a slope across a stint rather than trusting any single
+# reading.
+
+# A bar is a short vertical strip: red at the top, white below it. These bound
+# what counts as one, and they are deliberately loose on position and tight on
+# shape - position is the thing that moves.
+VR_BAR_MIN_H, VR_BAR_MAX_H = 8, 40
+VR_BAR_MIN_W, VR_BAR_MAX_W = 3, 16
+# The four bars sit either side of a small car icon. Two x positions, two y
+# bands, all within this of each other.
+VR_CLUSTER_W, VR_CLUSTER_H = 130, 90
+# Looser than the flat thresholds, because the dashboard is dim and the panel
+# is lit by the scene rather than composited over it.
+VR_RED_MIN, VR_RED_SEPARATION, VR_WHITE_MIN = 95, 40, 135
+
+
+def _vr_masks(frame):
+    import numpy as np
+
+    r, g, b = frame[..., 0], frame[..., 1], frame[..., 2]
+    red = (r > VR_RED_MIN) & (r - g > VR_RED_SEPARATION) &           (r - b > VR_RED_SEPARATION)
+    white = ((r > VR_WHITE_MIN) & (g > VR_WHITE_MIN) & (b > VR_WHITE_MIN)
+             & (abs(r - g) < 45) & (abs(g - b) < 45))
+    return red, white, np.asarray(red | white)
+
+
+def locate_gauge(frame) -> dict | None:
+    """Find the four bars in a frame that will not hold them still.
+
+    Returns a layout in the same shape as `LAYOUT_1720x916` - `{corner:
+    (x0, x1, y0, y1)}` - or None where four bars in a 2x2 could not be found.
+
+    **None is the expected answer much of the time** and is not a failure: the
+    panel is often edge-on, out of frame, or behind the wheel. Sampling more
+    often costs nothing but a screenshot, and a stint's slope survives gaps.
+    """
+    import numpy as np
+
+    red, white, solid = _vr_masks(frame)
+    height, width = solid.shape
+    found = []
+    for x in range(width):
+        column = solid[:, x]
+        if not column.any():
+            continue
+        idx = np.where(column)[0]
+        for run in np.split(idx, np.where(np.diff(idx) > 1)[0] + 1):
+            if not (VR_BAR_MIN_H <= len(run) <= VR_BAR_MAX_H):
+                continue
+            y0, y1 = int(run[0]), int(run[-1])
+            third = max(1, (y1 - y0) // 3)
+            if (red[y0:y0 + third + 1, x].mean() > 0.5
+                    and white[y1 - third:y1 + 1, x].mean() > 0.7):
+                found.append((x, y0, y1))
+    if len(found) < VR_BAR_MIN_W * 4:
+        return None
+
+    # Adjacent columns of similar extent are one bar.
+    #
+    # **Several bars are open at once, and that is the whole difficulty.** A
+    # single linear scan cannot do this. Sorting by column interleaves the top
+    # and bottom bar of the same column, which share an x; sorting by row
+    # breaks a bar apart the moment perspective drifts its rows across its own
+    # width, which is exactly what a HUD painted on a dashboard does. Measured
+    # both ways on one real recording: column-first read a fifth of the frames,
+    # row-first read a fourteenth.
+    #
+    # So every open bar is kept and each run joins the one it continues.
+    open_bars: list[list] = []
+    for item in sorted(found, key=lambda c: (c[0], c[1])):
+        for bar in open_bars:
+            last = bar[-1]
+            if item[0] - last[0] <= 1 and abs(item[1] - last[1]) <= 4:
+                bar.append(item)
+                break
+        else:
+            open_bars.append([item])
+
+    shaped = []
+    for group in open_bars:
+        if not VR_BAR_MIN_W <= len(group) <= VR_BAR_MAX_W:
+            continue
+        xs = [c[0] for c in group]
+        shaped.append((min(xs), max(xs),
+                       int(np.median([c[1] for c in group])),
+                       int(np.median([c[2] for c in group]))))
+    if len(shaped) < 4:
+        return None
+
+    # Four of them, close together, in two columns and two rows. Anything
+    # looser finds brake lights and kerbs.
+    best = None
+    for anchor in shaped:
+        near = [b for b in shaped
+                if abs(b[0] - anchor[0]) < VR_CLUSTER_W
+                and abs(b[2] - anchor[2]) < VR_CLUSTER_H]
+        if len(near) < 4:
+            continue
+        near = sorted(near, key=lambda b: (b[0], b[2]))[:4]
+        spread = max(b[1] for b in near) - min(b[0] for b in near)
+        if best is None or spread < best[0]:
+            best = (spread, near)
+    if best is None:
+        return None
+
+    quad = best[1]
+    left = sorted(quad[:2], key=lambda b: b[2])
+    right = sorted(quad[2:], key=lambda b: b[2])
+    if len(left) != 2 or len(right) != 2:
+        return None
+    # Left column is the near side, top of each column is the front axle -
+    # the same arrangement the flat HUD uses.
+    return {"fl": left[0], "rl": left[1], "fr": right[0], "rr": right[1]}
 
 
 class ObsSource:
