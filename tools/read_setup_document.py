@@ -18,7 +18,18 @@ So this reads them on their own terms, and it is deliberately timid:
   which is the failure this exists to prevent.
 
 Used by `check_setup_sheets.py` to say whether an unfiled revision actually
-changes anything, rather than merely being newer.
+changes anything, rather than merely being newer. **The checker compares slider
+values only; gear ratios are reported here and not acted on**, which is why the
+known limits below are tolerable.
+
+Known limits, stated rather than papered over:
+
+* **A document presenting two gearboxes returns both.** `2026-08-11-rsr-monza`
+  sets out a race box and a qualifying box and yields eight ratios for a
+  six-speed car. Visible in the count.
+* **A document tabulating gear SPEEDS returns no ratios.**
+  `2026-08-13-huracan-watkins-glen-long` lists `1st 110 km/h`, and the physical
+  bound rejects those - so it reports zero, which is the right failure.
 """
 from __future__ import annotations
 
@@ -65,6 +76,9 @@ GEARS = {"1st": 0, "2nd": 1, "3rd": 2, "4th": 3, "5th": 4, "6th": 5,
 # the race column is the absolute value; anything after it is the delta and the
 # percent-of-range, which are derived and not what is stored.
 NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?")
+# A gear ratio is always written with a decimal point, which is what
+# separates 2.727 from the "1st" and "6th" in the row's own label.
+RATIO = re.compile(r"\d+\.\d+")
 DECORATION = re.compile("[◄►●▲▼"
                         "─←→⚠️]+")
 
@@ -104,6 +118,8 @@ def read_race_sheet(text: str) -> tuple[dict[str, float], list[float], list[str]
         if "Body height" not in block and "Anti-roll" not in block:
             continue                      # not the sheet - a code or data block
         row_key: tuple[str, str] | str | None = None
+        collecting = False
+        gears_locked = False
         for raw in block.splitlines():
             line = _clean(raw)
             low = line.lower()
@@ -111,16 +127,61 @@ def read_race_sheet(text: str) -> tuple[dict[str, float], list[float], list[str]
                 continue
 
             gear = next((g for g in GEARS if low.strip().startswith(g)), None)
-            if gear is not None:
+            if gear is not None and not gears_locked:
+                # Same physical bound as the run collector. One document
+                # tabulates `1st 110 km/h` - the speed the gear reaches, not
+                # its ratio - and without this those were filed as ratios.
                 column = _race_column(line.strip()[len(gear):])
                 found = NUMBER.search(column or "")
-                if found:
+                if found and 0.4 <= float(found.group()) <= 6.0:
                     gears[GEARS[gear]] = float(found.group())
                 continue
 
             label = next((name for name in sorted(ROWS, key=len, reverse=True)
                           if low.lstrip().startswith(name)), None)
+
+            # **Ratios written as a run, wrapped across lines.** One document
+            # lists them one per line; another writes `Ratios 1st->6th` and
+            # then two continuation lines of three numbers each, which the
+            # per-line reader saw as no gears at all - and that is how a real
+            # difference stayed hidden: the stored sheet had 6th at 1.060, the
+            # document said 1.055, and the driver confirmed 1.055.
+            #
+            # **Checked only after a labelled row has failed to match**, so a
+            # settings row can never be swallowed by it, and restricted to
+            # decimals so the `1st` and `6th` in the label are not ratios.
+            if label is None:
+                # **The first gearbox in the document, and only the first.**
+                # The 11 Aug RSR sheet presents two - a race box and a
+                # qualifying box, its own section says so - and appending the
+                # second gave eight ratios for a six-speed car. Once a run has
+                # ended, no later heading reopens it.
+                if "ratio" in low and not gears_locked:
+                    collecting = True
+                if collecting:
+                    # **The first column that actually holds ratios.** On the
+                    # trigger line the leading column is the row's own label
+                    # ("Ratios 1st->6th"); on a continuation line it is the
+                    # ratios themselves. Taking column one blindly read the
+                    # label and lost the first three gears.
+                    columns = [c for c in re.split(r"\s{2,}", line.strip()) if c]
+                    column = next((c for c in columns if RATIO.search(c)), "")
+                    # **A gear ratio has a physical range.** Without this the
+                    # collector walked on into "6th at limiter 291.7 km/h" and
+                    # "(observed clean-air top speed) 273.5 km/h" and filed
+                    # both as gears. GT7's ratios sit between about 0.4 and 5.
+                    run = [float(m) for m in RATIO.findall(column)
+                           if 0.4 <= float(m) <= 6.0]
+                    if run and len(gears) < 8:
+                        start_at = max(gears) + 1 if gears else 0
+                        gears.update({start_at + i: v for i, v in enumerate(run)})
+                        continue
+                    if re.search(r"[A-Za-z]", column) and "ratio" not in low:
+                        collecting = False
+                        gears_locked = bool(gears)
+
             if label is not None:
+                collecting = False
                 row_key = ROWS[label]
                 rest = line.lstrip()[len(label):]
             elif row_key is not None and re.match(r"\s*(front|rear)\b", low):
