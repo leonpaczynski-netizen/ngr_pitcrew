@@ -399,3 +399,68 @@ a flat screen, but it is not out of reach.** It needs
 needs a per-frame locator.** Phase 3 therefore ships in two stages - the flat-screen
 sampler first, since it works today with the constants already in the repo, and
 the VR locator second as its own piece of work with its own accuracy target.
+
+---
+
+## 9. Spike S1 — run 21 Aug 2026
+
+### The finding that reframes the question
+
+**The transport is already solved, and it has been all along.**
+
+`%APPDATA%\Claude\claude_desktop_config.json` on this machine has **no
+`mcpServers` key at all**. What it has instead is `coworkUserFilesPath`,
+`ccdScheduledTasksEnabled`, and a `remoteSessionFolderGrants` block granting
+three sessions access to `C:\Projects\VR_Dashboard`. This is the Claude Code
+Desktop build, and it is already wired to the repo.
+
+So Claude — in a session exactly like the one that wrote this document — already
+has the repository, the SQLite database, `CLAUDE.md`, `EXPORT-CONTRACT.md`, and
+memory that persists between sessions. It can run arbitrary analysis against
+`Store`, which is **strictly more capable than any fixed MCP tool surface**.
+
+**What is missing is not a pipe. It is the brain**, which lives in a claude.ai
+Project that a Claude Code session cannot see. That was Phase 1's job already,
+and S1 raises it from "load-bearing" to "very nearly the whole of seamless".
+
+### The MCP server is still proven, and still worth having
+
+Built a throwaway read-only server over the real `Store` and drove it over stdio
+end to end:
+
+```
+connected: pitcrew-spike (protocol 2025-11-25)
+tools: ['list_events', 'cars_with_range_records', 'setup_sheet']
+cars_with_range_records -> Ford Shelby GT350R '16,
+                           Lamborghini Huracan GT3 '15,
+                           Porsche 911 RSR (991) '17
+```
+
+Real database, real rows. Notes for Phase 2:
+
+- **`mcp` 2.0.0 supports Python 3.14** and installs clean. No version risk.
+- **The 2.x API moved.** `mcp.server.fastmcp.FastMCP` is gone; it is
+  `mcp.server.mcpserver.MCPServer`, and result fields are snake_case
+  (`server_info`, not `serverInfo`). Any 1.x example found online needs porting.
+- Open the store per call, or with a read-only URI. **The server must never hold
+  a lock the app needs during a session.**
+
+Where the MCP server earns its place is **bounded** access — the claude.ai
+Project reaching the data through a connector, and gated write actions — not
+the analysis conversation, which Claude Code already does better.
+
+### Revised recommendation
+
+1. **Phase 1 (brain into the repo) becomes the whole of the near-term work.**
+   With Claude Code Desktop already on the race machine, extracting the brain to
+   `brain/` and shipping it as a skill closes the loop with no new plumbing.
+   A skills directory already exists and works.
+2. **Phase 2 (MCP) drops in priority** and is re-scoped to the Project/connector
+   case and to safe writes.
+3. The trade to be aware of: **Claude Code is tied to this machine; the claude.ai
+   Project is reachable from anywhere.** If setup work away from the rig matters,
+   the Project stays and the MCP connector matters more than this suggests.
+
+**Still open:** whether the Project's knowledge can be exported to files —
+uploaded documents and artifacts may not come out cleanly.
+
