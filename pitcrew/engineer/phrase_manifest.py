@@ -378,6 +378,47 @@ def _compound_words() -> list[str]:
     return [c.code for c in ALL_COMPOUNDS] + [c.name for c in ALL_COMPOUNDS]
 
 
+def spoken_openers() -> tuple[str, ...]:
+    """Whole lines the engineer says that no synthetic state produces.
+
+    `race_call_lines()` decomposes whatever `next_call` returns for a list of
+    enumerable states, which is the right way round - the wording stays where
+    it is written. But three families never come out of it: the temperature
+    calls, whose states are combinations of four per-wheel readings against a
+    measured window; the run-in, which lives in `colour.py` and not in
+    `next_call` at all; and the push-to-talk acknowledgement.
+
+    **Measured before this list existed: fourteen of the sixteen lines the
+    engineer can say were missing from the pack**, so nearly every race call
+    was being live-synthesised. They are numberless, so each is one clip and
+    the decomposition is not needed.
+
+    Sourced by import where the module exposes them and quoted here where it
+    does not; a line that drifts from its module is a clip that stops matching
+    and falls back to synthesis, which is the failure this list exists to fix -
+    so `test_phrase_manifest` checks these against the modules.
+    """
+    return (
+        # race/calls.py - the temperature family
+        "Tyres cold.",
+        "Rears heating.",
+        "Fronts heating.",
+        "Tyres are up to temperature.",
+        "Ease the traction out of the slow corners.",
+        # race/calls.py - the run-in, sayable only with an accurate clock
+        "Last lap.",
+        "Two to go.",
+        # race/colour.py - the quiet-lap tier
+        "That's the best lap of the race.",
+        "That's the tidiest run of the race.",
+        "Halfway.",
+        "Stop next lap.",
+        "Tyre gauge when you get a straight.",
+        # engineer/intents.py - acknowledge, never analyse
+        "Copy, noted with the temperatures.",
+    )
+
+
 def clips() -> tuple[str, ...]:
     """Everything the render tool should produce, de-duplicated."""
     everything = [
@@ -391,6 +432,7 @@ def clips() -> tuple[str, ...]:
         *number_fragments(),
         *fuel_fragments(),
         *race_call_lines(),
+        *spoken_openers(),
     ]
     return tuple(dict.fromkeys(everything))
 
@@ -424,6 +466,7 @@ def _reusable_lines() -> frozenset[str]:
     proactive call costs the pack nothing but the words that join them.
     """
     return frozenset((*fixed_lines(), *position_lines(), *compound_lines(),
+                      *spoken_openers(),
                       *box_when_lines(), *box_fuel_lines(),
                       *laps_remaining_lines(), *plan_single_part_lines(),
                       *call_openers()))
