@@ -427,6 +427,22 @@ def spoken_openers() -> tuple[str, ...]:
         "Tyre gauge when you get a straight.",
         # engineer/intents.py - acknowledge, never analyse
         "Copy, noted with the temperatures.",
+        # race/brief.py - the arming brief. Spoken on the grid rather than at
+        # racing speed, so latency matters less here than anywhere - but these
+        # are the lines that define what every later silence means, and a
+        # stutter before "I can't see them, not that they're fine" would
+        # undercut the one sentence that has to land.
+        "I have the tyre gauge this race.",
+        "No tyre gauge this race - read it to me when you can.",
+        "If I'm quiet about tyres it means I can't see them, "
+        "not that they're fine.",
+        "No measured temperature window on this car, so I'll call the trend "
+        "and not a number.",
+        "I can't see kerbs or offs on this stream.",
+        "I can't see other cars - position only.",
+        "No plan loaded - I'll call fuel and nothing else.",
+        "I won't give you a lap count until I can stand behind one.",
+        "I've lost the tyre gauge. Read it to me when you get a straight.",
     )
 
 

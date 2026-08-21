@@ -22,8 +22,17 @@ def test_every_declared_opener_still_exists_in_its_module():
     root = Path(__file__).resolve().parents[1]
     source = "".join(
         (root / name).read_text(encoding="utf-8")
-        for name in ("race/calls.py", "race/colour.py", "engineer/intents.py"))
-    stray = [line for line in spoken_openers() if f'"{line}"' not in source]
+        for name in ("race/calls.py", "race/colour.py",
+                     "race/brief.py", "engineer/intents.py"))
+    # **Whitespace-insensitive**, because a long line is written in the source
+    # as adjacent string literals across two lines and would never match
+    # literally. Comparing with all whitespace removed finds it wherever the
+    # formatter chose to break it.
+    # Adjacent string literals leave a `""` where they join once the
+    # whitespace between them is gone; dropping it splices them back.
+    flat = "".join(source.split()).replace('""', "")
+    stray = [line for line in spoken_openers()
+             if "".join(line.split()) not in flat]
     assert not stray, (
         "these lines are declared for rendering but no module says them any "
         f"more, so the real wording will fall through to synthesis: {stray}")
