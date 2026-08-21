@@ -203,9 +203,6 @@ class TelemetryBridge(QObject):
         # frame; nothing reads it on this thread.
         self.last_packet = None
         self.racing = False
-        # Whether the first packet is allowed to set the threshold. Off means
-        # the driver picked a number, and the game must not overwrite it.
-        self.beep_from_game = True
         self.beep_wanted = True
         # The settings the per-gear table lives in, and the car the stream is
         # currently showing. The table is per car and the car is not known
@@ -213,10 +210,8 @@ class TelemetryBridge(QObject):
         # `_apply_shift_points`.
         self._shift_points = None
         self._car_id = None
-        # The car's canonical NAME, set from the active event. It is what
-        # `Settings.shift_points_for` falls back to while the packet car id
-        # is still unknown - which is every car the app has not yet seen on
-        # the wire, including the one being raced tomorrow.
+        # The car's canonical NAME, set from the active event. Kept for the
+        # log lines that name which car is on the wire.
         self._car_name = None
         # Whether a REAL car id has been announced yet, as distinct from
         # `_announced`, which only says a packet arrived. The first packet
@@ -227,20 +222,31 @@ class TelemetryBridge(QObject):
         # being driven. None until a packet arrives - a lap nobody watched
         # makes no claim about how it was driven.
         self._lap_short_shift_rpm = None
+        # **The fitted sheet's own table**, set when a session opens. A shift
+        # point belongs to the gearbox, so it belongs to the sheet: change a
+        # ratio or the final drive and the rpm worth shifting at moves with
+        # it, which a table keyed by car alone cannot express.
+        self._sheet_shift_rpm: dict[int, float] = {}
+
+    def set_sheet_shift_rpm(self, table: dict | None) -> None:
+        self._sheet_shift_rpm = {int(g): float(r)
+                                 for g, r in (table or {}).items()}
+        self._apply_shift_points()
 
     def _apply_shift_points(self) -> None:
         """Install the measured per-gear table for the car now on track.
 
-        A car with no measured table gets an EMPTY one, never a neighbour's
-        and never a default: the whole value of a per-gear threshold is that
-        it was measured on that gearbox, and a table that quietly fills itself
-        would be indistinguishable at the wheel from one that was.
+        **The fitted sheet first**, then the legacy per-car setting for a car
+        whose sheet has not been given one yet. A car with no measured table
+        anywhere gets an EMPTY one, never a neighbour's and never a default:
+        the whole value of a per-gear threshold is that it was measured on
+        that gearbox, and a table that quietly fills itself would be
+        indistinguishable at the wheel from one that was.
         """
         settings = self._shift_points
         if settings is None:
             return
-        table = settings.shift_points_for(self._car_id,
-                                          car_name=self._car_name)
+        table = dict(self._sheet_shift_rpm)
         self.shift_beep.per_gear = table
         if self._car_id is None:
             return
@@ -249,33 +255,30 @@ class TelemetryBridge(QObject):
                 "car %s has shift points: %s", self._car_id,
                 ", ".join(f"g{g} {rpm:.0f}" for g, rpm in sorted(table.items())))
         else:
-            # **The car id is logged even when there is no table, and that is
-            # the point of the line.** It is the key the table is stored
-            # under, GT7 only sends it on the wire, and nothing persists it -
-            # so without this the driver cannot find out what to key his own
-            # measured table to, and the feature is unreachable for a car he
-            # has just started driving.
+            # **Silence, and it is said out loud.** There is no fallback any
+            # more: a gearbox nobody has measured does not beep, because the
+            # global rpm and GT7's own shift light both sounded exactly like a
+            # measurement without being one. A silence nobody can account for
+            # is its own defect, so the log says which car and what to do.
             log("beep").info(
-                "car %s has no measured shift points - beeping at %.0f rpm in "
-                "every gear. Run tools/shift_points.py against a session in "
-                "this car and store the table under this id.",
-                self._car_id, self.shift_beep.rpm)
+                "car %s has no measured shift points on the fitted sheet, so "
+                "the beep is silent. Run tools/shift_points.py against a "
+                "session in this car and put the table on the setup sheet.",
+                self._car_id)
 
     def apply_settings(self, settings) -> None:
         self.beep_wanted = settings.beep_enabled
-        self.beep_from_game = settings.uses_game_rpm
-        if not settings.uses_game_rpm:
-            self.shift_beep.rpm = settings.beep_rpm
         # Held rather than applied: which car this is arrives with the first
         # packet, so the table cannot be looked up until then - see
         # `_apply_shift_points`.
         self._shift_points = settings
         self.shift_beep.short_shift_drop_rpm = settings.beep_short_shift_drop
         self._apply_shift_points()
-        # Only the stream can turn the beep on when it follows the game: until
-        # a packet arrives there is no threshold to beep at.
-        self.shift_beep.enabled = settings.beep_enabled and (
-            not settings.uses_game_rpm or self._announced)
+        # **On means "sound the measured thresholds", not "sound something".**
+        # The beep no longer waits on a packet for a threshold, because the
+        # threshold is on the sheet and the sheet is known before the car
+        # turns a wheel.
+        self.shift_beep.enabled = settings.beep_enabled
 
     def reset(self, *, race: bool = False) -> None:
         self.state = SessionState(
@@ -340,21 +343,11 @@ class TelemetryBridge(QObject):
             # not need a configured rpm per car - the game already knows. The
             # driver can override it, and then the game must not win: a manual
             # threshold is usually a deliberate short-shift.
-            if self.beep_from_game:
-                usable = 1000 < packet.rpm_alert_min < 20_000
-                if usable:
-                    self.shift_beep.rpm = float(packet.rpm_alert_min)
-                # No threshold from the game and none chosen by the driver
-                # means no beep. Falling back to a default would beep at an
-                # rpm nobody picked, which is worse than silence.
-                self.shift_beep.enabled = self.beep_wanted and usable
-                if self.beep_wanted and not usable:
-                    log("beep").warning(
-                        "GT7 reported a shift-light rpm of %s, which is not a "
-                        "threshold - beep stays off. Set one by hand on the "
-                        "Settings screen.", packet.rpm_alert_min)
-            else:
-                self.shift_beep.enabled = self.beep_wanted
+            # **GT7's own shift light is no longer consulted.** It is one
+            # number for the whole gearbox and it is the game's opinion, not a
+            # measurement of where this car actually stops pulling - and at
+            # the wheel it was indistinguishable from a measured threshold.
+            self.shift_beep.enabled = self.beep_wanted
             # Now the car is known, so the measured per-gear table can be
             # looked up. It overrides both the game's shift light and the
             # driver's single number, because it is the only one of the three
@@ -634,12 +627,6 @@ class PitCrewController(QObject):
             self.settings_screen.test_feed_requested.connect(self.test_feed)
             self.settings_screen.capture_toggled.connect(self.toggle_capture)
             self.settings_screen.listen_toggled.connect(self.probe_button)
-            # **The picker for the per-gear shift table.** Canonical rows,
-            # each carrying its LEARNED packet car id where the stream has
-            # ever shown one. `car_id_map.json` is not a source for this: its
-            # ids are an ordinal from an older catalogue and measured false -
-            # the Shelby streams 3391 against that file's 473.
-            self.settings_screen.set_cars(self._cars_for_shift_points())
             self.settings_screen.load(self.settings)
             self.settings_screen.show_capabilities(
                 speech=self.voice.engine_name, hook=self.ptt.has_listener)
@@ -915,6 +902,21 @@ class PitCrewController(QObject):
                 gears.append(float(chunk))
             except ValueError:
                 continue
+        # **Positional, 1st gear first, same as the ratios beside it.** A
+        # blank entry is a gear nobody measured and is skipped rather than
+        # filled: the value of a per-gear threshold is that it was measured on
+        # that gearbox, and a table that quietly completes itself is
+        # indistinguishable at the wheel from one that did not.
+        shift_rpm: dict[int, float] = {}
+        for gear, chunk in enumerate(
+                data.get("shift_rpm_text", "").replace(",", " ").split(), 1):
+            try:
+                rpm = float(chunk)
+            except ValueError:
+                continue
+            if rpm > 0:
+                shift_rpm[gear] = rpm
+
         purpose = data.get("sheet_purpose") or DEFAULT_SHEET_PURPOSE
         name = data["sheet_name"] or f"{data['name']} sheet"
         sheet = SetupSheet(
@@ -922,6 +924,7 @@ class PitCrewController(QObject):
             sheet_name=name,
             values=dict(data["setup_values"]),
             gears=gears,
+            shift_rpm=shift_rpm,
             performance=dict(data.get("performance") or {}),
             build=dict(data.get("build") or {}),
             purpose=purpose,
@@ -1001,18 +1004,6 @@ class PitCrewController(QObject):
         audio_devices.set_output_device(values.audio_output_device or None)
         audio_devices.set_input_device(values.audio_input_device or None)
 
-    def _cars_for_shift_points(self):
-        """`(name, learned packet id or None)`, by name, for the picker."""
-        rows = []
-        try:
-            for car in self.store.list_cars():
-                name = car["name"]
-                if name:
-                    rows.append((name, car["gt7_car_id"]))
-        except Exception:                                   # noqa: BLE001
-            return []
-        return sorted(set(rows), key=lambda pair: pair[0].casefold())
-
     def save_settings(self, new: settings.Settings) -> None:
         """Apply the button and the beep, and remember them."""
         try:
@@ -1047,11 +1038,13 @@ class PitCrewController(QObject):
             # A key the hook is not watching is a button that does nothing, so
             # the listener is rebuilt rather than reconfigured.
             self.ptt.set_listener(best_listener(new.ptt_key))
+        table = self.bridge.shift_beep.per_gear or {}
         log("settings").info(
-            "ptt %s on %r (practice=%s) · beep %s at %s rpm from %s",
+            "ptt %s on %r (practice=%s) · beep %s, %s",
             "on" if new.ptt_enabled else "off", new.ptt_key,
             new.ptt_in_practice, "on" if new.beep_enabled else "off",
-            round(self.bridge.shift_beep.rpm), new.beep_rpm_source)
+            (", ".join(f"g{g} {rpm:.0f}" for g, rpm in sorted(table.items()))
+             if table else "no measured thresholds on the fitted sheet"))
         if self.settings_screen is not None:
             # A live listener is already bound to the old port. Rebinding it
             # under a running session would drop packets mid-lap, so it is
@@ -1262,7 +1255,11 @@ class PitCrewController(QObject):
             acted=played,
             failed=(f"No beep - {beep.last_error}" if beep.last_error else
                     "No beep - this machine has no tone device"),
-            worked=f"Beeped at the current threshold, {round(beep.rpm)} rpm",
+            worked=("Beeped at "
+                    + (", ".join(f"g{g} {rpm:.0f} rpm"
+                                 for g, rpm in sorted(beep.per_gear.items()))
+                       if beep.per_gear else
+                       "no measured threshold - the fitted sheet has none")),
             heard=heard, detail=detail)
         self.settings_screen.note_beep(note, warn=warn)
         return played and heard is not False
@@ -1609,6 +1606,8 @@ class PitCrewController(QObject):
                     f"{len(sheets)} others - this run is recorded without one. "
                     f"Load the {intent} sheet on the Event screen.")
         sheet_id = sheet.id if sheet else None
+        # The beep follows the gearbox that is actually fitted.
+        self.bridge.set_sheet_shift_rpm(sheet.shift_rpm if sheet else None)
 
         self.bridge.reset()
         self.session_id = self.store.start_session(
@@ -3092,6 +3091,7 @@ class PitCrewController(QObject):
                     f"one, so its laps carry no compound and the export "
                     f"cannot say what was on the car. Load the race sheet on "
                     f"the Event screen.", warn=True)
+        self.bridge.set_sheet_shift_rpm(sheet.shift_rpm if sheet else None)
         self.session_id = self.store.start_session(
             event["id"], "race", setup_sheet_id=sheet.id if sheet else None,
             rehearsal=rehearsal, game_version=self.settings.game_version)

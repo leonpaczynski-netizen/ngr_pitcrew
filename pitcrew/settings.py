@@ -22,21 +22,16 @@ from dataclasses import dataclass, field, fields
 
 from pitcrew.race import colour
 
-# Where the beep threshold comes from.
-RPM_FROM_GT7 = "gt7"        # the car's own shift-light rpm, off the packet
-
-# The prefix that marks a shift-point table keyed by car NAME rather than by
-# the packet's car id. A name is not an identity GT7 broadcasts, so it is the
-# fallback and never the preference - but the id is unknown until the car has
-# been driven with the app recording, and a table nobody can enter before the
-# session they want it for is a table nobody can use.
-
-
-def shift_point_key(car_name: str) -> str:
-    """The `beep_shift_points` key for a car with no learned packet id."""
-    return "name:" + " ".join(str(car_name).split()).casefold()
-RPM_MANUAL = "manual"       # a number the driver chose
-RPM_SOURCES = (RPM_FROM_GT7, RPM_MANUAL)
+# **The shift beep's thresholds live on the SETUP SHEET, not here.**
+# There were three sources: a per-gear table keyed by car, one global rpm the
+# driver could type, and GT7's own shift light. The last two sounded at the
+# wheel exactly like a measured threshold without being one, and the first was
+# keyed to the wrong thing - a shift point belongs to the GEARBOX, so change a
+# ratio and it moves, and two sheets for one car want two tables.
+#
+# On the sheet it travels with the setup, gets versioned alongside it and
+# reaches the export. A sheet with no table means the gearbox has not been
+# measured, and the beep is silent rather than guessing.
 
 # The prefix every settings key carries in app_state, so they cannot collide
 # with `active_event_id` or a custom catalogue.
@@ -185,25 +180,6 @@ class Settings:
 
     # --- shift beep
     beep_enabled: bool = True
-    beep_rpm_source: str = RPM_FROM_GT7
-    beep_rpm: float = 7000.0
-    # **Measured upshift points, per car, per gear.** `{car_id: {gear: rpm}}`,
-    # both keys strings because this round-trips through JSON.
-    #
-    # GT7's own shift light is one rpm for the whole gearbox and it is not the
-    # crossover: measured over his own laps, the Shelby GT350R's next gear
-    # starts pulling harder at about 8250 rpm in all five upshifts, while the
-    # threshold in use was 8640 - so every straight was driven several hundred
-    # rpm into the part of the curve where the shift was already free. The
-    # Porsche RSR measured the opposite way and wants the limiter in every
-    # gear. One number cannot serve both cars, which is why this is a table
-    # and why it is filled by `tools/shift_points.py` from recorded laps
-    # rather than typed in.
-    #
-    # A car with no entry falls back to `beep_rpm` or to GT7's shift light,
-    # per `beep_rpm_source`. An empty table is the normal state for a car that
-    # has not been driven yet.
-    beep_shift_points: dict = field(default_factory=dict)
     # How far a short-shift moves every threshold down when the engineer asks
     # for fuel. He prefers this to leaning the fuel map, which costs power
     # everywhere while this costs only the top of each gear - and it drops
@@ -261,10 +237,6 @@ class Settings:
             raise ValueError(
                 f"{self.udp_source_ip!r} is not an IPv4 address. Leave it "
                 f"empty to accept telemetry from anything on the network.")
-        if self.beep_rpm_source not in RPM_SOURCES:
-            raise ValueError(
-                f"beep_rpm_source must be one of {RPM_SOURCES}, "
-                f"got {self.beep_rpm_source!r}")
         for name, low, high in (("voice_length_scale", 0.5, 2.0),
                                 ("voice_noise_scale", 0.0, 1.5),
                                 ("voice_noise_w_scale", 0.0, 1.5)):
@@ -273,28 +245,6 @@ class Settings:
                 raise ValueError(
                     f"{name} of {value} is outside {low}-{high}, which is the "
                     f"range Piper produces speech in at all")
-        if not 1000.0 <= self.beep_rpm <= 20000.0:
-            raise ValueError(
-                f"a shift threshold of {self.beep_rpm} rpm is not a threshold "
-                f"any GT7 car has - expected 1000-20000")
-        # The table is written by a tool and round-trips through JSON, so it is
-        # checked rather than trusted: a wrong key here is a beep at an rpm
-        # nobody chose, in one gear, which is very hard to notice at the wheel.
-        for car, table in (self.beep_shift_points or {}).items():
-            if not isinstance(table, dict):
-                raise ValueError(
-                    f"shift points for {car!r} should be a table of gear to "
-                    f"rpm, got {type(table).__name__}")
-            for gear, rpm in table.items():
-                if int(gear) not in range(1, 9):
-                    raise ValueError(
-                        f"shift points for {car!r} name gear {gear!r}, and "
-                        f"GT7 cars have gears 1-8")
-                if not 1000.0 <= float(rpm) <= 20000.0:
-                    raise ValueError(
-                        f"shift point of {rpm} rpm for {car!r} gear {gear} is "
-                        f"not a threshold any GT7 car has - expected "
-                        f"1000-20000")
         if not 0.0 <= self.beep_short_shift_drop <= 4000.0:
             raise ValueError(
                 f"a short-shift drop of {self.beep_short_shift_drop} rpm is "
@@ -317,35 +267,6 @@ class Settings:
             raise ValueError(
                 f"speech_sensitivity must be one of {SENSITIVITIES}, "
                 f"got {self.speech_sensitivity!r}")
-
-    @property
-    def uses_game_rpm(self) -> bool:
-        return self.beep_rpm_source == RPM_FROM_GT7
-
-    def shift_points_for(self, car_id, car_name: str | None = None
-                         ) -> dict[int, float]:
-        """The measured per-gear table for this car, or empty.
-
-        Empty is the honest answer for a car that has not been driven, and it
-        leaves the beep on whatever `beep_rpm_source` says. Filling it with a
-        neighbouring car's numbers, or with a default, would be a measurement
-        claim about a gearbox nobody has measured.
-
-        **Keyed by packet car id, and by NAME until that id is known.** The id
-        is the only identity GT7 broadcasts and it is the right key - but it
-        only exists once the car has been driven with the app recording, and
-        every Porsche session on file predates that capture. Without the name
-        fallback the driver could not enter a table for a car until after the
-        session he wanted it for. The id wins where both exist, because the id
-        is the thing the stream actually matched.
-        """
-        points = self.beep_shift_points or {}
-        table = points.get(str(car_id))
-        if not table and car_name:
-            table = points.get(shift_point_key(car_name))
-        if not table:
-            return {}
-        return {int(gear): float(rpm) for gear, rpm in table.items()}
 
     def voice_tuning(self) -> dict[str, float]:
         """The synthesis parameters, in the names Piper's config uses."""

@@ -58,7 +58,6 @@ from pitcrew.engineer import audio_devices
 DOWNSHIFT_MUTE_S = 0.3
 # Re-arm once rpm falls back to this fraction of the threshold.
 REARM_FRACTION = 0.95
-DEFAULT_RPM = 7000.0
 # How far below the performance threshold a short-shift sits, when no measured
 # figure has been supplied for the car. Deliberately modest: the whole point is
 # that the cost is bounded and known, and 500 rpm off a crossover in the
@@ -139,11 +138,10 @@ def should_beep(*, prev_gear: int, cur_gear: int, rpm: float,
 class ShiftBeep:
     """Stateful wrapper around `should_beep`, fed one packet at a time."""
 
-    def __init__(self, *, rpm: float = DEFAULT_RPM, enabled: bool = True,
+    def __init__(self, *, enabled: bool = True,
                  tone=None, per_gear: dict[int, float] | None = None,
                  short_shift_drop_rpm: float | None = None,
                  top_gear: int | None = None) -> None:
-        self.rpm = rpm
         self.enabled = enabled
         # The highest gear the fitted gearbox has, or None while it is not
         # known. **None means beep in every gear**, which is what this did
@@ -151,10 +149,13 @@ class ShiftBeep:
         # arrived yet is not a reason to go quiet, and a wrong silence is
         # harder to notice than a wrong beep.
         self.top_gear = top_gear
-        # Measured per-gear thresholds, keyed by gear. A gear with no measured
-        # figure falls back to `rpm` rather than to a default: a made-up number
-        # for one gear inside a measured table is the worst of both, because it
-        # is indistinguishable from the measured ones at the wheel.
+        # **Measured per-gear thresholds, keyed by gear, and the only source
+        # there is.** They come off the setup sheet, because a shift point
+        # belongs to the gearbox: change a ratio and the rpm worth shifting at
+        # moves with it. A gear that is not in here does not beep - the global
+        # fallback and GT7's own shift light both used to fill the gap, and
+        # both sounded at the wheel exactly like a measurement without being
+        # one.
         self.per_gear: dict[int, float] = dict(per_gear or {})
         # How far down a short-shift moves the threshold. Per gear where it has
         # been measured, otherwise the scalar.
@@ -173,14 +174,27 @@ class ShiftBeep:
         # Why the last beep did not sound, for the settings screen to report.
         self.last_error: str | None = None
 
-    def threshold_for(self, gear: int) -> float:
-        """The rpm this gear beeps at, right now.
+    def threshold_for(self, gear: int) -> float | None:
+        """The rpm this gear beeps at, right now, or None for silence.
 
-        Public because the settings screen and the export both have to be able
-        to show what the driver is actually being told, and because a threshold
-        that can only be inferred from behaviour is one nobody can check.
+        **A gear with no measured threshold does not beep.** It used to fall
+        back to one global rpm, and before that to GT7's own shift light -
+        both of which sound exactly like a measurement and are not one. One
+        car wants the limiter in every gear and another wants 8250 in all
+        five, which is the whole reason this is a table, and a fallback quietly
+        told the driver a number nobody had taken on that gearbox.
+
+        The thresholds live on the setup sheet, because a shift point belongs
+        to the gearbox: change a ratio and it moves. A sheet with none means
+        the box has not been measured, and silence is the honest answer.
+
+        Public because the export has to be able to show what the driver was
+        actually being told, and a threshold that can only be inferred from
+        behaviour is one nobody can check.
         """
-        base = self.per_gear.get(int(gear), self.rpm)
+        base = self.per_gear.get(int(gear))
+        if base is None:
+            return None
         if not self.short_shifting:
             return base
         drop = self.short_shift_drop_per_gear.get(
@@ -210,11 +224,20 @@ class ShiftBeep:
             self._prev_gear = packet.current_gear
             return False
 
+        threshold = self.threshold_for(packet.current_gear)
+        if threshold is None:
+            # No measured threshold for this gear, so nothing to be above.
+            # State still advances: the beep must not fire on the first gear
+            # that does have one purely because the last one was silent.
+            self._prev_gear = packet.current_gear
+            self._shift_above = False
+            return False
+
         beep, self._shift_above, self._muted_until = should_beep(
             prev_gear=self._prev_gear,
             cur_gear=packet.current_gear,
             rpm=packet.engine_rpm,
-            threshold=self.threshold_for(packet.current_gear),
+            threshold=threshold,
             shift_above=self._shift_above,
             enabled=self.enabled,
             downshift_muted_until=self._muted_until,

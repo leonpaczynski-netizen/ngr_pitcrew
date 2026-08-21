@@ -17,8 +17,6 @@ from pitcrew import diagnostics, settings
 from pitcrew.controller import PitCrewController
 from pitcrew.settings import (
     DEFAULT_UDP_PORT,
-    RPM_FROM_GT7,
-    RPM_MANUAL,
     Settings,
 )
 from pitcrew.store.db import Store
@@ -67,21 +65,16 @@ def wired(qt_app, store: Store):
 
 def test_settings_round_trip_through_the_store(store):
     settings.save(store, Settings(ptt_key="f12", ptt_in_practice=True,
-                                  beep_enabled=False,
-                                  beep_rpm_source=RPM_MANUAL,
-                                  beep_rpm=8640.0))
+                                  beep_enabled=False))
     loaded = settings.load(store)
     assert loaded.ptt_key == "f12"
     assert loaded.ptt_in_practice is True
     assert loaded.beep_enabled is False
-    assert loaded.beep_rpm_source == RPM_MANUAL
-    assert loaded.beep_rpm == 8640.0
 
 
 def test_defaults_apply_when_nothing_has_been_set(store):
     loaded = settings.load(store)
     assert loaded.ptt_key == "f8"
-    assert loaded.beep_rpm_source == RPM_FROM_GT7
     assert loaded.udp_port == DEFAULT_UDP_PORT
     assert loaded.udp_source_ip == ""
 
@@ -197,37 +190,35 @@ def test_a_packet_from_the_wrong_address_never_reaches_the_parser():
 
 
 def test_a_stored_value_that_no_longer_validates_is_discarded(store):
-    """Better the default than a threshold that fires on every packet."""
-    store.set_state(settings.PREFIX + "beep_rpm", "12")
+    """Better the default than a setting an older build could still write."""
+    store.set_state(settings.PREFIX + "beep_short_shift_drop", "999999")
     loaded = settings.load(store)
-    assert loaded.beep_rpm == Settings().beep_rpm
+    assert loaded.beep_short_shift_drop == Settings().beep_short_shift_drop
 
 
-def test_a_nonsense_threshold_is_refused_rather_than_clamped():
-    with pytest.raises(ValueError, match="not a threshold"):
-        Settings(beep_rpm=50.0).validate()
+def test_a_nonsense_setting_is_refused_rather_than_clamped():
     with pytest.raises(ValueError, match="needs a button"):
         Settings(ptt_enabled=True, ptt_key="  ").validate()
 
 
 # ------------------------------------------------------------- the beep
 
-def test_a_manual_threshold_is_not_overwritten_by_the_game(wired):
-    """A number the driver chose is usually a deliberate short-shift."""
-    controller, screen, store = wired
-    screen.load(Settings(beep_rpm_source=RPM_MANUAL, beep_rpm=8000.0))
-    screen._on_save()
+def test_neither_the_game_nor_a_setting_supplies_a_threshold_any_more(wired):
+    """**Changed 21 Aug 2026 at the driver's instruction.**
 
-    controller.bridge.on_packet(raw(speed_ms=50.0, rpm_alert_min=9000))
-    assert controller.bridge.shift_beep.rpm == 8000.0
-    assert controller.bridge.shift_beep.enabled is True
+    There were three sources: a per-gear table, one global rpm the driver could
+    type, and GT7's own shift light. The last two are gone. Both sounded at the
+    wheel exactly like a measured threshold without being one, and the whole
+    reason the table exists is that one car wants the limiter in every gear
+    while another wants 8250 in all five.
 
-
-def test_the_game_supplies_the_threshold_by_default(wired):
+    A gearbox nobody has measured is silent, and the log says which car and
+    what to run - a silence nobody can account for would be its own defect.
+    """
     controller, _screen, _store = wired
     controller.bridge.on_packet(raw(speed_ms=50.0, rpm_alert_min=8800))
-    assert controller.bridge.shift_beep.rpm == 8800.0
-    assert controller.bridge.shift_beep.enabled is True
+    assert controller.bridge.shift_beep.per_gear == {}
+    assert controller.bridge.shift_beep.threshold_for(4) is None
 
 
 def test_turning_the_beep_off_keeps_it_off_when_the_stream_arrives(wired):
@@ -348,14 +339,6 @@ def test_the_screen_reports_what_actually_loaded_not_what_was_asked_for(wired):
     assert "NO keyboard hook" in screen.engine_note.text()
     screen.show_capabilities(speech="piper", hook=True)
     assert "piper" in screen.engine_note.text()
-
-
-def test_a_manual_threshold_field_is_disabled_when_the_game_supplies_it(wired):
-    _controller, screen, _store = wired
-    screen.load(Settings(beep_rpm_source=RPM_FROM_GT7))
-    assert screen.beep_rpm.isEnabled() is False
-    screen.load(Settings(beep_rpm_source=RPM_MANUAL))
-    assert screen.beep_rpm.isEnabled() is True
 
 
 # --------------------------------------------------------- session hygiene

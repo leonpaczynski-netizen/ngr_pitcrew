@@ -837,6 +837,19 @@ class EventScreen(QWidget):
             "1st to top", self.gear_edit,
             hint="Longest first. An ascending pair means the sheet was "
                  "transcribed out of order."))
+
+        # **The shift beep belongs to the gearbox, so it belongs here.** It
+        # used to live in settings keyed by car, which cannot express two
+        # sheets for one car with different ratios - and a setting does not
+        # travel with the export or get versioned alongside the setup it was
+        # measured against.
+        self.shift_rpm_edit = QLineEdit()
+        self.shift_rpm_edit.setPlaceholderText("8500  8250  8250  8000  8250")
+        plate.body.addWidget(Field(
+            "Upshift rpm, 1st to top", self.shift_rpm_edit,
+            hint="Measured on this gearbox by tools/shift_points.py. Leave it "
+                 "empty for a box nobody has measured - the beep then falls "
+                 "back to GT7's own shift light rather than to a guess."))
         return plate
 
     # ---------------------------------------------------------------- footer
@@ -1013,6 +1026,7 @@ class EventScreen(QWidget):
         self.sheet_purpose.setCurrentIndex(0)
         self.sheet_pair_note.setVisible(False)
         self.gear_edit.clear()
+        self.shift_rpm_edit.clear()
         self.paste_box.clear()
         self.paste_status.setText("Nothing read yet.")
         for editor in self._setup_editors.values():
@@ -1099,6 +1113,9 @@ class EventScreen(QWidget):
                 editor.setValue(EMPTY if value is None else float(value))
             if sheet.gears:
                 self.gear_edit.setText("  ".join(f"{g:g}" for g in sheet.gears))
+            if sheet.shift_rpm:
+                self.shift_rpm_edit.setText("  ".join(
+                    f"{sheet.shift_rpm[g]:g}" for g in sorted(sheet.shift_rpm)))
             for name, editor in self._build_editors.items():
                 section, _, key = name.partition(".")
                 stored = (sheet.build if section == "build"
@@ -1191,6 +1208,7 @@ class EventScreen(QWidget):
                 if purpose != self.sheet_purpose.currentData()},
             "setup_values": setup_values,
             "gear_text": self.gear_edit.text().strip(),
+            "shift_rpm_text": self.shift_rpm_edit.text().strip(),
             "build": build,
             "performance": performance,
         }

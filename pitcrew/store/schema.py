@@ -760,6 +760,11 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("wear_source", "TEXT"),
     ),
     "setup_sheets": (
+        # **The upshift rpm per gear, measured on this gearbox.** It was a
+        # setting keyed by car, which cannot express two sheets for one car
+        # with different ratios - and a setting does not travel with the
+        # export or get versioned alongside the setup it was measured on.
+        ("shift_rpm_json", "TEXT"),
         # `race` or `qualifying`. Two sheets for one car are two different
         # objects, not two versions of one - they answer different
         # questions and the tune builder issues them separately. Null on

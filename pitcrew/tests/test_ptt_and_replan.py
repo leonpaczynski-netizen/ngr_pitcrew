@@ -289,7 +289,8 @@ def test_disabling_it_silences_it():
 
 def test_the_wrapper_beeps_through_a_gear_change():
     tones = []
-    beeper = ShiftBeep(rpm=7000, tone=lambda: tones.append(1))
+    beeper = ShiftBeep(per_gear={3: 7000.0},
+                       tone=lambda: tones.append(1))
     beeper.update(make_packet(gear_raw=0x13, engine_rpm=6000.0), now=1.0)
     beeper.update(make_packet(gear_raw=0x13, engine_rpm=7200.0), now=1.1)
     assert tones == [1]
@@ -297,7 +298,7 @@ def test_the_wrapper_beeps_through_a_gear_change():
 
 def test_the_wrapper_stays_silent_off_track():
     tones = []
-    beeper = ShiftBeep(rpm=7000, tone=lambda: tones.append(1))
+    beeper = ShiftBeep(tone=lambda: tones.append(1))
     beeper.update(make_packet(gear_raw=0x13, engine_rpm=9000.0,
                               on_track=False), now=1.0)
     assert tones == []
@@ -307,7 +308,7 @@ def test_a_failing_tone_does_not_stop_the_telemetry_thread():
     def explode():
         raise RuntimeError("no audio device")
 
-    beeper = ShiftBeep(rpm=7000, tone=explode)
+    beeper = ShiftBeep(per_gear={3: 7000.0}, tone=explode)
     beeper.update(make_packet(gear_raw=0x13, engine_rpm=6000.0), now=1.0)
     assert beeper.update(make_packet(gear_raw=0x13, engine_rpm=7200.0),
                          now=1.1) is True
@@ -320,14 +321,14 @@ def test_the_test_button_reports_a_beep_that_did_not_sound():
     def explode():
         raise RuntimeError("no audio device")
 
-    beeper = ShiftBeep(rpm=7000, tone=explode)
+    beeper = ShiftBeep(tone=explode)
     assert beeper.play_now() is False
     assert "no audio device" in beeper.last_error
 
 
 def test_the_test_button_still_reports_a_beep_that_did_sound():
     tones = []
-    beeper = ShiftBeep(rpm=7000, tone=lambda: tones.append(1))
+    beeper = ShiftBeep(tone=lambda: tones.append(1))
     assert beeper.play_now() is True
     assert tones == [1] and beeper.last_error is None
 
@@ -335,7 +336,7 @@ def test_the_test_button_still_reports_a_beep_that_did_sound():
 def test_no_tone_device_at_all_is_still_a_no():
     """`tone=None` means "find the default"; a machine with no tone device is
     the one where that search comes back empty."""
-    beeper = ShiftBeep(rpm=7000, tone=lambda: None)
+    beeper = ShiftBeep(tone=lambda: None)
     beeper._tone = None
     assert beeper.play_now() is False
 
@@ -494,33 +495,49 @@ def test_a_replan_records_what_it_proposed():
 
 # ------------------------------------------------- shift beep from the game
 
-def test_the_beep_threshold_comes_from_the_car_not_a_config(qt_app, store):  # noqa: F811
-    """GT7 sends each car's own shift-light rpm; a configured value per car
-    would be a second source of truth that drifts."""
+def test_the_beep_ignores_the_games_shift_light(qt_app, store):  # noqa: F811
+    """**Changed 21 Aug 2026 at the driver's instruction.**
+
+    GT7 sends each car's own shift-light rpm and the beep used to follow it.
+    It is one number for the whole gearbox and it is the game's opinion about
+    where to shift, not a measurement of where this car stops pulling - and at
+    the wheel it was indistinguishable from a measured threshold.
+
+    The thresholds now come off the fitted setup sheet, which is where they
+    belong: a shift point is a property of the gearbox, so change a ratio and
+    it moves. A car whose sheet carries none does not beep.
+    """
     from pitcrew.controller import PitCrewController
     from pitcrew.ui.event_screen import EventScreen
     from pitcrew.ui.practice_screen import PracticeScreen
     from .test_controller import raw
 
     controller = PitCrewController(store, EventScreen(), PracticeScreen())
-    assert controller.bridge.shift_beep.enabled is False
+    try:
+        controller.bridge.on_packet(raw(speed_ms=50.0, rpm_alert_min=7600))
+        # The game named a threshold. Nothing took it.
+        assert controller.bridge.shift_beep.per_gear == {}
+        assert controller.bridge.shift_beep.threshold_for(3) is None
+    finally:
+        controller.shutdown()
 
-    controller.bridge.on_packet(raw(speed_ms=50.0, rpm_alert_min=7600))
-    assert controller.bridge.shift_beep.enabled is True
-    assert controller.bridge.shift_beep.rpm == 7600.0
-    controller.shutdown()
 
-
-def test_a_nonsense_shift_threshold_leaves_the_beep_off(qt_app, store):  # noqa: F811
+def test_the_fitted_sheets_table_is_what_the_beep_uses(qt_app, store):  # noqa: F811
+    """And it arrives before the car has turned a wheel, because the sheet is
+    known at session start while the packet car id is not."""
     from pitcrew.controller import PitCrewController
     from pitcrew.ui.event_screen import EventScreen
     from pitcrew.ui.practice_screen import PracticeScreen
-    from .test_controller import raw
 
     controller = PitCrewController(store, EventScreen(), PracticeScreen())
-    controller.bridge.on_packet(raw(speed_ms=50.0, rpm_alert_min=0))
-    assert controller.bridge.shift_beep.enabled is False
-    controller.shutdown()
+    try:
+        controller.bridge.set_sheet_shift_rpm({1: 8200.0, 2: 8150.0})
+        assert controller.bridge.shift_beep.threshold_for(1) == 8200.0
+        assert controller.bridge.shift_beep.threshold_for(2) == 8150.0
+        # A gear the sheet does not name stays silent.
+        assert controller.bridge.shift_beep.threshold_for(6) is None
+    finally:
+        controller.shutdown()
 
 
 # ----------------------------------------------------------------- outcome

@@ -460,15 +460,22 @@ class Store:
         with self._write() as conn:
             conn.execute(
                 "INSERT INTO setup_sheets (car_name, sheet_name, values_json, "
-                "gears_json, performance_json, build_json, notes, purpose, "
-                "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
+                "gears_json, shift_rpm_json, performance_json, build_json, "
+                "notes, purpose, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(car_name, sheet_name, purpose) DO UPDATE SET "
                 "values_json=excluded.values_json, gears_json=excluded.gears_json, "
+                "shift_rpm_json=excluded.shift_rpm_json, "
                 "performance_json=excluded.performance_json, "
                 "build_json=excluded.build_json, notes=excluded.notes, "
                 "updated_at=excluded.updated_at",
                 (sheet.car_name, sheet.sheet_name, json.dumps(sheet.values),
-                 json.dumps(sheet.gears), json.dumps(sheet.performance),
+                 json.dumps(sheet.gears),
+                 # Keys are gear numbers; JSON turns them into strings and the
+                 # reader turns them back, so a table never comes home keyed
+                 # differently from how it went out.
+                 json.dumps({str(g): r for g, r in (sheet.shift_rpm or {}).items()}),
+                 json.dumps(sheet.performance),
                  json.dumps(sheet.build), sheet.notes, purpose,
                  _now(), _now()))
             row = conn.execute(
@@ -1563,6 +1570,9 @@ def _setup_sheet(row: sqlite3.Row):
         sheet_name=row["sheet_name"],
         values=json.loads(row["values_json"] or "{}"),
         gears=json.loads(row["gears_json"] or "[]"),
+        shift_rpm={int(g): float(r) for g, r in json.loads(
+            (row["shift_rpm_json"] if "shift_rpm_json" in row.keys() else None)
+            or "{}").items()},
         performance=json.loads(row["performance_json"] or "{}"),
         build=json.loads(row["build_json"] or "{}"),
         notes=row["notes"] or "",

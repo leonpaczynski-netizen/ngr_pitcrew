@@ -50,6 +50,19 @@ class SetupSheet:
     # None rather than defaulting to `race`: a sheet stored before the
     # question existed has not answered it.
     purpose: str | None = None
+    # **The upshift rpm for each gear, measured on this gearbox.**
+    #
+    # It lived in settings, keyed by car, and that was the wrong shape twice
+    # over. A shift point is a property of the gearbox: change the final drive
+    # or a single ratio and the rpm that is worth shifting at moves with it,
+    # so two sheets for the same car want two tables. And a setting is not
+    # evidence - it does not travel with the export, it is not versioned with
+    # the setup that produced it, and nothing downstream can tell which sheet
+    # the number was measured against.
+    #
+    # Keyed by gear number, 1-based. Empty is the honest state for
+    # a gearbox nobody has measured, and it does not beep.
+    shift_rpm: dict[int, float] = field(default_factory=dict)
     # Set when the sheet came out of the store, so a session can record which
     # sheet was fitted without a second lookup.
     id: int | None = None
@@ -79,6 +92,12 @@ class SetupSheet:
                 "GT7 enters these as a magnitude and will not take a negative: "
                 + ", ".join(f"{describe(k).label.lower()} ({k}) {v:g}"
                             for k, v in unenterable))
+
+        for gear, rpm in (self.shift_rpm or {}).items():
+            if not isinstance(gear, int) or not 1 <= gear <= MAX_GEARS:
+                raise SetupError(f"shift rpm is keyed by gear number, got {gear!r}")
+            if rpm is None or not 0 < float(rpm) < 30_000:
+                raise SetupError(f"gear {gear} shift rpm is not an rpm: {rpm!r}")
 
         if len(self.gears) > MAX_GEARS:
             raise SetupError(f"{len(self.gears)} gears is more than GT7 allows")
