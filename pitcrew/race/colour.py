@@ -68,6 +68,11 @@ CONSISTENCY = "colour-consistency"
 STINT_COUNTDOWN = "colour-stint-countdown"
 MILESTONE = "colour-milestone"
 GAUGE_PROMPT = "colour-gauge"
+# **A number, every lap, in chatty mode.** He asked for this in as many
+# words - "chatty mode still didn't talk to me enough and isn't keeping me
+# engaged. I love data." The other colour kinds are mostly once per
+# stint, so at a three-lap gap most laps were silent.
+DATA = "colour-data"
 
 # **A run of laps inside this many multiples of his own sigma is a good run.**
 # Sigma is measured per car and circuit from the race in progress, never
@@ -120,7 +125,10 @@ class ColourCalls:
                  sigma_s: float | None = None,
                  wear_reading_age: int | None = None,
                  position: int | None = None,
-                 laps_firm: bool = True) -> ColourCall | None:
+                 laps_firm: bool = True,
+                 fuel_laps_in_hand: float | None = None,
+                 wear_worst: float | None = None,
+                 wear_corner: str | None = None) -> ColourCall | None:
         """One crossing. Returns at most one call, and usually None.
 
         `wear_reading_age` is laps since the tyre gauge was last read, or None
@@ -147,16 +155,35 @@ class ColourCalls:
             self._last_lap = lap
             return run_in
 
+        # **The data line is exempt from the gap in chatty mode**, on the same
+        # argument that exempts the run-in: the register exists to stop a call
+        # REPEATING when nothing has changed, and these numbers change every
+        # crossing. It is tried after the gap-bound kinds so a genuine finding
+        # still wins the lap.
         gap = GAP_LAPS[self.level]
-        if self._last_lap is not None and lap - self._last_lap < gap:
+        gapped = self._last_lap is not None and lap - self._last_lap < gap
+        if gapped and self.level != CHATTY:
             self._record_only(lap_time_ms)
             return None
+        if gapped:
+            data = self._data(fuel_laps_in_hand, wear_worst, wear_corner,
+                              lap_time_ms, stint_ends_on_lap, lap)
+            self._record_only(lap_time_ms)
+            # **`_last_lap` is deliberately not touched.** The gap belongs to
+            # the finding kinds - a best lap, a milestone - and extending it
+            # every time a number is read out starves them completely: with
+            # the data line setting it, a chatty race said one best-lap call
+            # and then nothing else for the rest of the race. Data fills the
+            # silence between findings; it does not create more of it.
+            return data
 
         call = (self._best_lap(lap_time_ms)
                 or self._milestone(lap, laps_remaining, laps_total)
                 or self._countdown(lap, stint_ends_on_lap)
                 or self._gauge(wear_reading_age)
-                or self._consistency(sigma_s))
+                or self._consistency(sigma_s)
+                or self._data(fuel_laps_in_hand, wear_worst, wear_corner,
+                              lap_time_ms, stint_ends_on_lap, lap))
         self._record_only(lap_time_ms)
         if call is None:
             return None
@@ -174,6 +201,50 @@ class ColourCalls:
         if lap_time_ms and lap_time_ms > 0:
             if self._best_ms is None or lap_time_ms < self._best_ms:
                 self._best_ms = lap_time_ms
+
+    def _data(self, fuel_laps_in_hand, wear_worst, wear_corner,
+              lap_time_ms, stint_ends_on_lap, lap) -> ColourCall | None:
+        """One measured number, rotating, so no lap in chatty mode is empty.
+
+        *"Chatty mode still didn't talk to me enough and isn't keeping me
+        engaged. I love data."* The other colour kinds are findings - a best
+        lap, a milestone - and findings are rare by nature. This is the
+        instrument read out.
+
+        **Every one of these is measured.** Fuel in hand comes off the tank and
+        the race's own burn; the wear figure is the gauge, transcribed; the
+        stint countdown is arithmetic on the plan. Nothing modelled appears
+        here, because a number said every lap in a relaxed register is exactly
+        the kind that stops sounding like an estimate.
+
+        Rotates rather than picking a favourite, so a quiet stint hears all of
+        it instead of the same line eight times.
+        """
+        options: list[tuple[str, str]] = []
+        if fuel_laps_in_hand is not None:
+            options.append((f"Fuel: {fuel_laps_in_hand:.1f} laps in hand.", ""))
+        if wear_worst is not None:
+            where = f"{wear_corner.upper()} " if wear_corner else "Worst tyre "
+            options.append((f"{where}{wear_worst * 100:.0f}.", ""))
+        if stint_ends_on_lap is not None and stint_ends_on_lap > lap:
+            to_box = stint_ends_on_lap - lap
+            options.append((
+                f"{to_box} to the box.", "" if to_box != 1 else "Box next lap."))
+        if lap_time_ms and self._best_ms and lap_time_ms > self._best_ms:
+            off = (lap_time_ms - self._best_ms) / 1000.0
+            if off >= 0.05:
+                options.append((f"{off:.1f} off your best.", ""))
+        if not options:
+            return None
+        # **Rotate on a counter of data lines said, not on the lap number.**
+        # The list of available numbers changes length from lap to lap - the
+        # wear reading comes and goes, the box countdown ends - so indexing by
+        # lap lands on the same entry repeatedly. Measured on eight laps: five
+        # of them said fuel.
+        self._data_said = getattr(self, "_data_said", 0)
+        call, reason = options[self._data_said % len(options)]
+        self._data_said += 1
+        return ColourCall(DATA, call, reason)
 
     def _best_lap(self, lap_time_ms: int | None) -> ColourCall | None:
         """**The one kind that may repeat within a stint.** A new personal best

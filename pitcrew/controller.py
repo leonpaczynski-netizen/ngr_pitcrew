@@ -2270,6 +2270,33 @@ class PitCrewController(QObject):
         if coach is not None:
             coach.set_speak(self.voice.say if speaks else None)
 
+    @staticmethod
+    def _laps_of_fuel_in_hand(state) -> float | None:
+        """Laps the fuel aboard covers beyond what is left to run.
+
+        None where either half is unknown - a surplus computed against a burn
+        nobody measured is a number he would plan around.
+        """
+        aboard = state.laps_of_fuel()
+        needed = state.laps_remaining()
+        if aboard is None or needed is None:
+            return None
+        return round(aboard - needed, 1)
+
+    @staticmethod
+    def _worst_wear(lap) -> float | None:
+        values = [getattr(lap, f"wear_{c}", None) for c in ("fl", "fr", "rl", "rr")]
+        present = [v for v in values if v is not None]
+        return max(present) if present else None
+
+    @staticmethod
+    def _worst_wear_corner(lap) -> str | None:
+        """Which corner it is - the number is worth little without it."""
+        pairs = [(getattr(lap, f"wear_{c}", None), c)
+                 for c in ("fl", "fr", "rl", "rr")]
+        present = [(v, c) for v, c in pairs if v is not None]
+        return max(present)[1] if present else None
+
     def _voice_colour(self, lap) -> None:
         """The radio for a quiet lap, or nothing - usually nothing."""
         race = self.race
@@ -2300,6 +2327,16 @@ class PitCrewController(QObject):
             # this car's own lap-time noise; the run-in then says "about three
             # to go" rather than quoting a figure it cannot stand behind.
             laps_firm=state.laps_estimate_firm or not state.race_minutes,
+            # **The instrument read out, for chatty mode.** He asked for it:
+            # "chatty mode still didn't talk to me enough and isn't keeping me
+            # engaged. I love data." Every one of these is measured - the fuel
+            # off the tank against this race's own burn, the wear off the
+            # gauge. Nothing modelled goes in here, because a number said in a
+            # relaxed register every lap is exactly the kind that stops
+            # sounding like an estimate.
+            fuel_laps_in_hand=self._laps_of_fuel_in_hand(state),
+            wear_worst=self._worst_wear(lap),
+            wear_corner=self._worst_wear_corner(lap),
         )
         if call is None:
             return
