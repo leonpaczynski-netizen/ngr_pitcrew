@@ -295,15 +295,29 @@ def _merged_session(sessions: list[dict]) -> dict:
     seen = sorted({v for v in (_session_field(s, "game_version") for s in ordered)
                    if v})
     if len(seen) > 1:
-        where = "; ".join(
-            f"{v}: " + ", ".join(
-                f"session {s['id']} ({str(s['started_at'])[:10]})"
-                for s in ordered if _session_field(s, "game_version") == v)
-            for v in seen)
+        # **Summarised, not enumerated.** The first version of this refusal
+        # listed every session on both sides, which on event 1 was 38 ids in
+        # one sentence - a refusal nobody reads is barely better than none.
+        # Each side gets a count and a date range, and the ids are named only
+        # for the smaller side, because that is the one he will split off or
+        # exclude.
+        sides = {v: [s for s in ordered
+                     if _session_field(s, "game_version") == v] for v in seen}
+        smallest = min(sides, key=lambda v: len(sides[v]))
+        parts = []
+        for v, runs in sides.items():
+            span = f"{str(runs[0]['started_at'])[:10]}"
+            if str(runs[-1]["started_at"])[:10] != span:
+                span += f" to {str(runs[-1]['started_at'])[:10]}"
+            part = f"{v}: {len(runs)} session{'s' if len(runs) != 1 else ''}, {span}"
+            if v == smallest and len(runs) <= 6:
+                part += " (" + ", ".join(str(s["id"]) for s in runs) + ")"
+            parts.append(part)
         raise ValueError(
             f"this event spans {len(seen)} GT7 versions and cannot be exported "
-            f"as one body of evidence - {where}. Export the sides separately, "
-            f"or exclude the sessions recorded under the other version.")
+            f"as one body of evidence - " + "; ".join(parts) +
+            ". Export the sides separately, or exclude the sessions recorded "
+            "under the other version.")
     merged["game_version"] = seen[0] if seen else None
 
     for key in ("packet_format",
