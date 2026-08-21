@@ -87,6 +87,7 @@ from pitcrew.race.replan import (
 )
 from pitcrew.race.qualifying import QualifyingCoach, reference_lap
 from pitcrew.race.temps import measured_temp_window
+from pitcrew.race.brief import Instruments, brief, lost_the_gauge
 from pitcrew.race.quali_fuel import qualifying_fuel
 from pitcrew.race.quali_fuel import refusal as quali_fuel_refusal
 from pitcrew.strategy.certify import certify
@@ -1684,6 +1685,47 @@ class PitCrewController(QObject):
             window.laps_to_window if window else None,
             "speaking" if speaks else "silent")
 
+    def _say_brief(self, event: dict, plan: dict | None, *,
+                   speaks: bool) -> None:
+        """What the engineer can see this race. App state only, no telemetry."""
+        stints = ((plan or {}).get("stints") or [])
+        compounds = tuple(
+            s.get("compound") for s in stints
+            if isinstance(s, dict) and s.get("compound"))
+        sampler = getattr(self, "_hud", None)
+        lines = brief(Instruments(
+            has_plan=plan is not None,
+            race_laps=event.get("race_laps") if not event.get("race_minutes")
+            else None,
+            race_minutes=event.get("race_minutes"),
+            stops=(len(stints) - 1) if stints else None,
+            compounds=compounds,
+            # **Only if it is actually working now.** Switched on, built, and
+            # not already stood down - promising an instrument that is not
+            # there is worse than promising nothing.
+            wear_gauge=bool(self.settings.hud_wear_enabled
+                            and sampler is not None
+                            and not sampler.stood_down),
+            temp_window=measured_temp_window(self.store, event["id"]) is not None,
+            # The `A` format carries no per-wheel surface, so nothing can
+            # see a kerb or an off. Read off the last packet rather than a
+            # setting, because the format is whatever the console actually
+            # sent. Unknown is treated as present: the brief should not
+            # announce a limitation it has not observed.
+            surface_channel=(getattr(self.bridge.last_packet,
+                                     "packet_format", None) or "C") != "A",
+        ))
+        for line in lines:
+            log("race").info("brief: %s", line)
+        if self.race_screen is not None:
+            self.race_screen.set_status(" ".join(lines))
+        # **`speaks` is passed rather than read.** `_engineer_speaks` is not
+        # assigned until later in the arming sequence, so reading it here got
+        # the *previous* race's answer - and a silent run spoke.
+        if speaks:
+            for line in lines:
+                self.voice.say(line)
+
     def _announce_quali_fuel(self, event: dict) -> None:
         """Say the qualifying load, or say why there is not one.
 
@@ -3186,6 +3228,12 @@ class PitCrewController(QObject):
                 f"Plan refused: {self.race.refusal}", warn=True)
             self.race = None
             return False
+
+        # **Declare the instrument, once, on the grid.** Silence is this
+        # app's most-used output and it has never meant one thing - no plan,
+        # no wear evidence, no resolvable lap count and nothing to report all
+        # sound identical. Nothing competes for the channel here.
+        self._say_brief(event, plan, speaks=speaks)
 
         self.bridge.reset(race=True)
         # **The race records the sheet it was run on, exactly as practice
