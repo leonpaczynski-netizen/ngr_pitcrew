@@ -232,6 +232,22 @@ class TelemetryBridge(QObject):
         # it, which a table keyed by car alone cannot express.
         self._sheet_shift_rpm: dict[int, float] = {}
 
+    def set_short_shift(self, drop_rpm: float | None) -> None:
+        """Engage or release the beep's short-shift, at the rpm asked for.
+
+        The drop is the engineer's, not the setting's: it comes from
+        `short_shift_for`, which costs the saving against this car's measured
+        litres-per-1000-rpm. Where no drop was named the beep returns to the
+        sheet's own thresholds - the call that says "short-shift and lift into
+        the slow corners" deliberately withheld a number, and inventing one to
+        move the beep by would put back the fabrication it avoided.
+        """
+        if drop_rpm and drop_rpm > 0:
+            self.shift_beep.short_shift_drop_rpm = float(drop_rpm)
+            self.shift_beep.short_shifting = True
+        else:
+            self.shift_beep.short_shifting = False
+
     def set_sheet_shift_rpm(self, table: dict | None) -> None:
         self._sheet_shift_rpm = {int(g): float(r)
                                  for g, r in (table or {}).items()}
@@ -3366,6 +3382,21 @@ class PitCrewController(QObject):
         # still happens: the screen shows it and the revision chain records
         # it, because an audit that could not see a call the engineer decided
         # against voicing would make the model look tidier than it was.
+        # **A call that asks for a short-shift now moves the beep.**
+        #
+        # It did not, and that is the defect this fixes: `short_shifting` was
+        # read in two places and set True nowhere outside the tests, so
+        # "Short-shift 450." reached his ears and nothing reached the beep. He
+        # was asked to short-shift with no cue, and `laps.short_shift_rpm`
+        # then recorded 0.0 on every lap that had a value - so the app could
+        # not tell afterwards that it had ever asked.
+        #
+        # Applied even when the engineer is silent, because the beep IS the
+        # instruction when it is not spoken. Cleared by any later call that
+        # does not ask for one: a box call ends the saving, and None here is
+        # "stop short-shifting" rather than "no opinion".
+        self.bridge.set_short_shift(call.short_shift_drop_rpm)
+
         if self._engineer_speaks and replan is None:
             self.voice.say(call.spoken())
             self.ptt.last_call = call.spoken()

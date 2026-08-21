@@ -229,6 +229,17 @@ class Call:
     # would let the first swallow the other two. Recorded by
     # `RaceState.record`, never spoken or exported.
     tag: str | None = None
+    # **The rpm the beep should come down by, when the call asks for a
+    # short-shift.** None on every other call, and None is the instruction to
+    # stop short-shifting rather than the absence of one.
+    #
+    # It exists because the engineer has been asking for a short-shift that
+    # nothing delivered: `ShiftBeep.short_shifting` is read in two places and
+    # was set True nowhere outside the tests, so "Short-shift 450" moved no
+    # beep, and `laps.short_shift_rpm` recorded 0.0 on all 179 laps that have
+    # a value. He was asked to short-shift with no cue, and the app then had
+    # no record of having asked.
+    short_shift_drop_rpm: float | None = None
 
     def spoken(self) -> str:
         """Instruction, then reason. Confidence only when it is not high."""
@@ -875,7 +886,8 @@ def stay_out_call(state: RaceState) -> Call | None:
             STAY_OUT, state.lap,
             "Staying out? You should make it.",
             f"Short-shift {int(round(drop / 50.0) * 50)}, "
-            f"you're {abs(gap):.1f} short.")
+            f"you're {abs(gap):.1f} short.",
+            short_shift_drop_rpm=drop)
     if gap < STAY_OUT_GAP_UNMEASURED:
         return None
     # No measured slope for this car: the lever is named without a number
@@ -914,7 +926,12 @@ def _fuel(state: RaceState) -> Call | None:
             # replaced by the other two things he actually does.
             call = "Short-shift and lift into the slow corners."
         return Call(FUEL_SHORT, state.lap, call, reason, confidence,
-                    severity=-gap)
+                    severity=-gap,
+                    # Only where a drop was named. "Short-shift and lift into
+                    # the slow corners" is the lever without a number, and
+                    # moving the beep by a figure nobody measured would be
+                    # inventing the number the call deliberately withheld.
+                    short_shift_drop_rpm=drop or None)
     if gap > FUEL_LONG_LAPS and _past_half_stint(state):
         # Only worth saying once the stint is half run. At the start of a
         # stint there is always surplus - the tank was just filled - and
