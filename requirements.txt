@@ -10,6 +10,12 @@ moonshine-voice>=0.1.1  # offline speech recognition (pitcrew/engineer/ptt.py).
 sounddevice>=0.4.0
 pynput>=1.7.6
 requests>=2.28.0
+mcp>=2.0.0  # the local MCP server (pitcrew/mcp/server.py) that lets the tuning
+#   brain read this database instead of being pasted into. Reads are open;
+#   the two write tools PROPOSE and never apply - a setup sheet still has to
+#   be applied on the Event screen and a plan still has to be approved.
+#   NOTE mcp 2.x moved the API: `mcp.server.fastmcp.FastMCP` is gone, it is
+#   `mcp.server.mcpserver.MCPServer`, and result fields are snake_case.
 pycryptodome>=3.19.0  # Crypto.Cipher.Salsa20 — GT7 packet decryption (telemetry/packet.py)
 pywin32>=306  # SAPI5 speech and the shortcut installer (win32com.client)
 pillow>=10.0.0  # builds pitcrew.ico from logo.png (tools/install_shortcut.py)
