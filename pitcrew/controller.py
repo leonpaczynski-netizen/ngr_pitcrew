@@ -1909,13 +1909,25 @@ class PitCrewController(QObject):
         existing = getattr(self, "_hud", None)
         if existing is not None:
             return existing
-        from pitcrew.telemetry.hud import LiveWearSampler, ObsSource
+        from pitcrew.settings import HUD_SOURCE_SCREEN
+        from pitcrew.telemetry.hud import (LiveWearSampler, ObsSource,
+                                           ScreenSource)
 
-        sampler = LiveWearSampler(
-            ObsSource(self.settings.obs_host, self.settings.obs_port,
-                      self.settings.obs_password),
-            self._write_hud_wear)
+        if self.settings.hud_source == HUD_SOURCE_SCREEN:
+            # Reads an OBS projector window off the desktop. No socket is
+            # opened at all, which is also why nothing here can hang on one.
+            source = ScreenSource()
+        else:
+            source = ObsSource(self.settings.obs_host, self.settings.obs_port,
+                               self.settings.obs_password)
+        interval = float(self.settings.hud_sample_interval_s or 0.0)
+        sampler = LiveWearSampler(source, self._write_hud_wear,
+                                  interval_s=interval)
         sampler.start()
+        log("pitcrew").info(
+            "hud-wear: %s source, %s", self.settings.hud_source,
+            f"sampling every {interval:g}s" if interval
+            else "sampling at each crossing only")
         self._hud = sampler
         return sampler
 

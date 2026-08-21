@@ -86,6 +86,12 @@ COLOUR_CHATTY = colour.CHATTY
 COLOUR_LEVELS = colour.LEVELS
 
 
+# Where the tyre-gauge frame is read from - see `Settings.hud_source`.
+HUD_SOURCE_OBS = "obs"
+HUD_SOURCE_SCREEN = "screen"
+HUD_SOURCES = (HUD_SOURCE_OBS, HUD_SOURCE_SCREEN)
+
+
 @dataclass
 class Settings:
     """Everything the driver can set. Small on purpose."""
@@ -200,6 +206,29 @@ class Settings:
     obs_host: str = "127.0.0.1"
     obs_port: int = 4455
     obs_password: str = ""
+    # **Where the frame comes from.** `obs` asks OBS for a canvas screenshot
+    # over the websocket; `screen` reads the gauge rectangle straight off an
+    # OBS projector window with `mss`.
+    #
+    # Measured 22 Aug 2026: the websocket costs about **537 ms of OBS CPU per
+    # screenshot** because it renders, PNG-encodes and base64s the whole
+    # 1720x916 canvas. The screen path copies the 82x76 gauge rectangle and
+    # costs **0.21 ms of CPU** - a five-hundredth - which is what makes
+    # sampling between crossings affordable at all.
+    #
+    # **`obs` stays the default because it is the one that has been proven.**
+    # It also does not care whether OBS is visible; the screen path reads what
+    # the monitor actually shows, so a covered or minimised projector reads
+    # nothing. That is the trade.
+    hud_source: str = HUD_SOURCE_OBS
+    # Seconds between free-running samples, or 0 to sample only at each lap
+    # crossing. A crossing then files the last reading taken before it, which
+    # is the rule `tools/read_hud_wear.py` already applies to recorded video.
+    #
+    # 0 by default, and deliberately: on the `obs` source a two-second interval
+    # would be about a quarter of one core of OBS, which is not affordable.
+    # Set it with `hud_source = screen`, where the same rate costs 0.01%.
+    hud_sample_interval_s: float = 0.0
 
     # --- shift beep
     beep_enabled: bool = True

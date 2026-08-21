@@ -19,6 +19,10 @@ mcp>=2.0.0  # the local MCP server (pitcrew/mcp/server.py) that lets the tuning
 pycryptodome>=3.19.0  # Crypto.Cipher.Salsa20 — GT7 packet decryption (telemetry/packet.py)
 pywin32>=306  # SAPI5 speech and the shortcut installer (win32com.client)
 pillow>=10.0.0  # builds pitcrew.ico from logo.png (tools/install_shortcut.py)
+mss>=9.0.0  # the tyre-gauge screen source (telemetry/hud.py::ScreenSource).
+#   Optional at runtime: without it that source reports itself unavailable
+#   and the OBS websocket source is unaffected. Measured 22 Aug 2026 at
+#   0.21 ms of CPU per gauge grab against the websocket path's 537 ms.
 numpy>=1.24.0  # Piper synthesis buffers (pitcrew/engineer/voice.py)
 pyserial>=3.5  # the wind simulator's Arduino on COM5 (pitcrew/rig/wind.py).
 #   Optional at runtime: without it the wind layer reports itself unavailable

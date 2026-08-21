@@ -52,6 +52,7 @@ import hashlib
 import json
 import queue
 import threading
+import time
 from dataclasses import dataclass
 
 from pitcrew.diagnostics import log
@@ -86,6 +87,24 @@ CONNECT_TIMEOUT_S = 4.0
 # so once and stops trying: an error repeated every lap is noise, and by then
 # something needs a human anyway.
 MAX_CONSECUTIVE_FAILURES = 5
+# A drop this large between readings is a fresh set, not wear going
+# backwards. Wear is monotonic within a stint and the only thing that
+# resets it is a tyre change - the gauge snapping back to white is a
+# cleaner detector than anything the telemetry offers.
+FRESH_SET_DROP = 0.25
+# How far past its own interval a held reading may be and still be the
+# lap reading. Wider than one interval so a single missed tick does not
+# force a grab on the crossing, and far short of a lap so a stale number
+# can never be filed as a fresh one.
+STALE_MARGIN_S = 3.0
+# How long the worker waits on the queue before looking round. Short
+# enough that stop() is prompt; the free-run interval is enforced against
+# the clock, so this does not set the sample rate.
+QUEUE_WAIT_S = 0.5
+# Free-run failures are logged no more often than this.
+FREE_RUN_LOG_SPACING_S = 30.0
+# Sentinel: no crossing asked, take a free-running sample.
+_FREE_RUN = object()
 
 
 @dataclass(frozen=True)
@@ -101,7 +120,7 @@ class Reading:
             v is not None for v in self.wear.values())
 
 
-def read_gauge(png: bytes, layout: dict | None = None) -> Reading:
+def read_gauge(png, layout: dict | None = None) -> Reading:
     """Transcribe the four bars from a canvas screenshot.
 
     Pure: bytes in, a reading out. Everything that can go wrong returns a
@@ -109,25 +128,53 @@ def read_gauge(png: bytes, layout: dict | None = None) -> Reading:
     handler and the lap matters more than the gauge.
     """
     layout = layout or LAYOUT_1720x916
-    try:
-        import io
 
+    if isinstance(png, CropFrame):
+        # **A crop, whose geometry was verified where it was cut.** The source
+        # measured the canvas it took this from; if that was not the calibrated
+        # one the crop is of the wrong rectangle and the refusal is the same
+        # refusal, made one step earlier.
+        if tuple(png.canvas) != CANVAS:
+            return Reading(None, f"canvas is {png.canvas[0]}x{png.canvas[1]}, "
+                                 f"not {CANVAS[0]}x{CANVAS[1]} - the gauge "
+                                 f"layout is calibrated to that geometry and "
+                                 f"cannot be scaled")
         import numpy as np
-        from PIL import Image
 
-        frame = np.array(Image.open(io.BytesIO(png)).convert("RGB")).astype(int)
-    except Exception as exc:                                 # noqa: BLE001
-        return Reading(None, f"frame could not be decoded: {exc}")
+        frame = np.asarray(png.pixels).astype(int)
+        ox, oy = png.origin
+        layout = {corner: (x0 - ox, x1 - ox, y0 - oy, y1 - oy)
+                  for corner, (x0, x1, y0, y1) in layout.items()}
+        bx0, by0, bx1, by1 = layout_bounds(layout)
+        if (bx0 < 0 or by0 < 0
+                or by1 >= frame.shape[0] or bx1 >= frame.shape[1]):
+            # The crop does not contain the gauge. Never read partially: a bar
+            # clipped at the edge reads as a bar that is short of white.
+            return Reading(None, f"crop at {png.origin} is "
+                                 f"{frame.shape[1]}x{frame.shape[0]} and does "
+                                 f"not contain the gauge")
+    else:
+        try:
+            import io
 
-    height, width = frame.shape[0], frame.shape[1]
-    if (width, height) != CANVAS:
-        # **Refused, not rescaled.** The constants are pixel positions on this
-        # canvas; on any other they point somewhere else entirely, and a
-        # confident reading of the wrong rectangle is the failure this whole
-        # module exists to avoid.
-        return Reading(None, f"canvas is {width}x{height}, not "
-                             f"{CANVAS[0]}x{CANVAS[1]} - the gauge layout is "
-                             f"calibrated to that geometry and cannot be scaled")
+            import numpy as np
+            from PIL import Image
+
+            frame = np.array(
+                Image.open(io.BytesIO(png)).convert("RGB")).astype(int)
+        except Exception as exc:                             # noqa: BLE001
+            return Reading(None, f"frame could not be decoded: {exc}")
+
+        height, width = frame.shape[0], frame.shape[1]
+        if (width, height) != CANVAS:
+            # **Refused, not rescaled.** The constants are pixel positions on
+            # this canvas; on any other they point somewhere else entirely, and
+            # a confident reading of the wrong rectangle is the failure this
+            # whole module exists to avoid.
+            return Reading(None, f"canvas is {width}x{height}, not "
+                                 f"{CANVAS[0]}x{CANVAS[1]} - the gauge layout "
+                                 f"is calibrated to that geometry and cannot "
+                                 f"be scaled")
 
     peak = max(int(frame[y0:y1 + 1, x0:x1 + 1].max())
                for (x0, x1, y0, y1) in layout.values())
@@ -136,7 +183,10 @@ def read_gauge(png: bytes, layout: dict | None = None) -> Reading:
         # there.** In VR it is drawn on the dashboard and moves with head
         # position, so the calibrated rectangle is looking at trim. A located
         # gauge is read; a genuinely dark frame still says so.
-        moved = locate_gauge(frame)
+        # **Only a full canvas can be searched.** The locator exists because
+        # the gauge moves; a crop is a bet that it did not, so on a crop there
+        # is nowhere to look and the dim verdict stands.
+        moved = None if isinstance(png, CropFrame) else locate_gauge(frame)
         if moved is not None:
             return _read_bars(frame, moved, quantisation_note=True)
         return Reading(None, f"frame is dimmed (gauge peaks at {peak}) - paused, "
@@ -314,6 +364,32 @@ def locate_gauge(frame) -> dict | None:
     return {"fl": left[0], "rl": left[1], "fr": right[0], "rr": right[1]}
 
 
+@dataclass(frozen=True)
+class CropFrame:
+    """A gauge-sized crop of the canvas, with the origin it was cut from.
+
+    **The point of this type is that the geometry was checked at the source
+    rather than by counting pixels here.** `read_gauge` refuses a PNG whose
+    canvas is not 1720x916 because the layout constants are pixel positions on
+    that canvas and mean nothing on another. A crop cannot be checked that way
+    - it is 82x76 by construction - so the source that cut it carries the
+    canvas it measured, and it is that figure which is verified.
+
+    `pixels` is RGB, `origin` is the crop's top-left in canvas coordinates.
+    """
+
+    pixels: object
+    origin: tuple[int, int]
+    canvas: tuple[int, int]
+
+
+def layout_bounds(layout: dict) -> tuple[int, int, int, int]:
+    """The bounding box of a layout, as (x0, y0, x1, y1) inclusive."""
+    xs = [v[0] for v in layout.values()] + [v[1] for v in layout.values()]
+    ys = [v[2] for v in layout.values()] + [v[3] for v in layout.values()]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
 class ObsSource:
     """One canvas screenshot per call, over obs-websocket 5.x.
 
@@ -414,25 +490,195 @@ class ObsSource:
                 return got["d"].get("responseData") or {}
 
 
+# --- the local screen, at a five-hundredth of the cost --------------------
+#
+# **Measured 22 Aug 2026, on this PC (Core Ultra 5 125U, 2560x1440):**
+#
+#   mss grab of the 82x76 gauge region     wall 16.68 ms   CPU  0.21 ms
+#   mss grab of the full 2560x1440 screen  wall 33.14 ms   CPU 12.50 ms
+#   PIL ImageGrab, same 82x76 bbox         wall 50.07 ms   CPU 23.05 ms
+#   transcribing the four bars                             CPU  0.10 ms
+#
+# against `ObsSource`'s measured **537 ms of OBS CPU per screenshot**. The
+# whole difference is what is being asked for: OBS renders, PNG-encodes and
+# base64s a 1720x916 canvas over a socket, where this copies 6,232 pixels.
+#
+# Three things that are not obvious in those numbers:
+#
+# * **The 16.68 ms wall time is vsync, not work.** It is 1/60 s to three
+#   decimals - the grab blocks on the compositor - and the CPU actually burned
+#   is 0.21 ms. It therefore belongs on the worker thread, which is where the
+#   sampler already puts it.
+# * **Crop at capture, never after.** Grabbing the screen and slicing in numpy
+#   costs 12.50 ms against 0.21; PIL costs 23.05 ms for the identical 82x76
+#   output because it copies the whole screen regardless of the bbox. The
+#   cheap path is the one that asks the OS for the rectangle.
+# * **The cost is flat in area** - 600x200 measured 0.52 ms against 82x76's
+#   0.21 - so it is the round trip that is paid for, not the pixels.
+#
+# **What it costs to be right: the pixels have to be on screen.** The socket
+# does not care whether OBS is visible, minimised or behind the app; this
+# reads what the monitor shows. That is the trade, and it is why `ObsSource`
+# stays and stays the default.
+
+# OBS's projector windows, whose client area IS the canvas - which is what
+# makes this self-locating rather than a rectangle he has to calibrate.
+PROJECTOR_TITLES = ("windowed projector (program)",
+                    "windowed projector (preview)",
+                    "fullscreen projector (program)")
+
+
+class ScreenSource:
+    """The gauge region, read straight off the desktop.
+
+    Point OBS at a **Windowed Projector (Program)** and size it 1:1 - right
+    click the preview, Windowed Projector, then size the window until its
+    client area is the canvas. This finds that window by title, so nothing has
+    to be calibrated and moving it costs nothing.
+
+    Returns a `CropFrame`, never PNG bytes: there is no encode step here and
+    adding one would put back most of what this exists to remove.
+    """
+
+    def __init__(self, title_hint: str = "") -> None:
+        # A hint narrows the search where several projectors are open. Empty
+        # means "any program projector", which is the normal case.
+        self.title_hint = title_hint.strip().lower()
+
+    def _window(self):
+        """(hwnd, title) of the projector, or (None, reason)."""
+        try:
+            import win32gui
+        except ImportError:
+            return None, "pywin32 is not installed"
+        hits = []
+
+        def visit(hwnd, _):
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            title = win32gui.GetWindowText(hwnd) or ""
+            low = title.lower()
+            if not any(name in low for name in PROJECTOR_TITLES):
+                return
+            if self.title_hint and self.title_hint not in low:
+                return
+            hits.append((hwnd, title))
+
+        try:
+            win32gui.EnumWindows(visit, None)
+        except Exception as exc:                             # noqa: BLE001
+            return None, f"could not enumerate windows: {type(exc).__name__}"
+        if not hits:
+            return None, ("no OBS projector window is open - right click the "
+                          "preview in OBS and choose Windowed Projector "
+                          "(Program)")
+        # **The first, and it is said when there are others.** Two projectors
+        # showing different scenes would otherwise be chosen between silently.
+        if len(hits) > 1:
+            log(f"hud-wear: {len(hits)} projector windows open, using "
+                f"{hits[0][1]!r}")
+        return hits[0], None
+
+    def grab(self):
+        """(CropFrame, None) or (None, reason). Never raises."""
+        found, why = self._window()
+        if found is None:
+            return None, why
+        hwnd, title = found
+        try:
+            import win32gui
+
+            left, top, right, bottom = win32gui.GetClientRect(hwnd)
+            ox, oy = win32gui.ClientToScreen(hwnd, (left, top))
+        except Exception as exc:                             # noqa: BLE001
+            return None, f"{title!r}: {type(exc).__name__}: {exc}"
+
+        width, height = right - left, bottom - top
+        if (width, height) != CANVAS:
+            # **Refused, not rescaled**, for the reason `read_gauge` refuses a
+            # PNG of the wrong size: a scaled projector moves every calibrated
+            # pixel. Resizing the window is a two-second fix; guessing at a
+            # scale factor is a wrong wear number.
+            return None, (f"{title!r} client area is {width}x{height}, not "
+                          f"{CANVAS[0]}x{CANVAS[1]} - resize the projector to "
+                          f"the canvas, or use the OBS source instead")
+
+        gx0, gy0, gx1, gy1 = layout_bounds(LAYOUT_1720x916)
+        try:
+            import mss
+            import numpy as np
+        except ImportError as exc:
+            return None, f"{exc.name} is not installed"
+        try:
+            with mss.mss() as sct:
+                shot = sct.grab({"left": ox + gx0, "top": oy + gy0,
+                                 "width": gx1 - gx0 + 1,
+                                 "height": gy1 - gy0 + 1})
+            # mss hands back BGRA; the reader wants RGB.
+            pixels = np.asarray(shot)[..., 2::-1]
+        except Exception as exc:                             # noqa: BLE001
+            return None, f"screen grab failed: {type(exc).__name__}: {exc}"
+        return CropFrame(pixels=pixels, origin=(gx0, gy0), canvas=CANVAS), None
+
+
 class LiveWearSampler:
-    """One gauge reading per lap, off the race path.
+    """Gauge readings off the race path, filed one per lap.
 
     `request` is called from the lap handler and returns immediately. The grab,
     the decode and the write all happen on a worker thread, and the queue holds
     **one** lap: if a reading is still in flight when the next crossing lands,
     the older request is dropped. A wear figure filed against the wrong lap is
     worse than a gap, and a queue that grows is a queue that is already wrong.
+
+    ### Free-running, where the frames are cheap enough for it
+
+    With `interval_s` set the worker also samples on its own between crossings,
+    and a crossing then files **the last good reading taken before it** rather
+    than grabbing afresh. That is not a new rule - it is the one
+    `tools/read_hud_wear.py::attach` already applies to a recorded race, for
+    the same reason: the gauge at the line is what that lap left the tyre at,
+    and a sample taken after the crossing belongs to the next lap.
+
+    Two things it buys, and one it does not:
+
+    * **A paused or dimmed frame at the crossing no longer costs the lap.** The
+      reading from a few seconds earlier stands in, and on a quantised gauge
+      those are usually the same number anyway.
+    * **A stint gets a series instead of a point.** The advice above for a
+      30 px bar is to fit a slope across the stint rather than trust any single
+      reading; at one sample every two seconds there are hundreds to fit rather
+      than the twenty-odd a race has laps.
+    * **It does not make a single reading finer.** One pixel is 3.3% of tyre
+      life whatever the rate. Sampling faster pins the step transitions, which
+      tightens the slope; it does not subdivide a step.
+
+    `interval_s = 0` keeps the original behaviour exactly: nothing is sampled
+    until a crossing asks for it.
+
+    **Only a crossing failure counts toward standing down.** A free-run grab
+    failing every two seconds would exhaust the budget in ten and take the
+    whole session gauge with it - and a projector window shut for a minute is
+    not the same event as the gauge being unreadable at the line.
     """
 
-    def __init__(self, source, write, *, on_status=None) -> None:
+    def __init__(self, source, write, *, on_status=None,
+                 interval_s: float = 0.0) -> None:
         self._source = source
         self._write = write
         self._status = on_status
+        self._interval_s = max(0.0, float(interval_s))
         self._queue: queue.Queue = queue.Queue(maxsize=1)
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._failures = 0
         self.stood_down = False
+        # The most recent good reading and when it was taken. Written and read
+        # on the worker thread only.
+        self._latest: tuple[float, Reading] | None = None
+        # Every good reading this stint, for the slope fit. Cleared on a fresh
+        # set, the same way the offline tool splits stints.
+        self.series: list[tuple[float, dict]] = []
+        self._last_free_log = 0.0
 
     def start(self) -> None:
         if self._thread is not None:
@@ -470,24 +716,89 @@ class LiveWearSampler:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                lap_id = self._queue.get(timeout=0.5)
+                lap_id = self._queue.get(timeout=QUEUE_WAIT_S)
             except queue.Empty:
-                continue
+                # Nothing asked. Free-running turns the idle wait into a
+                # sample; without it the loop simply goes round again.
+                lap_id = _FREE_RUN
             if lap_id is None:
                 return
             try:
-                self._sample(lap_id)
+                if lap_id is _FREE_RUN:
+                    self._free_run()
+                else:
+                    self._sample(lap_id)
             except Exception as exc:                         # noqa: BLE001
                 # Nothing here may reach the caller. The lap is recorded
                 # whatever the gauge does.
                 log(f"hud-wear: unhandled {type(exc).__name__}: {exc}")
 
-    def _sample(self, lap_id: int) -> None:
-        png, why = self._source.grab()
-        if png is None:
-            self._failed(f"lap {lap_id}: {why}")
+    def _free_run(self) -> None:
+        """One un-asked-for sample, kept but never filed against a lap."""
+        if not self._interval_s or self.stood_down:
             return
-        reading = read_gauge(png)
+        now = time.monotonic()
+        if self._latest is not None and now - self._latest[0] < self._interval_s:
+            return
+        reading, _ = self._read()
+        if reading.ok:
+            self._keep(now, reading)
+        elif now - self._last_free_log > FREE_RUN_LOG_SPACING_S:
+            # Sparse, deliberately. A shut projector is one fact, not one fact
+            # every two seconds.
+            self._last_free_log = now
+            log(f"hud-wear: no free-run reading: {reading.reason}")
+
+    def _read(self) -> tuple[Reading, bool]:
+        """Grab and transcribe. Returns (reading, the source itself failed).
+
+        **The two failures are not the same failure and must not be counted
+        together.** A source that cannot produce a frame is a connection
+        problem - OBS shut, the projector closed - and it is what standing down
+        exists for. A frame that arrives and cannot be read is a paused game or
+        a menu, which is a normal thing that happens several times a session.
+        """
+        frame, why = self._source.grab()
+        if frame is None:
+            return Reading(None, why), True
+        return read_gauge(frame), False
+
+    def _keep(self, at: float, reading: Reading) -> None:
+        """Hold a good reading, and cut the series where a fresh set went on."""
+        worst = max((v for v in reading.wear.values() if v is not None),
+                    default=None)
+        if worst is not None and self.series:
+            previous = max((v for v in self.series[-1][1].values()
+                            if v is not None), default=None)
+            if previous is not None and previous - worst > FRESH_SET_DROP:
+                # The gauge only goes backwards for one reason.
+                log(f"hud-wear: fresh set - gauge dropped "
+                    f"{previous * 100:.0f}% to {worst * 100:.0f}%")
+                self.series = []
+        self._latest = (at, reading)
+        self.series.append((at, dict(reading.wear)))
+
+    def latest(self) -> Reading | None:
+        """The most recent good reading, or None."""
+        return self._latest[1] if self._latest else None
+
+    def _sample(self, lap_id: int) -> None:
+        now = time.monotonic()
+        held = self._latest
+        if (self._interval_s
+                and held is not None
+                and now - held[0] <= self._interval_s + STALE_MARGIN_S):
+            # **The last sample before the crossing is this lap reading**, the
+            # same rule the offline tool applies to a recorded race. Nothing is
+            # grabbed on the crossing at all.
+            reading = held[1]
+        else:
+            reading, source_failed = self._read()
+            if source_failed:
+                self._failed(f"lap {lap_id}: {reading.reason}")
+                return
+            if reading.ok:
+                self._keep(now, reading)
         if not reading.ok:
             # A dimmed or unreadable frame is not a connection failure - it is
             # a normal thing that happens when the game is paused - so it does
