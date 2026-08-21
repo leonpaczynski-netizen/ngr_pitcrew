@@ -1395,7 +1395,20 @@ class PitCrewController(QObject):
             car_name=car,
             measured_date=datetime.date.today().isoformat(),
             ranges=ranges,
-            game_version=(self.active_event() or {}).get("game_version"),
+            # **The installed game, not the event's.** A range record is a
+            # reading off the car's own settings screen on whatever version is
+            # running right now - it is not a property of the round being
+            # prepared. Taking it from the event meant every record written
+            # while the active event had a blank version was stored unversioned,
+            # which is all three of them: the register now holds the RSR's
+            # v1.71 endpoints beside the Shelby's and Huracan's v1.70 ones with
+            # nothing marking the difference. 1.71 moved the three LSD axes from
+            # a shared 5-60 to 0-30, 0-100 and 0-99, so a percentage read
+            # against the wrong register is a different setting entirely.
+            # The event still overrides, for a register re-entered from an
+            # older version on purpose.
+            game_version=((self.active_event() or {}).get("game_version")
+                          or self.settings.game_version or None),
             verified=verified,
         )
         try:

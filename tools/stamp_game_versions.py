@@ -100,6 +100,23 @@ def main() -> int:
         for r in ragged:
             print(f"        event {r['id']}  {r['game_version']!r}  ({r['name']})")
 
+    # **The slider register is a measurement too, and 1.71 moved endpoints.**
+    # `range_records` carries a `game_version` column that nothing ever filled,
+    # because the writer took it from the active event rather than from the
+    # installed game - and the active event's was blank. The register therefore
+    # holds the RSR's v1.71 endpoints beside the Shelby's and Huracan's v1.70
+    # ones with nothing marking the difference, which matters because 1.71
+    # moved the three LSD axes off a shared 5-60 onto 0-30, 0-100 and 0-99.
+    regs = _rows(conn, "SELECT car_name, measured_date, game_version "
+                       "FROM range_records WHERE game_version IS NULL "
+                       "ORDER BY measured_date")
+    if regs:
+        print("\n  unstamped slider registers:")
+        for r in regs:
+            side = args.was if r["measured_date"] < cutoff else args.since
+            print(f"        {r['measured_date']}  {r['car_name']:<34} -> "
+                  f"{side or 'LEFT NULL (pass --since)'}")
+
     if not args.apply:
         print("\nDRY RUN - nothing written. Re-run with --apply.")
         return 0
@@ -112,14 +129,22 @@ def main() -> int:
             conn.execute("UPDATE sessions SET game_version = ? "
                          "WHERE game_version IS NULL AND started_at >= ?",
                          (args.since, cutoff))
+        for r in regs:
+            side = args.was if r["measured_date"] < cutoff else args.since
+            if side:
+                conn.execute("UPDATE range_records SET game_version = ? "
+                             "WHERE car_name = ?", (side, r["car_name"]))
         for r in ragged:
             fixed = r["game_version"].strip()
             if fixed.count(".") == 1 and len(fixed.split(".")[1]) == 1:
                 fixed = f"{fixed}0"
             conn.execute("UPDATE events SET game_version = ? WHERE id = ?",
                          (fixed, r["id"]))
-    print(f"\nwritten: {len(before)} before, "
-          f"{len(after) if args.since else 0} after, {len(ragged)} events tidied.")
+    stamped = sum(1 for r in regs
+                  if (args.was if r["measured_date"] < cutoff else args.since))
+    print(f"\nwritten: {len(before)} sessions before, "
+          f"{len(after) if args.since else 0} sessions after, "
+          f"{stamped} registers, {len(ragged)} events tidied.")
     conn.close()
     return 0
 
