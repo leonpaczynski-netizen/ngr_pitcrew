@@ -338,8 +338,33 @@ a firm rule: **detect the dim and skip the frame — never relax the thresholds 
 compensate.** Relaxing them lets a dimmed frame produce a number, and a wrong
 wear figure is far worse than a missing one.
 
-*Not yet proven:* an unpaused flat-screen read end to end. Every flat frame
-captured was a pause menu.
+**Proven end to end.** Ten consecutive live reads over ~27 s of driving, through
+OBS → websocket → the calibrated layout → `read_hud_wear._read_bars` unmodified.
+No re-probing, no code change, `peak = 255` on every frame:
+
+| | start | end | over 27 s |
+|---|---|---|---|
+| FL | 40.0% | 46.7% | +6.7 |
+| FR | 23.3% | 26.7% | +3.4 |
+| **RL** | **50.0%** | **60.0%** | **+10.0** |
+| RR | 36.7% | 46.7% | +10.0 |
+
+**Zero reversals across all forty readings**, and every step is either nothing or
+exactly one quantum (3.3–3.4 points = the gauge's 1/30 pixel). Wear is monotonic
+and the reader never once produced a value that went backwards — which is the
+strongest available evidence that it is reading the instrument and not noise.
+
+The dim detector also did its job: **10 live frames, 9 dim/paused polls**, cleanly
+separated with no dimmed frame producing a number.
+
+Two observations that are findings in their own right:
+
+- **The car is rear-limited and RL is the worst corner** — matching all eight of
+  the driver's previous gauge readings, where a front has never once been worst.
+- **The rate is very fast** — ~10 points in 27 s on both rears. That implies a
+  wear multiplier well above race settings in this session. Worth confirming
+  rather than assuming, but it is exactly the kind of thing the live sampler
+  will make visible from now on.
 
 ### VR: the gauge IS there — and it moves
 
@@ -370,5 +395,7 @@ a flat screen, but it is not out of reach.** It needs
    gauge quantised at 3.3%. That discipline is what makes the coarser VR gauge
    survivable, and it is already the design.
 
-**Neither mode is proven end to end yet.** Flat needs one unpaused driving
-frame; VR needs a locator worth the name.
+**S3 verdict: flat screen is proven and ready to build; VR is possible but
+needs a per-frame locator.** Phase 3 therefore ships in two stages - the flat-screen
+sampler first, since it works today with the constants already in the repo, and
+the VR locator second as its own piece of work with its own accuracy target.
