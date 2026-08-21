@@ -153,6 +153,23 @@ class Lap:
     position: int
     is_pit_lap: bool
     is_out_lap: bool
+    # **GT7's own completed-lap count, as it read at this crossing.**
+    #
+    # This module counts laps from `last_lap_ms` changing and not from here,
+    # on the stated grounds that "GT7's lap counter is unreliable and its
+    # indexing convention differs between race types". That may well be true.
+    # **It has never been checked, because nothing recorded the field** - so
+    # the claim and its refutation are equally unavailable.
+    #
+    # It matters now. Every Monza race on file recorded 26 rows for 27 laps
+    # driven: the crossing inside GT7's pit sequence never reaches the app, and
+    # a count one light asks for one lap of fuel too much - about six litres,
+    # six seconds standing still at 1 L/s. If this field survives the pit
+    # sequence it is the answer; if it does not, that is worth knowing once
+    # rather than assuming forever.
+    #
+    # Recorded, not yet trusted. One race settles it.
+    laps_completed: int | None = None
     recorded_at: float = field(default_factory=time.time)
     compound: str | None = None
     # The ratios actually fitted, read off the packet rather than the sheet.
@@ -509,6 +526,11 @@ class SessionState:
             fuel_added_l=self._fuel_added_in_stop if self._pit_lap else None,
             tyre_temp_front_c=temp_front,
             tyre_temp_rear_c=temp_rear,
+            # Recorded beside the app's own count so the two can be compared
+            # after a race instead of one being asserted over the other.
+            laps_completed=(int(p.laps_completed)
+                            if p.laps_completed is not None
+                            and p.laps_completed >= 0 else None),
         )
         self._laps.append(lap)
         self._pit_lap = False

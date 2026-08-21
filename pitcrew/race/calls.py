@@ -399,9 +399,32 @@ class RaceState:
     said_at: dict[str, float] = field(default_factory=dict)
 
     def laps_remaining(self) -> int | None:
+        """Laps still to run, corrected for any crossing that went missing.
+
+        **`self.lap` is the app's count, and it can be short.** GT7 takes the
+        car over at the pit entry and places it in the box, and the crossing
+        inside that sequence does not reach the app - so a pit lap arrives as
+        one lap that covered two. Measured: every Monza race on file recorded
+        26 rows for 27 laps driven, the pit row spanning 1.94 laps of distance
+        with 5.50 L gone against a 5.55 L lap.
+
+        The clock already detects this and folds the missing time into its
+        offset, but `laps_dropped` reached exactly one place - the wording of
+        the run-in call - and never the arithmetic. So the count stayed one
+        light, and **one light here is one lap of fuel too many at the stop.**
+        At 1 L/s that is about six litres and six seconds standing still, on a
+        driver who will not carry a spare lap of fuel precisely because he
+        counts the stop in seconds.
+
+        Corrected here rather than at each caller, because this is the
+        quantity that is wrong and every caller of it inherits the error.
+        """
         if self.laps_total is None:
             return None
-        return max(0, self.laps_total - self.lap)
+        # A dropped crossing means more laps are behind him than the app
+        # counted, so fewer remain.
+        counted = self.lap + max(0, self.laps_dropped)
+        return max(0, self.laps_total - counted)
 
     def laps_of_fuel(self) -> float | None:
         """How many more laps the fuel on board covers."""

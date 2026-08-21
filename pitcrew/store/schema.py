@@ -728,6 +728,11 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("fuel_map", "INTEGER"),
     ),
     "laps": (
+        # GT7's own completed-lap count at this crossing. The app counts laps
+        # from `last_lap_ms` instead, on an unverified claim that this field is
+        # unreliable - and until now nothing recorded it, so the claim could
+        # not be tested. See `session_state.Lap.laps_completed`.
+        ("laps_completed", "INTEGER"),
         ("gear_ratios", "TEXT"),
         ("tyres_fresh", "INTEGER"),
         # Observed at the stop, not declared by the driver. `tyres_fresh` is

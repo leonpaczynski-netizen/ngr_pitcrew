@@ -948,8 +948,8 @@ class Store:
                 " fuel_used, position, compound, is_pit_lap, is_out_lap, gear_ratios, "
                 " tyres_changed, fuel_added_l, tod_start_ms, tod_end_ms, "
                 " standing_start_ms, crawl_s, off_track_s, spin_s, "
-                " short_shift_rpm, recorded_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " short_shift_rpm, laps_completed, recorded_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (session_id, lap.lap_num, lap.lap_time_ms, lap.delta_ms,
                  lap.fuel_start, lap.fuel_end, lap.fuel_used, lap.position,
                  lap.compound, int(lap.is_pit_lap), int(lap.is_out_lap),
@@ -969,6 +969,7 @@ class Store:
                  # no claim about how it was driven, and 0.0 would be the
                  # claim that it was driven on the normal threshold.
                  getattr(lap, "short_shift_rpm", None),
+                 getattr(lap, "laps_completed", None),
                  _now()))
             # **The declared fuel map, because no channel carries it.** It was
             # null on every lap of every session ever recorded - the cheapest
