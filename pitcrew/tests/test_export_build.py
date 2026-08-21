@@ -363,24 +363,30 @@ def test_an_event_that_straddles_a_patch_refuses_to_export():
     is right for a packet format. For the game version it would flatten two
     physics models into one array with nothing marking the join, and
     `CLAUDE.md` §7 would rather refuse than emit that.
+
+    The refusal is summarised rather than enumerated: on the real database the
+    pre-patch side is 38 sessions, and naming all of them produced a sentence
+    nobody would read. Ids appear only for the smaller side, because that is
+    the one he splits off.
     """
-    sessions = [
-        {"id": 58, "started_at": "2026-08-19T20:40:23", "game_version": "1.70",
-         "packet_format": "C", "setup_sheet_id": None, "practice_intent": None,
-         "practice_mode": None, "car_category": "GR3", "fuel_capacity_l": 100.0,
-         "identity_status": "ok"},
-        {"id": 60, "started_at": "2026-08-21T17:14:02", "game_version": "1.71",
-         "packet_format": "C", "setup_sheet_id": None, "practice_intent": None,
-         "practice_mode": None, "car_category": "GR3", "fuel_capacity_l": 100.0,
-         "identity_status": "ok"},
-    ]
+    def run(sid, when, version):
+        return {"id": sid, "started_at": when, "game_version": version,
+                "packet_format": "C", "setup_sheet_id": None,
+                "practice_intent": None, "practice_mode": None,
+                "car_category": "GR3", "fuel_capacity_l": 100.0,
+                "identity_status": "ok"}
+
     with pytest.raises(ValueError) as raised:
-        _merged_session(sessions)
+        _merged_session([run(57, "2026-08-19T19:53:35", "1.70"),
+                         run(58, "2026-08-19T20:40:23", "1.70"),
+                         run(60, "2026-08-21T17:14:02", "1.71")])
     message = str(raised.value)
-    # The refusal has to say which sessions are on which side, or he cannot act
-    # on it without going to the database himself.
-    assert "1.70" in message and "1.71" in message
-    assert "session 58" in message and "session 60" in message
+    assert "1.70: 2 sessions, 2026-08-19" in message
+    assert "1.71: 1 session, 2026-08-21" in message
+    # The minority side is named so he can act without opening the database.
+    assert "(60)" in message
+    # The majority side is counted, not listed.
+    assert "57" not in message
 
 
 def test_sessions_with_no_version_recorded_leave_the_merge_open():
