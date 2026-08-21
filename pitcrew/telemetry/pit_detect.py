@@ -37,6 +37,25 @@ from dataclasses import dataclass, field
 # Stationary, in the units the packet reports. Not zero: the box release and
 # the roll-in both pass through single-digit speeds, and a hard zero would
 # clip the ends off the stop and shorten every duration measured here.
+# **The pit entry is a discontinuity, and that is the exact signal.**
+#
+# GT7 takes the car over at the pit entry line and places it in the box, so the
+# speed trace does not decelerate - it steps. Measured across the pit laps on
+# file: 145.6, 227.3, 226.3 and 211.1 kph to zero **between two consecutive
+# frames**, one such step per pit lap and never a matching step outwards, since
+# the car accelerates out of the box normally.
+#
+# No real braking can do this. At 60 Hz even a 3 g stop from 227 kph sheds about
+# half a km/h a frame, so a step of this size is the game intervening and
+# nothing else. It gives pit entry to the frame, where fuel-rise gives only the
+# start of refuelling - which is several seconds later, after the stop has
+# already begun.
+#
+# The driver asked for this directly: "the engineer should know exactly when I
+# am in the pits." It is exact, and it needs no flag the packet does not carry.
+PIT_ENTRY_FROM_KPH = 80.0
+PIT_ENTRY_TO_KPH = 5.0
+
 STOPPED_KPH = 2.0
 
 # Fuel is a 32-bit float off the wire, so it dithers in the last digit even
@@ -188,6 +207,39 @@ class Stop:
         return (f"lap {self.lap}: {self.duration_s:.1f} s stationary"
                 f"{' (' + ', '.join(what) + ')' if what else ''}"
                 f", {self.confidence} confidence")
+
+
+def pit_entry_frame(speeds, *, from_kph: float = PIT_ENTRY_FROM_KPH,
+                    to_kph: float = PIT_ENTRY_TO_KPH) -> int | None:
+    """The index at which the car was taken into the box, or None.
+
+    Pure and one-pass, so the same code answers over a stored lap and over a
+    live stream. Returns the **first** such step: a lap has one pit entry, and
+    a second would be a decode artefact rather than a second stop.
+    """
+    previous = None
+    for index, speed in enumerate(speeds):
+        if speed is None:
+            previous = None
+            continue
+        if previous is not None and previous > from_kph and speed < to_kph:
+            return index
+        previous = speed
+    return None
+
+
+def entered_the_pits(previous_kph: float | None, speed_kph: float | None, *,
+                     from_kph: float = PIT_ENTRY_FROM_KPH,
+                     to_kph: float = PIT_ENTRY_TO_KPH) -> bool:
+    """The same test on two consecutive live frames.
+
+    **Deliberately not stateful.** The caller owns the previous speed, so this
+    can be asked on the telemetry thread without anything to reset between
+    sessions or to go stale across a restart.
+    """
+    if previous_kph is None or speed_kph is None:
+        return False
+    return previous_kph > from_kph and speed_kph < to_kph
 
 
 @dataclass
