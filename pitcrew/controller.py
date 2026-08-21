@@ -87,6 +87,8 @@ from pitcrew.race.replan import (
 )
 from pitcrew.race.qualifying import QualifyingCoach, reference_lap
 from pitcrew.race.temps import measured_temp_window
+from pitcrew.race.quali_fuel import qualifying_fuel
+from pitcrew.race.quali_fuel import refusal as quali_fuel_refusal
 from pitcrew.strategy.certify import certify
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.model import StrategyImpossible, recommend
@@ -1647,6 +1649,14 @@ class PitCrewController(QObject):
         self.bridge.quali = QualifyingCoach(
             window=window, reference=reference,
             speak=self.voice.say if speaks else None, mid_lap=mid_lap)
+        # **The fuel call, before he goes out rather than after.**
+        # Qualifying is the one run where carrying fuel is pure loss: there is
+        # no stint to survive, so every litre is mass dragged round the only
+        # lap that counts. The app has always known the burn and the weight
+        # coefficient and never put them together into a sentence he could act
+        # on.
+        self._announce_quali_fuel(event)
+
         # One auditable line: what tonight's coaching rests on.
         log("quali").info(
             "armed: reference lap %s (%s), window front %s rear %s, "
@@ -1657,6 +1667,34 @@ class PitCrewController(QObject):
             window.rear if window else None,
             window.laps_to_window if window else None,
             "speaking" if speaks else "silent")
+
+    def _announce_quali_fuel(self, event: dict) -> None:
+        """Say the qualifying load, or say why there is not one.
+
+        **Silence would read as "carry what you like".** Where nothing has
+        measured this car's burn here the refusal is spoken instead, because
+        an unconfident call that says so is still a call he can act on.
+        """
+        try:
+            inputs, _evidence = build_inputs(self.store, event["id"])
+        except Exception:                                    # noqa: BLE001
+            inputs = None
+
+        burn = getattr(inputs, "fuel_per_lap_l", None) if inputs else None
+        load = qualifying_fuel(
+            fuel_per_lap_l=burn,
+            fuel_capacity_l=getattr(inputs, "fuel_capacity_l", None)
+            if inputs else None,
+            fuel_weight_s_per_l_per_lap=getattr(
+                inputs, "fuel_weight_s_per_l_per_lap", None) if inputs else None)
+        said = load.call() if load is not None else quali_fuel_refusal(burn)
+        if not said:
+            return
+        log("quali").info("%s", said)
+        if self.practice is not None:
+            self.practice.set_status(said)
+        if self.practice is not None and self.practice.coach_speaks():
+            self.voice.say(said)
 
     def start_haptics(self) -> bool:
         """Open the transducer for this session, if the driver wants it.
