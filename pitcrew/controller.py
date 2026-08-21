@@ -66,7 +66,8 @@ from pitcrew.prompts.templates import PROMPT_VERSION
 from pitcrew.setup.parse import parse_reply
 from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
 from pitcrew.store import catalogs
-from pitcrew.store.db import DEFAULT_SHEET_PURPOSE, Store
+from pitcrew.store.db import (DEFAULT_SHEET_PURPOSE, WEAR_HUD_VIDEO,
+                              Store)
 from pitcrew.store.identity import IDENTITY_OK
 from pitcrew.race.calls import STAY_OUT, fuel_target_l
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
@@ -1795,6 +1796,51 @@ class PitCrewController(QObject):
     def heartbeat_target(self) -> str | None:
         return self.settings.ps5_ip.strip() if self.direct else None
 
+    # ------------------------------------------------ tyre wear off the video
+
+    def _hud_sampler(self):
+        """The live gauge reader, built on first use, or None if it is off.
+
+        **Nothing about it may reach the race path.** It is constructed here
+        rather than at start-up so that a driver who never turns it on never
+        opens a socket, and every failure inside it is logged and swallowed -
+        the lap is recorded whatever the gauge does.
+        """
+        if not self.settings.hud_wear_enabled:
+            return None
+        existing = getattr(self, "_hud", None)
+        if existing is not None:
+            return existing
+        from pitcrew.telemetry.hud import LiveWearSampler, ObsSource
+
+        sampler = LiveWearSampler(
+            ObsSource(self.settings.obs_host, self.settings.obs_port,
+                      self.settings.obs_password),
+            self._write_hud_wear)
+        sampler.start()
+        self._hud = sampler
+        return sampler
+
+    def _write_hud_wear(self, lap_id: int, wear: dict) -> None:
+        """Worker thread. Writes the reading and nothing else.
+
+        `set_lap_wear` already refuses to let a video reading overwrite one the
+        driver gave: CLAUDE.md makes his report primary evidence and this
+        corroboration, so where the two disagree the disagreement stays visible
+        instead of being settled by whichever arrived last.
+        """
+        try:
+            self.store.set_lap_wear(
+                lap_id, wear.get("fl"), wear.get("fr"),
+                wear.get("rl"), wear.get("rr"), source=WEAR_HUD_VIDEO)
+        except Exception as exc:                             # noqa: BLE001
+            log("hud").warning("could not store lap %s wear: %s", lap_id, exc)
+
+    def _stop_hud_sampler(self) -> None:
+        sampler, self._hud = getattr(self, "_hud", None), None
+        if sampler is not None:
+            sampler.stop()
+
     def start_practice(self) -> None:
         # Starting one session over another left the first with no `ended_at`
         # and its listener running: SO_REUSEADDR lets the second UDP bind
@@ -2041,6 +2087,15 @@ class PitCrewController(QObject):
             # **And it stops here.** The rack is his count of what he drove;
             # a lap that never crossed the line does not belong on it.
             return
+
+        # **One gauge reading per crossing, off this thread.** GT7 sends no
+        # wear channel and he will not record it by hand, so the only source
+        # is the capture that is running anyway. The request returns at once
+        # and may be dropped; nothing here waits on it, and a fragment never
+        # gets one because it is not a lap.
+        sampler = self._hud_sampler()
+        if sampler is not None:
+            sampler.request(lap_id)
         self._tag_race_compound(lap_id)
         self.refresh_nav_state()
         # Race laps belong to the race session, not to the practice rack.
@@ -3781,6 +3836,7 @@ class PitCrewController(QObject):
             self.session_id = None
         self.stop_haptics()
         self.stop_wind()
+        self._stop_hud_sampler()
         if self.listener is not None:
             self.listener.stop()
         if self._button_probe is not None:

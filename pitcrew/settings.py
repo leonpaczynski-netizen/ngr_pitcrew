@@ -178,6 +178,20 @@ class Settings:
     # to find more.
     haptics_gain: float = 1.0
 
+    # --- tyre wear off the OBS capture
+    #
+    # **GT7 broadcasts no tyre wear channel**, and the driver has said he will
+    # not record it in the app or by voice - every session has video, and the
+    # gauge is in it. One screenshot at each lap crossing costs about 0.6% of
+    # one core, which is affordable; anything faster is not.
+    #
+    # Off by default: it reaches out to another process on a port, and that is
+    # not something that should start happening because the app was updated.
+    hud_wear_enabled: bool = False
+    obs_host: str = "127.0.0.1"
+    obs_port: int = 4455
+    obs_password: str = ""
+
     # --- shift beep
     beep_enabled: bool = True
     # How far a short-shift moves every threshold down when the engineer asks
@@ -257,6 +271,8 @@ class Settings:
                     f"a short-shift saving of {slope} L per 1000 rpm for "
                     f"{car!r} is not a measurement of a GT7 car - expected "
                     f"a positive figure up to 20")
+        if not 1 <= self.obs_port <= 65535:
+            raise ValueError(f"{self.obs_port} is not a port")
         if self.ptt_enabled and not self.ptt_key.strip():
             raise ValueError("push to talk needs a button")
         if self.speech_backend not in SPEECH_BACKENDS:
