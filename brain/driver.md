@@ -7,7 +7,8 @@ by measurement, and until now surviving only in a session's memory.
 
 **Every line carries its source.** Nothing here is inferred from how he drives; it
 is either something he said, something measured off his own data, or something a
-document already records. Where two records disagree, both are stated.
+document already records. Where two records disagree, both are stated rather
+than reconciled by preference.
 
 > ⚠️ **Needs his review.** Assembled from session memory and measurement, not
 > dictated. Anything wrong here is wrong in the app's advice too.
@@ -69,7 +70,7 @@ it costs. Optimum shift point ≈1200 rpm below the limiter; **his own habitual
 
 ---
 
-## Where the records disagree
+## Hardware facts that were unclear and now are not
 
 **The wheel base — settled 21 Aug 2026, and it was never a hardware
 disagreement.** He runs a **Fanatec DD Extreme (18 Nm) with ClubSport V3
