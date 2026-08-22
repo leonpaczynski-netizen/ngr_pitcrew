@@ -90,14 +90,38 @@ RESET_SETTLE_S = 1.6
 # different COM number after a replug.
 RECONNECT_S = 2.0
 RECONNECT_MAX_S = 30.0
+# **The first retry after a healthy spell does not wait.** Measured against
+# the only drop in ten days of logs - 16 Aug 2026, 11.72 seconds of dead fans
+# - the recovery was three attempts of `RECONNECT_S` plus a settle, and the
+# device itself was back in about two. A USB re-enumeration completes in one
+# to three seconds; pausing two before even looking spends most of the outage
+# waiting for something that has already happened.
+FIRST_RETRY_S = 0.1
+# How long the last commanded value is held verbatim when nothing new
+# arrives, and how long it then takes to fade to nothing. Three seconds is
+# far longer than any gap in a 60 Hz feed that is merely late; two seconds of
+# fade is slow enough not to be a slap.
+HOLD_S = 3.0
+DECAY_S = 2.0
+# How long a close may take before it is abandoned to the operating system.
+# `CancelIoEx` on a surprise-removed CH340 can block inside the driver, and
+# this is on the path a session shutdown joins.
+CLOSE_TIMEOUT_S = 1.0
 
 # How many frames may go unanswered before the link is treated as dead. The
 # device replies within a millisecond, so a run this long is not a busy
-# moment - it is a cable, a hub, or a board that has stopped listening. At
-# `SEND_INTERVAL_S` this is about two seconds, which is longer than the
-# firmware's own deadman: the fans will already have stopped by the time we
-# give up, and the reconnect is what brings them back.
-UNANSWERED_LIMIT = 8
+# moment - it is a cable, a hub, or a board that has stopped listening.
+#
+# **This said "about two seconds" and meant 3.2.** Each unanswered frame
+# costs `READ_TIMEOUT_S` waiting for the reply that never comes AND
+# `SEND_INTERVAL_S` before the next one goes out - 0.40 s a frame, not 0.25 -
+# so eight of them is 3.2 seconds, sixty per cent longer than the comment
+# claimed. The fans have been stopped by the firmware's own deadman for two
+# of those seconds and the app is still reporting `connected True`.
+#
+# Four: 1.6 seconds, which is what "about two seconds" was always meant to
+# be, and still comfortably longer than a single late reply.
+UNANSWERED_LIMIT = 4
 
 # This device declares four, though only two fans are wired. All four bytes go
 # every time: the firmware reads exactly `motorCount()` of them with no
@@ -136,6 +160,15 @@ def snap_duty(value: int) -> int:
 class WindState:
     """What the layer is doing, for the screen and the logs."""
     connected: bool = False
+    # **How many times the link has dropped, and when it last did.** The
+    # health report runs every ten seconds and only ever printed `connected`,
+    # so an eleven-second outage that healed itself showed up as at most one
+    # line saying False - and a seven-second one as nothing whatsoever. The
+    # driver reports the fans cutting out; the log has one drop in ten days.
+    # These two make the next occurrence a timestamp rather than an
+    # impression.
+    disconnects: int = 0
+    last_drop_at: float | None = None
     port: str | None = None
     firmware: str | None = None
     crc_name: str | None = None
@@ -217,8 +250,15 @@ class WindLink:
         # unread, which is the shape of the fault that stopped the fans twice.
         self.stale_bytes = 0
 
-    def open(self) -> None:
-        """Open without resetting the board into a full-speed blast."""
+    def open(self, settle: bool = True) -> None:
+        """Open without resetting the board into a full-speed blast.
+
+        `settle` waits out the Optiboot window. It is right on a board that
+        has just been powered or replugged and pure cost on one that has been
+        running for an hour - 1.6 seconds of dead fans, mid-race, for a
+        bootloader that finished before the session started. `_connect` tries
+        without it first and falls back.
+        """
         import serial
 
         handle = serial.Serial()
@@ -239,30 +279,77 @@ class WindLink:
         # Even with DTR held low a freshly enumerated board may still be in
         # its bootloader, and bytes sent into that are discarded rather than
         # queued.
-        time.sleep(RESET_SETTLE_S)
+        if settle:
+            time.sleep(RESET_SETTLE_S)
         handle.reset_input_buffer()
         handle.reset_output_buffer()
 
-    def close(self) -> None:
-        """Stop the fans, then let go. Only ever called by the owning thread."""
+    def close(self, graceful: bool = True) -> None:
+        """Stop the fans, then let go. Only ever called by the owning thread.
+
+        `graceful` is False when the link is being dropped because it already
+        failed. There is then nothing to say to it and no reason to wait for
+        it to listen - the firmware's deadman stops the fans a second later
+        whatever we do, and the handle we would be writing through is the one
+        that just raised.
+
+        **Nothing in here may block without a bound.** On 16 Aug 2026 this
+        cost six seconds on the Qt thread and left COM5 held:
+
+            ERROR MainThread the wind thread did not stop within 6s, so COM5
+            is still held. Nothing else can open it until this app exits.
+
+        The wind thread had nothing else to do at the time - it was inside
+        `_stop.wait(0.25)`, which returns at once - so the six seconds were
+        spent here. It is a relative of the SimHub close-from-send deadlock
+        this module was told never to copy: the send path is clean, but the
+        teardown was writing and flushing through a handle it had already
+        decided was dead.
+        """
         handle = self._serial
         if handle is None:
             return
-        try:
-            if handle.is_open:
-                # Courtesy, not the safety mechanism - the firmware's deadman
-                # is what actually guarantees this. But an explicit zero means
-                # the fans stop now rather than up to a second from now.
-                #
-                # Written BEFORE `_serial` is detached: `_write` refuses to
-                # send through a closed link, so clearing the attribute first
-                # made this silently a no-op and the fans spun on until the
-                # deadman caught them.
-                self._write(arq.motors_payload([0] * self.channels))
-                handle.flush()
-        except Exception as exc:                            # noqa: BLE001
-            log("wind").debug("could not stop the fans on the way out: %s", exc)
         self._serial = None
+        if graceful:
+            try:
+                if handle.is_open:
+                    # Courtesy, not the safety mechanism - the firmware's
+                    # deadman is what actually guarantees this. But an
+                    # explicit zero means the fans stop now rather than up to
+                    # a second from now.
+                    #
+                    # **`handle.flush()` used to follow this, and it is an
+                    # unbounded busy-wait.** pyserial's Windows implementation
+                    # is `while self.out_waiting: time.sleep(0.05)` with no
+                    # timeout and no escape, so a device that is present but
+                    # wedged - selective suspend, a stalled endpoint - spins
+                    # this thread for ever and raises nothing, which means the
+                    # `except` below never sees it. The frame is twelve bytes,
+                    # six milliseconds at 19200: there was never anything
+                    # worth waiting for on a healthy port, and on an unhealthy
+                    # one it was an infinite loop.
+                    self._write_through(handle,
+                                        arq.motors_payload([0] * self.channels))
+            except Exception as exc:                        # noqa: BLE001
+                log("wind").debug(
+                    "could not stop the fans on the way out: %s", exc)
+        # **Closed on a thread of its own, with a bound.** `CancelIoEx` and
+        # `CloseHandle` on a surprise-removed CH340 can block inside the
+        # driver, and this runs on the path a session shutdown waits for.
+        # Leaking a handle on a device that has already gone is cheaper than
+        # freezing the app at the end of every session.
+        closer = threading.Thread(
+            target=self._close_handle, args=(handle,),
+            name="PitCrewWindClose", daemon=True)
+        closer.start()
+        closer.join(CLOSE_TIMEOUT_S)
+        if closer.is_alive():
+            log("wind").warning(
+                "closing %s did not return within %.1fs, so it has been left "
+                "to the operating system. The port may stay held until this "
+                "app exits.", self.port, CLOSE_TIMEOUT_S)
+
+    def _close_handle(self, handle) -> None:
         try:
             handle.close()
         except Exception as exc:                            # noqa: BLE001
@@ -299,8 +386,18 @@ class WindLink:
         """
         if self._serial is None:
             raise OSError("the port is not open")
+        self._write_through(self._serial, payload)
+
+    def _write_through(self, handle, payload: bytes) -> None:
+        """The same frame, down a handle named explicitly.
+
+        `close` detaches `_serial` before it says goodbye, so that a failure
+        in the middle of a teardown cannot leave a half-closed link behind
+        for the next caller. It still needs to write one frame, and it has
+        the handle in hand.
+        """
         frame = arq.build_frame(arq.BROADCAST_ID, payload, self.crc)
-        self._serial.write(frame)
+        handle.write(frame)
 
     def _read_reply(self) -> arq.Reply | None:
         """One reply, read to its own length and no further.
@@ -451,6 +548,9 @@ class WindSim:
         self.state = WindState(channels=channels)
         self._channels = channels
         self._wanted: tuple[int, ...] = tuple([0] * channels)
+        # When it was last set, so a value nobody has refreshed can be faded
+        # out rather than blown for ever - see `_decayed_locked`.
+        self._wanted_at: float | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -469,6 +569,7 @@ class WindSim:
         padded = clamped + tuple([0] * (self._channels - len(clamped)))
         with self._lock:
             self._wanted = padded
+            self._wanted_at = time.monotonic()
 
     def stop_fans(self) -> None:
         self.set_output(tuple([0] * self._channels))
@@ -525,25 +626,35 @@ class WindSim:
         the board every time.
         """
         backoff = RECONNECT_S
+        # A link that has just dropped after working is a re-enumeration, not
+        # an absent device: try it at once, and without the bootloader settle.
+        # Only once - if the quick attempt fails, it gets the full treatment.
+        quick = False
         while not self._stop.is_set():
-            if self._link is None and not self._connect():
+            if self._link is None and not self._connect(settle=not quick):
                 # Nothing to talk to. Back off rather than poll a missing
                 # device at a steady rate for the whole session, and run
                 # discovery again each time - the COM number can change
                 # across a replug.
-                self._stop.wait(backoff)
-                backoff = min(backoff * 2, RECONNECT_MAX_S)
+                self._stop.wait(FIRST_RETRY_S if quick else backoff)
+                if not quick:
+                    backoff = min(backoff * 2, RECONNECT_MAX_S)
+                quick = False
                 continue
             if not self._send_once():
-                self._drop_link()
-                self._stop.wait(RECONNECT_S)
+                # Not graceful: `_send_once` returning False means the link
+                # already failed, so there is nothing to say to it.
+                self._drop_link(graceful=False)
+                self._stop.wait(FIRST_RETRY_S)
                 backoff = RECONNECT_S
+                quick = True
                 continue
             backoff = RECONNECT_S
+            quick = False
             self._stop.wait(SEND_INTERVAL_S)
         self._drop_link()
 
-    def _connect(self) -> bool:
+    def _connect(self, settle: bool = True) -> bool:
         port = find_port()
         if port is None:
             if self.state.error is None:
@@ -554,16 +665,23 @@ class WindSim:
             return False
         link = WindLink(port, channels=self._channels)
         try:
-            link.open()
+            link.open(settle=settle)
         except Exception as exc:                            # noqa: BLE001
             self.state.error = f"Could not open {port}: {exc}"
             log("wind").warning(self.state.error)
             return False
         if not link.handshake():
+            if not settle:
+                # It opened, so the device is there; it just was not ready to
+                # talk. That is the bootloader, which is what the settle is
+                # for - so pay for it now, having established it is needed,
+                # rather than on every reconnect whether it is or not.
+                link.close(graceful=False)
+                return self._connect(settle=True)
             self.state.error = (
                 f"{port} opened but would not answer. It may not be the wind "
                 f"simulator.")
-            link.close()
+            link.close(graceful=False)
             return False
         self._link = link
         self.state.connected = True
@@ -578,7 +696,7 @@ class WindSim:
         if link is None:
             return False
         with self._lock:
-            values = self._wanted
+            values = self._decayed_locked()
         try:
             alive = link.send(values)
         except Exception as exc:                            # noqa: BLE001
@@ -601,9 +719,58 @@ class WindSim:
         self.state.last_values = values
         return True
 
-    def _drop_link(self) -> None:
-        """Tear the link down here, on the owning thread, and nowhere else."""
+    def _decayed_locked(self) -> tuple[int, ...]:
+        """The value to send, faded out if nothing has set one recently.
+
+        **Holding the last value through a telemetry gap is right, and
+        holding it for ever is not.**
+
+        The send loop is a fixed 250 ms timer, completely decoupled from the
+        60 Hz feed, so a gap in telemetry leaves `_wanted` frozen and the
+        thread goes on transmitting it - which is what keeps the firmware's
+        deadman fed and stops the fans cutting out for a stream hiccup that
+        cost the driver nothing. That is deliberate and must not change.
+
+        What was missing is an end to it. If the console sleeps, the network
+        drops, or the packet thread dies, the fans blow at whatever speed the
+        car was doing when the feed stopped, indefinitely - two 4000 RPM
+        blowers at a corner the driver left ten minutes ago. So the value is
+        held verbatim for `HOLD_S`, which covers any gap worth riding out,
+        and then faded rather than cut: a hard stop would be as startling as
+        the wind itself.
+
+        The deadman stays fed throughout either way - this changes what is
+        sent, never whether.
+
+        Caller holds `_lock`.
+        """
+        if self._wanted_at is None or not any(self._wanted):
+            return self._wanted
+        stale_for = time.monotonic() - self._wanted_at
+        if stale_for <= HOLD_S:
+            return self._wanted
+        if stale_for >= HOLD_S + DECAY_S:
+            return tuple([0] * self._channels)
+        scale = 1.0 - (stale_for - HOLD_S) / DECAY_S
+        return tuple(snap_duty(int(v * scale)) for v in self._wanted)
+
+    def _drop_link(self, graceful: bool = True) -> None:
+        """Tear the link down here, on the owning thread, and nowhere else.
+
+        `graceful` is False when the link is being dropped because it failed.
+        Writing a courtesy stop through a handle that has just raised buys
+        nothing - the firmware's deadman has already zeroed the fans - and it
+        is the write that used to hang the teardown.
+        """
         link, self._link = self._link, None
-        self.state.connected = False
         if link is not None:
-            link.close()
+            if self.state.connected:
+                # Counted so a drop that heals inside one ten-second report
+                # cycle still leaves a mark. Until now a 7-second outage could
+                # fall entirely between two reports and leave no trace at all,
+                # which is most of why this was so hard to pin down.
+                self.state.disconnects += 1
+                self.state.last_drop_at = time.monotonic()
+            self.state.connected = False
+            link.close(graceful=graceful)
+        self.state.connected = False

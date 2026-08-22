@@ -2010,11 +2010,34 @@ class PitCrewController(QObject):
         The worker thread finds the device itself and keeps trying, so a wind
         sim that is switched on halfway through a session joins in rather than
         staying dark until the next one.
+
+        **The link outlives the session, and it used to be rebuilt for each
+        one.** `stop_practice` tore the `WindSim` down and `start_race` built
+        a new one, so every practice -> qualifying -> race night paid three
+        full reconnects: close the port, reopen it, wait out the bootloader
+        settle, probe the CRC. Several seconds of dead fans each time, and
+        from the seat that is indistinguishable from the hardware dropping -
+        which is very likely most of what "the wind keeps cutting out" has
+        been. The log recorded them as orderly shutdowns, so they never
+        looked like faults; there are 78 of those lines and exactly one real
+        drop in ten days.
+
+        The device is not per-session. The thread now lives for as long as
+        the controller does, and a session boundary only zeroes the fans and
+        re-seeds the curve. `shutdown_wind` is the one place it is really
+        torn down.
         """
-        if not self.settings.wind_enabled or self.bridge.wind is not None:
-            return self.bridge.wind is not None
-        sim = WindSim()
-        sim.start()
+        if not self.settings.wind_enabled:
+            # Turned off in settings while a link was up: that is the one
+            # case where a running thread must actually be stopped, and it
+            # is not a session boundary.
+            self.shutdown_wind()
+            return False
+        sim = self.bridge.wind
+        if sim is None:
+            sim = WindSim()
+            sim.start()
+            self.bridge.wind = sim
         self.bridge.wind_curve.reset()
         # **Scale the fans to the circuit, not to the car.** An event is one
         # car at one circuit, so its recorded top speed is the pair's and it
@@ -2026,15 +2049,25 @@ class PitCrewController(QObject):
             event["observed_top_kph"]
             if event is not None and "observed_top_kph" in event.keys()
             else None)
-        self.bridge.wind = sim
         return True
 
     def stop_wind(self) -> None:
+        """Park the fans at the end of a session. The link stays up.
+
+        Zeroed rather than closed. The firmware's deadman would catch it a
+        second later anyway, but a second of wind after the session ended is
+        a second of wondering whether it is stuck - and holding the port
+        means the next session starts blowing immediately instead of after a
+        reconnect the driver feels as a dropout.
+        """
+        sim = self.bridge.wind
+        if sim is not None:
+            sim.stop_fans()
+
+    def shutdown_wind(self) -> None:
+        """Really let the device go. Closing the app, or wind switched off."""
         sim, self.bridge.wind = self.bridge.wind, None
         if sim is not None:
-            # Zero before letting go. The firmware's deadman would catch it a
-            # second later, but a second of wind after the session ended is a
-            # second of wondering whether it is stuck.
             sim.stop_fans()
             sim.shutdown()
 
@@ -3417,12 +3450,20 @@ class PitCrewController(QObject):
         wind = self.bridge.wind
         if wind is not None and getattr(wind, "state", None) is not None:
             state = wind.state
+            # **`drops` is here because `connected` could not see them.**
+            # This line runs every ten seconds and a drop heals in seven to
+            # twelve, so an outage the driver felt could fall entirely
+            # between two reports and leave nothing behind. Ten days of logs
+            # hold one drop; the driver reports them repeatedly. A monotonic
+            # count cannot be missed by a sampling interval.
+            since = ("" if state.last_drop_at is None else
+                     f" ({_monotonic() - state.last_drop_at:.0f}s ago)")
             log("wind").info(
                 "frames %d · resyncs %d · stale %d · failures %d · "
-                "level %.2f · connected %s",
+                "drops %d%s · level %.2f · connected %s",
                 state.frames_sent, state.resyncs, state.stale_bytes,
-                state.write_failures, self.bridge.wind_curve.level,
-                state.connected)
+                state.write_failures, state.disconnects, since,
+                self.bridge.wind_curve.level, state.connected)
 
     def _report_health(self) -> None:
         """Say which of the several silences this one is.
@@ -4700,7 +4741,9 @@ class PitCrewController(QObject):
                                 self.session_id)
             self.session_id = None
         self.stop_haptics()
-        self.stop_wind()
+        # The one place the link is really let go: the app is closing. A
+        # session boundary only parks the fans - see `start_wind`.
+        self.shutdown_wind()
         self._stop_hud_sampler()
         if self.listener is not None:
             self.listener.stop()

@@ -258,7 +258,10 @@ def test_the_thread_keeps_sending_a_value_that_has_not_changed(monkeypatch):
     monkeypatch.setattr(wind, "SEND_INTERVAL_S", 0.01)
     monkeypatch.setattr(wind, "RESET_SETTLE_S", 0.0)
 
-    def fake_open(self):
+    def fake_open(self, settle=True):
+        # `settle` is the conditional Optiboot wait - a reconnect to a board
+        # that has been running for an hour does not need it, and 1.6 s of
+        # dead fans mid-race is what paying for it anyway costs.
         self._serial = fake
 
     monkeypatch.setattr(wind.WindLink, "open", fake_open)
@@ -413,3 +416,230 @@ def test_the_sequence_never_wraps_because_it_is_never_used():
         link.send((80, 80, 0, 0))
     assert len(fake.written) == 200
     assert all(frame[2] == arq.BROADCAST_ID for frame in fake.written)
+
+
+# ------------------------------------------------- the teardown that hung
+
+def test_a_failed_link_is_let_go_without_writing_through_it():
+    """**The six seconds that held COM5.** 16 Aug 2026:
+
+        ERROR MainThread the wind thread did not stop within 6s, so COM5 is
+        still held. Nothing else can open it until this app exits.
+
+    The wind thread was inside `_stop.wait(0.25)` at the time, which returns
+    at once, so the six seconds were spent in `close` - writing a courtesy
+    stop and then flushing, through a handle that had just raised. pyserial's
+    Windows `flush` is `while self.out_waiting: sleep(0.05)` with no timeout,
+    so a device that is present but wedged spins it for ever and raises
+    nothing, which is why the `except` around it never caught anything.
+
+    A link being dropped because it failed gets nothing said to it. The
+    firmware's own deadman stops the fans a second later regardless.
+    """
+    fake = FakeSerial(speaks=arq.DEFAULT_CRC)
+    link = link_onto(fake)
+    link.close(graceful=False)
+    assert fake.written == [], "wrote through a handle it had declared dead"
+    assert fake.closed is True
+
+
+def test_a_graceful_close_still_stops_the_fans_now():
+    """The deadman is the guarantee; this is so the fans stop at the end of a
+    session rather than up to a second later."""
+    fake = FakeSerial(speaks=arq.DEFAULT_CRC)
+    link = link_onto(fake)
+    link.close()
+    assert len(fake.written) == 1
+    assert fake.written[0][-2] == 0, "the last channel was not zeroed"
+    assert fake.closed is True
+
+
+def test_a_close_that_never_returns_does_not_own_the_thread(monkeypatch):
+    """`CancelIoEx` on a surprise-removed CH340 can block inside the driver,
+    and this is the path a session shutdown joins. Leaking a handle on a
+    device that has already gone is cheaper than freezing the app."""
+    monkeypatch.setattr(wind, "CLOSE_TIMEOUT_S", 0.05)
+    started = threading.Event()
+
+    class Hangs(FakeSerial):
+        def close(self) -> None:
+            started.set()
+            time.sleep(30.0)
+
+    fake = Hangs(speaks=arq.DEFAULT_CRC)
+    link = link_onto(fake)
+    began = time.monotonic()
+    link.close(graceful=False)
+    took = time.monotonic() - began
+    assert started.wait(1.0), "the close never even started"
+    assert took < 2.0, f"a hung close held the caller for {took:.1f}s"
+
+
+# ------------------------------------------------------ counting the drops
+
+def test_a_drop_is_counted_even_when_it_heals_between_reports():
+    """The health line runs every ten seconds and a drop heals in seven to
+    twelve, so an outage the driver felt could leave no trace at all. Ten days
+    of logs hold one drop; he reports them repeatedly. A monotonic count
+    cannot be missed by a sampling interval."""
+    sim = wind.WindSim()
+    sim._link = link_onto(FakeSerial(speaks=arq.DEFAULT_CRC))
+    sim.state.connected = True
+
+    sim._drop_link(graceful=False)
+    assert sim.state.disconnects == 1
+    assert sim.state.last_drop_at is not None
+    assert sim.state.connected is False
+
+    # Dropping an already-dropped link is not a second outage.
+    sim._drop_link()
+    assert sim.state.disconnects == 1
+
+
+# ------------------------------------------ the link outlives the session
+
+def test_a_session_boundary_parks_the_fans_and_keeps_the_link():
+    """**Three self-inflicted dropouts a night, recorded as clean
+    shutdowns.**
+
+    `stop_practice` tore the `WindSim` down and `start_race` built a new one,
+    so every practice -> qualifying -> race paid a full reconnect: close the
+    port, reopen it, wait out the 1.6 s bootloader settle, probe the CRC.
+    From the seat that is several seconds of dead fans, indistinguishable
+    from the hardware dropping - and the log wrote it down as an orderly
+    release, so it never looked like a fault. There are 78 of those lines in
+    ten days and exactly one real drop.
+
+    The device is not per-session. Only closing the app really lets it go.
+    """
+    from pitcrew.controller import PitCrewController
+
+    class Sim:
+        def __init__(self):
+            self.parked = 0
+            self.shut = 0
+
+        def stop_fans(self):
+            self.parked += 1
+
+        def shutdown(self):
+            self.shut += 1
+
+    class Curve:
+        level = 0.0
+        observed_top_kph = None
+
+        def reset(self):
+            pass
+
+    class Bridge:
+        def __init__(self):
+            self.wind = None
+            self.wind_curve = Curve()
+
+    class Settings:
+        wind_enabled = True
+
+    class Rack:
+        start_wind = PitCrewController.start_wind
+        stop_wind = PitCrewController.stop_wind
+        shutdown_wind = PitCrewController.shutdown_wind
+        active_event = staticmethod(lambda: None)
+
+        def __init__(self):
+            self.bridge = Bridge()
+            self.settings = Settings()
+
+    rack = Rack()
+    rack.bridge.wind = sim = Sim()
+
+    rack.stop_wind()
+    assert sim.parked == 1, "the fans were not zeroed at the boundary"
+    assert sim.shut == 0, "the link was torn down between sessions"
+    assert rack.bridge.wind is sim, "the next session would reconnect"
+
+    # And the next session reuses it rather than building a second one.
+    assert rack.start_wind() is True
+    assert rack.bridge.wind is sim
+
+    # Closing the app is the one place it really goes.
+    rack.shutdown_wind()
+    assert sim.shut == 1
+    assert rack.bridge.wind is None
+
+
+def test_switching_the_wind_off_stops_a_link_that_is_already_up():
+    """The one non-boundary case that must still tear down: a running link
+    when the driver unticks the box."""
+    from pitcrew.controller import PitCrewController
+
+    class Sim:
+        def __init__(self):
+            self.shut = 0
+
+        def stop_fans(self):
+            pass
+
+        def shutdown(self):
+            self.shut += 1
+
+    class Bridge:
+        def __init__(self):
+            self.wind = Sim()
+            self.wind_curve = None
+
+    class Settings:
+        wind_enabled = False
+
+    class Rack:
+        start_wind = PitCrewController.start_wind
+        shutdown_wind = PitCrewController.shutdown_wind
+
+        def __init__(self):
+            self.bridge = Bridge()
+            self.settings = Settings()
+
+    rack = Rack()
+    sim = rack.bridge.wind
+    assert rack.start_wind() is False
+    assert sim.shut == 1, "wind was switched off and the fans kept their link"
+    assert rack.bridge.wind is None
+
+
+# --------------------------------------- the value that was held for ever
+
+def test_a_held_value_is_faded_out_rather_than_blown_indefinitely(monkeypatch):
+    """Holding the last speed through a telemetry gap is right - the send
+    loop is a fixed 250 ms timer, decoupled from the 60 Hz feed, so a hiccup
+    must not cut the fans. Holding it for ever is not: if the console sleeps
+    or the packet thread dies, two 4000 RPM blowers keep describing a corner
+    the driver left ten minutes ago."""
+    monkeypatch.setattr(wind, "HOLD_S", 1.0)
+    monkeypatch.setattr(wind, "DECAY_S", 1.0)
+
+    clock = {"t": 100.0}
+    monkeypatch.setattr(wind.time, "monotonic", lambda: clock["t"])
+
+    sim = wind.WindSim()
+    sim.set_output((200, 200, 0, 0))
+
+    with sim._lock:
+        assert sim._decayed_locked() == (200, 200, 0, 0), "faded immediately"
+
+    clock["t"] += 0.9                                   # inside the hold
+    with sim._lock:
+        assert sim._decayed_locked() == (200, 200, 0, 0), "a 0.9s gap faded"
+
+    clock["t"] += 0.6                                   # half way down
+    with sim._lock:
+        half = sim._decayed_locked()
+    assert 0 < half[0] < 200, f"not fading: {half}"
+
+    clock["t"] += 1.0                                   # past the decay
+    with sim._lock:
+        assert sim._decayed_locked() == (0, 0, 0, 0), "never reached zero"
+
+    # And a fresh value restarts the clock rather than staying faded.
+    sim.set_output((180, 180, 0, 0))
+    with sim._lock:
+        assert sim._decayed_locked() == (180, 180, 0, 0)
