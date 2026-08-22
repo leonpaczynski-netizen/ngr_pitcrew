@@ -2588,7 +2588,7 @@ class PitCrewController(QObject):
         plan = build(QualifyingInputs(
             lap_time_ms=self._best_practice_lap_ms(event),
             fuel_per_lap_l=burn,
-            fuel_capacity_l=self._event_fuel_capacity(event),
+            fuel_capacity_l=self._event_fuel_capacity(event["id"]),
             laps_to_window=window.laps_to_window if window else None,
             session_minutes=self.strategy.qualifying_minutes()))
         self.strategy.show_qualifying(plan)
@@ -2617,16 +2617,6 @@ class PitCrewController(QObject):
                  if not row.get("excluded") and not row.get("is_out_lap")
                  and not row.get("is_pit_lap") and (row.get("lap_time_ms") or 0) > 0]
         return min(times) if times else None
-
-    def _event_fuel_capacity(self, event: dict) -> float | None:
-        """**None is "nobody measured", and 0 is an electric car.** The two are
-        different answers and the plan treats them differently, so this must
-        not collapse one into the other."""
-        for session in self.store.list_sessions(event["id"], "practice"):
-            capacity = session.get("fuel_capacity_l")
-            if capacity is not None:
-                return float(capacity)
-        return None
 
     def read_the_stint(self) -> bool:
         """What the run just recorded says about its corners.
@@ -2967,6 +2957,23 @@ class PitCrewController(QObject):
         First *plausible*, not first non-null: a session that opened before the
         car was loaded stores 0.0, and 0 is a real capacity meaning electric -
         which switches the fuel-plausibility test off for the whole event.
+
+        **A second copy of this method was added on 22 Aug 2026 and shadowed
+        this one**, taking the event dict rather than its id and returning the
+        first NON-NULL capacity. Python keeps the later definition, so the new
+        one was dead and the new caller - the qualifying plan - handed a dict
+        to `list_sessions`, which is `ProgrammingError: Error binding
+        parameter 1: type 'dict' is not supported`. The qualifying-plan button
+        raised every time it was pressed.
+
+        Its argument was CLAUDE.md rule 3, that a 0 which means "not measured"
+        must not be confused with a real 0, and in principle that is right.
+        It loses on this data: the live database holds three sessions at 0.0
+        against sixty-three at 100.0, the car is a Porsche 911 RSR, and an RSR
+        is not electric - so every 0.0 on file is the "opened before the car
+        loaded" artefact this rule was written for. If an electric car is ever
+        raced, the fix is to stop writing 0.0 for an unloaded car, not to
+        start believing it here.
         """
         for session in self.store.list_sessions(event_id, "practice"):
             capacity = session["fuel_capacity_l"]

@@ -357,11 +357,6 @@ class RaceInputs:
     compound_profiles: dict[str, CompoundProfile] = field(default_factory=dict)
 
     @property
-    def is_timed(self) -> bool:
-        """A race run to the clock, where an extra lap can really appear."""
-        return self.race_minutes is not None
-
-    @property
     def lap_count_firm(self) -> bool:
         """Whether a timed race's distance is resolved enough to fuel to.
 
@@ -439,6 +434,16 @@ class RaceInputs:
 
     @property
     def is_timed(self) -> bool:
+        """A race run to the clock, where an extra lap can really appear.
+
+        **Zero minutes is not a timed race.** This was defined twice on this
+        dataclass - once at the top without the `> 0`, once here with it -
+        and Python kept this one, so the stricter rule is what has always
+        run. The docstring was on the dead copy, which is the part that
+        mattered: anyone reading the class learnt a rule the code did not
+        follow. A zero would otherwise make `race_limit_s` zero and every
+        stint over the clock before it started.
+        """
         return self.race_minutes is not None and self.race_minutes > 0
 
     @property
