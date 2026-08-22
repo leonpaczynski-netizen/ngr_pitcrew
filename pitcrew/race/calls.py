@@ -22,6 +22,35 @@ from pitcrew.strategy.model import fuel_margin_l
 
 
 
+# --- the measured wear call ------------------------------------------------
+#
+# **One pixel of the gauge is 3.3% of tyre life**, so every figure here is
+# quantised to thirtieths and no arithmetic can make it finer. Everything below
+# is sized against that quantum rather than against what would look tidy.
+
+# Readings needed in this stint before a rate is fitted. Two points and a
+# quantum of noise is a rate of anything you like; three is the fewest that can
+# disagree with itself.
+WEAR_MIN_READINGS = 3
+# ...and the worst corner has to have actually moved this far across them.
+# Two quanta: one is indistinguishable from a bar crossing a pixel boundary.
+WEAR_MIN_SPAN = 0.067
+# A reading older than this many laps is not describing the tyre he is on now.
+# Three laps at a Monza-ish 5.6% a lap is most of a phase.
+WEAR_MAX_STALENESS_LAPS = 3
+# Where the stint ends. `analysis/wear.STINT_SAFETY_FACTOR`, restated rather
+# than imported so the live path carries no offline dependency - and asserted
+# equal to it in the tests, because two numbers that must agree and cannot see
+# each other is how they come to disagree.
+WEAR_STINT_LIMIT = 0.85
+# Below this the projection is not worth saying: he is inside the margin the
+# limit already builds in, and "about seven laps left" on a six-lap race is
+# noise dressed as a finding.
+WEAR_PROJECT_MAX_LAPS = 8
+# A corner this far clear of the next-worst is a finding about that corner
+# rather than about the set. Three quanta, so it cannot be quantisation.
+WEAR_ASYMMETRY = 0.10
+
 # Confidence travels with every call so a guess never sounds like a reading.
 HIGH = "high"
 MEDIUM = "medium"
@@ -33,6 +62,10 @@ BOX_SOON = "box-soon"
 FUEL_SHORT = "fuel-short"
 FUEL_LONG = "fuel-long"
 TYRE = "tyre"
+# **The gauge, not the model.** `TYRE` above is the retired
+# modelled warning; this one rests on a transcription of GT7's own
+# wear readout and is the only wear call that may speak plainly.
+WEAR = "wear"
 TYRE_TEMP = "tyre-temp"
 STATUS = "status"
 GREEN = "green"
@@ -63,8 +96,16 @@ LAPS_TO_GO = "laps-to-go"
 # 1.79: under a ranking that puts the countdown first, "short-shift and lift"
 # could not have been voiced on either of them. He can count laps himself; he
 # cannot see the fuel arithmetic.
+# **Every kind in `_candidates` must appear here.** `next_call` sorts on
+# `URGENCY.index(kind)`, so a kind that is emitted but not ranked raises on the
+# race path - which is exactly what `WEAR` did until a test asked for it.
 URGENCY = (CHEQUER, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
-           FUEL_LONG, TYRE_TEMP, GREEN, STATUS)
+           # **`WEAR` sits below the fuel calls and above temperature.** A car
+           # out of fuel stops on the circuit; a car on worn tyres is still
+           # moving, so fuel wins. But a measured wear figure beats an
+           # inference drawn from how hot the rubber is, so it takes
+           # precedence over `TYRE_TEMP`.
+           FUEL_LONG, WEAR, TYRE_TEMP, GREEN, STATUS)
 
 # A status call every few laps, so silence means "nothing to report" rather
 # than "the app has died".
@@ -354,6 +395,24 @@ class RaceState:
     temp_gap_s_per_c: float | None = None
     # The lap the conserve call was last made, for the re-arm hysteresis.
     temp_conserve_lap: int | None = None
+    # --- tyre wear, MEASURED off the HUD gauge (telemetry/hud.py) ---
+    # (lap, {corner: fraction worn}) per lap that carried a gauge reading.
+    # **Measured, not modelled** - it is a transcription of the game's own
+    # readout - which is why the calls resting on it may speak plainly where
+    # the retired `_tyre` had to hedge three times in one sentence.
+    #
+    # **The reading lags its lap by one.** The sampler is asked at the crossing
+    # and answers on a worker thread a moment later, so the figure filed
+    # against lap N reaches the state during lap N+1. That is why staleness is
+    # measured in laps and tolerated up to `WEAR_MAX_STALENESS_LAPS` rather
+    # than required to be current.
+    #
+    # Cleared on a confirmed tyre change: a fresh set's wear starts at its own
+    # zero, and a rate fitted across a stop describes neither set.
+    wear_history: list[tuple[int, dict[str, float]]] = field(default_factory=list)
+    # Which wear occasions were said this stint: "limited", "cliff",
+    # "asymmetry". Each at most once, like the temperature occasions.
+    wear_said: set[str] = field(default_factory=set)
     # Which tyre-temp occasions were said this stint: "cold", "up-to-temp",
     # "conserve", "trend-front", "trend-rear". Each is said at most once per
     # stint, and the conserve call can be re-armed within one - see
@@ -454,6 +513,24 @@ class RaceState:
     # The last lap on which the engineer said anything at all. None until he
     # has: a race that has not started is not a race that has gone quiet.
     last_said_lap: int | None = None
+
+    def note_wear(self, lap: int, wear: dict[str, float] | None) -> None:
+        """File a gauge reading against a lap. Ignores a repeat of one lap.
+
+        Repeats matter because with the sampler free-running the same held
+        reading can be offered at two crossings, and a duplicated point would
+        flatten the fitted rate towards zero - which reads as a tyre that has
+        stopped wearing, the one direction this must never err in.
+        """
+        if not wear:
+            return
+        present = {corner: value for corner, value in wear.items()
+                   if value is not None}
+        if not present:
+            return
+        if self.wear_history and self.wear_history[-1][0] >= lap:
+            return
+        self.wear_history.append((lap, present))
 
     def note_temps(self, lap: int, front_c: float, rear_c: float) -> None:
         """One completed lap's measured axle means, in order driven."""
@@ -588,6 +665,13 @@ def _candidates(state: RaceState) -> list[Call | None]:
         # Retiring it costs nothing measurable: across the five races on file
         # it fired **zero times in 74 recorded calls**. And it is no longer the
         # best available - `telemetry/hud.py` reads the gauge itself.
+        #
+        # **`_wear` is what replaced it**, and it sits here rather than beside
+        # the box calls on purpose. Those reason about fuel and are right to
+        # outrank it: a car out of fuel stops on the circuit, a car on worn
+        # tyres is still moving. But it ranks above temperature, because a
+        # measured wear figure beats an inference from how hot the rubber is.
+        _wear(state),
         _tyre_temp(state),
         _status(state),
     ]
@@ -1041,6 +1125,161 @@ def _tyre(state: RaceState) -> Call | None:
         severity=consumed)
 
 
+# --- the measured wear call -------------------------------------------------
+#
+# **This is the call the app exists to be able to make.** CLAUDE.md 3.3 calls
+# the absent wear channel the single most consequential fact in the document,
+# and 5 builds the whole strategy engine around planning for a quantity the
+# game will not report. The HUD gauge is the game's own readout of it, and
+# `telemetry/hud.py` transcribes it, so for the first time a wear call can name
+# a number without a model underneath it.
+#
+# It says at most one of three things, each once a stint:
+#
+# * **limited** - the tyres run out before the fuel does. Only a measurement
+#   can establish this, and it is the one that changes the plan: every box call
+#   above it reasons about fuel, so without this a tyre-limited stint is run to
+#   a fuel-limited schedule.
+# * **cliff** - the worst corner is past the stint limit. An instruction.
+# * **asymmetry** - one corner is going first, named. Not an instruction to
+#   pit; an instruction about brake balance, which is adjustable mid-race.
+
+
+def _wear_worst(wear: dict[str, float]) -> tuple[str, float]:
+    """The corner that ends the stint, and how worn it is.
+
+    **The worst single corner, never an axle mean.** A car eating one corner is
+    exactly what open tuning without BoP produces - his own eight gauge
+    readings put RL worst every time - and averaging it with its healthy pair
+    halves the number that decides when to stop.
+    """
+    return max(wear.items(), key=lambda kv: kv[1])
+
+
+def _wear_rate(state: RaceState) -> float | None:
+    """Fraction of the worst corner consumed per lap, or None.
+
+    A least-squares slope over this stint's readings. None where there are too
+    few, where the gauge has not moved far enough to be distinguishable from
+    its own quantisation, or where the fit comes out flat or negative - a tyre
+    that is not wearing is a reading problem, not a finding.
+    """
+    points = [(lap, _wear_worst(wear)[1]) for lap, wear in state.wear_history]
+    if len(points) < WEAR_MIN_READINGS:
+        return None
+    if points[-1][1] - points[0][1] < WEAR_MIN_SPAN:
+        return None
+    n = len(points)
+    mean_lap = sum(lap for lap, _ in points) / n
+    mean_worn = sum(worn for _, worn in points) / n
+    denominator = sum((lap - mean_lap) ** 2 for lap, _ in points)
+    if denominator <= 0:
+        return None
+    slope = sum((lap - mean_lap) * (worn - mean_worn)
+                for lap, worn in points) / denominator
+    return slope if slope > 0 else None
+
+
+def _wear_laps_left(state: RaceState) -> tuple[float, str, float, float] | None:
+    """(laps to the stint limit, worst corner, what it READ, where it IS now).
+
+    **The last two are different numbers and the difference is the point.**
+    The reading is a transcription of the game's own gauge and may be spoken
+    plainly. The carry-forward is the reading plus the fitted rate across the
+    laps since - a projection, and CLAUDE.md 4.5 forbids presenting one as a
+    measurement. So the decisions below are taken on the projection, because
+    that is where the tyre actually is, and every number said out loud is the
+    reading, because that is what was measured. Conflating them had the
+    engineer saying "RL measured at 99 percent" off a gauge that read 88.
+    """
+    if not state.wear_history:
+        return None
+    lap, wear = state.wear_history[-1]
+    if state.lap - lap > WEAR_MAX_STALENESS_LAPS:
+        # The gauge stopped reading. Silence is the honest answer: a
+        # projection from a reading four laps old is about a tyre he was on,
+        # not the one he is on.
+        return None
+    rate = _wear_rate(state)
+    if rate is None:
+        return None
+    corner, worn = _wear_worst(wear)
+    consumed = worn + rate * max(0, state.lap - lap)
+    return (WEAR_STINT_LIMIT - consumed) / rate, corner, worn, consumed
+
+
+def _wear(state: RaceState) -> Call | None:
+    """What the gauge says, when it says something he can act on."""
+    if state.in_pit or state.finished or _crossing_the_line(state):
+        return None
+    projection = _wear_laps_left(state)
+    if projection is None:
+        return None
+    laps_left, corner, reading, consumed = projection
+    name = corner.upper()
+
+    # --- past the limit. An instruction, and the reading is enough on its own.
+    if consumed >= WEAR_STINT_LIMIT and "cliff" not in state.wear_said:
+        state.wear_said.add("cliff")
+        return Call(
+            WEAR, state.lap,
+            "Box this lap.",
+            f"{name} measured at {reading * 100:.0f} percent.",
+            HIGH,
+            severity=consumed)
+
+    # --- the tyres run out before the fuel does.
+    fuel_laps = state.laps_of_fuel()
+    if (fuel_laps is not None and "limited" not in state.wear_said
+            and 0 < laps_left <= WEAR_PROJECT_MAX_LAPS
+            and laps_left + 1 < fuel_laps):
+        # **+1 before it is a finding.** The two figures are a fitted gauge
+        # slope and a fuel burn, and inside a lap of each other the ordering is
+        # noise - which would have him stopping early on the strength of it.
+        state.wear_said.add("limited")
+        # **Rounded DOWN, and never below one.** The projection is a fitted
+        # slope on a gauge quantised to thirtieths, and CLAUDE.md 5.1 is
+        # explicit that overshooting the cliff costs far more than
+        # undershooting it. Rounding to nearest would spend that asymmetry on
+        # tidiness.
+        whole = max(1, int(laps_left))
+        return Call(
+            WEAR, state.lap,
+            f"Tyres are the constraint, not fuel. About {whole} "
+            f"lap{'' if whole == 1 else 's'} left on them.",
+            f"{name} at {reading * 100:.0f} percent, measured.",
+            MEDIUM,
+            severity=consumed)
+
+    # --- one corner going first. A balance call, not a pit call.
+    ordered = sorted(state.wear_history[-1][1].values(), reverse=True)
+    if (len(ordered) >= 2 and "asymmetry" not in state.wear_said
+            and ordered[0] - ordered[1] >= WEAR_ASYMMETRY):
+        state.wear_said.add("asymmetry")
+        # **Rearward only.** Moving the balance forward is a standing refusal
+        # of his, and the axle this fires on is his measured pattern anyway:
+        # every gauge reading on file has put a rear corner worst.
+        toward = "rearward" if name.startswith("R") else "forward"
+        if toward == "forward":
+            # Named without a direction rather than told to do the one thing
+            # he does not do. The finding is still worth having.
+            return Call(
+                WEAR, state.lap,
+                f"{name} is going first.",
+                f"{ordered[0] * 100:.0f} percent against "
+                f"{ordered[1] * 100:.0f}, measured.",
+                HIGH,
+                severity=ordered[0])
+        return Call(
+            WEAR, state.lap,
+            "Brake balance one click rearward.",
+            f"{name} is going first - {ordered[0] * 100:.0f} percent "
+            f"against {ordered[1] * 100:.0f}, measured.",
+            HIGH,
+            severity=ordered[0])
+    return None
+
+
 def _smoothed_axles(history: list[tuple[int, float, float]]
                     ) -> tuple[float, float]:
     """The last few laps' axle means, averaged.
@@ -1338,9 +1577,17 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
     # and it starts cold, which is exactly what the cold check should see.
     state.temp_said = set()
     state.temp_conserve_lap = None
+    # The wear occasions speak freshly each stint for the same reason the
+    # temperature ones do; the readings only survive when the rubber does.
+    state.wear_said = set()
     if tyres_changed:
         state.laps_since_stop = 0
         state.tyre_change_unconfirmed = False
         state.temp_history = []
+        # **A rate fitted across a stop describes neither set.** The gauge
+        # snaps back to white on a fresh set, so keeping the old points would
+        # fit a line through a discontinuity and report a tyre that repairs
+        # itself.
+        state.wear_history = []
     elif tyres_changed is None:
         state.tyre_change_unconfirmed = True

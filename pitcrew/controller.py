@@ -508,6 +508,12 @@ class TelemetryBridge(QObject):
         return True
 
 
+# How many in-flight gauge readings the lap-id lookup keeps. A reading is
+# answered within a second or two; anything older than a handful of laps
+# is never going to be claimed.
+HUD_LAP_MEMORY = 8
+
+
 class PitCrewController(QObject):
     """Owns the store and the live session, and drives the screens."""
 
@@ -529,6 +535,9 @@ class PitCrewController(QObject):
         self.car_screen = car_screen
         self.engineer = engineer_screen
         self.settings_screen = settings_screen
+        # lap id -> lap number, for gauge readings still in
+        # flight. See `_on_lap_completed`.
+        self._hud_lap_nums: dict[int, int] = {}
         self.prompt_issue_id: int | None = None
         self.settings = settings.load(store)
         # The streams are opened deep inside two engines that must not know
@@ -2024,6 +2033,13 @@ class PitCrewController(QObject):
         present = {c: wear.get(c) for c in ("fl", "fr", "rl", "rr")
                    if wear.get(c) is not None}
         self._wear_now = present or None
+        # **And which lap it describes**, for the measured wear call. Two plain
+        # attribute writes rather than a lock: this thread only ever writes and
+        # the Qt thread only ever reads, and a reader that catches the pair
+        # mid-update sees a reading against the previous lap - which
+        # `RaceState.note_wear` already declines as a repeat. A lock here would
+        # be a lock a lap handler could wait on.
+        self._wear_now_lap = self._hud_lap_nums.get(lap_id)
         try:
             self.store.set_lap_wear(
                 lap_id, wear.get("fl"), wear.get("fr"),
@@ -2290,6 +2306,15 @@ class PitCrewController(QObject):
         # gets one because it is not a lap.
         sampler = self._hud_sampler()
         if sampler is not None:
+            # **The lap NUMBER, kept against the id the sampler answers with.**
+            # The reading comes back on a worker thread carrying only the lap
+            # id, and the race state files wear by lap number - so the pairing
+            # has to be made here, where both are in hand. Bounded to the last
+            # few laps: this is a lookup for a reading that is already in
+            # flight, not a record of the session.
+            self._hud_lap_nums[lap_id] = lap.lap_num
+            while len(self._hud_lap_nums) > HUD_LAP_MEMORY:
+                self._hud_lap_nums.pop(next(iter(self._hud_lap_nums)))
             sampler.request(lap_id)
         self._tag_race_compound(lap_id)
         self.refresh_nav_state()
@@ -3543,6 +3568,20 @@ class PitCrewController(QObject):
                 # prompt are news again, and the consistency window must not
                 # straddle a pit stop.
                 self._colour.new_stint()
+        # **Before `handle`, so the call sees this lap's gauge.** The reading
+        # lags its own lap by one - the sampler is asked at the crossing and
+        # answers a moment later on its worker - so what lands here is the
+        # previous lap's, which is exactly what the wear call is built to
+        # expect. Filed after the coordinator instead, it would be a lap
+        # further behind again and every projection would be one lap stale.
+        if event.kind is EventKind.LAP_COMPLETED:
+            # Both or neither. A reading whose lap could not be identified is
+            # dropped rather than filed against lap 0, which would anchor every
+            # fitted rate to a point the tyre was never at.
+            wear_lap = getattr(self, "_wear_now_lap", None)
+            wear_now = getattr(self, "_wear_now", None)
+            if wear_lap and wear_now:
+                self.race.state.note_wear(wear_lap, wear_now)
         call = self.race.handle(event)
         replan = None
         if event.kind is EventKind.LAP_COMPLETED:
