@@ -1343,6 +1343,27 @@ class Store:
         rows = self._query("SELECT circuit_key FROM corner_models ORDER BY circuit_key")
         return [r["circuit_key"] for r in rows]
 
+    def frames_meta(self, lap_id: int) -> dict | None:
+        """`sample_hz` and `frame_count` for a lap, without decoding it.
+
+        **`get_lap_frames` costs 65-160 ms because it decompresses and JSON-
+        parses a 481 KB blob; these two are plain columns beside it.** A
+        caller that wanted only the rate was paying the whole decode for it -
+        `analysis/grip.derive_event` did exactly that, once per lap, and it
+        was 21.7 s of a 67.6 s call.
+
+        Worse than slow: `json.loads` does not release the GIL, so every one
+        of those decodes was tens of milliseconds during which the audio
+        callback could not run. See `telemetry/recorder.ENCODE_CHUNK_ROWS`.
+        """
+        rows = self._query(
+            "SELECT sample_hz, frame_count FROM lap_frames WHERE lap_id = ?",
+            (lap_id,))
+        if not rows:
+            return None
+        return {"sample_hz": rows[0]["sample_hz"],
+                "frame_count": rows[0]["frame_count"]}
+
     def get_lap_frames(self, lap_id: int) -> dict | None:
         """Return {sample_hz, frame_count, frame_schema_version, frames} or None.
 

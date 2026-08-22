@@ -331,3 +331,34 @@ def test_a_repeated_lap_number_is_refused_not_replaced(store: Store,
     assert stored[0]["lap_time_ms"] == 92_000, "the original lap was replaced"
     assert store.get_lap_frames(lap_id) is not None, (
         "the raw telemetry was cascade-deleted by a duplicate lap number")
+
+
+def test_frames_meta_answers_without_decoding_the_blob(store: Store,
+                                                       event_id: int):
+    """**`get_lap_frames` costs 65-160 ms because it decompresses and JSON-
+    parses the blob; `sample_hz` and `frame_count` are columns beside it.**
+
+    `analysis/grip.derive_event` decoded a whole lap once per lap to keep one
+    float - 21.7 s of a 67.6 s call on the largest event. And `json.loads`
+    does not release the GIL, so each of those was tens of milliseconds the
+    audio callback could not run in.
+    """
+    session_id = store.start_session(event_id, "practice")
+    rec = LapRecorder()
+    rps = rolling_wheel_rps(50.0)
+    for i in range(37):
+        rec.record_frame(make_packet(
+            speed_ms=50.0, time_of_day_ms=i * 16,
+            wheel_rps_fl=rps, wheel_rps_fr=rps,
+            wheel_rps_rl=rps, wheel_rps_rr=rps))
+    lap_id = store.add_lap(session_id, a_lap(), frames=rec.take_lap())
+
+    meta = store.frames_meta(lap_id)
+    full = store.get_lap_frames(lap_id)
+    assert meta is not None and full is not None
+    assert meta["sample_hz"] == full["sample_hz"]
+    assert meta["frame_count"] == full["frame_count"] == 37
+    assert "frames" not in meta, "it decoded the blob after all"
+
+    assert store.frames_meta(lap_id + 9999) is None, (
+        "a lap with no frames must answer None, not an empty shape")

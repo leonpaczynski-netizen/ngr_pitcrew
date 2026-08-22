@@ -855,9 +855,15 @@ def _session_context(store, event: dict, session: dict,
         stored = store.get_lap_frames(lap_id)
         return stored["frames"] if stored else None
 
+    # **The rate only, off the columns.** This used to call
+    # `get_lap_frames`, which decompresses and JSON-parses the whole 481 KB
+    # blob, and then kept one float from it. Measured on event 1: 218 laps,
+    # each decoded THREE times in one `derive_event` - here, in `frames_for`
+    # below, and again in the trace loop - for 46.3 s of a 67.6 s call.
+    # Removing this one takes it to 45.9 s and 436 decodes.
     for lap in laps:
-        stored = store.get_lap_frames(lap["id"])
-        lap["sample_hz"] = stored["sample_hz"] if stored else 60.0
+        meta = store.frames_meta(lap["id"])
+        lap["sample_hz"] = meta["sample_hz"] if meta else 60.0
 
     changed_at: set[int] = set()
     for finding in read_session(list(laps), frames_for):
