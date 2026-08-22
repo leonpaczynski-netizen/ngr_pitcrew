@@ -74,6 +74,7 @@ from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.race.expectations import PRACTICE, Expectation
 from pitcrew.race.hud_calibration import note_frame_red
 from pitcrew.race.incident_watch import IncidentWatch
+from pitcrew.race.straight import Straight
 from pitcrew.race.colour import ColourCalls
 from pitcrew.race.refuel import RefuelAdviser
 from pitcrew.race.replan import (
@@ -162,6 +163,11 @@ class TelemetryBridge(QObject):
     # what it costs is read off the coordinator, and the coordinator is
     # not thread-safe.
     incident_seen = pyqtSignal()
+    # **The car is somewhere he can listen.** Emitted once per
+    # straight, not once per frame: `Straight.update` stays true
+    # for the whole straight so the caller does not have to catch
+    # one particular frame, and the edge is what is worth a signal.
+    straight_reached = pyqtSignal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -199,6 +205,11 @@ class TelemetryBridge(QObject):
         # the watch disabled itself silently on the first packet of every
         # race. The events that decide it arrive on this thread anyway.
         self._in_pit = False
+        # **Whether the car is on a straight**, for anything that wants to
+        # speak mid-lap. Lives here rather than in the race layer because it
+        # is a fact about the frame, like the shift beep.
+        self.straight = Straight()
+        self._on_straight = False
         # The incident watch, armed with the race. None when no race is
         # armed - practice laps are judged afterwards, by the module
         # that can see a whole lap.
@@ -508,6 +519,23 @@ class TelemetryBridge(QObject):
                     type(exc).__name__, exc, exc_info=True)
                 self.incidents = None
 
+        # **The straight detector.** Two floats and a comparison; it answers
+        # one question and emits only on the EDGE, so nothing downstream has
+        # to de-duplicate six hundred frames of the same straight.
+        try:
+            was, self._on_straight = self._on_straight, self.straight.update(
+                throttle_pct=packet.throttle * 100.0,
+                speed_ms=packet.speed_ms,
+                yaw_rate=packet.angvel_y,
+                now=_monotonic())
+            if self._on_straight and not was:
+                self.straight_reached.emit()
+        except Exception as exc:                            # noqa: BLE001
+            log("race").error(
+                "the straight detector raised on the telemetry thread: "
+                "%s: %s", type(exc).__name__, exc, exc_info=True)
+            self._on_straight = False
+
         # **The in-box refuel watch**, under the same doctrine as the coach
         # above: guarded, and dropped for the session on its first exception.
         # It does nothing at all until the tank starts climbing, which is once
@@ -674,6 +702,7 @@ class PitCrewController(QObject):
         self.bridge.button_probed.connect(self._note_button_probe)
         self.bridge.session_event.connect(self._on_race_event)
         self.bridge.incident_seen.connect(self._on_incident_seen)
+        self.bridge.straight_reached.connect(self._on_straight_reached)
 
         self.event_screen.saved.connect(self._on_event_saved)
         self.event_screen.discarded.connect(self.discard_event_edits)
@@ -2603,6 +2632,11 @@ class PitCrewController(QObject):
             fuel_laps_in_hand=self._laps_of_fuel_in_hand(state),
             wear_worst=self._worst_wear(lap),
             wear_corner=self._worst_wear_corner(lap),
+            # **The straight speaks it now.** Ranked here it displaced a
+            # finding on every lap it fired, and findings are rare where a
+            # number is always available - so the rare thing lost every
+            # collision. See `ColourCalls.data_line`.
+            include_data=False,
         )
         if call is None:
             return
@@ -3974,6 +4008,65 @@ class PitCrewController(QObject):
             # agreement.
             self._exclude_next_lap = (
                 "incident" if intent == REPORT_INCIDENT else "traffic")
+
+    def _live_worst_wear(self) -> tuple[float | None, str | None]:
+        """The worst corner the gauge has read, and which one. (None, None)
+        where it is not reading - never a zero, which would say fresh."""
+        wear = getattr(self, "_wear_now", None)
+        if not wear:
+            return None, None
+        corner, worst = max(wear.items(), key=lambda kv: kv[1])
+        return worst, corner
+
+    def _on_straight_reached(self) -> None:
+        """Qt thread: the car is somewhere he can listen. Read him a number.
+
+        **This is the only thing in the app that speaks mid-lap**, and it is
+        the smallest thing that could: one measured figure, in chatty mode
+        only, at most once a lap.
+
+        *"Agree data should come on straights not corners."* - and the measured
+        reason it needs `race/straight.py` rather than a throttle test is in
+        that module: sustained full throttle alone finds nineteen windows on a
+        Monza lap, several of them above 1.7 g, because the runs are broken by
+        upshifts rather than by corners. Speaking at 2.78 g is worse than
+        speaking in a braking zone. With the lateral gate it is five sensible
+        windows.
+
+        It is not extra radio. The data tier moved OFF the crossing to get
+        here, so the budget is unchanged and the findings it used to displace
+        now get through.
+        """
+        race = self.race
+        if race is None or not race.running or self._colour is None:
+            return
+        state = race.state
+        if state.in_pit or state.finished:
+            return
+        # **Never over the engineer.** A call was made on this lap's crossing,
+        # so the lap has already had its word - and a number read out on top
+        # of a box call is the nine-box-calls defect with a second mouth.
+        if state.last_said_lap == state.lap:
+            return
+        call = self._colour.data_line(
+            lap=state.lap,
+            fuel_laps_in_hand=self._laps_of_fuel_in_hand(state),
+            # **The live gauge, not a lap row.** There is no lap to read here
+            # - this is mid-lap - and `_worst_wear(None)` would return None
+            # for every corner, so the straight would never once carry a wear
+            # figure. `_wear_now` is what the sampler last transcribed, which
+            # is fresher than a stored lap in any case.
+            wear_worst=self._live_worst_wear()[0],
+            wear_corner=self._live_worst_wear()[1],
+            stint_ends_on_lap=state.stint_ends_on_lap)
+        if call is None:
+            return
+        spoken = call.spoken()
+        if self._engineer_speaks:
+            self.voice.say(spoken)
+        self.ptt.last_call = spoken
+        if self.race_screen is not None:
+            self.race_screen.set_status(spoken)
 
     def _on_incident_seen(self) -> None:
         """Qt thread: the car stopped mid-lap. Decide what it is worth.

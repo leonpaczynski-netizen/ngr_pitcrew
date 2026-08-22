@@ -111,6 +111,10 @@ class ColourCalls:
     _best_ms: int | None = None
     _times: list = field(default_factory=list)
     _stint: int = 0
+    # The lap a data line was last read out on. See `data_line`.
+    _data_lap: int | None = None
+    # How many data lines have been said, for the rotation.
+    _data_said: int = 0
 
     def new_stint(self) -> None:
         """A stop has been taken. Every kind is news again."""
@@ -128,7 +132,8 @@ class ColourCalls:
                  laps_firm: bool = True,
                  fuel_laps_in_hand: float | None = None,
                  wear_worst: float | None = None,
-                 wear_corner: str | None = None) -> ColourCall | None:
+                 wear_corner: str | None = None,
+                 include_data: bool = True) -> ColourCall | None:
         """One crossing. Returns at most one call, and usually None.
 
         `wear_reading_age` is laps since the tyre gauge was last read, or None
@@ -166,8 +171,11 @@ class ColourCalls:
             self._record_only(lap_time_ms)
             return None
         if gapped:
-            data = self._data(fuel_laps_in_hand, wear_worst, wear_corner,
-                              lap_time_ms, stint_ends_on_lap, lap)
+            # **`include_data=False` means the caller speaks it elsewhere.**
+            # The straight carries it now; see `data_line`.
+            data = (self._data(fuel_laps_in_hand, wear_worst, wear_corner,
+                               lap_time_ms, stint_ends_on_lap, lap)
+                    if include_data else None)
             self._record_only(lap_time_ms)
             # **`_last_lap` is deliberately not touched.** The gap belongs to
             # the finding kinds - a best lap, a milestone - and extending it
@@ -182,8 +190,9 @@ class ColourCalls:
                 or self._countdown(lap, stint_ends_on_lap)
                 or self._gauge(wear_reading_age)
                 or self._consistency(sigma_s)
-                or self._data(fuel_laps_in_hand, wear_worst, wear_corner,
-                              lap_time_ms, stint_ends_on_lap, lap))
+                or (self._data(fuel_laps_in_hand, wear_worst, wear_corner,
+                                lap_time_ms, stint_ends_on_lap, lap)
+                    if include_data else None))
         self._record_only(lap_time_ms)
         if call is None:
             return None
@@ -192,6 +201,37 @@ class ColourCalls:
         return call
 
     # ---------------------------------------------------------------- kinds
+
+    def data_line(self, *, lap: int, fuel_laps_in_hand=None, wear_worst=None,
+                  wear_corner=None, lap_time_ms=None,
+                  stint_ends_on_lap=None) -> ColourCall | None:
+        """The instrument read out, for somewhere the driver can listen.
+
+        **The same `_data` tier, moved off the crossing.** It was one of the
+        candidates `consider` ranked, which meant that on any lap it fired it
+        displaced a FINDING - a personal best, a milestone, the run-in.
+        Findings are rare by nature and a number is available every lap, so the
+        rare thing lost every time the two collided.
+
+        Spoken on a straight instead, it stops competing: the crossing keeps
+        the findings and the straight carries the number. That is more distinct
+        radio per stint **without one extra call in the budget** - which is the
+        only way to add engagement without undoing the register that stopped
+        the nine-box-calls defect.
+
+        At most once per lap, and the guard is the LAP rather than a timer
+        because `Straight.update` stays true for the whole straight - a caller
+        polling it every frame would otherwise be told yes six hundred times.
+        """
+        if self.level != CHATTY:
+            return None
+        if self._data_lap == lap:
+            return None
+        call = self._data(fuel_laps_in_hand, wear_worst, wear_corner,
+                          lap_time_ms, stint_ends_on_lap, lap)
+        if call is not None:
+            self._data_lap = lap
+        return call
 
     def _fresh(self, kind: str) -> bool:
         held = self._said.get(kind)
@@ -241,7 +281,6 @@ class ColourCalls:
         # wear reading comes and goes, the box countdown ends - so indexing by
         # lap lands on the same entry repeatedly. Measured on eight laps: five
         # of them said fuel.
-        self._data_said = getattr(self, "_data_said", 0)
         call, reason = options[self._data_said % len(options)]
         self._data_said += 1
         return ColourCall(DATA, call, reason)
