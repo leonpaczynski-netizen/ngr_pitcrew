@@ -527,10 +527,25 @@ class _Quantile:
             self.samples = 1
             return self.value
         if sample > self.value:
+            # **Counted even when the step is withheld**, and it was not.
+            # `settled` is a sample count, so returning early here meant a
+            # band sitting below its true value never accumulated any: every
+            # sample was above it, every rise was suppressed, and it could
+            # therefore neither climb nor ever settle. A band stuck in that
+            # state is read back by borrowing a neighbour - and the neighbour
+            # is a lower throttle band with a genuinely lower slip, which is
+            # how the driven axle came to look like it was spinning at
+            # 247 km/h in top gear for a whole practice session.
+            #
+            # Suppressing the STEP is the point. Suppressing the OBSERVATION
+            # was an accident: the estimator still saw the sample, and that
+            # it saw it is what "settled" is counting.
+            self.samples += 1
             if not allow_rise:
                 return self.value
             self.value += self._step * self._q
-        elif sample < self.value:
+            return self.value
+        if sample < self.value:
             self.value -= self._step * (1.0 - self._q)
         self.samples += 1
         return self.value
@@ -569,7 +584,22 @@ class _SlipReference:
 
     def observe(self, throttle: float, slip: float,
                 allow_rise: bool = True) -> None:
-        self._bands[self._index(throttle)].update(slip, allow_rise)
+        """One sample into the band this throttle falls in.
+
+        **A band that has not settled always learns, whatever the caller
+        says.** The caller withholds the rise while an event is running, so a
+        stream that is nothing but wheelspin cannot teach the estimator that
+        wheelspin is normal. That protects a reference which already knows
+        what normal is.
+
+        Applied to a band that does NOT yet know, it is a deadlock: the band
+        starts below its true value, so every honest sample reads as an event,
+        so the rise is withheld for ever and the band never converges. The
+        blanking is a guard on a settled estimate, not a bar on ever forming
+        one.
+        """
+        band = self._bands[self._index(throttle)]
+        band.update(slip, allow_rise or not band.settled)
 
     def value(self, throttle: float) -> float | None:
         """The expected slip at this throttle, or None if nothing has settled."""

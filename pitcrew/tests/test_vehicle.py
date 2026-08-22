@@ -599,3 +599,71 @@ def test_the_braking_cue_stays_quiet_until_it_has_something_to_say():
     assert levels["optimum"] < levels["past it"], (
         "it is no louder past the grip peak than on it, so it says nothing")
     assert levels["past it"] > levels["light"] * 2.5
+
+
+# ------------------------------------- the reference that could never rise
+
+def test_a_band_below_its_true_value_still_settles():
+    """**The deadlock that made the RSR spin its wheels at 247 km/h.**
+
+    `allow_rise=False` withholds the upward step so a stream that is nothing
+    but wheelspin cannot teach the estimator that wheelspin is normal. But it
+    used to return BEFORE `samples += 1`, and `settled` is a sample count.
+
+    A band sitting below its true value therefore saw every honest sample as
+    an event: rise suppressed, sample uncounted, band never settled, for ever.
+    An unsettled band is read back by borrowing a neighbour, and the
+    neighbours are lower throttle bands with genuinely lower slip - so full
+    throttle was measured against a part-throttle reference and the excess
+    became a constant. Practice, 22 Aug 2026: EXCESSIVE_WHEELSPIN at 0.54-0.58
+    at every speed from 209 to 247 km/h, 56 samples against 9 GRIPPED.
+    """
+    from pitcrew.rig import vehicle
+
+    q = vehicle._Quantile(vehicle.REFERENCE_QUANTILE, vehicle.REFERENCE_STEP,
+                          settle_frames=100, initial=0.008)
+    # Every sample above the value, every rise withheld - the locked state.
+    for _ in range(500):
+        q.update(0.032, allow_rise=False)
+    assert q.value == 0.008, "the step was not actually withheld"
+    assert q.settled, (
+        "a blanked sample was not counted, so the band can never settle and "
+        "will be read back by borrowing a neighbour for ever")
+
+
+def test_an_unsettled_band_learns_whatever_the_caller_says():
+    """The blanking guards a reference that already knows what normal is. A
+    band that does not yet know must be free to find its level, or it starts
+    low, reads every honest sample as an event, and stays low."""
+    from pitcrew.rig import vehicle
+
+    ref = vehicle._SlipReference()
+    # Full throttle, true slip well above where the band starts, and the
+    # caller withholding the rise on every single sample.
+    for _ in range(vehicle.REFERENCE_SETTLE_FRAMES * 3):
+        ref.observe(1.0, 0.032, allow_rise=False)
+
+    learned = ref.value(1.0)
+    assert learned is not None, "the full-throttle band never settled"
+    assert learned > 0.02, (
+        f"the band stayed at {learned:.4f} against a true 0.032 - it could "
+        f"not climb, so normal driving reads as wheelspin")
+
+
+def test_a_settled_band_is_still_protected_from_the_event():
+    """The other half must still hold: once a band knows what normal is, ten
+    seconds of held wheelspin must not move it. That is what the blanking is
+    for and it is why the cue survives being used at the limit."""
+    from pitcrew.rig import vehicle
+
+    ref = vehicle._SlipReference()
+    for _ in range(vehicle.REFERENCE_SETTLE_FRAMES * 2):
+        ref.observe(1.0, 0.030)
+    settled = ref.value(1.0)
+    assert settled is not None
+
+    for _ in range(600):                       # ten seconds of a held slide
+        ref.observe(1.0, 0.200, allow_rise=False)
+    after = ref.value(1.0)
+    assert after <= settled + 1e-9, (
+        f"the reference learned the event: {settled:.4f} -> {after:.4f}")
