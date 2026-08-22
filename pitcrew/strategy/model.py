@@ -25,7 +25,7 @@ import math
 import statistics
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
-from itertools import product
+from itertools import permutations, product
 
 from pitcrew.store.tyres import get_by_code
 
@@ -1223,13 +1223,63 @@ def _candidate_sequences(inputs: RaceInputs, stints: int) -> list[list[str] | No
         # there is no choice to search over.
         return [_compound_sequence(inputs, stints)]
 
-    if len(available) ** stints > MAX_CANDIDATES:
-        # Too wide to enumerate honestly. Fall back to the assignments worth
-        # most: every stint on one compound, for each compound. The narrowing
-        # is reported in the plan's notes rather than passed off as a search.
-        return [[code] * stints for code in available]
+    if len(available) ** stints <= MAX_CANDIDATES:
+        return [list(combo) for combo in product(available, repeat=stints)]
 
-    return [list(combo) for combo in product(available, repeat=stints)]
+    # Too wide to enumerate honestly. Fall back to the assignments worth
+    # most: every stint on one compound, for each compound.
+    #
+    # **But a uniform sequence cannot contain two DIFFERENT required
+    # compounds, so on its own this narrowing makes every candidate illegal
+    # and the race unplannable.** Measured: nine profiled compounds, four
+    # stints, `required_compounds=("RS", "RH")`. 9**4 = 6561 exceeds the cap,
+    # every candidate becomes uniform, `legal()` rejects all of them, and
+    # `recommend` raises "no plan satisfies the regulations - check mandatory
+    # stops and required compounds" - blaming the regulations for the search.
+    # With the cap lifted the same inputs yield **11,090 legal plans** and a
+    # perfectly good three-stop answer.
+    #
+    # So the narrowed set is seeded with the required compounds placed into
+    # a uniform base, every way round. That is `compounds x P(stints, r)`
+    # sequences - 117 for the case above against 6561 - and it guarantees the
+    # narrowed search can still reach a legal plan, which is the one property
+    # a narrowing must not cost.
+    seen: set[tuple[str, ...]] = set()
+    narrowed: list[list[str]] = []
+
+    def offer(sequence: list[str]) -> None:
+        key = tuple(sequence)
+        if key not in seen:
+            seen.add(key)
+            narrowed.append(sequence)
+
+    for code in available:
+        offer([code] * stints)
+
+    required = [code for code in inputs.required_compounds
+                if code in available]
+    # More required compounds than stints is genuinely impossible and the
+    # refusal for it is honest, so nothing is seeded and `legal` says so.
+    if required and len(required) <= stints:
+        for base in available:
+            for slots in permutations(range(stints), len(required)):
+                sequence = [base] * stints
+                for slot, code in zip(slots, required):
+                    sequence[slot] = code
+                offer(sequence)
+    return narrowed
+
+
+def _search_was_narrowed(inputs: RaceInputs, stints: int) -> bool:
+    """Whether `_candidate_sequences` had to fall back for this width.
+
+    Read by `recommend` so a refusal can say which of the two things
+    happened. "No plan satisfies the regulations" is a statement about the
+    regulations; if the search was narrowed it may instead be a statement
+    about the search, and the driver cannot tell those apart from the outside.
+    """
+    available = inputs.planning_compounds()
+    return bool(available) and len(available) ** stints > MAX_CANDIDATES
 
 
 def recommend(inputs: RaceInputs, *, max_stops: int = 4) -> list[Plan]:
@@ -1261,16 +1311,33 @@ def recommend(inputs: RaceInputs, *, max_stops: int = 4) -> list[Plan]:
             "no reference lap time - run a practice lap first")
 
     plans: list[Plan] = []
+    narrowed_widths: list[int] = []
     for stops in range(0, max_stops + 1):
         stints = stops + 1
         if stints > inputs.race_laps:
             break
+        if _search_was_narrowed(inputs, stints):
+            narrowed_widths.append(stints)
         for sequence in _candidate_sequences(inputs, stints):
             plan = build_plan(inputs, stops, sequence)
             if legal(plan, inputs):
                 plans.append(plan)
 
     if not plans:
+        # **Say which of the two things happened.** "No plan satisfies the
+        # regulations" is a claim about the regulations, and the driver acts
+        # on it by changing them. If the search was narrowed it may instead
+        # be a claim about the search, and he cannot tell from the outside -
+        # so when both are true, both are said.
+        if narrowed_widths:
+            raise StrategyImpossible(
+                f"no plan satisfies the regulations - but the compound "
+                f"search was also narrowed at "
+                f"{', '.join(str(n) for n in narrowed_widths)} stint(s) "
+                f"because {len(inputs.planning_compounds())} profiled "
+                f"compounds is too wide to enumerate, so this may be the "
+                f"search rather than the rules. Check mandatory stops and "
+                f"required compounds first.")
         raise StrategyImpossible(
             "no plan satisfies the regulations - check mandatory stops and "
             "required compounds")

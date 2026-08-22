@@ -555,3 +555,110 @@ def test_both_race_shapes_pass_the_contracts_key_check():
     for shape in (lap_race, timed):
         payload = {"strategy": build_plan(shape, stops=1).as_export(shape)}
         assert _validate_known_keys(payload) == []
+
+
+# ------------------------- the narrowing that blamed the rules for itself
+
+def _wide_inputs(compounds: int, *, required=("RS", "RH"), stops: int = 3):
+    """Enough profiled compounds that the search has to narrow."""
+    from pitcrew.strategy.model import CompoundProfile, RaceInputs
+
+    base = [("RS", 0.0, 0.052), ("RM", 0.55, 0.038), ("RH", 1.25, 0.028),
+            ("X4", 1.8, 0.024), ("X5", 2.3, 0.021), ("X6", 2.9, 0.018),
+            ("X7", 3.4, 0.016), ("X8", 4.0, 0.014), ("X9", 4.6, 0.012)]
+    picked = base[:compounds]
+    return RaceInputs(
+        available_compounds=[c for c, _p, _w in picked],
+        race_laps=27, lap_time_ms=95_000, fuel_per_lap_l=6.1,
+        fuel_capacity_l=100.0, pit_loss_s=20.0, wear_per_lap=0.04,
+        mandatory_stops=stops, required_compounds=list(required),
+        compound_profiles={c: CompoundProfile(code=c, pace_delta_s=p,
+                                              wear_per_lap=w,
+                                              source="MEASURED")
+                           for c, p, w in picked},
+        evidence_compound="RS")
+
+
+def test_a_narrowed_search_can_still_reach_a_legal_plan():
+    """**The narrowing used to make every candidate illegal.**
+
+    Above `MAX_CANDIDATES` the search falls back to uniform sequences - every
+    stint on one compound. A uniform sequence cannot contain two DIFFERENT
+    required compounds, so with `required_compounds=("RS", "RH")` every
+    candidate was illegal and `recommend` raised "no plan satisfies the
+    regulations", blaming the rules for its own truncation.
+
+    Measured on nine profiled compounds at four stints: 9**4 = 6561 exceeds
+    the cap, and with it lifted the same inputs give **11,090 legal plans**.
+    The race was always plannable; the search could not see it.
+    """
+    from pitcrew.strategy.model import MAX_CANDIDATES, recommend
+
+    inputs = _wide_inputs(9)
+    assert len(inputs.planning_compounds()) ** 4 > MAX_CANDIDATES, (
+        "this test no longer exercises the narrowing")
+
+    plans = recommend(inputs)
+    assert plans, "a plannable race was refused"
+    best = plans[0]
+    used = {stint.compound for stint in best.stints}
+    assert {"RS", "RH"} <= used, (
+        f"the winning plan does not carry the required compounds: {used}")
+
+
+def test_narrowing_adds_options_without_changing_the_answer():
+    """A narrowed search must never LOSE a plan it used to find, and must not
+    move the recommendation. Six compounds narrow at five stints but not at
+    four, so this exercises both sides of the cap in one race."""
+    from pitcrew.strategy.model import recommend
+
+    plans = recommend(_wide_inputs(6))
+    best = plans[0]
+    assert best.stops == 3
+    assert {"RS", "RH"} <= {stint.compound for stint in best.stints}
+    # Every plan the search returns must be legal, narrowed or not.
+    for plan in plans:
+        used = {stint.compound for stint in plan.stints if stint.compound}
+        assert {"RS", "RH"} <= used, f"an illegal plan was returned: {used}"
+
+
+def test_more_required_compounds_than_stints_is_an_honest_refusal():
+    """The one case where the refusal really is about the regulations: three
+    compounds required and two stints to put them in. Nothing is seeded and
+    nothing should be."""
+    from pitcrew.strategy.model import StrategyImpossible, recommend
+
+    inputs = _wide_inputs(9, required=("RS", "RM", "RH"), stops=1)
+    with pytest.raises(StrategyImpossible):
+        recommend(inputs, max_stops=1)
+
+
+def test_a_refusal_says_whether_the_search_was_narrowed():
+    """He acts on "no plan satisfies the regulations" by changing the
+    regulations. If the search was ALSO narrowed that may be the wrong
+    action, and he cannot tell from the outside - so the message says both.
+
+    Here the regulations demand more stops than the search will consider, so
+    the refusal is genuine; but nine compounds at four and five stints are
+    both over the cap, so the narrowing is genuine too. Both are true and the
+    driver needs both.
+    """
+    from pitcrew.strategy.model import StrategyImpossible, recommend
+
+    inputs = _wide_inputs(9, stops=6)
+    with pytest.raises(StrategyImpossible) as caught:
+        recommend(inputs, max_stops=4)
+    message = str(caught.value)
+    assert "regulations" in message, message
+    assert "narrowed" in message, message
+
+
+def test_a_refusal_that_is_only_about_the_rules_does_not_blame_the_search():
+    """The other half: three compounds never narrow, so the plain message is
+    the honest one and the caveat must not be added to it."""
+    from pitcrew.strategy.model import StrategyImpossible, recommend
+
+    inputs = _wide_inputs(3, stops=6)
+    with pytest.raises(StrategyImpossible) as caught:
+        recommend(inputs, max_stops=4)
+    assert "narrowed" not in str(caught.value), str(caught.value)
