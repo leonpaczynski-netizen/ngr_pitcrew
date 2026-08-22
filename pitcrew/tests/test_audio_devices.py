@@ -29,6 +29,10 @@ class FakePortAudio:
         # Device indices that refuse to open, by way of the host API they are
         # on: WASAPI refusing 22050 Hz is the case that matters.
         self.refuse: set = set()
+        # Counted, because `_terminate` over an open stream is an access
+        # violation rather than an exception - there is nothing to assert on
+        # except whether it was called at all.
+        self.terminated = 0
 
     def query_devices(self):
         return self._devices
@@ -39,7 +43,7 @@ class FakePortAudio:
         return self._hostapis[index]
 
     def _terminate(self):
-        pass
+        self.terminated += 1
 
     def _initialize(self):
         pass
@@ -784,3 +788,55 @@ def test_an_unknown_field_is_never_reported_as_a_change(monkeypatch):
     assert silent.mismatches() == []
     assert silent.differences(was) == []
     assert was.differences(None) == []
+
+
+# -------------------------------- terminating over an open stream is fatal
+
+def test_a_rebuild_that_could_not_wait_out_a_line_does_not_terminate(
+        monkeypatch):
+    """**`Pa_Terminate` over an open stream does not raise. It kills the
+    process.** Measured 22 Aug 2026, twice, from this exact call:
+
+        the engineer's line was still playing after 6.0s, so the audio
+        devices were rebuilt underneath it and it was cut off
+        PortAudioError: Unanticipated host error [PaErrorCode -9999]
+        Windows fatal exception: access violation
+          sounddevice.py:2952 in _terminate
+          audio_devices.py in _reinitialise
+
+    The wait is bounded on purpose - one that could not time out would let a
+    stuck engine hold off a transducer recovery for a whole race. But
+    reaching the cap and re-enumerating anyway trades a cut sentence for a
+    dead app, and he loses the session rather than one line of it. The cap
+    now ends the rebuild, not the wait.
+    """
+    monkeypatch.setattr(audio_devices, "DEFER_CAP_S", 0.05)
+    machine = _machine()
+    with _Speaking("the engineer"):
+        audio_devices._reinitialise(machine)
+
+    assert machine.terminated == 0, (
+        "PortAudio was terminated while a line was still playing - that is "
+        "an access violation, not an exception, and it takes the app down")
+
+
+def test_a_sustained_stream_that_will_not_suspend_stops_the_rebuild():
+    """Same rule, other route in: a holder that would not let go still has
+    its stream open, and that is the condition under which terminating is
+    fatal rather than merely unhelpful. It must still be resumed."""
+    held = _Sustained()
+
+    def refuse() -> None:
+        held.suspended += 1
+        raise RuntimeError("the card is mid-reset")
+
+    held.suspend = refuse
+    audio_devices.register_sustained(held)
+    machine = _machine()
+    try:
+        audio_devices._reinitialise(machine)
+        assert machine.terminated == 0, (
+            "terminated with a sustained stream still open")
+        assert held.resumed == 1, "left suspended for the rest of the session"
+    finally:
+        audio_devices.unregister_sustained(held)

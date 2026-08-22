@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 
 from pathlib import Path
@@ -64,6 +65,61 @@ ICON = Path(__file__).resolve().parent.parent / "pitcrew.ico"
 # grouped under the interpreter, so a pinned shortcut and the running window
 # appear as two separate buttons with two different icons.
 APP_ID = "NextGearRacing.PitCrew"
+
+
+# Held for the life of the process. A named mutex is released by Windows when
+# the process ends, however it ends - including a kill - so it cannot be left
+# stale by a crash the way a lock file can.
+_INSTANCE_MUTEX = None
+
+
+def _claim_sole_instance() -> str | None:
+    """Refuse to start if another Pit Crew already owns the rig.
+
+    **Two copies fighting over one rig is how a bad session became an
+    unrecoverable one.** 22 Aug 2026: an instance was left running, a second
+    was started, and between them they held COM5 against each other, rendered
+    two haptic streams into the same endpoint until it degraded, and thrashed
+    the recovery ladder until PortAudio was terminated over an open stream
+    and took the process down. The wind, the transducer and the microphone
+    are single-owner devices; nothing about this app is safe to run twice.
+
+    Returns None when this process is the only one, or a sentence to show and
+    log when it is not. Never raises - a machine where the mutex cannot be
+    created is a machine that should still be able to race.
+
+    `PITCREW_ALLOW_MULTIPLE=1` overrides, for a developer running a second
+    copy against a different database on purpose.
+    """
+    global _INSTANCE_MUTEX
+    if os.environ.get("PITCREW_ALLOW_MULTIPLE") == "1":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        ERROR_ALREADY_EXISTS = 183
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL,
+                                          wintypes.LPCWSTR)
+        # `Local\` scopes it to this login session, which is the right scope:
+        # two desktops on one machine are two rigs.
+        handle = kernel32.CreateMutexW(None, False, "Local\\" + APP_ID)
+        if not handle:
+            return None
+        _INSTANCE_MUTEX = handle
+        if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+            return (
+                "Pit Crew is already running. Two copies cannot share the "
+                "rig - they hold the wind controller against each other and "
+                "render two haptic streams into one transducer, which is "
+                "what breaks it. Close the other window and start again. If "
+                "there is no other window, a previous copy is stuck and the "
+                "machine needs restarting.")
+    except Exception:                            # noqa: BLE001
+        return None                              # not Windows, or too old
+    return None
 
 
 def _claim_taskbar_identity() -> None:
@@ -382,6 +438,16 @@ def main() -> int:
 
     _claim_taskbar_identity()
     app = QApplication(sys.argv)
+    # **Before the store, the controller, or any device.** Checked after
+    # QApplication exists so the refusal can be shown rather than only
+    # logged - the shortcut runs this through pythonw, which has no console,
+    # so a bare exit here would look exactly like the app failing to start.
+    taken = _claim_sole_instance()
+    if taken is not None:
+        diagnostics.log().error(taken)
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(None, "Pit Crew is already running", taken)
+        return 0
     if ICON.exists():
         app.setWindowIcon(QIcon(str(ICON)))
     theme.apply(app)

@@ -327,8 +327,12 @@ def open_and_declare(what: str, open_stream):
         return stream, begin_playback(what)
 
 
-def _wait_for_playback(cap: float | None = None) -> None:
+def _wait_for_playback(cap: float | None = None) -> list:
     """Hold a device-list rebuild until the sound in flight has finished.
+
+    Returns the playbacks still in flight at the cap - empty when the wait
+    came out clean. **The caller must not re-enumerate over a non-empty
+    return**; see `_reinitialise`.
 
     Bounded, always. A wait that could not time out would let a stuck engine
     hold off the settings picker, or a transducer recovery, for the rest of
@@ -348,7 +352,7 @@ def _wait_for_playback(cap: float | None = None) -> None:
     started = time.monotonic()
     with _PLAYING_STATE:
         if not _PLAYING:
-            return
+            return []
         others = [p for p in _PLAYING if p.thread != mine]
         labels = ", ".join(sorted({p.what for p in _PLAYING}))
         while others:
@@ -375,6 +379,7 @@ def _wait_for_playback(cap: float | None = None) -> None:
             "that re-enumerates is more urgent than that: a device picker is "
             "a screen he is reading, and a sentence he only half hears cannot "
             "be got back.", waited, labels)
+    return cut
 
 
 # Which route to a card to try first. A headset is reachable through several
@@ -721,16 +726,58 @@ def _reinitialise(sd) -> None:
     haptics in order to protect the voice, which is paying for the fix with
     the thing the fix is for.
     """
-    _wait_for_playback()
+    # **`Pa_Terminate` over an open stream does not raise. It takes the
+    # process down.** Measured 22 Aug 2026, twice, from this exact call:
+    #
+    #     the engineer's line was still playing after 6.0s, so the audio
+    #     devices were rebuilt underneath it and it was cut off
+    #     PortAudioError: Unanticipated host error [PaErrorCode -9999]
+    #     Windows fatal exception: access violation
+    #       sounddevice.py:2952 in _terminate
+    #       audio_devices.py in _reinitialise
+    #
+    # `_wait_for_playback` is bounded on purpose - a wait that could not time
+    # out would let a stuck engine hold off a transducer recovery for the
+    # rest of a race - but reaching the cap and then re-enumerating anyway
+    # trades a cut sentence for a dead app, and the driver loses the whole
+    # session rather than one line of it.
+    #
+    # So the cap now ends the REBUILD, not the wait. A stale device list is
+    # exactly what we already had and is survivable; the caller's strict
+    # check will refuse on its own if the card it wants is genuinely gone.
+    still_playing = _wait_for_playback()
+    if still_playing:
+        log("audio").error(
+            "not re-enumerating the audio devices: %s is still playing after "
+            "the wait, and terminating PortAudio over an open stream kills "
+            "the process rather than raising. The device list stays as it "
+            "was.", ", ".join(sorted({p.what for p in still_playing})))
+        return
     _WORKING.clear()
     with _SUSTAINED_GUARD:
         holders = list(_SUSTAINED)
+    unsuspended = []
     for holder in holders:
         try:
             holder.suspend()
         except Exception as exc:                # noqa: BLE001
+            unsuspended.append(holder)
             log("audio").warning("could not suspend %s before re-enumerating: "
                                  "%s", holder, exc)
+    if unsuspended:
+        # Same rule, same reason: a sustained holder that would not let go
+        # still has its stream open, and that is the one condition under
+        # which terminating is fatal rather than merely unhelpful.
+        log("audio").error(
+            "not re-enumerating the audio devices: %d sustained stream(s) "
+            "would not suspend, and terminating over an open stream kills "
+            "the process.", len(unsuspended))
+        for holder in holders:
+            try:
+                holder.resume()
+            except Exception as exc:            # noqa: BLE001
+                log("audio").error("%s did not come back: %s", holder, exc)
+        return
     try:
         sd._terminate()
         sd._initialize()
