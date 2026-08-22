@@ -531,6 +531,20 @@ class ObsSource:
 
 # OBS's projector windows, whose client area IS the canvas - which is what
 # makes this self-locating rather than a rectangle he has to calibrate.
+#
+# **Matched on the word alone, because OBS renamed them.** The tuple below is
+# what OBS 30 called these windows; **OBS 32.2.2 titles the same window
+# `Projector - Preview`**, which matches none of them. Measured 22 Aug 2026
+# with a projector open and the reader insisting none was - the message even
+# told him to open the thing that was already open.
+#
+# So the test is the word "projector" and the client area, not a title
+# format that changes between releases. The size check is what actually
+# guards against reading the wrong window, and it is exact.
+PROJECTOR_WORD = "projector"
+# Kept only to prefer the program feed where both are open - it is the real
+# output, and a preview projector can be showing a different scene.
+PROJECTOR_PREFERRED = ("program",)
 PROJECTOR_TITLES = ("windowed projector (program)",
                     "windowed projector (preview)",
                     "fullscreen projector (program)")
@@ -566,7 +580,7 @@ class ScreenSource:
                 return
             title = win32gui.GetWindowText(hwnd) or ""
             low = title.lower()
-            if not any(name in low for name in PROJECTOR_TITLES):
+            if PROJECTOR_WORD not in low:
                 return
             if self.title_hint and self.title_hint not in low:
                 return
@@ -579,12 +593,17 @@ class ScreenSource:
         if not hits:
             return None, ("no OBS projector window is open - right click the "
                           "preview in OBS and choose Windowed Projector "
-                          "(Program)")
+                          "(Program), then size it to "
+                          f"{CANVAS[0]}x{CANVAS[1]}")
         # **The first, and it is said when there are others.** Two projectors
         # showing different scenes would otherwise be chosen between silently.
+        # The program feed first where both are open: it is the real output,
+        # and a preview projector can be showing a different scene entirely.
+        hits.sort(key=lambda hit: 0 if any(
+            word in hit[1].lower() for word in PROJECTOR_PREFERRED) else 1)
         if len(hits) > 1:
             _log.info(f"hud-wear: {len(hits)} projector windows open, using "
-                f"{hits[0][1]!r}")
+                      f"{hits[0][1]!r}")
         return hits[0], None
 
     def grab(self):
