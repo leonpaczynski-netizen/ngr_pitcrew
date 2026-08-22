@@ -555,45 +555,4 @@ def parse_packet(data: bytes) -> GT7Packet | None:
 # Voice / display formatting helpers
 # ---------------------------------------------------------------------------
 
-def format_laptime_voice(ms: int) -> str:
-    """Return ms as spoken lap time, e.g. '1 minute 12 seconds'."""
-    if ms <= 0:
-        return "no time"
-    total_sec = ms // 1000
-    minutes, seconds = divmod(total_sec, 60)
-    if minutes == 0:
-        return f"{seconds} second{'s' if seconds != 1 else ''}"
-    return (f"{minutes} minute{'s' if minutes != 1 else ''} "
-            f"{seconds} second{'s' if seconds != 1 else ''}")
 
-
-def format_delta_voice(ms: int) -> str:
-    """Return a delta in ms as spoken text, e.g. 'plus 1 point 8 seconds'."""
-    sign = "plus" if ms >= 0 else "minus"
-    abs_ms = abs(ms)
-    seconds = abs_ms // 1000
-    tenths  = (abs_ms % 1000) // 100
-    if tenths == 0:
-        return f"{sign} {seconds} second{'s' if seconds != 1 else ''}"
-    return f"{sign} {seconds} point {tenths} seconds"
-
-
-def format_remaining_time_voice(ms: int) -> str:
-    """Return remaining time in ms as speech, e.g. '14 minutes 30 seconds'."""
-    total_sec = max(ms // 1000, 0)
-    minutes, seconds = divmod(total_sec, 60)
-    if minutes > 0 and seconds > 0:
-        return (f"{minutes} minute{'s' if minutes != 1 else ''} "
-                f"{seconds} second{'s' if seconds != 1 else ''}")
-    if minutes > 0:
-        return f"{minutes} minute{'s' if minutes != 1 else ''}"
-    return f"{seconds} second{'s' if seconds != 1 else ''}"
-
-
-def format_laptime_display(ms: int) -> str:
-    """Return ms as M:SS.mmm for UI display."""
-    if ms <= 0:
-        return "--:--.---"
-    minutes, remainder = divmod(ms, 60000)
-    seconds, millis = divmod(remainder, 1000)
-    return f"{minutes}:{seconds:02d}.{millis:03d}"

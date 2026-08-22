@@ -348,11 +348,3 @@ def exclusion_note(laps: list[LapInput]) -> str:
     return "Driver's account of the struck laps: " + ", ".join(parts) + "."
 
 
-def laps_per_stint(laps: list[LapInput]) -> list[list[LapInput]]:
-    """Split at every pit lap, so wear is never fitted across a tyre change."""
-    stints: list[list[LapInput]] = [[]]
-    for lap in laps:
-        stints[-1].append(lap)
-        if lap.is_pit_lap:
-            stints.append([])
-    return [stint for stint in stints if stint]

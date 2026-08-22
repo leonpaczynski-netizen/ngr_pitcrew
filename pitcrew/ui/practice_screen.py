@@ -276,40 +276,6 @@ def format_delta(ms: int) -> str:
     return f"{'+' if ms > 0 else '−'}{abs(ms) / 1000:.3f}"
 
 
-class SessionBreak(QWidget):
-    """Where one day's running stopped and the next started.
-
-    Laps at an event accumulate across every session, which is what makes
-    coming back tomorrow work at all - but without a break in the rack, three
-    evenings of running read as one continuous run, and the tyre stint
-    structure looks like it spans days.
-    """
-
-    HEIGHT = 30
-
-    def __init__(self, started_at: str | None,
-                 parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setFixedHeight(self.HEIGHT)
-        row = QHBoxLayout(self)
-        row.setContentsMargins(CompoundBand.WIDTH + 8, 0, 16, 0)
-        row.setSpacing(theme.GAP)
-
-        when = "New run"
-        if started_at:
-            # Stored as an ISO timestamp; the date and the hour are what
-            # matter, the seconds are noise.
-            when = started_at[:16].replace("T", " ")
-        label = StencilLabel(when, size=10, colour=theme.STENCIL_DIM,
-                             tracking=14.0)
-        row.addWidget(label)
-
-        rule = QWidget()
-        rule.setFixedHeight(1)
-        rule.setStyleSheet(f"background: {theme.TREAD};")
-        row.addWidget(rule, 1)
-
-
 class StintHeader(QWidget):
     """What one stint did, above the laps that did it.
 
@@ -588,6 +554,72 @@ class RackRow(QWidget):
                 "Restore" if self.row.excluded else "Strike")
 
 
+class FindingRow(QWidget):
+    """One thing the stint says about one corner.
+
+    Registered like everything else: the corner id came off the stored model
+    and the sample count off the laps, so both are **stencil**; the claim is
+    something the app worked out from them, so it is **derived**. The two inks
+    beside each other are the whole point - a reader can see at a glance which
+    half is the measurement and which half is the reading of it.
+    """
+
+    def __init__(self, finding, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 5, 0, 5)
+        row.setSpacing(theme.GAP)
+
+        corner = Measured(str(finding.corner_id), colour=theme.STENCIL)
+        corner.setFixedWidth(38)
+        row.addWidget(corner)
+
+        text = QVBoxLayout()
+        text.setSpacing(0)
+        # **Wrapping, because these are sentences.** Set `wrap=False` they
+        # each demanded their full single-line width - a finding runs to a
+        # hundred characters - and the plate grew a horizontal bar rather than
+        # a second line. DESIGN.md records the same trap twice already, for
+        # field hints and for combo boxes.
+        text.addWidget(BodyLabel(finding.detail, colour=theme.DERIVED))
+        row.addLayout(text, 1)
+
+        # **The sample count is not decoration and never elided.** CLAUDE.md
+        # §4.4: a corner metric from two laps and one from eleven are not the
+        # same claim, and a finding shown without its count is the second one
+        # wearing the first one's authority.
+        laps = Measured(f"{finding.samples} laps", colour=theme.STENCIL_DIM,
+                        size=13)
+        row.addWidget(laps, 0, Qt.AlignmentFlag.AlignVCenter)
+
+
+class OpportunityRow(QWidget):
+    """Where the gap between his average and his good laps is widest.
+
+    **Chalk, because it is an annotation rather than a finding.** The module
+    that produces these refuses to claim significance for any single row - the
+    ORDERING is the content - and chalk is this world's ink for exactly that:
+    provisional, worth reading, not a measurement and not a verdict.
+    """
+
+    def __init__(self, item, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 3, 0, 3)
+        row.setSpacing(theme.GAP)
+
+        corner = Measured(str(item.corner_id), colour=theme.STENCIL)
+        corner.setFixedWidth(38)
+        row.addWidget(corner)
+        row.addWidget(Measured(f"{item.gap_ms:.0f} ms", colour=theme.CHALK),
+                      0, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(BodyLabel("between your average and your good laps",
+                                size=13, colour=theme.STENCIL_DIM), 1)
+        row.addWidget(Measured(f"{item.samples} laps",
+                               colour=theme.STENCIL_DIM, size=13), 0,
+                      Qt.AlignmentFlag.AlignVCenter)
+
+
 class PracticeScreen(QWidget):
     """The rack, its spec line, and the export that ends the session."""
 
@@ -596,6 +628,10 @@ class PracticeScreen(QWidget):
     recording_toggled = pyqtSignal(bool)
     practice_mode_changed = pyqtSignal(str)
     practice_intent_changed = pyqtSignal(str)
+    # He asked for the stint to be read. Computed on
+    # demand rather than at every rebuild: it decompresses every
+    # lap's frames, which is not a thing to do on a repaint.
+    debrief_requested = pyqtSignal()
     coach_speaks_changed = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -692,9 +728,168 @@ class PracticeScreen(QWidget):
         self.spec = SpecLine()
         page.addWidget(self.spec)
 
-        page.addWidget(self._rack_plate(), 1)
+        # **The rack and the debrief scroll together, and this screen is the
+        # second to need it.** Settings shipped without a page bar and stood
+        # 1,291 px tall against a display that gives 501; the guard test
+        # written afterwards is what caught this one at 548. The debrief is
+        # not chrome that could be trimmed to fit - it is a second thing to
+        # read - so the screen gets the bar rather than the content getting
+        # cut.
+        #
+        # The rack keeps its stretch, so on the 1440 px monitor it still takes
+        # the room and the bar never appears. It appears on the small display,
+        # which is the display it exists for.
+        #
+        # Below the rack rather than beside it: the rack is what he marks up
+        # and the debrief is what he reads once he has, and side by side would
+        # halve the rack on the screen whose subject the rack is.
+        body = QWidget()
+        stack = QVBoxLayout(body)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(theme.GAP_WIDE)
+        # The rack still takes the spare room - it is the subject of the
+        # screen and the debrief is what he reads once he has marked it up.
+        stack.addWidget(self._rack_plate(), 1)
+        stack.addWidget(self._debrief_plate())
+
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroller.setWidget(body)
+        page.addWidget(scroller, 1)
+        # Outside the scroller, so the export he came here for cannot be
+        # scrolled away from - the same rule the Settings footer follows.
         page.addLayout(self._footer())
         self.refresh()
+
+    def _debrief_plate(self) -> Plate:
+        """What the stint says, read afterwards with the headset off.
+
+        **This is not a live instrument and could not be one.** Live corner
+        coaching was designed, measured against 307 recorded laps and refuted:
+        a corner metric is RELATIVELY NOISIER than a whole lap - corner time
+        2 sd of 4-6% against a lap's 1.66% - and `brake_point_m` carries 14-37 m
+        at the median corner. There is no circuit on file where "move your
+        marker back ten metres" is a sentence this app may say.
+
+        What survives is the read afterwards, over as many laps as it takes,
+        with the sample count on every claim. So it lives here, below the rack,
+        on the screen he returns to between stints.
+        """
+        plate = Plate("What the stint says")
+        # **No standing paragraph.** It said what the `EmptyState` inside the
+        # well already says, and the plate's minimum is the whole budget on
+        # this screen: measured, the header, spec, rack and footer leave 126 px
+        # and a three-line caption plus the well wanted 210. The explanation
+        # belongs on the control that does the thing.
+        row = QHBoxLayout()
+        row.setSpacing(theme.GAP)
+        self.debrief_button = MarkButton("Read the stint", compact=True)
+        self.debrief_button.setToolTip(
+            "Every claim is measured against your own lap-to-lap scatter in "
+            "these very laps, so a quiet corner means the app cannot see "
+            "anything there - which is not the same as nothing being wrong. "
+            "Read after a run, never during one: live corner coaching was "
+            "measured against 307 laps and refuted, because a corner metric "
+            "is noisier than a whole lap.")
+        self.debrief_button.clicked.connect(self.debrief_requested.emit)
+        row.addWidget(self.debrief_button)
+        self.debrief_note = BodyLabel("", size=13, colour=theme.CHALK)
+        row.addWidget(self.debrief_note, 1)
+        plate.body.addLayout(row)
+
+        # **No well of its own.** It had one, bounded to 300 px, and that was
+        # solving the wrong problem: the screen's height was fixed by giving
+        # the PAGE a bar, and once it had one a second bar inside the plate
+        # only capped the read while the rack took the rest of the room. The
+        # plate sizes to what the read actually found and the page scrolls.
+        self.debrief_body = QVBoxLayout()
+        self.debrief_body.setContentsMargins(0, 0, 0, 0)
+        self.debrief_body.setSpacing(0)
+        plate.body.addLayout(self.debrief_body)
+
+        self.debrief_empty = EmptyState(
+            "Nothing read yet.",
+            needs=("a run with at least six clean laps in it",))
+        self.debrief_body.addWidget(self.debrief_empty)
+        self.debrief_body.addStretch(1)
+        return plate
+
+    def clear_debrief(self) -> None:
+        """Empty the well, keeping the sentinel alive.
+
+        `EmptyState` is detached rather than destroyed - the same rule the rack
+        follows - so a read that finds nothing can say so again.
+        """
+        while self.debrief_body.count():
+            item = self.debrief_body.takeAt(0)
+            widget = item.widget()
+            if widget is not None and widget is not self.debrief_empty:
+                widget.deleteLater()
+        self.debrief_body.addWidget(self.debrief_empty)
+        self.debrief_body.addStretch(1)
+        self.debrief_empty.setVisible(True)
+
+    def show_debrief(self, report) -> None:
+        """Render one `analysis.corner_findings.Report`.
+
+        **The silent corners are rendered, not omitted.** They are the half
+        that stops silence reading as health, and leaving them out would turn
+        an honest "I cannot see anything here" into an implied all-clear.
+        """
+        self.clear_debrief()
+        self.debrief_empty.setVisible(False)
+        self.debrief_note.setText(report.summary())
+        # **Drop the trailing stretch before appending.** Left in place every
+        # row lands below it and the whole read renders pinned to the bottom
+        # of the well, which is how a list that starts at the top comes to
+        # start halfway down.
+        last = self.debrief_body.count() - 1
+        if last >= 0 and self.debrief_body.itemAt(last).spacerItem():
+            self.debrief_body.takeAt(last)
+
+        def heading(text: str) -> None:
+            label = StencilLabel(text, size=11, tracking=12.0,
+                                 colour=theme.STENCIL_DIM)
+            label.setContentsMargins(0, 10, 0, 2)
+            self.debrief_body.addWidget(label)
+
+        if report.findings:
+            heading("Findings")
+            for finding in report.findings:
+                self.debrief_body.addWidget(FindingRow(finding))
+
+        if report.opportunities:
+            heading("Where the time is")
+            for item in report.opportunities[:5]:
+                self.debrief_body.addWidget(OpportunityRow(item))
+
+        if report.silent:
+            heading("Nothing measurable")
+            for quiet in report.silent:
+                line = QHBoxLayout()
+                line.setContentsMargins(0, 2, 0, 2)
+                line.setSpacing(theme.GAP)
+                corner = Measured(str(quiet.corner_id),
+                                  colour=theme.STENCIL_DIM)
+                corner.setFixedWidth(38)
+                line.addWidget(corner)
+                line.addWidget(BodyLabel(quiet.reason, size=13,
+                                         colour=theme.STENCIL_DIM), 1)
+                holder = QWidget()
+                holder.setLayout(line)
+                self.debrief_body.addWidget(holder)
+
+        self.debrief_body.addStretch(1)
+        if report.laps_held_out:
+            self.debrief_body.insertWidget(
+                self.debrief_body.count() - 1, BodyLabel(
+                f"{report.laps_held_out} lap(s) held out: the distance "
+                f"integrated over them disagrees with this session's median, "
+                f"so their corner windows are not on the same piece of road.",
+                size=13, colour=theme.STENCIL_DIM))
 
     def _rack_plate(self) -> Plate:
         plate = Plate("Laps")

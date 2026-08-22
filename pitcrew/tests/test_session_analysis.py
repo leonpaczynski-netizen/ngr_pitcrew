@@ -13,7 +13,6 @@ from pitcrew.analysis.session import (
     exclusions_export,
     green_lap_reference_ms,
     lap_export,
-    laps_per_stint,
     session_export,
 )
 from pitcrew.store.db import Store
@@ -220,15 +219,6 @@ def test_green_lap_is_none_without_counted_laps():
 
 
 # -------------------------------------------------------------------- stints
-
-def test_stints_split_at_each_pit_lap():
-    laps = [a_lap(1), a_lap(2), a_lap(3, is_pit_lap=True), a_lap(4), a_lap(5)]
-    stints = laps_per_stint(laps)
-    assert [[lap.lap_num for lap in stint] for stint in stints] == [[1, 2, 3], [4, 5]]
-
-
-def test_a_session_without_a_stop_is_one_stint():
-    assert len(laps_per_stint([a_lap(1), a_lap(2)])) == 1
 
 
 # ----------------------------------------------------- corner model persistence

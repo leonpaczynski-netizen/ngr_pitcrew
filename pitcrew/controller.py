@@ -714,6 +714,7 @@ class PitCrewController(QObject):
         self.practice.practice_intent_changed.connect(
             self._on_practice_intent)
         self.practice.coach_speaks_changed.connect(self._on_coach_speaks)
+        self.practice.debrief_requested.connect(self.read_the_stint)
         if self.strategy is not None:
             self.strategy.build_requested.connect(self.build_strategy)
             self.strategy.approve_requested.connect(self.approve_strategy)
@@ -2511,6 +2512,72 @@ class PitCrewController(QObject):
             is_pit_lap=lap.is_pit_lap,
             session_id=self.session_id,
         ))
+
+    def read_the_stint(self) -> bool:
+        """What the run just recorded says about its corners.
+
+        **On demand, and only on demand.** It decompresses every lap's frames
+        and re-measures every corner window, which is not work to do on a
+        repaint - and it is a thing he asks for with the headset off, between
+        runs, rather than something that should happen while he is driving.
+
+        The session is the unit, not the event. `analysis/corner_findings`
+        estimates the noise floor from CONSECUTIVE laps, and two laps either
+        side of a session boundary are not consecutive in any sense that
+        estimate can use.
+        """
+        if self.practice is None:
+            return False
+        from pitcrew.analysis.corner_findings import analyse
+        from pitcrew.analysis.corners import CountedLap
+        from pitcrew.analysis.resolve import resolve_corner_model
+
+        event = self.active_event()
+        rows = self.practice.rows()
+        if event is None or not rows:
+            self.practice.set_status(
+                "Nothing to read - record a run first.", warn=True)
+            return False
+
+        counted = []
+        reference = None
+        for row in rows:
+            if not row.counted:
+                continue
+            stored = self.store.get_lap_frames(row.lap_id)
+            if not stored:
+                continue
+            frames = stored["frames"]
+            counted.append(CountedLap(row.lap_num, frames,
+                                      sample_hz=stored.get("sample_hz")))
+            if reference is None or (row.lap_time_ms or 0) < reference[0]:
+                reference = (row.lap_time_ms or 0, frames)
+
+        if not counted:
+            self.practice.set_status(
+                "No counted lap on the rack carries frames to read.",
+                warn=True)
+            return False
+
+        model = resolve_corner_model(self.store, event.get("track") or "",
+                                     event.get("layout"),
+                                     reference[1] if reference else None)
+        if model is None:
+            # **Honest rather than empty.** No stored model and a reference lap
+            # that would not segment means there are no corner identities to
+            # report against - not that the corners were fine.
+            self.practice.set_status(
+                "No corner model for this circuit yet, and the fastest lap "
+                "would not segment - so there are no corners to report "
+                "against.", warn=True)
+            return False
+
+        report = analyse(model, counted)
+        self.practice.show_debrief(report)
+        log("pitcrew").info(
+            "stint read: %d finding(s) over %d lap(s), %d held out",
+            len(report.findings), report.laps_used, report.laps_held_out)
+        return True
 
     def _on_practice_mode(self, mode: str) -> None:
         """He changed his mind about where the car starts.

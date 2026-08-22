@@ -21,7 +21,6 @@ from __future__ import annotations
 from pitcrew.analysis.session import LapInput
 from pitcrew.analysis.tyre_window import (
     BAND_ABOVE_WEAR_ONSET,
-    above_wear_onset,
     qualification,
     window_by_compound,
 )
@@ -46,24 +45,6 @@ def lap_at(lap_num: int, compound: str, temp_c: float, **overrides) -> LapInput:
 
 
 # --------------------------------------------------- the one sourced figure
-
-def test_the_wear_onset_threshold_is_read_per_compound():
-    """RS 88, RM 90, RH 93 degC - one test, GT7 1.55, in our own channel."""
-    assert above_wear_onset("RS", 89.0) is True
-    assert above_wear_onset("RS", 87.0) is False
-    assert above_wear_onset("RH", 89.0) is False      # RH's threshold is 93
-    assert above_wear_onset("RH", 94.0) is True
-
-
-def test_an_untested_compound_has_no_threshold_rather_than_a_guessed_one():
-    """Only the three Racing compounds were ever tested. Everything else is
-    None - which is "nobody has measured this", never "the tyre is fine"."""
-    assert above_wear_onset("CS", 85.0) is None
-    assert above_wear_onset("SS", 85.0) is None
-    assert above_wear_onset("IM", 85.0) is None
-    assert above_wear_onset("ZZ", 85.0) is None
-    assert above_wear_onset("", 85.0) is None
-    assert above_wear_onset(None, 85.0) is None
 
 
 def test_there_is_no_cold_side_to_read():

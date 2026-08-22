@@ -58,20 +58,6 @@ CORNERS = ("fl", "fr", "rl", "rr")
 BAND_ABOVE_WEAR_ONSET = "above wear onset"
 
 
-def above_wear_onset(compound_code: str | None,
-                     temp_c: float) -> bool | None:
-    """Whether this temperature is past the compound's wear-onset threshold.
-
-    None where the compound is unknown or has never been tested, which is
-    every compound except the three Racing ones. None is "nobody has measured
-    this", not "the tyre is fine", and the two must never look alike.
-    """
-    compound = get_by_code(compound_code) if compound_code else None
-    if compound is None or compound.wear_onset_c is None:
-        return None
-    return temp_c >= compound.wear_onset_c
-
-
 def _lap_mean_temps(lap: LapInput) -> dict[str, float] | None:
     """Mean surface temperature per corner across one lap's frames."""
     if not lap.frames:
