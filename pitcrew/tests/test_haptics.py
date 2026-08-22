@@ -1406,15 +1406,24 @@ def test_a_meter_that_could_not_be_read_never_runs_the_ladder():
     assert "UNREADABLE" in rack._endpoint_note
 
 
-def test_two_endpoints_of_one_name_make_the_verdict_an_admission():
-    """**The contradiction of 17 Aug, reproduced.** The meter resolves an
-    endpoint by friendly name and takes the first match; PortAudio resolves
-    the stream separately, walking its own list in its own order. Two active
-    endpoints spelling themselves identically - one card on two USB ports, or
-    a re-enumeration whose old endpoint has not left the ACTIVE list - and
-    the two can disagree. "It played nothing" is then a true statement about
-    an endpoint nobody was feeding, and the driver hears it while the seat is
-    working.
+def test_two_endpoints_of_one_name_no_longer_hedge_the_verdict():
+    """**The contradiction of 17 Aug, and the answer to it.**
+
+    The meter used to resolve an endpoint by friendly name and take the first
+    match, while PortAudio resolved the stream separately over its own list
+    in its own order. Two active endpoints spelling themselves identically -
+    one card on two USB ports, or a re-enumeration whose old endpoint has not
+    left the ACTIVE list - and the two can disagree, so "it played nothing"
+    became a true statement about an endpoint nobody was feeding. The app
+    could only hedge: "I have lost sight of them."
+
+    PortAudio never reports which MMDevice it opened - `StreamFacts` carries
+    a name, not an endpoint id - so the two can never be made to agree by
+    construction. `endpoint_meter` therefore meters **every** endpoint of the
+    name and reports the loudest. Silence from all of them is a claim about
+    the device whichever instance the stream picked, so the confident verdict
+    is sound again, and the driver gets the instruction he can act on rather
+    than an admission he cannot.
     """
     engine = _WedgedForGood()
     rack = _rack(engine)
@@ -1428,12 +1437,26 @@ def test_two_endpoints_of_one_name_make_the_verdict_an_admission():
     assert rack._rig_watchdog.stood_down
     assert len(rack.voice.spoken) == 1
     spoken = rack.voice.spoken[0]
-    assert "lost sight" in spoken, spoken
-    assert "if you can still feel them" in spoken.lower(), spoken
-    # The confident claim is exactly what it must NOT make.
-    assert "Haptics are out" not in spoken
-    assert any("2 active endpoints" in d
-               for d in rack._rig_watchdog.doubts())
+    assert "lost sight" not in spoken, spoken
+    assert not any("active endpoints" in d
+                   for d in rack._rig_watchdog.doubts()), (
+        "still hedging on an ambiguity that is now measured away")
+
+
+def test_the_metered_endpoint_changing_is_still_a_doubt():
+    """Several endpoints of one name is no longer suspicious - all of them
+    are watched. The SET moving under us mid-session is a different thing: a
+    re-enumeration, and the reading before it was about other hardware."""
+    wd = haptics.TransducerWatchdog()
+    wd.note_endpoint("{0.0.0}.ButtKicker#1", matches=1)
+    wd.note_endpoint("{0.0.0}.ButtKicker#2", matches=1)
+    assert any("changed mid-session" in d for d in wd.doubts())
+
+    quiet = haptics.TransducerWatchdog()
+    quiet.note_endpoint("{0.0.0}.ButtKicker#1", matches=2)
+    quiet.note_endpoint("{0.0.0}.ButtKicker#2", matches=2)
+    assert not quiet.doubts(), (
+        "the loudest of several endpoints moving between polls is ordinary")
 
 
 def test_one_endpoint_and_a_readable_meter_still_gets_the_plain_verdict():

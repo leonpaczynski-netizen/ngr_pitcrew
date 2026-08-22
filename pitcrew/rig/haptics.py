@@ -1187,19 +1187,30 @@ class TransducerWatchdog:
     def note_endpoint(self, identity: str | None, matches: int) -> None:
         """Which endpoint the reading came from, and how many share its name.
 
-        Two active endpoints of one name is the mechanism that would make the
-        whole verdict false: this meter takes the first of them and PortAudio
-        may have opened the other, so a silent reading is then a true
-        statement about an endpoint nobody is feeding. The metered endpoint
-        changing between polls says the same thing after the fact.
+        **Several endpoints of one name is no longer a doubt.** It was the
+        strongest of them: the meter took the first match while PortAudio
+        resolved the stream over its own list in its own order, so a silent
+        reading could be a true statement about an endpoint nobody was
+        feeding - which is how the app came to tell the driver his haptics
+        were dead while he could feel them working.
+
+        `endpoint_meter` now activates a meter on **every** endpoint of the
+        name and reports the loudest. A peak from any of them means the audio
+        is reaching the hardware; silence from all of them means it is
+        reaching none. Neither claim depends on which instance the stream
+        picked, so the ambiguity no longer has to be hedged - and the plain,
+        confident verdict is available again in the case it was written for.
+
+        The metered endpoint CHANGING between polls is still a doubt, and a
+        different one: it means the set moved under us mid-session, which is
+        a re-enumeration rather than an ambiguity.
         """
         with self._guard:
-            if matches > 1:
-                self._doubt(
-                    f"{matches} active endpoints answer to that name, so the "
-                    f"stream may be feeding one the meter is not reading")
             if (identity is not None and self._last_endpoint is not None
-                    and identity != self._last_endpoint):
+                    and identity != self._last_endpoint and matches <= 1):
+                # Only when there is one endpoint to be. With several, the
+                # reported identity is simply whichever was loudest this
+                # poll, and that moving is ordinary rather than suspicious.
                 self._doubt("the endpoint being metered changed mid-session")
             if identity is not None:
                 self._last_endpoint = identity

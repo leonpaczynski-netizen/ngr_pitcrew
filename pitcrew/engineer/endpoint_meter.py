@@ -170,16 +170,35 @@ def confirm_reached_endpoint(play, *, device: str | None,
 class _Meter:
     """A live `IAudioMeterInformation` on one render or capture endpoint."""
 
-    def __init__(self, meter, uninitialise, endpoint: str | None = None,
+    def __init__(self, meters, uninitialise, endpoint: str | None = None,
                  matches: int = 1) -> None:
-        self._meter = meter
+        # **Every endpoint of the name, not the first of them.**
+        #
+        # Windows does not promise friendly names are unique and on this rig
+        # they are not: three PortAudio devices and, after a re-enumeration,
+        # more than one ACTIVE MMDevice answer to `Speakers (ButtKicker PRO)`.
+        # This walked the MMDevice list in Windows' order and metered
+        # `found[0]`; PortAudio resolves the stream over its own list in its
+        # own order, and PortAudio does not report back which MMDevice it
+        # landed on - `StreamFacts` carries a name, not an endpoint id - so
+        # there is no way to make the two agree by construction.
+        #
+        # The way out is not to need them to agree. A peak from ANY endpoint
+        # of that name means the audio is reaching the hardware; silence from
+        # ALL of them means it is reaching none. Both claims hold whichever
+        # instance PortAudio picked, so the ambiguity stops mattering instead
+        # of being warned about.
+        #
+        # This is the last of the three "two endpoints, two resolvers" doubts
+        # from 17 Aug 2026, where the app told the driver his haptics were
+        # dead while he could feel them working.
+        self._meters = list(meters)
         self._uninitialise = uninitialise
-        # Which endpoint this is reading, and how many carried the name it
-        # was asked for. Both travel out with the reading, because "the
-        # endpoint metered nothing" is only a claim about the transducer when
-        # there was exactly one endpoint it could have meant.
+        # Which endpoint gave the loudest reading, and how many carried the
+        # name. Both travel out with the reading.
         self.endpoint = endpoint
         self.matches = matches
+        self._ids = [None] * len(self._meters)
 
     @classmethod
     def open(cls, device: str | None, kind: str) -> "_Meter | None":
@@ -352,46 +371,76 @@ class _Meter:
                     return None
                 endpoint, identity, _state = found[0]
                 if matches > 1:
-                    # **The reading is not safe to act on.** The stream is
+                    # **All of them, not the first of them.** The stream is
                     # resolved by PortAudio walking its own list in its own
-                    # order; this walks the MMDevice list in Windows'. Two
-                    # endpoints of one name, and the two can disagree - the
-                    # meter reads a dead instance, the stream feeds a live
-                    # one, and the app tells a driver who can feel the seat
-                    # working that it has stopped.
-                    log("audio").warning(
+                    # order; this walks the MMDevice list in Windows'. They
+                    # can disagree, and PortAudio does not say which MMDevice
+                    # it opened - so instead of metering one and hedging the
+                    # verdict, meter every one. A peak from any of them means
+                    # the audio is reaching the hardware; silence from all of
+                    # them means it is reaching none. Both hold whichever
+                    # instance the stream picked.
+                    log("audio").info(
                         "%d active %s endpoints answer to the name %r: %s. "
-                        "Metering the first of them - the stream may be "
-                        "feeding another, so a silent reading here is not "
-                        "proof that the device is silent.",
+                        "Metering all of them, so a silent reading is about "
+                        "the device rather than about which instance was "
+                        "picked.",
                         matches, kind, device,
                         "; ".join(str(i) for _c, i, _s in found))
+                candidates = [(c, i) for c, i, _s in found]
             else:
                 endpoint = enumerator.GetDefaultAudioEndpoint(flow, MULTIMEDIA)
                 try:
                     identity = str(endpoint.GetId())
                 except Exception:               # noqa: BLE001
                     identity = None
+                candidates = [(endpoint, identity)]
 
-            meter = endpoint.Activate(
-                byref(IAudioMeterInformation._iid_), CLSCTX_ALL,
-                None).QueryInterface(IAudioMeterInformation)
+            meters, ids = [], []
+            for candidate, candidate_id in candidates:
+                try:
+                    meters.append(candidate.Activate(
+                        byref(IAudioMeterInformation._iid_), CLSCTX_ALL,
+                        None).QueryInterface(IAudioMeterInformation))
+                    ids.append(candidate_id)
+                except Exception as exc:        # noqa: BLE001
+                    # One endpoint of several refusing a meter is not a
+                    # failure of the whole reading - it is one fewer witness.
+                    log("audio").debug(
+                        "no meter on endpoint %s: %s", candidate_id, exc)
+            if not meters:
+                raise OSError(
+                    f"no endpoint of the name {device!r} would open a meter")
         except Exception:
             uninitialise()
             raise
-        return cls(meter, uninitialise, endpoint=identity, matches=matches)
+        watcher = cls(meters, uninitialise, endpoint=identity, matches=matches)
+        watcher._ids = ids
+        return watcher
 
     def read(self) -> float:
-        try:
-            return float(self._meter.GetPeakValue())
-        except Exception:                       # noqa: BLE001
-            # A meter that stops answering mid-call is not evidence of
-            # silence, so read as "nothing seen this tick" and let the caller
-            # decide on the whole run.
-            return 0.0
+        """The loudest of every endpoint answering to the name.
+
+        A meter that stops answering mid-call is not evidence of silence, so
+        it reads as "nothing seen this tick" and the caller decides on the
+        whole run.
+        """
+        best = 0.0
+        for position, meter in enumerate(self._meters):
+            try:
+                value = float(meter.GetPeakValue())
+            except Exception:                   # noqa: BLE001
+                continue
+            if value > best:
+                best = value
+                if self._ids[position] is not None:
+                    # Name the one actually rendering, so a log line about a
+                    # working seat says which instance is carrying it.
+                    self.endpoint = self._ids[position]
+        return best
 
     def close(self) -> None:
-        self._meter = None
+        self._meters = []
         try:
             self._uninitialise()
         except Exception:                       # noqa: BLE001
