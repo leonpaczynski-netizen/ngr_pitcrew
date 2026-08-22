@@ -57,6 +57,14 @@ from dataclasses import dataclass
 
 from pitcrew.diagnostics import log
 
+# **`log` RETURNS a logger; it does not take a message.** Every diagnostic
+# in this module used to call `log(f"hud-wear: ...")`, which built a logger
+# NAMED after the message and emitted nothing - so the sampler could fail on
+# every sample of every lap and say so eight different ways, in silence.
+# That is the failure mode CLAUDE.md 7 exists to forbid: a capture that
+# degrades quietly instead of loudly. Bind it once, here.
+_log = log("hud")
+
 # The calibrated gauge, in canvas pixels. Four vertical bars flanking the car
 # icon in the HUD's bottom-left cluster; each fills red from the top as the
 # tyre wears and the remainder stays white.
@@ -575,7 +583,7 @@ class ScreenSource:
         # **The first, and it is said when there are others.** Two projectors
         # showing different scenes would otherwise be chosen between silently.
         if len(hits) > 1:
-            log(f"hud-wear: {len(hits)} projector windows open, using "
+            _log.info(f"hud-wear: {len(hits)} projector windows open, using "
                 f"{hits[0][1]!r}")
         return hits[0], None
 
@@ -731,7 +739,7 @@ class LiveWearSampler:
             except Exception as exc:                         # noqa: BLE001
                 # Nothing here may reach the caller. The lap is recorded
                 # whatever the gauge does.
-                log(f"hud-wear: unhandled {type(exc).__name__}: {exc}")
+                _log.warning(f"hud-wear: unhandled {type(exc).__name__}: {exc}")
 
     def _free_run(self) -> None:
         """One un-asked-for sample, kept but never filed against a lap."""
@@ -747,7 +755,7 @@ class LiveWearSampler:
             # Sparse, deliberately. A shut projector is one fact, not one fact
             # every two seconds.
             self._last_free_log = now
-            log(f"hud-wear: no free-run reading: {reading.reason}")
+            _log.warning(f"hud-wear: no free-run reading: {reading.reason}")
 
     def _read(self) -> tuple[Reading, bool]:
         """Grab and transcribe. Returns (reading, the source itself failed).
@@ -772,7 +780,7 @@ class LiveWearSampler:
                             if v is not None), default=None)
             if previous is not None and previous - worst > FRESH_SET_DROP:
                 # The gauge only goes backwards for one reason.
-                log(f"hud-wear: fresh set - gauge dropped "
+                _log.info(f"hud-wear: fresh set - gauge dropped "
                     f"{previous * 100:.0f}% to {worst * 100:.0f}%")
                 self.series = []
         self._latest = (at, reading)
@@ -803,13 +811,13 @@ class LiveWearSampler:
             # A dimmed or unreadable frame is not a connection failure - it is
             # a normal thing that happens when the game is paused - so it does
             # not count toward standing down.
-            log(f"hud-wear: lap {lap_id}: {reading.reason}")
+            _log.warning(f"hud-wear: lap {lap_id}: {reading.reason}")
             return
         self._failures = 0
         self._write(lap_id, reading.wear)
         worst = max((v for v in reading.wear.values() if v is not None),
                     default=None)
-        log(f"hud-wear: lap {lap_id}: "
+        _log.info(f"hud-wear: lap {lap_id}: "
             + ", ".join(f"{k.upper()} "
                         + ("--" if v is None else f"{v * 100:.0f}%")
                         for k, v in sorted(reading.wear.items()))
@@ -819,8 +827,8 @@ class LiveWearSampler:
 
     def _failed(self, message: str) -> None:
         self._failures += 1
-        log(f"hud-wear: {message}")
+        _log.warning(f"hud-wear: {message}")
         if self._failures >= MAX_CONSECUTIVE_FAILURES:
             self.stood_down = True
-            log(f"hud-wear: stood down after {self._failures} consecutive "
+            _log.warning(f"hud-wear: stood down after {self._failures} consecutive "
                 f"failures - it will not be retried this session")
