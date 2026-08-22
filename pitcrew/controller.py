@@ -2605,9 +2605,12 @@ class PitCrewController(QObject):
         from pitcrew.analysis.session import counted_laps
         from pitcrew.export.build import event_lap_inputs
 
+        # `hydrate=set()` - `fuel_used` is a column on the lap, and the
+        # default hydrates EVERY lap's 60 Hz blob to reach it. Measured on
+        # the active event, 3.4 s against 1.0 ms for the same answer.
         used = [lap.fuel_used for lap
                 in counted_laps(event_lap_inputs(self.store, event["id"],
-                                                 "practice"))
+                                                 "practice", hydrate=set()))
                 if lap.fuel_used and lap.fuel_used > 0]
         return median(used) if used else None
 
@@ -3695,8 +3698,13 @@ class PitCrewController(QObject):
         # to lap when deciding if and how the plan needs adjusting. Both
         # travel with their sample count and their source, because a burn from
         # three practice laps and one from fourteen are not the same claim.
+        # `hydrate=set()`: this is a COUNT. The default decodes every
+        # practice lap's telemetry to produce one integer - 2.5 s on the
+        # active event and 9.4 s on the largest, against 1.0 ms, and on the
+        # Qt thread at every race start and plan approval.
         practice_laps = len(counted_laps(
-            event_lap_inputs(self.store, event["id"], "practice")))
+            event_lap_inputs(self.store, event["id"], "practice",
+                             hydrate=set())))
         payload["expects"] = Expectation(
             lap_time_ms=self._inputs.lap_time_ms or None,
             lap_time_samples=practice_laps,
@@ -3783,8 +3791,13 @@ class PitCrewController(QObject):
         # expects to execute. Every aggregate carries its sample count
         # (CLAUDE.md §4.4): a burn from three laps and one from fourteen are
         # not the same claim, and the driver is about to be told one of them.
+        # `hydrate=set()`: this is a COUNT. The default decodes every
+        # practice lap's telemetry to produce one integer - 2.5 s on the
+        # active event and 9.4 s on the largest, against 1.0 ms, and on the
+        # Qt thread at every race start and plan approval.
         practice_laps = len(counted_laps(
-            event_lap_inputs(self.store, event["id"], "practice")))
+            event_lap_inputs(self.store, event["id"], "practice",
+                             hydrate=set())))
         # What the plan expects to execute, as stored when it was approved.
         expects = (plan or {}).get("expects") or {}
         self.race = RaceCoordinator(
