@@ -1685,3 +1685,49 @@ def test_the_meter_is_not_asked_about_audio_nobody_sent(monkeypatch):
     assert "REFUSED" in rack._endpoint_note
     assert polled == [], "asked a meter about audio it never got"
     assert climbed, "the ladder stopped climbing the moment it went quiet"
+
+
+# ------------------------------------------- strict means strict, at the open
+
+def test_a_strict_open_refuses_the_default_when_the_name_stops_matching():
+    """**The check and the resolution are separate moments.**
+
+    `open_output` verifies the named card exists before it starts, then
+    `_candidates` resolves the route - and the device list can be rebuilt in
+    between. It was three times in one practice session on 22 Aug 2026, with
+    the JBL headset moving from index 24 to 28 as it went.
+
+    `_candidates` answered a name that matched nothing with `[None]`, which
+    is PortAudio's default device. For the engineer's voice that is the right
+    trade and stays: a call out of the wrong speaker still reaches him. For
+    the transducer it is the exact harm `strict` exists to prevent - a
+    25-160 Hz bed into whatever Windows calls default, which on this machine
+    is a monitor over HDMI or a pair of headphones.
+    """
+    import pytest
+
+    from pitcrew.engineer import audio_devices
+
+    class FakeSd:
+        @staticmethod
+        def query_devices():
+            return [{"name": "Headphones (JBL Endurance Run 3C)",
+                     "max_output_channels": 2, "hostapi": 0}]
+
+        @staticmethod
+        def query_hostapis():
+            return [{"name": "Windows WASAPI"}]
+
+    # Not strict: the old behaviour, deliberately kept for the voice.
+    assert audio_devices._candidates(
+        FakeSd, "Speakers (ButtKicker PRO)", "output") == [None]
+
+    # Strict: the card it named, or nothing.
+    with pytest.raises(RuntimeError, match="Refusing to fall back"):
+        audio_devices._candidates(
+            FakeSd, "Speakers (ButtKicker PRO)", "output", strict=True)
+
+    # And a name that DOES match is unaffected either way.
+    assert audio_devices._candidates(
+        FakeSd, "Headphones (JBL Endurance Run 3C)", "output",
+        strict=True) == [0]

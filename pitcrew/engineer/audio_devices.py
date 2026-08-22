@@ -607,7 +607,7 @@ def _matching_indices(sd, name: str, kind: str) -> list[int]:
 
 
 def _candidates(sd, device: object | None, kind: str,
-                host_api: str | None = None) -> list:
+                host_api: str | None = None, strict: bool = False) -> list:
     """Every route to the chosen card, best first.
 
     None stays None - that is PortAudio's own default, which is re-resolved
@@ -619,6 +619,16 @@ def _candidates(sd, device: object | None, kind: str,
     A name that no longer matches anything falls back to the default with a
     warning rather than raising: the driver would rather hear the call out of
     the wrong speaker than not hear it.
+
+    **Unless `strict`, where that trade is exactly backwards.** The transducer
+    is a 150 W amplifier under the seat and its band is 25-160 Hz: routed to
+    the default it puts a road-rumble bed into whatever Windows currently
+    calls default, which on this machine has been a monitor over HDMI and a
+    pair of headphones. `open_output` checks the name exists before it starts,
+    but that check and this resolution are separate moments and the device
+    list is rebuilt between them often enough to matter - the list was rebuilt
+    three times in one practice session on 22 Aug. A strict caller gets the
+    card it named or nothing.
     """
     if device is None or isinstance(device, int):
         return [device]
@@ -645,6 +655,11 @@ def _candidates(sd, device: object | None, kind: str,
     if host_api is not None:
         return [index for _rank, index in sorted(found)]
     if not found:
+        if strict:
+            raise RuntimeError(
+                f"no {kind} device named {device!r} on this machine at the "
+                f"moment of opening. Refusing to fall back to the default - "
+                f"this sound is meant for one specific card.")
         log("audio").warning(
             "no %s device matching %r on this machine - using the default",
             kind, device)
@@ -777,8 +792,8 @@ def open_output(samplerate: int, *, channels: int = 1, dtype: str = "int16",
 
     def attempt():
         return _open_first_that_works(
-            sd, chosen, "output",
-            lambda resolved: sd.OutputStream(
+            sd, chosen, "output", strict=strict,
+            build=lambda resolved: sd.OutputStream(
                 samplerate=samplerate, channels=channels, dtype=dtype,
                 device=resolved, blocksize=blocksize, callback=callback,
                 finished_callback=finished_callback,
@@ -802,7 +817,7 @@ def open_input(samplerate: int, *, channels: int = 1, dtype: str = "float32",
     return _retry_once(sd, attempt, "input")
 
 
-def _open_first_that_works(sd, chosen, kind: str, build):
+def _open_first_that_works(sd, chosen, kind: str, build, strict: bool = False):
     """Walk the routes to the chosen card and start the first that opens.
 
     The last route's failure is re-raised rather than swallowed, so a card
@@ -810,7 +825,7 @@ def _open_first_that_works(sd, chosen, kind: str, build):
     remembered, because the next beep should not re-discover that WASAPI will
     not take 22050 Hz.
     """
-    routes = _candidates(sd, chosen, kind)
+    routes = _candidates(sd, chosen, kind, strict=strict)
     for position, device in enumerate(routes):
         try:
             stream = build(device)

@@ -35,13 +35,18 @@ from pitcrew.diagnostics import log
 from pitcrew.engineer import audio_devices
 from pitcrew.rig import synth, transducer
 
-# The block PortAudio is asked for.
+# The block PortAudio is asked for. Zero lets it choose, which resolves to
+# 480 frames on WASAPI here - 10 ms of audio per callback.
 #
-# **This was 0 - "let PortAudio choose" - and choosing was how the endpoint
-# got broken.** Zero resolves to 480 frames on WASAPI here, which is 10 ms
-# of audio per callback, and the callback is Python. Measured 22 Aug 2026 on
-# this machine, on a healthy endpoint, with the callback doing nothing at
-# all beyond counting:
+# **The block is not only a buffer. It is the rate the rig reads the car.**
+# The callback is the one place the mix samples telemetry, so whatever is
+# chosen here sets that sampling rate, and it has to stay well above the
+# 60 Hz the feed arrives at. That is the constraint the starvation fix ran
+# into, below.
+#
+# The callback is also Python, and cannot run until it is handed the GIL.
+# Measured 22 Aug 2026 on this machine, on a healthy endpoint, with the
+# callback doing nothing at all beyond counting:
 #
 #     GIL threads   block 0 (480)   block 2048
 #     0                48118 f/s      48297 f/s
@@ -60,12 +65,22 @@ from pitcrew.rig import synth, transducer
 # this module has been chasing since 16 Aug. Every client of that endpoint is
 # throttled once it happens, on any host API.
 #
-# 2048 frames is 42.7 ms per callback: five and a bit ticks of slack, so a
-# GIL stall long enough to matter no longer empties the device buffer. The
-# latency it costs - 22 ms to about 85 ms - is nothing to a road bed, which
-# is an immersion cue and not a shift beep. See `SWITCH_INTERVAL_S`, which
-# is the other half of the same fix.
-BLOCKSIZE = 2048
+# **It was raised to 2048 and put straight back, and the reason is worth
+# keeping.** 2048 frames is 42.7 ms of slack against the tick, which does
+# stop the starvation - but the callback is also the only place the mix reads
+# the car, so its rate is the rate the whole rig samples telemetry at. 2048
+# frames is 23.4 callbacks a second against a 60 Hz feed: the continuous beds
+# are unaffected, and every sharp cue - a kerb strike, an impact, a lock -
+# is undersampled and smears. Practice, 22 Aug: "something is droning
+# everything else out on acceleration". It also cost 85.3 ms of output
+# latency, logged, on cues whose whole value is arriving early.
+#
+# `SWITCH_INTERVAL_S` alone carries the fix, measured at every load level
+# tested - 48094 f/s at three contending threads, 48142 at six - so the block
+# size was never the load-bearing half. Zero it is, which resolves to 480
+# frames on WASAPI here: 10 ms a callback, 100 a second, comfortably faster
+# than the feed it is reading.
+BLOCKSIZE = 0
 # The largest block we will be handed. Buffers are sized for this once, so a
 # callback never allocates.
 MAX_BLOCK = 8192
