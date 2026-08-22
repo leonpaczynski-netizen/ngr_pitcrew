@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 
 from pitcrew.analysis.refuel import MAX_PLAUSIBLE_LPS
 from pitcrew.telemetry.packet import GT7Packet
+from pitcrew.telemetry.pit_detect import entered_the_pits
 from pitcrew.telemetry.recorder import SAMPLE_HZ
 
 # Speed below which a fuel increase means the pit lane rather than a physics
@@ -170,6 +171,22 @@ class Lap:
     #
     # Recorded, not yet trusted. One race settles it.
     laps_completed: int | None = None
+    # **Seconds of this lap actually spent RACING, on a pit lap only.**
+    #
+    # The time from the last crossing to the moment GT7 took the car into the
+    # box, plus the time from release to this crossing - the stop itself
+    # excluded. On an ordinary pit lap that is about one lap of driving.
+    #
+    # It exists because every Monza race on file recorded 26 rows for 27 laps:
+    # the crossing inside GT7's pit sequence never reaches the app, so ONE row
+    # holds nearly two laps of driving and the count comes out one light. A
+    # count one light asks for a lap of fuel too much - about six litres, six
+    # seconds standing still at the measured 1 L/s.
+    #
+    # **Measured here, judged in the race layer**, which is where the
+    # representative pace to judge it against already lives. None on any lap
+    # that was not a pit lap, and None where the entry frame was never seen.
+    pit_racing_ms: int | None = None
     recorded_at: float = field(default_factory=time.time)
     compound: str | None = None
     # The ratios actually fitted, read off the packet rather than the sheet.
@@ -218,6 +235,10 @@ class SessionState:
         self._pit_lap = False
         self._out_lap_pending = False
         self._fuel_at_pit_entry: float | None = None
+        # When GT7 took the car (monotonic), and when it let it go again.
+        # Both None outside a stop. See `Lap.pit_racing_ms`.
+        self._pit_entry_at: float | None = None
+        self._pit_exit_at: float | None = None
         self._gear_ratios: list[float] | None = None
         # (timestamp, litres) over the last `REFUEL_WINDOW_S`.  A refuel is
         # only visible across a window; see the constant for why.
@@ -457,12 +478,38 @@ class SessionState:
 
         refuelling = self._refuelling(p, now)
         swapped = self._tyres_swapped(p)
+        # **The speed step, and it is the earliest of the three by seconds.**
+        # GT7 takes the car over at pit entry and the speed drops from racing
+        # to nothing BETWEEN TWO CONSECUTIVE FRAMES - measured at Monza as
+        # 145.6 / 227.3 / 226.3 / 211.1 kph to zero, once per pit lap and never
+        # outbound. Refuelling only becomes visible once the tank has actually
+        # started to climb, which is several seconds after the car stopped
+        # being driven, and a tyre swap later still.
+        #
+        # That lateness was the whole problem. `pit_racing_ms` below measures
+        # the racing either side of the stop, and measured from a signal that
+        # arrives late it would silently charge the stop's opening seconds to
+        # the driving.
+        #
+        # **Only across genuinely adjacent frames.** The step is a one-frame
+        # event, so it is only evidence if the two frames really are one frame
+        # apart: a dropped datagram can put 200 km/h next to 0 km/h in the
+        # received stream with an ordinary braking zone in between, and that
+        # would read as a pit entry on a lap the driver never pitted. GT7's
+        # own packet counter is what makes the test answerable.
+        adjacent = (p.packet_id is not None
+                    and self._prev.packet_id is not None
+                    and p.packet_id - self._prev.packet_id == 1)
+        taken = adjacent and entered_the_pits(self._prev.speed_kmh,
+                                              p.speed_kmh)
 
         if self._phase is not Phase.IN_PIT:
-            if not (refuelling or swapped):
+            if not (refuelling or swapped or taken):
                 return []
             self._phase = Phase.IN_PIT
             self._pit_lap = True
+            self._pit_entry_at = now
+            self._pit_exit_at = None
             # The window's floor, not the previous frame: by the time a fill
             # clears the threshold the tank has already taken 0.3 L, and the
             # oldest reading in the window is the closest thing to the level
@@ -473,7 +520,13 @@ class SessionState:
             self._tyres_changed_in_stop = swapped
             return [SessionEvent(EventKind.PIT_ENTRY,
                                  {"fuel": self._fuel_at_pit_entry,
-                                  "tyres_changed": swapped})]
+                                  "tyres_changed": swapped,
+                                  # Which signal found it. `speed-step` is the
+                                  # frame-exact one; the others are seconds
+                                  # late and say so by being named.
+                                  "by": ("speed-step" if taken
+                                         else "refuelling" if refuelling
+                                         else "tyre-change")})]
 
         if swapped:
             self._tyres_changed_in_stop = True
@@ -484,6 +537,7 @@ class SessionState:
                 fuel_added = max(0.0, p.fuel_level - self._fuel_at_pit_entry)
             self._fuel_at_pit_entry = None
             self._fuel_added_in_stop = round(fuel_added, 2)
+            self._pit_exit_at = now
             self._out_lap_pending = True
             self._phase = Phase.RACING if self.race_started else Phase.ON_TRACK
             return [SessionEvent(EventKind.PIT_EXIT, {
@@ -492,6 +546,26 @@ class SessionState:
             })]
 
         return []
+
+    def _pit_racing_ms(self, now: float) -> int | None:
+        """Milliseconds of this pit lap spent driving, stop excluded.
+
+        `(entry - lap start) + (now - exit)`. **None unless both halves are
+        known**: without the exit the car is still in the box and this
+        crossing is not the end of a pit lap, and without the entry there is
+        nothing to subtract the stop from. A partial figure here would be
+        indistinguishable from a short lap, which is the opposite of the
+        finding it exists to support.
+        """
+        if not self._pit_lap:
+            return None
+        if self._pit_entry_at is None or self._pit_exit_at is None:
+            return None
+        before = self._pit_entry_at - self._lap_started_at
+        after = now - self._pit_exit_at
+        if before < 0 or after < 0:
+            return None
+        return int(round((before + after) * 1000.0))
 
     def _check_lap(self, p: GT7Packet, now: float) -> list[SessionEvent]:
         if self._phase in (Phase.IDLE, Phase.FINISHED):
@@ -524,6 +598,7 @@ class SessionState:
             gear_ratios=list(self._gear_ratios) if self._gear_ratios else None,
             tyres_changed=self._tyres_changed_in_stop if self._pit_lap else None,
             fuel_added_l=self._fuel_added_in_stop if self._pit_lap else None,
+            pit_racing_ms=self._pit_racing_ms(now),
             tyre_temp_front_c=temp_front,
             tyre_temp_rear_c=temp_rear,
             # Recorded beside the app's own count so the two can be compared
@@ -533,6 +608,8 @@ class SessionState:
                             and p.laps_completed >= 0 else None),
         )
         self._laps.append(lap)
+        self._pit_entry_at = None
+        self._pit_exit_at = None
         self._pit_lap = False
         self._out_lap_pending = False
         self._tyres_changed_in_stop = None

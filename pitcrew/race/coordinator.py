@@ -34,6 +34,19 @@ from pitcrew.race.expectations import ExpectationTracker
 from pitcrew.store.tyres import gap_association_for
 from pitcrew.telemetry.session_state import EventKind, Phase
 
+# **How much racing either side of the box means a crossing went missing.**
+#
+# An ordinary pit lap is about one lap of driving with a stop in the middle, so
+# the racing measured either side of the box comes to roughly one lap. Two
+# crossings' worth of driving in one row is the failure: every Monza race on
+# file recorded 26 rows for 27 laps.
+#
+# 1.5 rather than something tighter because the out lap is genuinely slower
+# than the reference - cold tyres and a pit-lane exit - and the pace this is
+# measured against is a median of racing laps. Half a lap of slack absorbs
+# that and is still nowhere near the whole extra lap the failure produces.
+PIT_RACING_DROPPED_RATIO = 1.5
+
 
 class RacePhase(enum.Enum):
     IDLE = "idle"          # not armed
@@ -152,6 +165,9 @@ class RaceCoordinator:
         # False for detected, True for driver-reported. Consumed at
         # the crossing - see `note_incident`.
         self._incident_pending: bool | None = None
+        # The clock's dropped-lap count as it stood before the lap
+        # being handled. See `_corroborate_pit_lap`.
+        self._dropped_before_lap = 0
         self._stints = list(self.plan.get("stints") or ())
         # **The app's own race clock**, built at arming and started at the
         # green. GT7's clock is not accurate - the driver measured it - so
@@ -388,9 +404,13 @@ class RaceCoordinator:
         # `lap_num` is the clock's backstop for a green detected late - it can
         # see that its first crossing was lap 4 and back-date itself even when
         # nothing was captured before the green. See `race/clock.note_lap`.
+        # Sampled before the clock is told about this lap, so that "did the
+        # clock count a drop on THIS crossing" is answerable afterwards.
+        self._dropped_before_lap = self.clock.laps_dropped
         self.clock.note_lap(lap.lap_time_ms, is_pit_lap=bool(lap.is_pit_lap),
                             lap_num=lap.lap_num)
         self.expect.note_lap(lap)
+        self._corroborate_pit_lap(lap)
 
         # Fuel calls must use what this race is actually burning, not what
         # practice suggested. Told he could push while burning 35% more than
@@ -505,6 +525,63 @@ class RaceCoordinator:
             "incident on lap %s: %s, cost %s",
             lap.lap_num, "driver-reported" if reported else "detected",
             f"{cost} ms" if cost else "not costed - no pace reference")
+
+    def _corroborate_pit_lap(self, lap) -> None:
+        """A second, independent opinion on whether a crossing went missing.
+
+        **`race/clock.py` already finds dropped laps** and finds them on pit
+        laps specifically - the guard that used to exclude them hid the event
+        it was most needed for. Its test is the app timer's span against GT7's
+        own lap time, `> 1.6x`, and at Monza on 18 Aug that read 1.74 where a
+        clean pit lap would have read 1.16.
+
+        **But that margin depends on how long the stop was.** A long stop eats
+        into the ratio: the stationary time sits inside GT7's lap figure, so a
+        splash-and-dash leaves a wider gap for a missed crossing to hide in
+        than a full service does.
+
+        `Lap.pit_racing_ms` does not have that weakness. It is the driving
+        either side of the box, measured from the frame GT7 took the car -
+        which is why the speed-step detector had to be wired first - with the
+        stop excluded by construction. Roughly one lap on an ordinary pit lap,
+        whatever the stop cost.
+
+        **Nothing here changes `laps_dropped`.** The clock owns that count and
+        two detectors incrementing one counter is how a single missed crossing
+        becomes two. This corroborates, and where the two disagree it says so:
+        CLAUDE.md §4.1's rule is that a disagreement between two measures is
+        the finding, and is worth more than either statement alone.
+        """
+        racing_ms = getattr(lap, "pit_racing_ms", None)
+        if not lap.is_pit_lap or not racing_ms:
+            return
+        pace = self.representative_pace_ms()
+        if not pace:
+            # No reference yet. Silence rather than a ratio against a guess.
+            return
+        ratio = racing_ms / pace
+        by_racing = ratio >= PIT_RACING_DROPPED_RATIO
+        by_clock = self.clock.laps_dropped > self._dropped_before_lap
+        if by_racing and by_clock:
+            log("race").warning(
+                "lap %s: both measures agree a crossing was missed - %.0f s "
+                "of racing either side of the box against a %.0f s lap "
+                "(ratio %.2f)", lap.lap_num, racing_ms / 1000.0,
+                pace / 1000.0, ratio)
+        elif by_racing:
+            log("race").warning(
+                "lap %s: the racing either side of the box came to %.0f s "
+                "against a %.0f s lap (ratio %.2f), which is a missed "
+                "crossing - but the clock did not see one. Two measures "
+                "disagree; the lap count may be one light",
+                lap.lap_num, racing_ms / 1000.0, pace / 1000.0, ratio)
+        elif by_clock:
+            log("race").warning(
+                "lap %s: the clock counted a dropped lap, but the racing "
+                "either side of the box was only %.0f s against a %.0f s lap "
+                "(ratio %.2f) - which is one lap of driving, not two. Two "
+                "measures disagree; this may have been a pause",
+                lap.lap_num, racing_ms / 1000.0, pace / 1000.0, ratio)
 
     def _laps_after_stops(self, lap_ms: int | None,
                           left: int | None) -> int | None:
