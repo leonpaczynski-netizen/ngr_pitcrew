@@ -58,6 +58,13 @@ exports/
 # Raw session captures: ~40 MB a race, and they are the driver's own
 # measurement runs, not source.
 captures/
+# The append-only observation logs: what he reported over the radio
+# (race/driver_report.py) and what the HUD was showing when a tyre frame went
+# red (race/hud_calibration.py). Both are his own race record, and neither is
+# source - `data/` otherwise holds committed reference JSON, so without this
+# they are one `git add data/` away from being published.
+data/driver_reports.jsonl
+data/tyre_hud_calibration.jsonl
 
 data/gt7_sessions.db
 *.pyc
