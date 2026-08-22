@@ -74,6 +74,9 @@ MIN_SPEED_KPH = 30.0
 # phase this driver's whole technique lives in.
 TRAIL_STEER_NORM = 0.15
 TRAIL_MIN_BRAKE_PCT = 5.0
+# Fewer braking events than this in one session and its mean split
+# describes a handful of stops rather than the session.
+MIN_SESSION_STOPS = 8
 
 
 @dataclass(frozen=True)
@@ -187,12 +190,19 @@ def trail_slip(frames: list[dict]) -> tuple[float | None, float | None, int]:
 
 # ------------------------------------------------------------------ reading
 
-def declared_bias(store: Store, session: dict) -> float | None:
-    """The `bb` value on the sheet this session was run with.
+def sheet_bias(store: Store, session: dict) -> float | None:
+    """The `bb` on the sheet this session records - **not a declaration.**
 
-    None where the session records no sheet, which is honest and common: the
-    bias then has to be given with `--bias`, and a run whose bias nobody
-    declared is not evidence about bias.
+    The driver, 22 Aug: *"Brake bias hasn't always been 0, I haven't updated it
+    and it has moved."* Brake balance is the one setup value he changes on the
+    MFD mid-session, and the sheet is only rewritten when a whole revision is
+    filed - so of every field on the sheet this is the likeliest to be stale,
+    and it is stale in the direction that matters, because a stale 0 reads as
+    a deliberate 0.
+
+    It is reported as what it is: the last value anybody wrote down. Grouping
+    runs by it manufactures agreement between runs driven at different
+    settings, which is the opposite of the finding - see `by_session`.
     """
     sheet_id = session.get("setup_sheet_id")
     if not sheet_id:
@@ -230,7 +240,7 @@ def collect(store: Store, *, event_id: int | None, session_id: int | None,
     by_bias: dict[float | None, list[Stop]] = {}
     trail: dict[float | None, list[tuple[float, float, int]]] = {}
     for session in sessions:
-        bias = override if override is not None else declared_bias(store, session)
+        bias = override if override is not None else sheet_bias(store, session)
         for lap in store.list_laps(session["id"]):
             if lap.get("excluded") or lap.get("is_pit_lap"):
                 continue
@@ -272,10 +282,11 @@ def report(by_bias, trail, *, show_trail: bool) -> None:
               f"{(st.mean(splits) if splits else float('nan')):>8.3f} "
               f"{_mean([s.decel_g for s in stops]):>8.3f}  {laps}")
 
-    if None in by_bias:
-        print("\n  The '??' row is runs whose bias nobody declared. It is not "
-              "evidence about bias;\n  give one with --bias, or file the "
-              "sheet against the session.")
+    print("\n  The bias column is THE SHEET'S last-known value, not a "
+          "declaration - brake\n  balance is changed on the MFD and the sheet "
+          "is only rewritten when a whole\n  revision is filed, so of every "
+          "field on it this is the likeliest to be stale.\n  Use --bias for a "
+          "run you actually know, and --by-session to see whether it moved.")
 
     v1 = {s.schema_version for stops in by_bias.values() for s in stops} & {1}
     if v1:
@@ -306,6 +317,67 @@ def report(by_bias, trail, *, show_trail: bool) -> None:
               "speed cannot.")
 
 
+def by_session(store: Store, event_id: int) -> None:
+    """Every session's split, oldest first. **This is the useful view.**
+
+    Grouped by the sheet's bias the archive looked uniform: three cars, three
+    circuits, split -0.039 / -0.040 / -0.039. Per session it is not uniform at
+    all - the Shelby at Yas runs +0.022 to -0.068 across six sessions on one
+    car at one circuit, and +0.022 means the REAR locked deeper. A stale sheet
+    had averaged a real change into a false agreement.
+
+    **A moved split is not proof of a moved bias.** ABS setting, compound, fuel
+    load and how hard the stop was taken all move it too, and none of them is
+    recorded against a braking event. What the spread establishes is that the
+    channel is sensitive enough to see a change of this size - which is the
+    precondition for a declared-bias run being able to calibrate it.
+    """
+    rows = []
+    for kind in ("practice", "race"):
+        for session in store.list_sessions(event_id, kind):
+            stops = []
+            for lap in store.list_laps(session["id"]):
+                if lap.get("excluded") or lap.get("is_pit_lap"):
+                    continue
+                stored = store.get_lap_frames(lap["id"])
+                if not stored:
+                    continue
+                stops.extend(find_stops(
+                    stored["frames"], lap_id=lap["id"], lap_num=lap["lap_num"],
+                    schema_version=stored.get("frame_schema_version") or 2,
+                    sample_hz=stored.get("sample_hz") or 60.0))
+            splits = [s.split for s in stops if s.split is not None]
+            if len(splits) >= MIN_SESSION_STOPS:
+                rows.append((session, kind, stops, splits))
+    if not rows:
+        print(f"No session at event {event_id} has {MIN_SESSION_STOPS} "
+              f"braking events.")
+        return
+
+    print(f"\n{'sess':>5} {'kind':<9} {'stops':>6} {'front':>7} {'rear':>7} "
+          f"{'split':>7} {'decel':>6} {'sheet':>6}  started")
+    print("-" * 76)
+    for session, kind, stops, splits in sorted(
+            rows, key=lambda r: (r[0].get("started_at") or "")):
+        sheet = sheet_bias(store, session)
+        print(f"{session['id']:>5} {kind:<9} {len(splits):>6} "
+              f"{_mean([s.front_min_slip for s in stops]):>7.3f} "
+              f"{_mean([s.rear_min_slip for s in stops]):>7.3f} "
+              f"{st.mean(splits):>7.3f} "
+              f"{_mean([s.decel_g for s in stops]):>6.2f} "
+              f"{('--' if sheet is None else f'{sheet:+.0f}'):>6}  "
+              f"{(session.get('started_at') or '')[:16]}")
+
+    spread = [st.mean(r[3]) for r in rows]
+    print(f"\n  split ranges {min(spread):+.3f} to {max(spread):+.3f} across "
+          f"{len(rows)} sessions.")
+    print("  A spread this wide on one car at one circuit is a setting that "
+          "moved - but ABS,\n  compound, fuel and how hard the stop was taken "
+          "move it too, and none of those\n  is recorded against a braking "
+          "event either. It says the channel is SENSITIVE\n  enough, not what "
+          "it was sensitive to.")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db")
@@ -314,6 +386,9 @@ def main() -> int:
     ap.add_argument("--bias", type=float,
                     help="the brake balance these runs were driven at, where "
                          "the sheet does not carry it")
+    ap.add_argument("--by-session", action="store_true",
+                    help="every session's split, oldest first - the view that "
+                         "shows whether the setting moved")
     ap.add_argument("--trail", action="store_true",
                     help="also report the trail-braking phase")
     args = ap.parse_args()
@@ -321,6 +396,11 @@ def main() -> int:
         raise SystemExit("give --event or --session")
 
     store = Store(args.db) if args.db else Store()
+    if args.by_session:
+        if args.event is None:
+            raise SystemExit("--by-session needs --event")
+        by_session(store, args.event)
+        return 0
     by_bias, trail = collect(store, event_id=args.event,
                              session_id=args.session, override=args.bias)
     report(by_bias, trail, show_trail=args.trail)
