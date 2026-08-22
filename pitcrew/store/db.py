@@ -955,8 +955,40 @@ class Store:
         without the telemetry the export depends on.
         """
         with self._write() as conn:
+            # **A plain INSERT, and it used to be INSERT OR REPLACE.**
+            #
+            # `laps` is UNIQUE(session_id, lap_num), and both `lap_frames`
+            # and `grip_observations` reference `laps(id) ON DELETE CASCADE`
+            # with `PRAGMA foreign_keys = ON`. A REPLACE on that constraint
+            # is a DELETE followed by an INSERT, so it cascades. Reproduced
+            # on a copy of the live database - one statement, one lap:
+            #
+            #     BEFORE  id=1    compound='RS'   frames=1  grip=7
+            #     AFTER   id=364  compound=None   frames=0  grip=0
+            #
+            # It destroyed the raw 60 Hz blob, which is the one thing in this
+            # database that cannot be recreated, took seven grip observations
+            # with it, dropped the driver's own compound, and reissued the
+            # lap id so that anything holding the old one now points at
+            # nothing. It reported success.
+            #
+            # The failure modes are not comparable. A plain INSERT raises
+            # `IntegrityError` on a collision, `controller.py` already
+            # catches `sqlite3.Error` around this call and puts "Lap NOT
+            # saved - the database rejected it" on the driver's screen. So
+            # the choice is between a visible refusal and silent,
+            # unrecoverable loss - and this app has had several lap-counting
+            # regressions (a rolling start losing a lap, phantom fragment
+            # laps, twenty-seven driven against twenty-six stored), any one
+            # of which is what would deliver the collision.
+            #
+            # Not reachable today: `lap_num` is `len(self._laps) + 1` and
+            # `_laps` is only ever appended to, and every `bridge.reset()` is
+            # followed by a `start_session()` with a fresh id. Changed
+            # because "not reachable today" is not a property anyone can
+            # keep, and the cost of being wrong about it is the telemetry.
             cur = conn.execute(
-                "INSERT OR REPLACE INTO laps "
+                "INSERT INTO laps "
                 "(session_id, lap_num, lap_time_ms, delta_ms, fuel_start, fuel_end, "
                 " fuel_used, position, compound, is_pit_lap, is_out_lap, gear_ratios, "
                 " tyres_changed, fuel_added_l, tod_start_ms, tod_end_ms, "

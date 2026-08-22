@@ -282,3 +282,52 @@ def test_a_foreign_schema_version_is_refused(tmp_path):
 
     with pytest.raises(RuntimeError, match="schema v43"):
         Store(path)
+
+
+# --------------------------------------- the lap that ate the previous one
+
+def test_a_repeated_lap_number_is_refused_not_replaced(store: Store,
+                                                       event_id: int):
+    """**`INSERT OR REPLACE` on `laps` cascades the telemetry away.**
+
+    `laps` is UNIQUE(session_id, lap_num), and `lap_frames` and
+    `grip_observations` both reference `laps(id) ON DELETE CASCADE` with
+    foreign keys on. A REPLACE on that constraint is a DELETE and an INSERT,
+    so it cascades. Reproduced against a copy of the live database - one
+    statement destroyed the raw 60 Hz blob, took seven grip observations with
+    it, dropped the driver's compound, reissued the lap id, and reported
+    success.
+
+    The blob is the one thing in this database that cannot be recreated.
+
+    A plain INSERT raises instead, `controller` already catches
+    `sqlite3.Error` around this call, and the driver gets "Lap NOT saved -
+    the database rejected it" on screen. A visible refusal is the right
+    failure; silent unrecoverable loss is not.
+    """
+    import sqlite3
+
+    session_id = store.start_session(event_id, "practice")
+    recorder = LapRecorder()
+    rps = rolling_wheel_rps(50.0)
+    for index in range(8):
+        recorder.record_frame(make_packet(
+            speed_ms=50.0, time_of_day_ms=index * 16,
+            wheel_rps_fl=rps, wheel_rps_fr=rps,
+            wheel_rps_rl=rps, wheel_rps_rr=rps))
+    frames = recorder.take_lap()
+    assert frames is not None
+
+    lap_id = store.add_lap(session_id, a_lap(lap_num=1), frames)
+    assert store.get_lap_frames(lap_id) is not None
+
+    with pytest.raises(sqlite3.Error):
+        store.add_lap(session_id, a_lap(lap_num=1, lap_time_ms=99_999), frames)
+
+    # The first lap, its id and its telemetry all survive the attempt.
+    stored = [row for row in store.list_laps(session_id) if row["lap_num"] == 1]
+    assert len(stored) == 1
+    assert stored[0]["id"] == lap_id, "the lap id was reissued"
+    assert stored[0]["lap_time_ms"] == 92_000, "the original lap was replaced"
+    assert store.get_lap_frames(lap_id) is not None, (
+        "the raw telemetry was cascade-deleted by a duplicate lap number")
