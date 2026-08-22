@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import math
 
+from pitcrew.telemetry import recorder
 from pitcrew.telemetry.recorder import (
+    BLOB_FORMAT,
     FRAME_FIELDS,
     SAMPLE_HZ,
     LapRecorder,
     _VERSION_KEY,
     decode_frames,
+    encode_frames,
     repair_frames,
 )
 
@@ -425,3 +428,91 @@ def test_time_in_the_menus_is_not_reported_as_a_dropped_feed():
 
     assert recorder.stream_gaps == 0
     assert recorder.lost_packets == 0
+
+
+# ----------------------------------- the lap crossing that starved the seat
+
+def _lap_rows(count: int = 400) -> list[list]:
+    """Rows shaped like a real lap: every column filled, speeds varying."""
+    rows = []
+    for index in range(count):
+        row = [None] * len(FRAME_FIELDS)
+        row[FRAME_FIELDS.index("t_ms")] = index * 17
+        row[FRAME_FIELDS.index("speed_kph")] = round(80.0 + (index % 150), 2)
+        row[FRAME_FIELDS.index("throttle_pct")] = float(index % 101)
+        row[FRAME_FIELDS.index("lat_g")] = round((index % 30) / 10.0, 3)
+        rows.append(row)
+    return rows
+
+
+def test_the_chunked_encode_writes_byte_identical_json():
+    """**`json` does not release the GIL and `zlib` does.**
+
+    Measured 22 Aug 2026 against a 100 Hz probe standing in for the audio
+    callback, with `sys.setswitchinterval(0.0005)` already in force: one
+    `json.dumps` of a lap held the GIL for 85 ms and cost 39 of 73 audio
+    blocks. The same rows in slices cost 0.6 ms and none. That underfeed is
+    what degrades the transducer's endpoint until the machine is rebooted, so
+    the lap crossing is a hardware fault with a software cause.
+
+    The blob's contract is "zlib of this JSON". The compressed framing may
+    differ - streaming deflate is a different but equally valid stream - but
+    the JSON inside it must not, or a stored lap depends on which code path
+    wrote it.
+    """
+    import json
+    import zlib
+
+    rows = _lap_rows()
+    single = json.dumps(
+        {"format": BLOB_FORMAT, "v": recorder.FRAME_SCHEMA_VERSION,
+         "fields": list(FRAME_FIELDS), "rows": rows},
+        separators=(",", ":")).encode("utf-8")
+
+    assert zlib.decompress(encode_frames(rows)) == single, (
+        "the chunked encode changed the stored JSON, not just its framing")
+
+
+def test_the_chunked_encode_round_trips():
+    rows = _lap_rows()
+    assert decode_frames(encode_frames(rows)) == decode_frames(
+        encode_frames(rows)), "not deterministic"
+    decoded = decode_frames(encode_frames(rows))
+    assert len(decoded) == len(rows)
+    assert decoded[7]["speed_kph"] == rows[7][FRAME_FIELDS.index("speed_kph")]
+
+
+def test_a_lap_carries_its_own_top_speed():
+    """**Taken off the rows, not read back out of the blob.**
+
+    `Store._note_top_speed` used to `decode_frames` the lap it had just
+    encoded three lines earlier, to take one maximum: 99 ms, about 30 ms of
+    it `json.loads` holding the GIL, on the Qt thread, at every crossing. The
+    same answer off the rows in hand is 0.9 ms - 108x - and it is the pattern
+    `crawl_s`, `off_track_s` and `spin_s` already follow.
+    """
+    rows = _lap_rows()
+    off_rows = recorder.top_speed_kph(rows)
+    off_blob = max(f["speed_kph"] for f in decode_frames(encode_frames(rows))
+                   if f["speed_kph"] is not None)
+    assert off_rows == round(off_blob, 1), (
+        f"the fast path disagrees with the blob: {off_rows} vs {off_blob}")
+
+
+def test_a_spike_and_an_empty_lap_are_both_refused():
+    """The ratchet only ever goes up and feeds a divisor for every future
+    session at this circuit, so one bad frame must not move it - and nothing
+    plausible must return null rather than zero."""
+    spike = _lap_rows(10)
+    spike[4][FRAME_FIELDS.index("speed_kph")] = 9_999.0
+    assert recorder.top_speed_kph(spike) < recorder.MAX_PLAUSIBLE_KPH
+
+    blank = [[None] * len(FRAME_FIELDS) for _ in range(5)]
+    assert recorder.top_speed_kph(blank) is None, "missing is null, never zero"
+
+    zeros = _lap_rows(5)
+    for row in zeros:
+        row[FRAME_FIELDS.index("speed_kph")] = 0.0
+    assert recorder.top_speed_kph(zeros) is None, (
+        "a stationary lap reported a top speed of zero, which would ratchet "
+        "the event's reference down")

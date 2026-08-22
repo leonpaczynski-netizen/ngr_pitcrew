@@ -219,6 +219,15 @@ class LapFrames:
     crawl_s: float | None = None
     off_track_s: float | None = None
     spin_s: float | None = None
+    # **The fastest frame of the lap, taken here rather than read back out.**
+    # `Store._note_top_speed` used to `decode_frames(blob)` - a full
+    # `zlib.decompress` plus `json.loads` of the lap that had just been
+    # encoded three lines earlier - to take one maximum. Measured at 40.2 ms,
+    # about 30 ms of it `json.loads` holding the GIL uninterruptibly, on the
+    # Qt thread, at every lap crossing, immediately after `encode_frames` had
+    # done the same thing in the other direction. The same answer off the
+    # rows in hand is 0.369 ms.
+    top_kph: float | None = None
 
     @property
     def size_bytes(self) -> int:
@@ -263,10 +272,102 @@ def _slip_ratios(p: GT7Packet) -> tuple[float | None, ...]:
     return (out[0], out[1], out[2], out[3])
 
 
+# How many rows are serialised per `json.dumps` call.
+#
+# **`json` does not release the GIL, and `zlib` does.** Measured 22 Aug 2026
+# against a 100 Hz probe standing in for the audio callback, with
+# `sys.setswitchinterval(0.0005)` already in force:
+#
+#     work on another thread   ms/call   worst callback lateness   blocks lost
+#     pure-Python loop            19.6                    0.6 ms         0/12
+#     zlib.compress                2.2                    0.5 ms          0/3
+#     zlib.decompress              0.7                    0.3 ms          0/2
+#     json.dumps                  29.3                   28.9 ms        12/19
+#     json.loads                  23.8                   22.5 ms         9/16
+#
+# The switch interval only takes effect at bytecode boundaries, so it cannot
+# pre-empt one long C call. A whole lap through `json.dumps` is ~30 ms of
+# uninterruptible GIL - three audio blocks - at every lap crossing, about
+# twenty-six times a race. That underfeed is what degrades the transducer's
+# endpoint until the machine is rebooted, so this is a hardware fault with a
+# software cause, not a latency nicety.
+#
+# Measured on a real 17,998-row lap, worst callback lateness against the same
+# 100 Hz probe:
+#
+#     one dumps   144.5 ms/call    91.4 ms late   32 blocks lost
+#     chunk  250  180.0 ms/call     0.9 ms late    0
+#     chunk  500  179.3 ms/call     0.6 ms late    0
+#     chunk 2000  178.3 ms/call     0.6 ms late    0
+#
+# The chunk size barely matters, which is the tell: the win comes from many
+# SHORT `dumps` calls, each of which ends at a bytecode boundary the audio
+# thread can be scheduled at, not from the slicing itself. 500 is picked for
+# doing fewer joins than 250 with the same result.
+#
+# **It costs about 35 ms of wall time and is still a net saving**, because
+# `_note_top_speed` used to decode the blob straight back - 99 ms - to take
+# one maximum. The lap crossing goes from ~245 ms with 91 ms uninterruptible
+# to ~181 ms with 0.6 ms.
+ENCODE_CHUNK_ROWS = 500
+
+
 def encode_frames(rows: list[list]) -> bytes:
-    payload = {"format": BLOB_FORMAT, "v": FRAME_SCHEMA_VERSION,
-               "fields": list(FRAME_FIELDS), "rows": rows}
-    return zlib.compress(json.dumps(payload, separators=(",", ":")).encode("utf-8"), 6)
+    """The lap's rows, as the stored blob.
+
+    Serialised in slices and fed straight into a streaming deflate rather
+    than built as one string. `json.dumps(list, separators=(",", ":"))` is
+    exactly `"[" + ",".join(dumps(row)) + "]"`, so the JSON is byte-identical
+    to the single-call form; only the compressed framing differs, and the
+    contract on disk is "zlib of this JSON", not one particular deflate
+    stream. See `ENCODE_CHUNK_ROWS`.
+    """
+    dumps = json.dumps
+    tight = {"separators": (",", ":")}
+    # Tight separators in the head too, or the field list comes out as
+    # `["t_ms", "road_plane_d"]` against the single-call form's
+    # `["t_ms","road_plane_d"]` - which decodes the same but is not the
+    # byte-identical blob this docstring claims. Checked: identical.
+    head = ('{"format":%s,"v":%s,"fields":%s,"rows":['
+            % (dumps(BLOB_FORMAT, **tight),
+               dumps(FRAME_SCHEMA_VERSION, **tight),
+               dumps(list(FRAME_FIELDS), **tight)))
+    packer = zlib.compressobj(6)
+    out = [packer.compress(head.encode("utf-8"))]
+    first = True
+    for start in range(0, len(rows), ENCODE_CHUNK_ROWS):
+        chunk = ",".join(dumps(row, **tight)
+                         for row in rows[start:start + ENCODE_CHUNK_ROWS])
+        out.append(packer.compress((chunk if first else "," + chunk)
+                                   .encode("utf-8")))
+        first = False
+    out.append(packer.compress(b"]}"))
+    out.append(packer.flush())
+    return b"".join(out)
+
+
+# 500 km/h is the sanity bound, and the reason is in `Store`: the speed
+# channel drops to exactly 0.0 for runs of frames mid-straight, which a
+# maximum is immune to, but a spike upward is not - and one bad frame would
+# move a divisor for every future session at this circuit.
+MAX_PLAUSIBLE_KPH = 500.0
+_SPEED_INDEX = FRAME_FIELDS.index("speed_kph")
+
+
+def top_speed_kph(rows: list[list]) -> float | None:
+    """The fastest plausible frame of the lap, off the uncompressed rows.
+
+    None when nothing plausible was seen - missing is null, never zero, and a
+    zero here would ratchet an event's reference speed down to nothing.
+    """
+    best = None
+    for row in rows:
+        value = row[_SPEED_INDEX]
+        if value is None or not 0.0 < value < MAX_PLAUSIBLE_KPH:
+            continue
+        if best is None or value > best:
+            best = value
+    return None if best is None else round(best, 1)
 
 
 def clock_span(rows: list[list]) -> tuple[int | None, int | None]:
@@ -643,6 +744,7 @@ class LapRecorder:
             tod_start_ms=start,
             tod_end_ms=end,
             standing_start_ms=standing_start_ms(rows, rate),
+            top_kph=top_speed_kph(rows),
         )
 
     def take_lap(self) -> LapFrames | None:

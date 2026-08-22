@@ -1019,23 +1019,30 @@ class Store:
 
     def _note_top_speed(self, conn: sqlite3.Connection, session_id: int,
                         frames) -> None:
-        blob = getattr(frames, "blob", None)
-        if not blob:
-            return
-        try:
-            from pitcrew.telemetry.recorder import decode_frames
-            speeds = [f.get("speed_kph") for f in decode_frames(blob)]
-        except Exception:                                   # noqa: BLE001
-            return
-        seen = [v for v in speeds
-                if v is not None and 0.0 < v < self.MAX_PLAUSIBLE_KPH]
-        if not seen:
+        """Ratchet the event's reference speed up, if this lap beat it.
+
+        **The value arrives on `frames` now; this used to decode the blob to
+        find it.** `decode_frames(blob)` on the lap that had just been
+        encoded three lines earlier cost 40.2 ms, of which about 30 ms was
+        `json.loads` holding the GIL uninterruptibly - on the Qt thread, at
+        every lap crossing, while the audio callback needs the GIL a hundred
+        times a second. `LapRecorder.encode` takes the same maximum off the
+        uncompressed rows for 0.369 ms, which is the pattern `crawl_s`,
+        `off_track_s` and `spin_s` already follow.
+
+        A lap stored without the field - an older `LapFrames`, or a caller
+        passing its own object - simply does not move the reference, which is
+        the right failure: the ratchet only ever goes up, so a missed lap
+        costs nothing that the next one will not supply.
+        """
+        top = getattr(frames, "top_kph", None)
+        if top is None or not 0.0 < top < self.MAX_PLAUSIBLE_KPH:
             return
         conn.execute(
             "UPDATE events SET observed_top_kph = MAX(?, "
             "COALESCE(observed_top_kph, 0)) WHERE id = "
             "(SELECT event_id FROM sessions WHERE id = ?)",
-            (round(max(seen), 1), session_id))
+            (round(top, 1), session_id))
 
     def list_laps(self, session_id: int) -> list[dict]:
         rows = self._query(
