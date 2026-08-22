@@ -305,9 +305,15 @@ def gather(store, *, event_id: int | None = None, kind: str = "brief",
 
     session_kind = "race" if kind == "outcome" else "practice"
     context.session_kind = session_kind
-    laps = event_lap_inputs(store, event["id"], session_kind)
-    if not laps:
+    # **Read once and used twice.** `build_event_export` below wants the same
+    # laps, and used to read them again from scratch - the whole event
+    # decompressed and JSON-parsed a second time, 3.2 s on one event. They
+    # are handed over raw, because that function classifies them itself and
+    # neither classifier mutates.
+    raw_laps = event_lap_inputs(store, event["id"], session_kind)
+    if not raw_laps:
         return context
+    laps = raw_laps
 
     # **Classified before anything is counted off it**, exactly as the export
     # does and for the same reason: out-laps, incidents and laps whose fuel
@@ -342,7 +348,7 @@ def gather(store, *, event_id: int | None = None, kind: str = "brief",
     try:
         context.payload = build_event_export(
             store, event["id"], kind=session_kind,
-            game_version=game_version)
+            game_version=game_version, laps=raw_laps)
         context.payload_json = to_json(context.payload)
     except ExportRefused as exc:
         # Refusing to emit is the designed behaviour: the consumer is a

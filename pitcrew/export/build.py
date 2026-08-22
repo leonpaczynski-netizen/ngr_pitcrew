@@ -101,7 +101,12 @@ def event_lap_inputs(store, event_id: int, kind: str = "practice", *,
 
 
 def mark_incidents(laps: list[LapInput]) -> tuple[list[LapInput], dict]:
-    """Find the laps with an off or a spin in them and mark them in place.
+    """Find the laps with an off or a spin in them and mark them.
+
+    **Not in place**, despite what this said for a long time: the marked laps
+    come back as new objects from `replace`, and the caller's list is
+    untouched. That is what lets `prompts/context` hand its raw laps to
+    `build_event_export` and classify its own copy separately.
 
     Only laps whose frames were decoded can be judged. A lap without them is
     left alone rather than assumed clean — not measured is not the same as
@@ -248,17 +253,29 @@ def build_session_export(store, session_id: int, *, notes: str = "",
 def build_event_export(store, event_id: int, *, kind: str = "practice",
                        notes: str = "",
                        game_version: str | None = None,
-                       calibrated_at_race_multiplier: bool = True) -> dict:
+                       calibrated_at_race_multiplier: bool = True,
+                       laps: list[LapInput] | None = None) -> dict:
     """The payload for everything run at this event.
 
     This is what the driver exports: three runs at one circuit are one body of
     evidence about one car, and splitting them would hand the tune builder
     three thin samples instead of one usable one.
+
+    `laps` lets a caller that has already paid for the decode hand it over.
+    **The prompt builder had, and was paying twice**: `prompts/context` reads
+    every lap of the event to build its prose, then calls this, which read the
+    identical laps again - 3.2 s of duplicated decoding on one event.
+
+    They must be the RAW laps, exactly as `event_lap_inputs` returns them,
+    because this classifies them itself. That is safe to share: neither
+    `mark_incidents` nor `classify_exclusions` mutates - both build new lists
+    with `replace` - so a caller's own classification cannot reach this one.
     """
     sessions = store.list_sessions(event_id, kind)
     if not sessions:
         raise ValueError("nothing recorded for this event yet")
-    laps = event_lap_inputs(store, event_id, kind)
+    if laps is None:
+        laps = event_lap_inputs(store, event_id, kind)
     return _build(store, _merged_session(sessions), laps, notes=notes,
                   game_version=game_version,
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
