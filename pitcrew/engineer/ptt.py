@@ -27,6 +27,7 @@ and for what a press the app cut short comes back as.
 from __future__ import annotations
 
 import os
+import pathlib
 import threading
 
 from pitcrew.diagnostics import log
@@ -806,12 +807,133 @@ class SemanticMatcher:
     it asks `moonshine_api` for a symbol that release does not define.
     """
 
-    def __init__(self, phrases=None, *, model=None) -> None:
+    def __init__(self, phrases=None, *, model=None, cache=True) -> None:
         self._phrases = phrases or PHRASES
         self._model = model if model is not None else self._load()
         self._embeddings: dict[str, tuple[str, object]] = {}
-        if self._model is not None:
-            self._embed_phrases()
+        if self._model is None:
+            return
+        if cache and self._load_cached():
+            return
+        self._embed_phrases()
+        if cache:
+            self._write_cache()
+
+    # ------------------------------------------------------------ the cache
+    #
+    # **The whole of this exists because embedding the phrase list cost about
+    # twenty seconds of every launch, on the Qt thread, before the window was
+    # shown.** Measured 22 Aug 2026: 230 phrases at 66-99 ms each. The comment
+    # below reasons about "forty-six short phrases" - the list has grown five
+    # times since and the cost assumption never moved with it.
+    #
+    # The output is deterministic: `PHRASES` is a frozen module constant and
+    # the q4 weights are a fixed file, so every launch recomputed the same
+    # 230 vectors. It is a pure function of two things that rarely change,
+    # which is the definition of something that should be cached rather than
+    # threaded - no worker, no handoff, no "still loading" state to get wrong.
+
+    CACHE_VERSION = 1
+    # Between a phrase and the next, so that two different phrase lists
+    # cannot hash the same by running into each other. A byte no phrase
+    # can contain.
+    SEPARATOR = bytes([0])
+
+    @staticmethod
+    def _cache_path():
+        from pitcrew.paths import DATA_DIR
+
+        return DATA_DIR / "ptt_embeddings.npz"
+
+    def _cache_key(self) -> str:
+        """What the cached vectors were computed from.
+
+        The phrase list AND the model. A phrase edited, added or removed
+        changes the first; a different model or variant changes the second.
+        Either one invalidates every vector, so both are in the key and a
+        miss simply recomputes.
+        """
+        import hashlib
+
+        digest = hashlib.sha256()
+        digest.update(str(self.CACHE_VERSION).encode())
+        for intent in sorted(self._phrases):
+            digest.update(intent.encode("utf-8"))
+            for phrase in self._phrases[intent]:
+                digest.update(self.SEPARATOR)
+                digest.update(phrase.encode("utf-8"))
+        model_file = getattr(self._model, "model_path", None) or getattr(
+            self._model, "path", None)
+        if model_file:
+            try:
+                stat = pathlib.Path(str(model_file)).stat()
+                digest.update(f"{model_file}:{stat.st_size}:{stat.st_mtime_ns}"
+                              .encode("utf-8"))
+            except OSError:
+                digest.update(str(model_file).encode("utf-8"))
+        return digest.hexdigest()
+
+    def _load_cached(self) -> bool:
+        path = self._cache_path()
+        try:
+            if not path.exists():
+                return False
+            import numpy as np
+
+            with np.load(path, allow_pickle=False) as stored:
+                if str(stored["key"]) != self._cache_key():
+                    log("ptt").info(
+                        "the phrase embeddings on disk are for a different "
+                        "phrase list or model - recomputing them")
+                    return False
+                phrases = [str(p) for p in stored["phrases"]]
+                intents = [str(i) for i in stored["intents"]]
+                vectors = stored["vectors"]
+            # Back to lists, which is what `calculate_embedding` returns and
+            # therefore what `distance` has always been handed. Verified to
+            # give a bit-identical distance either way, but matching the type
+            # the model produces costs nothing and removes the question.
+            self._embeddings = {
+                phrase: (intent, vectors[row].tolist())
+                for row, (phrase, intent) in enumerate(zip(phrases, intents))}
+        except Exception as exc:                 # noqa: BLE001
+            # A cache that will not load is not a failure - it is a slow
+            # start. Never let it be more than that.
+            log("ptt").info("could not read the phrase embeddings (%s: %s) - "
+                            "recomputing them", type(exc).__name__, exc)
+            self._embeddings = {}
+            return False
+        log("ptt").info("phrase embeddings read from %s (%d phrases)",
+                        path.name, len(self._embeddings))
+        return bool(self._embeddings)
+
+    def _write_cache(self) -> None:
+        if not self._embeddings:
+            return
+        path = self._cache_path()
+        try:
+            import numpy as np
+
+            phrases = list(self._embeddings)
+            intents = [self._embeddings[p][0] for p in phrases]
+            vectors = np.asarray([self._embeddings[p][1] for p in phrases],
+                                 dtype=np.float32)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Written beside itself and moved into place, so a launch
+            # interrupted here leaves the old cache rather than half a file.
+            spare = path.with_suffix(".npz.tmp")
+            with open(spare, "wb") as handle:
+                np.savez_compressed(handle, key=np.array(self._cache_key()),
+                                    phrases=np.array(phrases),
+                                    intents=np.array(intents),
+                                    vectors=vectors)
+            spare.replace(path)
+            log("ptt").info("phrase embeddings written to %s (%d phrases)",
+                            path.name, len(phrases))
+        except Exception as exc:                 # noqa: BLE001
+            log("ptt").info("could not save the phrase embeddings (%s: %s) - "
+                            "they will be recomputed next time",
+                            type(exc).__name__, exc)
 
     @staticmethod
     def _load():

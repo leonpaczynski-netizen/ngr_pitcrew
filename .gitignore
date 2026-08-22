@@ -10,6 +10,11 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 
+# Derived: the phrase embeddings are a pure function of the phrase
+# list and the model file, rebuilt on demand if absent or stale.
+data/ptt_embeddings.npz
+data/ptt_embeddings.npz.tmp
+
 # Python
 __pycache__/
 *.py[cod]
