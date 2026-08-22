@@ -6,17 +6,47 @@
 
 ---
 
-# 🟡 ONE CAR RE-READ, TWO STILL STALE — 21 August 2026
+# 🟡 TWO CARS READ ON v1.71, TWO STILL STALE — updated 22 August 2026
 
-**GT7 v1.71 (20 August 2026) said, in the official update notes, that adjustment ranges were revised for suspension, differential and aerodynamics. They were. The RSR has been re-read and five endpoints moved.**
+**GT7 v1.71 (20 August 2026) said, in the official update notes, that adjustment ranges were revised for suspension, differential and aerodynamics. They were. Two cars have now been read on v1.71 and the same five endpoints moved on both.**
 
 | Car | Status |
 |---|---|
 | **Porsche 911 RSR (991) '17** | ✅ **Re-read 21 Aug 2026 on v1.71. Five endpoints moved.** |
+| **Porsche 911 GT3 R (992) '22** | ✅ **First reading, 22 Aug 2026, on v1.71. New car — see §0.1.** |
 | Lamborghini Huracán GT3 '15 | 🔴 **v1.70 reading. Stale. Do not issue.** |
 | Ford Shelby GT350R '16 | 🔴 **v1.70 reading. Stale. Do not issue.** |
 
 **Full measurement write-up, with the telemetry that came from the same session: `17-v1.71-measured-results.md` §6.**
+
+## §0.1 ⭐ The 992 GT3 R — a new car, and it settles half of `17` §6's open question
+
+**Read 22 Aug 2026, filed in `data/pitcrew.db` stamped v1.71, verified.** This is the first reading this car has ever had; there is no v1.70 column for it and there never will be.
+
+**It reproduces the RSR's v1.71 register on 20 of 22 parameters, including all five moved endpoints:**
+
+| Parameter | v1.70 (Huracán / Shelby) | RSR, 21 Aug | **992 GT3 R, 22 Aug** |
+|---|---|---|---|
+| LSD initial torque | 5 – 60 | 0 – 30 | **0 – 30** ✅ |
+| LSD acceleration | 5 – 60 | 0 – 100 | **0 – 100** ✅ |
+| LSD braking | 5 – 60 | 0 – 99 | **0 – 100** ⚠️ |
+| Damper expansion F | 30 – 50 | 30 – 60 | **30 – 60** ✅ |
+| Damper expansion R | 30 – 50 | 30 – 60 | **30 – 60** ✅ |
+
+**`17` §6 closed with an explicit caveat and this addresses it.** That caveat was that the RSR's "v1.70 column" had been borrowed from the Huracán, so the comparison rested on the assumption that two Gr.3 cars shared endpoints. **A second Gr.3 car, different manufacturer, read a day later, reproducing all five — makes the version the cause rather than the car.**
+
+**Status: [MEASURED — two cars, in house]. The LSD and damper-expansion changes are not car-specific.**
+
+> **Still open: Gr.3-wide, or fleet-wide?** Both cars read so far are Gr.3. **The Shelby decides it** — a road car whose other endpoints differ wildly (ride height 75–160, NF 1.88–3.70, downforce 60–160) and which still reads the old 5–60 LSD. **If it re-reads as 0–30 / 0–100 / 0–100, the change is fleet-wide. Five minutes.**
+
+### ⚠️ Two cells on the 992 that want a second look
+
+| Cell | 992 reads | Every other car in the register | |
+|---|---|---|---|
+| **`top` (max speed setting)** | **150 – 450** | **200 – 800** — all three, including the Shelby | **The only cell in the whole register that breaks pattern.** 200–800 looks universal rather than per-car. Unused so far, so it costs nothing to re-check — but it poisons every gearbox calculation on this car if it is wrong. |
+| **`lsd_b`** | 0 – **100** | RSR reads 0 – **99** | The RSR's 99 and the 992's 100 cannot both be right on two cars whose other 21 cells are identical. One was mis-read by one click. Trivial in effect. |
+
+**First sheet issued against this register: `setups/2026-08-22-992-gt3r-spa-24h.md`** — and its 20 values parsed with **0 clamped**, which is an independent confirmation that the recorded endpoints admit the values written against them.
 
 ## ⭐ What moved on the RSR
 
