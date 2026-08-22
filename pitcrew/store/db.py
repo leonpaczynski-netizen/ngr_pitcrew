@@ -890,6 +890,19 @@ class Store:
                  outcome.note or "", _now()))
         return outcome.status
 
+    def set_session_video(self, session_id: int, *, path: str | None,
+                          started_at: str | None) -> None:
+        """Where this session's capture is, and the wall clock at its second 0.
+
+        **Written only when the app itself started the recording.** A capture
+        made by hand has no zero the app can know, and inventing one would put
+        every seek in `race/video_index.py` minutes out while reading as exact.
+        """
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE sessions SET video_path = ?, video_started_at = ? "
+                "WHERE id = ?", (path, started_at, session_id))
+
     def end_session(self, session_id: int, *, at: str | None = None) -> None:
         """Close a session.  `at` is for closing one the app never got to
         close itself: stamping it now would claim it ran until the next

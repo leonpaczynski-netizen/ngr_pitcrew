@@ -800,6 +800,16 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("purpose", "TEXT"),
     ),
     "sessions": (
+        # **Where the capture is, and the wall clock at video second zero.**
+        # `tools/read_hud_wear.py` had to be handed the zero with `--offset`,
+        # and its own comment admits the estimate is "a few seconds early".
+        # If the app starts the OBS recording it does not have to estimate:
+        # both stamps come off this machine's clock, so a lap's position in
+        # the capture is a subtraction. Null on every session the app did not
+        # start the recording for, which is honest - `--offset` is still the
+        # way into those.
+        ("video_path", "TEXT"),
+        ("video_started_at", "TEXT"),
         # **The GT7 version this session was RECORDED under.**
         #
         # It lived on the event and in settings, and neither can be right: on

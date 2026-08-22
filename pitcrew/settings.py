@@ -229,6 +229,19 @@ class Settings:
     # would be about a quarter of one core of OBS, which is not affordable.
     # Set it with `hud_source = screen`, where the same rate costs 0.01%.
     hud_sample_interval_s: float = 0.0
+    # **Whether the app starts and stops the OBS recording with the session.**
+    #
+    # The point is not the recording - he records anyway - it is the ZERO.
+    # `tools/read_hud_wear.py` has to be handed the video's zero point by hand
+    # with `--offset`, and its own comment admits the estimate is "a few
+    # seconds early". If the app starts the recording, both stamps come off
+    # this machine's clock and every lap's position in the capture is a
+    # subtraction rather than a guess - see `race/video_index.py`.
+    #
+    # Off by default: it writes gigabytes to a disk the app does not own, and
+    # that is not something that should begin because the app was updated. It
+    # will not stop a recording it did not start.
+    obs_record_sessions: bool = False
 
     # --- shift beep
     beep_enabled: bool = True

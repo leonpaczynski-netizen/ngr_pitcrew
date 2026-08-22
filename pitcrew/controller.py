@@ -2123,6 +2123,12 @@ class PitCrewController(QObject):
             self.practice.set_recording(False)
             return
 
+        # **After the session exists, before the first lap can land.** The
+        # zero has to be stamped against a session row, and it has to be
+        # stamped before anything is recorded against it, or the first laps
+        # sit outside the capture the index says contains them.
+        self._start_video()
+
         self.voice.warm()
         self.listener = UDPListener(
             "0.0.0.0", self.feed_port, self.bridge.on_packet,
@@ -2160,6 +2166,73 @@ class PitCrewController(QObject):
         self.practice.set_status(status)
         self.announce("Recording", "Go out when you are ready.")
 
+    # ------------------------------------------- the capture's own zero point
+
+    def _start_video(self) -> None:
+        """Ask OBS to record, and write down the wall clock at second zero.
+
+        **The zero is the whole point.** With it, a lap's position in the
+        capture is `recorded_at - video_started_at`; without it the offline
+        tool has to be handed an offset by hand and admits its estimate is a
+        few seconds early.
+
+        Silent on every failure. A recording is a convenience and a session is
+        not, so nothing here may stop one opening.
+        """
+        if not self.settings.obs_record_sessions or self.session_id is None:
+            return
+        from pitcrew.telemetry.hud import ObsSource
+
+        source = ObsSource(self.settings.obs_host, self.settings.obs_port,
+                           self.settings.obs_password)
+        started, why = source.start_recording()
+        if started is None:
+            log("session").info("could not start the OBS recording: %s", why)
+            return
+        if not started:
+            # **Already running, so the app does not own it and cannot know
+            # its zero.** Recording nothing is better than recording a zero
+            # that is wrong by however long it had been going.
+            log("session").info(
+                "OBS was already recording - this session gets no video zero, "
+                "because the app did not start the capture and cannot know "
+                "where in it second zero fell")
+            return
+        stamp = datetime.datetime.now().isoformat(timespec="seconds")
+        self.store.set_session_video(self.session_id, path=None,
+                                     started_at=stamp)
+        self._video_started = True
+        log("session").info("OBS recording started, video zero at %s", stamp)
+
+    def _stop_video(self, session_id: int | None) -> None:
+        """Stop the recording this app started, and file where OBS put it.
+
+        **Never stops one it did not start** - `ObsSource.stop_recording`
+        already refuses, and `_video_started` is the app's own half of the
+        same rule.
+        """
+        if not getattr(self, "_video_started", False):
+            return
+        self._video_started = False
+        from pitcrew.telemetry.hud import ObsSource
+
+        source = ObsSource(self.settings.obs_host, self.settings.obs_port,
+                           self.settings.obs_password)
+        path, why = source.stop_recording()
+        if path is None:
+            log("session").info("OBS recording not stopped cleanly: %s", why)
+            return
+        if session_id is not None:
+            # **The zero was written at the start and must survive.** Only the
+            # path is new here, so it is read back and passed through rather
+            # than left to default to None - which would throw away the one
+            # thing this whole path exists to record.
+            row = self.store.get_session(session_id) or {}
+            self.store.set_session_video(
+                session_id, path=path,
+                started_at=row.get("video_started_at"))
+        log("session").info("OBS recording written to %s", path)
+
     def stop_practice(self) -> None:
         # The coach before the listener, so no frame can arrive for a coach
         # whose session is being closed under it.
@@ -2172,10 +2245,14 @@ class PitCrewController(QObject):
         self._health.stop()
         self.ptt.stop()
         if self.session_id is not None:
-            self.store.end_session(self.session_id)
-            log("session").info("practice session %s closed", self.session_id)
+            closing = self.session_id
+            self.store.end_session(closing)
+            log("session").info("practice session %s closed", closing)
             self.session_id = None
             self.session_kind = None
+            # After the session is closed, so a slow websocket cannot hold the
+            # close open - the session row is what matters and it is written.
+            self._stop_video(closing)
 
         self.practice.set_recording(False)
         event = self.active_event()
