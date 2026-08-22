@@ -1868,11 +1868,19 @@ class PitCrewController(QObject):
             s.get("compound") for s in stints
             if isinstance(s, dict) and s.get("compound"))
         sampler = getattr(self, "_hud", None)
+        # **`events.race_laps` holds MINUTES when `race_type` is `time`, and
+        # `race_minutes` is NEVER written** - `race/coordinator.py` says so in
+        # its own docstring. Gating on `race_minutes` therefore never fired,
+        # so every timed race was briefed as a lap count: Spa's 120 minutes
+        # was announced as "120 laps", and Monza's 50 and Yas's 30 the same
+        # way. Read `race_type`, which is the field that actually says.
+        timed = (event.get("race_type") or "laps") == "time"
+        declared = event.get("race_laps")
         lines = brief(Instruments(
             has_plan=plan is not None,
-            race_laps=event.get("race_laps") if not event.get("race_minutes")
-            else None,
-            race_minutes=event.get("race_minutes"),
+            race_laps=None if timed else declared,
+            race_minutes=(float(declared) if declared else None) if timed
+            else event.get("race_minutes"),
             stops=(len(stints) - 1) if stints else None,
             compounds=compounds,
             # **Only if it is actually working now.** Switched on, built, and
