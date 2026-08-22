@@ -25,6 +25,7 @@ import math
 import statistics
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
+from contextvars import ContextVar
 from itertools import permutations, product
 
 from pitcrew.store.tyres import get_by_code
@@ -1038,6 +1039,43 @@ def build_plan(inputs: RaceInputs, stops: int,
     return plan
 
 
+# **Scratch space for one `recommend()` call, and nothing wider.**
+#
+# The search costs the same handful of (compound, length) pairs hundreds of
+# thousands of times: profiled, 968,375 calls to `stint_cost_s` against 84
+# distinct answers. The `lru_cache` on `_stint_seconds` already absorbs the
+# arithmetic - 84 misses out of 970,658 - so what is left is call overhead
+# re-deriving numbers the cache already holds.
+#
+# A `ContextVar` rather than a module global because it must not outlive the
+# call. `RaceInputs` is a mutable dataclass rebuilt with `replace()` every
+# lap of a race, so a cache that survived one `recommend` could serve one
+# race's costs to another - and a plan costed on the previous lap's fuel is
+# wrong in a way nothing downstream would notice. Outside a `recommend` the
+# var is None and every helper simply does not cache.
+_SCRATCH: ContextVar[dict | None] = ContextVar("strategy_scratch",
+                                               default=None)
+
+
+def _cost_signature(profile: CompoundProfile) -> tuple:
+    """Everything about a compound that changes what a stint costs.
+
+    **Not the profile itself, for two reasons.** `profile_for` returns a
+    FRESH object for a compound with no stored profile, so identity is not
+    stable across candidates and `id()` would be wrong under GC. And the
+    dataclass is not reliably hashable: `window` is a dict when a temperature
+    window was measured, so hashing a real measured profile raises
+    `TypeError` - which is a crash in the middle of a race plan, and is
+    exactly what happened when this was first written keyed on the profile.
+
+    So the key is the two fields `stint_time_s` actually reads. That is a
+    contract, and `test_the_cost_signature_covers_everything_the_cost_reads`
+    holds it: if this function ever starts reading a third field, the cache
+    would silently serve the wrong cost, and that test fails first.
+    """
+    return (profile.pace_delta_s, profile.wear_per_lap)
+
+
 def stint_cost_s(inputs: RaceInputs, profile: CompoundProfile, laps: int, *,
                  first: bool) -> float:
     """What one stint costs, **including the stop that put the car on it**.
@@ -1050,12 +1088,21 @@ def stint_cost_s(inputs: RaceInputs, profile: CompoundProfile, laps: int, *,
     are not - a 3-lap stint followed by a 14-lap one was being charged 3 laps
     of fuel for a stop that actually fills for 14.
     """
+    scratch = _SCRATCH.get()
+    key = (_cost_signature(profile), laps, first) if scratch is not None else None
+    if key is not None:
+        hit = scratch["cost"].get(key)
+        if hit is not None:
+            return hit
+
     fuel = stint_fuel_l(laps, inputs)
     total = stint_time_s(laps, inputs, fuel_at_start_l=fuel, profile=profile)
     if not first:
         total += inputs.pit_loss_s + inputs.pit_dead_time_s
         if fuel:
             total += refuel_time_s(fuel, inputs)
+    if key is not None:
+        scratch["cost"][key] = total
     return total
 
 
@@ -1088,6 +1135,27 @@ def optimal_split(inputs: RaceInputs, profiles: list[CompoundProfile],
     # f(index, remaining) -> (cost, first stint length)
     best: dict[tuple[int, int], tuple[float, int]] = {}
 
+    # **The suffix is shared across candidate sequences, not just within
+    # one.** `solve(index, remaining)` depends on nothing but the profiles
+    # and caps from `index` onward, the laps remaining, and whether this is
+    # the first stint. Thousands of candidates share a tail - every sequence
+    # ending "...RM, RH" solves the same sub-problem - and the search was
+    # rebuilding it per candidate.
+    #
+    # The key carries `index == 0` and not `index`, because `first` is what
+    # the cost depends on and a suffix of length four can be either the whole
+    # of a four-stint sequence (first=True) or the tail of a six-stint one
+    # (first=False). Keying on the tail alone would serve one's answer to the
+    # other, and the difference is a whole pit stop.
+    scratch = _SCRATCH.get()
+    shared = scratch["split"] if scratch is not None else None
+    # Signatures rather than the profiles themselves - same reason as
+    # `_cost_signature`: a measured profile carries a `window` dict and is
+    # not hashable.
+    signatures = [_cost_signature(profile) for profile in profiles]
+    profile_tail = [tuple(signatures[i:]) for i in range(count)]
+    caps_tail = [tuple(caps[i:]) for i in range(count)]
+
     def solve(index: int, remaining: int) -> tuple[float, int]:
         if index == count - 1:
             if 1 <= remaining <= caps[index]:
@@ -1097,6 +1165,13 @@ def optimal_split(inputs: RaceInputs, profiles: list[CompoundProfile],
         key = (index, remaining)
         if key in best:
             return best[key]
+        wide = ((index == 0, profile_tail[index], caps_tail[index], remaining)
+                if shared is not None else None)
+        if wide is not None:
+            hit = shared.get(wide)
+            if hit is not None:
+                best[key] = hit
+                return hit
         # Leave at least one lap for every stint still to come.
         highest = min(caps[index], remaining - (count - index - 1))
         answer = (math.inf, 0)
@@ -1107,6 +1182,8 @@ def optimal_split(inputs: RaceInputs, profiles: list[CompoundProfile],
             if here + rest < answer[0]:
                 answer = (here + rest, laps)
         best[key] = answer
+        if wide is not None:
+            shared[wide] = answer
         return answer
 
     cost, _ = solve(0, total_laps)
@@ -1309,6 +1386,18 @@ def recommend(inputs: RaceInputs, *, max_stops: int = 4) -> list[Plan]:
     if inputs.lap_time_ms <= 0:
         raise StrategyImpossible(
             "no reference lap time - run a practice lap first")
+
+    token = _SCRATCH.set({"cost": {}, "split": {}})
+    try:
+        return _recommend(inputs, max_stops=max_stops)
+    finally:
+        # Reset rather than left set: a plan costed on the previous lap's
+        # inputs is wrong in a way nothing downstream would notice.
+        _SCRATCH.reset(token)
+
+
+def _recommend(inputs: RaceInputs, *, max_stops: int = 4) -> list[Plan]:
+    """The search itself. See `recommend`, which owns the scratch space."""
 
     plans: list[Plan] = []
     narrowed_widths: list[int] = []

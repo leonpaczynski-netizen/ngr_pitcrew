@@ -72,6 +72,14 @@ APP_ID = "NextGearRacing.PitCrew"
 # stale by a crash the way a lock file can.
 _INSTANCE_MUTEX = None
 
+# The mutex's name, as a module constant so the tests can claim a private one.
+# **They must.** Using the real name means the suite cannot run while the app
+# is open - which on this rig is most of the time - and a suite that fails for
+# reasons the code did not cause is a suite that stops being read.
+# `Local\` scopes it to this login session, which is the right scope: two
+# desktops on one machine are two rigs.
+_INSTANCE_NAME = "Local\\" + APP_ID
+
 
 def _claim_sole_instance() -> str | None:
     """Refuse to start if another Pit Crew already owns the rig.
@@ -110,9 +118,7 @@ def _claim_sole_instance() -> str | None:
         kernel32.CreateMutexW.restype = wintypes.HANDLE
         kernel32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL,
                                           wintypes.LPCWSTR)
-        # `Local\` scopes it to this login session, which is the right scope:
-        # two desktops on one machine are two rigs.
-        handle = kernel32.CreateMutexW(None, False, "Local\\" + APP_ID)
+        handle = kernel32.CreateMutexW(None, False, _INSTANCE_NAME)
         if not handle:
             return None
         _INSTANCE_MUTEX = handle

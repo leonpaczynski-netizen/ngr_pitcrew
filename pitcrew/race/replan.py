@@ -137,7 +137,47 @@ REPLAN_NARROWED_MAX_STOPS = 2
 # budget on the linear part of the curve; everything above it is refused
 # without being attempted, and the post-hoc measurement stays as a backstop
 # for a shape this estimate does not anticipate.
-REPLAN_MAX_WORK = 1200
+#
+# **Recalibrated 23 Aug 2026, and it had to be.** The estimator counts search
+# WORK; the cap converts that into a time budget, and the conversion rate
+# changed when `recommend` started sharing its cost and dynamic-programming
+# results across candidate sequences. The same table, re-measured:
+#
+#     1 compound, 15 laps, timed        5 calls    1.4 ->   0.7 ms
+#     2 compounds, 15 laps, timed      62 calls   32   ->   8.1 ms
+#     3 compounds, 15 laps, timed     363 calls  234   ->  45.3 ms
+#     1 compound, 50 laps, timed        5 calls   38   ->   1.0 ms
+#     3 compounds, 50 laps, timed     363 calls 6351   ->  63.8 ms
+#
+# A hundred times faster at the wide end. Left at 1200 the cap would have gone
+# on refusing searches that now cost fifteen milliseconds, which is the whole
+# point of the change thrown away - and the estimate would have been wrong by
+# more than an order of magnitude in the direction that silently costs the
+# driver the better plan.
+#
+# **The budget is unchanged at about 40 ms.** That is what 1200 meant on the
+# old curve - 930 work measured 32 ms, so 1200 was ~41 ms - and it is
+# deliberately kept, because this runs on the Qt thread at a lap crossing and
+# the acceptable hitch has not changed just because the search got faster.
+# Only the units have.
+#
+# 5000 is where ~40 ms now falls, measured on the shapes the re-plan actually
+# runs (three profiled compounds, timed remainder):
+#
+#     laps left   max stops    work    was        now
+#            27           2    1053    ok        4.0 ms
+#            27           3    3240    REFUSED  15.0 ms   <- now allowed
+#            27           4    9801    REFUSED  48.3 ms   <- still refused
+#            20           3    2400    REFUSED  13.7 ms   <- now allowed
+#            12           4    4356    REFUSED  38.2 ms   <- now allowed
+#
+# The row that matters is the second. `self._replan_max_stops` latches DOWN
+# when a search is refused and is never restored, so the 3-stop shape was
+# ruled out on lap one and not reconsidered for the rest of the race - at
+# Monza on 18 Aug that is the plan that removes a stop and gains a whole lap.
+# It cost 165 ms then and costs 15 ms now; refusing it was right at 165 and
+# is indefensible at 15.
+REPLAN_MAX_WORK = 5000
 
 
 def replan_work(inputs: RaceInputs | None, laps_left: int,

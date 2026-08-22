@@ -662,3 +662,81 @@ def test_a_refusal_that_is_only_about_the_rules_does_not_blame_the_search():
     with pytest.raises(StrategyImpossible) as caught:
         recommend(inputs, max_stops=4)
     assert "narrowed" not in str(caught.value), str(caught.value)
+
+
+# ------------------------------ the cache key, and the contract it rests on
+
+def test_the_cost_signature_covers_everything_the_cost_reads():
+    """**The per-call cost cache is keyed on two fields, not on the profile.**
+
+    Not on the profile itself for two reasons, both of which bit: `profile_for`
+    returns a FRESH object for a compound with no stored profile, so identity
+    is unstable across candidates; and `CompoundProfile` is not reliably
+    hashable, because `window` is a dict whenever a temperature window was
+    measured. Keying on the profile raised `TypeError` on the first real
+    measured profile - a crash in the middle of a race plan.
+
+    So the key is `(pace_delta_s, wear_per_lap)`, which is what `stint_time_s`
+    reads. That is a contract, and this test is what holds it: if
+    `stint_cost_s` ever starts reading a third field, two profiles differing
+    only in that field would share a cache entry and one would silently get
+    the other's cost. This fails first.
+    """
+    from pitcrew.strategy.model import CompoundProfile, stint_cost_s
+
+    inputs = _wide_inputs(3, required=(), stops=0)
+    shared = dict(pace_delta_s=0.4, wear_per_lap=0.031)
+
+    # Same cost-determining fields, everything else deliberately different.
+    lean = CompoundProfile(code="AAA", source="assumed", **shared)
+    rich = CompoundProfile(
+        code="ZZZ", source="measured", laps_measured=44, stints_measured=6,
+        longest_stint_laps=19, window={"meanC": 88.0, "inWindow": True},
+        window_note="ran hot", pace_known=True, pace_basis="measured",
+        **shared)
+
+    for laps in (1, 7, 18):
+        for first in (True, False):
+            assert (stint_cost_s(inputs, lean, laps, first=first)
+                    == stint_cost_s(inputs, rich, laps, first=first)), (
+                f"the cost depends on a profile field the cache key does not "
+                f"carry (laps={laps}, first={first})")
+
+
+def test_a_measured_profile_does_not_crash_the_plan():
+    """The regression itself: a profile carrying a measured temperature
+    window has an unhashable `window` dict, and the search must not care."""
+    from pitcrew.strategy.model import CompoundProfile, RaceInputs, recommend
+
+    profiles = {
+        "RS": CompoundProfile(code="RS", pace_delta_s=0.0, wear_per_lap=0.05,
+                              source="measured",
+                              window={"meanC": 84.0, "inWindow": True}),
+        "RH": CompoundProfile(code="RH", pace_delta_s=1.1, wear_per_lap=0.027,
+                              source="measured",
+                              window={"meanC": 79.0, "inWindow": False}),
+    }
+    inputs = RaceInputs(
+        available_compounds=["RS", "RH"], race_laps=27, lap_time_ms=95_000,
+        fuel_per_lap_l=6.1, fuel_capacity_l=100.0, pit_loss_s=20.0,
+        wear_per_lap=0.04, compound_profiles=profiles, evidence_compound="RS")
+
+    plans = recommend(inputs)
+    assert plans, "a measured profile refused to plan at all"
+
+
+def test_the_scratch_space_does_not_outlive_the_call():
+    """`RaceInputs` is rebuilt with `replace()` every lap of a race, so a
+    cache that survived one `recommend` could serve one race's costs to
+    another - and a plan costed on the previous lap's fuel is wrong in a way
+    nothing downstream would notice."""
+    from pitcrew.strategy import model as M
+
+    assert M._SCRATCH.get() is None, "scratch left set before the call"
+    M.recommend(_wide_inputs(3, required=(), stops=0))
+    assert M._SCRATCH.get() is None, "scratch left set after the call"
+
+    # And after a refusal, which leaves by a different door.
+    with pytest.raises(M.StrategyImpossible):
+        M.recommend(_wide_inputs(3, stops=6), max_stops=4)
+    assert M._SCRATCH.get() is None, "scratch left set after a refusal"

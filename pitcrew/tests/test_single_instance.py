@@ -42,10 +42,22 @@ def _drop_claim() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _release_the_mutex():
-    """Each test starts owning nothing and leaves owning nothing. The handle
-    is process-wide state, so a test that kept it would decide the answer for
-    every test after it."""
+def _private_name(monkeypatch):
+    """A mutex name of this test run's own, and nothing owning it.
+
+    **The suite must be runnable while Pit Crew is open**, which on this rig
+    is most of the time. Using the real name meant a live app held the mutex
+    and four of these failed for a reason the code did not cause - and a
+    suite that fails for environmental reasons is a suite that stops being
+    read. Caught exactly that way: they passed, the driver started the app,
+    and they failed.
+
+    The process id keeps parallel runs apart as well.
+    """
+    # Built by extending the real name rather than spelling a new one, so
+    # there is no backslash to escape and no way for the two to drift apart.
+    monkeypatch.setattr(app, "_INSTANCE_NAME",
+                        f"{app._INSTANCE_NAME}.test.{os.getpid()}")
     _drop_claim()
     yield
     _drop_claim()
@@ -112,14 +124,16 @@ def test_a_genuinely_separate_process_is_refused():
     import textwrap
 
     assert app._claim_sole_instance() is None
+    # The child must claim the SAME private name, or it proves nothing.
     probe = textwrap.dedent(
         """
         import sys
         sys.path.insert(0, %r)
         from pitcrew import app
+        app._INSTANCE_NAME = %r
         print("REFUSED" if app._claim_sole_instance() else "ALLOWED")
-        """ % os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(app.__file__)))))
+        """ % (os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(app.__file__)))), app._INSTANCE_NAME))
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True,
                          text=True, timeout=120)
     assert out.stdout.strip() == "REFUSED", (

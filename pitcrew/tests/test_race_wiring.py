@@ -495,6 +495,9 @@ def test_an_oversized_search_narrows_before_it_stands_down(raced):
     fuelled by the plan approved before the green. The narrowed search that
     was never tried was 975 units and cost 19 ms against a 50 ms budget - the
     full one cost 161.
+
+    The cap is 5000 now and that exact shape costs 15 ms, so the test runs
+    one compound wider to stay on the same side of the line it is about.
     """
     from pitcrew.race.replan import (
         REPLAN_MAX_STOPS,
@@ -509,17 +512,27 @@ def test_an_oversized_search_narrows_before_it_stands_down(raced):
     inputs = controller._race_inputs
     assert inputs is not None
 
-    # The shape that refused: three profiled compounds and a race long enough
-    # that the full search is over the cap while the narrowed one is not.
+    # The shape that refused: enough profiled compounds that the full search
+    # is over the cap while the narrowed one is not.
+    #
+    # **Four compounds now, and it was three.** The cap was recalibrated from
+    # 1200 to 5000 on 23 Aug when `recommend` began sharing its cost and DP
+    # results across candidates and got a hundred times faster at the wide
+    # end - so the three-compound shape that used to be refused now costs
+    # 15 ms and is allowed, which is the point of that change. The story is
+    # unchanged, one compound further on: a compound acquires a profile
+    # between races and the search silently outgrows its budget.
     laps_left = 25
     profiles = dict(inputs.compound_profiles)
     reference = next(iter(profiles.values()))
-    for code in ("RH", "RM", "RS"):
+    for code in ("RH", "RM", "RS", "RI"):
         profiles.setdefault(code, dataclasses.replace(reference, code=code))
     controller._race_inputs = dataclasses.replace(
-        inputs, compound_profiles=profiles)
+        inputs, compound_profiles=profiles,
+        available_compounds=list(dict.fromkeys(
+            list(inputs.available_compounds) + ["RH", "RM", "RS", "RI"])))
     inputs = controller._race_inputs
-    assert len(inputs.planning_compounds()) == 3
+    assert len(inputs.planning_compounds()) == 4
     assert replan_work(inputs, laps_left, REPLAN_MAX_STOPS) > REPLAN_MAX_WORK
     assert (replan_work(inputs, laps_left, REPLAN_NARROWED_MAX_STOPS)
             <= REPLAN_MAX_WORK)
