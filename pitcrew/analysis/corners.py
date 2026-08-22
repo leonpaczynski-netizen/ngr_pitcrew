@@ -102,11 +102,19 @@ def _approach(frames: list[dict], corner: Corner) -> list[dict]:
     return sorted(picked, key=lambda f: f["lap_distance_m"])
 
 
+# The channel name per wheel, built once. It was an f-string INSIDE the frame
+# loop - four string constructions per frame, and this walks every frame of
+# every counted lap. Profiled on one export: 2.07 s cumulative across eight
+# calls, the largest single line in the whole run.
+_SUSPENSION_KEYS = (("fl", "susp_mm_fl"), ("fr", "susp_mm_fr"),
+                    ("rl", "susp_mm_rl"), ("rr", "susp_mm_rr"))
+
+
 def _suspension_by_wheel(frames: list[dict]) -> dict[str, list[float]]:
     seen: dict[str, list[float]] = {"fl": [], "fr": [], "rl": [], "rr": []}
     for frame in frames:
-        for wheel in seen:
-            value = frame.get(f"susp_mm_{wheel}")
+        for wheel, key in _SUSPENSION_KEYS:
+            value = frame.get(key)
             if value is not None:
                 seen[wheel].append(value)
     return seen
@@ -121,16 +129,30 @@ def _straight_line_frames(lap: CountedLap,
     bottoming reference is the observed minimum of the very frames the flag is
     tested against, so the deepest corner satisfies it by construction.
     """
+    # **The corner windows as plain tuples, hoisted out of the frame loop.**
+    # This was `any(c.contains(d) for c in model.corners)` evaluated per
+    # frame: 7.2 million bound-method calls and 5.1 million generator
+    # resumptions on one export, comparing against a window list that never
+    # changes. Same comparison, same boundaries - `contains` is
+    # `start_m <= d <= end_m` and so is this.
+    windows = (tuple((corner.start_m, corner.end_m)
+                     for corner in model.corners)
+               if model is not None else ())
+    limit = thresholds.BOTTOMING_REF_MAX_STEER_PCT
     out = []
     for frame in lap.frames:
         distance = frame.get("lap_distance_m")
         if distance is None:
             continue
-        if model is not None and any(c.contains(distance) for c in model.corners):
+        inside = False
+        for start, end in windows:
+            if start <= distance <= end:
+                inside = True
+                break
+        if inside:
             continue
         steering = frame.get("steering_norm")
-        if steering is not None and \
-                abs(steering) * 100.0 > thresholds.BOTTOMING_REF_MAX_STEER_PCT:
+        if steering is not None and abs(steering) * 100.0 > limit:
             continue
         out.append(frame)
     return out
