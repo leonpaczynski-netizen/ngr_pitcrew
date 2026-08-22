@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QScrollArea,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +32,9 @@ from pitcrew.ui.widgets import (
     Declared,
     Derived,
     EmptyState,
+    Field,
+    block_wheel,
+    HintLabel,
     MarkButton,
     Measured,
     Plate,
@@ -235,6 +239,7 @@ class StrategyScreen(QWidget):
     """Build a plan from the practice evidence, then approve one."""
 
     build_requested = pyqtSignal()
+    qualifying_requested = pyqtSignal()
     approve_requested = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -271,9 +276,37 @@ class StrategyScreen(QWidget):
         columns = QHBoxLayout()
         columns.setSpacing(theme.GAP_WIDE)
         columns.addWidget(self._plans_plate(), 5)
-        columns.addWidget(self._evidence_plate(), 3)
-        page.addLayout(columns, 1)
+        # **Stacked, not a third column.** At 3:3:3 the plan cards lose the
+        # width their stint bars need, and the race is still what this screen
+        # is about; qualifying is the smaller job that happens to be a plan.
+        side = QVBoxLayout()
+        side.setSpacing(theme.GAP_WIDE)
+        side.addWidget(self._evidence_plate(), 1)
+        side.addWidget(self._qualifying_plate())
+        columns.addLayout(side, 3)
 
+        # **The third screen to need a page bar, and for the same reason as
+        # the first two.** Settings shipped without one at 1,291 px against a
+        # display that gives 501; Practice reached 548 when the debrief landed;
+        # this reached 552 when qualifying did. The guard test written after
+        # Settings is what caught all three, and the answer is the same every
+        # time - the screen gets the bar rather than the content getting cut.
+        body = QWidget()
+        holder = QVBoxLayout(body)
+        holder.setContentsMargins(0, 0, 0, 0)
+        holder.setSpacing(0)
+        holder.addLayout(columns, 1)
+
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroller.setWidget(body)
+        page.addWidget(scroller, 1)
+
+        # Outside the bar: the plan is saved from here and a control that can
+        # be scrolled away from is a control that cannot be found.
         page.addLayout(self._footer())
 
     def _plans_plate(self) -> Plate:
@@ -314,6 +347,121 @@ class StrategyScreen(QWidget):
         plate.body.addLayout(self.evidence_layout)
         plate.body.addStretch(1)
         return plate
+
+    def _qualifying_plate(self) -> Plate:
+        """How much fuel, and how many runs.
+
+        **A qualifying run is not a small race, and the difference is 73 kg.**
+        The race plans beside this are about lasting; this is about carrying
+        nothing you are not going to burn. It sits on this screen because it is
+        a plan - read before the session with the headset off, like the rest
+        of it - and in the right column because the race is still the subject.
+
+        The litres are arithmetic on a measured burn and the plan is entitled
+        to be firm about them. The seconds beside them are not, and they are
+        rendered differently for that reason alone.
+        """
+        plate = Plate("Qualifying")
+
+        self.quali_minutes = QSpinBox()
+        self.quali_minutes.setRange(0, 120)
+        self.quali_minutes.setSuffix(" min")
+        # **Zero is "nobody said", and the plan treats it that way.** A lobby
+        # that does not state a qualifying length is a real state; guessing one
+        # would put a run count on the board that nothing supports.
+        self.quali_minutes.setSpecialValueText("not stated")
+        block_wheel(self.quali_minutes)
+        plate.body.addWidget(Field(
+            "Session", self.quali_minutes,
+            hint="Left unstated it plans one run and says so"))
+
+        row = QHBoxLayout()
+        row.setSpacing(theme.GAP)
+        self.quali_button = MarkButton("Plan qualifying", compact=True)
+        self.quali_button.clicked.connect(self.qualifying_requested.emit)
+        row.addWidget(self.quali_button)
+        row.addStretch(1)
+        plate.body.addLayout(row)
+
+        self.quali_body = QVBoxLayout()
+        self.quali_body.setContentsMargins(0, 0, 0, 0)
+        self.quali_body.setSpacing(0)
+        plate.body.addLayout(self.quali_body)
+
+        self.quali_empty = EmptyState(
+            "No qualifying plan.",
+            needs=("a measured fuel burn for this car",))
+        self.quali_body.addWidget(self.quali_empty)
+        return plate
+
+    def qualifying_minutes(self) -> float | None:
+        value = self.quali_minutes.value()
+        return float(value) if value > 0 else None
+
+    def clear_qualifying(self) -> None:
+        while self.quali_body.count():
+            item = self.quali_body.takeAt(0)
+            widget = item.widget()
+            if widget is not None and widget is not self.quali_empty:
+                widget.deleteLater()
+        self.quali_body.addWidget(self.quali_empty)
+        self.quali_empty.setVisible(True)
+
+    def show_qualifying(self, plan) -> None:
+        """Render one `race.qualifying_plan.QualifyingPlan`.
+
+        **The refusals are rendered as prose, not as an empty panel.** A plan
+        the app declined to make because nothing measured the burn is a
+        different thing from one it has not been asked for, and an empty plate
+        says the second when it means the first.
+        """
+        self.clear_qualifying()
+        self.quali_empty.setVisible(False)
+
+        if not plan.usable:
+            for reason in plan.refusals:
+                self.quali_body.addWidget(BodyLabel(
+                    reason[0].upper() + reason[1:] + ".", size=13,
+                    colour=theme.STENCIL_DIM))
+            return
+
+        lines = plan.as_text()
+        # The shape of the session: runs, flying laps, laps of fuel. Derived -
+        # the app worked it out from the burn and the clock.
+        self.quali_body.addWidget(BodyLabel(lines[0], colour=theme.DERIVED))
+        # **The instruction, in the register the driver acts on.** "Fuel to 28
+        # litres" is what he types into the car, and it is the one line here
+        # that becomes a setting rather than a fact.
+        fuel = Measured(f"{plan.fuel_l:.0f} L", size=23, bold=True,
+                        colour=theme.DERIVED)
+        fuel.setContentsMargins(0, 6, 0, 0)
+        self.quali_body.addWidget(fuel)
+        for line in lines[2:]:
+            self.quali_body.addWidget(BodyLabel(line, size=13,
+                                                colour=theme.STENCIL_DIM))
+
+        heading = StencilLabel("What it assumed", size=11, tracking=12.0,
+                               colour=theme.STENCIL_DIM)
+        heading.setContentsMargins(0, 10, 0, 2)
+        self.quali_body.addWidget(heading)
+        for note in plan.assumptions:
+            # **One line each, elided, with the whole thing as a tooltip.**
+            # These are full sentences by design - the product's principle is
+            # that nothing derived is presented as measured, so every figure
+            # states what it rests on - but wrapped, twelve of them are a wall
+            # of identical dim prose that buries the answer they qualify.
+            # `HintLabel` is this world's existing answer to exactly that, and
+            # it is why field hints elide rather than wrap.
+            #
+            # A note that says the plan is SHORT is a warning rather than a
+            # caveat: the tank cannot hold what the runs want, and that one is
+            # not something to make him hover to read.
+            text = note[0].upper() + note[1:] + "."
+            if "SHORT" in note:
+                self.quali_body.addWidget(BodyLabel(
+                    text, size=13, colour=theme.WARNING))
+                continue
+            self.quali_body.addWidget(HintLabel(text, size=13))
 
     def _footer(self) -> QHBoxLayout:
         row = QHBoxLayout()

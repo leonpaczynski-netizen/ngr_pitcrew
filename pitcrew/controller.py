@@ -717,6 +717,8 @@ class PitCrewController(QObject):
         self.practice.debrief_requested.connect(self.read_the_stint)
         if self.strategy is not None:
             self.strategy.build_requested.connect(self.build_strategy)
+            self.strategy.qualifying_requested.connect(
+                self.plan_qualifying)
             self.strategy.approve_requested.connect(self.approve_strategy)
         if self.race_screen is not None:
             self.race_screen.start_requested.connect(self.start_race)
@@ -2512,6 +2514,78 @@ class PitCrewController(QObject):
             is_pit_lap=lap.is_pit_lap,
             session_id=self.session_id,
         ))
+
+    def plan_qualifying(self) -> bool:
+        """How much fuel to put in, and how many runs fit.
+
+        **The measured burn is the whole input, and without it there is no
+        plan.** A qualifying run wants the laps it will actually drive and not
+        one litre more - a full tank is about 73 kg - so every figure here
+        comes off what this car has actually shown at this event, and where it
+        has shown nothing the plan refuses rather than assuming a rate.
+        """
+        if self.strategy is None:
+            return False
+        from pitcrew.race.qualifying_plan import QualifyingInputs, build
+        from pitcrew.race.temps import measured_temp_window
+
+        event = self.active_event()
+        if event is None:
+            self.strategy.note("Create an event first.", warn=True)
+            return False
+
+        # The event's own practice laps, through the same reader every other
+        # measurement uses - so the burn here and the burn the race plan is
+        # costed on cannot disagree.
+        inputs = self._race_inputs_for(event) if hasattr(
+            self, "_race_inputs_for") else None
+        burn = getattr(inputs, "fuel_per_lap_l", None) if inputs else None
+        if burn is None:
+            burn = self._measured_burn(event)
+
+        window = measured_temp_window(self.store, event["id"])
+        plan = build(QualifyingInputs(
+            lap_time_ms=self._best_practice_lap_ms(event),
+            fuel_per_lap_l=burn,
+            fuel_capacity_l=self._event_fuel_capacity(event),
+            laps_to_window=window.laps_to_window if window else None,
+            session_minutes=self.strategy.qualifying_minutes()))
+        self.strategy.show_qualifying(plan)
+        log("pitcrew").info(
+            "qualifying plan: %s",
+            "; ".join(plan.as_text()) if plan.usable
+            else "refused - " + "; ".join(plan.refusals))
+        return plan.usable
+
+    def _measured_burn(self, event: dict) -> float | None:
+        """Median fuel used over this event's counted practice laps."""
+        from statistics import median
+
+        from pitcrew.analysis.session import counted_laps
+        from pitcrew.export.build import event_lap_inputs
+
+        used = [lap.fuel_used for lap
+                in counted_laps(event_lap_inputs(self.store, event["id"],
+                                                 "practice"))
+                if lap.fuel_used and lap.fuel_used > 0]
+        return median(used) if used else None
+
+    def _best_practice_lap_ms(self, event: dict) -> int | None:
+        times = [row["lap_time_ms"] for row
+                 in self.store.list_event_laps(event["id"], "practice")
+                 if not row.get("excluded") and not row.get("is_out_lap")
+                 and not row.get("is_pit_lap") and (row.get("lap_time_ms") or 0) > 0]
+        return min(times) if times else None
+
+    def _event_fuel_capacity(self, event: dict) -> float | None:
+        """**None is "nobody measured", and 0 is an electric car.** The two are
+        different answers and the plan treats them differently, so this must
+        not collapse one into the other."""
+        for session in self.store.list_sessions(event["id"], "practice"):
+            capacity = session.get("fuel_capacity_l")
+            if capacity is not None:
+                return float(capacity)
+        return None
 
     def read_the_stint(self) -> bool:
         """What the run just recorded says about its corners.
