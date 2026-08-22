@@ -840,3 +840,51 @@ def test_a_sustained_stream_that_will_not_suspend_stops_the_rebuild():
         assert held.resumed == 1, "left suspended for the rest of the session"
     finally:
         audio_devices.unregister_sustained(held)
+
+
+def test_a_strict_open_does_not_rebuild_portaudio_when_the_card_is_there(
+        monkeypatch):
+    """**The 1.9 s on every practice start.**
+
+    `_reinitialise` is `Pa_Terminate` + `Pa_Initialize` - it tears down the
+    whole of PortAudio and re-enumerates every device on the machine. It ran
+    on every strict open whether or not anything was wrong, and 58 of the 82
+    transducer opens in the log are on the Qt thread, because `start_practice`
+    opens the haptics inline. So it was a frozen window on every session
+    start - and it is also the call that kills the process when a stream is
+    open, which makes not making it worth more than the time it saves.
+
+    The rebuild was there to be sure a name that looks absent really is. That
+    is still done; it is the fallback now, not the opening move.
+    """
+    import sys
+
+    machine = _machine()
+    machine.OutputStream = lambda **kw: _Stream(kw.get("device"))
+    monkeypatch.setitem(sys.modules, "sounddevice", machine)
+
+    audio_devices.open_output(
+        48000, device="Headphones (JBL Endurance Run 3C)", strict=True)
+
+    assert machine.terminated == 0, (
+        "PortAudio was rebuilt even though the card was already there - that "
+        "is ~1.9 s of frozen UI on every session start, for nothing")
+
+
+def test_a_strict_open_still_rebuilds_once_before_giving_up(monkeypatch):
+    """A name that is missing may only be missing from a STALE list, so the
+    expensive check is still made - once - before refusing. Dropping it would
+    turn a re-enumeration into a dead transducer."""
+    import sys
+
+    machine = _machine()
+    machine.OutputStream = lambda **kw: _Stream(kw.get("device"))
+    monkeypatch.setitem(sys.modules, "sounddevice", machine)
+
+    with pytest.raises(RuntimeError, match="Refusing to fall back"):
+        audio_devices.open_output(
+            48000, device="Speakers (ButtKicker PRO)", strict=True)
+
+    assert machine.terminated == 1, (
+        "gave up without re-enumerating, so a stale device list would read "
+        "as a card that is gone")

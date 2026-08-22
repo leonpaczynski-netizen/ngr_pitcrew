@@ -830,12 +830,31 @@ def open_output(samplerate: int, *, channels: int = 1, dtype: str = "int16",
     chosen = _OUTPUT if device is _DEFAULT else device
     if strict and isinstance(chosen, str):
         with _ENUMERATE_LOCK:
-            _reinitialise(sd)
+            # **Look before rebuilding, and it used to rebuild first.**
+            #
+            # `_reinitialise` is `Pa_Terminate` + `Pa_Initialize` - it tears
+            # down the whole of PortAudio and enumerates every device on the
+            # machine. Measured on this rig at about 1.9 s, and it ran on
+            # EVERY strict open whether or not anything was wrong. 58 of 82
+            # transducer opens in the log are on the Qt thread, because
+            # `start_practice` opens the haptics inline, so that 1.9 s was a
+            # frozen window on every practice and race start.
+            #
+            # It is also the call that takes the process down when a stream
+            # is open - see `_reinitialise` - so not making it is worth more
+            # than the time it saves.
+            #
+            # The rebuild was there to be sure a name that appears absent
+            # really is, rather than merely stale. That is still true, and
+            # still done: it is just now the fallback rather than the
+            # opening move. Only the genuinely-missing case pays for it.
             if not _matching_indices(sd, chosen, "output"):
-                raise RuntimeError(
-                    f"no output device named {chosen!r} on this machine. "
-                    f"Refusing to fall back to the default - this sound is "
-                    f"meant for one specific card.")
+                _reinitialise(sd)
+                if not _matching_indices(sd, chosen, "output"):
+                    raise RuntimeError(
+                        f"no output device named {chosen!r} on this machine. "
+                        f"Refusing to fall back to the default - this sound "
+                        f"is meant for one specific card.")
 
     def attempt():
         return _open_first_that_works(
