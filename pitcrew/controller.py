@@ -73,6 +73,7 @@ from pitcrew.race.calls import STAY_OUT, fuel_target_l
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.race.expectations import PRACTICE, Expectation
 from pitcrew.race.hud_calibration import note_frame_red
+from pitcrew.race.incident_watch import IncidentWatch
 from pitcrew.race.colour import ColourCalls
 from pitcrew.race.refuel import RefuelAdviser
 from pitcrew.race.replan import (
@@ -156,6 +157,11 @@ class TelemetryBridge(QObject):
     parse_failed = pyqtSignal()
     ptt_answered = pyqtSignal(str, str)      # heard, said - off the hook thread
     button_probed = pyqtSignal(str)          # probe note - off the hook thread
+    # **The car stopped mid-lap.** Emitted on the telemetry thread and
+    # handled on the Qt one, like every other cross-thread edge here:
+    # what it costs is read off the coordinator, and the coordinator is
+    # not thread-safe.
+    incident_seen = pyqtSignal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -186,6 +192,17 @@ class TelemetryBridge(QObject):
         # stalled USB port must not reach the packet handler.
         self.wind_curve = WindCurve()
         self.wind = None
+        # **In the pit lane, tracked here rather than read off the race.**
+        # The first version of the incident watch asked the coordinator, and
+        # the coordinator lives on the controller - `self.race` does not exist
+        # on this object, so every frame raised, the guard swallowed it and
+        # the watch disabled itself silently on the first packet of every
+        # race. The events that decide it arrive on this thread anyway.
+        self._in_pit = False
+        # The incident watch, armed with the race. None when no race is
+        # armed - practice laps are judged afterwards, by the module
+        # that can see a whole lap.
+        self.incidents = None
         # The qualifying coach, armed by the controller when a practice
         # session opens with the qualifying intent. On the telemetry thread
         # like the shift beep, because the out-lap and delta calls are about
@@ -318,6 +335,11 @@ class TelemetryBridge(QObject):
         # A watch armed for the race just closed would judge the next race's
         # first stop against the last one's target.
         self.refuel = None
+        # And an incident watch would carry "the car has been under way" into
+        # a session that opens with the car stationary in the box - which is
+        # the exact shape it exists to refuse.
+        self.incidents = None
+        self._in_pit = False
         # And a clock belonging to the race just closed would keep accruing
         # paused time against a race that no longer exists.
         self.race_clock = None
@@ -458,6 +480,33 @@ class TelemetryBridge(QObject):
                     type(exc).__name__, exc, exc_info=True)
                 if self.quali is coach:
                     self.quali = None
+
+        # **The incident watch**, under the same doctrine as the coach above.
+        # One comparison a frame until the car slows, and it answers exactly
+        # one question - has the car stopped mid-lap. What that is worth is
+        # decided on the Qt thread, not here.
+        watch = self.incidents
+        if watch is not None:
+            try:
+                # **The crossing first, on this thread.** `new_lap` is what
+                # holds it to one incident per lap, and doing it on the Qt
+                # side would leave a window where the frames after a crossing
+                # are still charged to the lap before it.
+                for event in events:
+                    if event.kind is EventKind.LAP_COMPLETED:
+                        watch.new_lap()
+                    elif event.kind is EventKind.PIT_ENTRY:
+                        self._in_pit = True
+                    elif event.kind is EventKind.PIT_EXIT:
+                        self._in_pit = False
+                if watch.update(packet, _monotonic(), in_pit=self._in_pit):
+                    self.incident_seen.emit()
+            except Exception as exc:                        # noqa: BLE001
+                log("race").error(
+                    "the incident watch raised on the telemetry thread and "
+                    "has been stopped for this race: %s: %s",
+                    type(exc).__name__, exc, exc_info=True)
+                self.incidents = None
 
         # **The in-box refuel watch**, under the same doctrine as the coach
         # above: guarded, and dropped for the session on its first exception.
@@ -624,6 +673,7 @@ class PitCrewController(QObject):
         self.bridge.ptt_answered.connect(self._show_ptt_answer)
         self.bridge.button_probed.connect(self._note_button_probe)
         self.bridge.session_event.connect(self._on_race_event)
+        self.bridge.incident_seen.connect(self._on_incident_seen)
 
         self.event_screen.saved.connect(self._on_event_saved)
         self.event_screen.discarded.connect(self.discard_event_edits)
@@ -3476,6 +3526,12 @@ class PitCrewController(QObject):
         # two-stop race gets a clean one for its second stop.
         self.bridge.refuel = RefuelAdviser(
             context=self._refuel_context, speak=self._voice_refuel)
+        # **Armed with the race, not with the session.** A practice lap with a
+        # spin in it is judged afterwards by `analysis/incidents.py`, which can
+        # see the whole lap and all three of its signals; this exists only for
+        # the one case where the verdict has to be reached before the lap is
+        # over, which is a race being planned around.
+        self.bridge.incidents = IncidentWatch()
         self._colour = ColourCalls(level=self.settings.colour_calls)
         self._replan_max_stops = REPLAN_MAX_STOPS
         self._replan_over_budget = 0
@@ -3825,6 +3881,12 @@ class PitCrewController(QObject):
             event_id=event["id"] if event else None,
             session_id=self.session_id)
 
+        if intent == REPORT_INCIDENT and self.race is not None:
+            # **Told, rather than detected.** The coordinator costs the lap
+            # either way; `reported` is what stops the engineer announcing
+            # something he has just been thanked for.
+            self.race.note_incident(reported=True)
+
         if intent in (REPORT_INCIDENT, REPORT_TRAFFIC):
             # **Held for the NEXT crossing rather than applied now.** The lap
             # he is describing has not been stored yet - it is the one he is
@@ -3835,6 +3897,21 @@ class PitCrewController(QObject):
             # agreement.
             self._exclude_next_lap = (
                 "incident" if intent == REPORT_INCIDENT else "traffic")
+
+    def _on_incident_seen(self) -> None:
+        """Qt thread: the car stopped mid-lap. Decide what it is worth.
+
+        **Both halves land here** - this one and the driver saying "I went
+        off" - so the lap leaves the count by one route whichever way the
+        engineer found out, and the two can never disagree about which lap.
+        """
+        if self.race is not None:
+            self.race.note_incident(reported=False)
+        # The same seam the driver's own report uses. Not overwritten if he
+        # already named it: his word is the primary record and "incident" is
+        # what both produce anyway.
+        if not getattr(self, "_exclude_next_lap", None):
+            self._exclude_next_lap = "incident"
 
     def _note_tyre_frame_red(self) -> None:
         """He saw a tyre frame go red. Write it down beside our own degrees.

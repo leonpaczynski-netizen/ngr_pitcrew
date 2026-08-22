@@ -14,6 +14,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 
+from pitcrew.diagnostics import log
 from pitcrew.race.calls import (
     BOX_IGNORED_LAPS,
     BOX_NOW,
@@ -147,6 +148,10 @@ class RaceCoordinator:
         # Lap times fit to judge pace against the plan - see
         # `representative_pace_ms` for what is kept out and why.
         self._pace_ms: list[int] = []
+        # An incident seen during the lap in progress: None for no,
+        # False for detected, True for driver-reported. Consumed at
+        # the crossing - see `note_incident`.
+        self._incident_pending: bool | None = None
         self._stints = list(self.plan.get("stints") or ())
         # **The app's own race clock**, built at arming and started at the
         # green. GT7's clock is not accurate - the driver measured it - so
@@ -410,15 +415,31 @@ class RaceCoordinator:
         if measured_sd is not None:
             self.state.fuel_sd_l = measured_sd
 
+        # **The lap the car stopped on, before anything reads the pace.** It
+        # has to be settled here because the cost is measured against the pace
+        # record and this lap must not be in it - and because the same flag
+        # decides whether the lap enters the record at all.
+        incident = self._incident_pending
+        self._incident_pending = None
+        if incident is not None:
+            self._note_incident(lap, reported=incident)
+
         # **Lap one never enters the pace record.** It carries the grid and -
         # on race day - a standing start, and it once fed the pace-vs-plan
         # check on its own: "lapping 2% slower than planned" was voiced two
         # minutes into a race whose laps 2-3 promptly beat the reference.
         # Pit and out laps are excluded for the same reason they are excluded
-        # offline; incidents cannot be flagged live, which is one more reason
-        # the pace is a median and never a single lap.
+        # offline.
+        #
+        # **And now incidents too.** The comment here used to end "incidents
+        # cannot be flagged live, which is one more reason the pace is a
+        # median and never a single lap" - `race/incident_watch.py` is the
+        # half that changed. The median still stands, because the watcher
+        # catches a car that stopped and not a spin that kept moving; this
+        # just stops the ones it does catch from having to be absorbed as
+        # outliers by a statistic that was never meant to carry them.
         if (lap.lap_num > 1 and not lap.is_pit_lap and not lap.is_out_lap
-                and lap.lap_time_ms > 0):
+                and lap.lap_time_ms > 0 and incident is None):
             self._pace_ms.append(lap.lap_time_ms)
 
         # The per-lap axle temperature means, where the session state
@@ -447,6 +468,43 @@ class RaceCoordinator:
             self.state.record(folded)
             return folded
         return self._emit()
+
+    def note_incident(self, *, reported: bool = False) -> None:
+        """The car stopped mid-lap, or the driver said it did.
+
+        Held until the crossing that ends the lap, because that is when the
+        lap has a time to be costed and a number to be named by. `reported`
+        travels so the engineer does not announce something the driver told
+        it thirty seconds ago and was already answered about.
+        """
+        if self._incident_pending is None or reported:
+            # **Reported wins over detected**, whichever arrived first: being
+            # told is being told, and the acknowledgement he already heard is
+            # the one that stands.
+            self._incident_pending = bool(reported)
+
+    def _note_incident(self, lap, *, reported: bool) -> None:
+        """Cost the lap and reset what it made stale."""
+        pace = self.representative_pace_ms()
+        cost = (int(lap.lap_time_ms - pace)
+                if pace is not None and lap.lap_time_ms else None)
+        self.state.incident_lap = lap.lap_num
+        self.state.incident_cost_ms = cost if cost and cost > 0 else None
+        self.state.incident_reported = reported
+
+        # **The stint's temperature occasions speak again.** This is the
+        # "reset" half: a trip through the grass or a spell stationary in the
+        # gravel leaves the set at a temperature the stint's earlier calls
+        # were not about, and "up to temperature" said four laps ago is now a
+        # claim about a set that has since stopped. The HISTORY is kept - it
+        # is the same rubber, and its own trend is the evidence - but every
+        # occasion is armed again so the engineer may speak about it.
+        self.state.temp_said = set()
+        self.state.temp_conserve_lap = None
+        log("race").info(
+            "incident on lap %s: %s, cost %s",
+            lap.lap_num, "driver-reported" if reported else "detected",
+            f"{cost} ms" if cost else "not costed - no pace reference")
 
     def _laps_after_stops(self, lap_ms: int | None,
                           left: int | None) -> int | None:

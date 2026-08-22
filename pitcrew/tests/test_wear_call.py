@@ -178,10 +178,19 @@ def test_the_balance_call_never_asks_for_forward_bias():
     assert call.call == "FL is going first."
 
 
-def test_each_occasion_is_said_once_a_stint():
+def test_an_occasion_repeats_until_it_is_actually_said():
+    """**The defect this replaced.** `wear_said` was marked inside the function
+    that BUILDS the call, and `next_call` builds every candidate and then
+    ranks - so a wear finding that lost one crossing to a box call marked
+    itself said and was never spoken again. Only the call actually made may
+    record that it was made."""
     state = state_with(a_stint(), lap=10, fuel_l=200.0)
-    assert _wear(state) is not None
-    assert _wear(state) is None or "constraint" not in _wear(state).text
+    first = _wear(state)
+    assert first is not None and first.tag == "limited"
+    # Not spoken, so still offered.
+    assert _wear(state).tag == "limited"
+    state.record(first)
+    assert _wear(state) is None
 
 
 # ----------------------------------------------------------------- the stint

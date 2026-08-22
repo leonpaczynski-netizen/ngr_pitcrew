@@ -47,6 +47,17 @@ WEAR_STINT_LIMIT = 0.85
 # limit already builds in, and "about seven laps left" on a six-lap race is
 # noise dressed as a finding.
 WEAR_PROJECT_MAX_LAPS = 8
+# Below this an incident is not worth a number. The driver's own measured
+# lap-to-lap noise is sd 0.918 s, so anything under about three of those is
+# inside the spread of laps he drives without noticing - and
+# `analysis/incidents.TIME_LOSS_S` uses the same 3 s as its own first test,
+# which is the figure this deliberately matches.
+INCIDENT_WORTH_SAYING_MS = 3000
+# How many crossings an unspoken incident may wait for a quiet one. It can
+# lose its own crossing to a box call, and one lap late is still true; two is
+# news about a lap two minutes gone.
+INCIDENT_STALE_LAPS = 1
+
 # A corner this far clear of the next-worst is a finding about that corner
 # rather than about the set. Three quanta, so it cannot be quantisation.
 WEAR_ASYMMETRY = 0.10
@@ -66,6 +77,10 @@ TYRE = "tyre"
 # modelled warning; this one rests on a transcription of GT7's own
 # wear readout and is the only wear call that may speak plainly.
 WEAR = "wear"
+# **After an off or a spin.** Not an instruction - he knows he went
+# off - but the lap has left the count and he is the only one who can
+# tell the engineer it picked the wrong lap.
+INCIDENT = "incident"
 TYRE_TEMP = "tyre-temp"
 STATUS = "status"
 GREEN = "green"
@@ -105,7 +120,11 @@ URGENCY = (CHEQUER, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            # moving, so fuel wins. But a measured wear figure beats an
            # inference drawn from how hot the rubber is, so it takes
            # precedence over `TYRE_TEMP`.
-           FUEL_LONG, WEAR, TYRE_TEMP, GREEN, STATUS)
+           # **`INCIDENT` outranks `WEAR`** and everything below it.
+           # It is true exactly once, on the crossing after the lap it
+           # describes, and a wear note said instead of it is a note
+           # that could have been said on any of the next five laps.
+           FUEL_LONG, INCIDENT, WEAR, TYRE_TEMP, GREEN, STATUS)
 
 # A status call every few laps, so silence means "nothing to report" rather
 # than "the app has died".
@@ -395,6 +414,19 @@ class RaceState:
     temp_gap_s_per_c: float | None = None
     # The lap the conserve call was last made, for the re-arm hysteresis.
     temp_conserve_lap: int | None = None
+    # --- an off or a spin, seen live (race/incident_watch.py) ---
+    # The lap the car stopped on, set at the crossing that ends it and cleared
+    # once spoken. None means nothing has happened.
+    incident_lap: int | None = None
+    # What that lap cost against the race's own representative pace, in ms, or
+    # None where no pace has been established yet. **A cost of None is not a
+    # cost of zero** - it means the race has not run enough clean laps to say,
+    # and the call then reports the incident without a figure.
+    incident_cost_ms: int | None = None
+    # Whether the driver told the engineer first. He has already been
+    # acknowledged if so, and saying it again is the app talking to itself.
+    incident_reported: bool = False
+
     # --- tyre wear, MEASURED off the HUD gauge (telemetry/hud.py) ---
     # (lap, {corner: fraction worn}) per lap that carried a gauge reading.
     # **Measured, not modelled** - it is a transcription of the game's own
@@ -566,6 +598,20 @@ class RaceState:
             self.temp_said.add(call.tag)
             if call.tag == "conserve":
                 self.temp_conserve_lap = call.lap
+        # **`WEAR` and `INCIDENT` book themselves off HERE, and this is not a
+        # tidy-up.** Both used to do it inside the function that builds the
+        # call, which runs for every candidate whether or not it wins - and
+        # `next_call` builds them all and then ranks. So a wear finding that
+        # lost one lap to a box call marked itself said and was never spoken
+        # again, and an incident that lost one was cleared and lost outright.
+        # Only the call that is actually made may record that it was made,
+        # which is what this method has always been for.
+        if call.kind == WEAR and call.tag:
+            self.wear_said.add(call.tag)
+        if call.kind == INCIDENT:
+            self.incident_lap = None
+            self.incident_cost_ms = None
+            self.incident_reported = False
 
 
 def _fuel_target(state: RaceState) -> float | None:
@@ -671,6 +717,7 @@ def _candidates(state: RaceState) -> list[Call | None]:
         # outrank it: a car out of fuel stops on the circuit, a car on worn
         # tyres is still moving. But it ranks above temperature, because a
         # measured wear figure beats an inference from how hot the rubber is.
+        _incident(state),
         _wear(state),
         _tyre_temp(state),
         _status(state),
@@ -1145,6 +1192,57 @@ def _tyre(state: RaceState) -> Call | None:
 #   pit; an instruction about brake balance, which is adjustable mid-race.
 
 
+def _incident(state: RaceState) -> Call | None:
+    """The lap the car stopped on has left the count. Said once.
+
+    **What this is for is the assumption, not the news.** He knows he went off.
+    What he cannot know is that the app noticed - and the app noticing is what
+    keeps the lap out of the pace median, out of the fuel rate and out of every
+    aggregate that would otherwise read the off as the car being slow. Told
+    nothing, a driver who has just lost fifteen seconds has to assume his
+    engineer is now planning around them.
+
+    It is also the only chance to be corrected. The detector is one signal, and
+    if it has struck the wrong lap the driver is the only one who can say so -
+    which he cannot do if he was never told which.
+    """
+    if state.incident_lap is None or state.in_pit or state.finished:
+        return None
+    lap = state.incident_lap
+    cost_ms = state.incident_cost_ms
+    reported = state.incident_reported
+    if state.lap - lap > INCIDENT_STALE_LAPS:
+        # **Held for a lap or two, then dropped.** It can lose a crossing to a
+        # box call, and being told on the next one is a lap late but still
+        # true. Two laps on it is not news, and `record` never got the chance
+        # to clear it, so it is cleared here.
+        state.incident_lap = None
+        state.incident_cost_ms = None
+        state.incident_reported = False
+        return None
+    if reported:
+        # Nothing will be spoken, so nothing will be recorded, so this is the
+        # only place it can be cleared.
+        state.incident_lap = None
+        state.incident_cost_ms = None
+        state.incident_reported = False
+        # He said it first and was answered then. The app has nothing to add
+        # and repeating it would be the engineer talking to himself.
+        return None
+    if cost_ms is None or cost_ms < INCIDENT_WORTH_SAYING_MS:
+        # **No pace reference, or it cost nothing worth a number.** The lap is
+        # still out - the exclusion is not in the driver's gift - but a figure
+        # the race has not earned must not be spoken beside it.
+        return Call(INCIDENT, state.lap, f"Lap {lap} is out.",
+                    "You stopped on it.", HIGH)
+    return Call(
+        INCIDENT, state.lap,
+        f"Lap {lap} is out.",
+        f"That cost you {cost_ms / 1000:.0f} seconds.",
+        HIGH,
+        severity=cost_ms / 1000.0)
+
+
 def _wear_worst(wear: dict[str, float]) -> tuple[str, float]:
     """The corner that ends the stint, and how worn it is.
 
@@ -1220,13 +1318,13 @@ def _wear(state: RaceState) -> Call | None:
 
     # --- past the limit. An instruction, and the reading is enough on its own.
     if consumed >= WEAR_STINT_LIMIT and "cliff" not in state.wear_said:
-        state.wear_said.add("cliff")
         return Call(
             WEAR, state.lap,
             "Box this lap.",
             f"{name} measured at {reading * 100:.0f} percent.",
             HIGH,
-            severity=consumed)
+            severity=consumed,
+            tag="cliff")
 
     # --- the tyres run out before the fuel does.
     fuel_laps = state.laps_of_fuel()
@@ -1236,7 +1334,6 @@ def _wear(state: RaceState) -> Call | None:
         # **+1 before it is a finding.** The two figures are a fitted gauge
         # slope and a fuel burn, and inside a lap of each other the ordering is
         # noise - which would have him stopping early on the strength of it.
-        state.wear_said.add("limited")
         # **Rounded DOWN, and never below one.** The projection is a fitted
         # slope on a gauge quantised to thirtieths, and CLAUDE.md 5.1 is
         # explicit that overshooting the cliff costs far more than
@@ -1249,13 +1346,13 @@ def _wear(state: RaceState) -> Call | None:
             f"lap{'' if whole == 1 else 's'} left on them.",
             f"{name} at {reading * 100:.0f} percent, measured.",
             MEDIUM,
-            severity=consumed)
+            severity=consumed,
+            tag="limited")
 
     # --- one corner going first. A balance call, not a pit call.
     ordered = sorted(state.wear_history[-1][1].values(), reverse=True)
     if (len(ordered) >= 2 and "asymmetry" not in state.wear_said
             and ordered[0] - ordered[1] >= WEAR_ASYMMETRY):
-        state.wear_said.add("asymmetry")
         # **Rearward only.** Moving the balance forward is a standing refusal
         # of his, and the axle this fires on is his measured pattern anyway:
         # every gauge reading on file has put a rear corner worst.
@@ -1269,14 +1366,16 @@ def _wear(state: RaceState) -> Call | None:
                 f"{ordered[0] * 100:.0f} percent against "
                 f"{ordered[1] * 100:.0f}, measured.",
                 HIGH,
-                severity=ordered[0])
+                severity=ordered[0],
+                tag="asymmetry")
         return Call(
             WEAR, state.lap,
             "Brake balance one click rearward.",
             f"{name} is going first - {ordered[0] * 100:.0f} percent "
             f"against {ordered[1] * 100:.0f}, measured.",
             HIGH,
-            severity=ordered[0])
+            severity=ordered[0],
+            tag="asymmetry")
     return None
 
 
@@ -1580,6 +1679,12 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
     # The wear occasions speak freshly each stint for the same reason the
     # temperature ones do; the readings only survive when the rubber does.
     state.wear_said = set()
+    # An incident that had not been spoken by the time he pitted is stale: the
+    # lap is still excluded, but "lap 12 is out" said on the way out of the
+    # pits is news about a lap two minutes gone.
+    state.incident_lap = None
+    state.incident_cost_ms = None
+    state.incident_reported = False
     if tyres_changed:
         state.laps_since_stop = 0
         state.tyre_change_unconfirmed = False
