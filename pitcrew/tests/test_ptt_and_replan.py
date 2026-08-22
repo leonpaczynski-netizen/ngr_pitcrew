@@ -14,6 +14,8 @@ from pitcrew.engineer.intents import (
     PLAN,
     POSITION,
     REPEAT,
+    REPORT_OVERSTEER,
+    REPORT_UNDERSTEER,
     UNKNOWN,
     answer,
     known_phrases,
@@ -81,8 +83,6 @@ def test_nonsense_is_unknown_rather_than_the_nearest_guess():
 
 
 @pytest.mark.parametrize("heard", [
-    "the front is pushing on entry",       # matched "p" -> position
-    "i have no grip at the rear",          # matched "no" -> keep
     "blah blah nonsense",                  # matched "no" inside "nonsense"
     "what is the tyre temperature",        # matched "p" in "temperature"
     "not yet",                             # matched "no" inside "not"
@@ -94,6 +94,32 @@ def test_free_dictation_that_means_nothing_is_unknown(heard):
     driver never said a word about. UNKNOWN has to be reachable or "say
     again" is dead and the refusal `intents` calls a real outcome is a lie."""
     assert match_intent(heard) == UNKNOWN
+
+
+@pytest.mark.parametrize("heard,wrong,right", [
+    # matched "p" -> position, before whole-word matching
+    ("the front is pushing on entry", POSITION, REPORT_UNDERSTEER),
+    # matched "no" -> keep, and silently declined a re-plan
+    ("i have no grip at the rear", KEEP, REPORT_OVERSTEER),
+])
+def test_a_sentence_about_the_car_reaches_the_report_that_owns_it(
+        heard, wrong, right):
+    """**These two used to be asserted UNKNOWN, and that assertion has been
+    split rather than deleted.**
+
+    What the original guarded was that a substring match could not turn a
+    sentence about the car into a confident wrong answer - "p" inside
+    "pushing" answering with a race position. UNKNOWN was the proxy for that,
+    and it was the right proxy while the app had no way to receive a handling
+    report at all.
+
+    The REPORT family gives these sentences somewhere correct to go, so the
+    proxy has stopped describing the property. The property itself is
+    unchanged and is now asserted directly: never the old wrong intent, and
+    now the right one."""
+    got = match_intent(heard)
+    assert got != wrong
+    assert got == right
 
 
 def test_a_phrase_only_matches_as_whole_words():
@@ -675,7 +701,12 @@ def test_no_phrase_is_a_word_that_appears_inside_a_sentence_about_the_car():
     """**The bug the rewrite introduced and this caught.** A bare "no" added
     to KEEP matched "I have no grip at the rear" - the literal matcher works on
     whole words, so a one-word phrase in common speech swallows real sentences.
-    Yes and no are resolved by the confirmation path and were never needed."""
+    Yes and no are resolved by the confirmation path and were never needed.
+
+    What is asserted is that none of these reaches an ANSWER-shaped intent -
+    an acceptance, a refusal, a position. "I have no grip at the rear" is a
+    report now and reaching `report-oversteer` is correct; reaching `keep`
+    never was, and that is what this holds."""
     for heard in ("i have no grip at the rear", "yes but the rears are gone",
                   "no grip on entry"):
-        assert match_intent(heard) == UNKNOWN, heard
+        assert match_intent(heard) not in (KEEP, ACCEPT, POSITION), heard

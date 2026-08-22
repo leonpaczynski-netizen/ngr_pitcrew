@@ -7,6 +7,18 @@ mis-hears is worse than one who says "say again".
 The rule that matters most: **an answer the app does not have is a refusal,
 never a guess.** "I don't have fuel yet" is useful — the driver stops asking
 and manages it himself. A fabricated number gets acted on.
+
+**Not every intent is a question.** The REPORT family is the driver telling the
+engineer something rather than asking, and it exists because CLAUDE.md §4.1 is
+the standing rule of the whole programme — *the driver's report is primary
+evidence, telemetry is corroboration* — and until these were added the app
+could not receive any. A handling complaint went into the `radio` table as free
+text tagged `unknown`, where nothing could find it again.
+
+Reports are **acknowledged, never analysed out loud**. The engineer says copy
+and writes it down beside what the feed was reading; see
+`race/driver_report.py`. Telling him what a report means would be inventing the
+meaning the record exists to collect evidence for.
 """
 from __future__ import annotations
 
@@ -42,6 +54,28 @@ ON_PLAN = "on-plan"
 TYRES = "tyres"
 # "What's my best lap" matched LAPS_LEFT, which answered "twelve to go".
 PACE = "pace"
+
+# --- the REPORT family: he tells the engineer, rather than asking it ---------
+#
+# **Two of these change what the app does and two only get written down**, and
+# the split is deliberate. A handling complaint is evidence for a setup and
+# nothing live may act on one: §4.1 makes it primary, and one observation is
+# still one observation. An off or a spell in traffic is different - it makes
+# the lap unrepresentative, and `laps.exclusion_reason` already exists for
+# exactly that, with "traffic" named in the export contract's own example.
+REPORT_UNDERSTEER = "report-understeer"
+REPORT_OVERSTEER = "report-oversteer"
+# **An incident excludes the lap.** Not because the app judges the driving, but
+# because an aggregate that includes the lap he went off on describes a lap
+# nobody drove on purpose - and CLAUDE.md is explicit that it is cheaper to
+# explain an exclusion than to have a setup built on a misread aggregate.
+REPORT_INCIDENT = "report-incident"
+# **So is traffic**, for the same reason and with more force: he cannot drive
+# his own line behind another car, so the lap measures the car in front.
+REPORT_TRAFFIC = "report-traffic"
+REPORTS = (REPORT_UNDERSTEER, REPORT_OVERSTEER, REPORT_INCIDENT,
+           REPORT_TRAFFIC)
+
 UNKNOWN = "unknown"
 
 # Phrases the driver actually uses, mapped to intent. Matching is on whole
@@ -75,7 +109,10 @@ PHRASES: dict[str, tuple[str, ...]] = {
            "what's my fuel", "where's my fuel", "fuel update",
            "have i got enough fuel", "am i ok on fuel"),
     POSITION: ("position", "where am i", "what position",
-               "what position am i in", "where am i running"),
+               "what position am i in", "where am i running",
+               # Measured: reached `laps-left` without this, and it predates
+               # the report family - the two intents have always been close.
+               "where am i in the race", "what place am i in"),
     LAPS_LEFT: ("laps left", "how long", "how many laps", "time left",
                 "laps remaining", "to go", "how many laps left",
                 "how many laps to go", "how much longer",
@@ -119,11 +156,95 @@ PHRASES: dict[str, tuple[str, ...]] = {
             "how are the tyres holding up", "how worn are my tyres",
             "tyre update", "give me a tyre update", "worst tyre",
             "how much life is in the tyres", "how much life is left",
-            "have the tyres got life left"),
+            "have the tyres got life left",
+            # **The axle forms, added because a report phrase outranked
+            # them.** Measured: "how shot are the fronts" sat 0.290 from
+            # "the front won't bite" and only 0.505 from "how are the tyres",
+            # so a WEAR question was being recorded as a HANDLING report. The
+            # fix is on the question side - "the front won't bite" is exactly
+            # how he would report understeer and deleting it would cost more.
+            # Note the shape that separates them: a question opens with "how
+            # are"/"how shot", a report is a statement about the car.
+            "how are the fronts", "how are the rears",
+            "how shot are the fronts", "how shot are the tyres",
+            "how much is left on the fronts",
+            "how much is left on the rears"),
     PACE: ("what's my pace", "how's my pace", "hows my pace",
            "what's my best lap", "am i quick enough", "how's my lap time",
            "am i on pace", "what's my lap time", "how am i doing on pace",
            "am i losing time"),
+    # **Measured 22 Aug 2026, after the REPORT family took the vocabulary from
+    # 57 phrases to 230.** The bands in `gate.py` were calibrated against the
+    # smaller list, and more reference phrases means smaller distances for
+    # everything - so the question was never "are reports recognised" but "did
+    # adding them break the questions that already worked".
+    #
+    # Twenty-six held-out probes, none of them in this file, thirteen of them
+    # questions that already worked: **26/26 to the right intent, all inside
+    # the act band.** Four collisions had to be fixed to get there, and each
+    # one is commented where it was fixed. The most instructive:
+    #
+    # * **"how shot are the fronts" was being recorded as a handling report.**
+    #   It sat 0.290 from "the front won't bite" and only 0.505 from "how are
+    #   the tyres" - so a question about WEAR became a statement about
+    #   BALANCE. Fixed on the question side, because "the front won't bite" is
+    #   exactly how he would report understeer. The shape that separates them
+    #   is worth knowing: a question opens "how are" / "how shot"; a report is
+    #   a statement about the car.
+    #
+    # **Unrelated speech still lands in the act band and that is unchanged
+    # doctrine** - see the note above the bands, which sets them on the cost of
+    # being wrong because no separation exists. But the cost is no longer
+    # symmetric: a stray sentence reaching `report-incident` strikes a lap,
+    # where before the worst case was one answer he ignores. Two things carry
+    # it: the engineer names the lap out loud so he hears which one went, and
+    # the lap rack's Strike/Restore puts it back. It is the reason those two
+    # reports name a lap at all.
+    #
+    # **The report vocabulary is how he actually complains, not how a
+    # textbook does.** "Understeer" is in here because it is unambiguous, but
+    # nobody says it at racing speed - "no front end", "it's pushing", "won't
+    # turn in" is what comes over the radio, and the semantic matcher is only
+    # as good as what it is near.
+    #
+    # Kept clear of `TYRES`, which is a question about wear: "the fronts are
+    # gone" would be either, so it is in neither.
+    # **"i've got no front" and "nothing from the front" were here and are
+    # gone.** Measured: they pulled "how shot are the fronts" - a question
+    # about WEAR that the gate's own band note names as a success case for
+    # `tyres` - onto understeer at 0.290. A phrase that steals a question the
+    # app already answered correctly costs more than it adds.
+    REPORT_UNDERSTEER: ("understeer", "understeering", "no front end",
+                        "it's pushing", "its pushing", "the front is pushing",
+                        "pushing on entry", "won't turn in", "wont turn in",
+                        "no turn in", "washing out", "washing wide",
+                        "running wide", "the front won't bite",
+                        "it won't rotate", "it wont rotate", "won't rotate",
+                        "no rotation"),
+    REPORT_OVERSTEER: ("oversteer", "oversteering", "the rear is loose",
+                       "rear is loose", "loose on exit", "it's snapping",
+                       "its snapping", "the back stepped out",
+                       "stepped out", "no rear grip", "no grip at the rear",
+                       "the rear is gone", "it's oversteering on exit",
+                       "spinning up", "kicking out",
+                       # Measured: "the back end is coming round on me"
+                       # reached `report-traffic` without these.
+                       "the back end is coming round", "coming round on me",
+                       "the back is coming round", "snap oversteer"),
+    REPORT_INCIDENT: ("i went off", "went off", "i had a moment",
+                      "had a moment", "i spun", "spun it", "off track",
+                      "i went wide", "had contact", "i got hit",
+                      "hit the wall", "in the gravel", "that lap was ruined",
+                      "scrap that lap",
+                      # Measured: "i just put two wheels on the grass" reached
+                      # `tyres-red` without these - grass and red frames sit
+                      # closer together than they have any business doing.
+                      "on the grass", "two wheels on the grass",
+                      "in the grass", "off the track", "i ran wide and lost it"),
+    REPORT_TRAFFIC: ("traffic", "i'm in traffic", "im in traffic",
+                     "stuck behind", "stuck behind him", "held up",
+                     "i got held up", "can't get past", "cant get past",
+                     "backmarker", "lapping traffic", "boxed in"),
     ON_PLAN: ("are we on the plan", "on the plan", "how's the burn",
               "hows the burn", "fuel burn", "on target",
               "am i saving enough", "is the saving working",
@@ -175,6 +296,35 @@ def match_intent(heard: str) -> str:
     return UNKNOWN
 
 
+# What the engineer says back to a report. Short, and it never says what the
+# report MEANS - see the module docstring. The two that exclude a lap name the
+# lap, because the driver is the only one who can tell the engineer it picked
+# the wrong one, and he cannot do that if he was not told which.
+_REPORT_REPLY = {
+    REPORT_UNDERSTEER: "Copy, understeer noted.",
+    REPORT_OVERSTEER: "Copy, oversteer noted.",
+}
+
+
+def _report_answer(intent: str, snapshot: dict) -> Answer:
+    """Acknowledge a report. Never analyse one."""
+    plain = _REPORT_REPLY.get(intent)
+    if plain is not None:
+        return Answer(plain, intent)
+
+    what = "Traffic" if intent == REPORT_TRAFFIC else "Noted"
+    # The lap being driven, never the last one completed - see `lapInProgress`
+    # on the coordinator's snapshot for what the difference cost.
+    lap = snapshot.get("lapInProgress")
+    if not lap:
+        # **No lap number is not a failure to record it.** The report is still
+        # written; the engineer just cannot say which lap comes out, so it
+        # does not claim one. A confident wrong lap number is worse than none,
+        # because it is the number he would correct against.
+        return Answer(f"Copy. {what} - this lap is out.", intent)
+    return Answer(f"Copy. {what} - lap {lap} is out.", intent)
+
+
 def _laps(value) -> str:
     return "1 lap" if value == 1 else f"{value} laps"
 
@@ -204,6 +354,9 @@ def answer(intent: str, snapshot: dict, *,
     """Answer from what the race actually knows. Never invents a number."""
     if intent == UNKNOWN:
         return Answer("Say again.", intent, answered=False)
+
+    if intent in REPORTS:
+        return _report_answer(intent, snapshot)
 
     if intent == TYRES_RED:
         # Acknowledged, never analysed out loud. One observation is one

@@ -702,6 +702,12 @@ class RaceCoordinator:
         return {
             "phase": self.phase.value,
             "lap": self.state.lap,
+            # **The lap he is ON, not the last one he finished.** `lap` counts
+            # crossings, so during the thirteenth lap it reads 12 - and a
+            # driver report is always about the lap in progress. Told "lap 12
+            # is out" while driving 13, he would correct a mistake the app had
+            # not made and the right lap would stay in.
+            "lapInProgress": self.state.lap + 1,
             "lapsTotal": self.state.laps_total,
             # Set for a timed race, where `lapsTotal` is the plan's expected
             # distance rather than a regulation, so nothing downstream reads

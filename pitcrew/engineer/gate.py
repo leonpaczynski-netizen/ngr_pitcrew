@@ -236,6 +236,18 @@ def judge(text: str, *, intent: str, distance: float | None,
     return Verdict(REJECT, UNKNOWN, text, NOT_UNDERSTOOD, distance)
 
 
+# Where the intent name does not survive being read out. The generic form
+# below turns a hyphenated id into words, which is serviceable for `box-when`
+# and unusable for the report family - "Did you mean report understeer?" is
+# not a sentence anybody answers.
+_SPOKEN_AS = {
+    "report-understeer": "understeer",
+    "report-oversteer": "oversteer",
+    "report-incident": "an incident - shall I throw the lap out",
+    "report-traffic": "traffic - shall I throw the lap out",
+}
+
+
 def confirmation_question(intent: str) -> str:
     """One short question, answerable with one word at racing speed."""
-    return f"Did you mean {intent.replace('-', ' ')}?"
+    return f"Did you mean {_SPOKEN_AS.get(intent, intent.replace('-', ' '))}?"

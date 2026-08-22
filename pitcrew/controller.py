@@ -538,6 +538,9 @@ class PitCrewController(QObject):
         # lap id -> lap number, for gauge readings still in
         # flight. See `_on_lap_completed`.
         self._hud_lap_nums: dict[int, int] = {}
+        # An exclusion reason the driver gave mid-lap, waiting for
+        # that lap to land. See `_note_driver_report`.
+        self._exclude_next_lap: str | None = None
         self.prompt_issue_id: int | None = None
         self.settings = settings.load(store)
         # The streams are opened deep inside two engines that must not know
@@ -2299,6 +2302,19 @@ class PitCrewController(QObject):
             # a lap that never crossed the line does not belong on it.
             return
 
+        # **The lap he said to throw away.** Set by a driver report during the
+        # lap; consumed here, on the first lap to land after it. It runs after
+        # the fragment check above deliberately - a fragment never reaches
+        # this line, so a report made during one is still waiting for the next
+        # real lap, which is the one he meant.
+        pending = getattr(self, "_exclude_next_lap", None)
+        if pending:
+            self._exclude_next_lap = None
+            self.store.exclude_lap(lap_id, pending)
+            log("pitcrew").info(
+                "lap %s excluded on the driver's report: %s",
+                lap.lap_num, pending)
+
         # **One gauge reading per crossing, off this thread.** GT7 sends no
         # wear channel and he will not record it by hand, so the only source
         # is the capture that is running anyway. The request returns at once
@@ -3738,6 +3754,7 @@ class PitCrewController(QObject):
         from pitcrew.engineer.intents import (
             ACCEPT,
             KEEP,
+            REPORTS,
             TYRES_RED,
             match_intent,
         )
@@ -3753,6 +3770,9 @@ class PitCrewController(QObject):
             self.session_id, heard=heard, said=said,
             lap_num=self._current_lap(), intent=intent)
 
+        if intent in REPORTS:
+            self._note_driver_report(intent, heard)
+            return
         if intent == TYRES_RED:
             self._note_tyre_frame_red()
             return
@@ -3766,6 +3786,55 @@ class PitCrewController(QObject):
         # and cleared the moment it is answered.
         if self.ptt.pending_replan and intent in (ACCEPT, KEEP):
             self._resolve_replan(accepted=intent == ACCEPT)
+
+    def _note_driver_report(self, intent: str, heard: str) -> None:
+        """He told the engineer something. Write it down; act only where the
+        report is about the LAP rather than about the car.
+
+        **CLAUDE.md §4.1 is the reason this exists**: the driver's report is
+        primary evidence and telemetry is corroboration, and until this landed
+        the app could only be asked questions. A handling complaint went into
+        the `radio` table as free text tagged `unknown`.
+
+        A handling report is recorded and nothing more - one observation is one
+        observation, and `race/driver_report.py` says why analysing it out loud
+        would be inventing the meaning the record exists to establish. An off
+        or a spell in traffic also **excludes the lap**, because the lap is
+        then not a measurement of this car.
+        """
+        from pitcrew.engineer.intents import (
+            REPORT_INCIDENT,
+            REPORT_OVERSTEER,
+            REPORT_TRAFFIC,
+            REPORT_UNDERSTEER,
+        )
+        from pitcrew.race import driver_report
+
+        kinds = {REPORT_UNDERSTEER: driver_report.UNDERSTEER,
+                 REPORT_OVERSTEER: driver_report.OVERSTEER,
+                 REPORT_INCIDENT: driver_report.INCIDENT,
+                 REPORT_TRAFFIC: driver_report.TRAFFIC}
+        packet = self.bridge.last_packet
+        event = self.active_event()
+        driver_report.note_report(
+            kinds[intent], heard,
+            packet=packet,
+            car_id=getattr(packet, "car_id", None) if packet else None,
+            compound=(self.race.state.tyre_compound if self.race else None),
+            lap=self._current_lap(),
+            event_id=event["id"] if event else None,
+            session_id=self.session_id)
+
+        if intent in (REPORT_INCIDENT, REPORT_TRAFFIC):
+            # **Held for the NEXT crossing rather than applied now.** The lap
+            # he is describing has not been stored yet - it is the one he is
+            # driving - so there is no row to mark. A lap number is
+            # deliberately not used as the key either: it would have to agree
+            # with GT7's own count, and `laps_completed` is still unverified
+            # against a real race. "The next lap to land" needs no such
+            # agreement.
+            self._exclude_next_lap = (
+                "incident" if intent == REPORT_INCIDENT else "traffic")
 
     def _note_tyre_frame_red(self) -> None:
         """He saw a tyre frame go red. Write it down beside our own degrees.
