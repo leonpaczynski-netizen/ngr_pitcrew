@@ -2980,8 +2980,15 @@ class PitCrewController(QObject):
         # The degraded latch stays visible on every path, including the ones
         # that never reach the meter - it is the one state the driver acts on.
         watchdog = self._rig_watchdog
+        # **`stood_down`, not `degraded`.** `degraded` now lifts every
+        # STAND_DOWN_RETRY_S so the ladder can try again, which means it is
+        # false for most of a fault rather than true. The line the driver
+        # reads must not blink out while the thing it describes is still
+        # true; `stood_down` latches once the ladder has been spent and
+        # stays latched.
         exhausted = (" · recovery exhausted"
-                     if watchdog is not None and watchdog.degraded else "")
+                     if watchdog is not None
+                     and getattr(watchdog, "stood_down", False) else "")
         produced = haptics.take_recent_peak()
         refused = getattr(haptics, "refused", None)
         if refused is not None:
@@ -3045,7 +3052,8 @@ class PitCrewController(QObject):
         watchdog = self._rig_watchdog
         if watchdog is None:
             watchdog = self._rig_watchdog = TransducerWatchdog()
-        exhausted = " · recovery exhausted" if watchdog.degraded else ""
+        exhausted = (" · recovery exhausted"
+                     if getattr(watchdog, "stood_down", False) else "")
         if not reading.measured:
             # **"Cannot measure" is not "failed", and no rung of the ladder
             # is earned by it.** Written down so a driver reporting dead
@@ -3159,6 +3167,10 @@ class PitCrewController(QObject):
     # A rebuild outlives the ten-second cycle that started it, and two of
     # them racing would each tear down the other's stream.
     _ladder_busy = False
+    # Said once per session, not every ten seconds. The condition persists
+    # until the scheduling changes, and 119 identical error lines inside a
+    # headset is how the last one of these was missed.
+    _starvation_reported = False
 
     def _climb_ladder_off_thread(self, haptics, watchdog) -> None:
         """The same rung, for callers that must not block."""
@@ -3193,7 +3205,44 @@ class PitCrewController(QObject):
         """
         clock = watchdog.clock_hz
         if watchdog.clock_suspect and clock is not None:
-            ratio = clock / float(transducer.SAMPLE_RATE)
+            nominal = float(transducer.SAMPLE_RATE)
+            ratio = clock / nominal
+            # **Ask the card before blaming it.** `clock_hz` is frames this
+            # process handed over per wall-clock second - a statement about
+            # our own scheduling, which for ten days was logged as "the card
+            # is pulling N frames a second" and acted on as a property of the
+            # hardware. `dac_clock_hz` is PortAudio's own stream clock and is
+            # the card's. When the two disagree, the app is the fault.
+            #
+            # Measured 22 Aug 2026: with the GIL contended by the app's own
+            # threads, a healthy 48 kHz ButtKicker was being handed 30699
+            # frames a second at 64 blocks a second - the field signature to
+            # four figures - while the endpoint itself never moved. Nothing
+            # was transposed. Muting was the wrong answer, and it was the
+            # answer given for nineteen minutes of a race.
+            tolerance = getattr(watchdog, "CLOCK_TOLERANCE", 0.04)
+            dac = getattr(haptics, "dac_clock_hz", None)
+            if dac is not None and abs(dac - nominal) / nominal <= tolerance:
+                # Starving a healthy endpoint. Do NOT mute: the cues are
+                # gapped, not transposed, so they are still in the right
+                # places and silence is the worse of the two. Do not run the
+                # ladder either - reopening a stream cannot give this
+                # process the GIL, and three rebuilds proved that on 17 Aug.
+                if not getattr(self, "_starvation_reported", False):
+                    self._starvation_reported = True
+                    log("haptics").error(
+                        "the transducer is being UNDERFED, not mis-clocked: "
+                        "the endpoint's own clock is %.0f Hz, which is the "
+                        "rate the mix is generated at, but this process is "
+                        "only handing it %.0f frames a second (%.2fx). The "
+                        "cues are gapped rather than transposed, so they are "
+                        "still in the right places and muting would be the "
+                        "worse answer. This is the app's scheduling, not the "
+                        "card - see SWITCH_INTERVAL_S and BLOCKSIZE in "
+                        "rig/haptics.py. Sustained underfeed is also what "
+                        "degrades the endpoint itself, so this must not be "
+                        "left to run.", dac, clock, ratio)
+                return
             reason = (f"the card is pulling about {clock:.0f} frames a "
                       f"second against the {transducer.SAMPLE_RATE} the mix "
                       f"is generated at, so every effect would arrive "
@@ -3215,6 +3264,19 @@ class PitCrewController(QObject):
                     "wrong one.")
             return
         if haptics.allow():
+            # **The one place the ladder can be told it is over, because it
+            # is the only evidence that arrives while the output is
+            # refused.** `settled` was reachable only from the endpoint
+            # meter, and `_check_transducer_is_heard` deliberately does not
+            # poll the meter while refused - it would be asking about a
+            # silence of our own making. So refusal and the ladder's reset
+            # were mutually exclusive: the attempt counters could never be
+            # cleared in the one state that needed them cleared, and the
+            # engine stayed spent for the rest of the process.
+            #
+            # A clock back at nominal is exactly the health `settled` exists
+            # to record. It costs nothing to say so here.
+            watchdog.settled(_monotonic())
             log("haptics").warning(
                 "the transducer's frame clock is back at the rate the mix is "
                 "generated for, so it is being sent to again.")

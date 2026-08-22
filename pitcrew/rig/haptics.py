@@ -24,6 +24,7 @@ resumed around a rebuild rather than being quietly destroyed by one. See
 """
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from collections import deque
@@ -34,13 +35,55 @@ from pitcrew.diagnostics import log
 from pitcrew.engineer import audio_devices
 from pitcrew.rig import synth, transducer
 
-# The block PortAudio is asked for. Zero lets it choose, which it does better
-# than we can - measured, forcing a small block bought nothing and slightly
-# worsened the jitter tail.
-BLOCKSIZE = 0
+# The block PortAudio is asked for.
+#
+# **This was 0 - "let PortAudio choose" - and choosing was how the endpoint
+# got broken.** Zero resolves to 480 frames on WASAPI here, which is 10 ms
+# of audio per callback, and the callback is Python. Measured 22 Aug 2026 on
+# this machine, on a healthy endpoint, with the callback doing nothing at
+# all beyond counting:
+#
+#     GIL threads   block 0 (480)   block 2048
+#     0                48118 f/s      48297 f/s
+#     2                39108 f/s      48059 f/s
+#
+# Two other Python threads holding the GIL are enough to starve a 10 ms
+# callback, because the callback cannot run until it is handed the GIL and
+# the default handover interval is 5 ms. The app runs seven or eight threads
+# - Qt, the 60 Hz UDP parser, the meter, the ladder, the beep, wind, voice,
+# the HUD sampler - so it lives permanently in that condition.
+#
+# **And a starved callback does not merely gap the audio; it degrades the
+# endpoint.** Chronic underfeed drops the ButtKicker's own pump to one block
+# per 15.625 ms system tick - 480 x 64 = 30720 frames a second - and it stays
+# there across app restarts, which is the "only a reboot clears it" wedge
+# this module has been chasing since 16 Aug. Every client of that endpoint is
+# throttled once it happens, on any host API.
+#
+# 2048 frames is 42.7 ms per callback: five and a bit ticks of slack, so a
+# GIL stall long enough to matter no longer empties the device buffer. The
+# latency it costs - 22 ms to about 85 ms - is nothing to a road bed, which
+# is an immersion cue and not a shift beep. See `SWITCH_INTERVAL_S`, which
+# is the other half of the same fix.
+BLOCKSIZE = 2048
 # The largest block we will be handed. Buffers are sized for this once, so a
 # callback never allocates.
 MAX_BLOCK = 8192
+# How long a Python thread may hold the GIL before it is asked to hand it
+# over. CPython's default is 5 ms, which is half a 10 ms callback and a
+# tenth of this one.
+#
+# The audio callback is Python, so it cannot run until it holds the GIL, and
+# under contention it waits roughly one switch interval per competing thread.
+# Measured on this machine against a healthy endpoint, block 0, two Python
+# threads spinning: 39108 frames a second at the 5 ms default, 48119 at
+# 0.5 ms - the whole deficit, closed by one call.
+#
+# Process-wide, and deliberately so: it is the process's threads that are in
+# the way. The cost is more context switches in code that is not
+# latency-critical, which on a 14-thread part is not a cost worth measuring
+# against a piston that stops working.
+SWITCH_INTERVAL_S = 0.0005
 
 # Telemetry arrives at 60 Hz, so a frame every ~16.7 ms. Silence for this long
 # means it has stopped rather than merely been late.
@@ -55,6 +98,26 @@ REBUILD_SETTLE_S = 1.0
 # an instant mute is itself a discontinuity, and a discontinuity here is a
 # thump - short enough that a real stop is not still buzzing a corner later.
 FADE_S = 0.15
+
+
+def _quicken_the_gil() -> None:
+    """Shorten the GIL handover interval, once, for the whole process.
+
+    Called from `start` rather than at import, so a build that never turns
+    the transducer on never pays for it, and never has its scheduling
+    changed by a module it merely imported.
+
+    Only ever shortens. If something else in the process has already asked
+    for a finer interval it keeps the finer one - this is a floor on
+    responsiveness, not a setting to be won.
+    """
+    try:
+        if sys.getswitchinterval() > SWITCH_INTERVAL_S:
+            sys.setswitchinterval(SWITCH_INTERVAL_S)
+    except (ValueError, AttributeError) as exc:              # pragma: no cover
+        # Not worth failing an open over: the block size carries the same
+        # fix on its own, measured, and this is the cheaper half of a pair.
+        log("haptics").debug("could not shorten the GIL interval: %s", exc)
 
 
 class HapticsEngine:
@@ -144,36 +207,61 @@ class HapticsEngine:
         # tone in the mix. On 17 Aug 2026 the log recorded only the blocks,
         # and thirteen minutes of evidence could not distinguish them.
         self.frames = 0
-        # **Whether the card asked for frames we failed to supply, and this
-        # is the one instrument the 17 Aug race did not have.**
+        # **Whether the card asked for frames we failed to supply. Kept, but
+        # it must never decide anything on WASAPI, where it does not work.**
         #
-        # That evening the frame count fell to 30.7 kHz against the 48 kHz the
-        # mix is generated at and stayed there for the whole race, and the
-        # verdict drawn from it was "the card's clock moved, so every effect
-        # is transposed by 0.64x". The frame count alone cannot support that
-        # verdict, because two different faults produce exactly the same
-        # number:
+        # This was added on 17 Aug to settle the question the frame count
+        # could not: whether the card was really consuming 30.7 kframes a
+        # second - in which case the mix is transposed, the road bed lands at
+        # 24 Hz under the amplifier's fixed 25 Hz low-cut, and refusing is
+        # right - or whether the card still wanted 48 k and we were handing
+        # it 30.7 k, in which case nothing is transposed and the cues are
+        # merely gapped.
         #
-        # * **The card really is consuming 30.7 kframes a second.** Then the
-        #   mix is transposed, the road bed lands at 24 Hz under the amp's
-        #   fixed 25 Hz low-cut, and refusing is right.
-        # * **The card still wants 48 kframes a second and we are only
-        #   handing it 30.7 k.** Then nothing is transposed - the cues are in
-        #   the right places and merely gapped, 480 frames of signal followed
-        #   by silence until the next wake-up.
+        # It shipped at 22:07 on 17 Aug. The race had ended at 20:58 and the
+        # transducer was switched off the same day, so it never once ran
+        # against the fault. When it was finally put on a bench, 22 Aug, it
+        # turned out it could not have answered:
         #
-        # The measured ratio is 480 / 750 = 0.64 to three figures, which is
-        # exactly one 480-frame block written per 15.625 ms wake-up, so the
-        # second reading is at least as well supported as the first. PortAudio
-        # already knows which it is and says so in `status.output_underflow`,
-        # and this callback was throwing that away.
+        #     starved to a third of nominal    delivered    output_underflow
+        #     WASAPI  (the route this uses)      15960 f/s          0
+        #     MME                                12095 f/s        240
+        #     DirectSound                        15962 f/s        660
         #
-        # Counting it costs one bool test on the common path - `status` is
-        # falsy when nothing is wrong - and it is what makes the bench test
-        # conclusive rather than another evening of inference.
+        # PortAudio's WASAPI backend never sets the flag on this machine. A
+        # rule of the form "no underruns, therefore the card is slow" can
+        # only ever return one answer there, and it is the wrong one.
+        #
+        # The bench also settled the underlying question outright: the card
+        # was healthy at 48 kHz and this process was starving it, because a
+        # Python audio callback cannot run until it holds the GIL. See
+        # `SWITCH_INTERVAL_S` and `BLOCKSIZE`, which are the fix, and
+        # `dac_seconds` below, which is the instrument that replaced this
+        # one. Still counted because MME and DirectSound are real fallback
+        # routes and it is honest there, and because it costs one bool test.
         self.underflows = 0
         self._underflows_taken = 0
         self.status_blocks = 0
+        # **PortAudio's own stream clock, which is the card's and not ours.**
+        #
+        # `frames / wall seconds` is what this process managed to hand over.
+        # For ten days it was logged as "the card is pulling N frames a
+        # second" and read as a property of the hardware, and on 17 Aug that
+        # misreading muted the seat for the rest of the race. These two make
+        # the other measurement available, so the report can say which of the
+        # two is happening instead of assuming:
+        #
+        #     delivery low, DAC clock at 48000  -> we are starving it
+        #     delivery low, DAC clock low too   -> the endpoint has degraded
+        #
+        # The second one is real and is the chronic ButtKicker wedge: chronic
+        # underfeed drops the endpoint's own pump to one block per 15.625 ms
+        # tick, and it stays there across app restarts until the machine is
+        # rebooted. Which is why the first case matters so much - it is the
+        # one that causes the second.
+        self.dac_seconds = 0.0
+        self.dac_frames = 0
+        self._dac_first = 0.0
         self.recoveries = 0
         self.rebuilds = 0
 
@@ -267,6 +355,25 @@ class HapticsEngine:
     @property
     def running(self) -> bool:
         return self._stream is not None and not self._suspended
+
+    @property
+    def dac_clock_hz(self) -> float | None:
+        """The rate the endpoint is consuming at, off PortAudio's own clock.
+
+        None until there are two callbacks to subtract, and None if the host
+        API does not fill `outputBufferDacTime` - both of which mean "no
+        reading", never "zero", because a zero here would be read as a dead
+        card by something downstream.
+
+        **Not the same number as the delivery rate the watchdog reads, and
+        that is the entire point of it.** The delivery rate is frames this
+        process handed over per wall-clock second, which falls when the app
+        is late whatever the card is doing. This falls only when the card
+        itself slows down.
+        """
+        if self.dac_seconds <= 0.0 or self.dac_frames <= 0:
+            return None
+        return self.dac_frames / self.dac_seconds
 
     def explain(self) -> list[dict]:
         """Every number behind the last block rendered, per effect.
@@ -371,12 +478,24 @@ class HapticsEngine:
         # this rebuild is about to open itself. `_open` re-registers.
         audio_devices.unregister_sustained(self)
         time.sleep(REBUILD_SETTLE_S)
-        with audio_devices.enumeration_lock():
-            with self._lock:
-                if self._stopped or self._suspended:
-                    return None
-                opened = self._open()
-                changed = self.last_open_changed
+        try:
+            with audio_devices.enumeration_lock():
+                with self._lock:
+                    if self._stopped or self._suspended:
+                        return None
+                    opened = self._open()
+                    changed = self.last_open_changed
+        finally:
+            # **Back on the register whatever happened, unless the driver
+            # stopped us.** `_open` re-registers on success and only on
+            # success, so a rebuild that failed to open used to leave the
+            # engine off the sustained list for good: `recover` then refused
+            # because there was no stream, `resume` refused because it was
+            # not suspended, and no later device rebuild could reach it. The
+            # engine was unrecoverable for the rest of the session, by
+            # bookkeeping rather than by anything the hardware did.
+            if not self._stopped:
+                audio_devices.register_sustained(self)
         self.rebuilds += 1
         if opened and not changed:
             log("haptics").warning(
@@ -388,6 +507,7 @@ class HapticsEngine:
     # ------------------------------------------------------------ lifecycle
 
     def start(self) -> bool:
+        _quicken_the_gil()
         with self._lock:
             self._stopped = False
             return self._open()
@@ -486,6 +606,12 @@ class HapticsEngine:
         self.error = None
         self._suspended = False
         self.facts = facts
+        # PortAudio's stream clock starts again with the stream, so the
+        # origin has to as well or the DAC rate is measured across a gap
+        # that contains a teardown and a one-second settle.
+        self._dac_first = 0.0
+        self.dac_seconds = 0.0
+        self.dac_frames = 0
         changed = facts.differences(self.baseline)
         self.last_open_changed = tuple(changed)
         if self.baseline is None:
@@ -548,14 +674,28 @@ class HapticsEngine:
 
     # ------------------------------------------------------- the hot thread
 
-    def _callback(self, outdata, frames, _time, status) -> None:
+    def _callback(self, outdata, frames, time_info, status) -> None:
         """PortAudio's thread. No allocation, no logging, no locks.
 
         `status` is deliberately not LOGGED - writing to a file from here is
         exactly the blocking call that causes the underrun it would be
-        reporting - but it is now COUNTED, which costs nothing and is the
-        only thing that can tell a card running slow from a card being
-        underfed. See `self.underflows`.
+        reporting - but it is COUNTED.
+
+        **`status.output_underflow` is a dead instrument on the host API this
+        engine runs on, and the whole disambiguation was built on it.**
+        Measured 22 Aug 2026: a WASAPI callback deliberately starved to a
+        third of nominal - 15960 frames a second against 48000 - reported
+        `output_underflow` **zero** times. The same starvation on MME
+        reported it 240 times and on DirectSound 660. PortAudio's WASAPI
+        backend simply never sets the flag here.
+
+        So the reasoning it was added for - "a low clock with no underruns
+        is a card genuinely consuming slower" - could only ever reach one
+        answer on WASAPI, and it was the wrong one. It is still counted,
+        because it is free and because MME and DirectSound are real fallback
+        routes where it does work, but nothing may decide anything from a
+        zero on WASAPI. `dac_seconds` below is the instrument that replaced
+        it.
         """
         self.callbacks += 1
         # `status` is falsy on a healthy block, so the common path is one
@@ -564,6 +704,29 @@ class HapticsEngine:
             self.status_blocks += 1
             if status.output_underflow:
                 self.underflows += 1
+
+        # **The device's own clock, not ours.** `frames / wall seconds`
+        # measures what this process managed to hand over, which is a
+        # statement about the app's scheduling and was read for ten days as
+        # a statement about the card. `outputBufferDacTime` is PortAudio's
+        # stream clock: the two together separate "we are starving a healthy
+        # endpoint" from "the endpoint itself has slowed", which is the
+        # question the whole recovery ladder turns on and could not ask.
+        #
+        # Two floats and a subtraction, on a thread that must not block.
+        # Wrapped because `time_info` is a C struct whose fields are not
+        # promised by every host API, and a missing attribute here must cost
+        # the diagnosis, never the audio.
+        try:
+            dac = time_info.outputBufferDacTime
+        except AttributeError:                               # pragma: no cover
+            dac = 0.0
+        if dac:
+            if self._dac_first == 0.0:
+                self._dac_first = dac
+            else:
+                self.dac_seconds = dac - self._dac_first
+                self.dac_frames = self.frames
         # Frames as well as blocks. Divided by wall-clock seconds upstairs
         # this is a direct measurement of the rate the card is actually
         # consuming at, which is the one number that separates "PortAudio
@@ -710,6 +873,29 @@ class TransducerWatchdog:
     # that needs a moment gets one and a device that is gone is not hammered.
     MAX_REBUILDS = 3
     REBUILD_BACKOFF_S = (0.0, 30.0, 90.0)
+    # **How long the stand-down lasts before the ladder is allowed to try
+    # again from the bottom, and it used to last forever.**
+    #
+    # `degraded` was set in one place and cleared in none: `plan_recovery`
+    # returned "stand-down" on its first line for the rest of the process,
+    # and the only reset of the attempt counters - `settled` - was reachable
+    # only through the endpoint meter, which the controller deliberately
+    # stops polling once the output is refused. So refusal and recovery were
+    # mutually exclusive by construction, and the one state that needed the
+    # ladder most was the one state the ladder could not run in.
+    #
+    # That is why the seat never came back without a restart, and it is a
+    # separate fault from the starvation that put it there: fixing the
+    # starvation alone would still have left this latched for any future
+    # cause. The wind simulator, on the same machine and the same USB tree,
+    # retries without a cap and recovers by itself - the difference between
+    # the two subsystems is this constant existing.
+    #
+    # Five minutes: long enough that a genuinely dead endpoint is not
+    # hammered through a race, short enough that a transient is not paid for
+    # in a whole session of silence. The driver notice stays one-shot; it is
+    # the repair that repeats, not the announcement.
+    STAND_DOWN_RETRY_S = 300.0
 
     def __init__(self) -> None:
         self._guard = threading.Lock()
@@ -748,7 +934,17 @@ class TransducerWatchdog:
         self._rebuild_unconfirmed = False
         self._recovered_notice_sent = False
         self.degraded = False
+        # When the stand-down began, so `plan_recovery` can re-arm rather
+        # than latch. None means "not standing down".
+        self._degraded_at: float | None = None
         self._notice: tuple[str, str] | None = None
+        # **Has the ladder ever been exhausted?** Latched for the life of
+        # the watchdog and never cleared by a re-arm, unlike `degraded`,
+        # which now comes and goes as the ladder stands back up. It gates
+        # the driver notice - see `_degrade` - and it is the honest thing
+        # for a caller to ask, because "is it standing down right now" is a
+        # question whose answer flickers.
+        self.stood_down = False
 
     # ------------------------------------------------------- what it watches
 
@@ -1044,11 +1240,27 @@ class TransducerWatchdog:
         """
         with self._guard:
             if self.degraded:
-                return "stand-down"
+                if (self._degraded_at is None
+                        or now - self._degraded_at < self.STAND_DOWN_RETRY_S):
+                    return "stand-down"
+                # **Re-arm.** Standing down is a pause, not a verdict. The
+                # endpoint may have been reset, replugged, or simply come
+                # back; none of those events reach this process, so the only
+                # way to find out is to try. Back to the bottom of the
+                # ladder, counters cleared, notice not repeated.
+                self.degraded = False
+                self._degraded_at = None
+                self._reopens = 0
+                self._rebuilds = 0
+                self._rebuild_unconfirmed = False
+                log("haptics").info(
+                    "standing back up after %.0f minutes: trying the "
+                    "transducer again from the top of the ladder.",
+                    self.STAND_DOWN_RETRY_S / 60.0)
             if self._reopens == 0:
                 return "reopen"
             if self._rebuilds >= self.MAX_REBUILDS:
-                self._degrade()
+                self._degrade(now)
                 return "stand-down"
             wait = self.REBUILD_BACKOFF_S[self._rebuilds]
             if (self._last_attempt_at is not None
@@ -1071,9 +1283,9 @@ class TransducerWatchdog:
                 # working one.
                 self._rebuild_unconfirmed = True
             elif self._rebuilds >= self.MAX_REBUILDS:
-                self._degrade()
+                self._degrade(now)
 
-    def _degrade(self) -> None:
+    def _degrade(self, now: float | None = None) -> None:
         """The ladder is spent. Say what is true, and only what is true.
 
         **The old line asserted "the haptics endpoint dropped and did not
@@ -1095,6 +1307,27 @@ class TransducerWatchdog:
         if self.degraded:
             return
         self.degraded = True
+        # Stamped so `plan_recovery` can stand back up. Defaulted rather
+        # than required so a caller that only wants the notice still
+        # works; a stand-down with no stamp never re-arms, which is the
+        # old behaviour and the safe direction to get it wrong in.
+        self._degraded_at = now
+        # **The repair repeats. The announcement does not.**
+        #
+        # `plan_recovery` now stands the ladder back up every
+        # STAND_DOWN_RETRY_S, which is right - an endpoint that came back
+        # deserves to be found. But each of those cycles ends here, and
+        # without this the driver would be told the haptics are gone once
+        # every five minutes for the rest of a two-hour race. That is the
+        # fault 881e213 fixed in the other direction - "not 119 error
+        # lines" - arriving back through a door that did not exist then.
+        #
+        # He is told once. If it is still true an hour later, telling him
+        # again mid-corner does not help him and the post-session log has
+        # every cycle in it either way.
+        if self.stood_down:
+            return
+        self.stood_down = True
         attempts = (f"{self._reopens} reopen(s) and {self._rebuilds} full "
                     f"rebuild(s)")
         # **"I have stopped trying" was heard as "I have stopped sending".**

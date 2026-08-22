@@ -908,7 +908,7 @@ def test_a_reopen_that_held_resets_the_ladder():
 def test_rebuilds_are_capped_backed_off_and_end_in_one_clear_stand_down():
     wd = haptics.TransducerWatchdog()
     wd.reopened(0.0)
-    t, rebuilds, waits = 10.0, 0, 0
+    t, rebuilds, waits, stood_down_at = 10.0, 0, 0, None
     while not wd.degraded and t < 1000.0:
         action = wd.plan_recovery(t)
         if action == "rebuild":
@@ -916,7 +916,10 @@ def test_rebuilds_are_capped_backed_off_and_end_in_one_clear_stand_down():
             wd.rebuilt(True, t)
         elif action == "wait":
             waits += 1
+        if wd.degraded and stood_down_at is None:
+            stood_down_at = t
         t += 10.0
+    assert stood_down_at is not None
     assert rebuilds == wd.MAX_REBUILDS
     assert waits > 0, "every rebuild fired back-to-back with no backoff"
     assert wd.degraded
@@ -926,7 +929,19 @@ def test_rebuilds_are_capped_backed_off_and_end_in_one_clear_stand_down():
     assert "power-cycle" in written
     assert spoken, "nothing for the voice to say"
     assert wd.take_notice() is None, "the notice repeated"
-    assert wd.plan_recovery(t + 500.0) == "stand-down"
+    assert wd.stood_down, "the exhaustion was not recorded"
+    # **A stand-down is a pause, not a verdict.** It used to be absorbing -
+    # `degraded` was set in one place and cleared in none - so the one state
+    # that most needed the ladder was the one state it could not run in, and
+    # the seat never came back without restarting the app.
+    assert wd.plan_recovery(
+        stood_down_at + wd.STAND_DOWN_RETRY_S - 10.0) == "stand-down"
+    assert wd.plan_recovery(
+        stood_down_at + wd.STAND_DOWN_RETRY_S + 10.0) == "reopen", (
+        "the ladder never stood back up")
+    assert not wd.degraded, "re-armed but still reporting itself spent"
+    # And he is told once, however many times it tries again.
+    assert wd.take_notice() is None, "told again on every re-arm"
 
 
 def test_a_rebuild_is_only_claimed_after_the_meter_is_seen_alive():
@@ -1002,9 +1017,16 @@ def test_a_frozen_race_night_runs_the_whole_ladder_and_tells_him_once():
         rack._act_on_endpoint_reading(engine, "Speakers (ButtKicker PRO)",
                                       rendered[i % len(rendered)], 0.054,
                                       10.0 * i)
-    assert engine.reopens == 1
-    assert engine.rebuilds_called == rack._rig_watchdog.MAX_REBUILDS
-    assert rack._rig_watchdog.degraded
+    # Ten minutes at a 5-minute retry is two climbs, not one per poll and
+    # not one forever. The cadence is the point: it keeps looking for an
+    # endpoint that may have been reset or replugged, without hammering one
+    # that is genuinely gone.
+    assert engine.reopens == 2
+    cap = rack._rig_watchdog.MAX_REBUILDS
+    assert cap < engine.rebuilds_called <= 2 * cap, (
+        f"{engine.rebuilds_called} rebuilds in ten minutes - one climb, a "
+        f"stand-down, and part of a second is the shape; per-poll is not")
+    assert rack._rig_watchdog.stood_down
     assert len(rack.voice.spoken) == 1, (
         f"spoken {len(rack.voice.spoken)} times: {rack.voice.spoken}")
     assert "STALE" in rack._endpoint_note
@@ -1403,7 +1425,7 @@ def test_two_endpoints_of_one_name_make_the_verdict_an_admission():
             _reading(0.054, matches=2, endpoint="{0.0.0}.ButtKicker#1"),
             10.0 * i)
 
-    assert rack._rig_watchdog.degraded
+    assert rack._rig_watchdog.stood_down
     assert len(rack.voice.spoken) == 1
     spoken = rack.voice.spoken[0]
     assert "lost sight" in spoken, spoken
@@ -1428,7 +1450,7 @@ def test_one_endpoint_and_a_readable_meter_still_gets_the_plain_verdict():
             _reading(0.054, matches=1, endpoint="{0.0.0}.ButtKicker"),
             10.0 * i)
 
-    assert rack._rig_watchdog.degraded
+    assert rack._rig_watchdog.stood_down
     assert rack._rig_watchdog.uncertain is False
     assert len(rack.voice.spoken) == 1
     assert "Haptics are out" in rack.voice.spoken[0]
@@ -1568,6 +1590,16 @@ def test_a_transposed_stream_is_refused_and_he_is_told_once():
     class Watchdog:
         clock_hz = 30611.0
         clock_suspect = True
+        settled_at = None
+
+        def settled(self, now):
+            # **The ladder's only reset, and until 22 Aug 2026 it could not
+            # be reached from here.** `_check_transducer_is_heard` refuses
+            # to poll the endpoint meter while the output is refused, and
+            # the meter was the sole caller of `settled` - so the attempt
+            # counters could never be cleared in the one state that needed
+            # them cleared.
+            self.settled_at = now
 
     class Rack:
         _apply_clock_verdict = PitCrewController._apply_clock_verdict
@@ -1588,6 +1620,9 @@ def test_a_transposed_stream_is_refused_and_he_is_told_once():
     rack._apply_clock_verdict(engine, wd)
     assert engine.refused is None
     assert len(rack.voice.spoken) == 2, "never said it was back"
+    assert wd.settled_at is not None, (
+        "a clock back at nominal did not reset the recovery ladder, so the "
+        "next fault would start from an already-spent ladder")
 
 
 def test_the_meter_is_not_asked_about_audio_nobody_sent(monkeypatch):
