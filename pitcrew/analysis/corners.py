@@ -237,6 +237,87 @@ def bottoming_inferable(laps: list[CountedLap],
     return inferable
 
 
+def integrated_length(lap: CountedLap) -> float | None:
+    """The lap's own integrated distance, or None where it carries none."""
+    distances = [frame.get("lap_distance_m") for frame in lap.frames
+                 if frame.get("lap_distance_m") is not None]
+    return max(distances) if len(distances) >= 2 else None
+
+
+@dataclass(frozen=True)
+class LengthGate:
+    """Which laps may place a corner window, and which may not.
+
+    **The single most consequential thing measured about this module.**
+    `lap_distance_m` is not in any packet - it is speed integrated at the
+    sample rate - and a corner window is a fixed distance range. So a lap whose
+    integration lands long or short is not merely imprecise about its corners:
+    it is measuring a different piece of road, and averaging it in moves the
+    aggregate toward a corner that was never driven.
+
+    Measured 22 Aug 2026 over 307 clean laps, at Monza (true length 5793 m):
+    median 5747 m, but the range is **203 m to 11,187 m** and the standard
+    deviation *within one run* is 620 m. A lap that swallowed a missed
+    crossing integrates to about two laps; a fragment to a few hundred metres.
+
+    **The median is the reference, not the circuit's published length.** The
+    integration has its own scale error - consistent, and the same for every
+    lap of a session - and gating against the published figure would reject a
+    whole session for being uniformly 1.5% short, which is exactly the case
+    the windows handle fine.
+    """
+
+    median_m: float | None
+    kept: list[CountedLap]
+    dropped: list[tuple[CountedLap, float | None]]
+
+    @property
+    def ran(self) -> bool:
+        return self.median_m is not None
+
+    def as_note(self) -> str | None:
+        """One line for the export's notes, or None where nothing was
+        dropped. An exclusion nobody is told about is worse than no
+        exclusion - CLAUDE.md is explicit that it is cheaper to explain one
+        than to have a setup built on a misread aggregate."""
+        if not self.dropped:
+            return None
+        laps = ", ".join(str(lap.lap) for lap, _ in self.dropped)
+        return (f"{len(self.dropped)} lap(s) held out of the corner "
+                f"aggregates - {laps} - because the distance integrated over "
+                f"the lap disagrees with the session median "
+                f"({self.median_m:.0f} m) by more than "
+                f"{thresholds.LAP_LENGTH_TOLERANCE:.0%}. A corner window is a "
+                f"fixed distance range, so those laps' windows are not on the "
+                f"same piece of road. Their laps and lap times are unaffected.")
+
+
+def length_gate(laps: list[CountedLap]) -> LengthGate:
+    """Hold out laps whose own integrated length disagrees with the median.
+
+    Fewer than `LAP_LENGTH_MIN_LAPS` and there is no median worth trusting, so
+    nothing is dropped and `ran` is False - stated rather than silently
+    skipped, because "the gate found nothing" and "the gate did not run" are
+    different claims about the same empty list.
+    """
+    measured = [(lap, integrated_length(lap)) for lap in laps]
+    lengths = [length for _, length in measured if length is not None]
+    if len(lengths) < thresholds.LAP_LENGTH_MIN_LAPS:
+        return LengthGate(None, list(laps), [])
+    middle = median(lengths)
+    limit = middle * thresholds.LAP_LENGTH_TOLERANCE
+    kept, dropped = [], []
+    for lap, length in measured:
+        # **A lap with no distance at all is kept.** It contributes no corner
+        # windows anyway - `_slice` finds nothing without `lap_distance_m` -
+        # so dropping it would report an exclusion that changed no number.
+        if length is None or abs(length - middle) <= limit:
+            kept.append(lap)
+        else:
+            dropped.append((lap, length))
+    return LengthGate(middle, kept, dropped)
+
+
 def aggregate_corners(model: CornerModel, laps: list[CountedLap],
                       bottoming_ref: dict[str, float] | None = None,
                       *, drivetrain: str | None = None,
@@ -248,6 +329,10 @@ def aggregate_corners(model: CornerModel, laps: list[CountedLap],
     from the laps themselves, because a reference passed in from outside cannot
     know which sheet each lap was run on.
     """
+    # **Before anything reads a window.** See `length_gate`: a lap whose
+    # integrated distance disagrees with the session median is not imprecise
+    # about its corners, it is measuring a different piece of road.
+    laps = length_gate(laps).kept
     references = bottoming_references(laps, model)
     context: dict[object, tuple[dict | None, set[str]]] = {}
     for sheet, reference in references.items():

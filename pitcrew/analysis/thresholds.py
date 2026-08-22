@@ -16,7 +16,16 @@ from __future__ import annotations
 # `understeer-mid` gained magnitude thresholds, and the bottoming reference is
 # now held out of the corner windows. A v2 export and a v3 export of the same
 # session do not carry the same flags, and neither is wrong.
-DETECTOR_VERSION = 3
+# 4: corner aggregation now REFUSES a lap whose integrated length disagrees
+# with the circuit's own median. Measured 22 Aug 2026 over 307 clean laps: at
+# Monza, true length 5793 m, the integrated length ranges from 203 m to
+# 11,187 m and its standard deviation WITHIN one run is 620 m - over a tenth of
+# a lap. A corner window is a fixed distance range, so on those laps every
+# window is looking at a different piece of road, and 8-12% of laps were
+# contributing corner measurements taken somewhere else entirely. A v3 export
+# and a v4 export of the same session do not carry the same corners, and v4 is
+# the one that means what it says.
+DETECTOR_VERSION = 4
 
 # --- corner flags (EXPORT-CONTRACT.md 7.1) ---------------------------------
 
@@ -119,6 +128,24 @@ APEX_DEFINITION = "minimum speed point within the corner window"
 # what `brakePointM` is measured from: anchoring it on the window let the
 # reported figure exceed the lookback it declares.
 BRAKE_LOOKBACK_M = 500.0
+# **How far a lap's own integrated distance may sit from the circuit median
+# before its corner windows are not trusted to be on the right piece of road.**
+#
+# `lap_distance_m` is not in any packet format - `telemetry/recorder.py`
+# integrates it from speed, and its own docstring claims the result "lands
+# within a percent or two of the circuit's published length and does so
+# consistently lap to lap". The first half is true of the MEDIAN and the second
+# half is not true at all: measured over 307 clean laps, 8-12% of them land
+# outside 2%, and the extremes are a lap that swallowed a missed crossing
+# (11,187 m at Monza) and a fragment (203 m).
+#
+# Two per cent of Monza is 115 m. That is already wider than a brake point, so
+# this is the loosest gate that is worth anything rather than a comfortable
+# one - and laps outside it are not marginal, they are wrong.
+LAP_LENGTH_TOLERANCE = 0.02
+# Fewer laps than this and there is no median worth gating against, so nothing
+# is dropped and the export says the gate did not run.
+LAP_LENGTH_MIN_LAPS = 5
 
 # --- drivetrain ------------------------------------------------------------
 #
@@ -326,4 +353,6 @@ def as_export(drivetrain: str | None = None, *,
             f"reading the same is the discriminator, not the level."),
         "freshTyreSpreadC": FRESH_TYRE_SPREAD_C,
         "detectorVersion": DETECTOR_VERSION,
+        "lapLengthTolerance": LAP_LENGTH_TOLERANCE,
+        "lapLengthMinLaps": LAP_LENGTH_MIN_LAPS,
     }

@@ -14,6 +14,7 @@ from pitcrew.analysis.corners import (
     CountedLap,
     aggregate_corners,
     bottoming_reference,
+    length_gate,
     observed_minimum,
 )
 from pitcrew.analysis.gearing import gearing_export
@@ -514,6 +515,7 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     bottoming_ref = None
     bottoming_ref_source = None
     observed_min = None
+    length_note = None
     if model is not None and counted_with_frames:
         meta.corner_model = model.as_meta()
         bottoming_ref = bottoming_reference(reference_laps, model)
@@ -542,8 +544,16 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         # a flag the driver had contradicted four sessions running. Sessions
         # recorded before the column existed read null and fall back to the
         # stated default, which the thresholds block already labels `assumed`.
+        # **Held out before the aggregate, and SAID.** `length_gate` refuses a
+        # lap whose integrated distance disagrees with the session median: a
+        # corner window is a fixed distance range, so such a lap's windows are
+        # not on the same road. Measured at 8-12% of clean laps. The note is
+        # not optional - an exclusion nobody is told about is worse than no
+        # exclusion.
+        gate = length_gate(counted_with_frames)
+        length_note = gate.as_note()
         corners = aggregate_corners(
-            model, counted_with_frames, bottoming_ref,
+            model, gate.kept, bottoming_ref,
             wheelbase_m=_session_field(session, "wheelbase_m"),
             # **Declared, because GT7 broadcasts no drivetrain channel and
             # the torque vectors that might have inferred one read zero on
@@ -579,7 +589,8 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
             range_record = record.as_export()
 
     all_notes = " ".join(part for part in (exclusion_note(laps),
-                                           capacity_note, notes) if part)
+                                           capacity_note, length_note,
+                                           notes) if part)
 
     wear = wear_export(
         laps, calibrated_at_race_multiplier=calibrated_at_race_multiplier,
