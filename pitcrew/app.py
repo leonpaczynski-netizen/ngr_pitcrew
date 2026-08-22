@@ -94,6 +94,13 @@ def _claim_sole_instance() -> str | None:
     global _INSTANCE_MUTEX
     if os.environ.get("PITCREW_ALLOW_MULTIPLE") == "1":
         return None
+    if _INSTANCE_MUTEX is not None:
+        # **We already hold it, so we are not our own second instance.**
+        # `CreateMutexW` reports ERROR_ALREADY_EXISTS for a name that exists
+        # whoever created it - including this process - so asking twice
+        # without this would have the app refuse itself. `main` asks once
+        # today; a restart-in-place or a test would not.
+        return None
     try:
         import ctypes
         from ctypes import wintypes
