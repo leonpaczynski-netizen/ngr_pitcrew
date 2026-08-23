@@ -809,7 +809,11 @@ class SemanticMatcher:
 
     def __init__(self, phrases=None, *, model=None, cache=True) -> None:
         self._phrases = phrases or PHRASES
-        self._model = model if model is not None else self._load()
+        # Resolved before the weights are loaded, and remembered, because the
+        # cache key needs the path and the model cannot supply it. Skipped
+        # entirely when a model is handed in, which is what the tests do.
+        self._source = None if model is not None else self._model_source()
+        self._model = model if model is not None else self._load(self._source)
         self._embeddings: dict[str, tuple[str, object]] = {}
         if self._model is None:
             return
@@ -862,15 +866,46 @@ class SemanticMatcher:
             for phrase in self._phrases[intent]:
                 digest.update(self.SEPARATOR)
                 digest.update(phrase.encode("utf-8"))
-        model_file = getattr(self._model, "model_path", None) or getattr(
-            self._model, "path", None)
+        # **From the source, not from the model.** This read
+        # `getattr(self._model, "model_path", ...)` and `EmbeddingModel` has
+        # no such attribute - nothing on it matches `*path*` - so the model
+        # contributed NOTHING to the key and swapping it would have been
+        # answered from the old one's vectors. The unit test passed only
+        # because its fake carried an attribute the real class does not,
+        # which is the shape of a test that assures you of nothing.
+        #
+        # A test model handed in directly still gets whatever it declares, so
+        # the fakes keep working; the real path is resolved once and costs
+        # 53 ms against the 753 ms of loading the weights it names.
+        model_file = (getattr(self._model, "model_path", None)
+                      or getattr(self._model, "path", None))
+        if model_file is None:
+            source = self._source if self._source is not None \
+                else self._model_source()
+            model_file = source[0] if source else None
         if model_file:
+            digest.update(str(model_file).encode("utf-8"))
+            # **Size and mtime only for a FILE, never for the directory.**
+            # `get_embedding_model` returns a DIRECTORY, and loading the
+            # weights creates and removes lock files inside it -
+            # `model_q4.ort.lock`, `tokenizer.bin.lock` - so its mtime moves
+            # on every single load. Stat'ing it made the key different every
+            # run: the cache was written, never matched, and recomputed for
+            # fifteen seconds each launch while appearing to work.
+            #
+            # The path names the model and the variant, which is the identity
+            # that matters. `CACHE_VERSION` covers a deliberate change of
+            # what is stored; a model replaced in place under the same name
+            # is the one case neither catches, and is not one that happens
+            # without someone knowing.
             try:
-                stat = pathlib.Path(str(model_file)).stat()
-                digest.update(f"{model_file}:{stat.st_size}:{stat.st_mtime_ns}"
-                              .encode("utf-8"))
+                found = pathlib.Path(str(model_file))
+                if found.is_file():
+                    stat = found.stat()
+                    digest.update(f":{stat.st_size}:{stat.st_mtime_ns}"
+                                  .encode("utf-8"))
             except OSError:
-                digest.update(str(model_file).encode("utf-8"))
+                pass
         return digest.hexdigest()
 
     def _load_cached(self) -> bool:
@@ -936,15 +971,42 @@ class SemanticMatcher:
                             type(exc).__name__, exc)
 
     @staticmethod
-    def _load():
+    def _model_source() -> tuple | None:
+        """Where the weights are, WITHOUT loading them.
+
+        Split out because the two halves cost wildly different amounts and
+        the cheap half is what the cache key needs: measured 53 ms to resolve
+        the path against 753 ms to construct the model from it.
+
+        **The cache key needs the path and cannot get it from the model.**
+        `EmbeddingModel` exposes no path attribute at all - checked, there is
+        nothing on it matching `*path*` - so keying on `getattr(model,
+        "model_path", ...)` silently contributed NOTHING, and a change of
+        model or variant would have been answered from the old model's
+        vectors. Every distance would then be measured in the wrong space,
+        quietly, and the only symptom is the engineer mishearing him.
+        """
         try:
             import moonshine_voice as moonshine
-            from moonshine_voice.embedding_model import EmbeddingModel
 
             # Returns (path, arch), and the q4 variant is 200 MB against
-            # 1.2 GB for fp32 - a sensible weight for deciding between
-            # forty-six short phrases.
-            path, arch = moonshine.get_embedding_model(variant="q4")
+            # 1.2 GB for fp32 - a sensible weight for deciding between a
+            # couple of hundred short phrases.
+            return moonshine.get_embedding_model(variant="q4")
+        except Exception as exc:                 # noqa: BLE001
+            log("ptt").info("no embedding model available (%s: %s)",
+                            type(exc).__name__, exc)
+            return None
+
+    @staticmethod
+    def _load(source: tuple | None = None):
+        try:
+            from moonshine_voice.embedding_model import EmbeddingModel
+
+            found = source or SemanticMatcher._model_source()
+            if found is None:
+                return None
+            path, arch = found
             # The variant has to be passed here as well as to the download:
             # the q4 weights land as `model_q4.ort` and the loader looks for
             # `model.ort` unless it is told which one it wants.
