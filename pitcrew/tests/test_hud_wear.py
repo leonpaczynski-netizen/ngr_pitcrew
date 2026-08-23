@@ -95,9 +95,19 @@ class FakeSource:
         self.calls = 0
         self.gate = threading.Event()
         self.gate.set()
+        # Set the moment `grab` is entered, BEFORE it waits on the gate. A
+        # test that wants a grab held open has to know one has actually
+        # started, or it is racing the worker thread rather than controlling
+        # it - see `test_the_queue_holds_one_lap_and_drops_the_older_request`.
+        self.entered = threading.Event()
 
     def grab(self):
-        self.gate.wait(timeout=2.0)
+        self.entered.set()
+        # Generous rather than tight: this is a fake, so the bound only has to
+        # stop a genuinely broken test hanging for ever. At two seconds it was
+        # short enough that a loaded machine could time it out and let a grab
+        # through that the test believed it was holding.
+        self.gate.wait(timeout=30.0)
         self.calls += 1
         return self.results[min(self.calls - 1, len(self.results) - 1)]
 
@@ -126,7 +136,22 @@ def test_a_reading_reaches_the_store_off_the_calling_thread():
 
 
 def test_the_queue_holds_one_lap_and_drops_the_older_request():
-    """A wear figure filed against the wrong lap is worse than a gap."""
+    """A wear figure filed against the wrong lap is worse than a gap.
+
+    **Made deterministic 23 Aug 2026.** It used to request all four laps and
+    then accept either outcome - `4 in written or written == [1]` - because
+    which of them happened depended on whether the worker had picked up the
+    first lap before the rest were queued. That is a disjunction over timing,
+    not an assertion, and it failed once under full-suite load having passed
+    twenty isolated runs and twelve under twelve-way CPU load. A test whose
+    answer depends on the scheduler cannot be debugged, only re-run.
+
+    The order is now imposed rather than hoped for: the first lap is
+    requested, the worker is WAITED FOR until it is actually inside `grab`,
+    and only then do the other three queue behind it. The contract being
+    tested is unchanged - one in flight, at most one queued, and the one kept
+    is the NEWEST - but there is now exactly one thing that can happen.
+    """
     png = a_canvas({"fl": 0.3, "fr": 0.3, "rl": 0.5, "rr": 0.4})
     source = FakeSource((png, None))
     source.gate.clear()                      # hold the first grab open
@@ -134,16 +159,22 @@ def test_the_queue_holds_one_lap_and_drops_the_older_request():
     sampler = LiveWearSampler(source, lambda lap, wear: written.append(lap))
     sampler.start()
     try:
-        for lap in (1, 2, 3, 4):
+        sampler.request(1)
+        assert source.entered.wait(timeout=5.0), (
+            "the worker never reached the first grab, so nothing was in "
+            "flight and this test would prove nothing")
+        # Now these three can only queue behind the one being held.
+        for lap in (2, 3, 4):
             sampler.request(lap)
         source.gate.set()
         drain(sampler, written, 2)
         time.sleep(0.2)
     finally:
         sampler.stop()
-    # One in flight plus at most one queued - never all four.
-    assert len(written) <= 2
-    assert 4 in written or written == [1]
+    # One in flight, then the NEWEST of the three that queued behind it -
+    # never 2, never 3, never all four.
+    assert written == [1, 4], (
+        f"expected the held lap and then the newest queued one, got {written}")
 
 
 def test_it_stands_down_rather_than_complain_every_lap():
