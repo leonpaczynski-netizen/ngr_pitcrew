@@ -552,9 +552,27 @@ def _build_brief(context: ctx.PromptContext, report: DriverReport,
     _return_contract(lines, first_sheet=True)
     lines.add("", "---")
     lines.add(template["footer"].format(
-        date=today, baseline=templates()["gt7Baseline"],
+        date=today, baseline=_baseline(context),
         promptVersion=PROMPT_VERSION))
     return Prompt(BRIEF, lines.render(), warnings=warnings)
+
+
+def _baseline(context: ctx.PromptContext) -> str:
+    """Which GT7 the footer claims to speak for.
+
+    Never a literal. A version hard-coded in prose is right for exactly as long
+    as it takes the console to patch itself, and then every brief issued
+    afterwards files post-patch evidence under the pre-patch physics with
+    nothing marking it - which is the same failure `Settings.game_version`
+    stopped doing at the payload, one layer up, and kept doing here.
+
+    Unset says so rather than guessing. The export refuses a payload with no
+    version; a prompt is prose and cannot refuse, so it declares the gap.
+    """
+    version = (context.game_version or "").strip()
+    if not version:
+        return templates()["gt7BaselineUnset"]
+    return templates()["gt7Baseline"].format(version=version)
 
 
 def _aero_line(context: ctx.PromptContext) -> str | None:
@@ -785,7 +803,7 @@ def _build_refinement(context: ctx.PromptContext, report: DriverReport,
     _return_contract(lines)
     lines.add("", template["hierarchy"], "", "---")
     lines.add(template["footer"].format(
-        date=today, baseline=templates()["gt7Baseline"],
+        date=today, baseline=_baseline(context),
         promptVersion=PROMPT_VERSION))
     if not context.has_telemetry:
         warnings.append("no laps are recorded against this event, so the "
@@ -877,7 +895,7 @@ def _build_outcome(context: ctx.PromptContext, report: DriverReport,
     _return_contract(lines, extra=template["returnLeadExtra"])
     lines.add("", template["hierarchy"], "", "---")
     lines.add(template["footer"].format(
-        date=today, baseline=templates()["gt7Baseline"],
+        date=today, baseline=_baseline(context),
         promptVersion=PROMPT_VERSION))
     return Prompt(OUTCOME, lines.render(), warnings=warnings)
 

@@ -1,7 +1,8 @@
 {
   "note": "The prose of the three race-engineering prompts. DATA, NOT CODE: edit the wording here without touching pitcrew/prompts/build.py, and bump `version` when you do. The version travels in every generated footer and is stored with every issued prompt, so a returned setup sheet is traceable to the template that asked for it. Prompts A and B are ports of buildBrief() and buildLog() in reference/gt7-race-engineering.html and their wording is tuned for the knowledge base that reads them — it is not to be 'improved'. Only where the values come from changed. {braces} are filled by the builder.",
-  "version": "pitcrew-prompts/1.2",
-  "gt7Baseline": "GT7 v1.70 baseline",
+  "version": "pitcrew-prompts/1.3",
+  "gt7Baseline": "GT7 v{version} baseline",
+  "gt7BaselineUnset": "GT7 version not declared",
   "shared": {
     "rigLine": "- Rig: Fanatec DD Extreme 18 Nm · ClubSport V3, load-cell brake, hydraulic throttle damper · GT7 sensitivity 10",
     "rangesHeading": "## Slider ranges — this car",

@@ -90,6 +90,13 @@ class PromptContext:
     session_totals: dict | None = None
     payload: dict | None = None
     payload_json: str | None = None
+    # **The GT7 version this prompt speaks for**, resolved the same way the
+    # payload resolves it: the event's own override where it has one, the
+    # app-wide setting otherwise. The prose used to carry a hard-coded "GT7
+    # v1.70 baseline" in its footer while the payload beside it carried the
+    # real number - so a brief could tell the knowledge base one version and
+    # show it another, and 1.71 reworked the tyre model.
+    game_version: str | None = None
     # What the lobby's time-of-day preset actually does at this circuit,
     # measured off GT7's own clock. A sentence, or None where this preset
     # has never been run here. The brief needs it as much as the
@@ -280,6 +287,12 @@ def gather(store, *, event_id: int | None = None, kind: str = "brief",
     """
     event = store.get_event(event_id) if event_id else None
     context = PromptContext(event=event)
+    # **Before the early returns, not beside the payload.** A brief needs no
+    # telemetry and leaves this function four statements from here, so a
+    # version resolved down beside `build_event_export` is resolved for every
+    # prompt except the one that introduces the car.
+    context.game_version = ((event or {}).get("game_version") or game_version
+                            or None)
     if event is None:
         return context
 
