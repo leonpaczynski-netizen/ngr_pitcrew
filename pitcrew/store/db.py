@@ -112,6 +112,22 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")
+        # **Three settings that cost nothing to be wrong about, left at
+        # defaults sized for a phone.** This database is 178 MB and 99% of it
+        # is one table of 481 KB telemetry blobs; the default 2 MB page cache
+        # holds about four of them, so a sweep re-reads almost everything from
+        # disk every time. Measured on a copy: a whole-table blob sweep falls
+        # from 199.9 ms to 116.5 ms with the cache and a memory map.
+        #
+        # None of these three trade durability. `synchronous` does, and is
+        # deliberately NOT set here: under WAL, NORMAL keeps everything safe
+        # across an app crash and risks only the last commits in a power cut,
+        # which is the usual setting for a local single-user app - but it is
+        # the driver's race data and his call, not one to make silently in a
+        # performance pass. It is worth about 1 ms per lap write.
+        self._conn.execute("PRAGMA cache_size = -65536")     # 64 MB, not 2
+        self._conn.execute("PRAGMA temp_store = MEMORY")
+        self._conn.execute("PRAGMA mmap_size = 268435456")   # 256 MB
         self._init_schema()
 
     def close(self) -> None:
