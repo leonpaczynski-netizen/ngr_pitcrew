@@ -625,6 +625,9 @@ class MoonshineRecogniser:
         self._capture = None
         self._speech_blocks = 0
         self._total_blocks = 0
+        # Latched when the capture callback raises, so the error is said once
+        # rather than at every block of a stream that is already dead.
+        self._callback_failed = False
         self._truncated = False
         self.last_reason: str | None = None
 
@@ -646,6 +649,9 @@ class MoonshineRecogniser:
 
         self._speech_blocks = 0
         self._total_blocks = 0
+        # Latched when the capture callback raises, so the error is said once
+        # rather than at every block of a stream that is already dead.
+        self._callback_failed = False
         self._truncated = False
         self.last_reason = None
         self._transcriber.start()
@@ -661,17 +667,37 @@ class MoonshineRecogniser:
                 # deadlocks the host.
                 self._truncated = True
                 raise sd.CallbackStop
-            block = np.asarray(indata, dtype=np.float32).reshape(-1)
-            self._total_blocks += 1
-            if float(np.sqrt(np.mean(block * block))) >= self._silence_rms:
-                self._speech_blocks += 1
             try:
+                block = np.asarray(indata, dtype=np.float32).reshape(-1)
+                if not self._total_blocks:
+                    # **Once, so that "the stream is alive" is a fact in the
+                    # log rather than an inference from its absence.** Every
+                    # push-to-talk failure on file reports `0.00s captured`,
+                    # which cannot distinguish a microphone that delivered
+                    # silence from a stream that never called back at all -
+                    # and those need opposite fixes.
+                    log("ptt").info(
+                        "capture is alive: first block, %s frames, %s",
+                        block.size, block.dtype)
+                self._total_blocks += 1
+                if float(np.sqrt(np.mean(block * block))) >= self._silence_rms:
+                    self._speech_blocks += 1
                 self._transcriber.add_audio(block.tolist(), self.SAMPLE_RATE)
             except Exception as exc:             # noqa: BLE001
-                # On the audio callback thread: raising here kills the stream
-                # mid-question, and PortAudio takes the process with it.
-                log("ptt").warning("add_audio raised: %s: %s",
-                                   type(exc).__name__, exc)
+                # **The whole body, not just `add_audio`.** On the audio
+                # callback thread an escaping exception aborts the stream, and
+                # PortAudio does it silently: the press then ends with
+                # `0.00s captured` and nothing anywhere saying why. The two
+                # lines above this guard used to sit outside it, so a route
+                # that opened with an unexpected channel count or dtype - which
+                # is exactly what a fallback route can do - killed the capture
+                # on its first block and left no trace at all.
+                if not self._callback_failed:
+                    self._callback_failed = True
+                    log("ptt").error(
+                        "the capture callback raised on its first block and "
+                        "the stream will deliver nothing: %s: %s",
+                        type(exc).__name__, exc, exc_info=True)
 
         # Opened and declared as one step, under the enumeration lock, so that
         # a device rebuild can neither close the microphone while he is
@@ -688,6 +714,19 @@ class MoonshineRecogniser:
             lambda: open_input(
                 self.SAMPLE_RATE, channels=1, dtype="float32",
                 blocksize=self.BLOCK, callback=on_audio))
+        # **What actually opened, said out loud.** Every output path in this
+        # app logs this - the transducer, the voice, the beep - and the
+        # microphone never has. So a push-to-talk failure could not be told
+        # apart from a routing failure: the log recorded that WASAPI refused
+        # the rate and then nothing whatsoever about the route that took over.
+        # `describe_stream` compares what was granted against what was asked
+        # for and never raises.
+        try:
+            log("ptt").info("microphone open: %s", audio_devices.describe_stream(
+                self._stream, samplerate=self.SAMPLE_RATE, channels=1,
+                dtype="float32", blocksize=self.BLOCK))
+        except Exception as exc:                 # noqa: BLE001
+            log("ptt").debug("could not describe the capture stream: %s", exc)
 
     def _release_capture(self):
         """Close the microphone and take its declaration down. Both, always.

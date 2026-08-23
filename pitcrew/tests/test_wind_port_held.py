@@ -145,3 +145,64 @@ def test_a_held_port_is_not_even_opened():
     open_at = body.index("link.open(")
     assert held_at < open_at
     assert "return False" in body[held_at:open_at]
+
+
+def test_pending_io_is_cancelled_before_the_close():
+    """**The root cause of the 31 minutes.** `WRITE_TIMEOUT_S` is 0.25 s and
+    pyserial's write timeout returns without cancelling the overlapped write
+    it gave up on. `CloseHandle` then blocks on that still-outstanding I/O,
+    the close never returns, and the port is abandoned still held."""
+    order = []
+
+    class _Handle:
+        def cancel_write(self):
+            order.append("cancel_write")
+
+        def cancel_read(self):
+            order.append("cancel_read")
+
+        def close(self):
+            order.append("close")
+
+    from pitcrew.rig.wind import WindLink
+
+    WindLink._close_handle(WindLink("COM5"), _Handle())
+    assert order[-1] == "close", "the close must come last"
+    assert "cancel_write" in order, (
+        "the timed-out write is what blocks the close; not cancelling it is "
+        "what cost the fans a whole race")
+
+
+def test_a_cancel_that_raises_still_reaches_the_close():
+    """A surprise-removed device can fail either cancel. Getting to the close
+    still matters."""
+    closed = []
+
+    class _Handle:
+        def cancel_write(self):
+            raise OSError("device gone")
+
+        def cancel_read(self):
+            raise OSError("device gone")
+
+        def close(self):
+            closed.append(True)
+
+    from pitcrew.rig.wind import WindLink
+
+    WindLink._close_handle(WindLink("COM5"), _Handle())
+    assert closed == [True]
+
+
+def test_a_handle_without_cancel_is_still_closed():
+    """Not every pyserial backend exposes them."""
+    closed = []
+
+    class _Handle:
+        def close(self):
+            closed.append(True)
+
+    from pitcrew.rig.wind import WindLink
+
+    WindLink._close_handle(WindLink("COM5"), _Handle())
+    assert closed == [True]

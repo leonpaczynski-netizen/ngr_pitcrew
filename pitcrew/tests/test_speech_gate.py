@@ -986,3 +986,72 @@ def test_nothing_ready_falls_back_to_the_one_still_coming(monkeypatch):
 def test_the_default_backend_is_the_one_that_has_ever_come_up():
     from pitcrew.settings import SPEECH_MOONSHINE, Settings
     assert Settings().speech_backend == SPEECH_MOONSHINE
+
+
+# ---------------------------------------------------------------------------
+# Why every press on file reports 0.00s captured
+#
+# Road Atlanta, 23 Aug 2026, and Yas before it. Two input opens exist in a week
+# of logs and both ended the same way:
+#
+#     input device 33 'Microphone (JBL Endurance Run 3C)' via Windows WASAPI
+#     would not open (Invalid sample rate) - trying the next route
+#     rejected before transcribing: the microphone delivered no audio
+#     (0.00s captured, 0.00s speech)
+#
+# Nothing between those two lines. Which route took over, what it granted, and
+# whether a single block ever arrived were all unrecorded - and `0.00s
+# captured` cannot tell a microphone that delivered silence from a stream that
+# never called back, which need opposite fixes.
+#
+# It also had a silent-abort path: `np.asarray(...).reshape(-1)` and the RMS
+# line sat OUTSIDE the callback's try. An exception there aborts the stream,
+# PortAudio does it without a word, `_total_blocks` stays 0, and the press ends
+# with exactly the message above and no trace of the cause.
+# ---------------------------------------------------------------------------
+
+def test_a_callback_that_raises_is_reported_rather_than_silently_aborting():
+    """The whole body is guarded, not just `add_audio`."""
+    import inspect
+
+    from pitcrew.engineer import ptt as ptt_module
+
+    body = inspect.getsource(ptt_module.MoonshineRecogniser.begin)
+    guarded = body[body.index("def on_audio"):]
+    reshape_at = guarded.index("np.asarray(indata")
+    try_at = guarded.index("try:")
+    assert try_at < reshape_at, (
+        "the array conversion is outside the guard, so a route that grants an "
+        "unexpected shape kills the capture with no log line at all")
+
+
+def test_the_failure_is_latched_and_said_once():
+    """A dead stream can call back many times before it stops. One error line
+    per press, not one per block."""
+    import inspect
+
+    from pitcrew.engineer import ptt as ptt_module
+
+    body = inspect.getsource(ptt_module.MoonshineRecogniser.begin)
+    assert "if not self._callback_failed:" in body
+
+
+def test_the_latch_is_cleared_for_every_press():
+    """Otherwise one bad press silences the diagnosis for the whole session."""
+    import inspect
+
+    from pitcrew.engineer import ptt as ptt_module
+
+    for where in (ptt_module.MoonshineRecogniser.__init__, ptt_module.MoonshineRecogniser.begin):
+        assert "_callback_failed = False" in inspect.getsource(where)
+
+
+def test_what_the_microphone_actually_opened_is_logged():
+    """Every output path in the app logs this and the microphone never has -
+    which is why a routing failure and a capture failure looked identical."""
+    import inspect
+
+    from pitcrew.engineer import ptt as ptt_module
+
+    body = inspect.getsource(ptt_module.MoonshineRecogniser.begin)
+    assert "describe_stream" in body

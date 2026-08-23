@@ -373,6 +373,39 @@ class WindLink:
                 self.port, CLOSE_TIMEOUT_S)
 
     def _close_handle(self, handle) -> None:
+        """Cancel what is still in flight, then close.
+
+        **This is why the close hung, and it is the whole of the fans defect
+        on 23 Aug 2026.** The sequence measured that night:
+
+            20:24:05  Lost the wind simulator on COM5: Write timeout
+            20:24:06  closing COM5 did not return within 1.0s
+            20:24:06  Could not open COM5: PermissionError(13, 'Access is
+                      denied.')          ... and again for 31 minutes
+
+        `WRITE_TIMEOUT_S` is 0.25 s, and pyserial's write timeout returns to
+        the caller **without cancelling the overlapped write it gave up on**.
+        The I/O is still outstanding in the CH340 driver. `close()` then calls
+        `CloseHandle`, which blocks until that write completes or is cancelled
+        - and it was neither, so the close never returned, the handle was
+        abandoned to the operating system, and the port stayed held for the
+        rest of the session.
+
+        `cancel_write` is pyserial's own `CancelIoEx` wrapper and exists for
+        exactly this. Cancelling first is what lets the close finish inside its
+        bound, which is what gives the port back.
+
+        Both cancels are attempted independently and neither may raise: a
+        device that has been surprise-removed can fail either one, and getting
+        as far as `close()` still matters.
+        """
+        for cancel in ("cancel_write", "cancel_read"):
+            try:
+                method = getattr(handle, cancel, None)
+                if method is not None:
+                    method()
+            except Exception as exc:                        # noqa: BLE001
+                log("wind").debug("%s on %s raised: %s", cancel, self.port, exc)
         try:
             handle.close()
         except Exception as exc:                            # noqa: BLE001
