@@ -364,6 +364,10 @@ class EffectDeriver:
             0.90, TEXTURE_LEARN_STEP, initial=_seed_at(TEXTURE_AT_TARMAC_P90))
         self.state = vehicle.VehicleState()
 
+    def set_abs(self, setting: str | None) -> None:
+        """The assist declared on the event, on its way to the brake model."""
+        self.model.set_abs(setting)
+
     def reset(self) -> None:
         """Between sessions. Stale state across a garage visit is a phantom
         impact the moment the car reappears somewhere else on the map."""
@@ -701,6 +705,12 @@ class EffectDeriver:
                 "front_lock": round(s.front_lock, 4),
                 "rear_lock": round(s.rear_lock, 4),
                 "lock_threshold": round(s.lock_threshold, 4),
+                # Which assist the scale was measured on, against which one is
+                # fitted. A borrowed scale is visible in a log an hour later
+                # instead of being inferred from how the seat behaved.
+                "abs": self.model._abs,
+                "confidence": s.brake_confidence,
+                "anchors": self.model._anchors.source,
                 "rear_unstable": round(s.rear_unstable, 3),
                 "note": s.reasons.get("brake"),
             },

@@ -246,6 +246,12 @@ class TelemetryBridge(QObject):
         # The car's canonical NAME, set from the active event. Kept for the
         # log lines that name which car is on the wire.
         self._car_name = None
+        # The assist declared on the active event, held so the push happens
+        # once per change rather than once per call. `_pushed_abs` separates
+        # "no assist declared" from "never asked", which are different facts
+        # and used to compare equal.
+        self._abs_setting = None
+        self._pushed_abs = False
         # Whether a REAL car id has been announced yet, as distinct from
         # `_announced`, which only says a packet arrived. The first packet
         # routinely carries id 0 - the car has not loaded - and that is not an
@@ -276,6 +282,17 @@ class TelemetryBridge(QObject):
             self.shift_beep.short_shifting = True
         else:
             self.shift_beep.short_shifting = False
+
+    def set_abs(self, setting: str | None) -> None:
+        """Which ABS the regulations put in the car, from the active event.
+
+        The brake cue's scale is a property of the assist, not of the car: with
+        ABS on it is measuring a regulator that holds the axle near its peak,
+        and with ABS off there is no regulator and the same slip number means
+        something else. The rig had no way to know which, and had been reading
+        every car as though a regulator were fitted.
+        """
+        self.effects.set_abs(setting)
 
     def set_sheet_shift_rpm(self, table: dict | None) -> None:
         self._sheet_shift_rpm = {int(g): float(r)
@@ -800,6 +817,27 @@ class PitCrewController(QObject):
         if getattr(self.bridge, "_car_name", None) != name:
             self.bridge._car_name = name
             self.bridge._apply_shift_points()
+        # **And the assist, on the same hook and for the same reason.** ABS is
+        # a regulation on the event - Supercars declares Off, every other
+        # series he runs declares Weak - so it changes when the event does,
+        # not when a session opens. Pushing it here keeps the brake cue's
+        # scale and the rulebook in step.
+        assist = (event or {}).get("abs_setting") if event else None
+        # **`_pushed_abs` and not `_abs_setting is None`.** The bridge starts
+        # with no assist, so comparing values meant that an event declaring
+        # nothing compared equal to the initial state, the push never
+        # happened, and the one log line that says "you are on a borrowed
+        # scale" could only fire on a transition FROM a declared assist - the
+        # rarest case, and never the one it was written for.
+        if not self.bridge._pushed_abs or self.bridge._abs_setting != assist:
+            self.bridge._pushed_abs = True
+            self.bridge._abs_setting = assist
+            self.bridge.set_abs(assist)
+            if assist is None:
+                log("rig").info(
+                    "no ABS setting on the active event, so the brake cue is "
+                    "borrowing the ABS-on scale - it will read LOW confidence "
+                    "until the event declares one")
         return event
 
     def _refresh_race_options(self, event) -> None:

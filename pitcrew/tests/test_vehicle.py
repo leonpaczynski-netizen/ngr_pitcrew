@@ -202,7 +202,7 @@ def test_the_abs_regulating_is_reported_as_the_limit_and_not_as_a_lock():
     model = V.VehicleModel()
     settle(model, throttle=0.5, rear_slip=1.02)
     for _ in range(120):                       # two seconds of hard braking
-        state = model.update(Frame(brake=1.0, front_slip=0.87, rear_slip=0.94))
+        state = model.update(Frame(brake=1.0, front_slip=0.90, rear_slip=0.94))
     assert state.brake_state == V.BRAKE_LIMIT_S
     assert state.brake_level < 0.55, (
         "the regulator working is information, not an alarm")
@@ -229,7 +229,7 @@ def test_the_lock_threshold_can_never_be_learned_away():
     settle(model, throttle=0.5, rear_slip=1.02)
     for _ in range(3000):     # fifty seconds of the deepest braking there is
         state = model.update(Frame(brake=1.0, front_slip=0.75, rear_slip=0.95))
-    assert state.lock_threshold >= V.LOCK_FLOOR
+    assert state.lock_threshold >= V.ABS_ON.lock_floor
     assert state.brake_state == V.BRAKE_LOCKED, (
         "it learned the lock and stopped reporting it")
 
@@ -250,7 +250,13 @@ def test_a_lock_does_not_teach_the_plateau_that_locking_is_normal():
     for _ in range(240):                           # four seconds locked solid
         state = model.update(Frame(brake=1.0, front_slip=0.74, rear_slip=0.95))
     assert state.brake_state == V.BRAKE_LOCKED
-    assert state.lock_threshold <= before, (
+    # One step of tolerance, and it is arithmetic rather than slack: the
+    # threshold each frame is computed from the plateau as it stood BEFORE
+    # that frame's update, so the last honest rise of the unlocked segment
+    # lands in the first locked frame's threshold. Anything beyond one step is
+    # the lock teaching the detector, which is what this test is about.
+    carry = V.PLATEAU_STEP * V.PLATEAU_QUANTILE * V.PLATEAU_MARGIN
+    assert state.lock_threshold <= before + carry, (
         "the lock event taught the detector to stop detecting it")
 
 
@@ -263,8 +269,8 @@ def test_deep_but_unlocked_regulation_still_raises_the_threshold():
     settle(model, throttle=0.5, rear_slip=1.02)
     state = None
     for _ in range(300):
-        state = model.update(Frame(brake=1.0, front_slip=0.84, rear_slip=0.95))
-    assert state.lock_threshold > V.LOCK_FLOOR
+        state = model.update(Frame(brake=1.0, front_slip=0.88, rear_slip=0.95))
+    assert state.lock_threshold > V.ABS_ON.lock_floor
 
 
 def test_a_lock_up_needs_the_brake_to_be_on():
@@ -327,16 +333,28 @@ def test_braking_at_the_optimum_is_silence_and_the_rasp_is_the_error():
     """The driver's own mapping, chosen after two other shapes: "quiet at
     optimum, grow as brake locking worsens." The boundary is marked by the
     ONSET of feedback - silence turning into anything is the change a body
-    notices best - so braking done well must feel like nothing at all."""
+    notices best - so braking done well must feel like nothing at all.
+
+    **The slip that counts as "done well" is written from the anchors, not
+    typed in.** This test used to hold 0.100 as "exactly the measured peak",
+    which it was on v1.70. Re-measured on v1.71 the peak is 0.065, so 0.100
+    became a tenth past it and the test failed by correctly reporting a rasp.
+    Taking the number from `ABS_ON` keeps the test about the SHAPE - silence
+    at the peak, growth past it - which is the part the driver chose and the
+    part that has to survive every re-measurement."""
     model = V.VehicleModel()
     settle(model, throttle=0.5, rear_slip=1.02)
+    at_peak = 1.0 - (V.ABS_ON.rasp_from + 0.001)
+    past_peak = 1.0 - (V.ABS_ON.rasp_from + 0.045)
     state = None
-    for _ in range(60):            # held exactly at the measured peak
-        state = model.update(Frame(brake=1.0, front_slip=0.90, rear_slip=0.96))
+    for _ in range(60):
+        state = model.update(Frame(brake=1.0, front_slip=at_peak,
+                                   rear_slip=at_peak + 0.06))
     assert state.brake_state == V.BRAKE_LIMIT_S
     assert state.brake_level < 0.02, "braking done well must be silent"
     for _ in range(60):            # let it slide past the peak
-        state = model.update(Frame(brake=1.0, front_slip=0.86, rear_slip=0.96))
+        state = model.update(Frame(brake=1.0, front_slip=past_peak,
+                                   rear_slip=at_peak + 0.06))
     assert state.brake_level > 0.1, "past the peak the rasp must appear"
 
 
@@ -839,3 +857,83 @@ def test_the_not_loaded_yet_sentinel_is_not_a_car():
     model._note_car(_packet(car_id=0))
     assert not model.car_changed, "the sentinel was taken for a car"
     assert model._slip_ref.value(1.0) is not None, "the reference was dropped"
+
+
+# ------------------------------------------------- the assist in the car
+
+def test_the_brake_scale_follows_the_assist_the_regulations_put_in_the_car():
+    """ABS is a property of the event, not of the car or the driver. With a
+    regulator the cue is grading distance past a measured grip peak; without
+    one there is no peak in the data at all, so it grades distance to the
+    lock instead - a different sentence on the same ramp."""
+    model = V.VehicleModel()
+    model.set_abs("Weak")
+    assert model._anchors.rasp_means == "past-peak"
+    assert model._anchors.plateau_learned
+
+    model.set_abs("Off")
+    assert model._anchors.rasp_means == "approaching-lock"
+    assert not model._anchors.plateau_learned, (
+        "a q0.85 of an unregulated stream is a quantile of his own pedal")
+
+
+def test_abs_off_still_speaks_before_the_lock():
+    """**The regression the first attempt shipped.** Rendering silence up to
+    the lock because no grip peak resolves cut the cue on his current series
+    from 1.5 audible episodes a lap to 0.6, with a 99th percentile of exactly
+    zero - shipped to a driver whose standing complaint is that braking feels
+    numb. There is no peak to claim, but there is a measured threshold to be
+    approaching, and that is a sentence the data supports."""
+    model = V.VehicleModel()
+    model.set_abs("Off")
+    settle(model, throttle=0.5, rear_slip=1.02)
+    approaching = 1.0 - (model._anchors.rasp_from
+                         + (model._anchors.lock_floor
+                            - model._anchors.rasp_from) * 0.6)
+    state = None
+    for _ in range(60):
+        state = model.update(Frame(brake=1.0, front_slip=approaching,
+                                   rear_slip=0.98))
+    assert state.brake_state == V.BRAKE_LIMIT_S
+    assert state.brake_level > 0.0, (
+        "with ABS off, the approach to a lock is the only warning there is")
+
+
+def test_a_borrowed_brake_scale_says_that_it_is_borrowed():
+    """An assist nobody has measured gets a cue rather than a silence - a
+    silent false negative on a CRITICAL cue is the wrong direction to be wrong
+    in - but it must never claim the scale was measured on it."""
+    model = V.VehicleModel()
+    model.set_abs("Off")
+    assert model._anchors.confidence == V.LOW, (
+        "the ABS-off scale is v1.70 numbers from one car on one circuit")
+
+    model.set_abs("something GT7 has never sent")
+    assert model._anchors is V.ABS_ON, "an unknown assist still gets a cue"
+    settle(model, throttle=0.5, rear_slip=1.02)
+    state = model.update(Frame(brake=1.0, front_slip=0.80, rear_slip=0.95))
+    assert state.brake_confidence == V.LOW
+    assert state.brake_level > 0.0, "an unknown assist must not go silent"
+
+
+def test_a_session_boundary_does_not_forget_which_assist_is_fitted():
+    """`reset()` runs on a session boundary, a car change and a watchdog
+    recovery. Clearing the assist there would drop a live race onto the
+    borrowed scale mid-stint with nothing saying so."""
+    model = V.VehicleModel()
+    model.set_abs("Off")
+    model.reset()
+    assert model._abs == "Off"
+    assert model._anchors.rasp_means == "approaching-lock"
+
+
+def test_the_lock_scale_is_re_seeded_when_the_assist_changes():
+    """The plateau's seed is a property of the scale. Leaving the previous
+    assist's floor in the learner keeps the old regulation's threshold alive
+    into the first minutes of the new one."""
+    model = V.VehicleModel()
+    model.set_abs("Weak")
+    seeded_on = model._plateau.value
+    model.set_abs("Off")
+    assert model._plateau.value != seeded_on
+    assert model._plateau.value == V.ABS_OFF.lock_floor / V.PLATEAU_MARGIN

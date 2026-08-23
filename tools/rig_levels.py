@@ -194,6 +194,17 @@ def main() -> None:
                         help="comma-separated session ids")
     parser.add_argument("--game-version", default="",
                         help="every framed lap recorded on this version")
+    # **Without this every replay silently measures the ABS-on branch.**
+    # `EffectDeriver` starts with no assist declared, so it falls back to
+    # ABS_ON - and a replay of ABS-Off laps then reports numbers for code that
+    # will never run on them. That is exactly how a 0.31% -> 0.77% improvement
+    # turned out to be a 0.35% -> 0.21% regression when it was finally
+    # exercised properly.
+    parser.add_argument("--abs", default="", choices=["", "Off", "Weak",
+                                                      "Default"],
+                        help="the assist declared on the event these laps "
+                             "were driven under; omit only for laps whose "
+                             "assist you do not know")
     args = parser.parse_args()
 
     sessions = [int(part) for part in args.sessions.split(",") if part.strip()]
@@ -207,6 +218,7 @@ def main() -> None:
         raise SystemExit("no recorded laps in that database")
 
     deriver = EffectDeriver()
+    deriver.set_abs(args.abs or None)
     mix = HapticMix(block=512)
     width = len(deriver.NAMES)
     raw: list[np.ndarray] = []

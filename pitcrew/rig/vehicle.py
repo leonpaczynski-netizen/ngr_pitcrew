@@ -298,6 +298,159 @@ PLATEAU_QUANTILE = 0.85
 PLATEAU_STEP = 3.0e-4
 PLATEAU_MARGIN = 1.15
 
+
+# Confidence, in the vocabulary the export already uses.
+HIGH, MEDIUM, LOW, NONE = "high", "medium", "low", "none"
+
+
+@dataclass(frozen=True)
+class BrakeAnchors:
+    """The brake cue's scale, for one assist setting.
+
+    **Keyed by ASSIST and not by car, and that is the whole argument.** The
+    genuinely per-car quantity here is the ABS plateau, and it is already
+    learned per car at runtime and dropped on a car change. What is left -
+    the slip at which the tyre stops giving more braking force, and the slip a
+    stopped wheel reads - is tyre and geometry rather than car. A table keyed
+    by car would manufacture a "car nobody has measured" hole for numbers that
+    are not per-car, and would then need a fallback, which is the thing the
+    shift beep's silence exists to forbid.
+
+    The hole that DOES exist is an assist nobody has measured. `source` is
+    carried so that a borrowed scale says so in the explainer rather than
+    being inferred from behaviour an hour later.
+    """
+
+    stable: float
+    at_limit: float
+    # Where the graded rasp begins, and WHAT IT CLAIMS - which is not the
+    # same question on both assists.
+    #
+    # With a regulator there is a measurable grip peak and the rasp means
+    # "past the peak". With ABS off no peak resolves: the deep-slip frames are
+    # cornering frames - measured, only 49-54% pass the straight-line gate, at
+    # 0.32-0.36 lateral g - so the gate that makes the measurement clean
+    # removes the region the peak would be in.
+    #
+    # **The first attempt rendered silence there, and that was wrong.** It cut
+    # the brake cue on his current series from 1.5 audible episodes a lap to
+    # 0.6 and put `amp_p99` at exactly 0.0000 - a 62% reduction, shipped to a
+    # driver whose standing complaint is that braking feels numb.
+    #
+    # The fix is to change what is CLAIMED, not to invent a peak. "You are
+    # past the grip peak" needs a peak; "you are approaching a lock" does not,
+    # and the lock threshold is the one number on this branch that IS
+    # measured. So off the regulator the same band grades proximity to the
+    # threshold instead, and `rasp_means` carries which claim is being made
+    # all the way into the explainer.
+    rasp_from: float
+    rasp_means: str
+    lock_floor: float
+    lock_full: float
+    plateau_learned: bool
+    # Whether the scale was measured on THIS assist, or borrowed from another.
+    # On the record rather than inferred from the lookup succeeding: a key
+    # existing in a dict is not evidence that anyone measured anything.
+    confidence: str
+    source: str
+
+
+# **Re-measured on v1.71, and the peak moved a long way.** The constants above
+# are v1.70 numbers and every one of them is kept, because they are the record
+# of how this cue was built - but none of them is what the car does now.
+#
+# Re-derived by the original method (median longitudinal decel binned on
+# front-axle lock, straight-line braking only, pedal >85%, lateral g <0.35,
+# 50-70 m/s, peak bootstrapped 400x), the grip peak sits at:
+#
+#     RSR 991,  Monza, v1.70, ABS Weak   0.101   (reproduces the shipped 0.105)
+#     RSR 991,  Monza, v1.71, ABS Weak   0.067   5-95% 0.066-0.075
+#     992 GT3R, Spa,   v1.71, ABS Weak   0.062   5-95% 0.058-0.063
+#
+# The first pair is the controlled comparison - same car, same circuit, same
+# assist, the version the only change - and a second car at a second circuit
+# lands within 0.005 of it. **Their bootstrap intervals do not actually
+# overlap** (0.066-0.075 against 0.058-0.063) at a resolution floor of about
+# 1%, so this is two nearby per-car peaks rather than one fleet number; 0.065
+# is the middle of them and the per-car question is open.
+#
+# 0.105 is about **p83** of the v1.71 RSR's braking frames - 16.9% still reach
+# it, largest ever seen 0.152 - so the ramp was not starved of input. What it
+# lost was the span: an onset at 0.105 against a top at 0.152 leaves 0.047 of
+# range, and `amp_p99` fell 0.117 to 0.048 across the patch. Starting the ramp
+# at the peak restores the span rather than finding new input.
+#
+# `at_limit` IS the peak, exactly. Its old definition - "the regulator has
+# started" - did not survive contact with the measurement: it matches its
+# stated percentile on no dataset, including the one it was fitted on. One
+# threshold with one meaning, which is where the tyre stops giving more braking
+# force, is worth more than two that disagree.
+#
+# A 0.005 gap was tried first, to stop the state boundary and the ramp onset
+# landing on the same float. It was unnecessary - `ramp()` returns 0.0 at
+# `value <= onset`, so a frame held exactly at the peak resolves
+# deterministically to state AT_LIMIT at level 0.0, which is the shape the
+# driver asked for - and it put the threshold below both cars' measured
+# intervals to buy nothing.
+#
+# `stable` is now only a gate on what teaches the plateau, and it is set to
+# what it always claimed to be: p20 of braking frames, re-measured.
+# `lock_full` is the pooled RACING-SPEED maximum, and the speed gate is the
+# point. Taken ungated it lands on a wheel stopping at the end of a stop: the
+# frames that set the RSR/992 tail sit at a median of 27-32 km/h, and a ramp
+# topped out there spends its whole usable range in the bottom fifth. Every
+# other threshold in this module is measured under a speed gate and this one
+# was not.
+#
+# **It is also the one field the second car refutes.** At 0.152 - the RSR's
+# all-time maximum - 46.4% of the 992's locks at Spa saturate, with a ramp
+# median of 0.899. The 992 genuinely reaches past 0.30 at racing speed (32
+# frames, median 61 km/h). So the top is per-car in a way `stable`, `at_limit`
+# and `rasp_from` are not, and 0.300 is the pooled figure until there is a
+# per-car one. The RSR then sits low in the ramp and renders 0.65-0.70 - the
+# LOCKED floor carries it, so low in the ramp is quiet, not silent.
+ABS_ON = BrakeAnchors(
+    stable=0.016, at_limit=0.065, rasp_from=0.065, rasp_means="past-peak",
+    lock_floor=0.130, lock_full=0.300, plateau_learned=True, confidence=HIGH,
+    source="RSR 991 12 laps + 992 GT3R 33 laps, 21-22 Aug 2026, v1.71, ABS Weak")
+
+# **With no regulator the shape is different, not just the numbers, and this
+# record is the least certain thing in the file.**
+#
+# `lock_full` = 0.260 was the largest excursion in 77 minutes of REGULATED
+# driving. Off the regulator a locking wheel runs toward 1.0 and gets there:
+# a quarter of every lock the model called on the Shelby was pinned at full
+# scale, with the median lock already halfway up the ramp. All the resolution
+# had been thrown away at exactly the assist where nothing is catching a
+# locked wheel for him.
+#
+# 0.330 is the racing-speed maximum on the only v1.71 ABS-Off data there is.
+# The ungated p99.9 is 0.880, and 0.880 was tried - but the frames that set it
+# sit at a median of 27 km/h, so it reproduces the 0.260 pathology mirrored:
+# at racing speed the whole usable range would live in the bottom fifth of the
+# ramp.
+#
+# **The floor stays at 0.170 deliberately.** Lifting it past ~0.30 deletes the
+# rear lock on downshifts - driver-confirmed, measured at 344 episodes with a
+# median peak of 0.127 - so a tidier floor would silence something he has
+# already said he feels.
+#
+# **`confidence` is LOW and it is LOW on purpose.** These are v1.70 numbers,
+# one car, one circuit, and CLAUDE.md rule 7 voids pre-patch tuning logic - a
+# provenance string documents that, it does not cure it. The one v1.71
+# ABS-Off sample says the distribution shrank about 2.2x across the patch,
+# the same order as the RSR's controlled 1.6x, and circuit and version are
+# confounded in the only pair available. So the cue runs, and it says out loud
+# that its scale is borrowed, until a v1.71 ABS-Off session exists.
+ABS_OFF = BrakeAnchors(
+    stable=0.016, at_limit=0.100, rasp_from=0.100,
+    rasp_means="approaching-lock",
+    lock_floor=0.170, lock_full=0.330, plateau_learned=False, confidence=LOW,
+    source="Shelby GT350R 24 laps Yas v1.70 + 14 laps Road Atlanta v1.71, "
+           "ABS Off - BORROWED ACROSS THE PATCH")
+
+ANCHORS = {"Weak": ABS_ON, "Default": ABS_ON, "Off": ABS_OFF}
+
 # **Rear instability under braking**, which matters more here than anywhere
 # else because his whole technique is trail-braking deep.
 #
@@ -484,8 +637,6 @@ ROTATION_ROTATING = "ROTATING"
 ROTATION_OVERSTEER = "OVERSTEER"
 ROTATION_SEVERE = "SEVERE_ROTATION"
 
-# Confidence, in the vocabulary the export already uses.
-HIGH, MEDIUM, LOW, NONE = "high", "medium", "low", "none"
 
 
 def ramp(value: float, onset: float, full: float) -> float:
@@ -903,8 +1054,13 @@ class VehicleState:
     brake_axle: str | None = None
     front_lock: float = 0.0
     rear_lock: float = 0.0
-    lock_threshold: float = LOCK_FLOOR
+    # The live default comes from the anchors, not from the v1.70
+    # constant: this field is logged, and session 39 was diagnosed off it.
+    lock_threshold: float = ABS_ON.lock_floor
     rear_unstable: float = 0.0
+    # Whether the scale behind `brake_level` was measured on the assist
+    # actually fitted, or borrowed from another one. See `VehicleModel.set_abs`.
+    brake_confidence: str = NONE
     # --- rotation
     rotation: str = UNKNOWN
     rotation_level: float = 0.0
@@ -948,7 +1104,7 @@ class VehicleModel:
     def __init__(self) -> None:
         self._slip_ref = _SlipReference()
         self._plateau = _Quantile(PLATEAU_QUANTILE, PLATEAU_STEP,
-                                  initial=LOCK_FLOOR / PLATEAU_MARGIN)
+                                  initial=ABS_ON.lock_floor / PLATEAU_MARGIN)
         self._load_ref = [_Reference(LOAD_REFERENCE_S, LOAD_REFERENCE_S,
                                      LOAD_SETTLE_FRAMES) for _ in range(4)]
         self._load_spread = [_Reference(LOAD_REFERENCE_S, LOAD_REFERENCE_S)
@@ -981,7 +1137,48 @@ class VehicleModel:
         # been reset. `_note_car` owns it.
         self._car_id: int | None = None
         self.car_changed = False
+        # The assist declared on the event, and the scale that goes with it.
+        # Like `_car_id`, deliberately NOT cleared by `reset()`: that runs on
+        # a session boundary, a car change and a watchdog recovery, and
+        # clearing it there would drop a live race into the borrowed branch
+        # mid-stint without anything saying so.
+        self._abs: str | None = None
+        self._anchors: BrakeAnchors = ABS_ON
+        self._borrowed = True
         self.state = VehicleState()
+
+    def set_abs(self, setting: str | None) -> None:
+        """Which ABS the regulations put in the car, from `events.abs_setting`.
+
+        **A declared assist with no measured scale still gets a cue.** The
+        repo's usual answer to "nobody has measured this" is silence - the
+        shift beep does exactly that for an unmeasured gearbox - but the
+        trade is different here and it goes the other way. A gearbox with no
+        beep costs a tenth; a brake cue that goes quiet under ABS Off is a
+        silent false negative on the highest-priority cue in the rig, at the
+        one assist setting where nothing is catching a locked wheel for him.
+        A wrong silence is also harder to notice from the seat than a wrong
+        level.
+
+        So an unmeasured assist BORROWS the ABS-on scale and says so:
+        `brake_confidence` drops to LOW and the explainer names the borrow.
+        `None` is kept as None rather than defaulted to a string - the app not
+        knowing and the event declaring "Weak" are different facts.
+        """
+        self._abs = setting or None
+        anchors = ANCHORS.get(self._abs or "")
+        # Order matters: `_anchors` first, so a telemetry frame landing between
+        # the two writes can never read the new confidence against the old
+        # scale.
+        self._anchors = anchors or ABS_ON
+        # **Borrowed, not merely absent.** An assist the table has never heard
+        # of gets ABS_ON at LOW - and an assist the table DOES have can still
+        # be LOW, because a key existing is not evidence anyone measured it.
+        self._borrowed = anchors is None
+        # Re-seeded, because the seed is a property of the scale: leaving the
+        # old assist's floor in the learner would keep the previous
+        # regulation's threshold alive for the first minutes of the new one.
+        self._plateau.reset(self._anchors.lock_floor / PLATEAU_MARGIN)
 
     # ------------------------------------------------------------- lifecycle
 
@@ -989,7 +1186,7 @@ class VehicleModel:
         """Between sessions. A garage visit teleports the car, which makes
         every differenced channel produce an event that never happened."""
         self._slip_ref.reset()
-        self._plateau.reset(LOCK_FLOOR / PLATEAU_MARGIN)
+        self._plateau.reset(self._anchors.lock_floor / PLATEAU_MARGIN)
         for ref in self._load_ref + self._load_spread:
             ref.reset()
         self._heading.reset()
@@ -1421,12 +1618,23 @@ class VehicleModel:
         worst = max(s.front_lock, s.rear_lock)
         s.brake_axle = "front" if s.front_lock >= s.rear_lock else "rear"
 
-        plateau = max(LOCK_FLOOR / PLATEAU_MARGIN, self._plateau.value or 0.0)
-        lock_threshold = max(LOCK_FLOOR, plateau * PLATEAU_MARGIN)
+        # The scale for the assist actually fitted to this car, and the
+        # honesty about whether it was measured on it - see `set_abs`.
+        anchors = self._anchors
+        s.brake_confidence = LOW if self._borrowed else anchors.confidence
+
+        plateau = max(anchors.lock_floor / PLATEAU_MARGIN,
+                      self._plateau.value or 0.0)
+        lock_threshold = max(anchors.lock_floor, plateau * PLATEAU_MARGIN)
         s.lock_threshold = lock_threshold
         self._latches["locking"].on = lock_threshold
         self._latches["locking"].off = lock_threshold * 0.82
 
+        # Re-derived per frame like `locking`, and it was not: `at_limit` was
+        # pinned to the module constant at construction, so the one threshold
+        # that says "past the peak" could not follow a change of assist.
+        self._latches["at_limit"].on = anchors.at_limit
+        self._latches["at_limit"].off = anchors.at_limit * 0.8
         self._latches["at_limit"].update(worst, dt)
         self._latches["locking"].update(worst, dt)
 
@@ -1443,10 +1651,22 @@ class VehicleModel:
         # below it, more than the rest of the session contained. The upward
         # step alone is withheld during the event: a threshold that is too
         # high hides locks, so the estimator is always allowed to fall.
-        if worst > BRAKE_STABLE:
+        # **Fed from the FRONT axle, not from `worst`.** It is a model of the
+        # regulator, and the regulator's working point is a front-axle
+        # quantity: measured, the front is the worse axle on 97-98.8% of
+        # braking frames, so this was already a front plateau on almost every
+        # frame and was being taught with rear data on the rest.
+        #
+        # **And not learned at all with ABS off.** With no regulator there is
+        # no plateau to find, and a q0.85 of a stream with nothing regulating
+        # it is a quantile of his own pedal discipline - which would report
+        # "unusual for Leon" while claiming "past the limit", the same
+        # self-referential fault the road bed's scale is allowed to have
+        # precisely because it is a bed and this is not.
+        if anchors.plateau_learned and s.front_lock > anchors.stable:
             quiet = (not self._latches["locking"].active
-                     and worst < lock_threshold)
-            self._plateau.update(worst, allow_rise=quiet)
+                     and s.front_lock < lock_threshold)
+            self._plateau.update(s.front_lock, allow_rise=quiet)
 
         # The rotation witness's view of the rear under braking, kept for the
         # explainer only. The EVENT reaches the driver through the traction
@@ -1459,7 +1679,8 @@ class VehicleModel:
 
         if self._latches["locking"].active:
             s.brake_state = BRAKE_LOCKED
-            s.brake_level = 0.65 + 0.35 * ramp(worst, lock_threshold, LOCK_FULL)
+            s.brake_level = 0.65 + 0.35 * ramp(worst, lock_threshold,
+                                               anchors.lock_full)
         elif self._latches["at_limit"].active:
             s.brake_state = BRAKE_LIMIT_S
             # **Silent at the optimum, growing as the lock worsens.**
@@ -1482,7 +1703,13 @@ class VehicleModel:
             # rasp appearing and growing means slip past the peak, heading
             # for the lock threshold; LOCKED stays the alarm it was. The AM
             # rate rides the same number, so the rhythm quickens with it.
-            s.brake_level = 0.50 * ramp(worst, BRAKE_OPTIMUM, lock_threshold)
+            # One ramp, and `rasp_means` says which claim it is making: past
+            # the grip peak where a peak resolves, approaching the lock where
+            # none does. Same shape, same authority, different sentence - and
+            # the explainer carries the difference so a log can be read months
+            # later without guessing which assist was fitted.
+            s.brake_level = 0.50 * ramp(worst, anchors.rasp_from,
+                                        lock_threshold)
         else:
             # Working brakes on the right side of the optimum, including the
             # old STABLE presence band: silence, by the same choice.

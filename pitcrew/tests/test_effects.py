@@ -409,7 +409,7 @@ def test_the_abs_working_reaches_the_brake_channel_but_not_at_alarm_level():
     deriver = EffectDeriver()
     _settle(deriver, throttle=0.5, rear_slip=1.02)
     for _ in range(60):
-        out = deriver.update(Frame(brake=1.0, front_slip=0.87, rear_slip=0.94))
+        out = deriver.update(Frame(brake=1.0, front_slip=0.90, rear_slip=0.94))
     level = out[_index("brake_limit")]
     assert 0.0 < level < 0.6
     assert deriver.state.brake_state == vehicle.BRAKE_LIMIT_S
