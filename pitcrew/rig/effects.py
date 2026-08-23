@@ -275,6 +275,57 @@ STRIKE_OWN_TAIL_S = 0.15      # how far past the gap it keeps the channel
 # The range is a claim about the car, not about the signal. Measured over 40
 # laps: median 0.22 g, p75 1.16, p90 1.50, p99 1.80. The ceiling at 2.20 sits
 # above the 99th so the top of the scale still has resolution at the limit.
+LAT_G_ONSET = 0.20
+LAT_G_FULL = 2.20
+# **The ceiling is right, the signal reaching it is not, and the correction
+# was built, measured and thrown away. All three of those are the finding.**
+#
+# 2.20 looked like a Porsche number applied to a fleet: it is exceeded on
+# 1.97% of the Shelby's frames at Road Atlanta against 0.16% of the RSR's at
+# Monza, twelve times as often. It is not. Replayed across three cars and
+# three circuits the p90 of lateral g is 1.45, 1.53, 1.53, 1.69 and 1.68 -
+# stable to within 15% of itself - and the spread is CIRCUIT rather than car:
+# Monza's median is 0.21 g against 0.62 at Spa and Road Atlanta, because Monza
+# is straights. "1.2 g is 1.2 g in every corner and every car" survived its
+# own test. The ceiling stays.
+#
+# **The signal defect is real.** `speed x yaw rate` is the path's centripetal
+# acceleration only while sideslip is small; sideways, the chassis turns
+# faster than its path and the number leaves the physics - 17.8 g at Road
+# Atlanta, on a road car. Measured against a path-derived figure, **79% of the
+# Road Atlanta frames that reach this ceiling are below 2.2 g on the path
+# measure** (Spa 64%, Monza 67%). The ceiling is being reached by artefact.
+#
+# **And it does not reach the driver, because the mixer already fixed it.**
+# `chassis_load` is STATE, so it ducks under `rear_traction`, which is
+# CRITICAL and at full level during exactly those frames. Driving the real
+# gain chain over a spin: the background duck is already pinned at its 0.180
+# floor and the "full scale" load cue arrives at the piston at **0.0357 -
+# below the whole-lap median of 0.0527**. The priority classes had done the
+# job before anything was added.
+#
+# **What was tried, and what it cost.** Fading the load by sideslip ANGLE over
+# `BETA_ONSET_DEG..BETA_FULL_DEG`. Scored against the path-derived figure it
+# is worse than doing nothing on all four datasets - Road Atlanta MAE 0.0656
+# against 0.0614, correlation 0.901 against 0.926 - because the angle is the
+# wrong variable. The error in `speed x yaw` is `speed x beta_RATE`: at a
+# steady drift with constant sideslip, `speed x yaw` is exactly right and
+# needs no correction, and those are precisely the frames the angle taper
+# mutes. At Spa it attenuated 4.25% of the lap by 23-100% while the car was
+# pulling a median 1.69 g **by the path measure too** - the driver's best
+# cornering, muted.
+#
+# `beta_rate` is on the state and is the error term exactly. It is not used
+# here either, because `speed x (yaw - beta_rate)` IS the path measure
+# algebraically, so keying on it is not a correction to this signal but a
+# substitution of the other one - and that one's problem is outliers (max 28.9
+# with a 3-frame stencil), not bias. Its body is fine: Road Atlanta p50/p90
+# 0.655/1.611 against 0.668/1.692 here, with a much better tail.
+#
+# So: if this is ever revisited, the question is not "how do I taper" but
+# "is a smoothed path-derived lateral g worth its outliers", and the answer
+# has to beat doing nothing on MAE against ordinary cornering, which the
+# obvious fix did not.
 # **A rear lock throbs, and that is how one piston says two things.**
 #
 # The brake voice already spends its three discriminable axes on severity:
@@ -323,9 +374,6 @@ REAR_THROB_GUARD = synth.ARBITRATE_ABOVE * 1.05
 # between "separate events" and `AM_RANGE_HZ[0]` = 5.0 - so it is a known
 # limit of the gesture, and the cue's amplitude still carries the severity.
 REAR_THROB_TAIL_S = 0.25
-
-LAT_G_ONSET = 0.20
-LAT_G_FULL = 2.20
 
 # An impact is a step in world velocity that no engine could produce. Metres
 # per second per frame - at 60 Hz, 1.5 m/s in one frame is 90 m/s^2.
@@ -634,6 +682,10 @@ class EffectDeriver:
         entry speed wants; it does not say how much is left. Nothing in GT7's
         feed says how much is left - there is no slip-angle channel and no grip
         channel - so a cue claiming to would be inventing one.
+
+        **Deliberately not corrected for sideslip**, and the attempt is worth
+        recording because the defect it chased is real. See the block above
+        LAT_G_ONSET.
         """
         if s.speed_ms < vehicle.MIN_SPEED_MS:
             return 0.0

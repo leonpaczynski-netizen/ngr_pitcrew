@@ -734,3 +734,30 @@ def test_a_rear_lock_that_flickers_does_not_alternate_rhythms():
                          rear_slip=0.95)
     assert min(trace) < max(trace) * 0.95, (
         "the rhythm stopped the instant the rear flickered")
+
+
+# ------------------------------------------------ load, while it means load
+
+def test_a_spin_does_not_reach_the_driver_as_cornering_load():
+    """**The defect that turned out not to need fixing.**
+
+    `speed x yaw rate` runs away from the physics once the car is sideways -
+    17.8 g measured on a road car - so the DERIVER really does report full
+    scale during a spin. It does not reach the piston: `chassis_load` is STATE
+    and ducks under `rear_traction`, which is CRITICAL and at full level on
+    exactly those frames. Driving the real gain chain, the load cue arrives at
+    0.036 against a whole-lap median of 0.053.
+
+    A taper was built for this and measured worse than nothing on all four
+    datasets. This test pins the reason it was not needed, so that the next
+    person to notice the 17.8 g checks the mixer before the deriver.
+    """
+    from pitcrew.rig.synth import BED, CRITICAL, STATE
+    names = {spec.name: spec for spec in PROFILE}
+    assert names["chassis_load"].priority == STATE
+    assert names["rear_traction"].priority == CRITICAL
+    assert names["road"].priority == BED
+    assert names["chassis_load"].priority > names["rear_traction"].priority, (
+        "load no longer ducks under the cue that owns a slide, so the "
+        "sideslip artefact now reaches the driver and needs correcting"
+    )

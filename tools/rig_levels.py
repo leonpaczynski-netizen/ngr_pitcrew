@@ -19,10 +19,16 @@ reconstructed:
   * wheel rates come back from the stored slip ratios and tyre radius rather
     than from `wheel_rps`, which is exact to the precision the ratios were
     rounded to;
-  * world velocity is not stored, so the heading the sideslip model needs is
-    differenced from position over a +-50 ms stencil. Live it comes from the
-    velocity vector and needs no differencing, so the rotation numbers here
-    are a floor rather than an estimate;
+  * world velocity **is** stored from 16 Aug onward and is used when present,
+    so the sideslip model sees what it sees live. Laps recorded before that
+    fall back to differencing position over a +-50 ms stencil, and their
+    rotation numbers are a floor rather than an estimate.
+
+    That fallback used to be unconditional, and it hid a finding: a claim that
+    a quarter of Road Atlanta reading `rotation` UNKNOWN was an artefact of
+    the stencil. Measured with the stored vector it is 26.6% rather than
+    23.8% - worse, not better - so the UNKNOWN is the car, not the tool, and a
+    cue exempting itself on those frames exempts itself in the field too;
   * `vel_x/y/z` therefore cannot drive the collision detector, so the impact
     channel here carries the kerb strike, the suspension strike, the landing
     and the compression only.
@@ -157,11 +163,19 @@ def _frames(rows: list[dict]) -> list[_Frame]:
         frame.throttle = _number(row, "throttle_pct") / 100.0
         frame.brake = _number(row, "brake_pct") / 100.0
         frame.angvel_y = _number(row, "yaw_rate")
-        # The heading the model wants comes from the velocity vector; here it
-        # comes from where the car actually went, which is the same direction.
-        frame.vel_x = float(dx[index])
-        frame.vel_z = float(dz[index])
-        frame.vel_y = 0.0
+        # **The stored velocity vector where there is one.** Differencing
+        # position is a good direction and a poor derivative: it smooths the
+        # heading over 100 ms, which flatters `_HeadingCheck`'s correlation and
+        # therefore its trust. An instrument that makes the model look more
+        # certain than it is will hide exactly the faults it exists to find.
+        vx, vz = row.get("vel_x"), row.get("vel_z")
+        if vx is None or vz is None:
+            frame.vel_x = float(dx[index])
+            frame.vel_z = float(dz[index])
+        else:
+            frame.vel_x = float(vx)
+            frame.vel_z = float(vz)
+        frame.vel_y = float(row.get("vel_y") or 0.0)
         radius = _number(row, "tyre_radius_m", 0.355) or 0.355
         for wheel in WHEELS:
             slip = row.get(f"slip_{wheel}")
