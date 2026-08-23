@@ -465,6 +465,26 @@ class RaceState:
     # that blames the disagreement on the two measures drifting is describing
     # the wrong fault - and naming the pit lane is something he can weigh.
     laps_dropped: int = 0
+    # **Crossings GT7's own lap counter says were missed, seen live.**
+    # `laps_dropped` above is the clock's, and the clock can only count one at
+    # a crossing - which is one lap too late for the only call that needs it.
+    # Measured, Road Atlanta 23 Aug 2026: the crossing went missing inside the
+    # box, the in-box fuel call went out at 20:40:35 asking for twelve laps of
+    # fuel against nine to run, and the clock only said so at 20:42:36 when
+    # lap 12 finally completed. Thirteen litres crossed the line unburnt.
+    #
+    # GT7's `laps_completed` had it right the whole time: +2 across the pit
+    # lap and +1 across all twenty others in that race. The field is marked
+    # unreliable *for the race finish* and that caution stands - this uses it
+    # only as a delta against the app's own count, which is the one thing it
+    # was right about on every lap on file.
+    #
+    # **Combined with `max`, never `+`.** Two detectors incrementing one
+    # counter is how a single missed crossing becomes two; taking the larger
+    # of the two makes double-counting impossible by construction, and lets
+    # the clock's authoritative count supersede this one at the crossing
+    # without either having to know about the other.
+    laps_dropped_seen: int = 0
     # Whether the lap-count estimate is resolvable at all. Measured: in the
     # first four crossings of a 30-minute race the median only had to be wrong
     # by 0.12-0.66 s to change the answer, against a lap-time spread of
@@ -514,8 +534,18 @@ class RaceState:
             return None
         # A dropped crossing means more laps are behind him than the app
         # counted, so fewer remain.
-        counted = self.lap + max(0, self.laps_dropped)
+        counted = self.lap + self.laps_missed()
         return max(0, self.laps_total - counted)
+
+    def laps_missed(self) -> int:
+        """Crossings that went missing, by whichever detector saw one.
+
+        **`max`, not a sum.** See `laps_dropped_seen`: the clock counts at the
+        crossing and GT7's counter within a packet of the event, so on an
+        ordinary missed lap both eventually report the same one. Adding them
+        would report two.
+        """
+        return max(0, self.laps_dropped, self.laps_dropped_seen)
 
     def laps_of_fuel(self) -> float | None:
         """How many more laps the fuel on board covers."""
@@ -785,7 +815,7 @@ def _laps_to_go(state: RaceState) -> Call | None:
     if to_go is None or not 1 <= to_go <= 2:
         return None
     call = "Last lap." if to_go == 1 else "Two to go."
-    if state.laps_dropped:
+    if state.laps_missed():
         # **A missed crossing, not a drift.** The clock folds the missing lap
         # into its offset and stays on the app timer, so "on lap times" would
         # name the measure it is NOT using. Both races so far missed the

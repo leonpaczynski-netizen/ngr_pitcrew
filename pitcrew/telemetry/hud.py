@@ -44,6 +44,18 @@ perception layer that can stall a lap handler is worse than no perception layer.
 its HUD on the car's dashboard in 3D there, so the gauge moves with head
 position - measured at roughly 200 px of drift - and a fixed rectangle tracks
 nothing. The flat-screen path is proven; the VR locator is separate work.
+
+**Measured in VR, 23 Aug 2026:** 22 crossings, 6 readings, and the 16 refusals
+all peaked at exactly 81 in blocks - which is the driver looking away, not a
+broken capture. `locate_gauge` is tried on every dim frame from `ObsSource` and
+found nothing on those 16. The lever that actually helps here is
+**`hud_sample_interval_s`**: at one grab every two seconds a 40-minute race
+offers about 1,200 chances instead of 22, and only a handful need to land while
+he is looking forward. **Note the interaction** - `ScreenSource` returns a
+`CropFrame`, and `read_gauge` skips the locator on a crop because a crop is a
+bet that the gauge did not move. So the cheap capture path and the VR locator
+are mutually exclusive as things stand, and in VR the OBS source is the one
+that can still find a moved gauge.
 """
 from __future__ import annotations
 
@@ -95,6 +107,20 @@ CONNECT_TIMEOUT_S = 4.0
 # so once and stops trying: an error repeated every lap is noise, and by then
 # something needs a human anyway.
 MAX_CONSECUTIVE_FAILURES = 5
+# **Consecutive unreadable crossings before the driver is told.** He raced
+# 22 laps at Road Atlanta on 23 Aug 2026 and the gauge answered six of them;
+# nothing said so at the time, and the wear plan ran the whole race on a
+# practice figure while the instrument that was meant to replace it sat blind.
+# CLAUDE.md's rule for the engineer is that silence must announce itself -
+# "I cannot see them" is a thing he can act on, and no message is not.
+BLIND_CROSSINGS_BEFORE_SAYING = 3
+# How many identical dim peaks in a row mean the rectangle is not looking at
+# the game at all. A dimmed game frame varies between grabs - a pause menu
+# behind a moving scene, a transition part-way through. **Sixteen refusals in
+# that race reported a peak of exactly 81, every one of them**, in two blocks
+# either side of readable stretches. Identical to the unit over forty minutes
+# is not a dim frame, it is the same pixels.
+IDENTICAL_PEAKS_MEAN_STATIC = 3
 # A drop this large between readings is a fresh set, not wear going
 # backwards. Wear is monotonic within a stint and the only thing that
 # resets it is a tyre change - the gauge snapping back to white is a
@@ -121,6 +147,12 @@ class Reading:
 
     wear: dict[str, float | None] | None
     reason: str | None = None
+    # **The brightest pixel in the gauge rectangle, when there was one.**
+    # Carried so a caller can tell two different failures apart: a frame that
+    # is genuinely dim varies from grab to grab, and one that reads the SAME
+    # peak every time is not a game frame at all - it is the same pixels, which
+    # means the rectangle is not on the gauge. None where no peak was taken.
+    peak: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -199,7 +231,8 @@ def read_gauge(png, layout: dict | None = None) -> Reading:
             return _read_bars(frame, moved, quantisation_note=True)
         return Reading(None, f"frame is dimmed (gauge peaks at {peak}) - paused, "
                              f"in a menu, or the HUD is drawn in 3D and the "
-                             f"gauge is not where the flat layout expects it")
+                             f"gauge is not where the flat layout expects it",
+                       peak=peak)
 
     return _read_bars(frame, layout)
 
@@ -699,6 +732,16 @@ class LiveWearSampler:
         self._stop = threading.Event()
         self._failures = 0
         self.stood_down = False
+        # Crossings in a row that produced no reading, and the dim peaks they
+        # reported. Both exist to turn a silent instrument into a spoken one -
+        # see `BLIND_CROSSINGS_BEFORE_SAYING`.
+        self._blind = 0
+        # What was last said about the blindness, so it can be said again when
+        # the diagnosis sharpens but not when it merely repeats. None = nothing
+        # said yet, which is not the same as "said nothing was wrong".
+        self._said_blind: str | None = None
+        self._said_stuck = False
+        self._dim_peaks: list[int] = []
         # The most recent good reading and when it was taken. Written and read
         # on the worker thread only.
         self._latest: tuple[float, Reading] | None = None
@@ -706,6 +749,20 @@ class LiveWearSampler:
         # set, the same way the offline tool splits stints.
         self.series: list[tuple[float, dict]] = []
         self._last_free_log = 0.0
+
+    def new_session(self) -> None:
+        """Forget what has already been said about the gauge being blind.
+
+        **The sampler outlives the session.** It is cached on the controller
+        and built once, so without this a practice run that went blind spends
+        the one-shot announcement and the race that follows says nothing at
+        all - which is precisely the Road Atlanta failure, moved one session
+        later. Cheap enough to call whenever a session opens.
+        """
+        self._blind = 0
+        self._said_blind = None
+        self._said_stuck = False
+        self._dim_peaks.clear()
 
     def start(self) -> None:
         if self._thread is not None:
@@ -831,7 +888,12 @@ class LiveWearSampler:
             # a normal thing that happens when the game is paused - so it does
             # not count toward standing down.
             _log.warning(f"hud-wear: lap {lap_id}: {reading.reason}")
+            self._note_blind(reading)
             return
+        self._blind = 0
+        self._said_blind = None
+        self._said_stuck = False
+        self._dim_peaks.clear()
         self._failures = 0
         self._write(lap_id, reading.wear)
         worst = max((v for v in reading.wear.values() if v is not None),
@@ -843,6 +905,79 @@ class LiveWearSampler:
             + (f" (worst {worst * 100:.0f}%)" if worst is not None else ""))
         if self._status:
             self._status(reading)
+
+    def _note_blind(self, reading: Reading) -> None:
+        """A crossing produced no reading. Decide whether to say so, and why.
+
+        **Two different faults wear the same message today.** A genuinely
+        dimmed frame - paused, mid-transition - varies from grab to grab. A
+        rectangle that is not on the gauge at all reports the *same* peak every
+        time, because it is the same pixels. Measured at Road Atlanta on
+        23 Aug 2026: sixteen refusals, every one of them "peaks at 81", in two
+        blocks either side of stretches that read perfectly.
+
+        **And it says so out loud.** He raced the whole thing believing the
+        instrument was watching. Silence from a perception layer reads as
+        "nothing to report"; CLAUDE.md's standard is that it has to read as
+        "I cannot see it", because only one of those is actionable.
+
+        **The diagnosis is hedged, because it is an inference over three
+        samples.** A constant peak also comes from a black frame during a
+        capture-card dropout, and from `ScreenSource` grabbing a window parked
+        over the projector - where the rectangle is right and the remedy is to
+        move the window. CLAUDE.md rule 5 covers a derived diagnosis as much as
+        a derived number, so this offers the likely cause rather than asserting
+        it.
+
+        **Worker thread.** `on_status` is called from here, so a consumer must
+        not touch Qt directly - see `PitCrewController._hud_status`.
+        """
+        self._blind += 1
+        if reading.peak is not None:
+            self._dim_peaks.append(reading.peak)
+            del self._dim_peaks[:-IDENTICAL_PEAKS_MEAN_STATIC]
+        stuck = (len(self._dim_peaks) >= IDENTICAL_PEAKS_MEAN_STATIC
+                 and len(set(self._dim_peaks)) == 1)
+        if stuck and not self._said_stuck:
+            self._said_stuck = True
+            _log.warning(
+                "hud-wear: the last %s refusals all peaked at exactly %s. A "
+                "dimmed game frame varies; an identical peak is the same "
+                "pixels every time, so the gauge is not in the rectangle. "
+                "**In VR that is expected and is not a fault** - GT7 draws the "
+                "HUD on the car's dashboard in 3D, so it leaves the calibrated "
+                "rectangle whenever the driver looks away, and a left-hander "
+                "can hide it completely. The answer there is free-running "
+                "(`hud_sample_interval_s`), not a capture fix: a sample every "
+                "two seconds only needs the few where he is looking forward. "
+                "On a flat screen, check nothing is parked over the projector "
+                "window and that the capture region is right.",
+                IDENTICAL_PEAKS_MEAN_STATIC, self._dim_peaks[-1])
+        if self._blind < BLIND_CROSSINGS_BEFORE_SAYING:
+            return
+        # **Said once, and again only if the diagnosis improves.** Repeating
+        # one message every lap is the nine-box-calls defect with a second
+        # mouth. But the first announcement can land before enough peaks exist
+        # to tell the two faults apart - a single refusal with no peak at all,
+        # a canvas-size refusal, is enough to delay it - and a driver told
+        # "unreadable" when the answer is "something is over your projector"
+        # has been given the wrong job.
+        # **Careful what this blames.** In VR the gauge moves with head
+        # position, so "the capture is wrong" is actively misleading - the
+        # capture is fine and the gauge is simply not being looked at. The
+        # message names the symptom and leaves the cause to the log, which has
+        # the room to separate the VR case from the flat-screen one.
+        note = "the gauge is not in the frame" if stuck else (
+            reading.reason or "the frames are unreadable")
+        if self._said_blind == note:
+            return
+        self._said_blind = note
+        if self._status:
+            # **A Reading with no wear IS the "I cannot see it" message.**
+            # `wear=None` rather than zeros, so nothing downstream can read a
+            # refusal as a measurement.
+            self._status(Reading(None, f"No tyre gauge - {note}",
+                                 peak=reading.peak))
 
     def _failed(self, message: str) -> None:
         self._failures += 1

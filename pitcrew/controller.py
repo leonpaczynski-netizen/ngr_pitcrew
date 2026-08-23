@@ -31,6 +31,7 @@ from pitcrew.analysis.incidents import (
     read_rows,
     stored_or_read,
 )
+from pitcrew.analysis.resolve import circuit_key
 from pitcrew.analysis.session import counted_laps
 from pitcrew.analysis.runs import (
     FOR_QUALIFYING,
@@ -149,6 +150,26 @@ _LAP_MIN_EVIDENCE_S = 10.0
 _FRAME_S = 1.0 / SAMPLE_HZ
 
 
+def circuit_key_for(event) -> str | None:
+    """Which circuit an event is at, in the store's own vocabulary.
+
+    The same key `grip_observations` and `tyre_models` are already indexed on,
+    so a sheet, a grip observation and a fitted tyre model all agree about
+    where they were measured.
+
+    None where the event has no track, which cannot happen through the Event
+    screen but can through a hand-built row - and None must not then match a
+    sheet, because "circuit unknown" is not "circuit is this one".
+    """
+    if not event:
+        return None
+    track = event["track"] if "track" in event.keys() else None
+    if not track:
+        return None
+    layout = event["layout"] if "layout" in event.keys() else None
+    return circuit_key(track, layout)
+
+
 class TelemetryBridge(QObject):
     """Turns the packet stream into Qt signals, on the right threads."""
 
@@ -224,6 +245,12 @@ class TelemetryBridge(QObject):
         # is a fact about the frame, and the release call is only worth
         # anything at the moment the tank actually reaches the target.
         self.refuel = None
+        # The race coordinator, handed over when a race is armed, so GT7's own
+        # lap counter can be read at 60 Hz. On the telemetry thread because a
+        # crossing missed in the box has to be caught while the car is still
+        # in the box - the fuel call is made there. See
+        # `RaceCoordinator.note_packet`.
+        self.lap_watch = None
         # The app's own race clock, handed over when a race is armed. It is
         # ticked here rather than from the race layer because a PAUSE is only
         # visible on the frames: `SessionState.update` returns early on one
@@ -363,6 +390,9 @@ class TelemetryBridge(QObject):
         # A watch armed for the race just closed would judge the next race's
         # first stop against the last one's target.
         self.refuel = None
+        # And a coordinator belonging to the race just closed would carry its
+        # counter offset into the next one.
+        self.lap_watch = None
         # And an incident watch would carry "the car has been under way" into
         # a session that opens with the car stationary in the box - which is
         # the exact shape it exists to refuse.
@@ -558,6 +588,24 @@ class TelemetryBridge(QObject):
         # It does nothing at all until the tank starts climbing, which is once
         # or twice a race, and the target is only sized when the car is slow
         # enough to be in a pit box - so the 60 Hz cost is one comparison.
+        # **Before the refuel watch, because the watch sizes the fill from the
+        # race state and this is what corrects it.** GT7's own lap counter
+        # sees a crossing missed in the box within a packet; the clock only
+        # sees it when the lap finally completes, which at Road Atlanta on
+        # 23 Aug 2026 was two minutes after the fill had been called and
+        # thirteen litres too late. Same doctrine as its neighbours: guarded,
+        # and dropped for the session on its first exception.
+        lap_watch = self.lap_watch
+        if lap_watch is not None:
+            try:
+                lap_watch.note_packet(packet)
+            except Exception as exc:                        # noqa: BLE001
+                log("race").error(
+                    "the lap-counter watch raised on the telemetry thread and "
+                    "has been stopped for this race: %s: %s",
+                    type(exc).__name__, exc, exc_info=True)
+                self.lap_watch = None
+
         refuel = self.refuel
         if refuel is not None:
             try:
@@ -632,6 +680,10 @@ class PitCrewController(QObject):
         # lap id -> lap number, for gauge readings still in
         # flight. See `_on_lap_completed`.
         self._hud_lap_nums: dict[int, int] = {}
+        # What the sampler last said about the gauge being unreadable, written
+        # on its worker thread and consumed on the Qt thread at a crossing.
+        # None means it has said nothing - not that the gauge is fine.
+        self._hud_blind_note: str | None = None
         # An exclusion reason the driver gave mid-lap, waiting for
         # that lap to land. See `_note_driver_report`.
         self._exclude_next_lap: str | None = None
@@ -888,9 +940,13 @@ class PitCrewController(QObject):
         # under the Race label and one Save rewrote it as the race sheet, which
         # left the car with two race sheets and no qualifying one.
         car = event["car_name"] or ""
-        sheet = self.store.sheet_for(car, "race")
+        here = circuit_key_for(event)
+        sheet = self.store.sheet_for(car, "race", here)
         if sheet is None:
-            sheets = self.store.list_setup_sheets(car)
+            # Falling back across circuits is what put a Yas Marina sheet on
+            # the Event screen for a Road Atlanta event.
+            sheets = [x for x in self.store.list_setup_sheets(car)
+                      if x.circuit_key == here]
             sheet = sheets[0] if sheets else None
         self.event_screen.load(event, sheet)
         self.practice.set_laps(self._rows_for_event(event["id"]))
@@ -1075,6 +1131,11 @@ class PitCrewController(QObject):
 
         purpose = data.get("sheet_purpose") or DEFAULT_SHEET_PURPOSE
         name = data["sheet_name"] or f"{data['name']} sheet"
+        # **Stamped with the circuit it was built for.** A sheet is a property
+        # of the car and the circuit, and until this was written the lookup
+        # had no way to tell one from another - so a Road Atlanta session
+        # bound itself to a Yas Marina sheet.
+        here = circuit_key_for(data)
         sheet = SetupSheet(
             car_name=data["car_name"],
             sheet_name=name,
@@ -1084,6 +1145,7 @@ class PitCrewController(QObject):
             performance=dict(data.get("performance") or {}),
             build=dict(data.get("build") or {}),
             purpose=purpose,
+            circuit_key=here,
         )
         sheet_id = self.store.save_setup_sheet(sheet)
 
@@ -1106,6 +1168,7 @@ class PitCrewController(QObject):
                 values=dict(parsed.values),
                 gears=list(parsed.gears),
                 purpose=other_purpose,
+                circuit_key=here,
             ))
         return sheet_id
 
@@ -1829,16 +1892,31 @@ class PitCrewController(QObject):
         # substitute: a `setup_sheet_id` that names a sheet he was not running
         # is worse than one that names none, because the export presents it as
         # the setup as run.
+        # **Keyed on the circuit as well as the car.** Without it this picked
+        # the car's most recent race sheet whatever circuit he was at - which
+        # is how a Road Atlanta session came to be recorded against a Yas
+        # Marina sheet on 23 Aug 2026, five sessions after the same class of
+        # error was first written down.
         intent = self.practice.practice_intent()
-        sheet = self.store.sheet_for(event["car_name"] or "", intent)
+        here = circuit_key_for(event)
+        sheet = self.store.sheet_for(event["car_name"] or "", intent, here)
         if sheet is None:
-            sheets = self.store.list_setup_sheets(event["car_name"] or "")
+            # **The one-sheet fallback may not cross a circuit.** "This car
+            # has exactly one sheet, so that is what is on it" is sound
+            # reasoning within a circuit and wrong across one: the single
+            # sheet on file is then demonstrably for somewhere else.
+            sheets = [s for s in self.store.list_setup_sheets(
+                event["car_name"] or "") if s.circuit_key == here]
             sheet = sheets[0] if len(sheets) == 1 else None
-            if sheet is None and sheets:
-                self.practice.set_status(
-                    f"No {intent} sheet on file for this car, and it has "
-                    f"{len(sheets)} others - this run is recorded without one. "
-                    f"Load the {intent} sheet on the Event screen.")
+            if sheet is None:
+                others = len(self.store.list_setup_sheets(
+                    event["car_name"] or ""))
+                if others:
+                    self.practice.set_status(
+                        f"No {intent} sheet on file for this car at this "
+                        f"circuit, and it has {others} for elsewhere - this "
+                        f"run is recorded without one. Load the {intent} "
+                        f"sheet on the Event screen.")
         sheet_id = sheet.id if sheet else None
         # The beep follows the gearbox that is actually fitted.
         self.bridge.set_sheet_shift_rpm(sheet.shift_rpm if sheet else None)
@@ -2175,6 +2253,7 @@ class PitCrewController(QObject):
                                self.settings.obs_password)
         interval = float(self.settings.hud_sample_interval_s or 0.0)
         sampler = LiveWearSampler(source, self._write_hud_wear,
+                                  on_status=self._hud_status,
                                   interval_s=interval)
         sampler.start()
         log("pitcrew").info(
@@ -2183,6 +2262,32 @@ class PitCrewController(QObject):
             else "sampling at each crossing only")
         self._hud = sampler
         return sampler
+
+    def _hud_status(self, reading) -> None:
+        """Worker thread. What the sampler wants the driver to know.
+
+        **Only refusals arrive here as news.** A good reading already reaches
+        the race through `_write_hud_wear`; this is the other half - the gauge
+        having gone blind, which used to be a log line and nothing else. He
+        raced Road Atlanta believing the instrument was watching while it
+        answered six of twenty-two crossings.
+
+        **No Qt from this thread.** Same rule as `_write_hud_wear`: a plain
+        attribute write, picked up by the Qt side at the next crossing. A
+        `set_status` call from here is the cross-thread defect the PTT answer
+        path already had to have fixed once.
+
+        **And it expires the stale reading.** `_wear_now` is only ever written
+        on a good reading and was never cleared, so a blind gauge left the
+        radio quoting a transcription many laps old as though it were current.
+        A wear number nobody can refresh is exactly the zero-that-means-missing
+        CLAUDE.md refuses.
+        """
+        if reading is None or reading.ok:
+            return
+        self._wear_now = None
+        self._wear_now_lap = None
+        self._hud_blind_note = reading.reason
 
     def _write_hud_wear(self, lap_id: int, wear: dict) -> None:
         """Worker thread. Writes the reading and nothing else.
@@ -2805,6 +2910,61 @@ class PitCrewController(QObject):
         present = [(v, c) for v, c in pairs if v is not None]
         return max(present)[1] if present else None
 
+    def _file_informational(self, call) -> None:
+        """Put a colour or data call on the race's ledger.
+
+        **The ledger was half a ledger.** After the Road Atlanta race on
+        23 Aug 2026 it held fourteen calls; the app had spoken roughly twice
+        that. Every instruction was there and every *number* was missing - the
+        fuel in hand, the countdown to the box, the wear readings off the gauge
+        - because the colour paths spoke straight to the voice and never filed.
+
+        Those are precisely the calls a post-race audit needs. CLAUDE.md §5.5
+        requires the record to carry the calls the engineer made and the
+        assumptions behind them; "Fuel: 3.1 laps in hand" is the fuel model
+        saying out loud what it believed, three laps from the flag, and losing
+        it means the model can never be marked right or wrong afterwards.
+
+        **This takes a `ColourCall`, which is not a `Call`.** It carries
+        `kind`, `call` and `reason` and nothing else - no `lap`, no
+        `confidence`, no `as_export`. The first version of this method assumed
+        otherwise, and every filing raised `AttributeError` into a guard that
+        swallowed it, so it wrote nothing at all. The payload is therefore
+        built here rather than asked for.
+
+        Filed with `informational: True` and `accepted=False`, the same shape
+        the in-box refuel call uses, so `export/build.py::_disposition` reads
+        these as informational rather than as offers the driver declined.
+        """
+        if self.race_run_id is None or self.race is None:
+            return
+        state = self.race.state
+        if state.finished:
+            # The flag has fallen. Anything after it belongs to no lap.
+            return
+        try:
+            self.store.append_revision(
+                self.race_run_id, state.lap, call.call,
+                {"call": {"lap": state.lap, "call": call.call,
+                          "reason": getattr(call, "reason", "") or "",
+                          "confidence": "high"},
+                 "confidence": "high",
+                 "kind": getattr(call, "kind", "colour"),
+                 "informational": True},
+                accepted=False)
+        except Exception as exc:                            # noqa: BLE001
+            # **Never into the caller** - he has already heard the call, and a
+            # ledger write must not cost him the next one. But it disarms
+            # after the first failure, like every other guard on this path: a
+            # fault here is permanent far more often than it is transient, and
+            # the first version logged the same error every lap of a race
+            # while writing nothing. Once, loudly, with a traceback.
+            log("race").error(
+                "colour calls are not reaching the ledger and filing has been "
+                "stopped for this race - it will be short: %s: %s",
+                type(exc).__name__, exc, exc_info=True)
+            self._file_informational = lambda _call: None
+
     def _voice_colour(self, lap) -> None:
         """The radio for a quiet lap, or nothing - usually nothing."""
         race = self.race
@@ -2859,6 +3019,7 @@ class PitCrewController(QObject):
         self.ptt.last_call = spoken
         if self.race_screen is not None:
             self.race_screen.set_status(spoken)
+        self._file_informational(call)
 
     def _tag_race_compound(self, lap_id: int) -> None:
         """A race lap's compound comes from the approved plan.
@@ -3905,14 +4066,19 @@ class PitCrewController(QObject):
         # where neither holds the session records NO sheet rather than a
         # plausible wrong one. A named sheet he was not running is worse than
         # none, because the export presents it as the setup as run.
-        sheet = self.store.sheet_for(event["car_name"] or "", "race")
+        here = circuit_key_for(event)
+        sheet = self.store.sheet_for(event["car_name"] or "", "race", here)
         if sheet is None:
-            sheets = self.store.list_setup_sheets(event["car_name"] or "")
+            # The one-sheet rule holds within a circuit and breaks across one.
+            sheets = [x for x in self.store.list_setup_sheets(
+                event["car_name"] or "") if x.circuit_key == here]
             sheet = sheets[0] if len(sheets) == 1 else None
-            if sheet is None and sheets:
+            if sheet is None and self.store.list_setup_sheets(
+                    event["car_name"] or ""):
+                sheets = self.store.list_setup_sheets(event["car_name"] or "")
                 self.race_screen.set_status(
-                    f"No race sheet on file for this car, and it has "
-                    f"{len(sheets)} others - this race is recorded without "
+                    f"No race sheet on file for this car at this circuit, and "
+                    f"it has {len(sheets)} elsewhere - this race is recorded without "
                     f"one, so its laps carry no compound and the export "
                     f"cannot say what was on the car. Load the race sheet on "
                     f"the Event screen.", warn=True)
@@ -3947,6 +4113,9 @@ class PitCrewController(QObject):
         # two-stop race gets a clean one for its second stop.
         self.bridge.refuel = RefuelAdviser(
             context=self._refuel_context, speak=self._voice_refuel)
+        # The same coordinator the event path drives, read at 60 Hz for one
+        # question only: has GT7 counted a crossing the app did not.
+        self.bridge.lap_watch = self.race
         # **Armed with the race, not with the session.** A practice lap with a
         # spin in it is judged afterwards by `analysis/incidents.py`, which can
         # see the whole lap and all three of its signals; this exists only for
@@ -4071,6 +4240,16 @@ class PitCrewController(QObject):
             # Both or neither. A reading whose lap could not be identified is
             # dropped rather than filed against lap 0, which would anchor every
             # fitted rate to a point the tyre was never at.
+            # **The gauge going blind is news, and it is said here.**
+            # The sampler decided; this is the Qt thread, where speaking is
+            # allowed. Cleared as it is taken so it is said once per
+            # diagnosis - see `LiveWearSampler._note_blind`.
+            blind = getattr(self, "_hud_blind_note", None)
+            if blind:
+                self._hud_blind_note = None
+                if self._engineer_speaks:
+                    self.voice.say(blind)
+                log("pitcrew").warning("hud-wear: told the driver: %s", blind)
             wear_lap = getattr(self, "_wear_now_lap", None)
             wear_now = getattr(self, "_wear_now", None)
             if wear_lap and wear_now:
@@ -4377,6 +4556,7 @@ class PitCrewController(QObject):
         self.ptt.last_call = spoken
         if self.race_screen is not None:
             self.race_screen.set_status(spoken)
+        self._file_informational(call)
 
     def _on_incident_seen(self) -> None:
         """Qt thread: the car stopped mid-lap. Decide what it is worth.

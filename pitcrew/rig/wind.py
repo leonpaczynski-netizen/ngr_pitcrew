@@ -234,6 +234,15 @@ class WindLink:
     deadlock structurally impossible rather than merely avoided.
     """
 
+    # **Closes that never returned, and are therefore still holding a port.**
+    # Class-level because they outlive the link that started them - that is the
+    # whole problem with them. `{port: thread}`, because the COM number can
+    # change across a replug and a claim about the wrong port is exactly the
+    # wrong-cause message this exists to remove; and because two abandoned
+    # closes must not overwrite each other. See `close` and
+    # `WindSim._port_is_held_by_us`.
+    _orphaned_closes: dict = {}
+
     def __init__(self, port: str, *, channels: int = CHANNELS) -> None:
         self.port = port
         self.channels = channels
@@ -344,10 +353,24 @@ class WindLink:
         closer.start()
         closer.join(CLOSE_TIMEOUT_S)
         if closer.is_alive():
+            # **Published, because the reopen has to know.** Leaking the handle
+            # is still the right trade against freezing the app - but the port
+            # is definitionally still held while this thread runs, so every
+            # reopen attempt until it finishes will fail with
+            # `PermissionError(13, 'Access is denied.')`, and that error names
+            # the symptom rather than the cause.
+            #
+            # Measured, Road Atlanta 23 Aug 2026: a write timeout at 20:24:05,
+            # this warning at 20:24:06, and then sixty-odd identical
+            # `Could not open COM5` lines over the next thirty-one minutes -
+            # the whole race with the fans dead - none of which mentioned that
+            # the app was the thing holding the port.
+            WindLink._orphaned_closes[self.port] = closer
             log("wind").warning(
                 "closing %s did not return within %.1fs, so it has been left "
-                "to the operating system. The port may stay held until this "
-                "app exits.", self.port, CLOSE_TIMEOUT_S)
+                "to the operating system. **This app is still holding the "
+                "port** and nothing can reopen it until that close returns.",
+                self.port, CLOSE_TIMEOUT_S)
 
     def _close_handle(self, handle) -> None:
         try:
@@ -654,6 +677,31 @@ class WindSim:
             self._stop.wait(SEND_INTERVAL_S)
         self._drop_link()
 
+    def _port_is_held_by_us(self, port: str) -> bool:
+        """Is an abandoned close still sitting on **this** port?
+
+        `WindLink.close` bounds itself and leaks the handle rather than freeze
+        the app, which is the right trade - but while that closer thread runs,
+        the port is ours and no reopen of it can possibly succeed. Knowing that
+        is the difference between an honest message and sixty misleading ones.
+
+        **Keyed by port, because `_run` re-runs `find_port()` on every
+        reconnect** - its own comment says the COM number can change across a
+        replug. Without the key, an abandoned close on COM5 would make a
+        perfectly innocent failure to open COM6 report that this app was
+        holding it, and send the driver to restart an app that a settle would
+        have fixed. That is the same wrong-cause message from the other side.
+        """
+        closer = WindLink._orphaned_closes.get(port)
+        if closer is None:
+            return False
+        if closer.is_alive():
+            return True
+        # It finished after all. Forget it, so a later failure on this port is
+        # judged on its own evidence rather than on this one.
+        WindLink._orphaned_closes.pop(port, None)
+        return False
+
     def _connect(self, settle: bool = True) -> bool:
         port = find_port()
         if port is None:
@@ -663,12 +711,31 @@ class WindSim:
                     "powered.")
                 log("wind").info(self.state.error)
             return False
+        if self._port_is_held_by_us(port):
+            # **Do not even try.** The port is ours and the open cannot
+            # succeed, so attempting it buys nothing and costs a settle.
+            message = (
+                f"{port} cannot be reopened because this app is still holding "
+                f"it - a close from an earlier failure has not returned. The "
+                f"fans stay off until it does, and if it never does they need "
+                f"an app restart.")
+            if self.state.error != message:
+                log("wind").warning(message)
+            self.state.error = message
+            return False
         link = WindLink(port, channels=self._channels)
         try:
             link.open(settle=settle)
         except Exception as exc:                            # noqa: BLE001
-            self.state.error = f"Could not open {port}: {exc}"
-            log("wind").warning(self.state.error)
+            # **Said once, not sixty times.** Measured at Road Atlanta on
+            # 23 Aug 2026: a write timeout dropped the link a minute into the
+            # race and the reconnect logged a byte-identical
+            # `PermissionError(13, 'Access is denied.')` against COM5 every
+            # thirty seconds for the next thirty-one minutes.
+            message = f"Could not open {port}: {exc}"
+            if self.state.error != message:
+                log("wind").warning(message)
+            self.state.error = message
             return False
         if not link.handshake():
             if not settle:

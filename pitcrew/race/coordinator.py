@@ -46,6 +46,16 @@ from pitcrew.telemetry.session_state import EventKind, Phase
 # measured against is a median of racing laps. Half a lap of slack absorbs
 # that and is still nowhere near the whole extra lap the failure produces.
 PIT_RACING_DROPPED_RATIO = 1.5
+# The most crossings the live counter will accept as "missed" inside one lap.
+# A pit stop loses one. More than two means the counter is not describing this
+# race - a restart, a session change, a bad read - and a fuel call must not be
+# sized from it. See `RaceCoordinator.note_packet`.
+MAX_LIVE_MISSED_LAPS = 2
+# How long a counter discrepancy must persist before it is believed, in
+# packets at 60 Hz - about two seconds. Every ordinary crossing shows one for
+# a handful of frames, because GT7's counter moves before the app's own
+# LAP_COMPLETED lands. A missed crossing shows one for the rest of the lap.
+LAP_COUNTER_HOLD_FRAMES = 120
 
 
 class RacePhase(enum.Enum):
@@ -186,6 +196,16 @@ class RaceCoordinator:
             practice_lap_samples=practice_lap_samples,
             practice_fuel_samples=practice_fuel_samples)
         self._apply_stint(0)
+        # **GT7's own lap counter at the last crossing the app recorded.**
+        # None until the first crossing under green. See `note_packet`.
+        # **GT7's counter minus the app's, learned at the first crossing
+        # under green.** None until then. Learned at a crossing and not at the
+        # green because only at a crossing is the relationship exact - mid-lap
+        # the game is already counting the lap in progress, and an offset one
+        # too high silently disables the detector. See `note_packet`.
+        self._gt7_offset: int | None = None
+        # Consecutive packets the current discrepancy has survived.
+        self._gt7_pending = 0
 
     # ------------------------------------------------------------------ arming
 
@@ -384,6 +404,26 @@ class RaceCoordinator:
     def _on_lap(self, event, packet) -> Call | None:
         lap = event.data["lap"]
         self.state.lap = lap.lap_num
+        # **The offset between the two lap counters, learned once, here.**
+        # At a crossing the relationship is exact; mid-lap GT7 is already
+        # counting the lap in progress and the offset would come out one high,
+        # which disables the detector silently. See `note_packet`.
+        #
+        # **Read off the Lap, not off `packet`.** The only production caller
+        # is the controller's race-event slot, which calls `handle(event)`
+        # with no packet at all - so a version of this that read the argument
+        # learned nothing, ever, and the detector was dead in the race while
+        # passing every test. `Lap.laps_completed` carries the same GT7 field
+        # and travels on the event.
+        counted = getattr(lap, "laps_completed", None)
+        if counted is None and packet is not None:
+            counted = getattr(packet, "laps_completed", None)
+        if (self._gt7_offset is None and counted is not None
+                and counted >= 0 and lap.lap_num > 0):
+            self._gt7_offset = counted - lap.lap_num
+        # A crossing resets the pending discrepancy: whatever it was, the app
+        # has just counted a lap and the two are being compared afresh.
+        self._gt7_pending = 0
         self.state.laps_since_stop += 1
         self.state.fuel_l = lap.fuel_end
         if lap.position:
@@ -526,6 +566,92 @@ class RaceCoordinator:
             lap.lap_num, "driver-reported" if reported else "detected",
             f"{cost} ms" if cost else "not costed - no pace reference")
 
+    def note_packet(self, packet) -> None:
+        """Compare GT7's own lap counter against the app's, every packet.
+
+        **This is the only detector that can see a missed crossing while the
+        car is still in the box.** The clock's check runs when a lap completes
+        and is therefore always one lap late; measured at Road Atlanta on
+        23 Aug 2026 that lateness was two minutes and one second, and the
+        in-box fuel call went out in the gap asking for twelve laps of fuel
+        against nine to run. Thirteen litres crossed the line unburnt, which
+        at that league's 2.00 L/s is six and a half seconds parked.
+
+        GT7 increments `laps_completed` at the crossing itself, including the
+        one inside the pit sequence that never reaches the app as a
+        LAP_COMPLETED. So while the app still believes it is on lap N, a
+        counter reading past the app's own crossings is a crossing the app
+        missed, and it says so within a packet.
+
+        **The field is marked unreliable for the race finish and that caution
+        stands.** It is not read as a count here, only as a delta against the
+        app's own crossings - which on the twenty-two laps of that race moved
+        by exactly one on every lap but the pit lap, where it moved by two.
+
+        **Three guards, all of which fail toward over-fuelling.** A false
+        positive takes fuel off the call, and a driver who runs dry has lost
+        the race where one lap too many costs him three seconds in the box:
+
+        1. The offset is learned at a *crossing*, where the relationship
+           between the two counters is exact, and never mid-lap.
+        2. A discrepancy must persist `LAP_COUNTER_HOLD_FRAMES` before it is
+           believed. GT7's counter moves a few frames before the app's own
+           LAP_COMPLETED lands, so every ordinary crossing shows this
+           discrepancy briefly; a real missed crossing shows it for the rest
+           of the lap.
+        3. More than `MAX_LIVE_MISSED_LAPS` is not a pit stop - it is a
+           restart or a bad read - and is ignored rather than acted on.
+        """
+        if self.phase is not RacePhase.RUNNING or packet is None:
+            return
+        if getattr(packet, "paused", False) or getattr(packet, "loading",
+                                                       False):
+            # **A paused or loading frame is not evidence.** `SessionState`
+            # returns early on both and emits no events, so the app lap count
+            # is frozen by construction while GT7 counter is whatever it was -
+            # and on a load frame the fields are stale from another context
+            # entirely. Two seconds of them would manufacture a crossing that
+            # never happened.
+            self._gt7_pending = 0
+            return
+        counted = getattr(packet, "laps_completed", None)
+        if counted is None or counted < 0 or self._gt7_offset is None:
+            # A sentinel or a missing field is a gap in the evidence, not
+            # agreement, so the pending count starts again rather than
+            # carrying across it.
+            self._gt7_pending = 0
+            return
+        if self.state.lap < 1:
+            # Before the first crossing there is nothing to be out of step
+            # with. The offset is learned at that crossing, so in a real race
+            # this is already unreachable - it is here because a detector that
+            # can fire on lap zero can fire during the formation lap.
+            return
+        missed = counted - self._gt7_offset - self.state.lap
+        if not 0 < missed <= MAX_LIVE_MISSED_LAPS:
+            # Back in agreement, or so far out it is not this race.
+            self._gt7_pending = 0
+            self.state.laps_dropped_seen = 0
+            return
+        self._gt7_pending += 1
+        if self._gt7_pending < LAP_COUNTER_HOLD_FRAMES:
+            return
+        # **Assigned, not ratcheted, so the claim can be WITHDRAWN.**
+        # `note_packet` runs on the telemetry thread and `_on_lap` on the Qt
+        # thread behind a queued signal, so at every ordinary crossing the two
+        # counters are briefly out of step - for as long as the Qt thread takes
+        # to reach the event, which on a crossing also encodes a lap of frames
+        # and writes them. A hold that a slow crossing outlasts would otherwise
+        # latch a lap of fuel out of every remaining fill, permanently, because
+        # nothing ever lowered it again. Now the next agreeing frame clears it.
+        if missed != self.state.laps_dropped_seen:
+            log("race").warning(
+                "GT7 has counted %s crossing(s) the app did not, while the "
+                "app is still on lap %s - most likely in the box. Correcting "
+                "the lap count now rather than at the next crossing, because "
+                "the fuel call is made in between.", missed, self.state.lap)
+        self.state.laps_dropped_seen = missed
+
     def _corroborate_pit_lap(self, lap) -> None:
         """A second, independent opinion on whether a crossing went missing.
 
@@ -641,7 +767,16 @@ class RaceCoordinator:
             # No lap time to divide by. The plan's frozen distance is all
             # there is, and it stands rather than being replaced by a guess.
             return None
-        self.state.laps_total = self.state.lap + left
+        # **`laps_missed()` is in the completed count here too.** A timed
+        # race distance is recomputed from the clock at every crossing, and
+        # `left` is time-based and therefore already right whatever the lap
+        # count has done. Adding only `lap` would leave `laps_remaining()`
+        # subtracting the correction a second time - `left - missed` - taking
+        # a lap of fuel out of the fill. That is the under-fuelling direction,
+        # and running dry loses the race where a lap too many costs three
+        # seconds in the box.
+        self.state.laps_total = (self.state.lap + self.state.laps_missed()
+                                 + left)
         # **What the fuel path counts, which is not what the flag counts.**
         # A stop is a minute of clock that covers no ground. `laps_total`
         # ceilings over the whole window including it, so before a stop is
