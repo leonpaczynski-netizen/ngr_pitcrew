@@ -119,6 +119,50 @@ REFERENCE_LAT_G_MAX = 3.0
 # built on nothing. 240 frames is four seconds; the model is reset between
 # sessions, not between laps.
 REFERENCE_SETTLE_FRAMES = 240
+# **Where a band starts, so that no band ever starts from one frame.**
+# Measured, sessions 65 and 66: the first full-throttle sample
+# of a session is taken at pit exit, ~18 km/h in first gear, where the
+# driveline snatches and the rear axle reads 0.90 one frame and 1.25 the next.
+# `_Quantile` seeds from its first sample, so the band took -0.099 as its
+# estimate of normal. Every honest sample is then far above it, so the caller
+# withholds every rise; nothing is ever below it, so it never steps down. A
+# one-way trapdoor, and the band stayed at -0.075 for the whole session while
+# reporting itself settled - which is EXCESSIVE_WHEELSPIN on 94% of frames at
+# 209-247 km/h, and the beds ducked 41% underneath it.
+#
+# **The fix is at the seed, not at the symptom.** A tracker that begins from
+# its own first sample has no defence against that sample being nonsense, and
+# at pit exit it always is. So each band now STARTS from the measured table
+# above rather than from whatever it is shown first - the same thing the ABS
+# plateau already does with `initial=LOCK_FLOOR / PLATEAU_MARGIN`.
+#
+# One car's numbers, and they are a starting point rather than an answer: the
+# band is unsettled at birth, so it learns freely until it has 240 samples of
+# this car, and downward steps are never withheld at all. Across the three
+# cars on file the true band-3 value spans 0.013 to 0.060, which brackets the
+# 0.0321 seed on both sides - so every one of them walks to its own value
+# rather than being trapped on the way there.
+REFERENCE_PRIOR = (0.0047, 0.0241, 0.0418, 0.0321)
+# **And no automatic release, deliberately.** Two were tried against the same
+# session and both were worse than the seed alone.
+#
+# Discarding a long-blanked band re-seeds it from the next sample - and that
+# sample is taken DURING whatever caused the blanking, so the reference lands
+# exactly on the event and reports GRIPPED through a slide. That is a silent
+# false negative on a CRITICAL cue, traded for the old loud false positive,
+# and it is the wrong direction to be wrong in. Granting one step per timeout
+# instead is safe and useless: 0.088 at `q * step` is 1257 steps, which at any
+# threshold worth having is hours.
+#
+# What is left is the honest position. The trapdoor needed a reference sitting
+# further from the stream than SLIP_USEFUL on EVERY frame, and only a
+# single-sample seed could put it there - session 65 sat 0.088 out, where the
+# whole distribution of ordinary driving is inside 0.030. Seeded from the
+# table, a band walks; it is never dropped somewhere it cannot walk back from.
+# So `withheld` is kept and published, and nothing acts on it: a band that
+# somehow does stick is then visible in the explainer for the length of one
+# session rather than silent, which is what the shift beep already does with a
+# gearbox nobody has measured.
 
 # **Rear traction, in slip above the learned reference.**
 #
@@ -511,6 +555,12 @@ class _Quantile:
         self._settle = settle_frames
         self.value = initial
         self.samples = 0
+        self.withheld = 0
+        # Set by the caller the first time this tracker sees a sample near its
+        # own value - see `_SlipReference.observe`. Until then the tracker has
+        # not shown it is anywhere near the stream, and blanking it would be
+        # defending an estimate that has not earned defending.
+        self.arrived = False
 
     def update(self, sample: float, allow_rise: bool = True) -> float | None:
         """One sample. `allow_rise=False` suppresses the upward step only.
@@ -542,9 +592,19 @@ class _Quantile:
             # it saw it is what "settled" is counting.
             self.samples += 1
             if not allow_rise:
+                # **A withheld rise is evidence about the estimate too.**
+                # Every sample above and none below, for as long as the caller
+                # keeps saying "event", is not what an event looks like - it is
+                # what a reference sitting below the whole stream looks like.
+                # Counted and published, and nothing acts on it: see
+                # REFERENCE_PRIOR for why the seed is the fix and an automatic
+                # release is not.
+                self.withheld += 1
                 return self.value
+            self.withheld = 0
             self.value += self._step * self._q
             return self.value
+        self.withheld = 0
         if sample < self.value:
             self.value -= self._step * (1.0 - self._q)
         self.samples += 1
@@ -553,6 +613,8 @@ class _Quantile:
     def reset(self, initial: float | None = None) -> None:
         self.value = initial
         self.samples = 0
+        self.withheld = 0
+        self.arrived = False
 
     @property
     def settled(self) -> bool:
@@ -573,9 +635,16 @@ class _SlipReference:
     """
 
     def __init__(self, bands: int = REFERENCE_BANDS) -> None:
+        # Seeded from the measured table, so no band ever takes its estimate
+        # from a single frame. A band count other than four has no measured
+        # seed and falls back to the old behaviour rather than to a number
+        # borrowed from a differently-shaped curve.
+        seeds = (REFERENCE_PRIOR if bands == len(REFERENCE_PRIOR)
+                 else (None,) * bands)
         self._bands = [_Quantile(REFERENCE_QUANTILE, REFERENCE_STEP,
-                                 REFERENCE_SETTLE_FRAMES)
-                       for _ in range(bands)]
+                                 REFERENCE_SETTLE_FRAMES, initial=seed)
+                       for seed in seeds]
+        self._seeds = seeds
         self._n = bands
 
     def _index(self, throttle: float) -> int:
@@ -586,7 +655,7 @@ class _SlipReference:
                 allow_rise: bool = True) -> None:
         """One sample into the band this throttle falls in.
 
-        **A band that has not settled always learns, whatever the caller
+        **A band that has not ARRIVED always learns, whatever the caller
         says.** The caller withholds the rise while an event is running, so a
         stream that is nothing but wheelspin cannot teach the estimator that
         wheelspin is normal. That protects a reference which already knows
@@ -594,12 +663,28 @@ class _SlipReference:
 
         Applied to a band that does NOT yet know, it is a deadlock: the band
         starts below its true value, so every honest sample reads as an event,
-        so the rise is withheld for ever and the band never converges. The
-        blanking is a guard on a settled estimate, not a bar on ever forming
-        one.
+        so the rise is withheld for ever and the band never converges.
+
+        **Arrival is proof, not elapsed time, and that distinction is the
+        whole guard.** An earlier version armed on `settled` - 240 samples -
+        which buys a band at most `240 * q * step` = 0.0168 of travel. From the
+        0.0321 seed that caps it at 0.0489, so any car whose true value is
+        above 0.0489 + SLIP_USEFUL = **0.0789** armed the guard while still
+        below the stream and stuck there for the session. The measured span
+        across three cars is 0.013 to 0.060, which is a margin of 1.32x, and a
+        high-torque RWD road car on Comfort tyres in a no-BoP league is not an
+        exotic way to spend it.
+
+        A band has arrived the first time it sees a sample within SLIP_USEFUL
+        of its own value. That cannot be satisfied by an event - an event is
+        what sits ABOVE the reference by more than that - so it says the band
+        is in the neighbourhood of the stream, which is the only thing worth
+        defending.
         """
         band = self._bands[self._index(throttle)]
-        band.update(slip, allow_rise or not band.settled)
+        if band.value is not None and slip - band.value < SLIP_USEFUL:
+            band.arrived = True
+        band.update(slip, allow_rise or not band.arrived)
 
     def value(self, throttle: float) -> float | None:
         """The expected slip at this throttle, or None if nothing has settled."""
@@ -629,9 +714,22 @@ class _SlipReference:
     def samples(self) -> tuple[int, ...]:
         return tuple(b.samples for b in self._bands)
 
+    @property
+    def withheld(self) -> tuple[int, ...]:
+        """Consecutive blanked rises per band, for the explainer.
+
+        A band whose count runs into the thousands is sitting below the whole
+        stream rather than watching a long event, and this is the only place
+        that says so. Nothing acts on it - see REFERENCE_PRIOR.
+        """
+        return tuple(b.withheld for b in self._bands)
+
     def reset(self) -> None:
-        for band in self._bands:
-            band.reset()
+        # Back to the measured seeds, not to nothing: a band that reset to
+        # empty would take its next estimate from one frame again, and the
+        # frame after a reset is the frame after a garage visit.
+        for band, seed in zip(self._bands, self._seeds):
+            band.reset(seed)
 
 
 class _Latch:
@@ -877,6 +975,12 @@ class VehicleModel:
         self._unload_peak = 0.0
         self._unload_since = 0.0
         self._offtrack_grace = 0.0
+        # Deliberately NOT cleared by `reset()`: which car this is survives a
+        # session boundary, and clearing it there would make the first frame of
+        # every session look like a car change and reset a model that had just
+        # been reset. `_note_car` owns it.
+        self._car_id: int | None = None
+        self.car_changed = False
         self.state = VehicleState()
 
     # ------------------------------------------------------------- lifecycle
@@ -907,7 +1011,40 @@ class VehicleModel:
 
     # -------------------------------------------------------------- a frame
 
+    def _note_car(self, p: GT7Packet) -> None:
+        """Forget everything learned when the car underneath changes.
+
+        Every reference in this model is a property of one car - the driven
+        axle's slip at a given throttle, the per-wheel load neutral, the ABS
+        plateau. `reset()` is called between SESSIONS, which is not the same
+        boundary: a garage visit inside one session swaps the car and leaves
+        the previous car's references in place, and they are then read back as
+        if they described this one. Measured across three cars in three days,
+        the band-3 slip reference spans 0.013 to 0.060 - a factor of 4.6, and
+        the cue reads slip ABOVE that number.
+
+        `car_id` 0 is GT7's "not loaded yet" sentinel and arrives during
+        loading screens, so it is not a car and never triggers the reset - the
+        same guard the controller applies before it announces a car.
+        """
+        self.car_changed = False
+        car = getattr(p, "car_id", None)
+        if not car:
+            return
+        if self._car_id is None:
+            self._car_id = car
+            return
+        if car != self._car_id:
+            self._car_id = car
+            self.reset()
+            # Published for one frame so anything holding its own per-car
+            # learning - the road bed's scale in `effects` - can drop it on the
+            # same boundary rather than keeping a second, disagreeing idea of
+            # which car this is.
+            self.car_changed = True
+
     def update(self, p: GT7Packet, dt: float = FRAME_S) -> VehicleState:
+        self._note_car(p)
         s = VehicleState()
         self.state = s
         s.speed_ms = p.speed_ms

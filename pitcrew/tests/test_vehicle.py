@@ -667,3 +667,175 @@ def test_a_settled_band_is_still_protected_from_the_event():
     after = ref.value(1.0)
     assert after <= settled + 1e-9, (
         f"the reference learned the event: {settled:.4f} -> {after:.4f}")
+
+
+# ------------------------------------------- the band that could never fall
+
+def test_a_band_seeded_by_a_pit_exit_snatch_does_not_stay_there_for_ever():
+    """**The trapdoor `e132b7b` did not close, replayed from sessions 65/66.**
+
+    `_Quantile` takes its first sample as its estimate, and the first
+    full-throttle sample of a session is pit exit at ~18 km/h in first gear,
+    where the driveline snatches and the rear axle reads 0.90 one frame and
+    1.25 the next. Session 65 seeded band 3 at -0.099.
+
+    Everything after that is above it, so the caller withholds every rise;
+    nothing is ever below it, so it never steps down. The band sat at -0.075
+    for the whole session while reporting itself settled - measured under
+    current code, EXCESSIVE_WHEELSPIN on 94.3% of frames from 209-247 km/h,
+    against 5.2% GRIPPED, with the beds ducked 41% underneath it.
+    """
+    from pitcrew.rig import vehicle
+
+    ref = vehicle._SlipReference()
+    ref.observe(1.0, -0.099)                   # the snatch, first sample seen
+    band = ref._bands[-1]
+    assert band.value != -0.099, (
+        "one frame of pit exit became the estimate of normal for the session")
+    assert band.value == vehicle.REFERENCE_PRIOR[-1] - vehicle.REFERENCE_STEP * (
+        1.0 - vehicle.REFERENCE_QUANTILE), (
+        "the snatch should move the seeded band by one ordinary step, no more")
+
+    # A whole pit exit of it, and the band is still on the right side of zero:
+    # the seed is what it walks away from, so a snatch costs steps, not the
+    # estimate. Below zero is where the trapdoor lived - the caller withholds
+    # every rise once the gap exceeds SLIP_USEFUL, and nothing is ever lower.
+    for _ in range(vehicle.REFERENCE_SETTLE_FRAMES):
+        ref.observe(1.0, -0.099)
+    assert band.value > 0.0, f"the band reached {band.value:.4f}"
+
+
+def test_a_long_slide_never_puts_the_reference_onto_the_event():
+    """The regression the first attempt at this introduced, pinned.
+
+    Releasing a long-blanked band by discarding it re-seeded the band from a
+    sample taken DURING the event, so the reference landed on the slide and
+    the cue read GRIPPED through it - a silent false negative on a CRITICAL
+    cue, which is worse than the loud false positive it replaced. However long
+    the caller blanks for, the reference must stay where it was.
+    """
+    from pitcrew.rig import vehicle
+
+    ref = vehicle._SlipReference()
+    for _ in range(vehicle.REFERENCE_SETTLE_FRAMES * 2):
+        ref.observe(1.0, 0.030)
+    honest = ref.value(1.0)
+
+    # A full minute of held 0.120 slide, every frame blanked by the caller.
+    for _ in range(3600):
+        ref.observe(1.0, 0.120, allow_rise=False)
+
+    after = ref.value(1.0)
+    assert after is not None, "the reference was discarded mid-slide"
+    assert after <= honest + 1e-9, (
+        f"the reference learned the event: {honest:.4f} -> {after:.4f}")
+    assert 0.120 - after > vehicle.SLIP_USEFUL, (
+        f"the excess fell to {0.120 - after:.4f}, so the slide has gone quiet")
+
+
+def _drive(ref, throttle, slip, frames):
+    """Feed a reference the way `VehicleModel._traction` actually feeds it.
+
+    The caller decides the blanking from the reference it just read - `quiet`
+    is `(difference - reference) < SLIP_USEFUL` - so a test that hard-codes
+    `allow_rise=False` is describing a caller that does not exist. It also
+    hides the interlock that makes the guard work: the caller only withholds
+    when the gap is wide, and a wide gap is exactly what leaves a band not yet
+    arrived, so a band below the stream is never blanked into staying there.
+    """
+    for _ in range(frames):
+        reference = ref.value(throttle)
+        quiet = reference is None or (slip - reference) < V.SLIP_USEFUL
+        ref.observe(throttle, slip, allow_rise=quiet)
+
+
+def test_a_band_below_the_stream_climbs_out_however_it_got_there():
+    """The trapdoor closed at the cause, not patched at the symptom.
+
+    Put a band where session 65's was - below the whole stream, with the
+    caller withholding every rise - and it must still reach the truth. It can,
+    because the guard is armed by ARRIVAL and this band has never arrived: it
+    has not once seen a sample within SLIP_USEFUL of itself, so it is still
+    learning freely and the caller's blanking does not apply to it.
+    """
+    from pitcrew.rig import vehicle
+
+    ref = vehicle._SlipReference()
+    band = ref._bands[-1]
+    band.reset(-0.075)                         # the state session 65 sat in
+
+    _drive(ref, 1.0, 0.013, 4000)
+    assert abs(band.value - 0.013) < 0.002, (
+        f"the band is at {band.value:.4f} against a true 0.013")
+
+
+def test_a_car_far_above_the_seed_still_reaches_its_own_value():
+    """**The cliff a sample-count gate left behind.** Arming on `settled` gave
+    a band 240 samples of free learning, which is 0.0168 of travel - so from
+    the 0.0321 seed anything above 0.0489 + SLIP_USEFUL = 0.079 armed the
+    guard while still below the stream and stuck there for the session. The
+    measured span across three cars is 0.013 to 0.060; that is 1.32x of
+    margin, and a high-torque RWD road car is not an exotic way to spend it.
+
+    Arrival is proof rather than elapsed time, so there is no cliff."""
+    from pitcrew.rig import vehicle
+
+    for true_value in (0.013, 0.060, 0.079, 0.120, 0.250):
+        ref = vehicle._SlipReference()
+        _drive(ref, 1.0, true_value, 8000)
+        landed = ref._bands[-1].value
+        assert abs(landed - true_value) < 0.002, (
+            f"a car whose driven axle sits at {true_value} was measured "
+            f"against {landed:.4f}, so ordinary throttle reads as wheelspin")
+
+
+# ------------------------------------------------------ the car underneath
+
+def _packet(*, car_id):
+    """A frame that also says which car it came from.
+
+    `Frame` deliberately carries only the fields the model reads to derive a
+    state; `car_id` is identity rather than physics, which is why it is added
+    here rather than to the stub every other test builds.
+    """
+    frame = Frame()
+    frame.car_id = car_id
+    return frame
+
+
+def test_changing_car_drops_what_was_learned_about_the_last_one():
+    """`reset()` runs between SESSIONS. A garage visit inside one session
+    swaps the car and leaves the previous car's references in place, and they
+    are then read back as if they described this one. Measured across three
+    cars in three days, the band-3 slip reference spans 0.013 to 0.060."""
+    from pitcrew.rig import vehicle
+
+    model = vehicle.VehicleModel()
+    for _ in range(vehicle.REFERENCE_SETTLE_FRAMES * 2):
+        model._slip_ref.observe(1.0, 0.060)
+    assert model._slip_ref.value(1.0) is not None
+
+    model._note_car(_packet(car_id=3311))      # the RSR, first seen
+    assert model._slip_ref.value(1.0) is not None, "first sight is not a change"
+    assert not model.car_changed
+
+    model._note_car(_packet(car_id=3391))      # the Shelby
+    assert model.car_changed, "the car change was not published"
+    assert model._slip_ref.value(1.0) is None, (
+        "the Shelby is being told about the Porsche's driven axle")
+
+
+def test_the_not_loaded_yet_sentinel_is_not_a_car():
+    """`car_id` 0 arrives during loading screens. Treating it as a car would
+    reset the model twice on every garage visit - the same guard the
+    controller applies before it announces a car."""
+    from pitcrew.rig import vehicle
+
+    model = vehicle.VehicleModel()
+    model._note_car(_packet(car_id=3311))
+    for _ in range(vehicle.REFERENCE_SETTLE_FRAMES * 2):
+        model._slip_ref.observe(1.0, 0.030)
+
+    model._note_car(_packet(car_id=0))
+    assert not model.car_changed, "the sentinel was taken for a car"
+    assert model._slip_ref.value(1.0) is not None, "the reference was dropped"

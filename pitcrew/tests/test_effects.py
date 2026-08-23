@@ -466,3 +466,198 @@ def test_a_session_boundary_clears_everything_behind_the_effects():
     assert deriver.state.slip_reference is not None
     deriver.reset()
     assert deriver.state.slip_reference is None
+
+
+# ------------------------------------------- the bed that fitted one car
+
+def _learn_tarmac(deriver, median, ninety, frames=20000):
+    """Feed the scale a real tarmac distribution with this median and p90.
+
+    **A continuous distribution, and it has to be.** The first version of this
+    alternated two levels in a 9:1 ratio, which looks like a p90 of `ninety`
+    and is not one: every value strictly between the two levels is a fixed
+    point of the tracker, because 0.9 steps down of `(1-q)*step` exactly
+    balance 0.1 steps up of `q*step`. The estimator was never exercised - it
+    returned whatever it had been seeded with, and the test passed because the
+    seed was the answer. A lognormal is the right shape for suspension
+    velocity and, more to the point, has one p90.
+    """
+    import math
+    import random
+    rng = random.Random(20260823)
+    mu = math.log(median)
+    sigma = math.log(ninety / median) / 1.2815515655446004   # z at the 90th
+    for _ in range(frames):
+        sample = rng.lognormvariate(mu, sigma)
+        deriver._tarmac_p50.update(sample)
+        deriver._tarmac_p90.update(sample)
+
+
+def test_the_learned_scale_reproduces_his_hand_tuned_pair_on_the_car_it_was_tuned_on():
+    """The shape is kept, only the scale moves. Fitting a line through the
+    tarmac median and p90 measured on the RSR at Monza - 0.0142 and 0.0401
+    over 278,034 frames - has to land back on the 0.008/0.090 he arrived at by
+    hand, or the fit is not preserving what he tuned."""
+    from pitcrew.rig import effects
+
+    deriver = EffectDeriver()
+    _learn_tarmac(deriver, 0.0142, 0.0401)
+    onset, full = deriver._texture_scale()
+    assert abs(onset - effects.TEXTURE_ONSET_MS) < 0.002, (
+        f"onset moved on the car it was fitted on: {onset:.4f}")
+    assert abs(full - effects.TEXTURE_FULL_MS) < 0.006, (
+        f"full scale moved on the car it was fitted on: {full:.4f}")
+
+
+def test_a_rougher_car_gets_a_bigger_range_instead_of_a_pinned_bed():
+    """**The Shelby at Road Atlanta, 23 Aug.** Tarmac texture speed runs a
+    median of 0.0463 there against the RSR's 0.0144 at Monza - 3.2x - and on
+    the fixed 0.090 the bed was audible on 92.3% of frames, sat at full scale
+    for the top decile and won the mix on 74.9% of them. The driver's account
+    was "lots of low vibrations but not a lot that means anything to me"."""
+    deriver = EffectDeriver()
+    fixed_onset, fixed_full = deriver._texture_scale()
+
+    _learn_tarmac(deriver, 0.0463, 0.1100)
+    onset, full = deriver._texture_scale()
+    assert full > fixed_full * 2.0, (
+        f"full scale barely moved ({fixed_full:.4f} -> {full:.4f}), so this "
+        f"car's ordinary tarmac still pins the channel")
+    # And the median of this car's own road now sits low in the range again,
+    # which is what leaves a kerb somewhere above it to go.
+    placed = (0.0463 - onset) / (full - onset)
+    assert 0.03 < placed < 0.15, f"tarmac sits at {placed:.2f} of full scale"
+
+
+def test_the_scale_starts_at_the_shipped_pair_and_never_steps():
+    """**Continuity is why there is no settle gate.** A gate that held the
+    prior and then switched dropped the bed 6.5x in one frame on the Shelby,
+    100 seconds into every session - and the size of that step is proportional
+    to how far the car is from the prior, so it is invisible on the car the
+    pair was fitted on and worst on the cars this exists for.
+
+    Seeded at the pair, the fit returns it at frame 0 and walks from there."""
+    import math
+    import random
+    from pitcrew.rig import effects
+
+    deriver = EffectDeriver()
+    onset, full = deriver._texture_scale()
+    assert (round(onset, 4), round(full, 4)) == (
+        round(effects.TEXTURE_ONSET_MS, 4), round(effects.TEXTURE_FULL_MS, 4))
+
+    # The Shelby's road, one sample at a time, watching for a discontinuity in
+    # what the driver actually feels for its own median texture.
+    rng = random.Random(20260823)
+    mu = math.log(0.0463)
+    sigma = math.log(0.1100 / 0.0463) / 1.2815515655446004
+    level = (0.0463 - onset) / (full - onset)
+    worst = 0.0
+    for _ in range(8000):
+        sample = rng.lognormvariate(mu, sigma)
+        deriver._tarmac_p50.update(sample)
+        deriver._tarmac_p90.update(sample)
+        onset, full = deriver._texture_scale()
+        now = (0.0463 - onset) / (full - onset)
+        worst = max(worst, abs(now - level))
+        level = now
+    assert worst < 0.01, f"the bed stepped by {worst:.3f} in a single frame"
+
+
+def test_kerbs_and_grass_never_teach_the_scale_they_exist_to_stand_above():
+    """The whole point of the range is that a kerb has somewhere to go. A
+    scale that learned from kerbs would climb until they were ordinary."""
+    deriver = EffectDeriver()
+    before = deriver._tarmac_p50.samples
+    for _ in range(600):
+        deriver.update(Frame(speed=40.0, surfaces="CCCC",
+                             suspension=(0.30, 0.30, 0.32, 0.32)))
+        deriver.update(Frame(speed=40.0, surfaces="CCCC",
+                             suspension=(0.28, 0.28, 0.29, 0.29)))
+    assert deriver._tarmac_p50.samples == before, (
+        "the road bed's scale is being taught by kerbs")
+
+
+def test_a_crawl_does_not_set_the_scale_for_a_lap():
+    """Pit lane at walking pace is not the road the cue is for."""
+    deriver = EffectDeriver()
+    before = deriver._tarmac_p50.samples
+    for _ in range(600):
+        deriver.update(Frame(speed=2.0, suspension=(0.30, 0.30, 0.32, 0.32)))
+        deriver.update(Frame(speed=2.0, suspension=(0.28, 0.28, 0.29, 0.29)))
+    assert deriver._tarmac_p50.samples == before, (
+        "the scale is being taught at a crawl")
+
+
+def test_changing_car_drops_the_road_scale_too():
+    """The model drops its references on a car change; a second, disagreeing
+    idea of which car this is would be worse than none."""
+    from pitcrew.rig import effects
+
+    deriver = EffectDeriver()
+    _learn_tarmac(deriver, 0.0463, 0.1100)
+    learned = deriver._texture_scale()
+    assert learned[1] > effects.TEXTURE_FULL_MS * 2.0, "nothing was learned"
+
+    deriver.update(_carred(Frame(speed=40.0), 3311))
+    deriver.update(_carred(Frame(speed=40.0), 3391))
+    onset, full = deriver._texture_scale()
+    assert (round(onset, 4), round(full, 4)) == (
+        round(effects.TEXTURE_ONSET_MS, 4), round(effects.TEXTURE_FULL_MS, 4)), (
+        "the new car is being rendered against the last one's road")
+
+
+def _carred(frame, car_id):
+    frame.car_id = car_id
+    return frame
+
+
+def test_a_packet_without_surface_types_withholds_rather_than_assuming_tarmac():
+    """Formats `A` and `B` carry no surface characters, and `vehicle._surfaces`
+    then leaves `on_kerb` and `off_surface` at False. Absent is missing, not
+    tarmac - CLAUDE.md rule 3 - and without the guard the whole of a kerb
+    teaches the scale on the fallback format the brief mandates."""
+    deriver = EffectDeriver()
+    before = deriver._tarmac_p50.samples
+    for _ in range(400):
+        frame = Frame(speed=40.0, suspension=(0.30, 0.30, 0.32, 0.32))
+        frame.surface_types = ()          # what format `A` gives you
+        deriver.update(frame)
+    assert deriver._tarmac_p50.samples == before, (
+        "the scale was taught by a packet that never said what it was on")
+
+
+def test_a_pause_does_not_cost_the_road_scale():
+    """`reset()` runs on a pause and on every haptics restart, including a
+    watchdog recovery. Neither changes the car or the circuit, and relearning
+    costs a lap and a half."""
+    deriver = EffectDeriver()
+    _learn_tarmac(deriver, 0.0463, 0.1100)
+    learned = deriver._texture_scale()
+    assert deriver._tarmac_p90.settled
+
+    deriver.update(Frame(speed=40.0, paused=True))
+    assert deriver._texture_scale() == learned, (
+        "a pause threw away what the circuit had taught it")
+
+
+def test_changing_car_forgets_the_last_ones_ride_height():
+    """Ride heights differ between cars by tens of millimetres, and 0.03 m
+    across one frame is 1.8 m/s - past `STRIKE_ONSET_MS`. Without dropping the
+    differencing state the new car arrives on a suspension strike."""
+    low = (0.28, 0.28, 0.29, 0.29)
+    high = (0.31, 0.31, 0.33, 0.33)
+
+    # The same step, in one car, is a real event: 0.03 m in a frame is 1.8 m/s.
+    same_car = EffectDeriver()
+    same_car.update(_carred(Frame(speed=40.0, suspension=low), 3311))
+    hit = same_car.update(_carred(Frame(speed=40.0, suspension=high), 3311))
+    assert hit[_index("impact")] > 0.0, "the step should be a strike in one car"
+
+    # Across a car change it is two different ride heights, and no event.
+    swapped = EffectDeriver()
+    swapped.update(_carred(Frame(speed=40.0, suspension=low), 3311))
+    arrival = swapped.update(_carred(Frame(speed=40.0, suspension=high), 3391))
+    assert arrival[_index("impact")] == 0.0, (
+        "the Shelby's ride height was differenced against the Porsche's, so "
+        "the new car arrives on a suspension strike")

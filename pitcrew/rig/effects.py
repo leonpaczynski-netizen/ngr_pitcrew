@@ -83,6 +83,64 @@ from pitcrew.telemetry.packet import GT7Packet
 # rather than arriving already clipped.
 TEXTURE_ONSET_MS = 0.008
 TEXTURE_FULL_MS = 0.090
+# **And both are now a starting prior, not the answer, because they are one
+# car's numbers on one circuit.** Replayed 23 Aug: tarmac texture speed runs a
+# median of 0.0144 m/s for the RSR at Monza - the same quantity as the 0.0142
+# above, re-measured over a different lap selection - and 0.0463 for the
+# Shelby at Road Atlanta. 3.2x, so a full-scale point fitted on the first pins
+# solid on the second. Measured on his laps this morning: the road bed was
+# audible on 92.3% of frames, sat at full scale for the top decile, and won
+# the mix on 74.9% of them, against a brake cue that won 0.31%. Reported from
+# the seat as "lots of low vibrations but not a lot that means anything".
+#
+# So the SCALE is learned per car and per circuit, and what is kept fixed is
+# the SHAPE he tuned - where tarmac sits inside the range, so that a kerb still
+# has somewhere above it to go. The two anchors below are read straight off the
+# numbers in the block above: at 0.008/0.090, tarmac's median lands at 0.076 of
+# full scale and its p90 at 0.391. Fitting a line through those two quantiles
+# of whatever the car is actually driving over reproduces 0.0080 and 0.0901 on
+# the RSR at Monza - the hand-tuned pair, to three decimals - and moves on a
+# car or a surface that is genuinely rougher.
+#
+# **This is a bed, and a bed is the one thing that SHOULD self-normalise.** A
+# limit cue must not: a threshold set at a quantile of his own driving fires at
+# a fixed rate for ever and reports "unusual for Leon" while claiming "past the
+# limit". Immersion is the opposite case - the road should use the range
+# available on every car and every circuit, which is exactly what a
+# self-normalising scale gives it.
+TEXTURE_AT_TARMAC_P50 = 0.0756
+TEXTURE_AT_TARMAC_P90 = 0.3910
+# Learned off tarmac frames only - kerbs and grass are the events this scale
+# exists to leave headroom for, so teaching it with them defeats it - and above
+# a crawl, so a pit lane at walking pace does not set the scale for a lap.
+TEXTURE_LEARN_MIN_KPH = 18.0
+TEXTURE_LEARN_STEP = 2.0e-4
+# **And there is no settle gate, because the seeding below removes the need
+# for one.** Both trackers start exactly where the pair above puts them, so
+# the fit returns that pair at frame 0 and walks continuously from it. A gate
+# would only reintroduce the discontinuity it was meant to hide: measured on
+# the Shelby stream, holding the prior until sample 6000 and then switching
+# dropped the bed from 0.467 to 0.072 for its own median texture **in a single
+# frame**, 100 seconds into every session - and the size of that step is
+# proportional to how far the car is from the prior, so it is invisible on the
+# RSR and worst on exactly the cars this exists for.
+#
+# Ungated, the largest single-frame change in bed level over the same stream
+# is 0.0024, and it is converged in about 20 seconds rather than 100.
+# Whatever is learned, the channel keeps a usable range: a degenerate fit - a
+# billiard-smooth circuit where the two quantiles nearly coincide - must not
+# collapse the ramp into a step.
+TEXTURE_FULL_MIN_MS = 0.020
+TEXTURE_FULL_MAX_MS = 1.000
+
+
+def _seed_at(place: float) -> float:
+    """The texture speed the shipped pair puts at `place` of full scale.
+
+    So the two trackers start life agreeing with the prior they fall back to,
+    and the scale cannot step when they settle.
+    """
+    return TEXTURE_ONSET_MS + place * (TEXTURE_FULL_MS - TEXTURE_ONSET_MS)
 # His SimHub rumble had `MaxEffectSpeed 130`, so the effect reaches full
 # authority at 130 km/h and is scaled below it: the same bump at 40 km/h is
 # not the same event.
@@ -289,6 +347,21 @@ class EffectDeriver:
         self._strike_size = 0.0
         self._limiter_pulse = 0.0
         self._prev_limiter = False
+        # The road bed's scale, learned. Same tracker the traction reference
+        # uses, and for the same reason: one float of state and no history.
+        #
+        # **Seeded from the shipped pair, never from the first frame seen.**
+        # The traction reference next door was seeded by its own first sample
+        # and a pit-exit driveline snatch put a whole session's cue on the
+        # floor; this is the identical estimator reading a channel taken at the
+        # identical moment, and it would have inherited the identical fault. A
+        # high seed is the expensive one here - the downward step is 2e-5, so a
+        # tracker seeded at 0.60 needs minutes to come back, and both clamps in
+        # `_texture_scale` engage while it does.
+        self._tarmac_p50 = vehicle._Quantile(
+            0.50, TEXTURE_LEARN_STEP, initial=_seed_at(TEXTURE_AT_TARMAC_P50))
+        self._tarmac_p90 = vehicle._Quantile(
+            0.90, TEXTURE_LEARN_STEP, initial=_seed_at(TEXTURE_AT_TARMAC_P90))
         self.state = vehicle.VehicleState()
 
     def reset(self) -> None:
@@ -306,6 +379,18 @@ class EffectDeriver:
         self._limiter_pulse = 0.0
         self._prev_limiter = False
         self._spike_speed = 0.0
+        # **The road scale is deliberately NOT reset here.** `reset()` runs on
+        # a pause and on every haptics restart, including a watchdog recovery,
+        # and neither the car nor the circuit changes across either. It is a
+        # property of the two, like `VehicleModel._car_id`, and clearing it on
+        # a pause would throw away a circuit's worth of road for nothing.
+        #
+        # It is dropped on a car change, in `update` below - and NOT on a
+        # circuit change, because there is no track ID in the feed to drop it
+        # on (CLAUDE.md §3.3). The same car moved to another circuit therefore
+        # carries the old road across, and walks to the new one in about 500
+        # samples because both trackers keep adapting. Benign, and named here
+        # rather than left to be discovered.
         self.state = vehicle.VehicleState()
 
     def update(self, packet: GT7Packet, dt: float = FRAME_S) -> np.ndarray:
@@ -322,6 +407,18 @@ class EffectDeriver:
 
         state = self.model.update(packet, dt)
         self.state = state
+        if self.model.car_changed:
+            # The model has already dropped its own references; this is the
+            # per-car state that lives on this side of the boundary. Back to
+            # the seeds rather than to nothing, for the reason in `__init__`.
+            self._tarmac_p50.reset(_seed_at(TEXTURE_AT_TARMAC_P50))
+            self._tarmac_p90.reset(_seed_at(TEXTURE_AT_TARMAC_P90))
+            # And the differenced channels, which is what `reset`'s own
+            # docstring is about: ride heights differ between cars by tens of
+            # millimetres, and 0.03 m across one frame is 1.8 m/s - past
+            # STRIKE_ONSET_MS, so the new car arrives on a suspension strike.
+            self._prev_suspension = None
+            self._prev_velocity = None
 
         out[0] = self._engine(packet)
         out[1] = self._road(packet, state, dt)
@@ -348,6 +445,28 @@ class EffectDeriver:
     # Worst single wheel's compression velocity this frame, for the strike.
     _spike_speed = 0.0
 
+    def _texture_scale(self) -> tuple[float, float]:
+        """Where the road bed's ramp starts and tops out, for this car.
+
+        A line through two learned quantiles of tarmac texture speed, placed so
+        that the median lands at `TEXTURE_AT_TARMAC_P50` of full scale and the
+        p90 at `TEXTURE_AT_TARMAC_P90` - the proportions his hand-tuned pair
+        already had. Both trackers are seeded at that pair, so at frame 0 this
+        returns it exactly and then walks; there is nothing to gate.
+        """
+        median, ninety = self._tarmac_p50.value, self._tarmac_p90.value
+        if median is None or ninety is None:
+            return TEXTURE_ONSET_MS, TEXTURE_FULL_MS
+        span = ninety - median
+        if span <= 0.0:
+            return TEXTURE_ONSET_MS, TEXTURE_FULL_MS
+        width = span / (TEXTURE_AT_TARMAC_P90 - TEXTURE_AT_TARMAC_P50)
+        width = min(max(width, TEXTURE_FULL_MIN_MS), TEXTURE_FULL_MAX_MS)
+        # Never below zero: the onset is a suspension speed, and a negative one
+        # would make a stationary car read as textured road.
+        onset = max(0.0, median - TEXTURE_AT_TARMAC_P50 * width)
+        return onset, onset + width
+
     def _road(self, p: GT7Packet, s: vehicle.VehicleState, dt: float) -> float:
         """Road texture, and the honest account of what this is.
 
@@ -369,7 +488,27 @@ class EffectDeriver:
         # Larger is more compressed, so a positive step is the wheel taking a
         # hit. Worst wheel, kept for the suspension strike below.
         self._spike_speed = max(h - q for h, q in zip(heights, previous)) / dt
-        texture = _ramp(speed, TEXTURE_ONSET_MS, TEXTURE_FULL_MS)
+
+        # Teach the scale what this car on this road actually does, from
+        # tarmac only and above a crawl.
+        #
+        # Fed before it is read, which is the opposite order to the traction
+        # reference next door - and deliberately, because the two are doing
+        # different jobs. That reference is read first so an EVENT cannot
+        # contribute to the measurement of what normal is. This is a bed with
+        # no events in it, and one frame moves the estimate by at most 1.8e-4.
+        # `p.surface_types` is in the condition and not assumed: it is absent
+        # on packet formats `A` and `B`, and `vehicle._surfaces` then leaves
+        # `on_kerb` and `off_surface` at their defaults of False. Absent is
+        # missing, not tarmac - without this the whole of a kerb teaches the
+        # scale on the fallback format, and the scale climbs until kerbs are
+        # ordinary, which is the one thing it exists to prevent.
+        if (p.surface_types and not s.on_kerb and not s.off_surface
+                and p.speed_kmh >= TEXTURE_LEARN_MIN_KPH):
+            self._tarmac_p50.update(speed)
+            self._tarmac_p90.update(speed)
+        onset, full = self._texture_scale()
+        texture = _ramp(speed, onset, full)
 
         # **The speed scaling belongs to the texture, not to the surface.**
         #
@@ -551,6 +690,9 @@ class EffectDeriver:
                 "slip_excess": round(s.slip_excess, 4),
                 "reference": (None if s.slip_reference is None
                               else round(s.slip_reference, 4)),
+                # Per band, so a reference stuck below the stream is visible
+                # rather than silent. Thousands here is the trapdoor.
+                "reference_blanked": self.model._slip_ref.withheld,
                 "witness": s.reasons.get("traction"),
             },
             "brake": {
