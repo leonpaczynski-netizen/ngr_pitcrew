@@ -631,6 +631,7 @@ BRAKE_STABLE_S = "STABLE"
 BRAKE_LIMIT_S = "AT_LIMIT"
 BRAKE_INCIPIENT = "INCIPIENT_LOCK"
 BRAKE_LOCKED = "LOCKED"
+BRAKE_LOCKED_REAR = "LOCKED_REAR"
 
 ROTATION_NEUTRAL = "NEUTRAL"
 ROTATION_ROTATING = "ROTATING"
@@ -1120,6 +1121,26 @@ class VehicleModel:
             "at_limit": _Latch(BRAKE_AT_LIMIT, BRAKE_AT_LIMIT * 0.8, confirm=1),
             "locking": _Latch(LOCK_FLOOR, LOCK_FLOOR * 0.82, confirm=2,
                               hold_s=0.08),
+            # **The rear axle, on its own threshold and with no presence
+            # band.**
+            #
+            # The witness this replaces was a BIAS - the rear reading slower
+            # than the front by any margin - and 97-99% of its episodes turned
+            # out to be engine braking. An absolute depth cannot make that
+            # mistake, but it has to be sited against the band that can
+            # actually reach the latch, which is NOT the pedal-off band: those
+            # frames early-return above and were never candidates.
+            #
+            # The band that both feeds this latch and is still engine-brake
+            # dominated is a light pedal, 0.02 to 0.25. There the worst of five
+            # datasets reaches p99.9 **0.2013**, above the 0.170 floor - so the
+            # separation is real but it is not the 3x the pedal-off figure
+            # suggests. It costs little in practice: 2 of 38 Shelby episodes
+            # and 2 of 21 RSR episodes begin in that band, and a light-pedal
+            # rear lock through a downshift on ABS Off is the driver-confirmed
+            # event the floor is deliberately kept low for.
+            "rear_locking": _Latch(LOCK_FLOOR, LOCK_FLOOR * 0.82, confirm=2,
+                                   hold_s=0.08),
         }
         self._prev_heading: float | None = None
         self._beta_raw = 0.0
@@ -1604,7 +1625,14 @@ class VehicleModel:
             s.brake_state = BRAKE_FREE
             s.brake_level = 0.0
             s.brake_axle = None
-            for name in ("at_limit", "locking"):
+            # **All three, and the third was missing.** A latch left active
+            # across the off-pedal interval is still active on the first frame
+            # of the next application, and `_Latch` needs `hold_s` below its
+            # release before it clears - so up to five frames of full-authority
+            # rear lock fired at the instant of pedal contact, which is exactly
+            # where his trail-braking lives. Measured at 3 of 190 braking-zone
+            # entries on the Shelby before this line was fixed.
+            for name in ("at_limit", "locking", "rear_locking"):
                 self._latches[name].reset()
             return
 
@@ -1637,6 +1665,13 @@ class VehicleModel:
         self._latches["at_limit"].off = anchors.at_limit * 0.8
         self._latches["at_limit"].update(worst, dt)
         self._latches["locking"].update(worst, dt)
+        # The rear is judged on its OWN depth, against the constant floor
+        # rather than the learned threshold: the plateau models the front
+        # regulator, and lending the rear a front-axle learned value would be
+        # the same category error as feeding it the plateau in the first place.
+        self._latches["rear_locking"].on = anchors.lock_floor
+        self._latches["rear_locking"].off = anchors.lock_floor * 0.82
+        self._latches["rear_locking"].update(s.rear_lock, dt)
 
         # The regulated plateau, learned. Sampled only where the axle is
         # genuinely working, so cruising on the brakes does not drag it down.
@@ -1677,7 +1712,36 @@ class VehicleModel:
         s.rear_unstable = (ramp(s.rotation_level, REAR_ROTATION_ONSET, 1.0)
                            if p.brake >= BRAKE_ROTATION_GATE else 0.0)
 
-        if self._latches["locking"].active:
+        if self._latches["rear_locking"].active:
+            # **The rear owns the channel while it is locked, and renders its
+            # OWN depth.** Rendering the front's level with the rear's rhythm
+            # would be a true rhythm making a false claim about magnitude.
+            #
+            # **Ahead of the front, and the reason is the measurement rather
+            # than the wheel.** "His wheel already reports the front" is only
+            # half true: a locked front generates no lateral force and the
+            # self-aligning torque collapses, which is a strong signal on an
+            # 18 Nm base - but only where there was steering angle to lose it
+            # from. In a straight-line threshold stop there is almost none, and
+            # the wheel genuinely says nothing.
+            #
+            # What survives measurement is the cost of the swap. The rear cue
+            # almost never fires alone - the front latch is also active on
+            # 88.9-99.6% of rear-cue frames - so this is the normal case and
+            # not a tie-break, and the cue means "the rear as well". Front
+            # level minus rear level over his stored laps runs a MEDIAN of
+            # -0.015 to -0.030: the rear is usually the larger claim, so the
+            # swap generally raises what is rendered. p99 is +0.34 of scale on
+            # the worst dataset, and the front lock is still rendered at full
+            # authority - it just has a rhythm on it.
+            #
+            # `max(front, rear)` hid two thirds of the RSR's rear-lock
+            # episodes in EVERY frame behind a larger front value.
+            s.brake_state = BRAKE_LOCKED_REAR
+            s.brake_axle = "rear"
+            s.brake_level = 0.65 + 0.35 * ramp(s.rear_lock, anchors.lock_floor,
+                                               anchors.lock_full)
+        elif self._latches["locking"].active:
             s.brake_state = BRAKE_LOCKED
             s.brake_level = 0.65 + 0.35 * ramp(worst, lock_threshold,
                                                anchors.lock_full)
@@ -1720,7 +1784,8 @@ class VehicleModel:
         # holding it down, not because the tyre is past its limit. Still worth
         # knowing, but it is not a lock-up, so it is reported as incipient and
         # attenuated rather than at full authority.
-        if s.unload > 0.4 and s.brake_state == BRAKE_LOCKED:
+        if s.unload > 0.4 and s.brake_state in (BRAKE_LOCKED,
+                                                BRAKE_LOCKED_REAR):
             s.brake_state = BRAKE_INCIPIENT
             s.brake_level *= 0.6
             s.reasons["brake"] = "wheel unloaded"

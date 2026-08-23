@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from pitcrew.rig import vehicle
+from pitcrew.rig import synth, vehicle
 from pitcrew.telemetry.packet import GT7Packet
 
 # ---------------------------------------------------------------- thresholds
@@ -275,6 +275,55 @@ STRIKE_OWN_TAIL_S = 0.15      # how far past the gap it keeps the channel
 # The range is a claim about the car, not about the signal. Measured over 40
 # laps: median 0.22 g, p75 1.16, p90 1.50, p99 1.80. The ceiling at 2.20 sits
 # above the 99th so the top of the scale still has resolution at the limit.
+# **A rear lock throbs, and that is how one piston says two things.**
+#
+# The brake voice already spends its three discriminable axes on severity:
+# amplitude, and an AM rate riding the same number, and a carrier pitch that
+# is perceptually inert here anyway - `transducer` measured that at a 40-100 Hz
+# carrier "44 Hz and 52 Hz feel like the same thing at different strengths".
+# There is no band left to give the rear either: 28-66 Hz is fully allocated,
+# 80-115 sits inside or beside `rear_traction`, and 66-80 crosses the measured
+# null at 70.
+#
+# What is unspent is a gesture BELOW the AM band. `AM_RANGE_HZ` starts at 5.0
+# and `EffectSpec` records why - under 5 Hz "the pulses are separate events" -
+# so 3.5 Hz cannot be heard as a slower severity rate. It is a different kind
+# of thing, not a different amount of the same thing.
+#
+# **The driver has already learned this gesture.** It was built once for
+# REAR_UNSTABLE and retired - but retired because the WITNESS was wrong (97-99%
+# engine braking), not because the signature failed to separate. It meant
+# "rear, under braking" then and it means that now.
+#
+# **Gated to a floor, and the floor is what keeps the rhythm inside this
+# voice.** Measured by driving the real `HapticMix`: a gate that dips below
+# `synth.ARBITRATE_ABOVE` re-decides arbitration twice per cycle, so the
+# throb stops being a property of the brake cue and becomes a 3.5 Hz rhythm on
+# `rear_traction` (6.9 dB, antiphase) and a 6.5 dB breathing of the road bed -
+# which is precisely the fault `DUCK_GATE` was added to cure, described from
+# the seat as "a constant on and off hum I could not work out". Net swing came
+# out at 5.9 dB where the brake voice itself was doing 12, because the other
+# voices filled the gap it was trying to make.
+#
+# So the dip is clamped to stay above the arbitration threshold whenever the
+# cue itself is above it. Gating to silence would be worse again: level and
+# carrier pitch both ride the shaped intensity.
+REAR_THROB_HZ = 3.5
+REAR_THROB_FLOOR = 0.25
+# A hair above `ARBITRATE_ABOVE`, so a cue sitting above the threshold never
+# crosses back down through it mid-gesture.
+REAR_THROB_GUARD = synth.ARBITRATE_ABOVE * 1.05
+# **Most rear locks are too short to carry a rhythm, and that is written down
+# rather than left to be found from the seat.** Phase starts at full, so the
+# first 143 ms of an episode is ungated. Measured over his stored laps, gates
+# actually delivered during a lock: Shelby/Yas ABS Off 57% of episodes get two
+# or more (median episode 558 ms), but RSR Monza 41%, 992 Spa 25%. Outside the
+# ABS-off Shelby the usual delivery is ONE dip, which is a dropout rather than
+# a rhythm. There is no headroom to fix that by rate - 3.5 Hz is already
+# between "separate events" and `AM_RANGE_HZ[0]` = 5.0 - so it is a known
+# limit of the gesture, and the cue's amplitude still carries the severity.
+REAR_THROB_TAIL_S = 0.25
+
 LAT_G_ONSET = 0.20
 LAT_G_FULL = 2.20
 
@@ -347,6 +396,8 @@ class EffectDeriver:
         self._strike_size = 0.0
         self._limiter_pulse = 0.0
         self._prev_limiter = False
+        self._throb_t = 0.0
+        self._throb_phase = 0.0
         # The road bed's scale, learned. Same tracker the traction reference
         # uses, and for the same reason: one float of state and no history.
         #
@@ -383,6 +434,8 @@ class EffectDeriver:
         self._limiter_pulse = 0.0
         self._prev_limiter = False
         self._spike_speed = 0.0
+        self._throb_t = 0.0
+        self._throb_phase = 0.0
         # **The road scale is deliberately NOT reset here.** `reset()` runs on
         # a pause and on every haptics restart, including a watchdog recovery,
         # and neither the car nor the circuit changes across either. It is a
@@ -430,7 +483,7 @@ class EffectDeriver:
         # coming round under braking is not on this channel any more - the
         # rotation witness carries it into `traction_level` below, in the
         # same vocabulary as throttle traction loss.
-        out[2] = state.brake_level
+        out[2] = self._brake_throb(state, state.brake_level, dt)
         out[3] = max(self._driveline(packet, state, dt),
                      self._limiter(state, dt))
         strike, strike_owns = self._suspension_strike(state, dt)
@@ -533,6 +586,36 @@ class EffectDeriver:
         elif s.off_surface:
             texture = min(1.0, texture + OFF_SURFACE_BOOST * moving)
         return texture
+
+    def _brake_throb(self, s: vehicle.VehicleState, level: float,
+                     dt: float) -> float:
+        """A rear lock, rendered as a rhythm rather than as more level.
+
+        Shaped here on the telemetry thread and not in the mixer, exactly like
+        the suspension strike's double tap: the mix knows nothing about it, so
+        this needs no new voice, no new band and no new `EffectSpec` field -
+        and arbitration, which scales amplitude, cannot scale a rhythm away.
+        """
+        rear = s.brake_state == vehicle.BRAKE_LOCKED_REAR
+        if rear:
+            self._throb_t = REAR_THROB_TAIL_S
+        elif s.brake_state in (vehicle.BRAKE_LOCKED, vehicle.BRAKE_INCIPIENT):
+            # **The tail does not outlive its own subject.** It exists so a
+            # rear flickering across its floor does not alternate rhythms - but
+            # the front latch outlasts the rear on most episodes, so a tail
+            # that kept gating whatever came next spent real time cutting a
+            # genuine FRONT lock to a quarter: measured at 2.83 s over 24 laps,
+            # removing up to 0.568 of level from a cue that had reverted to
+            # meaning the other axle.
+            self._throb_t = 0.0
+        if self._throb_t <= 0.0:
+            self._throb_phase = 0.0
+            return level
+        self._throb_t -= dt
+        self._throb_phase = (self._throb_phase + REAR_THROB_HZ * dt) % 1.0
+        if self._throb_phase < 0.5:
+            return level
+        return max(level * REAR_THROB_FLOOR, min(level, REAR_THROB_GUARD))
 
     def _engine(self, p: GT7Packet) -> float:
         """His hand-drawn curve, sorted, and normalised to its own top."""
@@ -701,10 +784,19 @@ class EffectDeriver:
             },
             "brake": {
                 "state": s.brake_state, "level": round(s.brake_level, 3),
+                # **"the axle that OWNS the channel", not "the worse axle".**
+                # Since the rear takes priority this reads "rear" on about a
+                # quarter of both-locked frames where `front_lock` in this same
+                # dict is the larger number. That is not a contradiction, it is
+                # the ownership rule - but it changed meaning, so it says so.
                 "axle": s.brake_axle,
                 "front_lock": round(s.front_lock, 4),
                 "rear_lock": round(s.rear_lock, 4),
                 "lock_threshold": round(s.lock_threshold, 4),
+                # `brake.level` above is the level BEFORE the throb gate, so a
+                # log read months later can tell an ungated cue from a gated
+                # one rather than inferring it from a number that moved.
+                "throbbing": self._throb_t > 0.0,
                 # Which assist the scale was measured on, against which one is
                 # fitted. A borrowed scale is visible in a log an hour later
                 # instead of being inferred from how the seat behaved.

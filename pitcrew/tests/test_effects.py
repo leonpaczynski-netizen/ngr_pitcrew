@@ -661,3 +661,76 @@ def test_changing_car_forgets_the_last_ones_ride_height():
     assert arrival[_index("impact")] == 0.0, (
         "the Shelby's ride height was differenced against the Porsche's, so "
         "the new car arrives on a suspension strike")
+
+
+# ------------------------------------------------- the rear, as a rhythm
+
+def _brake_trace(deriver, frames, **kw):
+    return [float(deriver.update(Frame(**kw))[_index("brake_limit")])
+            for _ in range(frames)]
+
+
+def test_a_rear_lock_throbs_and_a_front_lock_does_not():
+    """One piston, two things to say. Severity already owns amplitude and the
+    AM rate, and the carrier pitch is perceptually inert at these frequencies -
+    `transducer` measured that 44 Hz and 52 Hz "feel like the same thing at
+    different strengths". What is left is a gesture below the AM band."""
+    rear = EffectDeriver(); rear.set_abs("Off")
+    _settle(rear, throttle=0.5, rear_slip=1.02)
+    rear_trace = _brake_trace(rear, 40, brake=1.0, front_slip=0.99,
+                              rear_slip=0.72)
+    front = EffectDeriver(); front.set_abs("Off")
+    _settle(front, throttle=0.5, rear_slip=1.02)
+    front_trace = _brake_trace(front, 40, brake=1.0, front_slip=0.72,
+                               rear_slip=0.99)
+
+    def crossings(trace):
+        # From frame 10, so the envelope's attack at the onset of the lock is
+        # not counted as a beat. What is being asked is whether the level
+        # keeps crossing its own mean once the cue is established.
+        trace = trace[10:]
+        mean = sum(trace) / len(trace)
+        return sum(1 for a, b in zip(trace, trace[1:])
+                   if (a - mean) * (b - mean) < 0)
+
+    assert crossings(rear_trace) >= 2, "the rear lock is not a rhythm"
+    # And the front is STEADY rather than absent. Without this the test passes
+    # against a front lock that has been silenced entirely, reporting that it
+    # is not throbbing - which would be true and useless.
+    assert min(front_trace[10:]) > 0.6, "the front lock went quiet"
+    assert crossings(front_trace) == 0, "the front lock is throbbing too"
+
+
+def test_the_throb_is_below_the_range_the_body_reads_as_a_rate():
+    """Under 5 Hz the pulses are separate events rather than a faster or
+    slower version of the severity rhythm. That is the whole reason the
+    gesture is separable on a shared voice."""
+    from pitcrew.rig import effects, transducer
+    assert effects.REAR_THROB_HZ < transducer.AM_RANGE_HZ[0]
+
+
+def test_the_throb_gates_to_a_floor_rather_than_to_silence():
+    """Level and carrier pitch both ride the shaped intensity, so gating to
+    zero would swing the pitch and warble at every cycle - and the voice's
+    release would smear the gap shut anyway."""
+    deriver = EffectDeriver(); deriver.set_abs("Off")
+    _settle(deriver, throttle=0.5, rear_slip=1.02)
+    trace = _brake_trace(deriver, 40, brake=1.0, front_slip=0.99,
+                         rear_slip=0.72)
+    assert min(trace[10:]) > 0.05, "the throb gates to silence and will warble"
+
+
+def test_a_rear_lock_that_flickers_does_not_alternate_rhythms():
+    """A rear crossing its floor in and out must not switch between throbbing
+    and steady, which reads as neither."""
+    deriver = EffectDeriver(); deriver.set_abs("Off")
+    _settle(deriver, throttle=0.5, rear_slip=1.02)
+    for _ in range(20):
+        deriver.update(Frame(brake=1.0, front_slip=0.99, rear_slip=0.72))
+    # The rear crosses back under its floor for a moment. The OUTPUT has to
+    # keep gating across the gap - asserting on the tail counter instead would
+    # pass for any tail longer than a single frame.
+    trace = _brake_trace(deriver, 12, brake=1.0, front_slip=0.99,
+                         rear_slip=0.95)
+    assert min(trace) < max(trace) * 0.95, (
+        "the rhythm stopped the instant the rear flickered")

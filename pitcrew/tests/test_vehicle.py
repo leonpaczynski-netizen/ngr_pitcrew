@@ -937,3 +937,97 @@ def test_the_lock_scale_is_re_seeded_when_the_assist_changes():
     model.set_abs("Off")
     assert model._plateau.value != seeded_on
     assert model._plateau.value == V.ABS_OFF.lock_floor / V.PLATEAU_MARGIN
+
+
+# --------------------------------------------------- which axle is locking
+
+def test_a_locking_rear_is_not_hidden_behind_a_locking_front():
+    """**The regression this whole axle split is about.**
+
+    `max(front_lock, rear_lock)` rendered one scalar with no axle in it.
+    Measured over his own laps, 67% of the RSR's rear-lock episodes were
+    hidden in EVERY frame behind a larger front value, and on the Shelby with
+    ABS off the rear is the worse axle on 34.6% of braking frames.
+
+    The front is the axle the wheel already reports - 18 Nm of it, straight
+    into his hands. The rear is the one thing under braking that only the seat
+    can say, and it was the one being thrown away.
+    """
+    model = V.VehicleModel()
+    model.set_abs("Off")
+    settle(model, throttle=0.5, rear_slip=1.02)
+    state = None
+    for _ in range(30):                    # front deeper than the rear, both locked
+        state = model.update(Frame(brake=1.0, front_slip=0.70, rear_slip=0.78))
+    assert state.brake_state == V.BRAKE_LOCKED_REAR, (
+        "the deeper front swallowed the rear, which is what max() did")
+    assert state.brake_axle == "rear"
+    assert state.brake_level > 0.6, "a rear lock is still an alarm"
+
+
+def test_the_rear_reads_slow_under_engine_braking_without_becoming_a_lock():
+    """**The guard on the witness that was retired.** That one was a BIAS -
+    the rear reading slower than the front by any margin - and 97-99% of its
+    episodes turned out to be engine braking, because the driven axle reads a
+    few percent slow the moment the throttle closes.
+
+    This one is an absolute depth. The drag is held just UNDER the floor and
+    the value is derived from the floor rather than typed in, so the test
+    fails if anyone lowers it - a fixed 4% would have passed even at half the
+    threshold, which pins nothing.
+
+    Sited against the band that can actually reach the latch: pedal-off frames
+    early-return and were never candidates, so the number that matters is the
+    light-pedal band, where the worst of five datasets reaches p99.9 0.2013.
+    The separation is real but it is narrower than the pedal-off figure of
+    0.061 suggests, and the floor is deliberately kept low anyway to preserve
+    the driver-confirmed rear lock on downshifts."""
+    model = V.VehicleModel()
+    model.set_abs("Off")
+    settle(model, throttle=0.5, rear_slip=1.02)
+    # Halfway to the floor, once the learned rear offset is allowed for -
+    # the guard below keeps that honest rather than assuming it.
+    just_under = 1.0 - V.ABS_OFF.lock_floor * 0.5
+    state = None
+    for _ in range(120):        # trailing the brake, rear dragging beneath it
+        state = model.update(Frame(brake=0.30, front_slip=0.99,
+                                   rear_slip=just_under, throttle=0.0))
+    assert state.rear_lock < V.ABS_OFF.lock_floor, "the test drove past the floor"
+    assert state.brake_state != V.BRAKE_LOCKED_REAR, (
+        "engine braking is being reported as a rear lock again")
+
+
+def test_a_rear_lock_on_a_downshift_still_reaches_the_driver():
+    """Driver-confirmed: the Shelby's downshifts genuinely lock the rears, and
+    the rear is deliberately not shift-blinded because of it. Measured at 344
+    episodes with a median peak of 0.127, which is why the floor stays where
+    it is rather than being tidied upward."""
+    model = V.VehicleModel()
+    model.set_abs("Off")
+    settle(model, throttle=0.5, rear_slip=1.02, gear=4)
+    for _ in range(10):         # on the brakes, still in fourth
+        model.update(Frame(brake=1.0, front_slip=0.99, rear_slip=0.99, gear=4))
+    state = None
+    for _ in range(4):          # the downshift itself, and the rear steps down
+        state = model.update(Frame(brake=1.0, front_slip=0.95,
+                                   rear_slip=0.74, gear=3))
+    assert state.brake_state == V.BRAKE_LOCKED_REAR, (
+        "a blind here hides a real event exactly where his trail-braking is - "
+        "and asserting thirty frames later would not notice one, because "
+        "SHIFT_BLIND_S is shorter than that")
+
+
+def test_the_front_plateau_is_never_taught_by_the_rear_axle():
+    """The plateau models the ABS REGULATOR, which is a front-axle quantity.
+    It was fed `max(front, rear)` - already the front on 97-98.8% of frames,
+    and rear data on the rest."""
+    model = V.VehicleModel()
+    model.set_abs("Weak")
+    settle(model, throttle=0.5, rear_slip=1.02)
+    for _ in range(60):
+        state = model.update(Frame(brake=1.0, front_slip=0.95, rear_slip=0.95))
+    before = state.lock_threshold
+    for _ in range(300):        # rear deep, front barely working
+        state = model.update(Frame(brake=1.0, front_slip=0.99, rear_slip=0.72))
+    assert state.lock_threshold <= before + 1e-9, (
+        "the rear axle moved a threshold that describes the front regulator")
