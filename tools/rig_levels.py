@@ -28,6 +28,12 @@ reconstructed:
     and the compression only.
 
     python tools/rig_levels.py [--laps N] [--db PATH]
+                              [--sessions 50,51,52] [--game-version 1.70]
+
+`--sessions` and `--game-version` are what a controlled comparison needs: the
+same car at the same track either side of a game update is two replays of the
+same tool, and the difference between them is only readable if each side is
+the laps it says it is.
 """
 from __future__ import annotations
 
@@ -80,7 +86,8 @@ class _Frame:
                  "suspension_fr", "suspension_rl", "suspension_rr")
 
 
-def _load(path: str, count: int) -> list[list[dict]]:
+def _load(path: str, count: int, sessions: list[int] | None = None,
+          game_version: str = "") -> list[list[dict]]:
     """Laps through `Store`, NOT straight off the blob.
 
     The store repairs on read: laps recorded before the 2pi fix have slip
@@ -88,17 +95,37 @@ def _load(path: str, count: int) -> list[list[dict]]:
     raw. Doing exactly that here put wheel-spin at full scale for 54% of the
     lap and very nearly had it reported as a live defect - the live path uses
     the fixed `_slip_ratios` and was always correct.
+
+    **A selection is replayed in the order it was DRIVEN.** The learned
+    references - the slip curve, the ABS plateau, the ride-height neutral -
+    are not reset between laps, so a session replayed backwards is a system
+    that never existed. The unfiltered default keeps its most-recent-first
+    order, because "the last eight laps" is what it means.
     """
     store = Store(path)
+    # Excluded laps are the rack's own verdict on the same thing MIN_FRAMES
+    # catches from the other end, and a phantom lap is not evidence.
+    where, params = ["l.excluded = 0"], []
+    if sessions:
+        where.append(f"l.session_id IN ({','.join('?' * len(sessions))})")
+        params.extend(sessions)
+    if game_version:
+        where.append("s.game_version = ?")
+        params.append(game_version)
+    order = "ASC" if len(where) > 1 else "DESC"
     ids = sqlite3.connect(f"file:{path}?mode=ro", uri=True).execute(
-        "SELECT lap_id FROM lap_frames ORDER BY lap_id DESC").fetchall()
+        "SELECT f.lap_id FROM lap_frames f "
+        "JOIN laps l ON l.id = f.lap_id "
+        "JOIN sessions s ON s.id = l.session_id "
+        f"WHERE {' AND '.join(where)} ORDER BY f.lap_id {order}",
+        params).fetchall()
     laps = []
     for (lap_id,) in ids:
         payload = store.get_lap_frames(lap_id)
         if not payload or len(payload["frames"]) < MIN_FRAMES:
             continue
         laps.append(payload["frames"])
-        if len(laps) >= count:
+        if count and len(laps) >= count:
             break
     return laps
 
@@ -161,11 +188,21 @@ def _frames(rows: list[dict]) -> list[_Frame]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--laps", type=int, default=8)
+    parser.add_argument("--laps", type=int, default=0)
     parser.add_argument("--db", default=str(DEFAULT_DB_PATH))
+    parser.add_argument("--sessions", default="",
+                        help="comma-separated session ids")
+    parser.add_argument("--game-version", default="",
+                        help="every framed lap recorded on this version")
     args = parser.parse_args()
 
-    laps = _load(args.db, args.laps)
+    sessions = [int(part) for part in args.sessions.split(",") if part.strip()]
+    # A selection replays all of itself - taking eight of ninety-seven laps
+    # and calling it a session is how a comparison goes wrong quietly - while
+    # an unselected run keeps the old default of the eight most recent.
+    count = args.laps or (0 if (sessions or args.game_version) else 8)
+
+    laps = _load(args.db, count, sessions, args.game_version)
     if not laps:
         raise SystemExit("no recorded laps in that database")
 
