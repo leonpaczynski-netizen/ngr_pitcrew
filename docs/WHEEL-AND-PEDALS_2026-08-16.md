@@ -400,3 +400,81 @@ the flat-at-peak-load symptom appears. Order of operations for the whole change
 set: `NFR` and the two effect-strength
 diagnostics first (`SPR`, `DPR`), then `NDP`, then GT7 Max Torque, then `FEI`
 last and alone. `FUL`, `NIN`, `SEN`, `FFB`, `FOR` and `INT` are not changing.
+
+---
+
+## 9. Read again 23 Aug 2026, after GT7 v1.71 — driver-reported
+
+The first reading since 17 Aug, and the first on the other side of a patch
+that "optimised Fanatec Auto Setup parameters". **Profile slot SETUP 5, and he
+reports it as the one he is using** — which also closes §8.1's open item that
+nothing had been saved to a profile.
+
+| | SEN | FFB | FUL | NDP | NFR | NIN | INT | FEI | FOR | SPR | DPR | BLI | MPS | BRF |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| found 17 Aug | AUTO | 100 | 100 | 16 | 2 | OFF | 1 | 100 | 100 | 100 | 100 | — | — | — |
+| recommended | AUTO | 100 | 100 | **5** | **0** | OFF | 1 | **80** | 100 | **0** | **0** | — | — | — |
+| **now 23 Aug** | *not read* | 100 | 100 | **5** | **Off** | Off | **Off** | **100** | 100 | **Off** | **Off** | Off | Auto | Max |
+
+GT7 → Options → Controllers: **Force Feedback Max. Torque 4**, **Force Feedback
+Sensitivity 9**.
+
+### 9.1 What this settles
+
+**Auto Setup did not touch him.** Every value the 17 Aug sweep set is still
+where it was set, so the patch note's re-parameterisation either did not apply
+to a saved profile or did not change these axes. The contamination risk that
+`16` §8 raised against every post-patch comparison — "on an 18 Nm DD Extreme,
+an FFB change reads exactly like a grip change" — is closed for the base. It
+is **not** closed for GT7's own force signal, which the same patch adjusted and
+which no setting here can report.
+
+**Sensitivity is 9.** Three values were on file and none was current: `01` §13
+says 10, `WHEEL` §8.2 says 1 (superseded hours later on 17 Aug and never
+deleted), `WHEEL` §8.4 says 9. **9 is the measurement.** `01` §13's 10 is a
+stale driver report and the §8.2 line is dead text; both should be struck. It
+was also being declared as 10 in the footer of every generated prompt — see
+`prompts/templates.json`, fixed 23 Aug.
+
+**Max Torque is 4, not the recommended 5.** §8.4 prescribed 5 dropping to 4 on
+one symptom: the wheel going flat or light precisely when load is highest. He
+is at 4, and no record says when or why. Either the symptom appeared, or it was
+set independently. **Worth one question**, because 4 is the answer to a problem
+and if the problem was never there it is costing headroom.
+
+### 9.2 The two undocumented drifts, and only one matters
+
+**`INT` 1 → Off.** §4's list has `INT` among the values that are *not*
+changing, so this moved without a recorded reason — the same class of thing as
+the brake bias in `brain/driver.md`. On a direct drive it is benign and
+probably better: the interpolation filter trades latency for smoothness, and
+OFF is the lowest-latency setting, which is what a driver catching a slide
+wants. **No action, but it is on the record now rather than a surprise later.**
+
+**`FEI` is still 100, and it is the one unfinished step.** §7's order was
+diagnostics, then `NDP`, then Max Torque, then `FEI` **last and alone**. The
+first three are done. `FEI` 80 is the remaining recommendation and it has no
+driver evidence behind it, while the thing it could dull — FullForce carrying
+the dirty-air cue — does.
+
+**It should not be changed now, and the reason is not caution.** The
+ButtKicker's transient content changed materially on 23 Aug: the road bed
+rescaled per car, the brake cue re-anchored to v1.71's grip peak, and a
+rear-lock rhythm added. `FEI` is the wheel's transient sharpness. Moving both
+sides of a duplication in the same week destroys the ability to attribute
+anything to either. Drive the seat first; then `FEI` 80 as a single-variable
+test with the dirty-air cue as the acceptance criterion, exactly as §7 says.
+
+### 9.3 Not read, and wanted
+
+- **`SEN`.** Missing from the reading. It matters more than it did: 1.71
+  reworked **per-car steering geometry**, so AUTO may now hand a given car a
+  different rotation than it did before the patch. If it is AUTO, that is the
+  answer and §4 stands; if it is a number, something set it.
+- **`BRF` Max, `MPS` Auto, `BLI` Off** are new to this record and unanalysed.
+  `BRF` is the interesting one — it sets the load-cell force that reads as
+  100% brake, so it is the resolution he modulates threshold braking with, and
+  he now races ABS Off where that modulation is the whole job. Max means most
+  force for full brake, i.e. the finest resolution at the top of the pedal.
+  Plausibly right for him and **not measured**; the app cannot see pedal force
+  in newtons (§4's open list), only GT7's 0–255 interpretation of it.
