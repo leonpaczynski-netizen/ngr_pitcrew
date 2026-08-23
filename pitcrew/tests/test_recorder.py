@@ -463,7 +463,15 @@ def test_the_chunked_encode_writes_byte_identical_json():
     import json
     import zlib
 
+    # A column that mixes an int with floats cannot be packed exactly, so
+    # this is the shape that takes the JSON path - which is the path the
+    # chunking is about.
     rows = _lap_rows()
+    speed = FRAME_FIELDS.index("speed_kph")
+    rows[3][speed] = 100          # int among floats
+    assert recorder._encode_columnar(rows, recorder.FRAME_SCHEMA_VERSION) is None, (
+        "this no longer exercises the JSON fallback")
+
     single = json.dumps(
         {"format": BLOB_FORMAT, "v": recorder.FRAME_SCHEMA_VERSION,
          "fields": list(FRAME_FIELDS), "rows": rows},
@@ -516,3 +524,121 @@ def test_a_spike_and_an_empty_lap_are_both_refused():
     assert recorder.top_speed_kph(zeros) is None, (
         "a stationary lap reported a top speed of zero, which would ratchet "
         "the event's reference down")
+
+
+# ------------------------------------------------- the columnar blob format
+
+def test_the_columnar_blob_round_trips_every_channel_kind_exactly():
+    """**Exactly, not closely.** These numbers are the evidence every setup
+    recommendation is built on, and a lap that changed in the fourth decimal
+    on being re-read would be undetectable and wrong.
+
+    Verified against the real database as well: 363 laps, 2,621,938 frames
+    re-encoded columnar and decoded, zero differences, zero fallbacks.
+    """
+    rows = _lap_rows(120)
+    # One of each kind the channels actually carry.
+    for index, row in enumerate(rows):
+        row[FRAME_FIELDS.index("t_ms")] = index * 17          # int
+        row[FRAME_FIELDS.index("speed_kph")] = 80.0 + index / 3.0   # float
+        row[FRAME_FIELDS.index("surf_fl")] = "TCDGSs"[index % 6]    # char
+        # Nulls in the slip channels, as the real stream has them.
+        row[FRAME_FIELDS.index("slip_fl")] = (None if index % 3
+                                              else 0.9 + index / 1000.0)
+
+    blob = encode_frames(rows)
+    assert recorder._decode_columnar(__import__("zlib").decompress(blob)) \
+        is not None, "this did not take the columnar path"
+
+    back = decode_frames(blob)
+    assert len(back) == len(rows)
+    for index, (row, frame) in enumerate(zip(rows, back)):
+        for position, name in enumerate(FRAME_FIELDS):
+            assert frame[name] == row[position], (
+                f"{name} changed at frame {index}: "
+                f"{row[position]!r} -> {frame[name]!r}")
+            # An int must come back an int, not a float that compares equal.
+            assert type(frame[name]) is type(row[position]), (
+                f"{name} changed TYPE at frame {index}: "
+                f"{type(row[position])} -> {type(frame[name])}")
+
+
+def test_a_column_that_cannot_be_packed_exactly_falls_back():
+    """A mixed column is stored the old way rather than coerced. Coercion
+    here is silent loss in the one table that cannot be regenerated."""
+    rows = _lap_rows(20)
+    speed = FRAME_FIELDS.index("speed_kph")
+    rows[5][speed] = 100                     # int among floats
+
+    assert recorder._encode_columnar(rows, recorder.FRAME_SCHEMA_VERSION) is None
+    back = decode_frames(encode_frames(rows))
+    assert back[5]["speed_kph"] == 100
+    assert type(back[5]["speed_kph"]) is int, "the fallback coerced it anyway"
+
+
+def test_a_boolean_is_refused_rather_than_stored_as_a_number():
+    """`bool` is an `int` subclass, so it would pack into an integer column
+    and come back as 0 or 1. Refused instead."""
+    rows = _lap_rows(8)
+    rows[2][FRAME_FIELDS.index("rev_limiter")] = True
+    assert recorder._encode_columnar(rows, recorder.FRAME_SCHEMA_VERSION) is None
+    assert decode_frames(encode_frames(rows))[2]["rev_limiter"] is True
+
+
+def test_an_all_null_channel_survives():
+    """A channel the packet never carried is null everywhere, and null is not
+    zero - the export refuses to read one as the other."""
+    rows = _lap_rows(30)
+    for row in rows:
+        row[FRAME_FIELDS.index("slip_rr")] = None
+    back = decode_frames(encode_frames(rows))
+    assert all(frame["slip_rr"] is None for frame in back)
+
+
+def test_the_old_json_blobs_stay_readable():
+    """363 laps on disk are v1 and the raw stream cannot be regenerated, so
+    the reader knows both formats for good rather than the blobs being
+    migrated."""
+    import json
+    import zlib
+
+    rows = _lap_rows(15)
+    legacy = zlib.compress(json.dumps(
+        {"format": BLOB_FORMAT, "v": 1, "fields": list(FRAME_FIELDS),
+         "rows": rows}, separators=(",", ":")).encode("utf-8"), 6)
+
+    back = decode_frames(legacy)
+    assert len(back) == 15
+    assert back[0]["_v"] == 1, "the blob's own schema version was lost"
+    assert back[9]["speed_kph"] == rows[9][FRAME_FIELDS.index("speed_kph")]
+
+
+def test_a_re_encode_that_drops_the_schema_version_changes_the_physics():
+    """**The one door nobody had closed.**
+
+    The blob's schema version decides how the analysis reads the lap:
+    `grip.yaw_source_for` takes yaw from the stored path below version 2 and
+    off the packet at 2 and above, and the two differ by 3-4% at the top of
+    the acceleration distribution - the same size as the compound step the
+    tyre model exists to detect.
+
+    A throwaway migration script re-encoded the database columnar without
+    carrying it across. Every v1 lap came back stamped 2, and one event's
+    export moved `yawDeficitPct` from 0.2 to 42.0 with wheelspin flag counts
+    changed on nearly every corner. Nothing raised.
+
+    So the version is a parameter now, and this is what holds it.
+    """
+    rows = _lap_rows(12)
+    assert decode_frames(encode_frames(rows, version=1))[0]["_v"] == 1
+    assert decode_frames(encode_frames(rows, version=2))[0]["_v"] == 2
+    # The default is for a freshly recorded lap, which is genuinely current.
+    assert (decode_frames(encode_frames(rows))[0]["_v"]
+            == recorder.FRAME_SCHEMA_VERSION)
+
+    # And the fallback path must carry it too, or a mixed column would lose
+    # the stamp while a clean one kept it.
+    mixed = _lap_rows(12)
+    mixed[4][FRAME_FIELDS.index("speed_kph")] = 100
+    assert recorder._encode_columnar(mixed, 1) is None
+    assert decode_frames(encode_frames(mixed, version=1))[0]["_v"] == 1

@@ -15,7 +15,9 @@ buffer.
 """
 from __future__ import annotations
 
+import array
 import json
+import sys
 import math
 import threading
 import zlib
@@ -312,8 +314,227 @@ def _slip_ratios(p: GT7Packet) -> tuple[float | None, ...]:
 ENCODE_CHUNK_ROWS = 500
 
 
-def encode_frames(rows: list[list]) -> bytes:
+# **The columnar blob, and why the row-of-JSON one had to go.**
+#
+# A lap is 41 channels x up to 26,000 frames of numbers, and it was stored as
+# JSON rows. Measured on the longest lap on file:
+#
+#     zlib.decompress      4.9 ms
+#     json.loads          43.7 ms   <- 69% of the decode
+#     building the dicts  ~15   ms
+#
+# `json` also does not release the GIL, so every one of those decodes is tens
+# of milliseconds in which the audio callback cannot run - the fault that
+# degrades the transducer's endpoint. The encode side is worse: one lap
+# through `json.dumps` held the GIL for 85 ms at every lap crossing.
+#
+# Columns rather than rows, packed as machine numbers rather than decimal
+# text. The channels are strongly typed and strongly regular - 33 floats, 4
+# integers, 4 single-character surface codes, and nulls in the four slip
+# channels only - so each column packs into one `array` and compresses far
+# better beside its own kind than interleaved with 40 others.
+#
+# `array('d')` is IEEE double, which is exactly what a Python float already
+# is, and `array('q')` holds every integer these channels carry. So the round
+# trip is EXACT rather than close, which matters: these numbers are the
+# evidence every setup recommendation is built on, and a lap that changed in
+# the fourth decimal on being re-read would be undetectable and wrong.
+COLUMNAR_FORMAT = "pitcrew.frames.v2"
+
+_KIND_FLOAT = "f"          # array('d')
+_KIND_INT = "i"            # array('q')
+_KIND_CHAR = "c"           # one byte per row
+_KIND_NULL = "n"           # the column is entirely null; no data follows
+
+
+def _scan_column(values) -> tuple[str | None, bytes, list]:
+    """One pass: the column's kind, its null bitmap, and its present values.
+
+    **One pass and not four.** The first version asked `_column_kind`, then
+    `_pack_nulls`, then filtered out the Nones - three walks over every value
+    on top of a pure-Python transpose, and the encode came out slower than
+    the JSON it replaced. There are 2.6 million frames of 41 channels in this
+    database; a redundant pass is 107 million operations.
+    """
+    kind = None
+    mask = None
+    present = []
+    for index, value in enumerate(values):
+        if value is None:
+            if mask is None:
+                mask = bytearray((len(values) + 7) // 8)
+            mask[index >> 3] |= 1 << (index & 7)
+            continue
+        if isinstance(value, bool):
+            return None, b"", []             # bool is an int subclass; refuse
+        if isinstance(value, float):
+            here = _KIND_FLOAT
+        elif isinstance(value, int):
+            here = _KIND_INT
+        elif isinstance(value, str) and len(value) == 1 and value.isascii():
+            here = _KIND_CHAR
+        else:
+            return None, b"", []
+        if kind is None:
+            kind = here
+        elif kind != here:
+            return None, b"", []             # mixed: int and float are not
+        present.append(value)
+    return (kind or _KIND_NULL), (bytes(mask) if mask else b""), present
+
+
+def _column_kind(values: list) -> str | None:
+    """How this column packs, or None if it does not.
+
+    **Returning None is a supported answer and the whole safety story.** A
+    column that mixes types, or carries something these three kinds cannot
+    hold, sends the entire blob back to the JSON format rather than being
+    coerced - because coercion here is silent data loss in the one table that
+    cannot be regenerated. A lap recorded during a format change is worth more
+    than the bytes it would save.
+    """
+    kind = None
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            return None                      # bool is an int subclass; refuse
+        if isinstance(value, int):
+            here = _KIND_INT
+        elif isinstance(value, float):
+            here = _KIND_FLOAT
+        elif isinstance(value, str) and len(value) == 1 and value.isascii():
+            here = _KIND_CHAR
+        else:
+            return None
+        if kind is None:
+            kind = here
+        elif kind != here:
+            return None                      # mixed: int and float are not
+    return kind or _KIND_NULL
+
+
+def _pack_nulls(values: list) -> bytes:
+    """One bit per row, set where the value is null. Empty when none are."""
+    if not any(value is None for value in values):
+        return b""
+    mask = bytearray((len(values) + 7) // 8)
+    for index, value in enumerate(values):
+        if value is None:
+            mask[index >> 3] |= 1 << (index & 7)
+    return bytes(mask)
+
+
+def _encode_columnar(rows: list[list], version: int) -> bytes | None:
+    """The columnar blob, or None if these rows cannot be held exactly."""
+    count = len(rows)
+    if not rows or len(rows[0]) != len(FRAME_FIELDS):
+        return None
+    # `zip(*rows)` transposes in C. Done as a comprehension it was the single
+    # largest cost in the encode.
+    columns = zip(*rows)
+
+    meta, chunks = [], []
+    for name, values in zip(FRAME_FIELDS, columns):
+        kind, nulls, present = _scan_column(values)
+        if kind is None:
+            return None
+        meta.append({"n": name, "k": kind, "z": len(nulls)})
+        chunks.append(nulls)
+        if kind == _KIND_NULL:
+            continue
+        if kind == _KIND_CHAR:
+            chunks.append("".join(present).encode("ascii"))
+        else:
+            packed = array.array("d" if kind == _KIND_FLOAT else "q", present)
+            # Little-endian on the wire, whatever the machine is, so a blob
+            # written on one box reads on another.
+            if sys.byteorder != "little":
+                packed.byteswap()
+            chunks.append(packed.tobytes())
+
+    header = json.dumps({"format": COLUMNAR_FORMAT, "v": version,
+                         "fields": list(FRAME_FIELDS), "count": count,
+                         "cols": meta}, separators=(",", ":")).encode("utf-8")
+    body = b"".join(chunks)
+    return zlib.compress(len(header).to_bytes(4, "little") + header + body, 6)
+
+
+def _decode_columnar(raw: bytes) -> list[dict] | None:
+    """Rows back out of a v2 blob, or None if this is not one."""
+    if len(raw) < 4:
+        return None
+    size = int.from_bytes(raw[:4], "little")
+    if size <= 0 or size + 4 > len(raw):
+        return None
+    try:
+        header = json.loads(raw[4:4 + size].decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if header.get("format") != COLUMNAR_FORMAT:
+        return None
+
+    fields = header["fields"]
+    count = int(header["count"])
+    version = int(header.get("v", 1))
+    at = 4 + size
+    columns: list[list] = []
+    for column in header["cols"]:
+        kind, nulls_len = column["k"], int(column["z"])
+        mask = raw[at:at + nulls_len]
+        at += nulls_len
+        missing = [bool(mask[i >> 3] & (1 << (i & 7))) for i in range(count)]             if nulls_len else None
+        if kind == _KIND_NULL:
+            columns.append([None] * count)
+            continue
+        present_count = count - (sum(missing) if missing else 0)
+        if kind == _KIND_CHAR:
+            values = list(raw[at:at + present_count].decode("ascii"))
+            at += present_count
+        else:
+            code = "d" if kind == _KIND_FLOAT else "q"
+            packed = array.array(code)
+            width = packed.itemsize * present_count
+            packed.frombytes(raw[at:at + width])
+            if sys.byteorder != "little":
+                packed.byteswap()
+            values = packed.tolist()
+            at += width
+        if missing is None:
+            columns.append(values)
+        else:
+            out, source = [], iter(values)
+            for gone in missing:
+                out.append(None if gone else next(source))
+            columns.append(out)
+
+    return [dict(zip(fields, row), **{_VERSION_KEY: version})
+            for row in zip(*columns)] if columns else []
+
+
+def encode_frames(rows: list[list], *,
+                  version: int = FRAME_SCHEMA_VERSION) -> bytes:
     """The lap's rows, as the stored blob.
+
+    **`version` is the blob's own schema stamp and is a parameter for one
+    reason: anything that RE-ENCODES an existing lap must carry the original
+    across.** It decides how the analysis reads the lap - `grip.yaw_source_for`
+    takes yaw from the stored path below version 2 and off the packet at 2 and
+    above, and the two differ by 3-4% at the top of the acceleration
+    distribution, which is the same size as the compound step the tyre model
+    exists to detect.
+
+    Proved the hard way, 23 Aug 2026, on a throwaway migration script that
+    re-encoded the database columnar without preserving it: every v1 lap came
+    back stamped 2, the analysis switched yaw source underneath it, and one
+    event's export moved `yawDeficitPct` from 0.2 to 42.0 and changed the
+    wheelspin flag counts on nearly every corner. Nothing raised. That is
+    exactly the failure the stamp exists to prevent, arriving through the one
+    door nobody had thought to close.
+
+    The live path never re-encodes - `LapRecorder.encode` is the only caller
+    and it has a fresh lap - so the default is right for everything that
+    exists today, and a future migration has to say what it means.
 
     Serialised in slices and fed straight into a streaming deflate rather
     than built as one string. `json.dumps(list, separators=(",", ":"))` is
@@ -322,6 +543,16 @@ def encode_frames(rows: list[list]) -> bytes:
     contract on disk is "zlib of this JSON", not one particular deflate
     stream. See `ENCODE_CHUNK_ROWS`.
     """
+    columnar = _encode_columnar(rows, version)
+    if columnar is not None:
+        return columnar
+
+    # **The fallback, and it is not dead code.** `_encode_columnar` returns
+    # None for anything it cannot hold exactly - a column that mixes integers
+    # and floats, a channel carrying something new - and the answer to that is
+    # to store the lap the old way, not to coerce it. The chunking below is
+    # still what keeps `json.dumps` from holding the GIL for 85 ms when this
+    # path is taken.
     dumps = json.dumps
     tight = {"separators": (",", ":")}
     # Tight separators in the head too, or the field list comes out as
@@ -330,7 +561,7 @@ def encode_frames(rows: list[list]) -> bytes:
     # byte-identical blob this docstring claims. Checked: identical.
     head = ('{"format":%s,"v":%s,"fields":%s,"rows":['
             % (dumps(BLOB_FORMAT, **tight),
-               dumps(FRAME_SCHEMA_VERSION, **tight),
+               dumps(version, **tight),
                dumps(list(FRAME_FIELDS), **tight)))
     packer = zlib.compressobj(6)
     out = [packer.compress(head.encode("utf-8"))]
@@ -405,7 +636,17 @@ def decode_frames(blob: bytes) -> list[dict]:
     one recorded after. It strips the key again, so nothing downstream of the
     repair sees it.
     """
-    payload = json.loads(zlib.decompress(blob).decode("utf-8"))
+    raw = zlib.decompress(blob)
+    # **Every lap already on disk is v1 and stays readable.** 366 of them, and
+    # the raw stream is the one thing in this database that cannot be
+    # regenerated - so the reader knows both formats for good, rather than the
+    # blobs being migrated. A migration that goes wrong here loses the
+    # evidence every setup recommendation is built on.
+    columnar = _decode_columnar(raw)
+    if columnar is not None:
+        return columnar
+
+    payload = json.loads(raw.decode("utf-8"))
     fields = payload["fields"]
     version = int(payload.get("v", 1))
     return [dict(zip(fields, row), **{_VERSION_KEY: version})
