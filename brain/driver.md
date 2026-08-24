@@ -29,6 +29,59 @@ attractive, and `02` §9.6 calls fuel map "the primary endurance-strategy lever"
 
 **Never move brake balance forward.**
 *Source: session memory, standing.*
+Front bias is wrong for his style specifically — **it locks the fronts and
+creates understeer**. He controls rear lock with **LSD braking sensitivity**
+and rotates on brake release. `08` A4 is the stack; `01` §16 states the
+resolution as *"mechanical rear stability first, then brake balance around
+neutral as a fine adjustment."*
+
+> ⚠️ **23 Aug 2026 — he has been running `bb −1` in the car, and nothing on
+> file records it.** His words: *"car has a tendency to lock rears on braking
+> and I have had to move BB forward"*, magnitude confirmed as **one click**.
+>
+> **One click is not a violation of the rule above** — `01` §16 permits exactly
+> this: *"mechanical rear stability first, then brake balance around neutral as
+> a fine adjustment."* Record it as the fine adjustment, not as a lapse. But
+> 10% of the bias range **with ABS Off** is not a small lever, and it has two
+> consequences that were not being drawn:
+>
+> 1. **It explains the Yas front-locking finding.** Rev C recorded front lockup
+>    on 9 of 14 laps at T10 and credited `lsd_b` 22 with curing the rear so
+>    that *"the front is now the limiting axle."* Forward bias he had dialled
+>    in himself is the simpler explanation, and it is the exact failure this
+>    file names. **The rear was probably never cured.**
+> 2. **The app's brake balance is wrong, for the fourth consecutive session** —
+>    after `ballastPosition`, the compound, and the whole `setup.values` block.
+>    Every sheet on file says `bb 0`.
+>
+> **Ask what bias is actually in the car before reading any braking telemetry
+> off this driver.** `lsd_b` has never been taken past 22 against an A4 band of
+> +5 to +15.
+
+> ⚠️ **24 Aug 2026 — the Huracán is running `bb +1`, one click REARWARD, and no
+> sheet records that either.** Rev D (sheet 19) says `bb 0`. Two cars, two
+> different trims, both undocumented, opposite directions: the Shelby at −1 for
+> rear lock, the Huracán at +1.
+>
+> **This makes the Watkins front-lock finding stronger, not weaker.** Over 8,906
+> braking frames in the 17 Aug race the fronts fell below 0.90 slip on **20.2 %**
+> and the rears on **0.5 %** — and that was measured with the balance *already*
+> one click rearward. At `0` it would be worse. **Fuji's "brake bias one click
+> forward" doctrine (`05` §1.12) must not be applied to this car**, and if T1
+> locks the fronts the room is at `+2`, not the other way.
+
+
+**ABS Off is a Supercars regulation, not a preference.**
+*Source: driver, 23 Aug 2026.*
+Both Supercars rounds on file declare Off; every other series he runs declares
+Weak. **So `08` B3's "ABS Weak is the competitive meta" is unavailable in this
+series, and A4's rear-stability stack is the only structural route to a stable
+rear** — there is no engine-braking map, no brake pressure, and now no assist.
+**Both of A4's validations (Huracán 26, RSR 24, each at bias 0) were run on ABS
+Weak.** Nothing in the knowledge base has ever tested that stack on Off, which
+is the setting that governs whether a locked wheel stays locked. `01` §47 —
+*"when ABS is off, rear stability becomes even more important"* — is now a
+standing condition of this series rather than an occasional one.
 
 **He will not carry a spare lap of fuel in a lap race.**
 *Source: driver feedback, recorded. 6.31 L left at the flag is 6.3 s stationary at
