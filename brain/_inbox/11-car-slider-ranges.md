@@ -6,16 +6,52 @@
 
 ---
 
-# 🟡 TWO CARS READ ON v1.71, TWO STILL STALE — updated 22 August 2026
+# 🟢 THREE CARS READ ON v1.71, ONE STILL STALE — updated 24 August 2026
 
-**GT7 v1.71 (20 August 2026) said, in the official update notes, that adjustment ranges were revised for suspension, differential and aerodynamics. They were. Two cars have now been read on v1.71 and the same five endpoints moved on both.**
+**GT7 v1.71 (20 August 2026) said, in the official update notes, that adjustment ranges were revised for suspension, differential and aerodynamics. They were. Three cars have now been read on v1.71 and the same five endpoints moved on all three.**
 
 | Car | Status |
 |---|---|
 | **Porsche 911 RSR (991) '17** | ✅ **Re-read 21 Aug 2026 on v1.71. Five endpoints moved.** |
 | **Porsche 911 GT3 R (992) '22** | ✅ **First reading, 22 Aug 2026, on v1.71. New car — see §0.1.** |
-| Lamborghini Huracán GT3 '15 | 🔴 **v1.70 reading. Stale. Do not issue.** |
-| Ford Shelby GT350R '16 | 🔴 **v1.70 reading. Stale. Do not issue.** |
+| **Lamborghini Huracán GT3 '15** | ✅ **Re-read 24 Aug 2026 on v1.71 — see §0.2. The class-comparison test, and it reproduces.** |
+| Ford Shelby GT350R '16 | 🔴 **v1.70 reading. Stale. Do not issue.** — and it is now the only card left to turn |
+
+## §0.2 ⭐ The Huracán — the class comparison, and it reproduces on all five
+
+**Read 24 Aug 2026 by the driver, filed in `data/pitcrew.db` stamped v1.71, verified.** This is the reading `§0.1` asked for and the worksheet's first checkbox.
+
+| Parameter | Huracán v1.70 | RSR, 21 Aug | 992, 22 Aug | **Huracán, 24 Aug** |
+|---|---|---|---|---|
+| LSD initial torque | 5 – 60 | 0 – 30 | 0 – 30 | **0 – 30** ✅ |
+| LSD acceleration | 5 – 60 | 0 – 100 | 0 – 100 | **0 – 100** ✅ |
+| LSD braking | 5 – 60 | 0 – **99** | 0 – **100** | **0 – 100** ✅ |
+| Damper expansion F | 30 – 50 | 30 – 60 | 30 – 60 | **30 – 60** ✅ |
+| Damper expansion R | 30 – 50 | 30 – 60 | 30 – 60 | **30 – 60** ✅ |
+
+**Every other endpoint is unchanged from its v1.70 reading**, which is itself worth recording: the patch moved five cells and left the other seventeen alone, on the only car in the register that has a before-and-after on the same chassis.
+
+**Three consequences.**
+
+1. **The change is at least Gr.3-wide, and it is a version effect, not a car effect.** Three cars, two manufacturers, two drivetrain layouts (RR and MR), one class — the same five endpoints, the same values. This is the first reading with a genuine *before* column on the same car, so it also rules out the possibility that the RSR's "v1.70" figures (borrowed from this very car) were wrong to begin with.
+2. **`lsd_b` is 0 – 100 and the RSR's 99 is the odd reading.** §0.1 flagged this as a cell wanting a second look. Two cars now read 100 against the RSR's 99. **Re-read the RSR's LSD braking ceiling** — it is almost certainly a one-click misread, trivial in effect but it is the register's only remaining internal contradiction outside `top`.
+3. **Percent-of-range reasoning is restored for this car**, and the standing instruction to express LSD in absolutes no longer applies to the Huracán. It still applies to the Shelby.
+
+> **Still open: Gr.3-wide, or fleet-wide? The Shelby is now the only test left.** A Gr.N road car whose other endpoints differ wildly (ride height 75–160, NF 1.88–3.70, downforce 60–160) and which still reads the old 5–60 LSD. **If it re-reads as 0–30 / 0–100 / 0–100, the change is fleet-wide.** Five minutes.
+
+### ⚠️ What the re-read does to sheets already written against the old scale
+
+**Nothing was clamped** — all three of Rev D's LSD values and both damper-expansion values still sit inside the new endpoints, so `setups/2026-08-17-huracan-watkins-glen-long-revD.md` parses without loss. **But what they mean as a fraction of range has moved, and on one axis it moved a long way:**
+
+| Rev D value | % of v1.70 range | **% of v1.71 range** | |
+|---|---:|---:|---|
+| `lsd_i` 6 | 2 % | **20 %** | ⚠️ **the ceiling halved (60 → 30).** The one axis where the physical meaning most plausibly moved with it |
+| `lsd_a` 18 | 24 % | **18 %** | |
+| `lsd_b` 28 | 42 % | **28 %** | |
+| `de_f` 42 | 60 % | **40 %** | rebound headroom above it that did not exist before |
+| `de_r` 36 | 30 % | **20 %** | |
+
+**Any published figure quoted as an absolute LSD number is now ambiguous** until its game version is known — including `05-track-reference.md`'s per-circuit "LSD acceleration sensitivity" bands, every one of which was written against 5 – 60. On the new scale those numbers are not merely stale, they address a different slider.
 
 **Full measurement write-up, with the telemetry that came from the same session: `17-v1.71-measured-results.md` §6.**
 
@@ -107,7 +143,7 @@ Three outcomes, and they are not equally likely:
 **Two cars left, five minutes each.**
 
 - [x] **Porsche 911 RSR (991) '17** — Gr.3, MR — ✅ done 21 Aug 2026
-- [ ] **Lamborghini Huracán GT3 '15** — Gr.3, MR — **do this one next; it is the class comparison**
+- [x] **Lamborghini Huracán GT3 '15** — Gr.3, MR — ✅ **done 24 Aug 2026. Reproduced all five. See §0.2.**
 - [ ] **Ford Shelby GT350R '16** — Gr.N, FR road car — **the class-independence test**
 
 **On the remaining two, read all 22 parameters** — not just the five that moved on the RSR. A parameter that held on a Gr.3 car may not hold on a road car, and the whole point of the register is that it does not guess.
