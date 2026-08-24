@@ -402,13 +402,34 @@ class SettingsScreen(QWidget):
         # --- what the screen source needs instead
         self.hud_projector_note = BodyLabel(
             "In OBS, right click the preview and choose Windowed Projector "
-            "(Program), then size the window until its client area is exactly "
-            "1720x916. It is found by title, so it can sit anywhere — but it "
-            "must be visible. A covered or minimised projector reads nothing, "
-            "and this says so rather than guessing.",
+            "(Program). Size it with the button below — it has to be exactly "
+            "1720x916 and a mouse cannot do exact. It is found by title, so "
+            "it can sit on any screen and you can move it whenever you like; "
+            "only the size is fixed. But it must be VISIBLE, and nothing may "
+            "sit on top of the gauge in its bottom-left corner — this reads "
+            "what the monitor shows, so a window over that corner is read as "
+            "tyre wear.",
             size=13, colour=theme.STENCIL_DIM)
         self.hud_projector_note.setWordWrap(True)
         plate.body.addWidget(self.hud_projector_note)
+
+        # **A button rather than a note telling him the number.** A projector
+        # does not survive a restart, so this is a before-every-session job,
+        # and `ScreenSource` refuses anything that is not the canvas to the
+        # pixel. Dragging a window edge against a figure you cannot see, every
+        # session, is the kind of chore that ends with the source switched off.
+        snap_row = QHBoxLayout()
+        snap_row.setSpacing(theme.GAP)
+        self.snap_projector_button = MarkButton("Size the projector",
+                                                compact=True)
+        self.snap_projector_button.clicked.connect(self._on_snap_projector)
+        snap_row.addWidget(self.snap_projector_button)
+        snap_row.addStretch(1)
+        plate.body.addLayout(snap_row)
+
+        self.snap_note = BodyLabel("", size=13, colour=theme.CHALK)
+        self.snap_note.setWordWrap(True)
+        plate.body.addWidget(self.snap_note)
 
         self.hud_interval = QDoubleSpinBox()
         self.hud_interval.setRange(0.0, 30.0)
@@ -446,7 +467,9 @@ class SettingsScreen(QWidget):
         for field in (self.obs_host_field, self.obs_port_field,
                       self.obs_password_field):
             field.setVisible(not screen)
-        self.hud_projector_note.setVisible(screen)
+        for widget in (self.hud_projector_note, self.snap_projector_button,
+                       self.snap_note):
+            widget.setVisible(screen)
         # Measured 22 Aug 2026 on this PC. The gap is what makes sampling
         # between crossings affordable on one source and not the other.
         self.hud_cost.setText(
@@ -456,6 +479,22 @@ class SettingsScreen(QWidget):
             "about 537 ms of OBS CPU a reading — the whole canvas is "
             "rendered, PNG-encoded and sent over the socket. Affordable once "
             "a lap; not affordable faster.")
+
+    def _on_snap_projector(self) -> None:
+        """Size the projector to the canvas, and say what happened.
+
+        **Inline rather than through the controller.** `SetWindowPos` on a
+        window that is already up is local and instant - there is no socket,
+        no device and nothing to wait on - so routing it through a signal
+        would buy indirection and no safety. The gauge test next to it goes
+        the other way precisely because an OBS grab can take seconds.
+        """
+        from pitcrew.telemetry.hud import snap_projector
+        ok, said = snap_projector()
+        self.snap_note.setText(said)
+        self.snap_note.setStyleSheet(
+            f"color: {theme.CHALK if ok else theme.WARNING};"
+            "background: transparent;")
 
     def set_gauge_testing(self, testing: bool) -> None:
         """The seconds a websocket grab can take, said out loud."""

@@ -9,6 +9,10 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import sys
+import types
+
+from pitcrew.telemetry import hud
 from pitcrew.telemetry.hud import (
     CANVAS,
     LAYOUT_1720x916,
@@ -360,9 +364,18 @@ def test_a_dimmed_crop_is_refused_and_not_searched():
     assert not got.ok and "dimmed" in got.reason
 
 
-def test_the_screen_source_says_why_rather_than_raising():
+def test_the_screen_source_says_why_rather_than_raising(monkeypatch):
     """No projector open is the normal state when OBS is shut. It is a reason,
-    not an exception, because the caller is a worker beside a lap handler."""
+    not an exception, because the caller is a worker beside a lap handler.
+
+    **The absence is faked, and it has to be.** This asserted against the
+    developer's own desktop and so passed only where no OBS projector happened
+    to be open - it began failing the moment one was, on the machine that
+    actually races. A test whose verdict depends on what is on screen is not
+    testing the code.
+    """
+    _install(monkeypatch, FakeWin32({1: ("OBS 32.2.2 - Profile", True,
+                                         2560, 1369, 0, 0)}))
     frame, why = ScreenSource().grab()
     assert frame is None
     assert why and isinstance(why, str)
@@ -580,3 +593,126 @@ def test_the_known_good_race_is_accepted_end_to_end():
             f"refused a reading from the race the model rests on: {fl, fr, rl, rr}")
     # The stop cut the series, so only the second stint is left in it.
     assert len(sampler.series) == len(after)
+
+
+# ------------------------------------------------------- sizing the projector
+#
+# `ScreenSource` refuses a projector that is not the canvas to the pixel, and
+# a projector does not survive a restart - so sizing one is a job for before
+# every session, against a figure the driver cannot see while he drags. These
+# drive the win32 calls through a fake, because the imports are function-local.
+
+
+class FakeWin32:
+    """Just enough of win32gui to place, measure and resize a window."""
+
+    def __init__(self, windows, chrome=(16, 39), resizable=True):
+        # windows: {hwnd: (title, visible, client_w, client_h, x, y)}
+        self.windows = dict(windows)
+        self.chrome = chrome
+        self.resizable = resizable
+        self.calls = []
+
+    def EnumWindows(self, visit, _):
+        for hwnd in list(self.windows):
+            visit(hwnd, None)
+
+    def IsWindowVisible(self, hwnd):
+        return self.windows[hwnd][1]
+
+    def GetWindowText(self, hwnd):
+        return self.windows[hwnd][0]
+
+    def GetClientRect(self, hwnd):
+        _, _, w, h, _, _ = self.windows[hwnd]
+        return (0, 0, w, h)
+
+    def GetWindowRect(self, hwnd):
+        _, _, w, h, x, y = self.windows[hwnd]
+        cw, ch = self.chrome
+        return (x, y, x + w + cw, y + h + ch)
+
+    def ClientToScreen(self, hwnd, point):
+        _, _, _, _, x, y = self.windows[hwnd]
+        return (x + point[0], y + point[1])
+
+    def SetWindowPos(self, hwnd, _z, x, y, w, h, _flags):
+        self.calls.append((x, y, w, h))
+        if not self.resizable:
+            return
+        title, vis, _, _, _, _ = self.windows[hwnd]
+        cw, ch = self.chrome
+        self.windows[hwnd] = (title, vis, w - cw, h - ch, x, y)
+
+
+def _install(monkeypatch, fake):
+    monkeypatch.setitem(sys.modules, "win32gui", fake)
+    monkeypatch.setitem(sys.modules, "win32con", types.SimpleNamespace(
+        SWP_NOZORDER=4, SWP_NOACTIVATE=16))
+
+
+def test_the_program_projector_wins_when_both_are_open(monkeypatch):
+    """A preview projector can be showing a different scene entirely."""
+    fake = FakeWin32({1: ("Projector - Preview", True, 480, 270, 0, 0),
+                      2: ("Windowed Projector (Program)", True, 480, 270, 0, 0)})
+    _install(monkeypatch, fake)
+    found, why = hud.find_projector()
+    assert why is None
+    assert found[1] == "Windowed Projector (Program)"
+
+
+def test_no_projector_says_how_to_open_one(monkeypatch):
+    """The message has to name the menu item, not just the fault."""
+    _install(monkeypatch, FakeWin32({1: ("OBS 32.2.2 - Profile", True,
+                                         2560, 1369, 0, 0)}))
+    found, why = hud.find_projector()
+    assert found is None
+    assert "Windowed Projector" in why
+    assert f"{hud.CANVAS[0]}x{hud.CANVAS[1]}" in why
+
+
+def test_snap_sizes_the_client_area_and_leaves_it_where_it_was(monkeypatch):
+    """The chrome is measured, not assumed, and the position is not ours."""
+    fake = FakeWin32({1: ("Projector - Preview", True, 1184, 661, 2668, 51)},
+                     chrome=(16, 39))
+    _install(monkeypatch, fake)
+    ok, said = hud.snap_projector()
+    assert ok, said
+    # Outer size asked for = canvas + the chrome this window actually has.
+    assert fake.calls == [(2668, 51, hud.CANVAS[0] + 16, hud.CANVAS[1] + 39)]
+    assert fake.GetClientRect(1)[2:] == hud.CANVAS
+    assert "1184x661" in said and "left where it was" in said
+
+
+def test_snap_is_idempotent_and_says_so(monkeypatch):
+    """Pressing it twice must not read as having done something twice."""
+    fake = FakeWin32({1: ("Projector - Preview", True,
+                          hud.CANVAS[0], hud.CANVAS[1], 0, 0)})
+    _install(monkeypatch, fake)
+    ok, said = hud.snap_projector()
+    assert ok
+    assert "already" in said and "Nothing to do" in said
+    assert fake.calls == [], "a window already the right size was resized anyway"
+
+
+def test_a_projector_that_will_not_resize_is_reported_not_assumed(monkeypatch):
+    """A fullscreen projector ignores SetWindowPos. Saying 'done' would lie.
+
+    This is the exact case that turned up in the field: the driver opened a
+    Fullscreen Projector, it took the whole 2560x1440 monitor, and the reader
+    refused every grab.
+    """
+    fake = FakeWin32({1: ("Projector - Preview", True, 2560, 1440, 0, 0)},
+                     resizable=False)
+    _install(monkeypatch, fake)
+    ok, said = hud.snap_projector()
+    assert not ok
+    assert "2560x1440" in said
+    assert "Windowed Projector" in said
+
+
+def test_the_reader_and_the_sizer_agree_on_which_window(monkeypatch):
+    """One matcher. Two would drift the next time OBS renames them."""
+    fake = FakeWin32({1: ("Projector - Preview", True, 480, 270, 0, 0)})
+    _install(monkeypatch, fake)
+    assert hud.ScreenSource()._window()[0] == hud.find_projector()[0]

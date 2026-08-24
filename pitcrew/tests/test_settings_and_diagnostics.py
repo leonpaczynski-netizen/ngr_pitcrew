@@ -771,11 +771,23 @@ def test_a_password_keeps_its_trailing_space(qt_app):
     assert screen.values().obs_password == "pass "
 
 
-def test_the_gauge_test_reports_a_missing_source_rather_than_raising(wired):
+def test_the_gauge_test_reports_a_missing_source_rather_than_raising(
+        wired, monkeypatch):
     """The rehearsal the gauge has never had. With nothing to read it must say
-    so on the screen - not raise into a settings page, and not stay silent."""
+    so on the screen - not raise into a settings page, and not stay silent.
+
+    **The missing source is faked, like the readable one below it.** This
+    reached the real desktop and so asserted "there is no projector open on
+    the developer's machine", which stopped being true on the machine that
+    races the moment one was opened. Its neighbour already monkeypatches
+    `grab`; this one only got away with not doing so by luck.
+    """
+    from pitcrew.telemetry import hud
+
     controller, screen, _ = wired
     screen.load(Settings(hud_source=HUD_SOURCE_SCREEN))
+    monkeypatch.setattr(hud.ScreenSource, "grab",
+                        lambda self: (None, "no OBS projector window is open"))
     assert controller.test_gauge() is False
     assert screen.gauge_note.text()
     # And the button it disabled is given back, whatever happened.

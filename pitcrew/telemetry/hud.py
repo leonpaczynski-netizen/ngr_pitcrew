@@ -612,6 +612,103 @@ PROJECTOR_TITLES = ("windowed projector (program)",
                     "fullscreen projector (program)")
 
 
+def find_projector(title_hint: str = ""):
+    """(hwnd, title) of the OBS projector, or (None, reason).
+
+    **One matcher, used by both the reader and the sizer.** Two copies of
+    "which window is the projector" would drift the first time OBS renamed
+    them again - which it has already done once, between OBS 30 and 32.
+    """
+    try:
+        import win32gui
+    except ImportError:
+        return None, "pywin32 is not installed"
+    hint = (title_hint or "").strip().lower()
+    hits = []
+
+    def visit(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        title = win32gui.GetWindowText(hwnd) or ""
+        low = title.lower()
+        if PROJECTOR_WORD not in low:
+            return
+        if hint and hint not in low:
+            return
+        hits.append((hwnd, title))
+
+    try:
+        win32gui.EnumWindows(visit, None)
+    except Exception as exc:                                 # noqa: BLE001
+        return None, f"could not enumerate windows: {type(exc).__name__}"
+    if not hits:
+        return None, ("no OBS projector window is open - right click the "
+                      "preview in OBS and choose Windowed Projector "
+                      f"(Program), then size it to {CANVAS[0]}x{CANVAS[1]}")
+    # **The first, and it is said when there are others.** Two projectors
+    # showing different scenes would otherwise be chosen between silently.
+    # The program feed first where both are open: it is the real output,
+    # and a preview projector can be showing a different scene entirely.
+    hits.sort(key=lambda hit: 0 if any(
+        word in hit[1].lower() for word in PROJECTOR_PREFERRED) else 1)
+    if len(hits) > 1:
+        _log.info(f"hud-wear: {len(hits)} projector windows open, using "
+                  f"{hits[0][1]!r}")
+    return hits[0], None
+
+
+def snap_projector(title_hint: str = "") -> tuple[bool, str]:
+    """Size the projector so its client area is exactly the canvas.
+
+    Returns `(ok, what happened)`, both fit to be shown to the driver.
+
+    **Because the size has to be exact and a mouse cannot do exact.**
+    `ScreenSource` refuses a projector that is not `CANVAS` to the pixel -
+    correctly, since a scaled canvas moves every calibrated pixel and would
+    return a plausible wrong wear number rather than an error. That leaves
+    the driver dragging a window edge against a figure he cannot see, before
+    every session, because a projector does not survive a restart. This does
+    the arithmetic instead: the chrome is whatever the window rect has over
+    the client rect, so the outer size wanted is the canvas plus that.
+
+    **The position is preserved, deliberately.** Which monitor the projector
+    sits on is the driver's business - his second screen has the app on it -
+    and the reader re-reads the window's position on every grab, so moving it
+    afterwards costs nothing. Only the size is ours to set.
+    """
+    found, why = find_projector(title_hint)
+    if found is None:
+        return False, why
+    hwnd, title = found
+    try:
+        import win32con
+        import win32gui
+
+        _, _, was_w, was_h = win32gui.GetClientRect(hwnd)
+        if (was_w, was_h) == CANVAS:
+            return True, (f"{title!r} is already {CANVAS[0]}x{CANVAS[1]}. "
+                          f"Nothing to do.")
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        chrome_w = (right - left) - was_w
+        chrome_h = (bottom - top) - was_h
+        win32gui.SetWindowPos(
+            hwnd, None, left, top,
+            CANVAS[0] + chrome_w, CANVAS[1] + chrome_h,
+            win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+        _, _, now_w, now_h = win32gui.GetClientRect(hwnd)
+    except Exception as exc:                                 # noqa: BLE001
+        return False, f"{title!r}: {type(exc).__name__}: {exc}"
+    if (now_w, now_h) != CANVAS:
+        # A projector pinned by the window manager - fullscreen, snapped to
+        # half a monitor, or on a display too small to hold the canvas.
+        return False, (f"{title!r} would not resize: asked for "
+                       f"{CANVAS[0]}x{CANVAS[1]}, got {now_w}x{now_h}. If it "
+                       f"is a fullscreen projector, close it and open a "
+                       f"Windowed Projector (Program) instead.")
+    return True, (f"{title!r} resized from {was_w}x{was_h} to "
+                  f"{CANVAS[0]}x{CANVAS[1]}, left where it was.")
+
+
 class ScreenSource:
     """The gauge region, read straight off the desktop.
 
@@ -631,42 +728,7 @@ class ScreenSource:
 
     def _window(self):
         """(hwnd, title) of the projector, or (None, reason)."""
-        try:
-            import win32gui
-        except ImportError:
-            return None, "pywin32 is not installed"
-        hits = []
-
-        def visit(hwnd, _):
-            if not win32gui.IsWindowVisible(hwnd):
-                return
-            title = win32gui.GetWindowText(hwnd) or ""
-            low = title.lower()
-            if PROJECTOR_WORD not in low:
-                return
-            if self.title_hint and self.title_hint not in low:
-                return
-            hits.append((hwnd, title))
-
-        try:
-            win32gui.EnumWindows(visit, None)
-        except Exception as exc:                             # noqa: BLE001
-            return None, f"could not enumerate windows: {type(exc).__name__}"
-        if not hits:
-            return None, ("no OBS projector window is open - right click the "
-                          "preview in OBS and choose Windowed Projector "
-                          "(Program), then size it to "
-                          f"{CANVAS[0]}x{CANVAS[1]}")
-        # **The first, and it is said when there are others.** Two projectors
-        # showing different scenes would otherwise be chosen between silently.
-        # The program feed first where both are open: it is the real output,
-        # and a preview projector can be showing a different scene entirely.
-        hits.sort(key=lambda hit: 0 if any(
-            word in hit[1].lower() for word in PROJECTOR_PREFERRED) else 1)
-        if len(hits) > 1:
-            _log.info(f"hud-wear: {len(hits)} projector windows open, using "
-                      f"{hits[0][1]!r}")
-        return hits[0], None
+        return find_projector(self.title_hint)
 
     def grab(self):
         """(CropFrame, None) or (None, reason). Never raises."""
