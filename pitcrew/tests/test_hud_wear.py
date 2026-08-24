@@ -485,3 +485,98 @@ def test_interval_zero_keeps_the_original_behaviour():
         assert sampler.series == []
     finally:
         sampler.stop()
+
+
+# --------------------------------------------------------------- coherence
+#
+# The pit-lane gauge, 24 Aug 2026. GT7 moves the tyre gauge to the bottom
+# left of the screen while the car is in the pits, so the calibrated
+# rectangle reads whatever the HUD put in its place. What comes back is
+# plausible one corner at a time and impossible taken together.
+
+
+def _kept(sampler, wear):
+    """Offer a reading to the series. True if it was filed."""
+    return sampler._keep(0.0, Reading(dict(wear)))
+
+
+def a_sampler():
+    return LiveWearSampler(FakeSource((None, "unused")),
+                           lambda lap, wear: None)
+
+
+def test_a_reading_that_moves_both_ways_is_refused():
+    """Three corners fell and one rose. No tyre does that.
+
+    This is the pit lap of session 78 verbatim, against the lap before it.
+    """
+    sampler = a_sampler()
+    assert _kept(sampler, {"fl": 0.63, "fr": 0.37, "rl": 0.68, "rr": 0.55})
+    assert not _kept(sampler, {"fl": 0.45, "fr": 0.45,
+                               "rl": 0.32, "rr": 0.50})
+    # **And the refusal did not become the baseline.** If it had, every
+    # later reading would be judged against the relocated gauge and the
+    # rest of the stint would read as incoherent too.
+    assert sampler.series[-1][1]["rl"] == 0.68
+    assert _kept(sampler, {"fl": 0.68, "fr": 0.39, "rl": 0.73, "rr": 0.58})
+
+
+def test_every_corner_dropping_onto_a_worn_set_is_refused():
+    """The crash lap: all four fell, and it still reads 42% worst.
+
+    Too worn to be a fresh set, too low to follow the last reading. The
+    worst-corner test could not tell this from a tyre change.
+    """
+    sampler = a_sampler()
+    assert _kept(sampler, {"fl": 0.63, "fr": 0.37, "rl": 0.68, "rr": 0.55})
+    assert not _kept(sampler, {"fl": 0.42, "fr": 0.25,
+                               "rl": 0.39, "rr": 0.23})
+    assert len(sampler.series) == 1
+
+
+def test_a_real_tyre_change_still_cuts_the_series():
+    """Session 52's stop: every corner back to a tenth or less."""
+    sampler = a_sampler()
+    assert _kept(sampler, {"fl": 0.77, "fr": 0.50, "rl": 0.87, "rr": 0.69})
+    assert _kept(sampler, {"fl": 0.07, "fr": 0.07, "rl": 0.10, "rr": 0.07})
+    assert len(sampler.series) == 1, "the series should have been cut"
+
+
+def test_quantisation_alone_never_refuses_a_reading():
+    """One gauge row is 3.3% of tyre life and a corner can sit either side.
+
+    Session 78 lap 14 read FR one row BELOW lap 13 while the other three
+    rose. That is the bar, not the tyre, and it must still be filed.
+    """
+    sampler = a_sampler()
+    assert _kept(sampler, {"fl": 0.55, "fr": 0.38, "rl": 0.62, "rr": 0.52})
+    assert _kept(sampler, {"fl": 0.63, "fr": 0.37, "rl": 0.68, "rr": 0.55})
+    assert len(sampler.series) == 2
+
+
+def test_the_known_good_race_is_accepted_end_to_end():
+    """Session 52, all 25 readings, one stop. Nothing may be refused.
+
+    The rule earns its place by rejecting two readings in a session where
+    the driver could name what went wrong. It keeps it by touching nothing
+    in the race that produced the wear rate the model still rests on.
+    """
+    stint = [(0.06, 0.00, 0.03, 0.00), (0.10, 0.07, 0.10, 0.07),
+             (0.17, 0.07, 0.19, 0.13), (0.20, 0.13, 0.21, 0.19),
+             (0.27, 0.17, 0.28, 0.21), (0.33, 0.20, 0.33, 0.27),
+             (0.34, 0.23, 0.40, 0.33), (0.40, 0.27, 0.47, 0.34),
+             (0.47, 0.30, 0.52, 0.40), (0.53, 0.33, 0.55, 0.47),
+             (0.58, 0.39, 0.62, 0.52), (0.63, 0.40, 0.67, 0.53),
+             (0.67, 0.41, 0.73, 0.60), (0.73, 0.47, 0.80, 0.67),
+             (0.77, 0.50, 0.87, 0.69)]
+    after = [(0.07, 0.07, 0.10, 0.07), (0.14, 0.07, 0.14, 0.13),
+             (0.20, 0.13, 0.20, 0.19), (0.27, 0.19, 0.27, 0.21),
+             (0.30, 0.20, 0.33, 0.27), (0.34, 0.26, 0.40, 0.33),
+             (0.40, 0.27, 0.47, 0.37), (0.47, 0.33, 0.52, 0.41),
+             (0.53, 0.33, 0.57, 0.47), (0.58, 0.40, 0.62, 0.53)]
+    sampler = a_sampler()
+    for fl, fr, rl, rr in stint + after:
+        assert _kept(sampler, {"fl": fl, "fr": fr, "rl": rl, "rr": rr}), (
+            f"refused a reading from the race the model rests on: {fl, fr, rl, rr}")
+    # The stop cut the series, so only the second stint is left in it.
+    assert len(sampler.series) == len(after)

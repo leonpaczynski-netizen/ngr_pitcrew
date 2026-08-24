@@ -126,6 +126,35 @@ IDENTICAL_PEAKS_MEAN_STATIC = 3
 # resets it is a tyre change - the gauge snapping back to white is a
 # cleaner detector than anything the telemetry offers.
 FRESH_SET_DROP = 0.25
+# **Wear is monotonic on EVERY corner, not just the worst one, and that is
+# what says whether a reading is of the gauge at all.**
+#
+# 24 Aug 2026, Monza: the driver reported that GT7 moves the tyre gauge to
+# the bottom-left of the screen while he is in the pits. The calibrated
+# rectangle then reads whatever the HUD put in its place, and the numbers
+# that come back are plausible one at a time - the pit lap filed
+# FL 45 / FR 45 / RL 32 / RR 50 against a previous FL 63 / FR 37 / RL 68 /
+# RR 55. Three corners fell and one rose. **No tyre does that**, and the
+# old worst-corner test could not see it: it read a 75%-to-42% drop on the
+# worst corner, called a fresh set, and threw the stint's series away. It
+# did so three times in one session.
+#
+# So a reading is compared corner by corner and accepted only if it is
+# physically possible: every shared corner steady or rising, or every one
+# of them dropping onto a set that reads near zero. Anything else is not a
+# reading of the gauge and is refused rather than filed.
+#
+# `GAUGE_SLACK` is two gauge rows. The bar is 30 px, so one row is 3.3% of
+# tyre life and quantisation alone can put a corner a row either side of
+# where it truly sits; twice that is comfortably past the noise and still
+# far short of a lap's wear at any multiplier raced.
+GAUGE_SLACK = 0.05
+# A set that has just gone on reads near zero on every corner. This is the
+# other half of the fresh-set test, and it is what separates a tyre change
+# from a misread that happens to have dropped everything: the crash lap of
+# the same session dropped all four and landed at 42% worst, which is not a
+# new tyre and is not four laps of wear either.
+FRESH_SET_MAX = 0.15
 # How far past its own interval a held reading may be and still be the
 # lap reading. Wider than one interval so a single missed tick does not
 # force a grab on the crossing, and far short of a lap so a stale number
@@ -847,20 +876,62 @@ class LiveWearSampler:
             return Reading(None, why), True
         return read_gauge(frame), False
 
-    def _keep(self, at: float, reading: Reading) -> None:
-        """Hold a good reading, and cut the series where a fresh set went on."""
-        worst = max((v for v in reading.wear.values() if v is not None),
-                    default=None)
-        if worst is not None and self.series:
-            previous = max((v for v in self.series[-1][1].values()
-                            if v is not None), default=None)
-            if previous is not None and previous - worst > FRESH_SET_DROP:
-                # The gauge only goes backwards for one reason.
-                _log.info(f"hud-wear: fresh set - gauge dropped "
-                    f"{previous * 100:.0f}% to {worst * 100:.0f}%")
-                self.series = []
+    def _coherent(self, wear: dict) -> tuple[bool, bool, str]:
+        """Can this reading follow the last one on a real set of tyres?
+
+        Returns `(accept, fresh_set, why_not)`. See `GAUGE_SLACK` for the
+        account of the pit-lane gauge that made this necessary.
+
+        **The comparison is against the last ACCEPTED reading**, which is why
+        a refusal must not become `_latest`: one relocated gauge would
+        otherwise become the baseline every later reading is judged against,
+        and the whole stint after it would read as incoherent.
+        """
+        if not self.series:
+            return True, False, ""
+        previous = self.series[-1][1]
+        shared = [k for k, v in wear.items()
+                  if v is not None and previous.get(k) is not None]
+        if not shared:
+            return True, False, ""
+        moved = {k: wear[k] - previous[k] for k in shared}
+        fell = [k for k in shared if moved[k] < -GAUGE_SLACK]
+        rose = [k for k in shared if moved[k] > GAUGE_SLACK]
+        if fell and rose:
+            return False, False, (
+                "wear moved both ways at once ("
+                + ", ".join(f"{k.upper()} {moved[k] * 100:+.0f}"
+                            for k in sorted(shared))
+                + ") - no tyre does that, so this is not the gauge")
+        if fell and len(fell) == len(shared):
+            worst = max(wear[k] for k in shared)
+            if worst <= FRESH_SET_MAX:
+                return True, True, ""
+            return False, False, (
+                f"every corner dropped but the set still reads "
+                f"{worst * 100:.0f}% worst - too worn for a fresh set and "
+                f"too low to follow the last one")
+        return True, False, ""
+
+    def _keep(self, at: float, reading: Reading) -> bool:
+        """Hold a good reading, and cut the series where a fresh set went on.
+
+        Returns whether it was kept. A reading the gauge cannot physically
+        have produced is refused here rather than filed - see `_coherent`.
+        """
+        accept, fresh, why = self._coherent(reading.wear)
+        if not accept:
+            _log.warning("hud-wear: reading refused - %s", why)
+            return False
+        if fresh:
+            _log.info("hud-wear: fresh set - every corner back to "
+                      "%.0f%% or less",
+                      max(v for v in reading.wear.values() if v is not None)
+                      * 100)
+            self.series = []
         self._latest = (at, reading)
         self.series.append((at, dict(reading.wear)))
+        return True
 
     def latest(self) -> Reading | None:
         """The most recent good reading, or None."""
@@ -881,8 +952,13 @@ class LiveWearSampler:
             if source_failed:
                 self._failed(f"lap {lap_id}: {reading.reason}")
                 return
-            if reading.ok:
-                self._keep(now, reading)
+            if reading.ok and not self._keep(now, reading):
+                # Readable, and not of the gauge. **Not blind and not a
+                # failure**: the source is fine and the next grab may well be
+                # good, so this neither counts toward standing down nor tells
+                # the driver the gauge has gone dark. `_keep` has already said
+                # what was wrong with it.
+                return
         if not reading.ok:
             # A dimmed or unreadable frame is not a connection failure - it is
             # a normal thing that happens when the game is paused - so it does
