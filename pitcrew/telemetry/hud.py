@@ -686,15 +686,30 @@ def snap_projector(title_hint: str = "") -> tuple[bool, str]:
 
         _, _, was_w, was_h = win32gui.GetClientRect(hwnd)
         if (was_w, was_h) == CANVAS:
-            return True, (f"{title!r} is already {CANVAS[0]}x{CANVAS[1]}. "
-                          f"Nothing to do.")
+            # **Still raised, because being the right size is not the whole
+            # job.** The stint that went dark had a correctly sized projector
+            # the entire time; it was simply underneath something.
+            win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                                  | win32con.SWP_NOACTIVATE)
+            return True, (f"{title!r} is already {CANVAS[0]}x{CANVAS[1]}, and "
+                          f"is now kept in front so nothing can cover the "
+                          f"gauge.")
         left, top, right, bottom = win32gui.GetWindowRect(hwnd)
         chrome_w = (right - left) - was_w
         chrome_h = (bottom - top) - was_h
+        # **Topmost, and it is not a convenience.** This source reads what the
+        # MONITOR shows, not what the window holds, so anything composited
+        # over the gauge is read as tyre wear. Measured 24 Aug 2026: a stint
+        # sampled every two seconds for six minutes and every single grab came
+        # back dark, because the projector was sitting behind another window -
+        # the capture was of that window, and the log said only "the frame is
+        # dimmed". Sizing it correctly and leaving it buried is no better than
+        # not opening it, so the two are done together.
         win32gui.SetWindowPos(
-            hwnd, None, left, top,
+            hwnd, win32con.HWND_TOPMOST, left, top,
             CANVAS[0] + chrome_w, CANVAS[1] + chrome_h,
-            win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+            win32con.SWP_NOACTIVATE)
         _, _, now_w, now_h = win32gui.GetClientRect(hwnd)
     except Exception as exc:                                 # noqa: BLE001
         return False, f"{title!r}: {type(exc).__name__}: {exc}"
@@ -706,7 +721,8 @@ def snap_projector(title_hint: str = "") -> tuple[bool, str]:
                        f"is a fullscreen projector, close it and open a "
                        f"Windowed Projector (Program) instead.")
     return True, (f"{title!r} resized from {was_w}x{was_h} to "
-                  f"{CANVAS[0]}x{CANVAS[1]}, left where it was.")
+                  f"{CANVAS[0]}x{CANVAS[1]}, left where it was, and kept in "
+                  f"front so nothing can cover the gauge.")
 
 
 class ScreenSource:

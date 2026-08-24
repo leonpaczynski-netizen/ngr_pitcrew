@@ -612,6 +612,7 @@ class FakeWin32:
         self.chrome = chrome
         self.resizable = resizable
         self.calls = []
+        self.topmost = False
 
     def EnumWindows(self, visit, _):
         for hwnd in list(self.windows):
@@ -636,8 +637,10 @@ class FakeWin32:
         _, _, _, _, x, y = self.windows[hwnd]
         return (x + point[0], y + point[1])
 
-    def SetWindowPos(self, hwnd, _z, x, y, w, h, _flags):
+    def SetWindowPos(self, hwnd, z, x, y, w, h, _flags):
         self.calls.append((x, y, w, h))
+        if z == -1:                              # HWND_TOPMOST
+            self.topmost = True
         if not self.resizable:
             return
         title, vis, _, _, _, _ = self.windows[hwnd]
@@ -648,7 +651,8 @@ class FakeWin32:
 def _install(monkeypatch, fake):
     monkeypatch.setitem(sys.modules, "win32gui", fake)
     monkeypatch.setitem(sys.modules, "win32con", types.SimpleNamespace(
-        SWP_NOZORDER=4, SWP_NOACTIVATE=16))
+        SWP_NOZORDER=4, SWP_NOACTIVATE=16, SWP_NOMOVE=2, SWP_NOSIZE=1,
+        HWND_TOPMOST=-1))
 
 
 def test_the_program_projector_wins_when_both_are_open(monkeypatch):
@@ -691,8 +695,12 @@ def test_snap_is_idempotent_and_says_so(monkeypatch):
     _install(monkeypatch, fake)
     ok, said = hud.snap_projector()
     assert ok
-    assert "already" in said and "Nothing to do" in said
-    assert fake.calls == [], "a window already the right size was resized anyway"
+    assert "already" in said
+    # **It is still raised.** The stint that went dark had a correctly sized
+    # projector the whole time and was simply underneath something, so
+    # "already the right size" must not mean "nothing to do".
+    assert fake.calls == [(0, 0, 0, 0)], (
+        "an already-sized projector must still be brought to the front")
 
 
 def test_a_projector_that_will_not_resize_is_reported_not_assumed(monkeypatch):
@@ -716,3 +724,21 @@ def test_the_reader_and_the_sizer_agree_on_which_window(monkeypatch):
     fake = FakeWin32({1: ("Projector - Preview", True, 480, 270, 0, 0)})
     _install(monkeypatch, fake)
     assert hud.ScreenSource()._window()[0] == hud.find_projector()[0]
+
+
+def test_the_projector_is_brought_to_the_front(monkeypatch):
+    """Sizing it correctly and leaving it buried is no better than not
+    opening it.
+
+    24 Aug 2026: a six-minute stint sampled every two seconds and every
+    single grab came back dark. The projector was the right size the whole
+    time - it was behind another window, and this source reads what the
+    MONITOR shows, so the capture was of that other window. The log could
+    only say "the frame is dimmed".
+    """
+    fake = FakeWin32({1: ("Projector - Preview", True, 1184, 661, 0, 0)})
+    _install(monkeypatch, fake)
+    ok, said = hud.snap_projector()
+    assert ok
+    assert "cover" in said, "the message must say why it is in front"
+    assert fake.topmost, "the projector was resized but left where it could be buried"
