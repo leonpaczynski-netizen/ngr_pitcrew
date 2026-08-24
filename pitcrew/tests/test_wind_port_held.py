@@ -206,3 +206,137 @@ def test_a_handle_without_cancel_is_still_closed():
 
     WindLink._close_handle(WindLink("COM5"), _Handle())
     assert closed == [True]
+
+
+# ---------------------------------------------------------------------------
+# The fans, again - 24 Aug 2026
+#
+#     14:04:40  wind simulator ready on COM5
+#     14:07:20  Lost the wind simulator on COM5: Write timeout
+#     14:07:21  closing COM5 did not return within 1.0s
+#     14:07:22  COM5 cannot be reopened because this app is still holding it
+#
+# Two minutes forty into the first of four back-to-back test stints, and the
+# fans stayed off for the rest of the afternoon. The cancel-before-close fix
+# was already in - it did not get the port back. So the link must stop being
+# dropped for a single timeout in the first place: a fan value is idempotent
+# and resent every 250 ms against a 1000 ms deadman, and nothing about the
+# next frame is worse for the last one having been abandoned.
+# ---------------------------------------------------------------------------
+
+class _Handle:
+    """A port that refuses writes for a while and then takes them again."""
+
+    def __init__(self, refusals: int) -> None:
+        self.refusals = refusals
+        self.written: list[bytes] = []
+        self.purges = 0
+        self.cancels = 0
+        self.is_open = True
+        self.in_waiting = 0
+
+    def write(self, data: bytes) -> None:
+        import serial
+        if self.refusals > 0:
+            self.refusals -= 1
+            raise serial.SerialTimeoutException("Write timeout")
+        self.written.append(data)
+
+    def read(self, n: int = 1) -> bytes:
+        from pitcrew.rig import arq
+        return bytes([arq.REPLY_ACK, 0]) [:n]
+
+    def reset_output_buffer(self) -> None:
+        self.purges += 1
+
+    def reset_input_buffer(self) -> None:
+        pass
+
+    def cancel_write(self) -> None:
+        self.cancels += 1
+
+    def close(self) -> None:
+        self.is_open = False
+
+
+def _link(handle):
+    from pitcrew.rig.wind import WindLink
+    link = WindLink('COM5')
+    link._serial = handle
+    return link
+
+
+def test_one_write_timeout_is_ridden_out_rather_than_ending_the_link():
+    handle = _Handle(refusals=1)
+    link = _link(handle)
+
+    assert link.send((0, 0, 0, 0)) is True
+    assert link.write_timeouts == 1
+    assert link.consecutive_write_timeouts == 1
+    # The frame that stuck was cancelled and the buffer purged, or the next
+    # write inherits it.
+    assert handle.purges >= 1 and handle.cancels >= 1
+
+
+def test_the_stuck_write_is_forgotten_once_a_frame_gets_through():
+    handle = _Handle(refusals=1)
+    link = _link(handle)
+
+    link.send((0, 0, 0, 0))
+    assert link.send((0, 0, 0, 0)) is True
+    assert link.consecutive_write_timeouts == 0
+    assert link.write_timeouts == 1
+    assert len(handle.written) == 1
+
+
+def test_a_run_of_timeouts_still_gives_up():
+    """Riding one out is right; riding out a device that has gone is not."""
+    import pytest
+    from pitcrew.rig.wind import WRITE_TIMEOUT_LIMIT
+
+    handle = _Handle(refusals=WRITE_TIMEOUT_LIMIT + 5)
+    link = _link(handle)
+
+    for _ in range(WRITE_TIMEOUT_LIMIT - 1):
+        assert link.send((0, 0, 0, 0)) is True
+    with pytest.raises(Exception):
+        link.send((0, 0, 0, 0))
+
+
+def test_a_link_that_has_really_gone_is_not_ridden_out():
+    """Only a write timeout is survivable. A dead port is still dead."""
+    import pytest
+    import serial
+
+    class _Gone(_Handle):
+        def write(self, data: bytes) -> None:
+            raise serial.SerialException("ClearCommError failed")
+
+    link = _link(_Gone(refusals=0))
+    with pytest.raises(serial.SerialException):
+        link.send((0, 0, 0, 0))
+    assert link.write_timeouts == 0
+
+
+def test_the_output_buffer_is_purged_before_the_close():
+    """`CancelIoEx` alone did not get COM5 back on 24 Aug. PurgeComm is the
+    documented way to abandon a write stuck in the driver, and it goes first."""
+    order: list[str] = []
+
+    class _Recorder(_Handle):
+        def reset_output_buffer(self) -> None:
+            order.append('purge')
+
+        def cancel_write(self) -> None:
+            order.append('cancel_write')
+
+        def cancel_read(self) -> None:
+            order.append('cancel_read')
+
+        def close(self) -> None:
+            order.append('close')
+
+    link = _link(_Recorder(refusals=0))
+    link._close_handle(link._serial)
+    assert order[0] == 'purge'
+    assert order[-1] == 'close'

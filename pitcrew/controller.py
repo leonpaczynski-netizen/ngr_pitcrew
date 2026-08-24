@@ -3676,10 +3676,11 @@ class PitCrewController(QObject):
             since = ("" if state.last_drop_at is None else
                      f" ({_monotonic() - state.last_drop_at:.0f}s ago)")
             log("wind").info(
-                "frames %d · resyncs %d · stale %d · failures %d · "
-                "drops %d%s · level %.2f · connected %s",
+                "frames %d · resyncs %d · stale %d · timeouts %d · "
+                "failures %d · drops %d%s · level %.2f · connected %s",
                 state.frames_sent, state.resyncs, state.stale_bytes,
-                state.write_failures, state.disconnects, since,
+                state.write_timeouts, state.write_failures,
+                state.disconnects, since,
                 self.bridge.wind_curve.level, state.connected)
 
     def _report_health(self) -> None:

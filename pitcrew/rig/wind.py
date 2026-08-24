@@ -123,6 +123,27 @@ CLOSE_TIMEOUT_S = 1.0
 # be, and still comfortably longer than a single late reply.
 UNANSWERED_LIMIT = 4
 
+# **How many write timeouts in a row before the link is given up on.**
+#
+# Measured, and it is the whole of the fans defect on 24 Aug 2026. A single
+# `Write timeout` from `handle.write` was treated as a dead link, so the layer
+# tore the port down - and the teardown is the part that cannot be recovered
+# from: the close overran its bound, this app went on holding COM5, and the
+# fans were off for the rest of the day. Seven such losses since 22 Aug, and
+# only two of them ever reopened.
+#
+# A dropped fan frame is not worth that. The value is idempotent and resent
+# 250 ms later, and the firmware's own 1000 ms deadman is the only thing that
+# has to be beaten. So a timeout is now a hiccup: cancel what is stuck, purge
+# the output buffer, count it, and send the next one.
+#
+# Twenty frames is five seconds. Long enough to ride out a USB stall that
+# heals - the two that did reopened inside a fifth of a second - and short
+# enough that a board which is genuinely gone is rebuilt while the session it
+# belongs to is still running. Past that the fans have been dead for four
+# seconds anyway and the port is worth more than the handle.
+WRITE_TIMEOUT_LIMIT = 20
+
 # This device declares four, though only two fans are wired. All four bytes go
 # every time: the firmware reads exactly `motorCount()` of them with no
 # framing, so a short write leaves it waiting mid-command.
@@ -176,6 +197,11 @@ class WindState:
     last_values: tuple[int, ...] = field(default_factory=tuple)
     frames_sent: int = 0
     write_failures: int = 0
+    # Writes that timed out and were ridden out rather than treated as a
+    # dead link. Reported separately from `write_failures`, which counts the
+    # ones that ended the link - the difference between them is the whole of
+    # the 24 Aug fix.
+    write_timeouts: int = 0
     resyncs: int = 0
     stale_bytes: int = 0
     error: str | None = None
@@ -226,6 +252,23 @@ def find_port() -> str | None:
     return candidates[0][1]
 
 
+def _is_write_timeout(exc: BaseException) -> bool:
+    """Is this the write that did not complete, or a link that has gone?
+
+    pyserial raises `SerialTimeoutException` for the first and plain
+    `SerialException` (or `OSError`) for the second, and only the first is
+    survivable - a device that has been unplugged does not start accepting
+    bytes again because it was asked twice. Matched on the class rather than
+    the message, with the import inside the function so that a machine
+    without pyserial still imports this module.
+    """
+    try:
+        import serial
+    except ImportError:                                     # pragma: no cover
+        return False
+    return isinstance(exc, serial.SerialTimeoutException)
+
+
 class WindLink:
     """One serial connection, owned by one thread.
 
@@ -258,6 +301,12 @@ class WindLink:
         # Bytes thrown away as stale. Non-zero means a reply arrived late or
         # unread, which is the shape of the fault that stopped the fans twice.
         self.stale_bytes = 0
+        # Writes that did not complete inside `WRITE_TIMEOUT_S`, in total and
+        # in a row. The run is what decides whether the link is dropped; the
+        # total is what says afterwards whether a session was riding out
+        # stalls all the way through or met exactly one.
+        self.write_timeouts = 0
+        self.consecutive_write_timeouts = 0
 
     def open(self, settle: bool = True) -> None:
         """Open without resetting the board into a full-speed blast.
@@ -399,13 +448,20 @@ class WindLink:
         device that has been surprise-removed can fail either one, and getting
         as far as `close()` still matters.
         """
-        for cancel in ("cancel_write", "cancel_read"):
+        # **Purge first, then cancel.** `reset_output_buffer` is
+        # `PurgeComm(PURGE_TXABORT | PURGE_TXCLEAR)`, which is the documented
+        # way to abandon a write that is stuck in the driver; `CancelIoEx`
+        # only reaches I/O this process issued on this handle. On 24 Aug 2026
+        # the cancels alone were not enough - the close still overran its
+        # bound and COM5 stayed held - so both are attempted, cheapest and
+        # most specific first.
+        for step in ("reset_output_buffer", "cancel_write", "cancel_read"):
             try:
-                method = getattr(handle, cancel, None)
+                method = getattr(handle, step, None)
                 if method is not None:
                     method()
             except Exception as exc:                        # noqa: BLE001
-                log("wind").debug("%s on %s raised: %s", cancel, self.port, exc)
+                log("wind").debug("%s on %s raised: %s", step, self.port, exc)
         try:
             handle.close()
         except Exception as exc:                            # noqa: BLE001
@@ -454,6 +510,30 @@ class WindLink:
         """
         frame = arq.build_frame(arq.BROADCAST_ID, payload, self.crc)
         handle.write(frame)
+
+    def _abandon_stuck_write(self) -> None:
+        """Throw away a frame the driver would not take, and clear the way.
+
+        `WRITE_TIMEOUT_S` returns to the caller **without cancelling the
+        overlapped write it gave up on** - the same pyserial behaviour that
+        made `close` hang. Left in flight it is still there when the next
+        frame is written, so one stall becomes every frame afterwards.
+
+        Purge first for the same reason as `_close_handle`, and the input
+        buffer too: whatever the device may yet say about the frame that never
+        arrived is not an answer to the next one.
+        """
+        handle = self._serial
+        if handle is None:
+            return
+        for step in ("reset_output_buffer", "cancel_write",
+                     "reset_input_buffer"):
+            try:
+                method = getattr(handle, step, None)
+                if method is not None:
+                    method()
+            except Exception as exc:                        # noqa: BLE001
+                log("wind").debug("%s on %s raised: %s", step, self.port, exc)
 
     def _read_reply(self) -> arq.Reply | None:
         """One reply, read to its own length and no further.
@@ -569,7 +649,26 @@ class WindLink:
         stale = self._drain()
         if stale:
             self.stale_bytes += stale
-        self._write(arq.motors_payload(list(values)))
+        try:
+            self._write(arq.motors_payload(list(values)))
+        except Exception as exc:                            # noqa: BLE001
+            if not _is_write_timeout(exc):
+                raise
+            self.write_timeouts += 1
+            self.consecutive_write_timeouts += 1
+            self._abandon_stuck_write()
+            if self.consecutive_write_timeouts >= WRITE_TIMEOUT_LIMIT:
+                raise
+            log("wind").info(
+                "%s did not accept a frame within %.2fs (%d in a row, %d "
+                "this session) - cancelled and carrying on; the link is kept.",
+                self.port, WRITE_TIMEOUT_S, self.consecutive_write_timeouts,
+                self.write_timeouts)
+            # No frame went out, so there is no reply to wait for. Report the
+            # link as alive: this is a hiccup, and the next frame is 250 ms
+            # away against a 1000 ms deadman.
+            return True
+        self.consecutive_write_timeouts = 0
         reply = self._read_reply()
         if reply is None:
             # Silence is not yet a failure. The device answers within a
@@ -815,6 +914,7 @@ class WindSim:
             return False
         self.state.resyncs = link.resyncs
         self.state.stale_bytes = link.stale_bytes
+        self.state.write_timeouts = link.write_timeouts
         self.state.frames_sent += 1
         self.state.last_values = values
         return True
