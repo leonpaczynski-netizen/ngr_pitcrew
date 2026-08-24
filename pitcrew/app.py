@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 from pathlib import Path
 
@@ -67,9 +68,32 @@ ICON = Path(__file__).resolve().parent.parent / "pitcrew.ico"
 APP_ID = "NextGearRacing.PitCrew"
 
 
-# Held for the life of the process. A named mutex is released by Windows when
-# the process ends, however it ends - including a kill - so it cannot be left
-# stale by a crash the way a lock file can.
+# Held for the life of the process, and **released on the way out by
+# `_release_sole_instance`.**
+#
+# The sentence that used to be here - "a named mutex is released by Windows
+# when the process ends, however it ends - including a kill - so it cannot be
+# left stale by a crash the way a lock file can" - was the defect, written
+# down as a reassurance. It assumes the process can end.
+#
+# **Measured, three times in two days.** The CH340 wind controller stops
+# answering, `CloseHandle` on its port blocks inside the driver and never
+# returns, and the process is left with one thread parked in a kernel call
+# that nothing can retire. 24 Aug 2026, PID 15644: one thread, 0.000 seconds
+# of CPU over six, 301 handles, and it **survived `TerminateProcess`**. The
+# mutex outlived it, so the guard - added 22 Aug - refused every launch after
+# it. He was locked out at 09:54, 12:05, 12:13 and 12:42.
+#
+# The guard turned a survivable session into an unrecoverable one: on 22 Aug,
+# *before* it existed, the app started perfectly well alongside a wedge of
+# exactly this shape at 20:42 and again at 20:53. It cost him the fans and a
+# UDP bind, not the evening.
+#
+# `main` completed on every occurrence - the log's last line is "Pit Crew
+# exited with 0" - so closing this handle there is enough to fix the observed
+# failure. There is exactly one handle to it: `CreateMutexW` is called once,
+# nothing in this package spawns a child, and NULL security attributes are
+# not inheritable. Closing it drops the refcount to zero and the name goes.
 _INSTANCE_MUTEX = None
 
 # The mutex's name, as a module constant so the tests can claim a private one.
@@ -80,11 +104,256 @@ _INSTANCE_MUTEX = None
 # desktops on one machine are two rigs.
 _INSTANCE_NAME = "Local\\" + APP_ID
 
+# Who is holding it. **The mutex says whether somebody is there; this says
+# who, and it is only ever used to decide what to SAY and whether refusing is
+# honest.** A missing or unreadable record never blocks a launch - it drops
+# us to "cannot tell", which starts.
+#
+# Deliberately not the mechanism. A pid file alone is exactly the stale-lock
+# problem the mutex avoids: it survives a crash and a reboot. The mutex stays
+# the authority on existence; this is a hint attached to it, checked against
+# the process's own creation time so a recycled pid cannot impersonate it.
+_INSTANCE_RECORD = "pitcrew.claim"
+# How long to watch a holder's processor time before believing it is wedged.
+# A live Pit Crew is never still: the wind link writes four times a second and
+# the transducer renders continuously, so any live copy moves this counter
+# well inside the window. Long enough to be sure, short enough that a driver
+# who double-clicked twice does not think the app has hung.
+_WEDGE_SAMPLE_S = 0.7
 
-def _claim_sole_instance() -> str | None:
-    """Refuse to start if another Pit Crew already owns the rig.
 
-    **Two copies fighting over one rig is how a bad session became an
+def _forced() -> bool:
+    """Has the driver said start regardless?
+
+    **Two doors, because the environment variable is not one he can use.**
+    `PITCREW_ALLOW_MULTIPLE=1` was written for a developer running a second
+    copy against another database on purpose; at 19:55 on a race night, with
+    the app refusing to open, setting an environment variable is not a
+    recovery. `--force` is the same override reachable from a shortcut, which
+    is what `tools/install_shortcut.py` now makes one of.
+    """
+    return (os.environ.get("PITCREW_ALLOW_MULTIPLE") == "1"
+            or "--force" in sys.argv[1:])
+
+
+def _record_path():
+    return diagnostics.log_dir() / _INSTANCE_RECORD
+
+
+def _process_facts(pid: int):
+    """`(created_ticks, cpu_seconds)` for a live pid, or None.
+
+    `created_ticks` identifies the process beyond its pid - Windows reuses
+    pids, and a fresh process wearing a dead one's number must not be able to
+    impersonate it. `cpu_seconds` is kernel plus user, which is the only
+    number that separates a copy that is working from one that is parked in a
+    driver call it will never return from.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL,
+                                         wintypes.DWORD)
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                      False, int(pid))
+        if not handle:
+            return None
+        try:
+            created = wintypes.FILETIME()
+            exited = wintypes.FILETIME()
+            in_kernel = wintypes.FILETIME()
+            in_user = wintypes.FILETIME()
+            ok = kernel32.GetProcessTimes(
+                handle, ctypes.byref(created), ctypes.byref(exited),
+                ctypes.byref(in_kernel), ctypes.byref(in_user))
+            if not ok:
+                return None
+
+            def _ticks(value) -> int:
+                return (value.dwHighDateTime << 32) | value.dwLowDateTime
+
+            # 100 ns units throughout, which is what FILETIME counts in.
+            spent = (_ticks(in_kernel) + _ticks(in_user)) / 1e7
+            return _ticks(created), spent
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:                                        # noqa: BLE001
+        return None                                          # not Windows
+
+
+def _write_claim_record() -> None:
+    """Say who took the claim. Never raises - this is a hint, not the lock."""
+    try:
+        facts = _process_facts(os.getpid())
+        created = facts[0] if facts else 0
+        path = _record_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{os.getpid()} {created}\n", encoding="utf-8")
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
+def _read_claim_record():
+    """`(pid, created_ticks)` of the holder, or None if we cannot tell.
+
+    None is the answer that starts the app, so every failure here - missing
+    file, half-written line, a pid that has since been reused - has to arrive
+    as None rather than as a guess.
+    """
+    try:
+        pid_text, created_text = _record_path().read_text(
+            encoding="utf-8").split()
+        pid, created = int(pid_text), int(created_text)
+    except Exception:                                        # noqa: BLE001
+        return None
+    if pid == os.getpid():
+        return None
+    facts = _process_facts(pid)
+    if facts is None:
+        return None                                          # gone already
+    if created and facts[0] != created:
+        return None                                          # a recycled pid
+    return pid, facts[0]
+
+
+def _thread_count(pid: int) -> int | None:
+    """How many threads the process still has, or None if we cannot look.
+
+    **The second discriminator, and it is the one that makes the verdict
+    safe.** Processor time alone is not enough: `GetProcessTimes` has about
+    15 ms of resolution, and a live copy sitting in the menus with the
+    haptics and the wind both switched off could plausibly burn less than
+    that inside the sample window and be mistaken for a corpse. Getting that
+    wrong means two live copies, which is the 22 Aug transducer.
+
+    A running Pit Crew has many threads - Qt, the listener, the wind link,
+    the transducer, the gauge sampler, push-to-talk. A wedged one has the
+    single un-retirable thread left parked in the driver: PID 15644 was
+    measured at exactly one.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        TH32CS_SNAPTHREAD = 0x00000004
+        INVALID = wintypes.HANDLE(-1).value
+
+        class THREADENTRY32(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD),
+                        ("cntUsage", wintypes.DWORD),
+                        ("th32ThreadID", wintypes.DWORD),
+                        ("th32OwnerProcessID", wintypes.DWORD),
+                        ("tpBasePri", ctypes.c_long),
+                        ("tpDeltaPri", ctypes.c_long),
+                        ("dwFlags", wintypes.DWORD)]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+        if snapshot == INVALID or not snapshot:
+            return None
+        try:
+            entry = THREADENTRY32()
+            entry.dwSize = ctypes.sizeof(THREADENTRY32)
+            if not kernel32.Thread32First(snapshot, ctypes.byref(entry)):
+                return None
+            seen = 0
+            while True:
+                if entry.th32OwnerProcessID == pid:
+                    seen += 1
+                if not kernel32.Thread32Next(snapshot, ctypes.byref(entry)):
+                    break
+            return seen
+        finally:
+            kernel32.CloseHandle(snapshot)
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+# A running Pit Crew is never this thin. Qt alone brings more than this before
+# a single device is opened; the wedge that started all of this had one.
+_WEDGED_THREADS = 2
+
+
+def _holder_is_wedged(pid: int) -> bool:
+    """Has this process stopped running altogether?
+
+    **Both signals must agree, and the bias is deliberate.** Any processor
+    time at all, or a normal complement of threads, means a live copy and a
+    refusal - because the thing on the other side of a wrong answer here is
+    the 22 Aug transducer. Not being able to look at all is a different
+    question, answered by the caller, and it starts the app.
+    """
+    first = _process_facts(pid)
+    if first is None:
+        return True                                          # it just went
+    time.sleep(_WEDGE_SAMPLE_S)
+    second = _process_facts(pid)
+    if second is None:
+        return True
+    if second[1] > first[1]:
+        return False                                         # it is working
+    threads = _thread_count(pid)
+    if threads is None:
+        # Still, but we cannot count its threads. Treat stillness alone as
+        # too weak to act on: refusing is recoverable by closing a window,
+        # and the override shortcut exists for the case where it is not.
+        return False
+    return threads <= _WEDGED_THREADS
+
+
+def _clear_claim_record() -> None:
+    try:
+        _record_path().unlink(missing_ok=True)
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
+def _release_sole_instance() -> None:
+    """Give the name back, rather than trusting the process to end.
+
+    Called from a `finally` around `app.exec`, which is the one place that
+    runs on every exit path this app has ever actually taken - including the
+    three wedges, all of which reached the end of `main`.
+    """
+    global _INSTANCE_MUTEX
+    handle, _INSTANCE_MUTEX = _INSTANCE_MUTEX, None
+    _clear_claim_record()
+    if not handle:
+        return
+    try:
+        import ctypes
+
+        # **`CloseHandle` alone, and no `ReleaseMutex`.** The mutex is created
+        # with `bInitialOwner=False` and never waited on, so no thread has
+        # ever owned it - confirmed against the live wedge on 24 Aug, where
+        # `WaitForSingleObject` returned WAIT_OBJECT_0 rather than
+        # WAIT_ABANDONED. `ReleaseMutex` on a mutex you do not own fails with
+        # ERROR_NOT_OWNER and would achieve nothing but a misleading line in
+        # a debugger.
+        ctypes.WinDLL("kernel32").CloseHandle(handle)
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
+class Claim:
+    """The verdict on starting, and the sentence that goes with it."""
+
+    def __init__(self, allowed: bool, message: str = "",
+                 holder: int | None = None) -> None:
+        self.allowed = allowed
+        self.message = message
+        self.holder = holder
+
+
+def _claim_sole_instance() -> Claim:
+    """Decide whether this copy may start, and say why either way.
+
+    **Two live copies fighting over one rig is how a bad session became an
     unrecoverable one.** 22 Aug 2026: an instance was left running, a second
     was started, and between them they held COM5 against each other, rendered
     two haptic streams into the same endpoint until it degraded, and thrashed
@@ -92,23 +361,42 @@ def _claim_sole_instance() -> str | None:
     and took the process down. The wind, the transducer and the microphone
     are single-owner devices; nothing about this app is safe to run twice.
 
-    Returns None when this process is the only one, or a sentence to show and
-    log when it is not. Never raises - a machine where the mutex cannot be
-    created is a machine that should still be able to race.
+    **But existence is not liveness, and treating it as such cost four
+    launches on 24 Aug.** A process wedged in a driver call holds the name
+    for ever - it cannot be killed, so Windows never takes it back - and the
+    old guard read that as a running copy and refused. It is not a running
+    copy. It has no threads, renders nothing and answers nothing, and a
+    second instance alongside it gets the whole rig bar the port it leaked.
+    Measured on the day: both UDP ports free, only COM5 held.
 
-    `PITCREW_ALLOW_MULTIPLE=1` overrides, for a developer running a second
-    copy against a different database on purpose.
+    So the question asked here is "is there a copy that can still touch the
+    hardware", and it is answered from the holder's processor time. Refusing
+    needs POSITIVE evidence of a live copy. Everything else starts:
+
+    * no claim record, unreadable, a pid that has gone, a recycled pid, not
+      Windows -> start. Cannot tell is not the same as yes, and this is
+      race-night software: failing to start is the worst outcome there is.
+    * the holder is burning processor time -> refuse. This is 22 Aug, and
+      it is the one verdict that does not bend.
+    * the holder has stopped altogether -> start, and say what it is holding.
+
+    Never raises. A machine where none of this works is a machine that should
+    still be able to race.
+
+    `PITCREW_ALLOW_MULTIPLE=1` overrides the lot, for a developer running a
+    second copy against a different database on purpose - and for the driver,
+    through the "force start" shortcut, when everything else has gone wrong.
     """
     global _INSTANCE_MUTEX
-    if os.environ.get("PITCREW_ALLOW_MULTIPLE") == "1":
-        return None
+    if _forced():
+        return Claim(True)
     if _INSTANCE_MUTEX is not None:
         # **We already hold it, so we are not our own second instance.**
         # `CreateMutexW` reports ERROR_ALREADY_EXISTS for a name that exists
         # whoever created it - including this process - so asking twice
         # without this would have the app refuse itself. `main` asks once
         # today; a restart-in-place or a test would not.
-        return None
+        return Claim(True)
     try:
         import ctypes
         from ctypes import wintypes
@@ -120,19 +408,40 @@ def _claim_sole_instance() -> str | None:
                                           wintypes.LPCWSTR)
         handle = kernel32.CreateMutexW(None, False, _INSTANCE_NAME)
         if not handle:
-            return None
+            return Claim(True)
         _INSTANCE_MUTEX = handle
-        if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
-            return (
-                "Pit Crew is already running. Two copies cannot share the "
-                "rig - they hold the wind controller against each other and "
-                "render two haptic streams into one transducer, which is "
-                "what breaks it. Close the other window and start again. If "
-                "there is no other window, a previous copy is stuck and the "
-                "machine needs restarting.")
+        if ctypes.get_last_error() != ERROR_ALREADY_EXISTS:
+            _write_claim_record()
+            return Claim(True)
     except Exception:                            # noqa: BLE001
-        return None                              # not Windows, or too old
-    return None
+        return Claim(True)                       # not Windows, or too old
+
+    known = _read_claim_record()
+    if known is None:
+        # The name is taken and we cannot say by what. Start, and leave a
+        # line in the log saying so, because this is also what a claim record
+        # deleted by hand looks like.
+        return Claim(True, "Something already holds the Pit Crew rig claim "
+                           "and it left no record of itself. Starting anyway.")
+    pid = known[0]
+    if not _holder_is_wedged(pid):
+        return Claim(False, (
+            f"Pit Crew is already running - process {pid}, and it is "
+            f"answering. Two copies cannot share the rig: they hold the wind "
+            f"controller against each other and render two haptic streams "
+            f"into one transducer, which is what breaks it. Switch to the "
+            f"other Pit Crew window. This copy will not start."), pid)
+    _write_claim_record()
+    return Claim(True, (
+        f"The previous Pit Crew never finished closing. Process {pid} still "
+        f"exists but has stopped running entirely - Windows cannot end it, "
+        f"because it is stuck releasing the wind controller. This copy has "
+        f"started anyway.\n\nThe fans will not work this session: that "
+        f"process still holds the serial port. Everything else - telemetry, "
+        f"the tyre gauge, the engineer, push-to-talk and the haptics - is "
+        f"unaffected.\n\nWorth trying: unplug the wind controller's USB "
+        f"and plug it back in. That may free the port and let the stuck "
+        f"process finally end."), pid)
 
 
 def _claim_taskbar_identity() -> None:
@@ -446,8 +755,11 @@ def main() -> int:
     # at all behind, which is exactly what happened the first time it died.
     log_path = diagnostics.install()
     diagnostics.install_qt_handler()
-    diagnostics.banner(version=APP_VERSION, database=DEFAULT_DB_PATH,
-                       log=log_path)
+    # **The pid, because every wedge investigation so far has begun by hunting
+    # it by hand.** When a copy of this app has to be diagnosed after the
+    # fact, the first question is always which process it was.
+    diagnostics.banner(pid=os.getpid(), version=APP_VERSION,
+                       database=DEFAULT_DB_PATH, log=log_path)
 
     _claim_taskbar_identity()
     app = QApplication(sys.argv)
@@ -455,20 +767,35 @@ def main() -> int:
     # QApplication exists so the refusal can be shown rather than only
     # logged - the shortcut runs this through pythonw, which has no console,
     # so a bare exit here would look exactly like the app failing to start.
-    taken = _claim_sole_instance()
-    if taken is not None:
-        diagnostics.log().error(taken)
+    claim = _claim_sole_instance()
+    if claim.message:
+        # Said either way. A copy that starts alongside a wedged one is in a
+        # degraded state the driver has to know about mid-race, and a copy
+        # that refuses has to say what to do instead.
+        diagnostics.log().error(claim.message)
+    if not claim.allowed:
         from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.warning(None, "Pit Crew is already running", taken)
+        QMessageBox.warning(None, "Pit Crew is already running", claim.message)
         return 0
     if ICON.exists():
         app.setWindowIcon(QIcon(str(ICON)))
     theme.apply(app)
 
-    store = Store(DEFAULT_DB_PATH)
-    window = PitCrewWindow(store)
-    window.show()
-    code = app.exec()
+    try:
+        store = Store(DEFAULT_DB_PATH)
+        window = PitCrewWindow(store)
+        window.show()
+        if claim.message:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(None, "The previous Pit Crew is stuck",
+                                claim.message)
+        code = app.exec()
+    finally:
+        # **The whole fix, and it belongs in a `finally`.** The old code let
+        # the process's death release the name, and the process cannot always
+        # die - see `_INSTANCE_MUTEX`. Every exit path this app has actually
+        # taken runs through here, including all three wedges.
+        _release_sole_instance()
     diagnostics.log().info("Pit Crew exited with %s", code)
     return code
 

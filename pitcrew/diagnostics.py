@@ -34,6 +34,8 @@ import threading
 from pathlib import Path
 
 LOG_DIR = Path("logs")
+# Set by `install`, read by `log_dir`. None until then.
+_ACTIVE_DIR: Path | None = None
 LOG_FILE = LOG_DIR / "pitcrew.log"
 # Native faults are written raw by faulthandler, which cannot use the logging
 # module - it runs inside a signal handler.
@@ -54,11 +56,12 @@ def log(name: str = "") -> logging.Logger:
 
 def install(*, level: int = logging.INFO, log_dir: Path | None = None) -> Path:
     """Start writing everything down. Safe to call more than once."""
-    global _installed, _fault_file
+    global _installed, _fault_file, _ACTIVE_DIR
     if _installed:
         return _resolve(log_dir) / LOG_FILE.name
 
     directory = _resolve(log_dir)
+    _ACTIVE_DIR = directory
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / LOG_FILE.name
 
@@ -91,6 +94,16 @@ def install(*, level: int = logging.INFO, log_dir: Path | None = None) -> Path:
 
 def _resolve(log_dir: Path | None) -> Path:
     return Path(log_dir) if log_dir is not None else LOG_DIR
+
+
+def log_dir() -> Path:
+    """Where this run is writing. The claim record goes here too.
+
+    Both are state about the run rather than about the driver's data, and a
+    test that redirects the log must be able to redirect the claim with it -
+    otherwise a suite run would step on the real app's record.
+    """
+    return _ACTIVE_DIR or LOG_DIR
 
 
 def banner(**facts) -> None:

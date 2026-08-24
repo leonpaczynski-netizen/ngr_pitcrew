@@ -60,22 +60,30 @@ def _pythonw() -> str:
     return str(candidate if candidate.exists() else sys.executable)
 
 
-def make_shortcut(folder: Path, icon: Path) -> Path:
+def make_shortcut(folder: Path, icon: Path, *, force: bool = False) -> Path:
     import win32com.client
 
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"{NAME}.lnk"
+    name = f"{NAME} (force start)" if force else NAME
+    path = folder / f"{name}.lnk"
     shell = win32com.client.Dispatch("WScript.Shell")
     link = shell.CreateShortCut(str(path))
     link.TargetPath = _pythonw()
-    link.Arguments = "-m pitcrew.app"
+    link.Arguments = "-m pitcrew.app --force" if force else "-m pitcrew.app"
     # Without this the app writes data/pitcrew.db and exports/ wherever the
     # shortcut happened to be launched from.
     link.WorkingDirectory = str(REPO)
     link.IconLocation = str(icon)
-    link.Description = "GT7 race engineering companion"
+    link.Description = (
+        "Start even if another copy holds the rig claim"
+        if force else "GT7 race engineering companion")
     link.save()
-    _tag_app_id(path)
+    if not force:
+        # **Only the ordinary shortcut is tagged.** The app id is what groups
+        # a pinned shortcut with the running window; giving both the same id
+        # would make the recovery shortcut disappear into the normal one on
+        # the taskbar, which is the one place it needs to be findable.
+        _tag_app_id(path)
     return path
 
 
@@ -106,6 +114,11 @@ def main() -> int:
     made = []
     desktop = Path(os.path.expanduser("~")) / "Desktop"
     made.append(make_shortcut(desktop, icon))
+    # **The way back in when the guard says no.** A copy of Pit Crew wedged in
+    # a driver call cannot be killed and holds its claim for ever; this starts
+    # anyway. Measured 24 Aug 2026: four refused launches, and the only
+    # recovery anyone had was rebooting the machine.
+    made.append(make_shortcut(desktop, icon, force=True))
 
     start = (Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows"
              / "Start Menu" / "Programs")
