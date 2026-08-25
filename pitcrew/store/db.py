@@ -568,6 +568,93 @@ class Store:
                  change.to_value, _now()))
             return int(cur.lastrowid)
 
+    def note_sheet_change(self, session_id: int) -> int:
+        """Record what changed on the car since the last session like this one.
+
+        **`setup_changes` had both ends built and no caller, and after 88
+        sessions it held zero rows.** The charter calls that the single biggest
+        gap in the system, because everything downstream of it is blocked:
+        every change is an experiment, a regression cannot be recognised
+        without knowing what moved, and setup history is not knowledge until a
+        change is tied to the run that tested it.
+
+        The caller was missing because the obvious one is impossible. The table
+        is written as *mid-session* changes, and of the 23 setup values the
+        only one the feed can see change mid-session is the gearbox - the other
+        22 have no channel at all. So the mid-session case needs a human to
+        type it and has no interface.
+
+        **The between-session case needs neither, and it is the one that
+        carries the experiment.** A session opens against a sheet; the last
+        session on this car and circuit opened against another; the difference
+        between them is exactly what this run is testing. Recorded at
+        `from_lap=1`, which is what the column means - from lap one of this
+        session, these values were different.
+
+        Idempotent: a session that already has rows is left alone, so opening
+        the same session twice cannot double the ledger.
+
+        Returns the number of rows written. Silent when there is nothing to
+        compare against - a first session on a car is not a change.
+        """
+        from pitcrew.setup.sheet import SetupChange
+
+        rows = self._query(
+            "SELECT s.setup_sheet_id, e.car_name FROM sessions s "
+            "JOIN events e ON e.id = s.event_id WHERE s.id = ?", (session_id,))
+        if not rows or not rows[0]["setup_sheet_id"]:
+            return 0
+        sheet_id, car_name = rows[0]["setup_sheet_id"], rows[0]["car_name"]
+        if self._query("SELECT 1 FROM setup_changes WHERE session_id = ? "
+                       "LIMIT 1", (session_id,)):
+            return 0
+
+        current = self.get_setup_sheet(sheet_id)
+        if current is None:
+            return 0
+        # **The same circuit, or it is not a comparison.** A sheet built for
+        # another track differs in every value that responds to the track, and
+        # calling that an experiment would fill the ledger with noise - the
+        # same error `tools/check_setup_sheets.py` was making one level up.
+        previous = self._query(
+            "SELECT sh.id FROM sessions s "
+            "JOIN events e ON e.id = s.event_id "
+            "JOIN setup_sheets sh ON sh.id = s.setup_sheet_id "
+            "WHERE s.id < ? AND e.car_name = ? AND sh.purpose = ? "
+            "AND sh.circuit_key IS ? AND sh.id != ? "
+            "ORDER BY s.id DESC LIMIT 1",
+            (session_id, car_name, current.purpose, current.circuit_key,
+             sheet_id))
+        if not previous:
+            return 0
+        before = self.get_setup_sheet(previous[0]["id"])
+        if before is None:
+            return 0
+
+        written = 0
+        for key in sorted(set(current.values) | set(before.values)):
+            was, now = before.values.get(key), current.values.get(key)
+            if was is None and now is None:
+                continue
+            if was is not None and now is not None and abs(was - now) <= 1e-9:
+                continue
+            try:
+                self.add_setup_change(
+                    session_id,
+                    SetupChange(from_lap=1, key=key,
+                                from_value=was, to_value=now))
+            except Exception:                          # noqa: BLE001
+                # A key outside the shared vocabulary is a sheet problem, not a
+                # reason to lose the rest of the ledger. `SetupChange.validate`
+                # has already refused it and said why.
+                continue
+            written += 1
+        if written:
+            log("store").info(
+                "session %s opens with %s value(s) changed from %r - filed as "
+                "this run's experiment", session_id, written, before.sheet_name)
+        return written
+
     def list_setup_changes(self, session_id: int) -> list:
         from pitcrew.setup.sheet import SetupChange
         rows = self._query(

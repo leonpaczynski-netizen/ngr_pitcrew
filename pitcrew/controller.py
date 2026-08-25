@@ -1928,6 +1928,14 @@ class PitCrewController(QObject):
             practice_intent=intent,
             game_version=self.settings.game_version)
         self.session_kind = "practice"
+        # **Every change is an experiment, and this is where it is filed.**
+        # The session that opens against a different sheet from the last one on
+        # this car and circuit IS the run that tests the difference. Recorded
+        # here rather than asked for later, because a ledger that depends on
+        # somebody remembering is the ledger that held zero rows for 88
+        # sessions. Silent and harmless when nothing changed.
+        self._note_sheet_change()
+
         # The rack is NOT cleared. Going out again adds to the session's
         # evidence; it does not replace it. Three runs at one circuit are one
         # body of evidence about one car.
@@ -2315,6 +2323,23 @@ class PitCrewController(QObject):
                 wear.get("rl"), wear.get("rr"), source=WEAR_HUD_VIDEO)
         except Exception as exc:                             # noqa: BLE001
             log("hud").warning("could not store lap %s wear: %s", lap_id, exc)
+
+    def _note_sheet_change(self) -> None:
+        """File this session's setup delta, and never let it cost a session.
+
+        The ledger is worth having and it is worth nothing at all compared with
+        the session opening. Every failure here is logged and swallowed - see
+        `Store.note_sheet_change` for what it records and why the caller was
+        missing for so long.
+        """
+        if self.session_id is None:
+            return
+        try:
+            self.store.note_sheet_change(self.session_id)
+        except Exception as exc:                            # noqa: BLE001
+            log("store").warning(
+                "could not file this session's setup delta: %s: %s",
+                type(exc).__name__, exc)
 
     def _new_hud_session(self) -> None:
         """Tell the gauge reader a new session has started.
@@ -4120,6 +4145,14 @@ class PitCrewController(QObject):
             event["id"], "race", setup_sheet_id=sheet.id if sheet else None,
             rehearsal=rehearsal, game_version=self.settings.game_version)
         self.session_kind = "race"
+        # **Every change is an experiment, and this is where it is filed.**
+        # The session that opens against a different sheet from the last one on
+        # this car and circuit IS the run that tests the difference. Recorded
+        # here rather than asked for later, because a ledger that depends on
+        # somebody remembering is the ledger that held zero rows for 88
+        # sessions. Silent and harmless when nothing changed.
+        self._note_sheet_change()
+
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
 
