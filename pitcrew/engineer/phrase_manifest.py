@@ -38,6 +38,7 @@ from functools import lru_cache
 
 from pitcrew.engineer import gate
 from pitcrew.engineer.intents import (
+    GAP,
     ACCEPT,
     BOX_FUEL,
     BOX_WHAT,
@@ -132,6 +133,7 @@ def fixed_lines() -> tuple[str, ...]:
         _text(BOX_WHAT, {}),                                 # no plan at all
         _text(BOX_WHAT, {"hasPlan": True}),                  # no tyre change
         _text(BOX_FUEL, {}),                                 # no fuel target
+        _text(GAP, {}),                                      # never answerable
         *rejection_lines(),
     ]
     return tuple(dict.fromkeys(lines))

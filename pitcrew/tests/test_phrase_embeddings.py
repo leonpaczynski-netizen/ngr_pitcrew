@@ -244,3 +244,54 @@ def test_the_key_is_stable_when_the_model_directory_is_touched(tmp_path,
     monkeypatch.setattr(SemanticMatcher, "_model_source",
                         staticmethod(lambda: (str(tmp_path / "other"), 0)))
     assert SemanticMatcher(PHRASES, model=PathlessModel())._cache_key() != before
+
+
+# --- the vocabulary the driver asked to be broadened -------------------------
+
+
+def test_an_unanswerable_question_gets_a_reason_rather_than_say_again():
+    """`gap` exists only to refuse, and that is worth an intent.
+
+    The feed carries this car and nothing else - no opponent position, no gap,
+    no closing speed - so "how far behind is he" has no answer and never will.
+    Without an intent it did not fall silent, which would at least be honest:
+    it reached `position` and came back "you're fifth", answering a question he
+    did not ask.
+    """
+    from pitcrew.engineer.intents import GAP, answer
+
+    reply = answer(GAP, {})
+    assert reply.answered is False
+    assert "other cars" in reply.text.lower()
+
+
+def test_the_permanent_refusal_is_pre_rendered():
+    """It is spoken often and it never changes, so it must not synthesise live.
+
+    Every rejection line is pre-rendered for the same reason: a pause at the
+    moment the driver has just failed to get an answer lands on the one
+    exchange that has already gone wrong.
+    """
+    from pitcrew.engineer import phrase_manifest
+    from pitcrew.engineer.intents import GAP, answer
+
+    assert answer(GAP, {}).text in phrase_manifest.fixed_lines()
+
+
+def test_no_phrase_belongs_to_two_intents():
+    """A phrase in two lists is a coin toss at match time.
+
+    The matcher keeps one embedding per phrase, keyed by the phrase, so a
+    duplicate does not tie - one intent silently wins and which one depends on
+    dictionary order.
+    """
+    from pitcrew.engineer.intents import PHRASES
+
+    seen: dict[str, str] = {}
+    clashes = []
+    for intent, phrases in PHRASES.items():
+        for phrase in phrases:
+            if phrase in seen and seen[phrase] != intent:
+                clashes.append((phrase, seen[phrase], intent))
+            seen[phrase] = intent
+    assert not clashes, f"phrases claimed by two intents: {clashes}"

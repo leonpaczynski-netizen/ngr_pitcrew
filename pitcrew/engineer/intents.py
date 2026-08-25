@@ -54,6 +54,20 @@ ON_PLAN = "on-plan"
 TYRES = "tyres"
 # "What's my best lap" matched LAPS_LEFT, which answered "twelve to go".
 PACE = "pace"
+# **An intent whose only job is to refuse by name, and it earns its place.**
+# The feed carries this car and nothing else - no opponent position, no gap, no
+# closing speed (§3.2/§3.3) - so "how far behind is he" has no answer and never
+# will from telemetry. Without an intent it did not fall silent, which would at
+# least be honest: it reached `position` and came back "you're fifth", which
+# answers a question he did not ask, or it reached a report intent and was
+# written into the ledger as a handling complaint.
+#
+# `intents.py`'s own rule is that an answer the app does not have is a refusal
+# and never a guess, and that a refusal is useful - "I don't have fuel yet"
+# lets him stop asking and manage it himself. A refusal that names its reason
+# is the same thing done properly: he learns once that the app cannot see other
+# cars, and never spends another press on it.
+GAP = "gap"
 
 # --- the REPORT family: he tells the engineer, rather than asking it ---------
 #
@@ -107,36 +121,69 @@ PHRASES: dict[str, tuple[str, ...]] = {
            "how's my fuel", "hows my fuel", "how is my fuel",
            "how much fuel have i got", "give me a fuel update",
            "what's my fuel", "where's my fuel", "fuel update",
-           "have i got enough fuel", "am i ok on fuel"),
+           "have i got enough fuel", "am i ok on fuel",
+           # **Measured: "am i going to run out" reached `pace` at 0.340.**
+           # Every phrase above names fuel as a noun; the way he actually
+           # worries about it is as an outcome - running out, making it,
+           # being short - and none of those words were anywhere near this
+           # intent.
+           "will i make it on fuel", "can i make the end on fuel",
+           "am i short on fuel", "will the fuel last",
+           "do i have enough to finish", "is fuel going to be tight",
+           "how many laps of fuel do i have"),
     POSITION: ("position", "where am i", "what position",
                "what position am i in", "where am i running",
                # Measured: reached `laps-left` without this, and it predates
                # the report family - the two intents have always been close.
-               "where am i in the race", "what place am i in"),
+               "where am i in the race", "what place am i in",
+               # Measured: "am i still in the points" reached `on-plan` at
+               # 0.352 - "am i still..." is the shape of a status question and
+               # `on-plan` owned that shape alone.
+               "am i still in the top ten", "am i still in the points",
+               "have i gained any places", "did i lose a place",
+               "how many cars are ahead of me", "what place am i running"),
     LAPS_LEFT: ("laps left", "how long", "how many laps", "time left",
                 "laps remaining", "to go", "how many laps left",
                 "how many laps to go", "how much longer",
                 "how many laps are left", "what lap am i on",
-                "what lap is this", "how far into the race are we"),
+                "what lap is this", "how far into the race are we",
+                "how many more to go", "what's left to run",
+                "how many laps in this race", "how many have i got left"),
     BOX_WHEN: ("when do i box", "when box", "box when", "pit when",
                "when do i pit", "when am i boxing", "when am i stopping",
                "how far to the stop", "how many laps to the stop",
                "when's my stop", "whens my stop", "do i box this lap",
                "box this lap", "am i boxing soon", "when's the pit stop",
                "when do i come in", "what lap do i come in",
-               "do i come in soon", "am i coming in"),
+               "do i come in soon", "am i coming in",
+               "which lap is the stop", "how far away is the stop",
+               "is the stop soon", "am i due in", "what lap is my stop"),
     BOX_WHAT: ("what tyres", "which tyres", "what tires", "which compound",
                "what compound", "what tyres am i taking",
                "which tyres at the stop", "what am i fitting",
-               "what compound at the stop", "what's going on the car"),
+               "what compound at the stop", "what's going on the car",
+               # Measured: "what am i going onto" reached `plan` at 0.299.
+               # "what am i..." belonged to no intent here, and `plan` is the
+               # catch-all for a question about what happens next.
+               "what am i going on", "what am i changing to",
+               "what tyre goes on", "which compound am i getting",
+               "what rubber goes on", "what am i fitting at the stop"),
     BOX_FUEL: ("how much fuel do i take", "fuel to take", "how much to take",
                "fuel in the stop", "how much fuel at the stop",
                "how many litres do i take", "what's my fuel target",
-               "how much am i putting in"),
+               "how much am i putting in", "how much goes in",
+               "what's going in the tank", "how many litres at the stop"),
     PLAN: ("what's the plan", "whats the plan", "the plan", "strategy",
            "remind me of the plan", "what's the strategy",
            "run me through the plan", "tell me the plan",
-           "what are we doing", "what's my race plan"),
+           "what are we doing", "what's my race plan",
+           # **Measured: "run me through it again" reached `repeat` at 0.258
+           # and "what are we doing about the stop" reached `box-when` at
+           # 0.269.** The word "again" belonged entirely to `repeat`, and any
+           # mention of the stop pulled to `box-when`. Both are the plan.
+           "go through the plan again", "run the plan by me again",
+           "remind me what we're doing", "talk me through the strategy",
+           "what are we doing about the stop", "what's the whole plan"),
     ACCEPT: ("accept", "do it", "yes do it", "agreed", "copy that",
              "go ahead", "let's do it", "confirmed", "affirmative",
              "yeah do that"),
@@ -144,7 +191,12 @@ PHRASES: dict[str, tuple[str, ...]] = {
            "i'll stay out", "staying out", "leave it",
            "stick with the plan", "no change"),
     REPEAT: ("say again", "repeat", "again", "say that again",
-             "i missed that", "come again", "one more time"),
+             "i missed that", "come again", "one more time",
+             # Held apart from `plan` deliberately: `repeat` is about the last
+             # thing the engineer said, not about the strategy. These name the
+             # hearing rather than the content.
+             "i didn't hear you", "what did you say", "what was that",
+             "didn't catch that"),
     TYRES_RED: ("tyres are red", "tires are red", "tyres red", "tires red",
                 "gone red", "went red", "frame is red",
                 "the gauge has gone red", "tyres are in the red",
@@ -168,11 +220,33 @@ PHRASES: dict[str, tuple[str, ...]] = {
             "how are the fronts", "how are the rears",
             "how shot are the fronts", "how shot are the tyres",
             "how much is left on the fronts",
-            "how much is left on the rears"),
+            "how much is left on the rears",
+            # **The worst collision measured: "have the rears gone" reached
+            # `report-oversteer` at 0.124** - closer than any correct match in
+            # the whole probe set. A question about tyre LIFE was being filed
+            # as a driver report about the CAR, so the engineer would have said
+            # "copy, noted" and written down a handling complaint he never
+            # made. The axle words alone do not separate them; the verb does.
+            # "Gone", "done", "finished", "left" are about wear.
+            "have the tyres gone", "have the fronts gone",
+            "are the rears gone", "are the tyres done",
+            "are the fronts done", "are they finished",
+            "is there life left in the tyres",
+            "is there anything left in the rears",
+            "are the tyres past it", "how much have they worn"),
     PACE: ("what's my pace", "how's my pace", "hows my pace",
            "what's my best lap", "am i quick enough", "how's my lap time",
            "am i on pace", "what's my lap time", "how am i doing on pace",
-           "am i losing time"),
+           "am i losing time",
+           # **Measured: "was that a good lap" reached `laps-left` at 0.240.**
+           # This is the collision already fixed once, for "what's my best
+           # lap", come straight back in a different phrasing: the word "lap"
+           # belongs to `laps-left` unless something here claims it. These
+           # claim the lap he has just driven, which is a different thing from
+           # the laps he has left.
+           "how was that lap", "was that lap any good", "was that quick",
+           "how quick was that lap", "am i improving",
+           "am i faster or slower", "what did i just do"),
     # **Measured 22 Aug 2026, after the REPORT family took the vocabulary from
     # 57 phrases to 230.** The bands in `gate.py` were calibrated against the
     # smaller list, and more reference phrases means smaller distances for
@@ -220,7 +294,18 @@ PHRASES: dict[str, tuple[str, ...]] = {
                         "no turn in", "washing out", "washing wide",
                         "running wide", "the front won't bite",
                         "it won't rotate", "it wont rotate", "won't rotate",
-                        "no rotation"),
+                        "no rotation",
+                        # **Measured: "the front just washes out" reached
+                        # `report-oversteer` at 0.219** - the word "washing"
+                        # was here but every form of it was a bare participle,
+                        # and a sentence with a subject and a verb matched the
+                        # oversteer phrases, which are all full sentences. The
+                        # two report intents are each other's nearest
+                        # neighbours, so each needs the other's sentence shape.
+                        "the front washes out", "it washes wide",
+                        "the front is washing", "it's pushing wide",
+                        "i can't get it turned", "it just runs wide",
+                        "the front end is gone"),
     REPORT_OVERSTEER: ("oversteer", "oversteering", "the rear is loose",
                        "rear is loose", "loose on exit", "it's snapping",
                        "its snapping", "the back stepped out",
@@ -230,7 +315,17 @@ PHRASES: dict[str, tuple[str, ...]] = {
                        # Measured: "the back end is coming round on me"
                        # reached `report-traffic` without these.
                        "the back end is coming round", "coming round on me",
-                       "the back is coming round", "snap oversteer"),
+                       "the back is coming round", "snap oversteer",
+                       # **Measured: "i nearly lost it" reached
+                       # `report-incident` at 0.312.** A near-miss is a
+                       # handling report; an incident is something that
+                       # happened. "Nearly", "almost" and "caught it" are the
+                       # words that separate a moment he saved from one he did
+                       # not, and `report-incident` owned all of them.
+                       "i nearly lost it", "i nearly lost the back",
+                       "it nearly went round", "i caught a slide",
+                       "i almost spun it", "it's snapping on me",
+                       "the rear won't stay put"),
     REPORT_INCIDENT: ("i went off", "went off", "i had a moment",
                       "had a moment", "i spun", "spun it", "off track",
                       "i went wide", "had contact", "i got hit",
@@ -244,12 +339,54 @@ PHRASES: dict[str, tuple[str, ...]] = {
     REPORT_TRAFFIC: ("traffic", "i'm in traffic", "im in traffic",
                      "stuck behind", "stuck behind him", "held up",
                      "i got held up", "can't get past", "cant get past",
-                     "backmarker", "lapping traffic", "boxed in"),
+                     "backmarker", "lapping traffic", "boxed in",
+                     # **Measured: "there's a train of cars in front" reached
+                     # `report-understeer` at 0.369** - on the word "front",
+                     # which this intent never used and understeer uses in
+                     # every phrase. Traffic is about other cars, and nothing
+                     # here said so in a full sentence.
+                     "there's a train in front", "there's a queue of cars",
+                     "i'm behind a train", "there are cars in front of me",
+                     "i'm being held up", "stuck in a queue",
+                     "i can't get through this traffic",
+                     # Measured: "i'm stuck behind someone" reached `gap` at
+                     # 0.260, because "someone" reads as a reference to
+                     # another car and every `gap` phrase names one. The
+                     # difference is that this is a report - he is telling the
+                     # engineer he is being held up, which strategy can act on
+                     # - where `gap` is a question about a number nobody has.
+                     "i'm stuck behind a car", "i'm stuck behind this guy",
+                     "i've got someone holding me up",
+                     "there's someone in my way"),
+    # **Narrow, and the first draft was not.** It was written wide on the
+    # reasoning that a wrong match INTO an unanswerable intent costs one honest
+    # sentence while a wrong match out of it costs a confident wrong answer.
+    # Measured, that was backwards: the wide version pulled "am i going to run
+    # out" - a FUEL question - to 0.301 and "i'm stuck behind someone" to
+    # 0.260, because generic motion phrases like "am i pulling away" and "am i
+    # losing ground" are about no particular subject and therefore near
+    # everything. **An unanswerable intent that is wide is a magnet, and what
+    # it catches is questions that had answers.**
+    #
+    # So every phrase here names another car explicitly - "he", "him", "the car
+    # ahead", "the next car" - or the word gap itself. That is the only thing
+    # that makes the question genuinely about something the feed cannot see.
+    GAP: ("what's the gap", "whats the gap", "how far behind is he",
+          "how far ahead is he", "how far behind am i", "how far ahead am i",
+          "who am i behind", "who's behind me", "whos behind me",
+          "who's in front of me", "am i catching him", "is he catching me",
+          "how far back is the next car", "can i catch him",
+          "how close is he", "gap to the car ahead", "gap to the car behind",
+          "how far up the road is he", "is he pulling away from me",
+          "what's the gap to the car in front"),
     ON_PLAN: ("are we on the plan", "on the plan", "how's the burn",
               "hows the burn", "fuel burn", "on target",
               "am i saving enough", "is the saving working",
               "am i on target", "how's the burn looking",
-              "do i need to save fuel", "am i where i should be"),
+              "do i need to save fuel", "am i where i should be",
+              "are we on track", "am i ahead or behind the plan",
+              "am i using too much fuel", "is my burn ok",
+              "should i be lifting", "do i need to lift and coast"),
 }
 
 # Longest phrases first: "how much fuel do i take" must win over "fuel".
@@ -357,6 +494,17 @@ def answer(intent: str, snapshot: dict, *,
 
     if intent in REPORTS:
         return _report_answer(intent, snapshot)
+
+    if intent == GAP:
+        # **The one refusal that is permanent, so it says so.** Every other
+        # "I don't have that" here is about this moment - no plan yet, no fuel
+        # rate yet, the gauge is not reading - and inviting him to ask again in
+        # a few laps is right for those. This one will not change: the feed
+        # carries one car. Telling him the reason once is worth more than
+        # telling him "say again" every time, and it is the difference between
+        # an engineer who cannot see the timing screen and one who is broken.
+        return Answer("I can't see other cars - the feed only carries yours. "
+                      "Position I have.", intent, answered=False)
 
     if intent == TYRES_RED:
         # Acknowledged, never analysed out loud. One observation is one
