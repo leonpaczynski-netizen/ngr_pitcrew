@@ -48,10 +48,18 @@ SAMPLES = 1000
 CURVATURE_TURNING = 0.004
 # A run of turning samples shorter than this is noise in the path, not a corner.
 MIN_CORNER_M = 40.0
-# Two corners closer than this are one complex. Below it the exit of the first
-# and the entry of the second overlap, and splitting them puts a boundary in
-# the middle of a piece of track nobody drives as two corners.
-MERGE_GAP_M = 60.0
+# How far a curvature peak must stand above the straightest point beside it,
+# as a fraction of the peak itself, before it is a corner rather than a ripple.
+#
+# **Prominence rather than a higher threshold, and the difference matters.** A
+# ripple partway through a sweeper can have high curvature and still not be a
+# corner; a gentle kink between two straights can have low curvature and be
+# one. Height alone cannot separate them and no setting of it can - which is
+# why raising the threshold traded four kilometre-long regions for thirty-one
+# fragments. Prominence asks the question that actually distinguishes them:
+# does the track straighten out either side of this, or is it part of
+# something longer? It is scale-free, so it needs no per-circuit tuning.
+MIN_PROMINENCE = 0.45
 
 
 def _laps(store, circuit_key: str):
@@ -154,24 +162,74 @@ def curvature(path, length_m: float):
 
 
 def regions(curv, step_m: float):
-    """Contiguous runs of turning, merged into complexes."""
-    turning = [abs(k) >= CURVATURE_TURNING for k in curv]
-    runs, start = [], None
-    for i, t in enumerate(turning):
-        if t and start is None:
-            start = i
-        elif not t and start is not None:
-            runs.append((start, i - 1))
-            start = None
-    if start is not None:
-        runs.append((start, len(turning) - 1))
-    merged = []
-    for run in runs:
-        if merged and (run[0] - merged[-1][1]) * step_m <= MERGE_GAP_M:
-            merged[-1] = (merged[-1][0], run[1])
+    """One region per curvature PEAK, bounded by the troughs either side.
+
+    **The threshold version was the wrong shape and tuning it would have been
+    the wrong fix.** Asking "is the car turning here" chains a whole section
+    into one corner as soon as the straights between its parts fall below the
+    threshold - at Fuji it returned four regions for about sixteen corners, two
+    of them near a kilometre long. Lowering the threshold splits sweepers in
+    half instead; there is no setting that is right everywhere, which is the
+    sign that the question is wrong rather than the number.
+
+    A corner is not "where curvature is high", it is **where curvature peaks**.
+    Each local maximum of |curvature| is one corner, and its extent runs to the
+    minimum either side - the straightest point between it and its neighbours.
+    The count then falls out of the track's own shape instead of out of a
+    constant, and a complex reads as the several corners it is rather than one
+    long one.
+
+    `MIN_CORNER_M` still applies, because two peaks a few metres apart are one
+    corner seen through the noise in the path rather than two.
+    """
+    n = len(curv)
+    mag = [abs(k) for k in curv]
+    # A peak has to stand above a genuine straight somewhere, or every wobble
+    # on a straight becomes a corner. This is the only threshold left and it
+    # rejects noise rather than defining a corner.
+    floor = CURVATURE_TURNING
+    peaks = [i for i in range(n)
+             if mag[i] >= floor
+             and mag[i] >= mag[(i - 1) % n] and mag[i] > mag[(i + 1) % n]]
+    if not peaks:
+        return []
+
+    # Merge peaks closer together than a corner can be - the same peak seen
+    # twice through a ripple in the median path.
+    merged = [peaks[0]]
+    for i in peaks[1:]:
+        if (i - merged[-1]) * step_m < MIN_CORNER_M:
+            if mag[i] > mag[merged[-1]]:
+                merged[-1] = i
         else:
-            merged.append(run)
-    return [(a, b) for a, b in merged if (b - a + 1) * step_m >= MIN_CORNER_M]
+            merged.append(i)
+
+    # Then keep only the peaks the track actually straightens out either side
+    # of. See `MIN_PROMINENCE` for why height alone cannot decide this.
+    def trough(a: int, b: int) -> float:
+        return min(mag[j % n] for j in range(a, b + 1))
+
+    kept = []
+    for idx, peak in enumerate(merged):
+        prev_peak = merged[idx - 1] if idx else merged[-1] - n
+        next_peak = (merged[idx + 1] if idx + 1 < len(merged)
+                     else merged[0] + n)
+        prominence = mag[peak] - max(trough(prev_peak, peak),
+                                     trough(peak, next_peak))
+        if mag[peak] > 0 and prominence / mag[peak] >= MIN_PROMINENCE:
+            kept.append(peak)
+    merged = kept or merged
+
+    out = []
+    for idx, peak in enumerate(merged):
+        prev_peak = merged[idx - 1] if idx else merged[-1] - n
+        next_peak = merged[idx + 1] if idx + 1 < len(merged) else merged[0] + n
+        # Walk out to the straightest point between this peak and each
+        # neighbour. That boundary is a property of the track, not a setting.
+        start = min(range(prev_peak, peak + 1), key=lambda j: mag[j % n])
+        end = min(range(peak, next_peak + 1), key=lambda j: mag[j % n])
+        out.append((start % n, end % n))
+    return out
 
 
 def main() -> int:
@@ -216,10 +274,14 @@ def main() -> int:
               f"at |k| >= {CURVATURE_TURNING} /m:\n")
         print(f"{'id':<5} {'from_m':>8} {'to_m':>8} {'len_m':>7} "
               f"{'radius_m':>9}  direction")
+        total = len(curv)
         for n, (a, b) in enumerate(found, start=1):
-            peak = max(curv[a:b + 1], key=abs)
+            # A region that crosses the start line wraps, so the span is walked
+            # rather than sliced - a slice of it comes back empty.
+            span = (b - a) % total + 1
+            peak = max((curv[(a + k) % total] for k in range(span)), key=abs)
             print(f"T{n:<4} {a * step:8.0f} {b * step:8.0f} "
-                  f"{(b - a + 1) * step:7.0f} {1.0 / abs(peak):9.0f}  "
+                  f"{span * step:7.0f} {1.0 / abs(peak):9.0f}  "
                   f"{'left' if peak > 0 else 'right'}")
         print("\nNothing written - this reports the regions it would define.")
         return 0
