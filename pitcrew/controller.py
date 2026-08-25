@@ -4246,6 +4246,51 @@ class PitCrewController(QObject):
             self.race_screen.set_armed(False)
             self.race_screen.set_status("Race closed.")
 
+    def _close_out_finished_race(self) -> None:
+        """Close the race run at the flag, rather than at app shutdown.
+
+        **The Fuji race never ended.** `race_runs.finished_at` stayed null, no
+        chequered flag was called, and the session closed on shutdown 16
+        minutes 48 seconds after the last crossing - so `finish_race_run` never
+        ran, and `prompt_issues` holds nothing for that event at all. Job 3,
+        the export that is this app's most important output, did not run for
+        the race it exists to describe.
+
+        The proximate cause was the lap counter (see `coordinator._on_lap`),
+        but the run stayed open for a second reason: **nothing closed it except
+        `stop_race`, and `stop_race` is a button.** A driver who watches the
+        replay, or closes the app, or simply forgets, loses the export for a
+        race that is already over.
+
+        **Deliberately not `stop_race`.** The flag is not the end of the
+        session: the slow-down lap is still being recorded, the transducer is
+        still running, and tearing all that down on a detector - however well
+        guarded - is a bigger claim than this needs to make. What is recorded
+        here is the fact that the race finished and when, which is what the
+        run row and the export are missing. Stopping remains his.
+
+        Idempotent: `race_run_id` is cleared, so a second crossing after the
+        flag does nothing.
+        """
+        if self.race is None or self.race_run_id is None:
+            return
+        if not self.race.state.finished:
+            return
+        run_id, self.race_run_id = self.race_run_id, None
+        try:
+            self.store.finish_race_run(run_id)
+        except Exception as exc:                            # noqa: BLE001
+            # Never into the caller. He has just taken the flag and the app
+            # falling over on the ledger write would be the last thing he sees
+            # of the race.
+            log("race").error("could not close the race run at the flag: %s",
+                              exc, exc_info=True)
+            return
+        log("race").info(
+            "race finished on lap %s - run %s closed. The session is still "
+            "recording; stop it when you are done to file the video and "
+            "close the laps.", self.race.state.lap, run_id)
+
     def _on_race_event(self, event) -> None:
         """Feed one telemetry event to the race, and say ONE thing back.
 
@@ -4309,6 +4354,7 @@ class PitCrewController(QObject):
         replan = None
         if event.kind is EventKind.LAP_COMPLETED:
             replan = self._check_replan(event.data["lap"], against=call)
+        self._close_out_finished_race()
         if self.race_screen is not None:
             self.race_screen.show_snapshot(self._race_snapshot())
         if replan is not None:

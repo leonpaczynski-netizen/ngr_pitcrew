@@ -204,8 +204,11 @@ class RaceCoordinator:
         # the game is already counting the lap in progress, and an offset one
         # too high silently disables the detector. See `note_packet`.
         self._gt7_offset: int | None = None
-        # Consecutive packets the current discrepancy has survived.
+        # Consecutive packets the current discrepancy has survived, and the
+        # value it has been surviving as. Both, because the hold has to re-arm
+        # when the discrepancy CHANGES - see `note_packet`.
         self._gt7_pending = 0
+        self._gt7_pending_value = 0
 
     # ------------------------------------------------------------------ arming
 
@@ -424,6 +427,7 @@ class RaceCoordinator:
         # A crossing resets the pending discrepancy: whatever it was, the app
         # has just counted a lap and the two are being compared afresh.
         self._gt7_pending = 0
+        self._gt7_pending_value = 0
         self.state.laps_since_stop += 1
         self.state.fuel_l = lap.fuel_end
         if lap.position:
@@ -518,6 +522,32 @@ class RaceCoordinator:
             remaining = self.state.laps_remaining()
             self.state.laps_to_go_estimate = remaining
             self.state.laps_estimate_firm = remaining is not None
+            # **The flag, for a lap race, and nothing was declaring it.**
+            #
+            # `SessionState` raises RACE_FINISHED when `laps_in_race` minus the
+            # number of lap ROWS it filed reaches zero - and a crossing inside
+            # GT7's pit sequence never reaches the app, so at Fuji it filed 19
+            # rows for 20 laps and the count stopped one short. The race never
+            # ended: `race_runs.finished_at` stayed null, no chequered flag was
+            # called, no export was ever generated, and the session closed on
+            # shutdown 16 minutes 48 seconds after the last crossing. Job 3 did
+            # not run at all.
+            #
+            # The dropped crossing and the missing finish are the same defect,
+            # and the correction already exists one layer up: `laps_remaining`
+            # here counts `lap + laps_missed()`, which at Fuji is 19 + 1 = 20.
+            # It was computed every crossing and nothing read it as a finish.
+            #
+            # Same rule as the timed race two hundred lines below - a lap
+            # completing with nothing left to run IS the final lap - and it
+            # cannot fire early: `laps_missed` only ever grows the count by a
+            # crossing the game itself counted and the app did not.
+            if remaining == 0 and self.phase is RacePhase.RUNNING:
+                self.phase = RacePhase.FINISHED
+                self.state.finished = True
+                if lap.position:
+                    self.state.position = lap.position
+                return self._emit()
 
         finish = self._update_clock_distance()
         if finish is not None:
@@ -613,6 +643,7 @@ class RaceCoordinator:
             # entirely. Two seconds of them would manufacture a crossing that
             # never happened.
             self._gt7_pending = 0
+            self._gt7_pending_value = 0
             return
         counted = getattr(packet, "laps_completed", None)
         if counted is None or counted < 0 or self._gt7_offset is None:
@@ -620,6 +651,7 @@ class RaceCoordinator:
             # agreement, so the pending count starts again rather than
             # carrying across it.
             self._gt7_pending = 0
+            self._gt7_pending_value = 0
             return
         if self.state.lap < 1:
             # Before the first crossing there is nothing to be out of step
@@ -631,7 +663,30 @@ class RaceCoordinator:
         if not 0 < missed <= MAX_LIVE_MISSED_LAPS:
             # Back in agreement, or so far out it is not this race.
             self._gt7_pending = 0
+            self._gt7_pending_value = 0
             self.state.laps_dropped_seen = 0
+            return
+        # **The hold has to re-arm on the VALUE, not just on disagreement.**
+        # `_gt7_pending` counted frames where the two counters differed at all,
+        # so once a real dropped lap had parked `missed` at 1 the counter sat
+        # saturated for the rest of the race - and the moment an ordinary
+        # crossing pushed it briefly to 2, that 2 was believed on the very next
+        # frame. The hold existed precisely to swallow that transient and could
+        # never fire again after the first genuine correction.
+        #
+        # Fuji is the whole shape of it. 31 warnings between the stop and the
+        # flag, alternating "2 crossings ... app still on lap N" at the
+        # crossing instant and "1 crossing ... app still on lap N+1" about two
+        # seconds later, never converging. The permanent +1 was right; the +2
+        # was the Qt thread not having reached LAP_COMPLETED yet. **The calls
+        # are composed during exactly that window**, so the run-in went out a
+        # lap early all the way to the flag: "Two to go" with three to go,
+        # "Last lap" with two, and nothing at all on the actual last lap.
+        #
+        # Each distinct value now serves its own hold before it is believed.
+        if missed != self._gt7_pending_value:
+            self._gt7_pending_value = missed
+            self._gt7_pending = 1
             return
         self._gt7_pending += 1
         if self._gt7_pending < LAP_COUNTER_HOLD_FRAMES:
