@@ -90,6 +90,13 @@ TYRE_SWAP_SPREAD_C = 0.5
 # four corners do not converge within half a degree while the car is driving.
 TYRE_SWAP_MAX_SPEED_KPH = 10.0
 
+# **How big a single-frame fuel rise means the game just fuelled the car.**
+# GT7 fills at about 1 L/s against a 60 Hz stream, so a real refuel moves the
+# tank 0.0167 L between packets - three orders of magnitude below this. The
+# grid fill is a step: session 88 stepped 49.88 -> 100.0 in one frame while
+# stationary. See `_rebaseline_on_grid_fill`.
+GRID_FILL_STEP_L = 1.0
+
 # Race-start gates.  See the module docstring for why both exist.
 RACE_START_SPEED_KMH = 80.0
 GRID_LOW_SPEED_KMH = 30.0
@@ -114,17 +121,35 @@ GRID_LOW_SPEED_KMH = 30.0
 # wants to show it. Nothing may decide anything on it.
 
 
-def _burn(started_with: float | None, ended_with: float | None) -> float | None:
-    """Fuel used across a lap, or None where the pair cannot say.
+def _burn(started_with: float | None, ended_with: float | None,
+          added: float | None = None) -> float:
+    """Fuel used across a lap, counting anything put in during it.
 
-    A tank that ends fuller than it started is a refuel, a pre-load frame, or
-    a reference taken before the car was fuelled - never a lap that burned
-    nothing. See the call site for the two Fuji rows this produced.
+    **A tank that ends fuller than it started has been filled, not un-burned.**
+    Clamping that difference at zero is what filed `fuel_used = 0.0` against two
+    Fuji laps that plainly used fuel: the pit lap, where refuelling put more in
+    than the lap took out, and lap 1, whose reference was the 49.92 L lobby tank
+    read 78 s before the game filled it to 100 L on the grid.
+
+    Neither is a lap the app cannot measure - both are laps whose arithmetic was
+    missing a term. The pit lap's term is the fill, which `_fuel_added_in_stop`
+    already measures; lap 1's is the grid fill, which `update` now re-baselines
+    against. So the answer is the true burn rather than a clamp *or* a null.
+
+    **Not null, deliberately, and this is the constraint that decides it.**
+    `laps.fuel_used` is `NOT NULL DEFAULT 0.0` and SQLite cannot relax that
+    without rebuilding the table - which cascades into `lap_frames` and is
+    forbidden. A None here reaches `if lap.fuel_used > 0` in the race
+    coordinator and the practice screen, and an unhandled TypeError inside a Qt
+    slot does not raise on Windows, it aborts the process. Every consumer
+    already treats 0.0 as "no reading", so a residual zero is read as absent
+    exactly as it should be; what changed is that it is now rare and honest
+    rather than routine and wrong.
     """
     if started_with is None or ended_with is None:
-        return None
-    used = started_with - ended_with
-    return used if used >= 0.0 else None
+        return 0.0
+    used = started_with - ended_with + (added or 0.0)
+    return used if used > 0.0 else 0.0
 
 
 class Phase(enum.Enum):
@@ -352,6 +377,7 @@ class SessionState:
             self._temp_sum_front += (temps[0] + temps[1]) / 2.0
             self._temp_sum_rear += (temps[2] + temps[3]) / 2.0
             self._temp_frames += 1
+        self._rebaseline_on_grid_fill(packet)
         events.extend(self._update_phase(packet, now))
         events.extend(self._update_pit(packet, now))
         events.extend(self._check_lap(packet, now))
@@ -360,6 +386,32 @@ class SessionState:
         return events
 
     # --------------------------------------------------------------- internals
+
+    def _rebaseline_on_grid_fill(self, p: GT7Packet) -> None:
+        """Take lap one's fuel reference from the grid, not from the lobby.
+
+        **The reference was being read up to a minute before the game fuelled
+        the car.** `_update_phase` stamps `_fuel_lap_start` the moment the car
+        is first seen on track, which in a race is the lobby: session 88's lap
+        1 recorded `fuel_start = 49.92` and the frames show the tank stepping
+        49.88 -> 100.0 at t = 77.78 s, stationary on the grid. The lap then
+        "used" -44 litres, which the clamp turned into a positive claim of
+        none.
+
+        So a rise before the race has started re-stamps the reference. Bounded
+        three ways, because "the tank went up" is also what a pit stop looks
+        like: only before the green, only while the car is not moving, and only
+        for a step far larger than any refuel delivers in one frame - GT7 fills
+        at about 1 L/s against a 60 Hz stream, so a real fill moves 0.0167 L
+        between packets and this needs a whole litre.
+        """
+        if self._phase is not Phase.ON_TRACK or self._prev is None:
+            return
+        if p.speed_kmh > GRID_LOW_SPEED_KMH:
+            return
+        if p.fuel_level - self._prev.fuel_level < GRID_FILL_STEP_L:
+            return
+        self._fuel_lap_start = p.fuel_level
 
     def _update_phase(self, p: GT7Packet, now: float) -> list[SessionEvent]:
         if self._phase is Phase.IDLE:
@@ -604,18 +656,12 @@ class SessionState:
             delta_ms=(lap_time_ms - best_ms) if best_ms > 0 else 0,
             fuel_start=self._fuel_lap_start,
             fuel_end=p.fuel_level,
-            # **A negative burn is not a burn of zero, it is a lap whose
-            # reference is wrong - and clamping it made that unreportable.**
-            # CLAUDE.md rule 3: missing is null, never 0. Two rows of the Fuji
-            # race carried `fuel_used = 0.0` on laps that plainly burned fuel:
-            # lap 1, where `_fuel_lap_start` was the 49.92 L lobby tank read
-            # 78 s before the game filled it to 100 L on the grid, and the pit
-            # lap, where refuelling put more in than the lap took out. Both
-            # went negative and both were clamped to a positive claim of
-            # nothing used. Null says "this lap cannot tell you", which is
-            # true, and every consumer already gates on the value being
-            # present.
-            fuel_used=_burn(self._fuel_lap_start, p.fuel_level),
+            # The fill is part of the lap's arithmetic, not a reason to give
+            # up on it - see `_burn`. On a pit lap this is what turns a
+            # negative difference into the real burn.
+            fuel_used=_burn(self._fuel_lap_start, p.fuel_level,
+                            self._fuel_added_in_stop if self._pit_lap
+                            else None),
             position=p.current_position,
             is_pit_lap=self._pit_lap,
             is_out_lap=self._out_lap_pending,
