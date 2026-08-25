@@ -600,6 +600,21 @@ class MoonshineRecogniser:
     name = "moonshine"
     SAMPLE_RATE = 16_000
     BLOCK = 1600                    # 100 ms, the granularity the VAD counts in
+    # **Trailing silence, because the button comes up on the last syllable.**
+    # A streaming recogniser decides a word is finished when it hears what
+    # comes after it, and nothing comes after the last one: the mic closes and
+    # the final pass runs on audio that stops mid-word. Measured over ten
+    # phrases run three times each (`tools/stt_bench.py`), feeding six tenths
+    # of a second of silence before that pass took the tiny model from 5 exact
+    # transcripts in 30 to 19, and its median word error rate from 25% to
+    # zero. **It is a larger improvement than any model in the family gives**,
+    # because the errors it removes are all the same error: "box this lap"
+    # came back as "box this side", "the rear is loose on entry" as "the rear
+    # is loose on". Silence is fed rather than waited for, so what it costs is
+    # only the final pass looking at a little more audio - ~300 ms against the
+    # ~4 ms of a pass that had nothing left to decide, and still less than any
+    # larger model's.
+    TAIL_PAD_S = 0.6
 
     def __init__(self, *, max_capture_s: float = MAX_CAPTURE_S,
                  silence_rms: float = 0.012) -> None:
@@ -609,6 +624,19 @@ class MoonshineRecogniser:
         from moonshine_voice.moonshine_api import ModelArch
         from moonshine_voice.transcriber import Transcriber
 
+        # **Tiny stays, and that is a measurement rather than the default it
+        # used to be.** Once the tail is padded (see `TAIL_PAD_S`) the three
+        # streaming models are level on accuracy over thirty trials of
+        # `tools/stt_bench.py` - tiny 19 exact transcripts, small 18, medium 21
+        # - and the median word error rate of all three is zero. They are not
+        # level on waiting: tiny finishes its last pass in ~300 ms, small in
+        # ~770, medium in ~1240, and the worst case runs 0.6 / 1.5 / 2.1
+        # seconds. Nothing is bought by the bigger models here, so nothing is
+        # worth paying for them.
+        #
+        # This was briefly changed to small on a single ten-phrase pass that
+        # showed a large gap. Repeating it three times removed the gap: ten
+        # samples of a noisy quantity looked like a finding and was scatter.
         path, arch = moonshine.get_model_for_language(
             "en", ModelArch.TINY_STREAMING)
         self._transcriber = Transcriber(path, arch)
@@ -755,6 +783,26 @@ class MoonshineRecogniser:
                 audio_devices.end_playback(capture)
         return capture
 
+    def _feed_tail_silence(self):
+        """Give the decoder something after his last word. See `TAIL_PAD_S`.
+
+        Guarded, and deliberately not fatal: if this raises, the transcript is
+        the one we would have had anyway - a word short, not absent - and
+        losing the whole question over an accuracy improvement would be the
+        worse trade.
+        """
+        try:
+            import numpy as np
+
+            quiet = np.zeros(int(self.SAMPLE_RATE * self.TAIL_PAD_S),
+                             dtype=np.float32)
+            for at in range(0, quiet.size, self.BLOCK):
+                self._transcriber.add_audio(
+                    quiet[at:at + self.BLOCK].tolist(), self.SAMPLE_RATE)
+        except Exception as exc:                 # noqa: BLE001 - see above
+            log("ptt").debug("could not pad the tail: %s: %s",
+                             type(exc).__name__, exc)
+
     def end(self) -> str:
         """Button up: close the mic and return what was said, or nothing.
 
@@ -801,6 +849,7 @@ class MoonshineRecogniser:
             return ""
 
         try:
+            self._feed_tail_silence()
             result = self._transcriber.update_transcription()
             text = " ".join(line.text for line in
                             getattr(result, "lines", [])).strip()
