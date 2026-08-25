@@ -1,6 +1,6 @@
 {
   "skill_name": "ludo",
-  "note": "Three of these are traps. A skill that answers them helpfully has failed: each asks for something this project has measured and forbidden, and the right output is a refusal that says why and offers what CAN be said. The rest check that Ludo reaches for real code rather than inventing an analysis.",
+  "note": "Four of these are traps. A skill that answers them helpfully has failed: each asks for something this project has measured and forbidden, or asks in a mode whose own priorities forbid the obvious answer, and the right output is a refusal or a redirection that says why and offers what CAN be said. The rest check that Ludo reaches for real code rather than inventing an analysis, and that it picks the right mode - the same telemetry read with a race question in mind and a qualifying question in mind gives opposite advice.",
   "evals": [
     {
       "id": 1,
@@ -89,6 +89,44 @@
       "assertions": [
         "Identifies this as application work rather than a car/race/driver decision",
         "Offers to proceed outside the skill rather than refusing outright"
+      ]
+    },
+    {
+      "id": 9,
+      "name": "quali-mode-must-not-import-race-reasoning",
+      "prompt": "give me a quali setup for the huracan at fuji - i want to be quick over one lap",
+      "expected_output": "Picks the `quali` mode and says so. Must NOT reason about tyre life, fuel saving, or stability over a stint - a quali setup may spend its whole range on one lap, and importing race concerns is this mode's named failure. Must say that NO qualifying session has ever been recorded, so the reference is the best counted practice lap. Should treat the out-lap as owning the result, and must not say 'get the tyres into the window' - no optimal window has ever been published for GT7, so a warm-up plateau call is the honest form. Checks rank zero before proposing anything.",
+      "assertions": [
+        "Identifies this as the quali mode rather than a general setup request",
+        "Says there is no qualifying evidence on file and names practice as the reference",
+        "Does not recommend anything on tyre-life or fuel-saving grounds",
+        "Does not claim an optimal tyre temperature window exists",
+        "Treats the out-lap as a first-order concern"
+      ]
+    },
+    {
+      "id": 10,
+      "name": "initial-mode-refuses-to-diagnose-from-nothing",
+      "prompt": "i'm picking up a new car for next season - a gr.3 i've never run. give me a starting setup for it",
+      "expected_output": "Picks the `initial` mode. **Must not produce a symptom-to-cause diagnosis** - there is no run and therefore no symptom, and that is this mode's named failure. Must go to the range record FIRST, because every downstream figure is a percentage of it, and check both `verified` and `game_version` (anything before 20 Aug 2026 is void post-1.71). Where no record exists, the honest deliverable is the settings screen to read and what to read off it. Should ask whether BoP is on, since the app has no BoP field and nothing will warn it. Everything produced must be labelled [DOCTRINE] or [ASSUMED], and it should carry the runs that would turn those into evidence.",
+      "assertions": [
+        "Goes to the range record before proposing any slider value",
+        "Labels its output as ASSUMED or DOCTRINE rather than measured",
+        "Does not diagnose a handling symptom that was never reported",
+        "Asks whether BoP applies, or names it as an unknown",
+        "Names the runs that would turn the assumptions into evidence"
+      ]
+    },
+    {
+      "id": 11,
+      "name": "mode-priorities-are-not-interchangeable",
+      "prompt": "how did the fuji race go and what should i change on the car for next time?",
+      "expected_output": "Two modes in one ask - `debrief` then `refine` - and it should say so rather than blending them. The debrief half opens on the OPEN PREDICTIONS, not on the plan, and reads plan-versus-actual from the data rather than from the plan. The refine half opens on rank zero. Neither half may borrow the other's first priority.",
+      "assertions": [
+        "Names both modes rather than answering as one",
+        "Checks open predictions before reporting outcomes",
+        "Runs rank zero before proposing a setup change",
+        "Reads what happened from the data rather than restating the plan"
       ]
     }
   ]

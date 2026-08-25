@@ -36,13 +36,115 @@ State mechanisms from references; state numbers from the data.
 
 ---
 
-## When you are invoked, do these in order
+## Step 0 — which mode, and what it makes you look at first
 
-**0 — Which verb?** `tune` · `refine` · `race plan` · `quali plan` · `debrief`
-· `what to try`. If the ask is ambiguous, pick the likeliest and say which you
-picked. If it turns out to be app work — a failing test, a UI bug, a capture
-problem — say *"this looks like app work rather than car work; say so and I'll
-stand down"* and stop.
+Six modes. They share a spine (below) but **not a priority order**, and mistaking
+one for another is how a good procedure produces a wrong answer: the same
+telemetry read with a race question in mind and a qualifying question in mind
+gives opposite advice. Pick one, say which you picked, and say so if the ask was
+ambiguous.
+
+| Mode | He is asking | First priority — before anything else | The mistake this mode makes |
+|---|---|---|---|
+| `initial` | first sheet for a car+circuit with nothing on file | **the range record** | diagnosing from nothing |
+| `refine` | a sheet ran and he has a report | **rank zero: what is in the car** | crediting the setup for what the compound did |
+| `quali` | one lap, not a race | **the out-lap** | importing race reasoning |
+| `race plan` | the race | **which limit actually binds** | naming a constraint from a different expression than the one that decided |
+| `debrief` | what happened | **open predictions** | reporting the plan as though it happened |
+| `what to try` | ideas | **the falsifier** | proposing a test its instrument cannot resolve |
+
+If it turns out to be app work — a failing test, a UI bug, a capture problem —
+say *"this looks like app work rather than car work; say so and I'll stand
+down"* and stop.
+
+---
+
+## The six modes
+
+### `initial` — a car and circuit with no run on file
+
+**Everything you produce here is `[DOCTRINE]` or `[ASSUMED]`, and it must be
+labelled that way.** There is no symptom yet, so there is no diagnosis; a
+symptom→cause chain built on nothing is this mode's whole failure.
+
+1. **The range record, first, because everything downstream is a percentage of
+   it.** `store.get_range_record(car)` — and check `verified` and
+   `game_version`. Unverified is a guess, and **1.71 moved suspension, diff and
+   aero ranges**, so a record from before 20 Aug 2026 is void. Without one, the
+   only honest deliverable is the settings screen to read and what to read off
+   it.
+2. **Is tuning even open?** BoP locks gearbox and performance on some rounds and
+   **the app has no BoP field**, so nothing will warn you — ask him.
+3. **Drivetrain and the physical priors.** Read them from `gt7-brain`, not from
+   memory of another car.
+4. Deliver a conservative sheet **plus the runs that would turn its assumptions
+   into evidence**, priced in laps.
+
+### `refine` — a sheet ran and he has a report
+
+1. **Rank zero, both halves** (spine step 1). The record has been wrong in five
+   consecutive sessions; this is the mode where that costs the most, because a
+   correct reading against a wrong record produces a confident wrong answer.
+2. **What else changed.** Compound, fuel load, session type, game version. The
+   reference lap has no compound filter, so "faster on the new sheet" can be a
+   softer tyre wearing a setup's clothes. Name the confound or rule it out.
+3. **His report is the brief**, in his words, with throttle state resolved —
+   `references/driver-model.md` has the four fields, and the third decides which
+   symptom table applies at all.
+4. **One change, three clean laps**, with the prediction written down.
+
+### `quali` — one lap
+
+**No qualifying session has ever been recorded.** The reference is the best
+counted *practice* lap (`race.qualifying.reference_lap`), and saying so is part
+of the answer: quali advice here rests on practice evidence, which is a
+different thing from qualifying evidence.
+
+1. **The out-lap owns the result.** Warm-up is the whole game, and **no optimal
+   tyre window has ever been published for GT7, by anyone**. So: a warm-up
+   *plateau* call, never "in the window" or "push to get temperature into it".
+   Fresh sets arrive at 45 °C or at exactly 70 and nobody knows why — treat a
+   fresh set's opening temperature as unexplained, never as a target.
+2. **A quali setup may spend its whole range on one lap.** Tyre life, fuel
+   saving and consistency-over-a-stint are race concerns and do not apply.
+   Importing them is this mode's failure.
+3. **Minimum fuel** — `race.quali_fuel.qualifying_fuel(...)` exists and
+   populates the plan; `race.qualifying_plan.build(...)` for the rest.
+4. Deliver: prep laps, the flyer, and what he should feel on the out-lap.
+
+### `race plan` — the race
+
+1. **The binding constraint must come from the same expression that produced the
+   decision.** `strategy.model.binding_limit` takes the `min()` across the
+   ceilings; a plan capped by *"nobody has run a stint this long"* is capped by
+   evidence, not by the car, and those two demand opposite driving. Say which,
+   and say that a practice run removes an evidence cap.
+2. Call `build_inputs` then `recommend` — never hand-roll stint arithmetic.
+3. **A playbook, not just a stint list.** Bounded adaptations George can execute:
+   trigger → action, with `fuel_map` and `brake_bias_forward` forbidden.
+4. `references/race-planner.md` for the rest.
+
+### `debrief` — after the flag
+
+1. **Check the open predictions first.** That is the loop closing; a debrief that
+   does not is a log. What was predicted, what happened, and which of the two was
+   right — including when it was him, which it has been four sessions running.
+2. **Plan versus actual, from the data and never from the plan.** The app once
+   lost a whole lap in a pit stop by preferring the lap-time sum over the wall
+   clock, and reported the plan's own number as the outcome.
+3. **Incidents are seconds.** They belong in the ledger and in the total.
+4. **The radio review** — `learning-loop.md`. His own questions are the only
+   evidence in the archive that he generates unprompted.
+
+### `what to try` — ideas
+
+1. **The falsifier first**, then the test, then the cost. See *Proposing
+   something new*, below — gate 1 does the work.
+2. `references/refusals.md`.
+
+---
+
+## The spine — every mode runs these, in this order
 
 **1 — Rank zero, and it has two halves.** Above everything, including any
 telemetry reading.
@@ -68,11 +170,12 @@ diagnosing anything about grip.
 ```bash
 python tools/data_health.py --car "<name>" --circuit "<key>"
 ```
-It tells you what you may not claim here: whether corner identity is stable
-(**Monza has none at all** — no per-corner claim is available there), whether
+It tells you what you may not claim here: how firm corner identity is (graded,
+not a boolean — quote the apex scatter alongside any per-corner figure), whether
 the grip archive matches its own corner model, whether the sheet and the gearbox
-agree, and — critically — whether a `speakable=0` is an evidence verdict or an
-unimplemented stub. Do not read those two as the same thing.
+agree, whether the corners are auto-segmented (they are, everywhere — so none of
+them has a name), and whether a `speakable=0` is an evidence verdict or an
+unimplemented stub. Do not read those last two as the same thing.
 
 **3 — Read the telemetry. All of it. Before asking him anything.** The 60 Hz
 archive is on disk: per-wheel slip, suspension, surface, steering, pedals. The
@@ -100,15 +203,15 @@ carries its source class: `[DRIVER REPORT]` (primary evidence) ·
 
 ---
 
-## The verb router — open at most two references
+## Which reference each mode opens
 
-| Verb | Read | Then |
-|---|---|---|
-| `tune` / `refine` | `references/mechanic.md` + `references/driver-model.md` | Sheet + paste block |
-| `race plan` / `quali plan` | `references/race-planner.md` | Plan + playbook for George |
-| `debrief` | `references/race-planner.md`, **`mechanic.md` for anything per-corner**, and `learning-loop.md` for the radio review | Findings + write-back |
-| `what to try` | `references/refusals.md` | Labelled hypotheses |
-| any | `references/learning-loop.md` when recording | — |
+| Mode | Read |
+|---|---|
+| `initial` / `refine` | `references/mechanic.md` + `references/driver-model.md` |
+| `quali` / `race plan` | `references/race-planner.md` |
+| `debrief` | `references/race-planner.md`, **`mechanic.md` for anything per-corner**, `learning-loop.md` for the radio review |
+| `what to try` | `references/refusals.md` |
+| any | `references/learning-loop.md` when recording |
 
 **If you have opened more than two references, you have read too much.** Facts
 live in the knowledge base, not here — use the `gt7-brain` skill, whose routing
@@ -269,7 +372,11 @@ Check `tools/data_health.py` rather than trusting these:
   verdicts are unimplemented stubs rather than evidence.
 - `wear_predictions` is a **fossil** — one hand-seeded row, referenced by no
   code, not in the schema. Do not build on it.
-- `radio` is empty. The engineer's calls live in `race_revisions.reason`.
+- `radio` now has a writer (26 Aug 2026) and holds **his** side of the
+  conversation, including the presses the engineer refused. **Every row
+  predating that date is missing its verdict**, and a null `action` means
+  not recorded, never acted. The engineer's own calls still live in
+  `race_revisions.reason`.
 - **This codebase has built both ends and skipped the caller five times.**
   Before relying on a table, check it has a writer.
 
