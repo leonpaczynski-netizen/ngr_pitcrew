@@ -920,6 +920,46 @@ def stint_limit(inputs: RaceInputs,
     return min(known, key=lambda pair: pair[0])
 
 
+def _evidence_cap_note(inputs: RaceInputs, profiles: list,
+                       limit: int | None, constraint: str,
+                       stops: int) -> list[str]:
+    """Say what run would lift an evidence cap, and what it would be worth.
+
+    **Reporting the constraint honestly is not the same as making it
+    actionable.** `binding_limit` now names `evidence` where the plan is capped
+    by the longest stint anyone has run, which stops the driver being told the
+    stop count is arithmetic when it is an admission. It still leaves him to
+    work out on his own what would change it.
+
+    At Fuji the answer was one practice run. The tyre allowed 20.7 laps and the
+    tank 15.4, both longer than the 20-lap race; the longest RS stint on record
+    was 6, so the optimiser produced four stints and priced them 50 s worse than
+    the one-stop it could not justify. **Nothing anywhere told him that a single
+    long run would collapse the plan to one stop** - and he found it out by
+    ignoring two box calls and being right.
+
+    So the note names the cap, the ceiling behind it, and the stop count that
+    would follow. Only where lifting it actually changes the answer: a cap that
+    costs nothing is not worth a line on a plan the driver reads before a race.
+    """
+    if constraint != CONSTRAINT_EVIDENCE or not limit:
+        return []
+    freed, _ = max_stint_laps(inputs)
+    if not freed or freed <= limit:
+        return []
+    would_stop = max(0, math.ceil(inputs.race_laps / freed) - 1)
+    if would_stop >= stops:
+        return []
+    codes = sorted({profile.code for profile in profiles if profile.code})
+    on_what = "/".join(codes) if codes else "this compound"
+    return [
+        f"**Capped by evidence, not by the car.** The longest stint ever run "
+        f"on {on_what} is {limit} laps; the tyre and the tank allow "
+        f"{freed}. One {freed}-lap run in practice would make this a "
+        f"{would_stop}-stop race. Until then the stop count is an admission "
+        f"rather than a measurement."]
+
+
 def build_plan(inputs: RaceInputs, stops: int,
                compounds: list[str] | None = None) -> Plan:
     """One candidate: the race split into `stops + 1` stints."""
@@ -945,6 +985,12 @@ def build_plan(inputs: RaceInputs, stops: int,
     limit, constraint = binding_limit(inputs, profiles)
 
     notes: list[str] = []
+    # **Held back until the feasibility notes are in.** `strategy_screen`
+    # shows `notes[0]` and nothing else, so the first note is the one the
+    # driver reads before approving - and "this stint needs more fuel than the
+    # tank holds" outranks anything about how the cap could be lifted. Slotted
+    # in below, after `over` and the capacity checks have had their say.
+    cap_note = _evidence_cap_note(inputs, profiles, limit, constraint, stops)
     over = [(index, laps, limits[index])
             for index, laps in enumerate(stint_lengths)
             if limits[index] is not None and laps > limits[index]]
@@ -1006,6 +1052,15 @@ def build_plan(inputs: RaceInputs, stops: int,
             if fuel_needed:
                 total += refuel_time_s(fuel_needed, inputs)
 
+    # **The cap note sits here, and the position is the point.**
+    # `strategy_screen` shows `notes[0]` and nothing else, so the first note is
+    # the only one the driver reads before approving. Everything above this
+    # line is a feasibility failure - a stint longer than its compound allows,
+    # a fill bigger than the tank - and those outrank it. Everything below is
+    # routine commentary the cap note outranks in turn: at Fuji it would have
+    # been buried under a note about fuel margin.
+    notes.extend(cap_note)
+
     # **Say what the margin is and what it costs.** CLAUDE.md §5.1 asks for a
     # margin to be built in AND stated; the second half was missing, and a
     # margin nobody can see is a margin nobody can argue with. At Watkins it
@@ -1042,10 +1097,28 @@ def build_plan(inputs: RaceInputs, stops: int,
          for laps, profile in zip(stint_lengths, profiles)
          if profile.wear_per_lap), default=None)
     if worst_fraction is not None:
-        notes.append(
-            f"Stint length is {STINT_SAFETY_FACTOR} / w with the margin "
-            f"deliberate; longest stint ends in the "
-            f"'{phase_at(worst_fraction)}' phase at {worst_fraction:.0%} worn.")
+        # **Only where `0.85 / w` is what actually set the length.** The
+        # sentence is arithmetically true whatever bound the stint - the
+        # fraction is computed from the length that was chosen - but its
+        # IMPLICATURE is that the wear model chose it. At Fuji that was false
+        # and it read as corroboration: the plan said "longest stint ends in
+        # the 'flat' phase at 25% worn" beside a six-lap stint that `0.85 / w`
+        # would have allowed to run twenty. A driver reading it concludes the
+        # tyre is why he is stopping four times.
+        if constraint == CONSTRAINT_TYRE:
+            notes.append(
+                f"Stint length is {STINT_SAFETY_FACTOR} / w with the margin "
+                f"deliberate; longest stint ends in the "
+                f"'{phase_at(worst_fraction)}' phase at "
+                f"{worst_fraction:.0%} worn.")
+        else:
+            # The wear figure is still worth having - it is what says how much
+            # tyre is left at the flag - but stated as an outcome of the plan
+            # rather than as its reason.
+            notes.append(
+                f"The longest stint ends in the '{phase_at(worst_fraction)}' "
+                f"phase at {worst_fraction:.0%} worn. Wear is not what limits "
+                f"it - {STINT_SAFETY_FACTOR} / w would allow more.")
         if not inputs.wear_measured_at_race_multiplier:
             notes.append(
                 "[ASSUMED] Wear was calibrated at a different multiplier and "
