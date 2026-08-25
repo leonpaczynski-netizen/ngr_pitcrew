@@ -477,13 +477,16 @@ class Store:
             conn.execute(
                 "INSERT INTO setup_sheets (car_name, sheet_name, values_json, "
                 "gears_json, shift_rpm_json, performance_json, build_json, "
-                "notes, purpose, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+                "notes, purpose, circuit_key, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(car_name, sheet_name, purpose) DO UPDATE SET "
                 "values_json=excluded.values_json, gears_json=excluded.gears_json, "
                 "shift_rpm_json=excluded.shift_rpm_json, "
                 "performance_json=excluded.performance_json, "
                 "build_json=excluded.build_json, notes=excluded.notes, "
+                # **COALESCE, not excluded.** A save that does not know
+                # the circuit must not erase one already established.
+                "circuit_key=COALESCE(excluded.circuit_key, setup_sheets.circuit_key), "
                 "updated_at=excluded.updated_at",
                 (sheet.car_name, sheet.sheet_name, json.dumps(sheet.values),
                  json.dumps(sheet.gears),
@@ -493,6 +496,7 @@ class Store:
                  json.dumps({str(g): r for g, r in (sheet.shift_rpm or {}).items()}),
                  json.dumps(sheet.performance),
                  json.dumps(sheet.build), sheet.notes, purpose,
+                 sheet.circuit_key,
                  _now(), _now()))
             row = conn.execute(
                 "SELECT id FROM setup_sheets WHERE car_name = ? "
@@ -504,21 +508,40 @@ class Store:
         rows = self._query("SELECT * FROM setup_sheets WHERE id = ?", (sheet_id,))
         return _setup_sheet(rows[0]) if rows else None
 
-    def sheet_for(self, car_name: str, purpose: str):
-        """The car's most recent sheet for this purpose, or None.
+    def sheet_for(self, car_name: str, purpose: str,
+                  circuit_key: str | None = None):
+        """The car's most recent sheet for this purpose **at this circuit**.
 
-        **None means none, and never the other purpose's sheet.** A qualifying
-        run measured against the race sheet files a symptom on a setup that
-        was not on the car. The caller decides what to do about a missing
-        sheet; substituting one here would hide the question.
+        **None means none, and never another purpose's or another circuit's
+        sheet.** A qualifying run measured against the race sheet files a
+        symptom on a setup that was not on the car. The caller decides what to
+        do about a missing sheet; substituting one here hides the question.
 
         Every sheet now carries a purpose - v8 made the column NOT NULL and
         back-filled the seven untagged rows to `race`, which is the convention
         this method already documented - so there is no null case left to
         interpret.
+
+        **The circuit was missing from this key until 23 Aug 2026, and it cost
+        five sessions.** Without it this returned the car's most recent race
+        sheet whatever circuit he was at: a Road Atlanta session bound itself
+        to "Yas Marina race Rev C", the export reported that as the setup as
+        run, and its empty shift table silenced the beep for the session.
+
+        `circuit_key=None` asks the old question - the most recent sheet for
+        this car and purpose, circuit unexamined - and is kept for callers
+        that genuinely have no circuit, such as listing what a car has ever
+        run. **It is not what a session should ask.**
+
+        A sheet whose own `circuit_key` is NULL never matches a named circuit.
+        Missing is missing: a sheet that has never said which circuit it is
+        for cannot be asserted to be for this one, and asserting it is exactly
+        how the failure happened.
         """
         wanted = [sheet for sheet in self.list_setup_sheets(car_name)
-                  if sheet.purpose == purpose]
+                  if sheet.purpose == purpose
+                  and (circuit_key is None
+                       or sheet.circuit_key == circuit_key)]
         return wanted[0] if wanted else None
 
     def list_setup_sheets(self, car_name: str | None = None) -> list:
@@ -1523,8 +1546,15 @@ class Store:
         a compound-agnostic fit would accumulate a new row on every run and the
         newest would not be findable by the constraint.
         """
+        # **`game_version` is part of the identity, not a column on it.** It
+        # became a scope key when 1.71 was found pooling into pre-patch fits -
+        # see `tyre_model.Scope` - and a key the storage does not know about is
+        # not a key. Without it the v1.71 Monza fit DELETED the v1.70 one it
+        # was meant to sit beside: 74 laps of pre-patch evidence vanished on
+        # write, silently, and the archive kept only the 21 post-patch laps
+        # under a row that still read like the whole record.
         keys = ("car_key", "circuit_key", "compound", "yaw_source",
-                "model_kind", "derivation_version")
+                "model_kind", "derivation_version", "game_version")
         missing = [k for k in keys if k not in model]
         if missing:
             raise ValueError(f"a tyre model needs {', '.join(missing)}")
@@ -1539,14 +1569,13 @@ class Store:
             "gate_json": json.dumps(model.get("gate", {})),
             "unknowns_json": json.dumps(list(model.get("unknowns", ()))),
             "provenance_json": json.dumps(model.get("provenance", {})),
-            "game_version": model.get("game_version"),
             "fitted_at": _now(),
         }
         with self._write() as conn:
             conn.execute(
                 "DELETE FROM tyre_models WHERE car_key = ? AND circuit_key = ? "
                 "AND compound IS ? AND yaw_source = ? AND model_kind = ? "
-                "AND derivation_version = ?",
+                "AND derivation_version = ? AND game_version IS ?",
                 [model[k] for k in keys])
             cur = conn.execute(
                 f"INSERT INTO tyre_models ({', '.join(payload)}) "
@@ -1696,6 +1725,8 @@ def _setup_sheet(row: sqlite3.Row):
         build=json.loads(row["build_json"] or "{}"),
         notes=row["notes"] or "",
         purpose=row["purpose"] if "purpose" in row.keys() else None,
+        circuit_key=(row["circuit_key"]
+                     if "circuit_key" in row.keys() else None),
         id=row["id"],
     )
 

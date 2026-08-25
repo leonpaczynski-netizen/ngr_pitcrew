@@ -166,24 +166,45 @@ class PoolingRefused(RuntimeError):
 
 @dataclass(frozen=True)
 class Scope:
-    """The keys a fit may never cross."""
+    """The keys a fit may never cross.
+
+    **`game_version` is one of them, and it was not.** The other three plus
+    `yaw_source` were chosen because pooling across them measures the storage
+    format or the car rather than the tyre - and the argument for `yaw_source`
+    is stated as a 3-4 % offset against a 1.8-6.4 % compound step. A GT7
+    physics update is at least that: 1.71 changed the tyre slip model itself,
+    which is the quantity this whole module fits, and `CLAUDE.md` rule 7 makes
+    "pre-patch evidence is void until re-measured" doctrine rather than
+    preference.
+
+    It was pooling. The Monza Racing Hard model held **95 laps across 8
+    sessions spanning the 20 Aug patch** at `confidence: high` - the largest
+    sample in the archive, and the one most likely to be trusted.
+    """
     car_key: str
     circuit_key: str
     compound: str | None
     yaw_source: str
+    game_version: str | None = None
 
     def as_dict(self) -> dict:
         return {"car_key": self.car_key, "circuit_key": self.circuit_key,
-                "compound": self.compound, "yaw_source": self.yaw_source}
+                "compound": self.compound, "yaw_source": self.yaw_source,
+                "game_version": self.game_version}
 
     def label(self) -> str:
+        version = f" / v{self.game_version}" if self.game_version else ""
         return (f"{self.circuit_key} / {self.car_key} / "
-                f"{self.compound or 'compound-untagged'} / {self.yaw_source}")
+                f"{self.compound or 'compound-untagged'} / {self.yaw_source}"
+                f"{version}")
 
 
 def scope_of(row: dict) -> Scope:
+    # `game_version` is absent on a raw observation row and is stamped onto it
+    # by `fit_archive` from the session it came from. Absent everywhere means
+    # one scope, exactly as before this key existed.
     return Scope(row["car_key"], row["circuit_key"], row["compound"],
-                 row["yaw_source"])
+                 row["yaw_source"], row.get("game_version"))
 
 
 def refuse_to_pool(rows: list[dict]) -> str:
@@ -194,6 +215,15 @@ def refuse_to_pool(rows: list[dict]) -> str:
     averaged them would produce a plausible number with a plausible standard
     error and no way to tell it was measuring the storage format.
     """
+    versions = {row.get("game_version") for row in rows}
+    versions.discard(None)
+    if len(versions) > 1:
+        raise PoolingRefused(
+            "a fit spans exactly one game version; these observations span "
+            + ", ".join(sorted(versions))
+            + ". 1.71 changed the tyre slip model, which is the quantity this "
+              "module fits, so laps either side of it are measurements of "
+              "different physics. CLAUDE.md rule 7.")
     sources = {row["yaw_source"] for row in rows}
     if not sources:
         raise PoolingRefused("no observations")
@@ -1228,16 +1258,63 @@ def fit_scope(evidence: ScopeEvidence, *, reproduced_on: list[str] | None = None
     ]
 
 
+def _scope_game_version(evidence: "ScopeEvidence",
+                        session_versions: dict[int, str] | None,
+                        fallback: str | None) -> str | None:
+    """The game version this scope's own laps were driven on.
+
+    Every session behind the scope, comma-joined where they disagree - a scope
+    that straddles a physics patch says so rather than picking one. Falls back
+    to the caller's flat value only where nothing can be resolved, so a caller
+    that supplies no map behaves exactly as before.
+    """
+    if not session_versions:
+        return fallback
+    found = {row.get("game_version")
+             or session_versions.get(row.get("session_id"))
+             for row in (evidence.all_rows or evidence.rows)}
+    found.discard(None)
+    return ", ".join(sorted(found)) if found else fallback
+
+
 def fit_archive(rows: list[dict], *,
                 derivation_version: int = DERIVATION_VERSION,
                 game_version: str | None = None,
+                session_versions: dict[int, str] | None = None,
                 wear_multipliers: dict[str, str] | None = None) -> dict:
     """Fit every scope in a set of observations, and say what is still missing.
 
     The cross-scope pass is what Stage 4 needs: a temperature slope is only
     speakable if its **sign reproduces on a second scope**, so no scope can be
     fitted in isolation.
+
+    **`session_versions` stamps each scope with the version its own laps were
+    driven on, and the flat `game_version` is the fallback for callers that
+    cannot supply it.** The flat one was wrong in a way that mattered: the
+    caller collected it from `events.game_version`, unioned it across every
+    event, and stamped the result on every model. Event 6 (Fuji) carries NULL
+    there while its five sessions all correctly say 1.71 - so the only events
+    with a version said 1.70, and **every model in the archive was written
+    `1.70`, including the four fitted entirely from v1.71 laps.**
+
+    That is worse than an absent stamp. 1.71 was a physics update - tyre slip
+    model, suspension and aero ranges - and `CLAUDE.md` rule 7 turns on being
+    able to tell post-patch evidence from pre-patch. A v1.71 model wearing a
+    v1.70 label invites exactly the comparison the rule forbids, and does it
+    silently.
+
+    Sessions are the right source because an observation knows which session it
+    came from and a session is stamped at recording. A scope whose laps span
+    two versions is reported as both, comma-joined, which is a thing a reader
+    can act on rather than a silent pick.
     """
+    if session_versions:
+        # Stamped onto the row rather than looked up inside `scope_of`, so the
+        # scope key stays a pure function of the row and a caller with no map
+        # gets the previous behaviour exactly.
+        rows = [{**row,
+                 "game_version": session_versions.get(row.get("session_id"))}
+                for row in rows]
     scopes = group_by_scope(rows)
     signs: dict[Scope, tuple[float, float] | None] = {}
     for scope, evidence in scopes.items():
@@ -1258,7 +1335,9 @@ def fit_archive(rows: list[dict], *,
                     reproduced.append(other.label())
         models.extend(fit_scope(
             evidence, reproduced_on=reproduced,
-            derivation_version=derivation_version, game_version=game_version,
+            derivation_version=derivation_version,
+            game_version=_scope_game_version(evidence, session_versions,
+                                             game_version),
             wear_multiplier=(wear_multipliers or {}).get(scope.circuit_key)))
 
     # **Split by yaw_source, not just by circuit.** This is the figure the

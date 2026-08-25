@@ -125,8 +125,23 @@ def main() -> int:
         if event.get("game_version"):
             versions.add(event["game_version"])
 
+    # **Per session, not per event, and the difference is a wrong label on
+    # every model in the archive.** `events.game_version` is NULL on event 6
+    # while its five sessions all say 1.71, so the union above resolved to
+    # `1.70` alone and stamped it on all 76 models - including the four fitted
+    # entirely from post-patch Fuji laps. Sessions are stamped at recording and
+    # an observation knows which one it came from; see
+    # `tyre_model._scope_game_version`. The union stays as the fallback for a
+    # scope whose sessions cannot be resolved.
+    session_versions: dict[int, str] = {}
+    for event in store.list_events():
+        for session in store.list_sessions(event["id"]):
+            if session.get("game_version"):
+                session_versions[session["id"]] = session["game_version"]
+
     result = fit_archive(rows, derivation_version=args.derivation_version,
                          game_version=", ".join(sorted(versions)) or None,
+                         session_versions=session_versions,
                          wear_multipliers=multipliers)
     scopes = result["scopes"]
 

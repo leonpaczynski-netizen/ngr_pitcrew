@@ -51,6 +51,14 @@ Versions, and what upgrading means here:
   migration here that rebuilds a table; see its docstring for why that is safe
   for `setup_sheets` and would not be for `laps`.
 
+* **v9** puts `game_version` inside `tyre_models`' uniqueness key, for the same
+  reason v8 put `purpose` inside `setup_sheets`': the conflict target did not
+  include the column that tells two fits apart, so the v1.71 Monza model
+  overwrote the v1.70 one.  It is the cheapest rebuild in the file — the table
+  is wholly derived from `grip_observations`, nothing references it, and
+  `tools/fit_tyre_models.py --apply` restores it in full — so it is dropped and
+  recreated rather than copied across.
+
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
 two columns and back-fills four — so `MIGRATIONS` below exists, and anything
@@ -62,7 +70,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -530,10 +538,18 @@ CREATE TABLE IF NOT EXISTS tyre_models (
     gate_json          TEXT    NOT NULL,   -- which staged gate, its thresholds, what failed
     unknowns_json      TEXT    NOT NULL,   -- what this model explicitly cannot say
     provenance_json    TEXT    NOT NULL,   -- derivation_version, lap ids, multipliers
+    -- **Part of the scope, not a label on it (v9).** 1.71 changed the tyre
+    -- slip model, which is the quantity this table fits, so laps either side
+    -- of the patch measure different physics - `tyre_model.Scope` refuses to
+    -- pool them. Left out of the uniqueness key, the post-patch fit DELETED
+    -- the pre-patch one it was meant to sit beside: 74 laps of Monza evidence
+    -- vanished on write and the archive kept 21 under a row that still read
+    -- like the whole record.
     game_version       TEXT,
     derivation_version INTEGER NOT NULL,
     fitted_at          TEXT    NOT NULL,
-    UNIQUE(car_key, circuit_key, compound, yaw_source, model_kind, derivation_version)
+    UNIQUE(car_key, circuit_key, compound, yaw_source, model_kind,
+           derivation_version, game_version)
 );
 CREATE INDEX IF NOT EXISTS idx_tyre_models_scope
     ON tyre_models(car_key, circuit_key, model_kind);
@@ -798,6 +814,28 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # every sheet stored before the question was asked, which reads as
         # "not stated" rather than as a race sheet.
         ("purpose", "TEXT"),
+        # **Which circuit this sheet is for, and it cost five sessions to
+        # find out it was missing.**
+        #
+        # `sheet_for(car_name, purpose)` had no circuit in its key, so it
+        # returned the car's most recent race sheet whatever circuit the
+        # driver was at. On 23 Aug 2026 a practice session at Road Atlanta
+        # bound itself to "Yas Marina race Rev C" - a different circuit's
+        # gearbox, ride height and differential - and the export then
+        # reported that as the setup as run. The same wrong sheet carried an
+        # empty shift table, which silenced the shift beep for the whole
+        # session.
+        #
+        # A sheet is a property of the car AND the circuit. The gearbox alone
+        # proves it: change a ratio for a different track and the rpm worth
+        # shifting at moves with it.
+        #
+        # **Deliberately NOT in the UNIQUE key.** It is nullable, and sqlite
+        # counts two NULLs as distinct in a UNIQUE constraint - exactly the
+        # trap the v8 note above describes, where the upsert stops matching
+        # and a sheet accumulates a row on every save. Sheet names already
+        # carry the circuit in practice.
+        ("circuit_key", "TEXT"),
     ),
     "sessions": (
         # **Where the capture is, and the wall clock at video second zero.**
@@ -1272,6 +1310,59 @@ def _migrate_v8_sheet_purpose(conn: sqlite3.Connection) -> None:
                      (sequence[0], "setup_sheets", sequence[0]))
 
 
+def _migrate_v9_tyre_model_version(conn) -> None:
+    """Put `game_version` inside `tyre_models`' uniqueness key.
+
+    **Dropped and recreated, not copied across.** Every other rebuild in this
+    file preserves its rows because they are the only copy. This table is not:
+    it is fitted wholesale from `grip_observations` by
+    `tools/fit_tyre_models.py`, nothing holds a foreign key into it, and a
+    re-fit reproduces it exactly. Copying rows across would preserve precisely
+    the collisions this migration exists to make impossible - the pre-patch
+    models that the post-patch write already deleted are not in there to copy.
+
+    **Re-fit after upgrading.** The table is left empty and the app falls back
+    to "I can't see tyre wear" until it is repopulated, which is the honest
+    state for an archive that has not been rebuilt yet.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='tyre_models'"
+    ).fetchone()
+    if row is None or "derivation_version, game_version" in (row[0] or ""):
+        return                          # already v9, or built fresh from the DDL
+
+    conn.execute("DROP TABLE tyre_models")
+    # Spelled out rather than sliced out of `DDL`: splitting that string on
+    # semicolons is a parser, and a wrong one - the column comments alone make
+    # it fragile. A migration is a fixed point in the file's history and its
+    # shape should not move when the DDL above is next edited.
+    conn.execute("""
+        CREATE TABLE tyre_models (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            car_key            TEXT    NOT NULL,
+            circuit_key        TEXT    NOT NULL,
+            compound           TEXT,
+            yaw_source         TEXT    NOT NULL,
+            model_kind         TEXT    NOT NULL,
+            model_json         TEXT    NOT NULL,
+            samples            INTEGER NOT NULL,
+            sessions           INTEGER NOT NULL,
+            stints             INTEGER NOT NULL,
+            confidence         TEXT    NOT NULL,
+            speakable          INTEGER NOT NULL DEFAULT 0,
+            gate_json          TEXT    NOT NULL,
+            unknowns_json      TEXT    NOT NULL,
+            provenance_json    TEXT    NOT NULL,
+            game_version       TEXT,
+            derivation_version INTEGER NOT NULL,
+            fitted_at          TEXT    NOT NULL,
+            UNIQUE(car_key, circuit_key, compound, yaw_source, model_kind,
+                   derivation_version, game_version)
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tyre_models_scope "
+                 "ON tyre_models(car_key, circuit_key, model_kind)")
+
+
 MIGRATIONS: dict[int, tuple[str, object]] = {
     3: ("per-corner tyre wear", _migrate_v3_wear_per_corner),
     4: ("the game clock onto the lap, and the readings taken through a keyhole",
@@ -1280,4 +1371,6 @@ MIGRATIONS: dict[int, tuple[str, object]] = {
     7: ("canonical car and circuit identity", _migrate_v7_canonical_identity),
     8: ("a race sheet and a qualifying sheet are two sheets",
         _migrate_v8_sheet_purpose),
+    9: ("a pre-patch fit and a post-patch fit are two models",
+        _migrate_v9_tyre_model_version),
 }
