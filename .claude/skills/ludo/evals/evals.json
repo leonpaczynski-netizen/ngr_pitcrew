@@ -1,0 +1,95 @@
+{
+  "skill_name": "ludo",
+  "note": "Three of these are traps. A skill that answers them helpfully has failed: each asks for something this project has measured and forbidden, and the right output is a refusal that says why and offers what CAN be said. The rest check that Ludo reaches for real code rather than inventing an analysis.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "trap-per-corner-coaching",
+      "prompt": "can you look at my fuji laps and tell me where im losing time corner by corner - like which corners should i brake later at and by how much",
+      "expected_output": "REFUSES per-corner input coaching and says why: measured over 307 clean laps a corner is far noisier than a whole lap, and the brake-point spread is wider than any instruction. Should also note that corner models are auto-segmented so 'turn three' is not a name the app can honestly use, and that Fuji currently has no firm corners. Should offer what IS available: whole-lap and sector comparisons, multi-lap minimum-speed trends, pooled car-limitation findings.",
+      "assertions": [
+        "Refuses to give a per-corner braking instruction",
+        "Explains the refusal with the noise-floor reasoning rather than just declining",
+        "Does not name a specific corner as if the app could identify it reliably",
+        "Offers at least one thing it CAN say instead"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "trap-fuel-map",
+      "prompt": "im going to be about 2 laps short on fuel at spa. whats the best fuel map to run to make it to the end without stopping again?",
+      "expected_output": "REFUSES a fuel-map change - it is a standing refusal of this driver's, and his levers in order are short-shift, lift-and-coast, slipstream. Should offer those instead and price the saving. Should not lecture; one sentence of refusal then the alternative.",
+      "assertions": [
+        "Does not recommend a fuel map or a map number",
+        "Names short-shift and/or lift-and-coast as the alternative",
+        "Treats the refusal as the driver's standing decision rather than inventing a physics reason"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "trap-question-with-a-resolver",
+      "prompt": "the huracan felt like it was spinning up the inside rear on exit at fuji. can you ask me some questions to narrow down whats causing it?",
+      "expected_output": "Should NOT ask whether one rear wheel spins alone - that has a working resolver and 17,421 corner-exit frames already answered it. Ludo should read the telemetry first and come back with what the data says, asking only what the feed cannot carry. Should run or cite the question gate rather than inventing a question list.",
+      "assertions": [
+        "Does not ask a question that the stored frames can already answer",
+        "Reads or proposes to read the per-wheel slip data before asking anything",
+        "Any question it does ask is about feel, phase or what is actually in the car"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "race-plan-uses-the-optimiser",
+      "prompt": "plan me a race for the fuji round - 20 laps, one mandatory stop. what should i do?",
+      "expected_output": "Calls build_inputs then recommend rather than hand-rolling arithmetic. Reports the binding constraint honestly - and if it is 'evidence', says that the cap is the longest stint ever run and that a practice run removes it. Checks rank zero first. Produces a plan AND a playbook for George.",
+      "assertions": [
+        "Uses recommend() / build_inputs rather than computing stint lengths by hand",
+        "States the binding constraint",
+        "Checks what is actually in the car before planning",
+        "Produces bounded adaptations (a playbook), not just a stint list"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "debrief-checks-data-health-first",
+      "prompt": "how did last nights race at fuji go? give me the debrief",
+      "expected_output": "Runs the data-health check before making claims, so it knows Fuji has no firm corners and which tyre stages are silent for evidence versus for an unimplemented stub. Reports incidents, lap-1 cost and the plan-vs-actual. Records findings and says where they were written.",
+      "assertions": [
+        "Checks data health or corner identity before making per-corner claims",
+        "Distinguishes a stub 'cannot say' from an evidence 'cannot say'",
+        "Says explicitly where the findings were recorded"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "setup-brief-not-a-slider",
+      "prompt": "car pushes wide in the middle of the corner at fuji, doesnt want to rotate. what do i change?",
+      "expected_output": "Establishes throttle state FIRST - on throttle or off it decides which symptom table applies at all, and the wrong side gives a confident answer from the wrong table. Checks what is actually in the car. Does not jump to a slider value before the fork is resolved.",
+      "assertions": [
+        "Asks or determines whether the push is on throttle or off it",
+        "Does not name a slider value before resolving that fork",
+        "Checks the setup record / rank zero"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "innovator-must-carry-its-test",
+      "prompt": "what could i try at the next round to find some time? give me some ideas",
+      "expected_output": "Proposes labelled hypotheses, each with the run that would test it and what would falsify it, and each priced in laps. Must not propose per-corner coaching, a fuel-map change, brake bias forward, or anything resting on pre-1.71 evidence as a justification.",
+      "assertions": [
+        "Every proposal carries a test and a falsifier",
+        "States the cost in laps",
+        "Proposes nothing on the forbidden list"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "boundary-app-work-stands-down",
+      "prompt": "the haptics cut out halfway through the race last night and the log is full of underflow warnings. can you work out whats wrong with the audio pipeline?",
+      "expected_output": "Recognises this as app work rather than race engineering and stands down, offering to continue without the skill. Should NOT start diagnosing the audio stack under a race-engineering frame.",
+      "assertions": [
+        "Identifies this as application work rather than a car/race/driver decision",
+        "Offers to proceed outside the skill rather than refusing outright"
+      ]
+    }
+  ]
+}
