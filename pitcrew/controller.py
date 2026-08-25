@@ -70,7 +70,7 @@ from pitcrew.store import catalogs
 from pitcrew.store.db import (DEFAULT_SHEET_PURPOSE, WEAR_HUD_VIDEO,
                               Store)
 from pitcrew.store.identity import IDENTITY_OK
-from pitcrew.race.calls import STAY_OUT, fuel_target_l
+from pitcrew.race.calls import STAY_OUT, fuel_target_l, fuel_to_flag_l
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.race.expectations import PRACTICE, Expectation
 from pitcrew.race.hud_calibration import note_frame_red
@@ -4915,7 +4915,11 @@ class PitCrewController(QObject):
         race = self.race
         if race is None or not race.running:
             return None
-        return fuel_target_l(race.state), race.state.fuel_per_lap_l
+        # The third figure is the alternative he is actually weighing in the
+        # box - see `calls.fuel_to_flag_l`. It is None whenever staying out is
+        # not a live option, and the watch says nothing about it then.
+        return (fuel_target_l(race.state), race.state.fuel_per_lap_l,
+                fuel_to_flag_l(race.state))
 
     def _voice_refuel(self, call) -> None:
         """Say it, show it, and file it with the rest of the race's calls."""

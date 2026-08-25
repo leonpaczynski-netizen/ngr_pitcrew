@@ -950,6 +950,43 @@ def fuel_target_l(state: RaceState) -> float | None:
     return after_stop * state.fuel_per_lap_l + (margin_l or 0.0)
 
 
+def fuel_to_flag_l(state: RaceState) -> float | None:
+    """What the tank needs at pit exit to reach the flag without stopping again.
+
+    **The number the driver was not given, at the moment he needed it.** Fuji,
+    20:27:19, with the hose already in: *"Go. 71 litres aboard - that already
+    covers it."* True for the approved plan, whose next stint was four laps.
+    He was not driving that race - he had ignored the box call twice by then
+    and ran to the flag - and fifteen laps at the measured burn wanted about
+    92 L. He filled the tank instead, crossed the line with 8.276 L aboard,
+    and that is 8.3 s stationary at the measured 1.001 L/s.
+
+    Nothing in the app produced this figure at the box. `fuel_target_l` sizes
+    the NEXT STINT whenever a further stop is planned, which is right for the
+    plan and silent about the alternative the driver is actually weighing. So
+    it is computed alongside and spoken beside it, and he picks - which is the
+    charter's division of labour: the engineer supplies the number, the driver
+    makes the call.
+
+    None where it cannot be sized, or where the tank cannot hold it anyway -
+    a figure he cannot act on is not worth the words.
+    """
+    if not state.fuel_per_lap_l:
+        return None
+    remaining = _laps_after_this_stop(state)
+    if remaining is None:
+        return None
+    margin_l, _ = fuel_margin_l(remaining, state.fuel_per_lap_l,
+                                sd_l=state.fuel_sd_l,
+                                timed=state.race_minutes is not None,
+                                lap_count_firm=state.laps_estimate_firm)
+    needed = remaining * state.fuel_per_lap_l + (margin_l or 0.0)
+    capacity = state.fuel_capacity_l
+    if capacity and needed > capacity:
+        return None
+    return needed
+
+
 def _fuel_instruction(state: RaceState) -> str:
     """How much to take, in litres, to the diamond plus a lap.
 

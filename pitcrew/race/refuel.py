@@ -65,6 +65,11 @@ RELEASE_EPSILON_L = 0.05
 # epsilon the fuel call uses before it bothers reporting what a short-shift
 # leaves uncovered.
 SHORT_EPSILON_L = 0.5
+# How much bigger the to-the-flag fill has to be before it is worth naming as
+# an alternative in the box. Under a couple of litres the two plans are the
+# same stop and a second number is noise at the one moment he cannot afford
+# any. Two litres is also two seconds on the measured 1.001 L/s rig.
+TO_FLAG_EPSILON_L = 2.0
 
 TARGET = "refuel-target"
 RELEASE = "refuel-release"
@@ -119,7 +124,8 @@ class RefuelWatch:
 
     def note(self, fuel_l: float | None, *, speed_kph: float | None,
              target_l: float | None,
-             fuel_per_lap_l: float | None = None) -> RefuelCall | None:
+             fuel_per_lap_l: float | None = None,
+             to_flag_l: float | None = None) -> RefuelCall | None:
         """One frame. Returns what to say, or None - which is almost always.
 
         `target_l` is what the tank should read at pit exit, recomputed by the
@@ -174,9 +180,11 @@ class RefuelWatch:
                 self._said_release = True
                 return RefuelCall(
                     RELEASE, "Go.",
-                    f"{fuel_l:.0f} litres aboard - that already covers it.")
+                    f"{fuel_l:.0f} litres aboard - that already covers it."
+                    + _to_flag_clause(to_flag_l, target))
             return RefuelCall(TARGET, f"Fuel to {_ceil_l(target)} litres.",
-                              _laps_reason(target, fuel_per_lap_l))
+                              _laps_reason(target, fuel_per_lap_l)
+                              + _to_flag_clause(to_flag_l, target))
 
         if not self._said_release and fuel_l >= target - RELEASE_EPSILON_L:
             self._said_release = True
@@ -223,8 +231,8 @@ class RefuelAdviser:
     qualifying coach: the controller builds it with a `speak` callable and
     hands it over, and the frame path calls one method and knows nothing else.
 
-    `context` returns `(target_l, fuel_per_lap_l)` for the race right now, or
-    None where nothing can size a stop. It is called **only when the car is
+    `context` returns `(target_l, fuel_per_lap_l, to_flag_l)` for the race
+    right now, or None where nothing can size a stop. It is called **only when the car is
     slow enough to be in a pit box**, because it re-derives the fill from the
     race's own burn and that is not free sixty times a second for an hour.
     """
@@ -240,13 +248,14 @@ class RefuelAdviser:
 
     def note_frame(self, fuel_l: float | None,
                    speed_kph: float | None) -> None:
-        target = fuel_per_lap = None
+        target = fuel_per_lap = to_flag = None
         if speed_kph is not None and speed_kph <= FILL_MAX_KPH:
             found = self._context()
             if found is not None:
-                target, fuel_per_lap = found
+                target, fuel_per_lap, to_flag = found
         call = self.watch.note(fuel_l, speed_kph=speed_kph, target_l=target,
-                               fuel_per_lap_l=fuel_per_lap)
+                               fuel_per_lap_l=fuel_per_lap,
+                               to_flag_l=to_flag)
         if call is not None:
             self._speak(call)
 
@@ -260,6 +269,20 @@ class RefuelAdviser:
         if call is not None:
             self._speak(call)
         self.watch.reset()
+
+
+def _to_flag_clause(to_flag_l: float | None, target_l: float | None) -> str:
+    """" Nn to the flag if you stay out.", or nothing.
+
+    Only where staying out is a live alternative: a figure that is already
+    covered by the planned fill is not a choice, and one the tank cannot hold
+    is not an option. See `calls.fuel_to_flag_l` for why it is said at all.
+    """
+    if to_flag_l is None or target_l is None:
+        return ""
+    if to_flag_l <= target_l + TO_FLAG_EPSILON_L:
+        return ""
+    return f" {_ceil_l(to_flag_l)} to the flag if you stay out."
 
 
 def _ceil_l(litres: float) -> int:
