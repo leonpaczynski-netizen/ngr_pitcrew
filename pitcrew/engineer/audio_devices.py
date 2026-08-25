@@ -105,6 +105,10 @@ def lock_for(device: object | None) -> threading.Lock:
 
 # **The beep goes first, and the line it cuts is said again.**
 #
+# SUPERSEDED 25 Aug 2026 for the beep, which now mixes - see `mixing_on` below.
+# This remains the rule for anything that cannot be mixed, and the reasoning
+# below is still why the beep is never made to wait for a sentence.
+#
 # The voice and the beep share one card, so they share one `lock_for` - which
 # until now meant a beep arriving mid-sentence WAITED for the sentence. That
 # is the wrong way round twice over. A spoken call is a paragraph the driver
@@ -163,6 +167,125 @@ def priority_wanted(device: object | None) -> bool:
     key = endpoint_key(device) if isinstance(device, str) else repr(device)
     with _PRIORITY_GUARD:
         return _PRIORITY.get(key, 0) > 0
+
+
+# **Better than going first: going at the same time.**
+#
+# Pre-emption above is the right answer to "who gets the card", and the wrong
+# answer to the question the driver actually asked. Measured in the Fuji race
+# (session 88, 24 Aug 2026): nine calls were cut mid-sentence and re-spoken
+# from the beginning, and "Green, green, green. 20 laps." was truncated and
+# restarted FOUR times between 20:18:26 and 20:18:31. The driver did not hear
+# a beep win a race against a sentence. He heard his engineer stammer at the
+# start of a grand prix.
+#
+# Both sounds want the same card at the same moment, and the card can carry
+# both: they are int16 PCM at a known rate, and summing them is addition. So a
+# beep that finds the card busy now hands its waveform to whoever is writing,
+# and that writer mixes it into the chunk it is about to play. One stream, one
+# writer, no close, no restart, nothing said twice.
+#
+# **The ownership rule is untouched and this is why the mailbox exists.** The
+# beep still never reaches into another thread's stream - it deposits samples
+# and returns. The writing thread is still the only thread that writes, ducks,
+# or closes. A close landing inside another thread's blocking `write` is the
+# SimHub close-from-send deadlock this codebase has already paid for once, and
+# mixing does not go anywhere near it.
+#
+# **The renderer is a callable, not an array, because the rates differ.** The
+# beep is synthesised at 44.1 kHz and the voice pack is 22.05 kHz; resampling
+# a square wave is how you get a click, and a click in a headset at racing
+# speed reads as a fault. A square wave costs nothing to generate again at
+# whatever rate the writer is already using, so the mailbox carries the recipe
+# rather than the result.
+#
+# Pre-emption remains the fallback, for the case no one is mixing - the card
+# held by something that cannot mix, or a beep arriving in the gap between the
+# play lock and the first chunk of synthesis.
+_MIX: dict[str, list] = {}
+_MIXERS: dict[str, int] = {}
+_MIX_GUARD = threading.Lock()
+
+# How stale a deposited sound may be when the writer gets to it. The beep's own
+# rule, unchanged since it was written: a beep played late names a shift point
+# the engine has already gone past, which is worse than the missed one. The
+# writer drains between chunks, so in practice this only ever discards a beep
+# that landed while a live synthesis was still running.
+MIX_STALE_AFTER_S = 0.4
+
+# What the two sounds are worth relative to each other while they overlap.
+# The driver's instruction, 25 Aug 2026: "both sounds are played at the same
+# time, beep is just louder than engineer." The beep is built at 16000/32767 of
+# full scale, so lifting it and ducking the line under it puts roughly 3.5 dB
+# between them - audible as "over the top of", not as "instead of".
+MIX_DUCK = 0.45
+MIX_GAIN = 1.3
+
+
+@contextlib.contextmanager
+def mixing_on(device: object | None):
+    """Declare that this thread is writing `device` and will mix what arrives.
+
+    Held for the whole of a spoken line, including the synthesis before the
+    first chunk. A beep offered during synthesis is accepted and waits in the
+    mailbox rather than being refused - the alternative is the fallback path,
+    which cuts a line that has not started playing yet and re-speaks it. It is
+    `MIX_STALE_AFTER_S`, not the offer, that decides whether a waiting beep is
+    still worth sounding.
+    """
+    key = endpoint_key(device) if isinstance(device, str) else repr(device)
+    with _MIX_GUARD:
+        _MIXERS[key] = _MIXERS.get(key, 0) + 1
+    try:
+        yield
+    finally:
+        with _MIX_GUARD:
+            remaining = _MIXERS.get(key, 0) - 1
+            if remaining > 0:
+                _MIXERS[key] = remaining
+            else:
+                _MIXERS.pop(key, None)
+                # Nothing is writing this card any more, so nothing will ever
+                # drain what is left. Dropping it here rather than leaving it
+                # for the next line is the same staleness rule stated as
+                # ownership: a beep that outlived its writer is a beep for an
+                # rpm two corners ago.
+                _MIX.pop(key, None)
+
+
+def offer_mix(device: object | None, render) -> bool:
+    """Hand a short sound to the thread writing `device`. True if it was taken.
+
+    `render` is called as `render(rate)` by that thread and must return int16
+    samples at `rate`. It runs on the writer's thread, between chunks, so it
+    has to be cheap - generating a waveform, not reading a file.
+    """
+    key = endpoint_key(device) if isinstance(device, str) else repr(device)
+    with _MIX_GUARD:
+        if not _MIXERS.get(key):
+            return False
+        _MIX.setdefault(key, []).append((_mix_now(), render))
+        return True
+
+
+def take_mix(device: object | None) -> list:
+    """Everything waiting to be mixed into `device`, oldest first.
+
+    Drains. Anything older than `MIX_STALE_AFTER_S` is dropped here rather
+    than played late.
+    """
+    key = endpoint_key(device) if isinstance(device, str) else repr(device)
+    with _MIX_GUARD:
+        waiting = _MIX.pop(key, None)
+    if not waiting:
+        return []
+    now = _mix_now()
+    return [render for at, render in waiting
+            if now - at <= MIX_STALE_AFTER_S]
+
+
+def _mix_now() -> float:
+    return time.monotonic()
 
 
 # Streams that outlive the sound they are making. A spoken line opens a stream

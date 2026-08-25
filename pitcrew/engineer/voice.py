@@ -49,6 +49,113 @@ def _play_lock():
     return audio_devices.lock_for(audio_devices.output_device())
 
 
+# **How often the voice offers the card to the shift beep.**
+#
+# The beep waits `shift_beep.PRIORITY_WAIT_S` (0.4 s) and then drops itself
+# rather than sound at an rpm the engine has left. That deadline was never met
+# while a line was playing: both writers below handed PortAudio a whole clip in
+# one blocking `write`, so the yield below - documented as happening "between
+# written chunks" - could only happen between whole sentences. Measured on the
+# rendered pack, every clip is longer than the deadline and the median is
+# 1.88 s, so the beep lost the race roughly four times in five and the log
+# filled with "the card was still busy 0.4s after the beep asked for it".
+#
+# 100 ms gives the beep four chances inside its deadline while keeping each
+# write long enough that the callback is never short of work.
+_YIELD_CHUNK_S = 0.1
+
+
+class _Mixer:
+    """Sums short sounds into a line that is already playing.
+
+    One per spoken line. Holds the tail of an overlay that did not fit in the
+    chunk it arrived on - a 60 ms beep landing 80 ms into a 100 ms chunk plays
+    20 ms here and 40 ms on the next one, rather than being cut at the chunk
+    boundary or delayed to it.
+
+    See `audio_devices.offer_mix` for why the beep hands over a recipe rather
+    than a waveform, and why mixing replaced pre-emption at all.
+    """
+
+    __slots__ = ("device", "_carry")
+
+    def __init__(self, device) -> None:
+        self.device = device
+        self._carry = None
+
+    @property
+    def active(self) -> bool:
+        return self._carry is not None
+
+    def blend(self, chunk, rate: int):
+        """`chunk` with anything pending summed into it, ducked underneath.
+
+        Returns `chunk` itself, untouched and unconverted, when there is
+        nothing to mix. That is the overwhelmingly common case - it is on the
+        voice's inner loop, and a line with no beep in it must not pay for the
+        arithmetic of one.
+        """
+        import numpy as np
+
+        for render in audio_devices.take_mix(self.device):
+            try:
+                arriving = np.asarray(render(rate), dtype=np.float32)
+            except Exception as exc:            # noqa: BLE001 - see below
+                # A sound that cannot be built is not worth taking the line
+                # down for. The beep is the thing being dropped here, and it
+                # is dropped the same way an overlapping beep already is.
+                log("voice").warning("could not mix a sound into the line: "
+                                     "%s: %s", type(exc).__name__, exc)
+                continue
+            self._carry = (arriving if self._carry is None
+                           else _summed(self._carry, arriving))
+        if self._carry is None:
+            return chunk
+        head, self._carry = self._carry[:len(chunk)], self._carry[len(chunk):]
+        if not len(self._carry):
+            self._carry = None
+        mixed = np.asarray(chunk, dtype=np.float32) * audio_devices.MIX_DUCK
+        mixed[:len(head)] += head * audio_devices.MIX_GAIN
+        return np.clip(mixed, -32768, 32767).astype(np.int16)
+
+
+def _summed(a, b):
+    """`a` and `b` overlaid from sample zero, long enough to hold both."""
+    import numpy as np
+
+    if len(b) > len(a):
+        a, b = b, a
+    out = a.copy()
+    out[:len(b)] += b
+    return out
+
+
+def _write_yielding(stream, samples, rate: int, line, mixer=None) -> bool:
+    """Play `samples`, mixing in anything urgent that arrives on the way.
+
+    Returns True when it stopped early to let a beep through - which now only
+    happens when there was no mixer to take it, because a beep that can be
+    mixed is never a reason to stop.
+
+    **The chunking is the whole point.** `_yield_to_priority` has always said
+    it is checked between written chunks; a clip written in one `write` is one
+    chunk, which made the promise vacuous. Nothing about the ownership rule
+    changes - the writing thread is still the only one that touches the stream,
+    and the beep still never reaches into it.
+    """
+    step = max(1, int(rate * _YIELD_CHUNK_S))
+    for start in range(0, len(samples), step):
+        chunk = samples[start:start + step]
+        stream.write(chunk if mixer is None else mixer.blend(chunk, rate))
+        # A mixer that is still draining an overlay has a beep sounding right
+        # now. Standing aside for a second one mid-tone would cut the first.
+        if mixer is not None and mixer.active:
+            continue
+        if _yield_to_priority(line):
+            return True
+    return False
+
+
 def _yield_to_priority(line) -> bool:
     """True when the line should stop here and let the shift beep through.
 
@@ -386,9 +493,14 @@ class PiperEngine:
                    chunk.sample_rate)
 
     def speak(self, text: str) -> None:
-        with _play_lock():
+        device = audio_devices.output_device()
+        # Declared before the lock body rather than around the write loop, so
+        # a beep arriving during synthesis is taken and mixed into the first
+        # chunk instead of pre-empting a line that has not been heard yet.
+        with _play_lock(), audio_devices.mixing_on(device):
             stream = None
             line = None
+            mixer = _Mixer(device)
             try:
                 for samples, rate in self.synthesise(text):
                     if stream is None:
@@ -399,8 +511,7 @@ class PiperEngine:
                         # `audio_devices.begin_playback` for both halves.
                         stream, line = audio_devices.open_and_declare(
                             SPOKEN_LINE, lambda: open_output(rate))
-                    stream.write(samples)
-                    if _yield_to_priority(line):
+                    if _write_yielding(stream, samples, rate, line, mixer):
                         break
             finally:
                 if stream is not None:
@@ -523,9 +634,11 @@ class VoicePackEngine:
         self._fallback.speak(text)
 
     def _play(self, segments) -> None:
-        with _play_lock():
+        device = audio_devices.output_device()
+        with _play_lock(), audio_devices.mixing_on(device):
             stream = None
             line = None
+            mixer = _Mixer(device)
             try:
                 for name in segments:
                     samples, rate = self._read(self._clips[name]["file"])
@@ -534,8 +647,7 @@ class VoicePackEngine:
                         # reasons in `audio_devices.begin_playback`.
                         stream, line = audio_devices.open_and_declare(
                             SPOKEN_LINE, lambda: open_output(rate))
-                    stream.write(samples)
-                    if _yield_to_priority(line):
+                    if _write_yielding(stream, samples, rate, line, mixer):
                         break
             finally:
                 if stream is not None:

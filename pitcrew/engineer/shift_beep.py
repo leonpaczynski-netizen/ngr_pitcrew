@@ -324,6 +324,13 @@ class _TonePlayer:
         # question uses it - same machinery, different sound.
         self._samples = (_square_wave(freq, ms, rate) if samples is None
                          else samples)
+        # How to build this sound again at somebody else's sample rate, for
+        # `audio_devices.offer_mix`. Only the synthesised beep can do it: a
+        # caller-supplied waveform exists at one rate and resampling it is how
+        # you get the click `_square_wave` ramps its edges to avoid. Those
+        # callers keep the pre-emption path, which is what they had.
+        self._recipe = (None if samples is not None
+                        else lambda at: _square_wave(freq, ms, at))
         # Held for the duration of a beep. Non-blocking acquisition is what
         # makes an overlapping beep a drop rather than a queue.
         self._busy = threading.Lock()
@@ -374,6 +381,28 @@ class _TonePlayer:
         # happens when even that is too slow.
         device = audio_devices.output_device()
         lock = audio_devices.lock_for(device)
+
+        # **Free card first.** Nothing below changes the common case, which is
+        # a beep with no line in flight: take the lock, open, play, at the
+        # latency it has always had.
+        if lock.acquire(blocking=False):
+            try:
+                self._render_locked()
+            finally:
+                lock.release()
+            return
+
+        # **Busy card: play over the top rather than instead of.** Measured in
+        # the Fuji race, pre-emption cut nine calls mid-sentence and restarted
+        # the race-start call four times. Handing the waveform to the thread
+        # already writing this card costs one chunk of latency - well inside
+        # `PRIORITY_WAIT_S` - and costs the line nothing at all.
+        if self._recipe is not None and audio_devices.offer_mix(device,
+                                                                self._recipe):
+            return
+
+        # Nobody could mix it: the card is held by something that does not
+        # write in chunks. Pre-empt, exactly as before.
         with audio_devices.priority_on(device):
             if not lock.acquire(timeout=PRIORITY_WAIT_S):
                 self.dropped += 1
