@@ -1554,7 +1554,7 @@ class Store:
         "tod_ms", "clock_frozen", "session_elapsed_s",
         "commit_brake_pct", "commit_full_thr_frac", "kerb_frac",
         "apex_m_model", "apex_m_observed", "apex_anchor_laps",
-        "apex_anchor_sd_m", "identity_stable",
+        "apex_anchor_sd_m", "apex_instability", "identity_stable",
         "counts_toward_fit", "exclusion_reason",
     )
 

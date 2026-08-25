@@ -434,6 +434,46 @@ class ApexAnchor:
     half_width_m: float
 
     @property
+    def instability(self) -> float | None:
+        """How far outside the limit this corner sits. 1.0 IS the limit.
+
+        **The boolean above is this number thresholded, and the threshold sits
+        in the middle of the distribution rather than at a natural break.**
+        Measured across the whole archive: median apex scatter runs 10.8-20.0 m
+        and the limit runs 7.2-15.4 m, so they overlap at every circuit. The
+        consequence is that stability behaves like a coin flip rather than a
+        property - Fuji went from 71% stable to 0% when its corner model was
+        re-anchored by a few metres, with nothing about the driving changed.
+
+        Grading it keeps the information the threshold throws away. A corner at
+        1.2 is the same marginal case the design pass named when it called
+        Yas T7 borderline at 1.84; a corner at 4.0 genuinely is not the corner
+        it claims to be, and reporting the two identically is what made the
+        boolean untrustworthy.
+
+        None where there is no measured scatter to grade - which is not zero.
+        """
+        limit = APEX_SD_LIMIT_FRACTION * self.half_width_m
+        if self.sd_m is None or limit <= 0:
+            return None
+        return self.sd_m / limit
+
+    @property
+    def identity_grade(self) -> str:
+        """`firm` | `marginal` | `unstable` | `unmeasured`, for a human.
+
+        The bands are the archive's own shape, not a fresh opinion: `marginal`
+        ends at twice the limit because that is where the one corner the design
+        pass singled out as borderline actually sits.
+        """
+        ratio = self.instability
+        if ratio is None:
+            return "unmeasured"
+        if ratio <= 1.0:
+            return "firm"
+        return "marginal" if ratio <= 2.0 else "unstable"
+
+    @property
     def offset_m(self) -> float:
         """How far the window moves. Zero when there is nothing to move it by."""
         if self.apex_m_observed is None:
@@ -731,6 +771,7 @@ def observation_rows(trace: LapTrace, lap: dict, context: SessionContext,
              "entry_temp_front_c": None, "entry_temp_rear_c": None,
              "apex_m_model": None, "apex_m_observed": None,
              "apex_anchor_laps": None, "apex_anchor_sd_m": None,
+             "apex_instability": None,
              "identity_stable": None,
              "counts_toward_fit": int(counts),
              "exclusion_reason": reason}]
@@ -771,6 +812,8 @@ def observation_rows(trace: LapTrace, lap: dict, context: SessionContext,
             "apex_m_observed": anchor.apex_m_observed if anchor else None,
             "apex_anchor_laps": anchor.laps if anchor else None,
             "apex_anchor_sd_m": anchor.sd_m if anchor else None,
+            "apex_instability": (None if anchor is None
+                                 else anchor.instability),
             "identity_stable": (None if anchor is None
                                 else int(anchor.stable)),
             "counts_toward_fit": int(corner_counts),

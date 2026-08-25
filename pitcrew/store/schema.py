@@ -498,6 +498,15 @@ CREATE TABLE IF NOT EXISTS grip_observations (
     apex_m_observed       REAL,
     apex_anchor_laps      INTEGER,
     apex_anchor_sd_m      REAL,
+    -- **How far outside the stability limit this corner sits, as a ratio.**
+    -- `identity_stable` is that same measurement collapsed to a boolean at
+    -- 1.0, and the cut-point sits in the middle of the distribution rather
+    -- than at a natural break: measured across the archive, median apex
+    -- scatter and the limit overlap at every circuit. So a corner at 1.2 and
+    -- one at 4.0 were being reported identically, and a corner model
+    -- re-anchoring by a few metres flipped a whole circuit from 71% stable to
+    -- 0% without anything about the driving changing.
+    apex_instability      REAL,
     identity_stable       INTEGER,
 
     -- ELIGIBILITY, and the reason, so an exclusion can be explained rather than
@@ -679,6 +688,12 @@ CREATE INDEX IF NOT EXISTS idx_identity_repairs_row
 # Only nullable columns with no default belong here. Anything that needs a
 # back-fill, a type change or a drop needs a real numbered migration instead.
 ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "grip_observations": (
+        # The graded form of `identity_stable`; see the DDL for why the
+        # boolean alone was not enough. Null on every row derived before it
+        # existed, which is what null means.
+        ("apex_instability", "REAL"),
+    ),
     "events": (
         ("extra_time_s", "REAL"),
         ("start_hour", "REAL"),

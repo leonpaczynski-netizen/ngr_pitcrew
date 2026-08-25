@@ -6,9 +6,14 @@ fresh. This is the check as one command with one output.
 
 It answers the questions that decide whether an analysis is possible at all:
 
-* **Corner identity.** A per-corner claim needs corners that mean the same thing
-  across sessions. Monza has none - `identity_stable` is 0 on every one of its
-  observations - so no per-corner claim is available there at any sample size.
+* **Corner identity, graded rather than gated.** A per-corner claim needs
+  corners that mean the same thing across sessions. `identity_stable` collapsed
+  that to a boolean at a cut-point sitting in the middle of the distribution:
+  measured across the archive, apex scatter runs 0.98-1.64 times the limit at
+  every circuit, and only 36 observations of 3,458 are genuinely outside twice
+  it. So a corner model re-anchoring by a few metres flipped Fuji from 71%
+  "stable" to 0% with nothing about the driving changed. Reported here as
+  firm / marginal / unstable, with the median ratio.
 * **Is the grip archive keyed to the corner model that is actually stored?** A
   re-anchored model leaves every earlier observation pointing at corners that
   have since moved, and the symptom is quiet: an export and a grip row disagree
@@ -54,19 +59,38 @@ def _rows(store, sql, params=()):
 
 
 def corner_identity(store, circuit_key: str) -> str:
+    """Graded, because the boolean cut through the middle of the distribution.
+
+    Measured across the whole archive, apex scatter sits at 0.98-1.64 times the
+    stability limit at every circuit - so `identity_stable` was separating a
+    tight cluster at an arbitrary point, and a corner model re-anchoring by a
+    few metres flipped Fuji from 71% "stable" to 0% with nothing about the
+    driving changed. Only 36 observations in the entire archive are genuinely
+    outside twice the limit.
+    """
     rows = _rows(store,
-                 "SELECT identity_stable, COUNT(*) n FROM grip_observations "
-                 "WHERE circuit_key = ? AND unit_kind != 'LAP' "
-                 "GROUP BY identity_stable", (circuit_key,))
-    total = sum(r["n"] for r in rows)
-    stable = sum(r["n"] for r in rows if r["identity_stable"])
+                 "SELECT apex_instability r FROM grip_observations "
+                 "WHERE circuit_key = ? AND unit_kind != 'LAP'", (circuit_key,))
+    graded = [r["r"] for r in rows if r["r"] is not None]
+    total = len(rows)
     if not total:
         return "  corners        no corner observations - nothing to claim"
-    if not stable:
-        return (f"  corners        ** NONE STABLE ** 0 of {total} - no "
-                f"per-corner claim is available at this circuit")
-    return (f"  corners        {stable} of {total} stable "
-            f"({stable / total:.0%})")
+    if not graded:
+        return (f"  corners        {total} observations, none graded - "
+                f"re-derive to grade them")
+    firm = sum(1 for r in graded if r <= 1.0)
+    marginal = sum(1 for r in graded if 1.0 < r <= 2.0)
+    unstable = sum(1 for r in graded if r > 2.0)
+    median = sorted(graded)[len(graded) // 2]
+    verdict = (f"  corners        firm {firm} · marginal {marginal} · "
+               f"unstable {unstable}   (median {median:.2f}x the limit)")
+    if unstable > len(graded) / 2:
+        verdict += ("\n                 ** most corners are not the corner "
+                    "they claim to be - no per-corner claim here")
+    elif not firm:
+        verdict += ("\n                 no corner is firm: quote the apex "
+                    "scatter with any per-corner figure")
+    return verdict
 
 
 def model_version(store, circuit_key: str) -> str:
