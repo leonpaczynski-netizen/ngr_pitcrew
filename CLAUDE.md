@@ -7,6 +7,22 @@ contract with the tool that consumes our output.
 
 Written 11 Aug 2026 · GT7 v1.70 · rebuild of an existing codebase.
 
+> **23 Aug 2026 — the app has a fifth job, and it is the one the other four
+> serve: be the driver's race engineer.** The standard, the gap analysis against
+> what is actually built, and the build order are in
+> `docs/RACE-ENGINEER-CHARTER_2026-08-23.md`. Nothing in it overrides this file,
+> `EXPORT-CONTRACT.md`, or §3's facts about the feed — **it is bounded by them,
+> and the charter's §6 says where.** Two things from it belong here because they
+> change what the app may claim:
+>
+> - **Rank zero of every diagnosis is "what is actually in the car."** The setup
+>   record has been wrong in five consecutive sessions. A correct telemetry
+>   reading against a wrong setup record produces a confident wrong answer.
+> - **Per-lap, per-corner input coaching may not ship.** Measured over 307 clean
+>   laps, a corner is 3–4× noisier in relative terms than a whole lap. Multi-lap
+>   trends, whole-lap comparisons and pooled findings are fair; *"brake 10 m
+>   later at T4"* is not, at any corner on any circuit on file.
+
 ---
 
 ## 1. What this app is
@@ -170,6 +186,51 @@ and output that violates them will be discarded on arrival.
    damper split.** If any of these appear in the UI, the model, or a comment, the
    logic was pattern-matched from another sim and is wrong throughout.
 
+9. **`max(x, 0.0)` on a measurement is rule 3 in disguise, and it is the most
+   repeated defect in this codebase.** A quantity that came out negative is not
+   a quantity of zero — it is a reading whose *reference* is wrong, and clamping
+   it converts "I cannot tell you" into a confident, well-formed, wrong answer
+   that no downstream consumer can distinguish from a real one. Three instances
+   found in one race: `fuel_used` clamped on two laps that plainly burned fuel,
+   and the launch-detector offset clamped so a −2 s green read as `0.00 s`
+   against a log line whose entire stated purpose was to report that sign.
+   Where the arithmetic can go negative, return `None` and say why.
+
+10. **A rule that refuses a reading must be able to refuse its own baseline.**
+    Any check of the form *"is this new value consistent with the last good
+    one?"* is a latch unless something can retire the reference. The tyre gauge
+    accepted one bad frame, then refused 432 consecutive honest readings against
+    it and accepted nothing for a whole race, because a refusal — correctly —
+    never becomes the baseline, and nothing else could clear it either. Two
+    guards, and both are needed: bound how far a reading may move *in each
+    direction*, and drop the reference after a sustained run of refusals,
+    because a reference that disagrees with everything is the thing that is
+    wrong. **And log the accepts, not only the refusals** — the ratchet was
+    invisible for a whole race precisely because the number setting the bar
+    never appeared in the log.
+
+11. **State that outlives a session will be read as if it belongs to this one.**
+    The sampler, its comparison series, and the controller's lap-id map are all
+    built once and torn down at app exit, so a race opened judging its fresh
+    tyres against practice's worn ones, and a practice gauge reading was spoken
+    aloud as a measured race number two laps in. Anything cached across a
+    session boundary needs an explicit reset at the start of the next one, and
+    that reset needs a caller — `LiveWearSampler.new_session()` existed,
+    documented why it was needed, and was called only from a test file.
+
+12. **Report the constraint that actually bound the answer, not one from the
+    same family.** The strategy layer laid plans out against the lowest of three
+    ceilings and reported a constraint computed from only two of them, so a plan
+    capped by *"nobody has run a stint this long"* told the driver it was
+    fuel-limited. Those two readings demand opposite driving. Where a decision
+    is a `min()` over several limits, the reported reason must come from the
+    same expression that produced the decision.
+
+13. **Two calls that use the same words must mean the same thing.** "Laps in
+    hand" was spoken twice in two minutes meaning laps-to-the-stop and
+    laps-to-the-flag — figures ten laps apart, neither naming its reference.
+    Under a helmet the driver cannot ask which one he just heard.
+
 ---
 
 ## 5. Job 4 — the race strategy engine
@@ -287,6 +348,17 @@ audited afterwards against what actually happened.
   and refuse to export rather than export something wrong.
 - Round-trip test: export → parse → confirm every non-null field has a unit and a
   sample count, and every null is genuinely unmeasured rather than defaulted.
+- **Run the suite in quarters.** The full run crashes natively on Windows /
+  Python 3.14 in a PyQt teardown — `0xC0000409`, no traceback, and the exit code
+  is the only signal because the summary line is lost with the process. It is an
+  environment fault, not a product defect, but it means a green "all tests pass"
+  from one command is not available: check exit codes per quarter, and re-run any
+  crashing quarter file-by-file before believing a failure is yours.
+- **A test that passes in a group and fails alone — or the reverse — is telling
+  you about shared state, not about the change in front of you.** Before
+  attributing a failure to your own work, reproduce it with your change reverted.
+  Two of the failures found while fixing the Fuji race predated it entirely, and
+  one timing assertion only fails under full-suite load.
 
 ## 8. Out of scope
 
