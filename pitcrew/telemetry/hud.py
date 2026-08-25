@@ -281,14 +281,38 @@ def read_gauge(png, layout: dict | None = None) -> Reading:
 
         height, width = frame.shape[0], frame.shape[1]
         if (width, height) != CANVAS:
-            # **Refused, not rescaled.** The constants are pixel positions on
-            # this canvas; on any other they point somewhere else entirely, and
-            # a confident reading of the wrong rectangle is the failure this
-            # whole module exists to avoid.
+            # **Not the calibrated canvas, so the layout is not used - the
+            # gauge is FOUND instead.** The constants are pixel positions and
+            # still may not be scaled onto another geometry; what changed is
+            # that refusing outright was the wrong answer to that.
+            #
+            # 1720x916 is not a property of the game. It is an OBS canvas
+            # someone chose, and it is not even 16:9 (1.878 against 1.778), so
+            # it is a window size rather than a scale of the PS5's own output.
+            # Forcing it costs twice: the 1080p source is downscaled before it
+            # is read, which makes the bar SHORTER - 30 px instead of about 35,
+            # so 3.3% of tyre life per pixel instead of 2.9% - and it puts the
+            # capture at odds with the resolution the driver broadcasts at.
+            #
+            # `locate_gauge` already exists for exactly this shape of problem:
+            # it finds four bars in a 2x2 by their own red-over-white
+            # signature, at whatever size and wherever they sit. It was written
+            # for VR, where the HUD is drawn on the dashboard in 3D, and a
+            # different canvas is a strictly easier case - the gauge is in
+            # screen space, it is simply not where 1720x916 put it.
+            #
+            # **A located read is honest about being one.** It classifies on
+            # the looser thresholds the locator found the bars with and carries
+            # `quantisation_note`, so it is never confused with the fixed-layout
+            # read that the 0.5% verification was taken on.
+            located = locate_gauge(frame)
+            if located is not None:
+                return _read_bars(frame, located, quantisation_note=True)
             return Reading(None, f"canvas is {width}x{height}, not "
-                                 f"{CANVAS[0]}x{CANVAS[1]} - the gauge layout "
-                                 f"is calibrated to that geometry and cannot "
-                                 f"be scaled")
+                                 f"{CANVAS[0]}x{CANVAS[1]}, and the four bars "
+                                 f"could not be found in it - so there is no "
+                                 f"calibrated rectangle to read and nothing "
+                                 f"that looks like the gauge either")
 
     peak = max(int(frame[y0:y1 + 1, x0:x1 + 1].max())
                for (x0, x1, y0, y1) in layout.values())
@@ -390,6 +414,52 @@ def _vr_masks(frame):
     return red, white, np.asarray(red | white)
 
 
+def _looks_like_a_bar(red, white, x: int, y0: int, y1: int) -> bool:
+    """Could this column of solid pixels be one tyre bar?
+
+    **A bar is red from the top and white below, and either part may be the
+    whole of it.** The test used to demand both at once - top third red AND
+    bottom third white - which finds a half-worn tyre and nothing else. A
+    FRESH set is white all the way down and a dead one is red all the way
+    down, so the locator could not see either: the two readings that matter
+    most, since one anchors a stint and the other ends it.
+
+    Measured on synthetic canvases at 1920x1080: a 0% set and a 90% set both
+    failed to locate under the old test and both read correctly under this
+    one.
+
+    The relaxation is safe because **finding is not validating.** What
+    disambiguates the gauge from brake lights and kerbs is the 2x2 geometry
+    below - four bars, two columns, two rows, inside a tight cluster, taking
+    the tightest spread. This test only has to admit what a bar can look like
+    and reject a column that is not red-over-white at all.
+    """
+    import numpy as np
+
+    r = red[y0:y1 + 1, x]
+    w = white[y0:y1 + 1, x]
+    rows = len(r)
+    if rows == 0:
+        return False
+    # The run is solid by construction, so nearly every row should be one or
+    # the other. A column that is largely neither is not this instrument.
+    if (r | w).mean() < 0.9:
+        return False
+    red_rows, white_rows = np.where(r)[0], np.where(w)[0]
+    if len(red_rows) == 0 and len(white_rows) == 0:
+        return False
+    # **Red above white, and either may be empty.** That single statement is
+    # what a tyre bar is at every wear level - it fills red from the top as
+    # the tyre wears - and it covers the fresh set (no red), the spent set (no
+    # white) and everything between, which three separate thresholds did not.
+    # One row of overlap is allowed for the boundary pixel, which is a blend
+    # of both and can classify either way.
+    if len(red_rows) and len(white_rows):
+        if int(red_rows.max()) > int(white_rows.min()) + 1:
+            return False
+    return True
+
+
 def locate_gauge(frame) -> dict | None:
     """Find the four bars in a frame that will not hold them still.
 
@@ -414,9 +484,7 @@ def locate_gauge(frame) -> dict | None:
             if not (VR_BAR_MIN_H <= len(run) <= VR_BAR_MAX_H):
                 continue
             y0, y1 = int(run[0]), int(run[-1])
-            third = max(1, (y1 - y0) // 3)
-            if (red[y0:y0 + third + 1, x].mean() > 0.5
-                    and white[y1 - third:y1 + 1, x].mean() > 0.7):
+            if _looks_like_a_bar(red, white, x, y0, y1):
                 found.append((x, y0, y1))
     if len(found) < VR_BAR_MIN_W * 4:
         return None

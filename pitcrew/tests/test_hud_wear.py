@@ -77,12 +77,40 @@ def test_a_fresh_set_reads_zero_and_not_null():
     assert all(v == 0.0 for v in got.wear.values())
 
 
-def test_the_wrong_canvas_is_refused_not_rescaled():
-    """The constants are pixel positions; on another geometry they point
-    somewhere else, and a confident reading of the wrong rectangle is exactly
-    the failure this module exists to avoid."""
-    got = read_gauge(a_canvas({"fl": 0.4}, size=(1920, 1080)))
-    assert not got.ok and "1920x1080" in got.reason
+def test_the_constants_are_never_rescaled_onto_another_canvas():
+    """The rule that has not changed: the calibrated positions are pixel
+    positions and are never stretched onto a different geometry, because a
+    confident reading of the wrong rectangle is the failure this module exists
+    to avoid.
+
+    **What changed is the answer when the canvas differs.** It used to refuse
+    outright, which made 1720x916 a hard requirement of the whole capture
+    chain - and that number is not a property of the game, it is an OBS canvas
+    someone picked. The gauge is now LOCATED instead. Here it is drawn at the
+    916 coordinates inside an 1080 frame, so the fixed layout would read trim;
+    the locator finds the real bars and reads those.
+    """
+    got = read_gauge(a_canvas({"fl": 0.4, "fr": 0.2, "rl": 0.6, "rr": 0.4},
+                              size=(1920, 1080)))
+
+    assert got.ok, got.reason
+    assert got.wear["rl"] > got.wear["fl"] > got.wear["fr"]
+
+
+def test_a_different_canvas_with_no_gauge_is_still_refused():
+    """Locating is not guessing. Nothing that looks like the gauge means no
+    reading, on any canvas."""
+    import numpy as np
+    from PIL import Image as _Image
+
+    blank = np.full((1080, 1920, 3), 20, dtype=np.uint8)
+    buf = io.BytesIO()
+    _Image.fromarray(blank).save(buf, format="PNG")
+
+    got = read_gauge(buf.getvalue())
+
+    assert not got.ok
+    assert "could not be found" in got.reason
 
 
 def test_rubbish_bytes_do_not_raise():
