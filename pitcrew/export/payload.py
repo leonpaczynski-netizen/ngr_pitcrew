@@ -1,4 +1,4 @@
-"""Building and validating the `gt7-pitcrew/1.6` payload.
+"""Building and validating the `gt7-pitcrew/1.7` payload.
 
 This is the app's most important output. It is pasted into a prompt and read by
 a language model, not parsed by a program — so a malformed payload does not
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from pitcrew.telemetry.packet import STEER_SOURCE, STEERING_FULL_LOCK_RAD
 
-FORMAT = "gt7-pitcrew/1.6"
+FORMAT = "gt7-pitcrew/1.7"
 APP_VERSION = "pitcrew 2.2.0"
 
 SESSION_TYPES = ("practice", "quali", "tt", "race")
@@ -1017,7 +1017,13 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "driverChanges"}),
     "setup.performance": frozenset({
         "powerRestrictor", "ecuOutput", "ballastKg", "ballastPosition"}),
-    "setup.build": frozenset({"bhp", "weightKg", "pp"}),
+    # `drivetrain`, `weightBalance`, `torqueKgfm` and `displacementCc` joined in
+    # 1.7. They are read off the car's own screen with the rest of the sheet and
+    # were being emitted and then refused - so the first setup record this
+    # project ever verified against the game could not be exported.
+    "setup.build": frozenset({"bhp", "weightKg", "pp", "drivetrain",
+                              "weightBalance", "torqueKgfm",
+                              "displacementCc"}),
     "setup.driverChanges[]": frozenset({"fromLap", "key", "from", "to"}),
     "rangeRecord": frozenset({
         "car", "measuredDate", "gameVersion", "verified", "r"}),

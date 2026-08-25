@@ -1,4 +1,4 @@
-# Pit Crew export contract — `gt7-pitcrew/1.6`
+# Pit Crew export contract — `gt7-pitcrew/1.7`
 
 **What this is.** The exact payload Pit Crew emits after a session. The driver copies
 it and pastes it into the **Pit Crew data** box on the Driver Feedback tab of the GT7
@@ -15,7 +15,7 @@ Two consequences, and they drive every decision below:
    setup decision and nothing else.
 
 Supersedes `gt7-pitcrew/1.0`. Changes and their justification are in §15 (through
-1.1) and §16 (1.2, 1.3, 1.4, 1.5 and 1.6). **Every version bump lands with its change table in
+1.1) and §16 (1.2, 1.3, 1.4, 1.5, 1.6 and 1.7). **Every version bump lands with its change table in
 the same commit** — without one the consumer cannot tell an added field from a
 renamed one, and has to read every unfamiliar field conservatively.
 
@@ -30,7 +30,7 @@ section full of zeros is not.
 
 ```json
 {
-  "format": "gt7-pitcrew/1.6",
+  "format": "gt7-pitcrew/1.7",
   "meta":        { },
   "setup":       { },
   "rangeRecord": { },
@@ -112,7 +112,8 @@ its per-car range library, so ranges round-trip with no translation.
   },
   "gears": [3.10, 2.28, 1.79, 1.46, 1.22, 1.04],
   "performance": { "powerRestrictor": 100, "ecuOutput": 100, "ballastKg": 0, "ballastPosition": 0 },
-  "build": { "bhp": 525, "weightKg": 1300, "pp": 730.12 },
+  "build": { "bhp": 525, "weightKg": 1300, "pp": 730.12, "drivetrain": "MR",
+             "weightBalance": "43:57", "torqueKgfm": 56.0, "displacementCc": 5204 },
   "driverChanges": [
     { "fromLap": 5, "key": "arb_r", "from": 4, "to": 3 },
     { "fromLap": 6, "key": "bb", "from": -1, "to": -2 }
@@ -124,6 +125,15 @@ its per-car range library, so ranges round-trip with no translation.
   `−` is out; brake balance `−` is front bias, `+` is rear, expressed as a **delta
   from the car's factory bias**, not an absolute percentage.
 - **`gears`** — 1st…nth, in order. Separate from `values` because it is an array.
+- **`build`** — what the car *is*, as opposed to what was set on it. `bhp`,
+  `weightKg` and `pp` are the figures GT7 shows on the tuning screen; **`drivetrain`
+  (`FF` \| `FR` \| `MR` \| `RR` \| `4WD`), `weightBalance` (front:rear, as GT7
+  writes it), `torqueKgfm` and `displacementCc` joined in 1.7.** Every one of them
+  changes what a recommendation should say and none is derivable from the values:
+  a rear-biased MR car and a nose-heavy FR car do not want the same answer to the
+  same complaint, and the app had no drivetrain field anywhere until the sheet
+  started carrying one. Null wherever the sheet does not record it.
+
 - **`driverChanges`** — structured, not free text. Mid-session changes are exactly
   the thing that invalidates a corner aggregate, so they need to be machine-legible.
   Anything not expressible as a key change goes in `notes`.
@@ -1036,3 +1046,16 @@ fuel-limited.
 | # | Change | Reason |
 |---|---|---|
 | 1 | **`strategy.bindingConstraint` gains `evidence`** | Fuji, 24 Aug 2026: RS wear of 0.04115/lap gives a tyre ceiling of 20.7 laps and the tank gives 15.4 — both longer than the 20-lap race — while the longest RS stint on record was 6. Evidence bound every stint, the optimiser produced four of them, and the approved plan exported `bindingConstraint: "fuel"`, which its own numbers refute: 20 laps at 6.507 L/lap into a 100 L tank needs one stop, not three. The app then priced that plan 50 s slower than the one-stop candidate it replaced and briefed it anyway. The two readings demand opposite driving — *fuel-limited* means staying out is not available, *evidence-limited* means nobody has tried yet — and the driver, told the first, correctly acted on the second: he ignored two box calls, ran to the flag, finished P5. A consumer that reads `fuel` here concludes the car is fuel-constrained and starts trimming for economy, when the finding is that the practice programme never ran a long stint |
+
+### `gt7-pitcrew/1.7`
+
+**Four fields the app was already emitting and the contract then refused.** The
+Fuji sheet of 24 Aug 2026 is the first setup record in this project's history read
+off the car's own settings screen rather than transcribed from a plan, and it
+carries the whole build block that screen shows. The export refused it on four
+undeclared keys — so the one verified sheet could not be exported at all, which is
+the refusal gate working correctly against a contract that had fallen behind.
+
+| # | Change | Reason |
+|---|---|---|
+| 1 | **`setup.build` gains `drivetrain`, `weightBalance`, `torqueKgfm` and `displacementCc`** | None is derivable from `values`, and each changes what a recommendation should say: an MR car at 43:57 and an FR car at 57:43 do not want the same answer to the same mid-corner complaint. `drivetrain` matters most — the app had no drivetrain field anywhere on file, so every diagnosis that depends on which axle drives was being made without it. All four are null wherever the sheet does not record them, which is the ordinary case for a sheet typed from a plan rather than read off the screen |
