@@ -1,4 +1,4 @@
-# Pit Crew export contract — `gt7-pitcrew/1.5`
+# Pit Crew export contract — `gt7-pitcrew/1.6`
 
 **What this is.** The exact payload Pit Crew emits after a session. The driver copies
 it and pastes it into the **Pit Crew data** box on the Driver Feedback tab of the GT7
@@ -15,7 +15,7 @@ Two consequences, and they drive every decision below:
    setup decision and nothing else.
 
 Supersedes `gt7-pitcrew/1.0`. Changes and their justification are in §15 (through
-1.1) and §16 (1.2, 1.3, 1.4 and 1.5). **Every version bump lands with its change table in
+1.1) and §16 (1.2, 1.3, 1.4, 1.5 and 1.6). **Every version bump lands with its change table in
 the same commit** — without one the consumer cannot tell an added field from a
 renamed one, and has to read every unfamiliar field conservatively.
 
@@ -30,7 +30,7 @@ section full of zeros is not.
 
 ```json
 {
-  "format": "gt7-pitcrew/1.5",
+  "format": "gt7-pitcrew/1.6",
   "meta":        { },
   "setup":       { },
   "rangeRecord": { },
@@ -686,9 +686,16 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
 }
 ```
 
-`bindingConstraint` ∈ `tyre` \| `fuel` \| `regulation` \| `unknown`. Knowing which
-one bound the stint is the single most useful strategy output, because it decides
-whether the next setup should chase durability or pace.
+`bindingConstraint` ∈ `tyre` \| `fuel` \| `regulation` \| `evidence` \| `unknown`.
+Knowing which one bound the stint is the single most useful strategy output, because
+it decides whether the next setup should chase durability or pace.
+
+**`evidence` means none of the others bound it — the cap is the longest stint anyone
+has actually run on the compound, and it is an admission rather than a measurement.**
+Read it as *"do not conclude anything about durability from this plan's stint
+length"*: the tyre and the tank both allowed more, and the only reason the plan is
+shaped this way is that nobody has been out that far yet. The action it implies is a
+long run in practice, not a setup change. Added in 1.6 — see §16.
 
 `callsMade` exists so live advice can be checked against what actually happened.
 An app that gives calls and never records them cannot be improved.
@@ -1016,3 +1023,16 @@ own return-shape example asked for `cam_f: -3.2` for two versions, which is
 enter, arriving in the one section of the payload that has no telemetry behind
 it to contradict it. `SetupSheet.validate()` now refuses it and the prompt no
 longer asks for it.
+
+### `gt7-pitcrew/1.6`
+
+**One value, and it exists because the app told the driver the wrong reason for a
+three-stop race.** `stint_limit()` weighs three ceilings — the tyre, the tank, and
+the longest stint on record — and the plan is laid out against the lowest. The
+constraint it *reported* came from a different function that weighs only the first
+two, so a plan capped by inexperience could only ever describe itself as tyre- or
+fuel-limited.
+
+| # | Change | Reason |
+|---|---|---|
+| 1 | **`strategy.bindingConstraint` gains `evidence`** | Fuji, 24 Aug 2026: RS wear of 0.04115/lap gives a tyre ceiling of 20.7 laps and the tank gives 15.4 — both longer than the 20-lap race — while the longest RS stint on record was 6. Evidence bound every stint, the optimiser produced four of them, and the approved plan exported `bindingConstraint: "fuel"`, which its own numbers refute: 20 laps at 6.507 L/lap into a 100 L tank needs one stop, not three. The app then priced that plan 50 s slower than the one-stop candidate it replaced and briefed it anyway. The two readings demand opposite driving — *fuel-limited* means staying out is not available, *evidence-limited* means nobody has tried yet — and the driver, told the first, correctly acted on the second: he ignored two box calls, ran to the flag, finished P5. A consumer that reads `fuel` here concludes the car is fuel-constrained and starts trimming for economy, when the finding is that the practice programme never ran a long stint |

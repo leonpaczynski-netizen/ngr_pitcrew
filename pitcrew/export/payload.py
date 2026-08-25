@@ -1,4 +1,4 @@
-"""Building and validating the `gt7-pitcrew/1.5` payload.
+"""Building and validating the `gt7-pitcrew/1.6` payload.
 
 This is the app's most important output. It is pasted into a prompt and read by
 a language model, not parsed by a program — so a malformed payload does not
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from pitcrew.telemetry.packet import STEER_SOURCE, STEERING_FULL_LOCK_RAD
 
-FORMAT = "gt7-pitcrew/1.5"
+FORMAT = "gt7-pitcrew/1.6"
 APP_VERSION = "pitcrew 2.2.0"
 
 SESSION_TYPES = ("practice", "quali", "tt", "race")
@@ -57,7 +57,8 @@ METHOD_FRESH_AT_RUN_START = WEAR_METHODS[1]
 
 WEAR_PHASES = ("flat", "linear", "cliff")
 COMPOUND_PROFILE_SOURCES = ("measured", "declared", "assumed")
-BINDING_CONSTRAINTS = ("tyre", "fuel", "regulation", "unknown")
+BINDING_CONSTRAINTS = ("tyre", "fuel", "regulation", "evidence",
+                       "unknown")
 RACE_LENGTH_TYPES = ("time", "laps")
 
 # Contract §16.4. The rate the plan's stops were costed at is only readable
@@ -520,8 +521,8 @@ def _validate_strategy(payload: dict, meta: dict) -> list[str]:
     constraint = strategy.get("bindingConstraint")
     if constraint not in BINDING_CONSTRAINTS + (None,):
         problems.append(
-            f"strategy.bindingConstraint must be tyre, fuel, regulation or "
-            f"unknown, got {constraint!r}")
+            f"strategy.bindingConstraint must be one of "
+            f"{', '.join(BINDING_CONSTRAINTS)}, got {constraint!r}")
 
     problems.extend(_validate_race_length(strategy))
     problems.extend(_validate_plan(strategy))

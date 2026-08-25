@@ -751,6 +751,43 @@ def max_stint_laps(inputs: RaceInputs) -> tuple[int | None, str]:
     return fuel, CONSTRAINT_FUEL
 
 
+def binding_limit(inputs: RaceInputs,
+                  profiles: list) -> tuple[int | None, str]:
+    """What actually caps a stint in THIS plan, and what to call it.
+
+    **`max_stint_laps` cannot answer this and reporting it was a real cost.**
+    It weighs the tyre against the tank and stops there, so it can only ever
+    name "tyre" or "fuel" - while `stint_limit`, which builds the caps the plan
+    is actually laid out against, weighs a third ceiling: the longest stint
+    anyone has ever run on the compound. When evidence is the lowest of the
+    three, the plan is shaped by it and the driver is told about one of the
+    other two.
+
+    Fuji, 24 Aug 2026, is what that costs. RS wear of 0.04115/lap gives a tyre
+    ceiling of 20.7 laps and the tank gives 15.4, both longer than the 20-lap
+    race; the longest RS stint on record was 6. Evidence won, the optimiser
+    produced four stints, and the approved plan reported `binding_constraint`
+    "fuel" - which its own numbers refute, because 20 laps at 6.507 L/lap into
+    a 100 L tank needs one stop and not three. The app then priced that plan
+    50 s slower than the one-stop candidate it replaced and briefed it anyway.
+
+    The two readings demand opposite driving. *Fuel-limited* means the stop is
+    arithmetic and staying out is not available. *Evidence-limited* means
+    nobody has been out that long yet and the cap is an admission, not a
+    measurement - which is a thing a driver can weigh, and this one did: he
+    ignored two box calls, ran to the flag and finished P5.
+
+    So the reported constraint comes from the same function as the caps. Taken
+    across the compounds this plan actually uses, because a plan is only as
+    free as its tightest stint.
+    """
+    limits = [stint_limit(inputs, profile) for profile in profiles]
+    known = [(laps, why) for laps, why in limits if laps is not None]
+    if not known:
+        return max_stint_laps(inputs)
+    return min(known, key=lambda pair: pair[0])
+
+
 def split_laps(total: int, stints: int) -> list[int]:
     """Divide the race as evenly as possible, longer stints first."""
     if stints < 1:
@@ -905,7 +942,7 @@ def build_plan(inputs: RaceInputs, stops: int,
         stint_lengths = (optimal_split(inputs, profiles, limits,
                                        inputs.race_laps)
                          or allocate_laps(inputs.race_laps, limits))
-    limit, constraint = max_stint_laps(inputs)
+    limit, constraint = binding_limit(inputs, profiles)
 
     notes: list[str] = []
     over = [(index, laps, limits[index])

@@ -2316,6 +2316,26 @@ class PitCrewController(QObject):
         except Exception as exc:                             # noqa: BLE001
             log("hud").warning("could not store lap %s wear: %s", lap_id, exc)
 
+    def _new_hud_session(self) -> None:
+        """Tell the gauge reader a new session has started.
+
+        **`LiveWearSampler.new_session` existed, documented why it was needed,
+        and had no caller in the app at all** - only two lines in
+        `tests/test_hud_blind_gauge.py`. The sampler is cached on this
+        controller and torn down only in `shutdown`, so without this every
+        piece of state it holds crosses session boundaries: the one-shot
+        "I cannot see the gauge" announcement, and - worse - the comparison
+        baseline every later reading is judged against. A race then opens
+        measuring its fresh set against whatever practice left behind.
+
+        Resets an existing sampler only. Building one here would open a socket
+        at session start for a driver who has the reader switched on but never
+        crosses a line, which is the cost `_hud_sampler` is lazy to avoid.
+        """
+        sampler = getattr(self, "_hud", None)
+        if sampler is not None:
+            sampler.new_session()
+
     def _stop_hud_sampler(self) -> None:
         sampler, self._hud = getattr(self, "_hud", None), None
         if sampler is not None:
@@ -2344,6 +2364,7 @@ class PitCrewController(QObject):
         # stamped before anything is recorded against it, or the first laps
         # sit outside the capture the index says contains them.
         self._start_video()
+        self._new_hud_session()
 
         self.voice.warm()
         self.listener = UDPListener(
@@ -4091,6 +4112,19 @@ class PitCrewController(QObject):
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
 
+        # **The race is the session most worth having on video, and it was the
+        # only kind that never was.** `_start_video` had one call site, in
+        # `start_practice`, so every practice on 24 Aug 2026 was recorded and
+        # the race was not - and no session with `kind='race'` has a
+        # `video_path` anywhere in the database's history. It matters more than
+        # a missing convenience: the HUD wear gauge is read off the OBS frame,
+        # the live reader accepted nothing at all that race, and `hud-video` on
+        # a recording is the only route that produced a usable wear reading all
+        # weekend. Same placement as in `start_practice` - after the session
+        # row exists, before any lap can land against it.
+        self._start_video()
+        self._new_hud_session()
+
         self.listener = UDPListener(
             "0.0.0.0", self.feed_port, self.bridge.on_packet,
             source_ip=self.settings.udp_source_ip,
@@ -4166,6 +4200,11 @@ class PitCrewController(QObject):
             self.listener = None
         self._health.stop()
         if self.session_id is not None:
+            # Before the id is cleared: `_stop_video` files the path OBS wrote
+            # against the session row, and it needs the row to file it against.
+            # It stops only a recording this app started, so a race run without
+            # one costs nothing here.
+            self._stop_video(self.session_id)
             self.store.end_session(self.session_id)
             self.session_kind = None
             # `stop_practice` clears this and `stop_race` did not, so the

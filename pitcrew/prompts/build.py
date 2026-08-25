@@ -966,7 +966,20 @@ def _strategy_section(lines: Lines, context: ctx.PromptContext,
                  if actual_stops else ""))
 
     constraint = strategy.get("bindingConstraint")
-    if constraint:
+    if constraint == "evidence":
+        # **Not a finding about the car, and it must not be read as one.**
+        # The tyre and the tank both allowed a longer stint; the cap is the
+        # longest run anyone has actually done. Asking whether the race "bears
+        # it out" would invite a durability conclusion from a number that
+        # contains no durability information - which is the Fuji error in the
+        # opposite direction.
+        lines.add("- Binding constraint, as the model determined it: "
+                  "**evidence** — neither the tyre nor the tank bound these "
+                  "stints. The cap is the longest stint on record for this "
+                  "compound, so the stint length says nothing about "
+                  "durability. What it asks for is a long run in practice, "
+                  "not a setup change.")
+    elif constraint:
         lines.add(f"- Binding constraint, as the model determined it: "
                   f"**{constraint}**. Say whether the race bears that out — "
                   f"it decides whether the next setup chases durability or "

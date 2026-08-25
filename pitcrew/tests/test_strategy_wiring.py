@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from pitcrew.controller import PitCrewController
+from pitcrew.export import payload
 from pitcrew.store.db import Store
 from pitcrew.strategy.evidence import (
     DECLARED,
@@ -162,8 +163,11 @@ def test_approving_stores_the_plan_and_its_assumptions(planned):
     approved = store.get_approved_strategy(event_id)
     assert approved is not None
     assert approved["plan"]["stints"][0]["laps"] == plans[0].stints[0].laps
-    assert approved["plan"]["export"]["bindingConstraint"] in (
-        "tyre", "fuel", "unknown")
+    # The contract's vocabulary, not a hand-kept subset of it. `evidence`
+    # joined it in 1.6 and this assertion is exactly the kind that goes stale
+    # silently - it passed for two versions by listing three of four values.
+    assert (approved["plan"]["export"]["bindingConstraint"]
+            in payload.BINDING_CONSTRAINTS)
     assert "tyre wear rate" in approved["evidence"]["missing"]
 
 

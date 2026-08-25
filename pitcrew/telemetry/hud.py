@@ -155,6 +155,50 @@ GAUGE_SLACK = 0.05
 # the same session dropped all four and landed at 42% worst, which is not a
 # new tyre and is not four laps of wear either.
 FRESH_SET_MAX = 0.15
+# **The ceiling on how far a reading may climb in one sample, and it exists
+# because the refusal rule above only ever looks downward.**
+#
+# `_coherent` refuses two shapes - corners moving both ways, and every corner
+# dropping onto a set too worn to be new - and silently accepts everything
+# else, including a reading that rose forty points in ten seconds. Since a
+# refusal deliberately does not become the new baseline, and an accept
+# silently does, the baseline can only ever ratchet UPWARD: one bad
+# all-rising read raises the bar, and every honest reading below it is then
+# refused, loudly, for the rest of the session.
+#
+# Fuji, 24 Aug 2026, is that mechanism running to completion. The sampler was
+# rebuilt with an empty series at 20:03:47 and was already refusing a 32%
+# reading by 20:07:28 - which requires an unlogged accept above 37% inside
+# those four minutes - and later refusals name figures as high as 76%. Across
+# the race it refused 432 readings and accepted none. The driver was told "I
+# have the tyre gauge this race" in the brief and "No tyre gauge" three and a
+# half minutes later.
+#
+# A lap at the multipliers this league races is a few percent of tyre life,
+# and samples are seconds apart. Fifteen points between two consecutive
+# readings is not a tyre wearing, it is a misread - so it is refused in the
+# rising direction exactly as an impossible fall already is.
+GAUGE_MAX_RISE = 0.15
+# **How many refusals in a row mean the BASELINE is the wrong reading.**
+#
+# The rule that a refusal must not become the baseline is right, and on its own
+# it makes the comparison a latch: once a bad reading is filed, every honest
+# one after it is refused, and because refusals never replace the baseline
+# nothing can ever clear it. There is no path back. Fuji refused 432 readings
+# in a row on exactly that mechanism and accepted none.
+#
+# The asymmetry to fix is that one accepted reading outranks any number of
+# rejected ones, forever. It should not. A handful of consecutive refusals is
+# a gauge that has moved or a frame that is being misread; a sustained run of
+# them, all judged against one reading, is evidence about that reading. So the
+# baseline is dropped and the next reading re-seeds the series.
+#
+# Deliberately not small. Three or four refusals in a row is ordinary - the
+# driver looks away in VR, the pit-lane HUD relocates the gauge for a few
+# seconds - and re-seeding then would hand the series to the pit-lane misread
+# that `_coherent` exists to reject. Twelve consecutive, at the sample rates
+# raced, is tens of seconds of nothing but disagreement.
+REFUSALS_BEFORE_RESEED = 12
 # How far past its own interval a held reading may be and still be the
 # lap reading. Wider than one interval so a single missed tick does not
 # force a grab on the crossing, and far short of a lap so a stale number
@@ -855,6 +899,9 @@ class LiveWearSampler:
         # Every good reading this stint, for the slope fit. Cleared on a fresh
         # set, the same way the offline tool splits stints.
         self.series: list[tuple[float, dict]] = []
+        # Consecutive refusals against the current baseline. See
+        # `REFUSALS_BEFORE_RESEED`.
+        self._refused_running = 0
         self._last_free_log = 0.0
 
     def new_session(self) -> None:
@@ -870,6 +917,15 @@ class LiveWearSampler:
         self._said_blind = None
         self._said_stuck = False
         self._dim_peaks.clear()
+        # **The comparison baseline is session state and it never was.** The
+        # series and the held reading outlived the session along with the
+        # sampler, so a race opened judging its fresh set against whatever
+        # practice left behind - and the seed guard added above would be
+        # defeated by a stale series it never gets to re-seed. A stint that
+        # ended is not evidence about the one starting.
+        self.series = []
+        self._refused_running = 0
+        self._latest = None
 
     def start(self) -> None:
         if self._thread is not None:
@@ -989,7 +1045,18 @@ class LiveWearSampler:
                 f"every corner dropped but the set still reads "
                 f"{worst * 100:.0f}% worst - too worn for a fresh set and "
                 f"too low to follow the last one")
+        leapt = [k for k in rose if moved[k] > GAUGE_MAX_RISE]
+        if leapt:
+            # The other direction of the same impossibility. See
+            # `GAUGE_MAX_RISE` for why this one had to be added.
+            return False, False, (
+                "wear jumped "
+                + ", ".join(f"{k.upper()} +{moved[k] * 100:.0f}"
+                            for k in sorted(leapt))
+                + f" points since the last reading - more than a tyre wears "
+                  f"between samples, so this is not the gauge")
         return True, False, ""
+
 
     def _keep(self, at: float, reading: Reading) -> bool:
         """Hold a good reading, and cut the series where a fresh set went on.
@@ -999,8 +1066,28 @@ class LiveWearSampler:
         """
         accept, fresh, why = self._coherent(reading.wear)
         if not accept:
+            self._refused_running += 1
             _log.warning("hud-wear: reading refused - %s", why)
+            if self._refused_running >= REFUSALS_BEFORE_RESEED:
+                # **The baseline is the reading that is wrong.** See
+                # `REFUSALS_BEFORE_RESEED`. Said loudly rather than quietly:
+                # the series is being thrown away, so any wear slope built on
+                # it is gone too, and the driver's gauge figures restart from
+                # here.
+                _log.warning(
+                    "hud-wear: %d readings in a row refused against one "
+                    "baseline (%s) - so the baseline is what is wrong, not "
+                    "the gauge. Dropping it and re-seeding from the next "
+                    "reading; the wear series so far is discarded.",
+                    self._refused_running,
+                    ", ".join(f"{k.upper()} {v * 100:.0f}%"
+                              for k, v in sorted(self.series[-1][1].items())
+                              if v is not None) if self.series else "none")
+                self.series = []
+                self._latest = None
+                self._refused_running = 0
             return False
+        self._refused_running = 0
         if fresh:
             _log.info("hud-wear: fresh set - every corner back to "
                       "%.0f%% or less",
@@ -1009,6 +1096,18 @@ class LiveWearSampler:
             self.series = []
         self._latest = (at, reading)
         self.series.append((at, dict(reading.wear)))
+        # **Refusals were logged and accepts were not, which is why the
+        # ratchet was invisible.** The Fuji log carries 432 refusals naming
+        # figures from 19% to 76% and not one line saying what they were being
+        # judged against - so a baseline climbing on unlogged accepts looked
+        # exactly like a gauge that had simply stopped working. The number that
+        # sets the bar has to be as visible as the ones it rejects.
+        _log.info("hud-wear: reading accepted - %s (worst %.0f%%)",
+                  ", ".join(f"{k.upper()} {v * 100:.0f}%"
+                            for k, v in sorted(reading.wear.items())
+                            if v is not None),
+                  max((v for v in reading.wear.values() if v is not None),
+                      default=0.0) * 100)
         return True
 
     def latest(self) -> Reading | None:

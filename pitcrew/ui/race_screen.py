@@ -303,7 +303,13 @@ class RaceScreen(QWidget):
         # and "tyre" are different races, and which one binds is the first
         # thing to check against the evidence he actually has.
         binding = plan.get("binding_constraint")
-        if binding:
+        if binding == "evidence":
+            # Spelled out because "evidence-limited" on its own reads like a
+            # measurement, and it is the opposite of one: the tyre and the
+            # tank both allowed more, and the cap is only how far anyone has
+            # been. He is about to decide whether to trust the stop count.
+            parts.append("evidence-limited (nothing has run longer)")
+        elif binding:
             parts.append(f"{binding}-limited")
         label = strategy.get("label")
         head = f"{label}: " if label and parts and label not in parts[0] else ""

@@ -444,7 +444,7 @@ def _fuel_capacity(session) -> tuple[float | None, str]:
 def _build(store, session: dict, laps: list[LapInput], *, notes: str,
            game_version: str | None = None,
            calibrated_at_race_multiplier: bool) -> dict:
-    """Assemble the `gt7-pitcrew/1.5` payload."""
+    """Assemble the `gt7-pitcrew/1.6` payload."""
     event = store.get_event(session["event_id"])
     if event is None:
         raise ValueError("session has no event")
