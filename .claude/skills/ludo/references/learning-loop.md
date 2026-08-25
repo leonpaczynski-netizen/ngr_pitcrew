@@ -28,6 +28,44 @@ it from anywhere else that needs it.
 
 ---
 
+## What he asked on the radio is evidence, and it is the only kind he generates
+
+Every other store here records what the app measured or what a sheet said. The
+`radio` table records **what he chose to ask**, which is the one signal that
+comes from him unprompted — and the questions the engineer could not take are
+the most useful rows in the whole database, because each one is a hole in the
+vocabulary in his own words.
+
+Run it in every debrief:
+
+```bash
+python tools/radio_review.py --event <id> --misses
+```
+
+Refusals first, repeats counted. Each candidate needs a decision, and there are
+only three:
+
+1. **It belongs to an existing intent** — add the phrasing to that intent's
+   tuple in `pitcrew/engineer/intents.py`, then **re-run
+   `python tools/gate_bands.py`**. `gate.py` carries the standing instruction to
+   re-measure when the phrase list changes, and adding phrases is not free:
+   measured 26 Aug, nine of twenty-nine held-out questions were being answered
+   as the *wrong* question, and a widened `gap` intent pulled a fuel question
+   into itself. **An addition that raises "reached" while raising "wrong" has
+   made the engineer more confident and less correct.**
+2. **It needs a new intent** — only if the snapshot can actually answer it.
+   Check `controller._ptt_snapshot` for the keys before promising anything.
+3. **The feed cannot answer it, ever** — then it gets an intent whose job is to
+   refuse *by name*, like `gap` does for anything about other cars. A named
+   refusal is worth an intent: he learns once and stops asking. "Say again"
+   teaches him the app is broken.
+
+**Never add a phrase to `PHRASES` and to `gate_bands.py`'s probe set.** A probe
+in the phrase list scores ~0 against itself and grades its own answer key; the
+tool now refuses to run when that happens.
+
+---
+
 ## What makes a record learning rather than logging
 
 The project records values, calls and changes. It records **no predictions** —

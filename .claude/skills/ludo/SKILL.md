@@ -106,7 +106,7 @@ carries its source class: `[DRIVER REPORT]` (primary evidence) ·
 |---|---|---|
 | `tune` / `refine` | `references/mechanic.md` + `references/driver-model.md` | Sheet + paste block |
 | `race plan` / `quali plan` | `references/race-planner.md` | Plan + playbook for George |
-| `debrief` | `references/race-planner.md`, and **`mechanic.md` for anything per-corner** | Findings + write-back |
+| `debrief` | `references/race-planner.md`, **`mechanic.md` for anything per-corner**, and `learning-loop.md` for the radio review | Findings + write-back |
 | `what to try` | `references/refusals.md` | Labelled hypotheses |
 | any | `references/learning-loop.md` when recording | — |
 
