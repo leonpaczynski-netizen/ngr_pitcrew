@@ -106,8 +106,14 @@ def model_version(store, circuit_key: str) -> str:
     seen = sorted(r["v"] for r in used)
     if not seen:
         return f"  corner model   stored v{want}; no observations derived yet"
+    source = _rows(store, "SELECT source FROM corner_models WHERE circuit_key = ?",
+                   (circuit_key,))[0]["source"]
+    named = ("" if source == "track-map" else
+             "  ** auto-segmented: the corners have no names, only windows the "
+             "app cut from the speed trace - do not call one 'turn three'")
     if seen == [want]:
-        return f"  corner model   v{want}, and the archive agrees"
+        agrees = f"  corner model   v{want} ({source}), and the archive agrees"
+        return agrees + ("\n" + named if named else "")
     return (f"  corner model   ** STALE ** stored v{want}, archive holds "
             f"v{', v'.join(str(s) for s in seen)} - re-derive before trusting "
             f"any corner claim here")

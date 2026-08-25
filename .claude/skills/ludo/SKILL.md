@@ -48,8 +48,8 @@ stand down"* and stop.
 telemetry reading.
 
 *1a. What is actually in the car.* The setup record has been wrong in five
-consecutive sessions and a sixth was found on 25 Aug — a Fuji session tagged the
-Fuji sheet while its telemetry decoded the Watkins gearbox.
+consecutive sessions, and one of the two instruments that catches it is a
+gearbox comparison.
 ```bash
 python tools/check_setup_sheets.py          # circuit-matched; exit 1 = mismatch
 ```
@@ -81,9 +81,13 @@ corner-exit frames.
 
 **4 — Then ask, at most four questions, one at a time.** A question with a
 working resolver may never be asked. Run the gate rather than guessing at it:
-```bash
-python -c "from pitcrew.prompts.questions import *; ..."   # see references/driver-model.md
+```python
+from pitcrew.prompts.context import gather
+from pitcrew.prompts.questions import resolve
+context = gather(store, event_id=<id>, kind="refinement")
+answer = resolve(store, context, kind="refinement")   # .asked / .answered
 ```
+Report what the resolvers already settled; ask only what is left.
 Each question states what the data already shows, so he is confirming rather
 than reporting from scratch. If something cannot be measured, say
 `unmeasurable_because` — never dress a gap as a preference.
@@ -102,7 +106,7 @@ carries its source class: `[DRIVER REPORT]` (primary evidence) ·
 |---|---|---|
 | `tune` / `refine` | `references/mechanic.md` + `references/driver-model.md` | Sheet + paste block |
 | `race plan` / `quali plan` | `references/race-planner.md` | Plan + playbook for George |
-| `debrief` | `references/race-planner.md` (incident ledger) | Findings + write-back |
+| `debrief` | `references/race-planner.md`, and **`mechanic.md` for anything per-corner** | Findings + write-back |
 | `what to try` | `references/refusals.md` | Labelled hypotheses |
 | any | `references/learning-loop.md` when recording | — |
 
@@ -146,9 +150,17 @@ FINDINGS_2026-08-23.md` — cite them, do not copy them.
 **About the driving**
 - ⛔ **No per-lap, per-corner input coaching, at any corner on any circuit on
   file.** A corner is far noisier than a whole lap; the brake-point spread alone
-  is wider than any instruction you could give. Only minimum speed survives, and
-  only as a multi-lap trend. **And `corner_models` is `auto-segment` everywhere —
-  "turn three" is not a name this app may honestly use.**
+  is wider than any instruction you could give. **And `corner_models` is
+  `auto-segment` everywhere — "turn three" is not a name this app may honestly
+  use.**
+  **The line is finding versus instruction, not channel versus channel.**
+  `corner_findings.analyse` reports a trend on brake point, corner time or
+  throttle-on when it clears that corner's *own measured* noise floor over
+  enough laps, and such a trend is a fair finding — *"your brake point drifted
+  11 m earlier across the stint"* describes what happened. *"Brake 10 m later
+  at T4"* is an instruction inside the scatter, and it is the forbidden thing.
+  Never sum per-corner "opportunities" into a lap time: that total is session
+  scatter, and scatter is a state, never a loss to be banked.
 - **Silence must announce itself.** *"I cannot see that"*, never nothing. A
   corner that cannot carry a claim is named as silent, not omitted.
 - **Lap time confirms degradation. It can never warn of it** — his lap-to-lap

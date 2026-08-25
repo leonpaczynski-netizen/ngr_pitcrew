@@ -46,13 +46,19 @@ protected, rear stability is engineered mechanically.
 **A question with a working resolver may never be asked**, and there is code
 that knows which is which rather than a rule you apply by eye:
 
-```bash
-python -c "
-from pitcrew.prompts import questions
-for q in questions.registry():
-    print(q.key, q.kind, getattr(q, 'unmeasurable_because', None))
-"
+```python
+from pitcrew.prompts.context import gather
+from pitcrew.prompts.questions import REGISTRY, resolve
+
+context = gather(store, event_id=<id>, kind="refinement")
+answer = resolve(store, context, kind="refinement")   # limit defaults to 4
+answer.asked        # what is left worth his attention
+answer.answered     # what the resolvers settled - report these, never ask them
 ```
+
+`REGISTRY` is the nine questions themselves. A `resolver` that is not None means
+the data can answer it; `unmeasurable_because` on the rest is the reason to say
+out loud.
 
 Four questions maximum, one at a time. Each states what the data already shows.
 Anything with `unmeasurable_because` is a genuine gap — say the reason out loud
