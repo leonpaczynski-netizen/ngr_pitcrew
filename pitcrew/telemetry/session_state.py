@@ -114,6 +114,19 @@ GRID_LOW_SPEED_KMH = 30.0
 # wants to show it. Nothing may decide anything on it.
 
 
+def _burn(started_with: float | None, ended_with: float | None) -> float | None:
+    """Fuel used across a lap, or None where the pair cannot say.
+
+    A tank that ends fuller than it started is a refuel, a pre-load frame, or
+    a reference taken before the car was fuelled - never a lap that burned
+    nothing. See the call site for the two Fuji rows this produced.
+    """
+    if started_with is None or ended_with is None:
+        return None
+    used = started_with - ended_with
+    return used if used >= 0.0 else None
+
+
 class Phase(enum.Enum):
     IDLE = "idle"          # no car on track
     ON_TRACK = "on_track"  # car on track, race not running
@@ -591,7 +604,18 @@ class SessionState:
             delta_ms=(lap_time_ms - best_ms) if best_ms > 0 else 0,
             fuel_start=self._fuel_lap_start,
             fuel_end=p.fuel_level,
-            fuel_used=max(self._fuel_lap_start - p.fuel_level, 0.0),
+            # **A negative burn is not a burn of zero, it is a lap whose
+            # reference is wrong - and clamping it made that unreportable.**
+            # CLAUDE.md rule 3: missing is null, never 0. Two rows of the Fuji
+            # race carried `fuel_used = 0.0` on laps that plainly burned fuel:
+            # lap 1, where `_fuel_lap_start` was the 49.92 L lobby tank read
+            # 78 s before the game filled it to 100 L on the grid, and the pit
+            # lap, where refuelling put more in than the lap took out. Both
+            # went negative and both were clamped to a positive claim of
+            # nothing used. Null says "this lap cannot tell you", which is
+            # true, and every consumer already gates on the value being
+            # present.
+            fuel_used=_burn(self._fuel_lap_start, p.fuel_level),
             position=p.current_position,
             is_pit_lap=self._pit_lap,
             is_out_lap=self._out_lap_pending,

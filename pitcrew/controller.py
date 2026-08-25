@@ -2335,6 +2335,17 @@ class PitCrewController(QObject):
         sampler = getattr(self, "_hud", None)
         if sampler is not None:
             sampler.new_session()
+        # **The lap-id map outlives the session too, and it leaked a practice
+        # wear figure into a race.** `_write_hud_wear` looks a lap_id up here
+        # to decide which lap a reading belongs to; the ids carried over, so
+        # at the Fuji race's first crossing the controller filed session 87's
+        # gauge reading - FL 19 / FR 29 / RL 29 / RR 23, a different set of
+        # tyres fitted twenty minutes earlier - against race lap 6, a lap that
+        # had not happened. The engineer then said "FR 29." out loud on lap 2,
+        # in the register `colour.py` reserves for measured numbers.
+        self._hud_lap_nums.clear()
+        self._wear_now_lap = None
+        self._hud_blind_note = None
 
     def _stop_hud_sampler(self) -> None:
         sampler, self._hud = getattr(self, "_hud", None), None

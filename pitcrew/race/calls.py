@@ -1159,7 +1159,14 @@ def _fuel(state: RaceState) -> Call | None:
         return Call(
             FUEL_LONG, state.lap,
             "You can push.",
-            f"{gap:.1f} laps of fuel in hand.",
+            # **"to the box" is load-bearing and it was missing.** The colour
+            # line says "Fuel: N laps in hand" against the FLAG, this one says
+            # it against the STOP, and at Fuji they were spoken two minutes
+            # apart - "9.4 laps of fuel in hand" at 20:29:34 and "Fuel: 0.6
+            # laps in hand" at 20:31:33. Same words, quantities ten laps
+            # apart, no reference stated in either. Under a helmet that is
+            # CLAUDE.md 5.5's failure mode exactly.
+            f"{gap:.1f} laps of fuel in hand to the box.",
             confidence,
             severity=gap)
     return None

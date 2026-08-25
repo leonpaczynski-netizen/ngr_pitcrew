@@ -39,6 +39,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pitcrew.engineer import say
+
 # Off, and it means off - not "less often".
 QUIET = "quiet"
 NORMAL = "normal"
@@ -262,7 +264,16 @@ class ColourCalls:
         """
         options: list[tuple[str, str]] = []
         if fuel_laps_in_hand is not None:
-            options.append((f"Fuel: {fuel_laps_in_hand:.1f} laps in hand.", ""))
+            # "to the flag" names which of the two fuel margins this is - see
+            # the same note in `calls.py::_fuel_long`. This one counts to the
+            # end of the race; that one counts to the next stop.
+            # Worded to reuse the fuel answer's own number words, so the pack
+            # covers it with one added tail clip instead of synthesising the
+            # whole line live. Every colour line in the Fuji race logged a
+            # pack miss; this is the most repeated of them.
+            options.append(
+                (f"{fuel_laps_in_hand:.1f} laps of fuel in hand to the flag.",
+                 ""))
         if wear_worst is not None:
             where = f"{wear_corner.upper()} " if wear_corner else "Worst tyre "
             options.append((f"{where}{wear_worst * 100:.0f}.", ""))
@@ -273,7 +284,7 @@ class ColourCalls:
         if lap_time_ms and self._best_ms and lap_time_ms > self._best_ms:
             off = (lap_time_ms - self._best_ms) / 1000.0
             if off >= 0.05:
-                options.append((f"{off:.1f} off your best.", ""))
+                options.append((f"{say.spoken_gap(off)} off your best.", ""))
         if not options:
             return None
         # **Rotate on a counter of data lines said, not on the lap number.**
@@ -296,7 +307,7 @@ class ColourCalls:
             return None
         gained = (self._best_ms - lap_time_ms) / 1000.0
         return ColourCall(BEST_LAP, "That's the best lap of the race.",
-                          f"{gained:.1f} up on your own." if gained >= 0.1
+                          f"{say.spoken_gap(gained)} up on your own." if gained >= 0.1
                           else "")
 
     def _run_in(self, laps_remaining: int | None, lap_time_ms: int | None,
@@ -323,7 +334,17 @@ class ColourCalls:
 
         best = self._best_ms
         if lap_time_ms and lap_time_ms > 0:
-            if best is None or lap_time_ms <= best:
+            if best is None:
+                # **No best on file is not the same as having beaten it.**
+                # `best is None` used to fall into the branch below and
+                # announce a best lap, which is CLAUDE.md rule 3 - missing
+                # read as a value - in the one register the driver has no way
+                # to check. Fuji, 20:44:27: "4 to go. P5. That's your best of
+                # the race" on a lap 1.06 s slower than the race best, and
+                # `_best_ms` had been None the whole way to lap 13. Say the
+                # part that is measured and nothing about pace.
+                return ColourCall(RUN_IN, head, where.strip())
+            if lap_time_ms < best:
                 return ColourCall(RUN_IN, head,
                                   f"{where}That's your best of the race.")
             off = (lap_time_ms - best) / 1000.0
@@ -331,7 +352,8 @@ class ColourCalls:
             # on, and "0.0 off your best" is a number that means nothing.
             if off < 0.1:
                 return ColourCall(RUN_IN, head, f"{where}On your best pace.")
-            return ColourCall(RUN_IN, head, f"{where}{off:.1f} off your best.")
+            return ColourCall(RUN_IN, head,
+                              f"{where}{say.spoken_gap(off)} off your best.")
         return ColourCall(RUN_IN, head, where.strip())
 
     def _consistency(self, sigma_s: float | None) -> ColourCall | None:
@@ -344,7 +366,7 @@ class ColourCalls:
         if spread > CONSISTENT_SIGMA * sigma_s:
             return None
         return ColourCall(
-            CONSISTENCY, f"{len(recent)} laps inside {spread:.1f}.",
+            CONSISTENCY, f"{len(recent)} laps inside {say.spoken_gap(spread)}.",
             "That's the tidiest run of the race.")
 
     def _countdown(self, lap: int,

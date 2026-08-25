@@ -62,6 +62,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import queue
 import threading
 import time
@@ -1102,12 +1103,18 @@ class LiveWearSampler:
         # judged against - so a baseline climbing on unlogged accepts looked
         # exactly like a gauge that had simply stopped working. The number that
         # sets the bar has to be as visible as the ones it rejects.
-        _log.info("hud-wear: reading accepted - %s (worst %.0f%%)",
-                  ", ".join(f"{k.upper()} {v * 100:.0f}%"
-                            for k, v in sorted(reading.wear.items())
-                            if v is not None),
-                  max((v for v in reading.wear.values() if v is not None),
-                      default=0.0) * 100)
+        #
+        # Guarded rather than left to the logger to discard: the join and the
+        # sort run whichever way the level is set, and this is the sampler's
+        # own loop. At the 2-10 s intervals raced that is nothing, but it is
+        # on a path that can be driven as fast as the source will answer.
+        if _log.isEnabledFor(logging.INFO):
+            _log.info("hud-wear: reading accepted - %s (worst %.0f%%)",
+                      ", ".join(f"{k.upper()} {v * 100:.0f}%"
+                                for k, v in sorted(reading.wear.items())
+                                if v is not None),
+                      max((v for v in reading.wear.values() if v is not None),
+                          default=0.0) * 100)
         return True
 
     def latest(self) -> Reading | None:

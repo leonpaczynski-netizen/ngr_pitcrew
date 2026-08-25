@@ -70,6 +70,9 @@ TENS_WORDS = ("", "", "twenty", "thirty", "forty", "fifty", "sixty",
               "seventy", "eighty", "ninety")
 
 POINT = "point"
+# The tail of `colour.py`'s running fuel line. Kept beside the fuel answer's
+# own fragments because it shares its number words; see `fuel_fragments`.
+COLOUR_FUEL_TAIL = "laps of fuel in hand to the flag."
 
 # `answer()` produces this shape for the fuel question. Parsed rather than
 # re-formatted, so the fragments are derived from what the function actually
@@ -200,8 +203,16 @@ def number_fragments() -> tuple[str, ...]:
 
 
 def fuel_fragments() -> tuple[str, ...]:
-    """The pieces "4.5 laps of fuel." is assembled from, beyond the numbers."""
-    return (POINT, _fuel_tail())
+    """The pieces "4.5 laps of fuel." is assembled from, beyond the numbers.
+
+    **Plus the colour line's tail**, which the `race_call_lines` decomposition
+    cannot reach: it enumerates `calls.py`, and the running commentary in
+    `colour.py` is a separate family that is not enumerated anywhere. Every
+    colour line in the Fuji race logged a pack miss and was synthesised live;
+    the fuel one is the most repeated of them, and it shares this family's
+    number words, so one tail clip covers it.
+    """
+    return (POINT, _fuel_tail(), COLOUR_FUEL_TAIL)
 
 
 @lru_cache(maxsize=1)
