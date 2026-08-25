@@ -122,6 +122,28 @@ BLIND_CROSSINGS_BEFORE_SAYING = 3
 # either side of readable stretches. Identical to the unit over forty minutes
 # is not a dim frame, it is the same pixels.
 IDENTICAL_PEAKS_MEAN_STATIC = 3
+# **How many samples in a row may produce NOTHING before the reader accepts
+# that it cannot see the gauge this session.**
+#
+# `MAX_CONSECUTIVE_FAILURES` covers the source dying - OBS shut, the projector
+# closed - and nothing covered the case where the source is perfectly healthy
+# and the gauge simply is not in what it returns. That is the VR case, and it
+# is now the normal case: he races in VR, where GT7 draws the HUD on the car's
+# dashboard in 3D. At Fuji the reader made **553 attempts after the green and
+# accepted none**, writing a warning for almost every one - half a thousand log
+# lines saying the same thing, and a driver who had been told in the brief that
+# the gauge was being watched.
+#
+# **Any accepted reading resets it, and that distinction is the whole design.**
+# In VR the gauge is intermittent rather than absent - at Road Atlanta it
+# answered 6 crossings of 22, because a sample only needs the driver to be
+# looking forward. Standing down on a count that a partial success could not
+# clear would throw those six away. Zero accepts across this many attempts is a
+# different claim: the gauge is not coming.
+#
+# Sixty, against the 2-10 s intervals raced, is ten minutes and several laps -
+# far past any occlusion a long left-hander or a menu can produce.
+BLIND_SAMPLES_BEFORE_STANDING_DOWN = 60
 # A drop this large between readings is a fresh set, not wear going
 # backwards. Wear is monotonic within a stint and the only thing that
 # resets it is a tyre change - the gauge snapping back to white is a
@@ -962,6 +984,9 @@ class LiveWearSampler:
         self._said_blind: str | None = None
         self._said_stuck = False
         self._dim_peaks: list[int] = []
+        # Consecutive samples that produced no accepted reading, for any
+        # reason. Reset by any accept. See BLIND_SAMPLES_BEFORE_STANDING_DOWN.
+        self._nothing_seen = 0
         # The most recent good reading and when it was taken. Written and read
         # on the worker thread only.
         self._latest: tuple[float, Reading] | None = None
@@ -986,6 +1011,8 @@ class LiveWearSampler:
         self._said_blind = None
         self._said_stuck = False
         self._dim_peaks.clear()
+        self._nothing_seen = 0
+        self.stood_down = False
         # **The comparison baseline is session state and it never was.** The
         # series and the held reading outlived the session along with the
         # sampler, so a race opened judging its fresh set against whatever
@@ -1058,8 +1085,11 @@ class LiveWearSampler:
             return
         reading, _ = self._read()
         if reading.ok:
-            self._keep(now, reading)
-        elif now - self._last_free_log > FREE_RUN_LOG_SPACING_S:
+            if not self._keep(now, reading):
+                self._saw_nothing()
+            return
+        self._saw_nothing()
+        if now - self._last_free_log > FREE_RUN_LOG_SPACING_S:
             # Sparse, deliberately. A shut projector is one fact, not one fact
             # every two seconds.
             self._last_free_log = now
@@ -1157,6 +1187,7 @@ class LiveWearSampler:
                 self._refused_running = 0
             return False
         self._refused_running = 0
+        self._nothing_seen = 0
         if fresh:
             _log.info("hud-wear: fresh set - every corner back to "
                       "%.0f%% or less",
@@ -1205,17 +1236,21 @@ class LiveWearSampler:
                 self._failed(f"lap {lap_id}: {reading.reason}")
                 return
             if reading.ok and not self._keep(now, reading):
-                # Readable, and not of the gauge. **Not blind and not a
+                # Readable, and not of the gauge. **Not blind and not a source
                 # failure**: the source is fine and the next grab may well be
-                # good, so this neither counts toward standing down nor tells
-                # the driver the gauge has gone dark. `_keep` has already said
-                # what was wrong with it.
+                # good, so this does not tell the driver the gauge has gone
+                # dark. `_keep` has already said what was wrong with it. It
+                # does count toward `BLIND_SAMPLES_BEFORE_STANDING_DOWN`,
+                # because a sample that produced no reading produced no
+                # reading whatever the reason.
+                self._saw_nothing()
                 return
         if not reading.ok:
             # A dimmed or unreadable frame is not a connection failure - it is
             # a normal thing that happens when the game is paused - so it does
             # not count toward standing down.
             _log.warning(f"hud-wear: lap {lap_id}: {reading.reason}")
+            self._saw_nothing()
             self._note_blind(reading)
             return
         self._blind = 0
@@ -1306,6 +1341,35 @@ class LiveWearSampler:
             # refusal as a measurement.
             self._status(Reading(None, f"No tyre gauge - {note}",
                                  peak=reading.peak))
+
+    def _saw_nothing(self) -> None:
+        """One more sample that produced no reading. Stand down at the cap.
+
+        **Said once, with the route to the number rather than only its
+        absence.** The gauge is the only ground truth for tyre wear that exists
+        - GT7 broadcasts no wear channel in any packet format - so "I cannot
+        see it" is not the end of the sentence. In VR it can be read afterwards
+        off a chase-view replay, where the HUD is back in screen space, and
+        that is a thing the driver can act on.
+        """
+        self._nothing_seen += 1
+        if (self.stood_down
+                or self._nothing_seen < BLIND_SAMPLES_BEFORE_STANDING_DOWN):
+            return
+        self.stood_down = True
+        _log.warning(
+            "hud-wear: %s samples in a row produced no reading, so the gauge "
+            "is not visible this session and sampling stops here. **This is "
+            "expected in VR** - GT7 draws the HUD on the car's dashboard in "
+            "3D, so a fixed rectangle cannot hold it. Nothing is lost that "
+            "was not already lost: read it off a chase-view replay afterwards "
+            "with `tools/read_hud_wear.py --session <id> --video <file>`, "
+            "where the HUD is in screen space and the whole race is "
+            "available. Until then this session contributes no measured wear.",
+            self._nothing_seen)
+        if self._status:
+            self._status(Reading(None, "no tyre gauge this session - it will "
+                                       "have to come from the replay"))
 
     def _failed(self, message: str) -> None:
         self._failures += 1
