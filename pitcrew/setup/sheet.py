@@ -50,6 +50,17 @@ class SetupSheet:
     # None rather than defaulting to `race`: a sheet stored before the
     # question existed has not answered it.
     purpose: str | None = None
+    # **Which circuit this sheet was built for.**
+    #
+    # A sheet is a property of the car AND the circuit - the gearbox alone
+    # proves it. Without this the lookup returned the car's most recent race
+    # sheet whatever circuit he was at, and on 23 Aug 2026 a Road Atlanta
+    # session recorded itself against a Yas Marina sheet.
+    #
+    # None means the circuit was never established, and it is not a wildcard:
+    # a sheet whose circuit is unknown may not be asserted to be for the one
+    # in front of us. `Store.sheet_for` will not auto-bind it.
+    circuit_key: str | None = None
     # **The upshift rpm for each gear, measured on this gearbox.**
     #
     # It lived in settings, keyed by car, and that was the wrong shape twice

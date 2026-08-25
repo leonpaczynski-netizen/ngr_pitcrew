@@ -1,13 +1,15 @@
 """The last word of a press, which the recogniser used to eat.
 
 A streaming recogniser decides a word is finished when it hears what follows
-it, and after the last word nothing follows: the button comes up, the
-microphone closes and the final pass runs on audio that stops mid-syllable.
-Measured over ten phrases through `tools/stt_bench.py`, that single failure
+it, and after the last word nothing follows. The button is a tap - press,
+static, listen, static - and the second tap closes the microphone, so the final
+pass runs on audio that stops mid-syllable.
+Measured over thirty trials through `tools/stt_bench.py`, that single failure
 accounted for most of every model's error - "box this lap" came back as "box
-this side", "the rear is loose on entry" as "the rear is loose on" - and
-feeding six tenths of a second of silence before the final pass took the small
-model from two exact transcripts in ten to eight.
+this side", "the rear is loose on entry" as "the rear is loose on", "when am I
+boxing" as "when am I" - and feeding six tenths of a second of silence before
+the final pass took the tiny model from five exact transcripts in thirty to
+nineteen, and its median word error rate from 25% to zero.
 
 **It is worth a test because the symptom is invisible.** A transcript one word
 short still reads like a sentence, still reaches the matcher, and still gets

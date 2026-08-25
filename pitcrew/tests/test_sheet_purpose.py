@@ -161,18 +161,68 @@ def _start_qualifying_practice(store: Store, event_id: int):
     return store.get_session(session_id)
 
 
+def _here(store: Store, event_id: int) -> str:
+    from pitcrew.controller import circuit_key_for
+    return circuit_key_for(store.get_event(event_id))
+
+
 def test_one_sheet_on_file_is_the_sheet_that_is_fitted(store: Store, event_id,
                                                        qt_app):
-    """A car with a single sheet is unambiguous whatever it is labelled.
+    """A car with a single sheet **at this circuit** is unambiguous whatever
+    it is labelled.
 
     Refusing to record it over the label would be bureaucracy, and the driver
     is not helped by an app that knows what he ran and declines to say.
     """
     car = store.get_event(event_id)["car_name"]
     only = store.save_setup_sheet(SetupSheet(
-        car_name=car, sheet_name="v1", values={"rh_f": 60.0}, purpose="race"))
+        car_name=car, sheet_name="v1", values={"rh_f": 60.0}, purpose="race",
+        circuit_key=_here(store, event_id)))
 
     assert _start_qualifying_practice(store, event_id)["setup_sheet_id"] == only
+
+
+def test_the_one_sheet_rule_does_not_cross_a_circuit(store: Store, event_id,
+                                                     qt_app):
+    """23 Aug 2026, and it cost five sessions.
+
+    `sheet_for(car_name, purpose)` had no circuit in its key, so a practice
+    session at Road Atlanta bound itself to the car's only race sheet - which
+    was for Yas Marina. The export then reported a different circuit's
+    gearbox, ride height and differential as the setup as run, and the empty
+    shift table on it silenced the beep for the whole session.
+
+    "This car has exactly one sheet, so that is what is on it" is sound within
+    a circuit and wrong across one: the single sheet on file is then
+    demonstrably for somewhere else.
+    """
+    car = store.get_event(event_id)["car_name"]
+    store.save_setup_sheet(SetupSheet(
+        car_name=car, sheet_name="Yas Marina race Rev C",
+        values={"rh_f": 89.0}, purpose="race",
+        circuit_key="yas-marina-circuit-full-course"))
+
+    session = _start_qualifying_practice(store, event_id)
+
+    assert session["setup_sheet_id"] is None, (
+        "a sheet for another circuit must never be recorded as the setup as "
+        "run - missing is null, never a plausible substitute")
+
+
+def test_a_sheet_that_never_said_which_circuit_does_not_bind(store: Store,
+                                                             event_id, qt_app):
+    """Circuit unknown is not circuit matches.
+
+    Every sheet stored before the column existed carries NULL. Treating that
+    as a wildcard would re-open the failure for exactly the sheets whose
+    provenance is weakest.
+    """
+    car = store.get_event(event_id)["car_name"]
+    store.save_setup_sheet(SetupSheet(
+        car_name=car, sheet_name="untagged", values={"rh_f": 60.0},
+        purpose="race"))
+
+    assert _start_qualifying_practice(store, event_id)["setup_sheet_id"] is None
 
 
 def test_a_session_records_no_sheet_rather_than_the_wrong_one(store: Store,

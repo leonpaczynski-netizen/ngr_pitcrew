@@ -101,3 +101,85 @@ def test_a_session_with_no_radio_adds_no_heading(store: Store):
     lines = Lines()
     _radio_section(lines, Context())
     assert lines.out == []
+
+
+# --- the verdict, rather than a second opinion of it -------------------------
+#
+# The ledger stored an intent re-derived by `intents.match_intent` - a literal
+# keyword test - while the decision the driver actually heard came from the
+# semantic matcher and `gate.judge`. Those disagree by design, so a row could
+# read `fuel` on a press the engineer had refused. And every refused press was
+# dropped before it reached the table at all, which is the half that matters:
+# a question his engineer could not take, in his own words, is exactly what the
+# phrase list is missing.
+
+
+def test_the_gate_verdict_is_kept_beside_the_words(store: Store):
+    _event_id, session_id = a_session(store)
+    store.log_radio(session_id, heard="how far behind is he",
+                    said="Say again.", intent="unknown", action="reject",
+                    distance=0.61, lap_num=4)
+    row = store.list_radio(session_id)[0]
+    assert row["action"] == "reject"
+    assert row["distance"] == 0.61
+
+
+def test_a_press_with_no_words_is_still_a_row(store: Store):
+    """A brushed button and a microphone that never opened are different.
+
+    Both arrive here with an empty transcript, and the reason is the only
+    thing that separates them. Recording the press without it would leave the
+    two indistinguishable, which is the state `gate.py` exists to end.
+    """
+    _event_id, session_id = a_session(store)
+    store.log_radio(session_id, heard="", said="I didn't catch that.",
+                    intent="unknown", action="reject",
+                    reason="no speech in the capture")
+    row = store.list_radio(session_id)[0]
+    assert row["reason"] == "no speech in the capture"
+
+
+def test_a_caller_without_a_verdict_writes_null_rather_than_a_guess(
+        store: Store):
+    """Null is "not recorded". It must never read as "acted"."""
+    _event_id, session_id = a_session(store)
+    store.log_radio(session_id, heard="fuel", said="Fine.", intent="fuel")
+    row = store.list_radio(session_id)[0]
+    assert row["action"] is None
+    assert row["distance"] is None
+
+
+def test_the_review_tool_puts_the_refusals_first_and_counts_repeats():
+    """What `tools/radio_review.py` is for: the misses are the additions."""
+    import tools.radio_review as review
+
+    rows = [
+        {"session_id": 9, "lap_num": 5, "heard": "how are my tyres",
+         "said": "Fronts 62 percent.", "intent": "tyres", "action": "act",
+         "distance": 0.11},
+        {"session_id": 9, "lap_num": 7, "heard": "how far behind is he",
+         "said": "Say again.", "intent": "unknown", "action": "reject",
+         "distance": 0.59},
+        {"session_id": 9, "lap_num": 4, "heard": "how far behind is he",
+         "said": "Say again.", "intent": "unknown", "action": "reject",
+         "distance": 0.61},
+    ]
+    text = "\n".join(review.report(rows, misses_only=False))
+    assert text.index("REFUSED") < text.index("ANSWERED")
+
+    asked = "\n".join(review.suggestions(rows))
+    assert '2x  "how far behind is he"' in asked
+    # An answered question is not a candidate: it already has an intent.
+    assert "how are my tyres" not in asked
+
+
+def test_a_row_with_no_verdict_is_reported_as_unrecorded_not_as_acted():
+    """The distinction the whole schema change exists to make."""
+    import tools.radio_review as review
+
+    rows = [{"session_id": 1, "lap_num": None, "heard": "old row",
+             "said": "x", "intent": "fuel", "action": None,
+             "distance": None}]
+    text = "\n".join(review.report(rows, misses_only=False))
+    assert "unrecorded" in text
+    assert "predate the verdict" in text

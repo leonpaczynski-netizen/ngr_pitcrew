@@ -600,7 +600,9 @@ class MoonshineRecogniser:
     name = "moonshine"
     SAMPLE_RATE = 16_000
     BLOCK = 1600                    # 100 ms, the granularity the VAD counts in
-    # **Trailing silence, because the button comes up on the last syllable.**
+    # **Trailing silence, because the radio shuts on the last syllable.**
+    # The button is a tap, not a hold: press, static, listen, static. The
+    # second tap ends the capture, and it lands where his sentence does.
     # A streaming recogniser decides a word is finished when it hears what
     # comes after it, and nothing comes after the last one: the mic closes and
     # the final pass runs on audio that stops mid-word. Measured over ten

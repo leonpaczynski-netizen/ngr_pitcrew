@@ -665,19 +665,28 @@ class Store:
                 for r in rows]
 
     def log_radio(self, session_id: int | None, *, heard: str, said: str,
-                  lap_num: int | None = None, intent: str | None = None) -> None:
+                  lap_num: int | None = None, intent: str | None = None,
+                  action: str | None = None, distance: float | None = None,
+                  reason: str | None = None) -> None:
         """Record one push-to-talk exchange, both sides.
 
         **Never raises into the caller.** This is written from the answer
         callback while the driver is on track, and a database hiccup must not
         cost him the reply he already heard.
+
+        `action`, `distance` and `reason` are the gate's own verdict. They are
+        optional because a caller that does not have one should write null
+        rather than a plausible substitute - the whole reason these columns
+        exist is that a re-derived intent was standing in for a real decision.
         """
         try:
             with self._write() as conn:
                 conn.execute(
                     "INSERT INTO radio (session_id, lap_num, heard, said, "
-                    "intent, created_at) VALUES (?,?,?,?,?,?)",
-                    (session_id, lap_num, heard, said, intent, _now()))
+                    "intent, action, distance, reason, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (session_id, lap_num, heard, said, intent, action,
+                     distance, reason, _now()))
         except sqlite3.Error:
             log("store").exception("radio exchange not recorded")
 

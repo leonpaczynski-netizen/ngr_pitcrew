@@ -233,7 +233,7 @@ def test_the_run_in_carries_position_and_pace_against_his_own_best():
                        wear_reading_age=1)
     reason = said[0][1].reason
     assert reason.startswith("P4.")
-    assert "1.5 off your best" in reason
+    assert "1.5 seconds off your best" in reason
 
 
 def test_the_run_in_says_nothing_it_did_not_measure():

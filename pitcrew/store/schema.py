@@ -70,7 +70,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -688,6 +688,29 @@ CREATE INDEX IF NOT EXISTS idx_identity_repairs_row
 # Only nullable columns with no default belong here. Anything that needs a
 # back-fill, a type change or a drop needs a real numbered migration instead.
 ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    # **What the gate actually decided, rather than a second opinion.**
+    # The ledger stored an intent re-derived by `intents.match_intent` - the
+    # literal keyword matcher - while the decision that reached the driver came
+    # from the semantic matcher and `gate.judge`. Those disagree by design:
+    # one is a substring test and the other is a distance in embedding space.
+    # So a row could read `fuel` on a press the app had actually refused, and
+    # the record of what he asked was a record of something else answering it.
+    "radio": (
+        # 'act' | 'confirm' | 'reject'. The three outcomes the driver can tell
+        # apart by ear, and the only thing that separates "answered him" from
+        # "asked him to repeat himself".
+        ("action", "TEXT"),
+        # How far the transcript sat from the nearest phrase. Null where the
+        # literal matcher answered, which is a real state: no distance was
+        # computed, rather than a distance of zero.
+        ("distance", "REAL"),
+        # Why there was no question at all - a brushed button, a microphone
+        # that never opened, nothing close enough in meaning. **A refusal is
+        # the most valuable row in this table**: it is a question his engineer
+        # could not take, in his own words, which is exactly what the phrase
+        # list is missing.
+        ("reason", "TEXT"),
+    ),
     "grip_observations": (
         # The graded form of `identity_stable`; see the DDL for why the
         # boolean alone was not enough. Null on every row derived before it

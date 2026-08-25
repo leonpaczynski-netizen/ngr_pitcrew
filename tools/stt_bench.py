@@ -25,7 +25,8 @@ answers a question nobody asked.
 
 **Trailing silence is the biggest single lever here, and it is not a model
 choice at all.** A streaming recogniser finishes a word when it hears what
-follows it; after the last word nothing follows, because the button comes up.
+follows it; after the last word nothing follows, because the second tap ends
+the capture.
 Feeding six tenths of a second of silence before the final pass took the small
 model from two exact transcripts in ten to eight and the tiny model from three
 to five - larger than the gap between any two models - and cost nothing, since
@@ -34,7 +35,7 @@ what it was losing.
 
 **Two latencies, and the second is the one he feels.** Audio arrives while he
 talks, so feeding it is not waiting. What he waits for is the final pass after
-he lets go of the button - `finalise`. `total` is the whole clip fed as fast as
+the second tap - `finalise`. `total` is the whole clip fed as fast as
 the machine can and then finalised; it bounds the work but overstates the wait.
 
 **The audio is synthesised, and that bounds the claim.** Rendering the phrases
@@ -163,7 +164,7 @@ def _transcribe(transcriber, audio, pad_s=0.6):
         for at in range(0, len(audio), BLOCK):
             transcriber.add_audio(audio[at:at + BLOCK].tolist(), SAMPLE_RATE)
         # The wait that belongs to him: everything above happens while he is
-        # still speaking, this happens after he lets go of the button.
+        # still speaking, this happens after the second tap.
         released = time.perf_counter()
         if pad_s:
             quiet = np.zeros(int(SAMPLE_RATE * pad_s), dtype=np.float32)
@@ -261,8 +262,8 @@ def main() -> int:
 
     print("\nSynthesised speech, so the ranking is sound and the absolute "
           "error rates are optimistic - a headset mic in a moving car is "
-          "harder than this. `finalise` is what he waits for after releasing "
-          "the button; `total` also includes feeding audio he has already "
+          "harder than this. `finalise` is what he waits for after the second "
+          "tap; `total` also includes feeding audio he has already "
           "spoken.")
     return 0
 

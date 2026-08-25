@@ -324,7 +324,7 @@ def test_ahead_of_the_reference_reads_up():
     pid, now = drive(coach, pid, now, 34, speed=55.0)
     # ref elapsed at 1870 m = 37.4 s, live 34.0 s: 3.4 s up, "about"
     # because no completed flyer has yet measured the integration drift.
-    assert "On it. Up about 3.4." in coach.said
+    assert "On it. Up about 3.4 seconds." in coach.said
 
 
 def test_behind_the_reference_reads_down():
@@ -333,7 +333,7 @@ def test_behind_the_reference_reads_down():
     pid, now = start_flyer(coach, pid, now)
     pid, now = drive(coach, pid, now, 41, speed=45.0)
     # ref elapsed at 1845 m = 36.9 s, live 41.0 s: 4.1 s down.
-    assert "Down about 4.1." in coach.said
+    assert "Down about 4.1 seconds." in coach.said
 
 
 def test_the_mid_lap_call_behind_asks_for_a_tidy_last_sector():
@@ -352,7 +352,7 @@ def test_a_purple_lap_is_called_purple_with_the_gap():
     pid, now = drive(coach, pid, now, 100, speed=55.0)
     coach.update(pkt(pid + 60, speed=55.0, front=75.0, rear=80.0),
                  crossing(a_lap(2, 109_400)), now + 1.0)
-    assert "Purple. 109.4 - six tenths under your best." in coach.said
+    assert "Purple. one forty-nine point four - six tenths under your best." in coach.said
 
 
 def test_a_slower_lap_on_ready_tyres_says_another_run_is_worth_taking():
@@ -363,7 +363,7 @@ def test_a_slower_lap_on_ready_tyres_says_another_run_is_worth_taking():
     pid, now = drive(coach, pid, now, 100, speed=55.0)
     coach.update(pkt(pid + 60, speed=55.0, front=75.0, rear=80.0),
                  crossing(a_lap(2, 110_400)), now + 1.0)
-    assert ("110.4 - four tenths down. Tyres were ready - grip should hold "
+    assert ("one fifty point four - four tenths down. Tyres were ready - grip should hold "
             "for another run." in coach.said)
 
 
@@ -375,7 +375,7 @@ def test_a_slower_lap_on_cold_tyres_makes_no_grip_claim():
                      front=60.0, rear=63.0)
     coach.update(pkt(pid + 60, speed=55.0, front=60.0, rear=63.0),
                  crossing(a_lap(2, 110_400)), now + 1.0)
-    line = next(s for s in coach.said if s.startswith("110.4"))
+    line = next(s for s in coach.said if s.startswith("one fifty point four"))
     assert "grip" not in line
 
 
@@ -392,7 +392,7 @@ def test_purple_is_judged_against_the_session_best_not_just_the_reference():
                  crossing(a_lap(3, 109_500)), now + 1.0)
     # Faster than the practice reference, slower than tonight's best:
     # that is down, not purple.
-    assert any(s.startswith("109.5 - five tenths down.")
+    assert any(s.startswith("one forty-nine point five - five tenths down.")
                for s in coach.said)
     assert sum(s.startswith("Purple") for s in coach.said) == 1
 
@@ -445,7 +445,7 @@ def test_no_reference_still_gives_temps_and_the_line_call():
     coach.update(pkt(pid + 60, speed=55.0, front=75.0, rear=80.0),
                  crossing(a_lap(2, 109_000)), now + 1.0)
     # First flyer: the exact time, no comparison claimed.
-    assert "109.0." in coach.said
+    assert "one forty-nine flat." in coach.said
     # And never a mid-lap delta: there is nothing measured to chase.
     assert not any(s.startswith(("On it.", "Up ", "Down ", "Level"))
                    for s in coach.said)
@@ -454,7 +454,7 @@ def test_no_reference_still_gives_temps_and_the_line_call():
     pid, now = drive(coach, pid, now, 120, speed=55.0)
     coach.update(pkt(pid + 60, speed=55.0, front=75.0, rear=80.0),
                  crossing(a_lap(3, 108_500)), now + 1.0)
-    assert "Purple. 108.5 - five tenths under your best." in coach.said
+    assert "Purple. one forty-eight point five - five tenths under your best." in coach.said
 
 
 def test_the_crossing_frame_cannot_abandon_the_new_flyer():
@@ -556,12 +556,12 @@ def test_a_full_out_lap_and_flyer_replay():
     pid, now = drive(coach, pid, now, 100, speed=55.0, front=82.0, rear=87.0)
     coach.update(pkt(pid + 60, speed=55.0, front=82.0, rear=87.0),
                  crossing(a_lap(2, 109_800)), now + 1.0)
-    assert "Purple. 109.8 - two tenths under your best." in coach.said
+    assert "Purple. one forty-nine point eight - two tenths under your best." in coach.said
 
     # Second flyer: the drift is measured and small, so no more "about".
     pid, now = pid + 60, now + 1.0
     pid, now = drive(coach, pid, now, 34, speed=55.0, front=82.0, rear=87.0)
-    assert "On it. Up 3.4." in coach.said
+    assert "On it. Up 3.4 seconds." in coach.said
 
 
 # ------------------------------------------------------------------- wiring

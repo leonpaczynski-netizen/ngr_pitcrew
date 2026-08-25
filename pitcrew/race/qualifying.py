@@ -40,6 +40,7 @@ from bisect import bisect_right
 from dataclasses import dataclass
 
 from pitcrew.diagnostics import log
+from pitcrew.engineer import say
 from pitcrew.race.temps import TempWindow
 from pitcrew.telemetry.recorder import SAMPLE_HZ
 from pitcrew.telemetry.session_state import EventKind
@@ -108,17 +109,14 @@ NOISE_OK_S = 0.2
 # every call here, so half of one is the dead band.
 LEVEL_BAND_S = 0.05
 
-_TENTHS = {1: "a tenth", 2: "two tenths", 3: "three tenths", 4: "four tenths",
-           5: "five tenths", 6: "six tenths", 7: "seven tenths",
-           8: "eight tenths", 9: "nine tenths"}
-
-
 def _tenths_words(seconds: float) -> str:
-    """Say a gap the way an engineer would: tenths, then plain seconds."""
-    n = max(1, int(round(abs(seconds) * 10.0)))
-    if n >= 10:
-        return f"{abs(seconds):.1f}"
-    return _TENTHS[n]
+    """Say a gap the way an engineer would: tenths, then plain seconds.
+
+    **Kept as a name, moved as an implementation.** It used to drop the unit
+    above a second - "one point three down" - which is a number with no
+    dimension in the middle of a sentence. `say.spoken_gap` attaches it.
+    """
+    return say.spoken_gap(seconds)
 
 
 def _axle_means(packet) -> tuple[float, float]:
@@ -559,33 +557,36 @@ class QualifyingCoach:
     def _line_call(self, lap, now: float) -> None:
         """The lap is set. Judged against GT7's own times - exact, no
         integration in it - so this call never says "about"."""
-        seconds = lap.lap_time_ms / 1000.0
+        # **Spoken as a lap time, not as a count of seconds.** GT7's own exact
+        # figure goes to the log through `_say`; what he hears is the form
+        # every timing screen uses.
+        spoken = say.spoken_lap_time(lap.lap_time_ms)
         if self._best_ms is None:
             # Temperature-only mode's first flyer: nothing measured to
             # compare against, so the exact time is the whole call. Purple
             # claims start once tonight has a best of its own.
-            self._say(f"{seconds:.1f}.", now)
+            self._say(f"{spoken}.", now, exact_ms=lap.lap_time_ms)
             self._best_ms = lap.lap_time_ms
             return
         gap_s = (self._best_ms - lap.lap_time_ms) / 1000.0
         if abs(gap_s) < LEVEL_BAND_S:
-            text = f"{seconds:.1f} - level with your best."
+            text = f"{spoken} - level with your best."
         elif gap_s > 0:
-            text = (f"Purple. {seconds:.1f} - "
+            text = (f"Purple. {spoken} - "
                     f"{_tenths_words(gap_s)} under your best.")
         else:
-            text = f"{seconds:.1f} - {_tenths_words(gap_s)} down."
+            text = f"{spoken} - {_tenths_words(gap_s)} down."
             if self._flyer_started_in_window:
                 # The one diagnostic worth a second sentence: the set was
                 # not the problem, so another run is worth taking.
                 text += " Tyres were ready - grip should hold for another run."
-        self._say(text, now)
+        self._say(text, now, exact_ms=lap.lap_time_ms)
         self._best_ms = min(self._best_ms, lap.lap_time_ms)
 
     # ------------------------------------------------------------------ voice
 
     def _say(self, text: str, now: float | None, *,
-             temp_call: bool = False) -> bool:
+             temp_call: bool = False, exact_ms: int | None = None) -> bool:
         """Record and speak one line. Temperature calls respect the spacing
         limiter - temps move slowly and a second call inside it is chatter.
         Structural calls (out-lap start, line calls) are events, not
@@ -594,7 +595,13 @@ class QualifyingCoach:
                 and now - self._last_call_at < TEMP_CALL_SPACING_S):
             return False
         self.said.append(text)
-        log("quali").info("said: %s", text)
+        # **The spoken form loses the thousandth on purpose; the log keeps
+        # it.** He cannot act on a thousandth between two corners, but he can
+        # read one back afterwards, and two of his laps are separated by it.
+        if exact_ms:
+            log("quali").info("said: %s  [%s]", text, say.lap_time(exact_ms))
+        else:
+            log("quali").info("said: %s", text)
         if now is not None:
             self._last_call_at = now
         if self._speak is not None:

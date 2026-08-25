@@ -4535,8 +4535,6 @@ class PitCrewController(QObject):
     def _show_ptt_answer(self, heard: str, said: str) -> None:
         if self.race_screen is not None:
             self.race_screen.show_exchange(heard, said)
-        if not heard:
-            return
         from pitcrew.engineer.intents import (
             ACCEPT,
             KEEP,
@@ -4544,17 +4542,40 @@ class PitCrewController(QObject):
             TYRES_RED,
             match_intent,
         )
-        intent = match_intent(heard)
+        # **The verdict that reached him, not a second opinion of it.** This
+        # re-derived the intent with `match_intent` - the literal keyword
+        # matcher - while the decision he actually heard came from the semantic
+        # matcher and `gate.judge`. Those two disagree by design, so the ledger
+        # could record `fuel` against a press the engineer had refused, and the
+        # record of what he asked became a record of something else answering
+        # it. `last_verdict` is set on every path through `ask()`, including
+        # the refusals.
+        verdict = getattr(self.ptt, "last_verdict", None)
+        intent = getattr(verdict, "intent", None) or match_intent(heard)
+        action = getattr(verdict, "action", None)
+        distance = getattr(verdict, "distance", None)
+        reason = getattr(self.ptt, "last_reason", None) if (
+            action == "reject") else None
 
-        # **Both sides of the exchange, on the record.** The calls ledger has
-        # only ever held what the engineer said and whether it was taken. A
-        # call that was right and ignored, and a call that was noise and
-        # ignored, look identical there - the difference is almost always in
-        # what he said back. Learning which calls help cannot be done from one
-        # side of a conversation.
+        # **Both sides of the exchange, on the record - including the ones with
+        # no question in them.** The calls ledger has only ever held what the
+        # engineer said and whether it was taken. A call that was right and
+        # ignored, and a call that was noise and ignored, look identical there;
+        # the difference is almost always in the reply.
+        #
+        # And this used to return before writing anything whenever `heard` was
+        # empty, which is precisely what a refused press looks like from here.
+        # **Every press the app could not understand was therefore discarded**,
+        # and those are the rows worth the most: a question his engineer could
+        # not take, in his own words, is exactly what the phrase list is
+        # missing. `tools/radio_review.py` reads them back.
         self.store.log_radio(
             self.session_id, heard=heard, said=said,
-            lap_num=self._current_lap(), intent=intent)
+            lap_num=self._current_lap(), intent=intent,
+            action=action, distance=distance, reason=reason)
+
+        if not heard:
+            return
 
         if intent in REPORTS:
             self._note_driver_report(intent, heard)
