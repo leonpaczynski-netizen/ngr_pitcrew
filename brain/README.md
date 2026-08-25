@@ -27,9 +27,14 @@ found a mechanism the knowledge base had wrong. Neither record knew.
    else: the method survived the patch, the numbers have not been re-verified.
 2. **`_inbox/17-v1.71-measured-results.md`** — what has actually been measured
    since. Short, and the only document in the set whose numbers are post-patch.
-3. **`_inbox/08-playbook-leon.md`** — the synthesis, and where a setup decision
+3. **`fuji-race-2026-08-24.md`** — the first RACE measured on v1.71, and the
+   only document here with post-patch race numbers rather than practice ones:
+   lap-time sigma, fuel burn, the pit-stop decomposition, and why a null
+   degradation result does not mean the tyres held. Its §6 reverses the Watkins
+   setup-provenance conclusion; `RECONCILIATION.md` §F carries the rulings.
+4. **`_inbox/08-playbook-leon.md`** — the synthesis, and where a setup decision
    starts.
-4. **`_inbox/00-INDEX.md`** — the full map, the standing rules, and the open items.
+5. **`_inbox/00-INDEX.md`** — the full map, the standing rules, and the open items.
 
 ## The rule this directory exists to enforce
 

@@ -211,6 +211,26 @@ right, both found by checking rather than by shipping:
   sign error on a parameter whose sign is the whole setting, arriving silently.
 
 
+## F. Reversed by the Fuji race, 25 Aug 2026
+
+Full working in `fuji-race-2026-08-24.md`. These are the entries that change a
+verdict either record already held.
+
+| # | Finding | Ruling |
+|---|---|---|
+| F1 | **The Watkins setup-provenance conclusion is REVERSED.** The sheet linked to the Watkins race was created four days after it and disagrees with the sheet its own practices point at by 3 mm of front ride height, which read as a retrospective reconstruction overwriting the real record | `laps.gear_ratios` is decoded from the packet and copied from no sheet. Session 49 reports 6th = 1.055, matching Rev D **to 9.5e-08** and missing the other sheet by 5.0e-03; all three practices agree. Suspension height corroborates — race-versus-practice differs by the same margin as the practice-to-practice control, 6–12× smaller than the 3 mm in dispute. **Rev D was in the car. The PRACTICES are the mis-linked sessions.** The car was never raised |
+| F2 | Fresh tyres arrive at a knowable temperature | **Refuted for the third time, with a third value.** 45 °C, exactly 70 °C, and now exactly 60.0 °C, all four corners converging in one frame. Any fixed fresh-tyre constant is fabricated and nothing may be gated on one |
+| F3 | Pit loss is a track constant | **The total still is; the decomposition is not.** Fuji: 22.05 s dead time against 7.5 s modelled, and 6.8 s transit against 20 s declared. The two errors nearly cancel here and will not on a splash-and-dash, where there is no fuel time for the dead time to hide in. Fuji's dead time includes a tyre change and Watkins' 6.79 s may not |
+| F4 | "No degradation detected" over a long stint | **Must never be reported as "the tyres did not degrade".** The Fuji null bounds *average* degradation below ≈0.03 s/lap, but against the piecewise shape `03` requires, the smallest detectable end-of-stint step is ≈0.8 s/lap — inside the 0.5–1.5 s/lap band it was meant to catch. It does not refute the planned rate, and with no gauge reading in existence nothing can arbitrate |
+| F5 | The app's strategy layer is the better record of what constrains a stint | **Not while it reports the wrong constraint.** The plan was capped by the longest stint ever run (6 laps) and reported *fuel*. Fixed in the app and in the export contract (1.6 adds `evidence`), but the KB should read any pre-1.6 `bindingConstraint` of `tyre` or `fuel` as possibly meaning neither |
+
+**And one thing both records got right.** The driver overrode the engineer twice
+and was right both times — the fourth consecutive session in which his judgement
+beat the app's. `driver.md`'s fuel-margin refusal is reaffirmed: the 8.3 s of
+fuel carried across the line is charged to the app's in-box call, not to him.
+
+---
+
 ## What was not checked
 
 Honesty about coverage: this pass read `00`, `10`, `15`, `16` (index and §11–12),
