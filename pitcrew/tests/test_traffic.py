@@ -123,3 +123,55 @@ def test_the_side_is_decided_at_the_crosshair_not_at_the_contact():
     distance, label = tool.branches(passable, (10, 10))
     assert label[16, 15] == 1, "doubled back but still the road ahead"
     assert label[16, 10] == -1, "straight down is the road behind"
+
+# ------------------------------------------------- naming the car, not the box
+
+def _board():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "read_replay_board",
+        Path(__file__).resolve().parents[2] / "tools" / "read_replay_board.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_same_name_clusters_and_a_different_one_does_not():
+    """GT7 renders one font at one size, so the same name is the same bitmap.
+
+    Exact where OCR would be probabilistic - and there is no OCR engine on
+    this machine to be probabilistic with.
+    """
+    numpy = pytest.importorskip("numpy")
+    board = _board()
+    a = numpy.zeros((16, 64), dtype=bool)
+    a[4:12, 8:40] = True
+    b = a.copy()
+    b[5, 9] = False                      # one pixel of rendering noise
+    c = numpy.zeros((16, 64), dtype=bool)
+    c[2:14, 20:60] = True                # a different name
+    groups = board.cluster([(("t1", "ahead"), a), (("t2", "ahead"), b),
+                            (("t3", "behind"), c)])
+    assert len(groups) == 2
+    assert len(groups[0]["seen"]) == 2
+
+
+def test_an_unreadable_cluster_has_a_way_to_say_so():
+    """The board reorders between frames and a sample caught mid-reorder has
+    two names over each other. Guessing puts a driver on a car that was never
+    there; leaving it blank blocks every other contact."""
+    board = _board()
+    assert board.UNREADABLE
+    assert board.UNREADABLE != ""
+
+
+def test_a_name_is_never_carried_further_than_the_board_was_read():
+    """Beyond one sampling interval the order may have changed in between,
+    and a name carried across a pass names the wrong driver."""
+    store_module = _board()
+    # The rule is expressed as `gap <= args.every` in the join; this asserts
+    # the tool exposes the interval it was read at rather than hard-coding a
+    # tolerance that could outlive its sampling.
+    import inspect
+    source = inspect.getsource(store_module.main)
+    assert "best[0] <= args.every" in source

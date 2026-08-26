@@ -239,6 +239,12 @@ CREATE TABLE IF NOT EXISTS traffic (
     -- down. Named `_position` rather than `rival` so nothing mistakes it for
     -- the name on the leaderboard, which needs OCR nobody has written.
     rival_position INTEGER,
+    -- The name off the leaderboard, which IS an identity where
+    -- `rival_position` is not: the car that was P6 on lap 14 can be P8 by
+    -- lap 18, so "the same car for four laps" is only answerable from this.
+    -- Null until `tools/read_replay_board.py` has been run and its clusters
+    -- labelled - never guessed from the position.
+    rival       TEXT,
     source      TEXT NOT NULL,
     read_at     TEXT NOT NULL
 );
@@ -720,6 +726,13 @@ CREATE INDEX IF NOT EXISTS idx_identity_repairs_row
 # Only nullable columns with no default belong here. Anything that needs a
 # back-fill, a type change or a drop needs a real numbered migration instead.
 ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    # The name off the leaderboard. `traffic` shipped without it because the
+    # position was thought to be identity enough, and it is not: the car that
+    # was P6 on lap 14 can be P8 by lap 18, so "the same car for four laps"
+    # cannot be asked of `rival_position` at all.
+    "traffic": (
+        ("rival", "TEXT"),
+    ),
     # **What the gate actually decided, rather than a second opinion.**
     # The ledger stored an intent re-derived by `intents.match_intent` - the
     # literal keyword matcher - while the decision that reached the driver came

@@ -1795,6 +1795,12 @@ class Store:
                   stamp) for r in rows])
         return len(rows)
 
+    def name_traffic(self, traffic_id: int, rival: str) -> None:
+        """Put a name to one contact. Only ever from a labelled cluster."""
+        with self._write() as conn:
+            conn.execute("UPDATE traffic SET rival = ? WHERE id = ?",
+                         (rival, traffic_id))
+
     def list_traffic(self, session_id: int) -> list[dict]:
         return [dict(r) for r in self._query(
             "SELECT * FROM traffic WHERE session_id = ? "
