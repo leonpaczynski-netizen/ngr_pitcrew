@@ -35,6 +35,7 @@ from pitcrew.store.tyres import ALL_COMPOUNDS
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
     BodyLabel,
+    CascadingPicker,
     CompoundBand,
     Field,
     MarkButton,
@@ -189,7 +190,8 @@ class EventScreen(QWidget):
         self._tracks = (list(tracks) if tracks is not None
                         else list(catalogs.track_bases()))
         self._car_groups = (list(car_groups) if car_groups is not None
-                            else list(catalogs.cars_by_category().items()))
+                            else list(
+                                catalogs.cars_by_category_and_maker().items()))
         self._build()
 
     def set_catalogs(self, tracks, car_groups) -> None:  # noqa: N802 - Qt naming
@@ -407,7 +409,10 @@ class EventScreen(QWidget):
         self.track_edit = Picker(self._tracks, placeholder="Pick a track")
         self.track_edit.changed.connect(self._on_track_changed)
         self.layout_edit = Picker(placeholder="—")
-        self.car_edit = Picker(placeholder="Pick a car", groups=self._car_groups)
+        # Class, then maker, then car. A flat `Picker` over 608 cars - 369 of
+        # them road cars under one heading - is a scroll, not a choice.
+        self.car_edit = CascadingPicker(self._car_groups,
+                                        placeholder="Pick a car")
 
         # GT7 rewrote its physics, tyre model and geometry in 1.49 and again in
         # 1.55, so a measurement without the version it was taken under cannot

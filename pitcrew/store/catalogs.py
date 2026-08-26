@@ -231,6 +231,37 @@ def cars_by_category() -> dict[str, tuple[str, ...]]:
     return ordered
 
 
+@functools.lru_cache(maxsize=1)
+def cars_by_category_and_maker() -> dict[str, dict[str, tuple[str, ...]]]:
+    """Car names grouped by GT7 class, then by manufacturer.
+
+    The flat list is 608 cars long. Grouping it by class alone still leaves
+    369 road cars under one heading, which is a scroll, not a choice - so the
+    maker is the second axis. `Road Car` last for the same reason
+    `CATEGORY_ORDER` puts it there.
+
+    A car whose spec carries no maker is filed under `Unknown` rather than
+    dropped: a name the driver can no longer reach is worse than a heading
+    that admits the gap.
+    """
+    grouped: dict[str, dict[str, list[str]]] = {}
+    for name, spec in car_specs().items():
+        category = spec.get("category") or "Road Car"
+        maker = spec.get("maker") or "Unknown"
+        grouped.setdefault(category, {}).setdefault(maker, []).append(name)
+
+    def _makers(makers: dict[str, list[str]]) -> dict[str, tuple[str, ...]]:
+        return {maker: tuple(sorted(makers[maker])) for maker in sorted(makers)}
+
+    ordered: dict[str, dict[str, tuple[str, ...]]] = {}
+    for category in CATEGORY_ORDER:
+        if grouped.get(category):
+            ordered[category] = _makers(grouped.pop(category))
+    for category in sorted(grouped):
+        ordered[category] = _makers(grouped[category])
+    return ordered
+
+
 def car_name(car_id: int | None) -> str | None:
     if car_id is None:
         return None

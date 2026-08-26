@@ -782,6 +782,242 @@ class Picker(QWidget):
         self.combo.setEnabled(enabled)
 
 
+class CascadingPicker(QWidget):
+    """Three dependent dropdowns for one value: class, then maker, then car.
+
+    A `Picker` over the whole car catalogue is 608 rows behind eight headings,
+    and 369 of them sit under `Road Car`. Headings make that skimmable; they
+    do not make it choosable. Narrowing by class and then by manufacturer
+    turns one long scroll into three short ones, and the two narrowing steps
+    are throwaway - only the last combo carries a value.
+
+    **Only the final selection is the value.** `currentText` is the car and
+    nothing else, `changed` fires for the car and nothing else, so this is a
+    drop-in for `Picker` everywhere the event screen uses one. Class and maker
+    are navigation; they are never saved and never read back.
+    """
+
+    changed = pyqtSignal(str)
+
+    def __init__(self, groups=None, *, placeholder: str = "",
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._placeholder = placeholder
+        # {category: {maker: (name, ...)}}, the whole catalogue.
+        self._catalog: dict[str, dict[str, tuple[str, ...]]] = {}
+        # A stored car the catalogue no longer carries. Held apart from
+        # `_catalog` so it shows without being offered to anyone else - the
+        # same rule `Picker.setCurrentText` follows and for the same reason.
+        self._unlisted: str | None = None
+        self._loading = False
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        self.category_combo = self._combo("Class")
+        self.maker_combo = self._combo("Make")
+        self.car_combo = self._combo(placeholder or "Car")
+        # The car name is the long one and the only one worth reading in full,
+        # so it takes the width and the two narrowing steps stay compact.
+        row.addWidget(self.category_combo, 2)
+        row.addWidget(self.maker_combo, 3)
+        row.addWidget(self.car_combo, 5)
+
+        # Tab and `setFocus()` land on the first step, which is where a driver
+        # who has just been told the field is empty needs to start.
+        self.setFocusProxy(self.category_combo)
+
+        self.category_combo.currentIndexChanged.connect(self._on_category)
+        self.maker_combo.currentIndexChanged.connect(self._on_maker)
+        self.car_combo.currentIndexChanged.connect(self._on_car)
+
+        self.set_groups(groups or [])
+
+    def _combo(self, placeholder: str) -> QComboBox:
+        combo = QComboBox()
+        combo.setMinimumHeight(34)
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(8)
+        combo.view().setTextElideMode(Qt.TextElideMode.ElideNone)
+        block_wheel(combo)
+        combo.setProperty("placeholder", placeholder)
+        return combo
+
+    # ------------------------------------------------------------- catalogue
+
+    def set_groups(self, groups) -> None:  # noqa: N802 - Qt naming
+        """Populate from `[(category, [(maker, [names]), ...]), ...]`.
+
+        A two-level list - `[(category, [names])]`, what `Picker` takes - is
+        accepted too and filed under one `All` maker, so a caller that has not
+        been given maker data still gets a working control rather than an
+        empty one.
+        """
+        current = self.currentText()
+        self._catalog = {}
+        for category, entries in groups:
+            heading = category or "Other"
+            makers: dict[str, list[str]] = {}
+            for entry in (entries.items() if isinstance(entries, dict)
+                          else entries):
+                if isinstance(entry, str):
+                    makers.setdefault("All", []).append(entry)
+                else:
+                    maker, names = entry
+                    makers.setdefault(maker or "Unknown", []).extend(names)
+            # Sorted here, not left to the caller. The whole point of the
+            # narrowing is that a name can be found by eye, and a list in
+            # whatever order a dict happened to be built in cannot be.
+            self._catalog[heading] = {maker: tuple(sorted(makers[maker]))
+                                      for maker in sorted(makers)}
+
+        self._loading = True
+        self._fill(self.category_combo, list(self._catalog))
+        self._fill(self.maker_combo, [])
+        self._fill(self.car_combo, [])
+        self._loading = False
+
+        # A selection the new catalogue does not carry has stopped existing,
+        # and `Picker` documents why re-adding it here would be wrong: it
+        # leaks one list's value into another's. The caller decides what to
+        # put in the gap.
+        if current and self._locate(current):
+            self.setCurrentText(current)
+        elif current:
+            self._emit()
+
+    def _fill(self, combo: QComboBox, names) -> None:
+        placeholder = combo.property("placeholder") or ""
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(placeholder or "-", None)
+        widest = placeholder
+        for name in names:
+            combo.addItem(name, name)
+            if len(name) > len(widest):
+                widest = name
+        combo.blockSignals(False)
+        metrics = combo.view().fontMetrics()
+        combo.view().setMinimumWidth(metrics.horizontalAdvance(widest) + 44)
+        self._sync_ink(combo)
+
+    # -------------------------------------------------------------- cascade
+
+    def _on_category(self, _index: int = 0) -> None:
+        if self._loading:
+            return
+        category = self.category_combo.currentData()
+        makers = list(self._catalog.get(category, {})) if category else []
+        self._loading = True
+        self._fill(self.maker_combo, makers)
+        self._fill(self.car_combo, [])
+        self._loading = False
+        self._sync_ink(self.category_combo)
+        # Narrowing the class discards the car, so the value changed even
+        # though nobody touched the car combo. Saying so is the whole reason
+        # anything downstream can trust `currentText`.
+        self._emit()
+
+    def _on_maker(self, _index: int = 0) -> None:
+        if self._loading:
+            return
+        category = self.category_combo.currentData()
+        maker = self.maker_combo.currentData()
+        names = (list(self._catalog.get(category, {}).get(maker, ()))
+                 if category and maker else [])
+        self._loading = True
+        self._fill(self.car_combo, names)
+        self._loading = False
+        self._sync_ink(self.maker_combo)
+        self._emit()
+
+    def _on_car(self, _index: int = 0) -> None:
+        self._sync_ink(self.car_combo)
+        if not self._loading:
+            self._emit()
+
+    def _emit(self) -> None:
+        self.changed.emit(self.currentText())
+
+    def _sync_ink(self, combo: QComboBox) -> None:
+        """Nothing chosen reads struck, not crayon - as `Picker` does."""
+        palette = combo.palette()
+        chosen = combo.currentData() is not None
+        palette.setColor(palette.ColorRole.ButtonText,
+                         QColor(theme.CRAYON if chosen else theme.STRUCK))
+        palette.setColor(palette.ColorRole.Text,
+                         QColor(theme.CRAYON if chosen else theme.STRUCK))
+        combo.setPalette(palette)
+
+    # ----------------------------------------------------------------- value
+
+    def currentText(self) -> str:  # noqa: N802 - Qt naming
+        return self.car_combo.currentData() or ""
+
+    def setCurrentText(self, text: str) -> None:  # noqa: N802 - Qt naming
+        """Select a car by name, driving the two steps above it to match.
+
+        A stored name the catalogue no longer carries is still shown, for the
+        reason `Picker.setCurrentText` gives: blanking it would throw away
+        what the event was actually raced on at the next save. It is filed
+        under the `Unknown` headings rather than smuggled into a real maker's
+        list, so it is visible without being offered to anyone else.
+        """
+        self._unlisted = None
+        if not text:
+            self._loading = True
+            self.category_combo.setCurrentIndex(0)
+            self._fill(self.maker_combo, [])
+            self._fill(self.car_combo, [])
+            self._loading = False
+            self._sync_ink(self.category_combo)
+            self._emit()
+            return
+
+        found = self._locate(text)
+        self._loading = True
+        if found:
+            category, maker = found
+            self.category_combo.setCurrentIndex(
+                self.category_combo.findData(category))
+            self._fill(self.maker_combo, list(self._catalog[category]))
+            self.maker_combo.setCurrentIndex(self.maker_combo.findData(maker))
+            self._fill(self.car_combo, list(self._catalog[category][maker]))
+        else:
+            self._unlisted = text
+            self._fill(self.category_combo,
+                       list(self._catalog) + ["Unknown"])
+            self.category_combo.setCurrentIndex(
+                self.category_combo.findData("Unknown"))
+            self._fill(self.maker_combo, ["Unknown"])
+            self.maker_combo.setCurrentIndex(0 if self.maker_combo.count() < 2
+                                             else 1)
+            self._fill(self.car_combo, [text])
+        self.car_combo.setCurrentIndex(self.car_combo.findData(text))
+        self._loading = False
+        for combo in (self.category_combo, self.maker_combo, self.car_combo):
+            self._sync_ink(combo)
+        self._emit()
+
+    def _locate(self, text: str) -> tuple[str, str] | None:
+        for category, makers in self._catalog.items():
+            for maker, names in makers.items():
+                if text in names:
+                    return category, maker
+        return None
+
+    def items(self) -> list[str]:
+        """Every selectable car in the catalogue, not just the visible page."""
+        return sorted({name for makers in self._catalog.values()
+                       for names in makers.values() for name in names})
+
+    def setEnabledState(self, enabled: bool) -> None:  # noqa: N802 - Qt naming
+        for combo in (self.category_combo, self.maker_combo, self.car_combo):
+            combo.setEnabled(enabled)
+
+
 class StrikeRow(QFrame):
     """A rack row that can be struck out.
 

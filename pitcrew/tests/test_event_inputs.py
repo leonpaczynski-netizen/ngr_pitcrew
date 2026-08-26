@@ -195,14 +195,30 @@ def test_a_track_with_one_layout_disables_the_layout_box(qt_app, store: Store): 
     controller.shutdown()
 
 
-def test_cars_are_grouped_by_class(qt_app, store: Store):  # noqa: F811
+def test_cars_are_narrowed_by_class_then_maker(qt_app, store: Store):  # noqa: F811
+    """Class first, race classes before road cars - and a maker step under it.
+
+    The grouping used to be headings inside one 608-row dropdown. The class
+    ordering is the part of that worth keeping: a league event picks a race
+    class, and ten times as many road cars must not be in the way of it.
+    """
     screen = EventScreen()
     controller = PitCrewController(store, screen, PracticeScreen())
-    texts = [screen.car_edit.combo.itemText(i)
-             for i in range(screen.car_edit.combo.count())]
-    assert "— Gr.3 —" in texts
-    assert "— Road Car —" in texts
-    assert texts.index("— Gr.3 —") < texts.index("— Road Car —")
+    classes = [screen.car_edit.category_combo.itemData(i)
+               for i in range(screen.car_edit.category_combo.count())
+               if screen.car_edit.category_combo.itemData(i) is not None]
+    assert "Gr.3" in classes
+    assert "Road Car" in classes
+    assert classes.index("Gr.3") < classes.index("Road Car")
+
+    combo = screen.car_edit.category_combo
+    combo.setCurrentIndex(combo.findData("Gr.3"))
+    makers = [screen.car_edit.maker_combo.itemData(i)
+              for i in range(screen.car_edit.maker_combo.count())
+              if screen.car_edit.maker_combo.itemData(i) is not None]
+    assert "Porsche" in makers
+    # The road-car makers are not in the way of the race-class ones.
+    assert len(makers) < len(classes) * 20
     controller.shutdown()
 
 

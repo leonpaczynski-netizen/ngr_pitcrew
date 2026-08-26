@@ -846,11 +846,17 @@ class PitCrewController(QObject):
         """
         tracks = sorted(set(catalogs.track_bases())
                         | set(self.store.custom_catalog("track")))
-        groups = list(catalogs.cars_by_category().items())
         extra = self.store.custom_catalog("car")
+        # Two shapes of the same catalogue. The event screen narrows by class
+        # then maker and wants the nested form; the car screen's flat `Picker`
+        # wants class alone. Building both here keeps the widgets ignorant of
+        # each other rather than making one accept the other's shape.
+        groups = list(catalogs.cars_by_category().items())
+        nested = list(catalogs.cars_by_category_and_maker().items())
         if extra:
             groups.append(("Added", tuple(sorted(extra))))
-        self.event_screen.set_catalogs(tracks, groups)
+            nested.append(("Added", {"Added": tuple(sorted(extra))}))
+        self.event_screen.set_catalogs(tracks, nested)
         if self.car_screen is not None:
             self.car_screen.set_car_groups(groups)
 
