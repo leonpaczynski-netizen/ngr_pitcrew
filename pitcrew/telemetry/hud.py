@@ -249,11 +249,209 @@ class Reading:
     # peak every time is not a game frame at all - it is the same pixels, which
     # means the rectangle is not on the gauge. None where no peak was taken.
     peak: int | None = None
+    # **The height of the shortest bar that was read, in pixels.** Carried
+    # because it IS the reading's resolution and nothing downstream can
+    # recover it: one pixel of a 30 px bar is 3.3% of tyre life and one pixel
+    # of an 18 px bar is 5.6%, and the two numbers look identical once they
+    # are floats in a column. None where no bar was read.
+    rows: int | None = None
+    # **Whether the gauge was FOUND rather than read from the calibrated
+    # rectangle.** The 0.5% verification of this transcription was taken on
+    # the fixed layout at 1720x916; a located read uses looser thresholds on
+    # whatever the locator found, and the two should not be confused when a
+    # run is being judged. The canvas size does not answer this - a dim frame
+    # on the calibrated canvas is located too.
+    located: bool = False
 
     @property
     def ok(self) -> bool:
         return self.wear is not None and any(
             v is not None for v in self.wear.values())
+
+
+def coherent(previous: dict | None, wear: dict, *,
+             slack: float = GAUGE_SLACK,
+             max_rise: float = GAUGE_MAX_RISE,
+             fresh_max: float = FRESH_SET_MAX) -> tuple[bool, bool, str]:
+    """Can this reading follow the one before it on a real set of tyres?
+
+    Returns `(accept, fresh_set, why_not)`. `previous` is the last reading
+    that was believed, or None to seed a series.
+
+    **One rule, two callers.** `LiveWearSampler` applies it to the race path
+    and `tools/read_hud_wear.py` applies it to a recorded capture, and they
+    have to mean the same thing: the offline tool wrote readings into sessions
+    71 and 77 that this rule refuses, while the live path was refusing the
+    identical shape of misread in the same week.
+
+    `slack` is how far a corner may move the wrong way and still be
+    quantisation rather than a misread. It is a parameter because the gauge is
+    not always the same size - the calibrated HUD bar is 30 px, a located one
+    at 1920x1080 is 36, and one on a VR dashboard is 8-20, so a pixel is worth
+    2.8% of tyre life in one case and 12.5% in another.
+    """
+    if not previous:
+        return True, False, ""
+    shared = [k for k, v in wear.items()
+              if v is not None and previous.get(k) is not None]
+    if not shared:
+        return True, False, ""
+    moved = {k: wear[k] - previous[k] for k in shared}
+    fell = [k for k in shared if moved[k] < -slack]
+    rose = [k for k in shared if moved[k] > slack]
+    if fell and rose:
+        return False, False, (
+            "wear moved both ways at once ("
+            + ", ".join(f"{k.upper()} {moved[k] * 100:+.0f}"
+                        for k in sorted(shared))
+            + ") - no tyre does that, so this is not the gauge")
+    if fell and len(fell) == len(shared):
+        worst = max(wear[k] for k in shared)
+        if worst <= fresh_max:
+            return True, True, ""
+        return False, False, (
+            f"every corner dropped but the set still reads "
+            f"{worst * 100:.0f}% worst against a {fresh_max * 100:.0f}% "
+            f"ceiling - too worn for a fresh set and too low to follow "
+            f"the last one")
+    leapt = [k for k in rose if moved[k] > max_rise]
+    if leapt:
+        # The other direction of the same impossibility. See
+        # `GAUGE_MAX_RISE` for why this one had to be added.
+        return False, False, (
+            "wear jumped "
+            + ", ".join(f"{k.upper()} +{moved[k] * 100:.0f}"
+                        for k in sorted(leapt))
+            + f" points since the last reading - more than a tyre wears "
+              f"between samples, so this is not the gauge")
+    return True, False, ""
+
+
+@dataclass(frozen=True)
+class WearFault:
+    """One step in a series of readings that no tyre could have produced."""
+
+    # Whatever identifies the two readings to the operator - lap numbers for
+    # a series about to be written, video seconds for one being swept.
+    before: object
+    after: object
+    corners: tuple[str, ...]
+    moved: dict[str, float]
+    why: str
+
+    def __str__(self) -> str:
+        return (f"{self.before} -> {self.after}: "
+                + ", ".join(f"{k.upper()} {self.moved[k] * 100:+.1f}"
+                            for k in self.corners)
+                + f" - {self.why}")
+
+
+def wear_faults(series, *, slack: float = GAUGE_SLACK,
+                max_rise: float = GAUGE_MAX_RISE,
+                fresh_max: float = FRESH_SET_MAX, span=None) -> list[WearFault]:
+    """Every step in a series of readings that a real tyre cannot have made.
+
+    `series` is `[(key, {corner: wear|None}), ...]` in order. The keys are
+    only carried through to the faults and to `span`, so they can be lap
+    numbers, video seconds or anything else the caller can print.
+
+    **`max_rise` is per step, and `span` says how big a step was.** The live
+    ceiling is 15 points between readings taken seconds apart, and applying
+    that to a series a LAP apart refuses honest data: measured across the
+    archive, a lap on RS routinely puts 12-17 points on a corner, and the
+    ceiling would split that population - refusing 16.7 and 15.0 in two
+    sessions while accepting 14.1 in a third that was recorded the same way.
+    So a caller whose readings are laps apart passes `span=lambda a, b: b - a`
+    and a per-lap ceiling, and a step over nine laps is allowed nine laps of
+    wear.
+
+    **This is the batch form of `coherent`, and it is stricter in one place.**
+    `coherent` lets a single corner fall while the others hold, because on the
+    race path a refusal costs a lap of gauge and the next sample is two
+    seconds away - it is tuned to keep sampling. A batch write is the opposite
+    trade: nothing is lost by refusing, the whole series is on the table at
+    once, and **wear is monotonic on every corner** - so a corner that goes
+    backwards by more than the quantisation is reported here rather than
+    filed.
+
+    **Every step is judged against the one before it, and the baseline always
+    advances** - deliberately unlike the live path. There, a refusal must not
+    become the baseline or one misread poisons the comparison for the rest of
+    the session. Here the point is to name each bad step exactly once, and a
+    frozen baseline would report every later reading as a fault of the first.
+    """
+    faults: list[WearFault] = []
+    for (before, was), (after, now) in zip(series, series[1:]):
+        laps = max(1.0, span(before, after)) if span else 1.0
+        ceiling = max_rise * laps
+        # **The fresh-set ceiling is spanned too, and it was not.** `max_rise`
+        # was scaled here and `FRESH_SET_MAX` was left at its live-path value,
+        # which asks a set fitted in the pits to read under 15% on the NEXT
+        # SAMPLE - and the next sample is a lap later, or two. A new set that
+        # has run an out-lap and a flying lap has genuinely worn: at the RS
+        # rates measured in this very archive (14.1%/lap in session 83,
+        # 16.7% in session 81) it reads 25-30%, every corner has correctly
+        # fallen, and the batch gate refuses the step - which discards the
+        # WHOLE RACE, because the gate is all-or-nothing.
+        #
+        # Allowed the same physical budget the rise test already allows: what
+        # the set could have consumed since it went on. Anything above that is
+        # not a fresh set and is still refused.
+        fresh_ceiling = fresh_max + max_rise * laps
+        accept, fresh, why = coherent(was, now, slack=slack, max_rise=ceiling,
+                                      fresh_max=fresh_ceiling)
+        if fresh:
+            continue
+        shared = [k for k, v in now.items()
+                  if v is not None and was.get(k) is not None]
+        moved = {k: now[k] - was[k] for k in shared}
+        wrong = tuple(sorted(k for k in shared
+                             if moved[k] < -slack or moved[k] > ceiling))
+        if accept and not wrong:
+            continue
+        if accept:
+            why = ("wear went backwards on "
+                   + ", ".join(k.upper() for k in wrong)
+                   + " while the other corners held - a tyre does not recover, "
+                     "so one of the two readings is not of the gauge")
+        faults.append(WearFault(before, after, wrong, moved, why))
+    return faults
+
+
+def flat_series_fault(series, *, slack: float = GAUGE_SLACK) -> str | None:
+    """Why a whole run cannot be a reading of tyres, or None. **Tyres wear.**
+
+    Every other rule here asks whether one STEP is possible, and all of them
+    pass trivially on a series that never moves - which is exactly what a
+    misplaced rectangle produces. Rendered at 2560x1440 the locator returned a
+    quad of 16 px fragments reading 0.000 on all four corners in 57 of 60
+    frames, with zero faults from `wear_faults`, and a batch write would have
+    filed a whole race of zeros under a source that says they were measured.
+    That is CLAUDE.md rule 3: a zero meaning "not measured" is indistinguish-
+    able downstream from a zero that was.
+
+    `bar_height_bounds` now scales with the canvas so the real gauge cannot be
+    excluded from candidacy, which is what created that particular false quad.
+    This is the backstop for the general case, because no locator is proof
+    against a frame that does not contain the gauge at all.
+
+    A run of one is not a run and returns None: a single reading has nothing
+    to be flat against, and refusing it would refuse the honest case of one
+    crossing answered in a whole session.
+    """
+    worst = [max((v for v in wear.values() if v is not None), default=None)
+             for _, wear in series]
+    seen = [v for v in worst if v is not None]
+    if len(seen) < 2:
+        return None
+    moved = max(seen) - min(seen)
+    if moved > slack:
+        return None
+    if max(seen) <= 0.0:
+        return (f"all four corners read 0.00 on every one of {len(seen)} "
+                f"readings - tyres wear, so this is not the gauge")
+    return (f"the worst corner moved {moved * 100:.1f} points across "
+            f"{len(seen)} readings - tyres wear, so this is not the gauge")
 
 
 def read_gauge(png, layout: dict | None = None) -> Reading:
@@ -387,16 +585,24 @@ def _read_bars(frame, layout: dict, *,
         out[corner] = n_red / total if total >= floor else None
 
     if all(v is None for v in out.values()):
-        return Reading(out, "no bar showed enough classified rows to read")
+        return Reading(out, "no bar showed enough classified rows to read",
+                       rows=shortest, located=quantisation_note)
     if quantisation_note and shortest:
         # **Said, because it changes what the number is worth.** One pixel of
         # an 18 px bar is 5.6% of tyre life - about a lap at Monza - against
         # 3.3% on the flat HUD's 30 px.
-        return Reading(out, f"located on a moving HUD; bars are {shortest} px, "
-                            f"so one pixel is {100 / shortest:.1f}% of tyre "
-                            f"life - fit a slope across the stint rather than "
-                            f"trusting one reading")
-    return Reading(out)
+        #
+        # **"Found" rather than "moving".** This path is taken by the VR HUD,
+        # which does move, and equally by a flat capture at a canvas nobody
+        # calibrated - 1920x1080, which is what the driver broadcasts at. The
+        # bars there are 36 px and perfectly still; calling them a moving HUD
+        # misdescribes the reading in the one field that explains it.
+        return Reading(out, f"gauge found rather than calibrated; bars are "
+                            f"{shortest} px, so one pixel is "
+                            f"{100 / shortest:.1f}% of tyre life - fit a slope "
+                            f"across the stint rather than trusting one "
+                            f"reading", rows=shortest, located=True)
+    return Reading(out, rows=shortest, located=quantisation_note)
 
 
 # --- finding the gauge when it will not hold still -------------------------
@@ -417,6 +623,38 @@ def _read_bars(frame, layout: dict, *,
 # what counts as one, and they are deliberately loose on position and tight on
 # shape - position is the thing that moves.
 VR_BAR_MIN_H, VR_BAR_MAX_H = 8, 40
+# **...and both scale with the canvas, because those two are pixel counts on a
+# 916-row frame and the gauge is a FRACTION of the screen, not a size.**
+#
+# GT7 draws the flat bar at exactly `canvas_height / 30`: 30-31 px on the
+# calibrated 916 canvas, 36 px measured on the 25 Aug 1080p replay. So at
+# 1440p the real bar is 48 px, a fixed cap of 40 EXCLUDES IT FROM CANDIDACY,
+# and the locator is left to pick the best of whatever else is on screen. It
+# does: at 2560x1440 it returns a quad of 16 px fragments in 57 of 60 frames,
+# every one reading 0.000 on all four corners, with the coherence gate seeing
+# nothing wrong because a flat series of zeros is perfectly monotonic. That is
+# CLAUDE.md rule 3 written to the archive under the highest-trust source tag,
+# and **the driver's monitor is 2560x1440** - one click in OBS away.
+#
+# Scaled, not replaced: the VR gauge is painted on the dashboard in 3D and is
+# both smaller and variable with head position (8-20 px against 30 flat), so a
+# strict `canvas_height / 30` rule would refuse every VR capture on file. The
+# ratios below are the existing constants divided by the calibrated 30.5, so
+# the 916 canvas keeps exactly the bounds it has today.
+FLAT_BAR_ROWS = 30
+VR_BAR_MIN_RATIO, VR_BAR_MAX_RATIO = VR_BAR_MIN_H / 30.5, VR_BAR_MAX_H / 30.5
+
+
+def bar_height_bounds(canvas_height: int) -> tuple[int, int]:
+    """The tallest and shortest thing that can be a gauge bar on this canvas.
+
+    Returns pixel counts, never a fraction, because the caller is comparing
+    against a run length. Floors at the calibrated bounds so a small window
+    cannot narrow the search below what already works.
+    """
+    flat = canvas_height / FLAT_BAR_ROWS
+    return (min(VR_BAR_MIN_H, max(1, int(flat * VR_BAR_MIN_RATIO))),
+            max(VR_BAR_MAX_H, int(round(flat * VR_BAR_MAX_RATIO))))
 VR_BAR_MIN_W, VR_BAR_MAX_W = 3, 16
 # The four bars sit either side of a small car icon. Two x positions, two y
 # bands, all within this of each other.
@@ -424,6 +662,72 @@ VR_CLUSTER_W, VR_CLUSTER_H = 130, 90
 # Looser than the flat thresholds, because the dashboard is dim and the panel
 # is lit by the scene rather than composited over it.
 VR_RED_MIN, VR_RED_SEPARATION, VR_WHITE_MIN = 95, 40, 135
+
+# **What makes four bars THE gauge is that they form a 2x2 grid**, and the
+# constants below are that grid's tolerances.
+#
+# Measured 26 Aug 2026 on the driver's own 1920x1080 capture, mid-race: the
+# four real bars were found exactly - x346-357 and x430-441, y960-995 and
+# y1014-1049, 36 px tall - and `locate_gauge` returned four fragments of the
+# track map at x1745-1753, y339-406 instead, which then read 0.000 wear on all
+# four corners. It did that because the only test applied to a candidate four
+# was "closest together wins", and a stack of fragments in one column has a
+# spread of 8 px where the real instrument, which has the car icon between its
+# two columns, has 95. Nothing anywhere checked that the four bars were in two
+# columns and two rows at all.
+#
+# A wrong wear number is far worse than a missing one, so the grid is now
+# tested rather than assumed: two columns of two, separated by the icon,
+# aligned in x within a column and in y across them, and all four the same
+# size because they are the same instrument drawn four times.
+
+# Two bars are in one column if their x extents overlap by this much of the
+# narrower one. Not equality: in VR the panel is skewed by perspective and a
+# bar's own edges step sideways down its height.
+VR_COLUMN_OVERLAP = 0.5
+# **The two columns sit either side of the car icon, and how far apart they
+# are RELATIVE TO THE BAR HEIGHT is this instrument's signature.** Measured
+# 2.33 at 1920x1080 (84 px between column centres, 36 px bars) and 2.40 on the
+# calibrated canvas (72 px, 30 px bars) - the same gauge at two scales.
+#
+# Relative to height rather than to width, because width is where this went
+# wrong twice. A 3 px wide fragment satisfies "two bar-widths apart" at 6 px
+# of separation, and two such quads - track-map fragments on the 25 Aug
+# replay, leaderboard flags on the 26 Aug capture - beat the real gauge on
+# that test. Their height ratios are 1.17 and 0.23, nowhere near 2.3.
+#
+# The band is wide because in VR the panel is seen at an angle, which
+# foreshortens the horizontal separation while leaving the bars their height.
+VR_COLUMNS_APART_MIN, VR_COLUMNS_APART_MAX = 1.2, 4.0
+# How far the two columns may sit apart vertically, as a fraction of bar
+# height. Zero on a flat capture; non-zero in VR, where the dashboard is seen
+# at an angle.
+VR_ROW_SKEW = 0.6
+# **What is BETWEEN the two columns is a car icon, and that is the last thing
+# that separates the gauge from four bright shapes in the right arrangement.**
+#
+# The icon is grey line-work: neither red enough nor white enough to classify,
+# so the space between the columns is almost entirely unclassified. A patch of
+# sky, a white kerb or a scoreboard is not. Measured 26 Aug 2026 over the
+# fraction of that space which classifies as red or white:
+#
+#   real gauge, 1920x1080 race capture      2.1%
+#   real gauge, 1080p chase-view replay     3.0%
+#   real gauge, VR dashboard, fresh set     9.4% and 10.5%
+#   FALSE - VR HUD's sky and lap counter   90.3%
+#   FALSE - flat HUD over a white kerb     27.2%
+#
+# The false one at 90.3% is the one that matters: it read 0% wear on all four
+# corners at lap 5 of a stint, and no monotonicity check can catch that,
+# because a run of zeros is perfectly consistent with a run of zeros. Rule 3
+# of CLAUDE.md is precisely this - a zero that means "not measured" is
+# diagnosed as a real value - and here it would have told the wear model that
+# five laps consumed nothing.
+VR_ICON_MAX_SOLID = 0.20
+# How much the four bars may differ in height, as a fraction of the shortest.
+# They are one instrument drawn four times; anything wildly mismatched is four
+# unrelated things that happen to be near each other.
+VR_HEIGHT_MISMATCH = 0.5
 
 
 def _vr_masks(frame):
@@ -496,14 +800,29 @@ def locate_gauge(frame) -> dict | None:
 
     red, white, solid = _vr_masks(frame)
     height, width = solid.shape
+    min_h, max_h = bar_height_bounds(height)
     found = []
     for x in range(width):
         column = solid[:, x]
         if not column.any():
             continue
         idx = np.where(column)[0]
-        for run in np.split(idx, np.where(np.diff(idx) > 1)[0] + 1):
-            if not (VR_BAR_MIN_H <= len(run) <= VR_BAR_MAX_H):
+        # **A run may bridge one unclassified row, because the boundary
+        # between the red and the white IS one.** Measured on the 25 Aug
+        # 1080p replay, rear-left bar: red runs y1014-1030, white y1032-1049,
+        # and y1031 is the blend of the two - about (230,190,190) - which is
+        # neither red enough nor white enough at some columns and both at
+        # others. Split there, one bar becomes two runs of 17 and 18 rows, the
+        # grouping below mixes full-height columns with half-height ones, and
+        # the bar's median extent comes out 26 px instead of 36. That is not a
+        # missed reading, it is a WRONG one: the same 17 red rows over a
+        # denominator of 26 read 65% worn where the truth is 47%.
+        #
+        # `_looks_like_a_bar` already allows the two to overlap by a row for
+        # the same reason, and its solidity test is a 90% mean, so one bridged
+        # row cannot admit a column that is not otherwise a bar.
+        for run in np.split(idx, np.where(np.diff(idx) > 2)[0] + 1):
+            if not (min_h <= len(run) <= max_h):
                 continue
             y0, y1 = int(run[0]), int(run[-1])
             if _looks_like_a_bar(red, white, x, y0, y1):
@@ -543,30 +862,87 @@ def locate_gauge(frame) -> dict | None:
     if len(shaped) < 4:
         return None
 
-    # Four of them, close together, in two columns and two rows. Anything
-    # looser finds brake lights and kerbs.
-    best = None
-    for anchor in shaped:
-        near = [b for b in shaped
-                if abs(b[0] - anchor[0]) < VR_CLUSTER_W
-                and abs(b[2] - anchor[2]) < VR_CLUSTER_H]
-        if len(near) < 4:
-            continue
-        near = sorted(near, key=lambda b: (b[0], b[2]))[:4]
-        spread = max(b[1] for b in near) - min(b[0] for b in near)
-        if best is None or spread < best[0]:
-            best = (spread, near)
-    if best is None:
-        return None
+    # Two bars stacked at the same x are one side of the car.
+    columns = []
+    for index, first in enumerate(shaped):
+        for second in shaped[index + 1:]:
+            top, bottom = sorted((first, second), key=lambda bar: bar[2])
+            if bottom[2] - top[2] > VR_CLUSTER_H:
+                continue
+            if _one_column(top, bottom):
+                columns.append((top, bottom))
 
-    quad = best[1]
-    left = sorted(quad[:2], key=lambda b: b[2])
-    right = sorted(quad[2:], key=lambda b: b[2])
-    if len(left) != 2 or len(right) != 2:
-        return None
-    # Left column is the near side, top of each column is the front axle -
-    # the same arrangement the flat HUD uses.
-    return {"fl": left[0], "rl": left[1], "fr": right[0], "rr": right[1]}
+    # Two columns either side of the car icon are the gauge. **Scored on size
+    # first** - not on how close together the four are, which is what chose
+    # the track map, and not on how well they match each other either.
+    #
+    # Measured on the 25 Aug 1080p replay: the real gauge's rear-left bar is
+    # split by a seam in its white section, so that quad is 36/26/36/36 while
+    # a quad of track-map fragments is 9/9/9/10 - and any score that ranks
+    # regularity above size prefers the fragments. Bar height IS the reading's
+    # resolution (36 px is 2.8% of tyre life per pixel, 9 px is 11.1%), so
+    # where two candidates both satisfy the grid, the bigger one is both the
+    # more likely instrument and the better reading. Regularity breaks ties.
+    best = None
+    for index, first in enumerate(columns):
+        for second in columns[index + 1:]:
+            left, right = sorted((first, second), key=lambda pair: pair[0][0])
+            if not _one_gauge(left, right, solid):
+                continue
+            heights = [bar[3] - bar[2] + 1 for pair in (left, right)
+                       for bar in pair]
+            score = (-min(heights), max(heights) - min(heights))
+            if best is None or score < best[0]:
+                # Left column is the near side, top of each column is the
+                # front axle - the same arrangement the flat HUD uses.
+                best = (score, {"fl": left[0], "rl": left[1],
+                                "fr": right[0], "rr": right[1]})
+    return best[1] if best else None
+
+
+def _heights_match(bars) -> bool:
+    """One instrument drawn four times, or four unrelated things?"""
+    heights = [bar[3] - bar[2] + 1 for bar in bars]
+    return (max(heights) - min(heights)
+            <= max(2, VR_HEIGHT_MISMATCH * min(heights)))
+
+
+def _one_column(top, bottom) -> bool:
+    """Are these two bars the front and rear of one side of the car?"""
+    if top[3] >= bottom[2]:
+        # Overlapping vertically. Two axles do not share rows, and a bar that
+        # overlaps another is a fragment of the same thing.
+        return False
+    overlap = min(top[1], bottom[1]) - max(top[0], bottom[0]) + 1
+    narrower = min(top[1] - top[0], bottom[1] - bottom[0]) + 1
+    if overlap < VR_COLUMN_OVERLAP * narrower:
+        return False
+    return _heights_match((top, bottom))
+
+
+def _one_gauge(left, right, solid) -> bool:
+    """Are these two columns the same instrument, with the icon between them?"""
+    bars = (left[0], left[1], right[0], right[1])
+    if not _heights_match(bars):
+        return False
+    height = max(bar[3] - bar[2] + 1 for bar in bars)
+    apart = abs((right[0][0] + right[0][1]) - (left[0][0] + left[0][1])) / 2
+    if not (VR_COLUMNS_APART_MIN * height <= apart
+            <= min(VR_COLUMNS_APART_MAX * height, VR_CLUSTER_W)):
+        return False
+    if max(abs(left[0][2] - right[0][2]),
+           abs(left[1][2] - right[1][2])) > VR_ROW_SKEW * height:
+        return False
+    # The front row is entirely above the rear row, across both columns.
+    if max(left[0][3], right[0][3]) >= min(left[1][2], right[1][2]):
+        return False
+    # And the car icon sits between the columns. See `VR_ICON_MAX_SOLID`.
+    top = min(left[0][2], right[0][2])
+    bottom = max(left[1][3], right[1][3])
+    between = solid[top:bottom + 1,
+                    max(left[0][1], left[1][1]) + 1:
+                    min(right[0][0], right[1][0])]
+    return not between.size or between.mean() <= VR_ICON_MAX_SOLID
 
 
 @dataclass(frozen=True)
@@ -1119,42 +1495,13 @@ class LiveWearSampler:
         a refusal must not become `_latest`: one relocated gauge would
         otherwise become the baseline every later reading is judged against,
         and the whole stint after it would read as incoherent.
+
+        **The rule itself is `coherent`**, module level and shared with
+        `tools/read_hud_wear.py`. Two copies of "can a tyre do that" is two
+        answers to the same question, and the offline tool has already
+        recorded readings this one would have refused.
         """
-        if not self.series:
-            return True, False, ""
-        previous = self.series[-1][1]
-        shared = [k for k, v in wear.items()
-                  if v is not None and previous.get(k) is not None]
-        if not shared:
-            return True, False, ""
-        moved = {k: wear[k] - previous[k] for k in shared}
-        fell = [k for k in shared if moved[k] < -GAUGE_SLACK]
-        rose = [k for k in shared if moved[k] > GAUGE_SLACK]
-        if fell and rose:
-            return False, False, (
-                "wear moved both ways at once ("
-                + ", ".join(f"{k.upper()} {moved[k] * 100:+.0f}"
-                            for k in sorted(shared))
-                + ") - no tyre does that, so this is not the gauge")
-        if fell and len(fell) == len(shared):
-            worst = max(wear[k] for k in shared)
-            if worst <= FRESH_SET_MAX:
-                return True, True, ""
-            return False, False, (
-                f"every corner dropped but the set still reads "
-                f"{worst * 100:.0f}% worst - too worn for a fresh set and "
-                f"too low to follow the last one")
-        leapt = [k for k in rose if moved[k] > GAUGE_MAX_RISE]
-        if leapt:
-            # The other direction of the same impossibility. See
-            # `GAUGE_MAX_RISE` for why this one had to be added.
-            return False, False, (
-                "wear jumped "
-                + ", ".join(f"{k.upper()} +{moved[k] * 100:.0f}"
-                            for k in sorted(leapt))
-                + f" points since the last reading - more than a tyre wears "
-                  f"between samples, so this is not the gauge")
-        return True, False, ""
+        return coherent(self.series[-1][1] if self.series else None, wear)
 
 
     def _keep(self, at: float, reading: Reading) -> bool:

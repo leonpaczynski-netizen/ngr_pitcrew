@@ -15,6 +15,22 @@ it.** This reads the same instrument he reads, from the capture, as often as
 the video is sampled. It is not a model and it is not derived: it is the
 game's own wear readout, transcribed.
 
+### It is the app's reader, not a second one
+
+**Every part of the transcription lives in `pitcrew/telemetry/hud.py`** - the
+calibrated layout, the colour thresholds, the locator that finds the gauge on
+a canvas nobody calibrated, and `coherent`, the rule for whether one reading
+can follow another on a real set of tyres. This file supplies frames and laps
+and nothing else.
+
+That was not true until 26 Aug 2026 and the divergence cost real data. This
+tool carried its own copy of a layout calibrated for a 1720x916 OBS canvas,
+with no fall-through to the locator that `hud.py` had gained in `55aa96e`, and
+its own bar classifier. On the 1920x1080 canvas the driver now broadcasts at,
+the copy cropped a rectangle that is not the gauge and reported "no readable
+gauge" - and it had no plausibility check at all, so where it did read
+something it filed it whatever the numbers said.
+
 ### What the gauge looks like and how it is read
 
 Four vertical bars flank the car icon in the HUD's bottom-left cluster. Each
@@ -30,9 +46,13 @@ the temperature convergence the app uses elsewhere.
 
 A sequential decode of a 53-minute AV1 capture takes about half an hour;
 ffmpeg fast seek (`-ss` BEFORE `-i`) takes about two minutes at 30-second
-spacing. The gauge is 30 pixels tall - one pixel is 3.3% of tyre life, and a
-lap at Monza is 5.6% - so sampling faster than about 15 s buys nothing the
-quantisation can express.
+spacing. Measured 26 Aug 2026, per sample: 0.25-0.45 s to seek and decode one
+frame, plus 0.1-0.3 s to find and read the gauge in it.
+
+**The bar's height in pixels is the reading's resolution and the tool now
+reports it.** A 30 px bar quantises tyre life at 3.3% a pixel and a 36 px one
+at 2.8%, so sampling faster than about 15 s buys nothing the quantisation can
+express - a lap at Monza is 5.6%.
 
 ### The accuracy this was verified at
 
@@ -48,32 +68,43 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pitcrew.store.db import WEAR_HUD_VIDEO, Store          # noqa: E402
+from pitcrew.telemetry.hud import (                         # noqa: E402
+    CANVAS,
+    FRESH_SET_MAX,
+    GAUGE_SLACK,
+    Reading,
+    coherent,
+    flat_series_fault,
+    read_gauge,
+    wear_faults,
+)
 
-# The HUD cluster's position is fixed to the capture, not to the game, so the
-# bars are located by geometry once and checked by the fresh-tyre frame. These
-# are for a 1720x916 OBS window capture; `--probe` re-finds them on any other.
-LAYOUT_1720x916 = {
-    "fl": (339, 348, 800, 829),
-    "rl": (339, 348, 846, 875),
-    "fr": (411, 420, 800, 829),
-    "rr": (411, 420, 846, 875),
-}
 
-# A bar reads red where the channel separation is unmistakable, and white where
-# every channel is high. Anything else - the dark HUD backing, a bloom from the
-# scenery behind a translucent panel - is neither, and a bar that cannot show
-# at least this many classified rows is not read at all rather than guessed.
-MIN_CLASSIFIED_ROWS = 20
+# **How much of one tyre a single LAP may consume before the reading is a
+# misread rather than a lap of wear.**
+#
+# `hud.GAUGE_MAX_RISE` is 15 points and it is right for the live path, where
+# readings are seconds apart. The series written here is a lap apart, and a
+# lap is not a small step: measured across every `hud-video` reading in the
+# archive on 26 Aug 2026, the largest honest per-lap rises are 16.7, 15.4,
+# 15.0 and 14.1 points, all on RS, and all in sessions whose series never goes
+# backwards. The live ceiling cuts straight through that population.
+#
+# The physical bound agrees: the shortest stint ever measured on file is
+# 4.9 laps on RS, and `L = 0.85 / w` puts that at 17.3 points of tyre a lap.
+# 25 is above everything measured and everything the model allows, and still
+# refuses a corner that jumps a quarter of its bar in a lap.
+LAP_MAX_RISE = 0.25
 
-# A drop this large between consecutive samples is a fresh set, not wear going
-# backwards. Wear is monotonic within a stint; the only thing that resets it is
-# a tyre change.
-FRESH_SET_DROP = 0.25
+# How far a sample's bar height may sit from the run's modal height and still
+# be the same instrument. See `one_instrument`.
+BAR_HEIGHT_TOLERANCE = 0.25
 
 
 def _ffmpeg() -> str:
@@ -84,55 +115,41 @@ def _ffmpeg() -> str:
         return "ffmpeg"
 
 
-def _duration_s(video: Path) -> float:
+def probe(video: Path) -> tuple[float, tuple[int, int] | None]:
+    """(duration in seconds, (width, height)) of a capture."""
     out = subprocess.run([_ffmpeg(), "-hide_banner", "-i", str(video)],
                          capture_output=True, text=True).stderr
     found = re.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", out)
     if not found:
         raise SystemExit(f"could not read a duration from {video}")
     h, m, s = found.groups()
-    return int(h) * 3600 + int(m) * 60 + float(s)
+    size = re.search(r"Video:.*?, (\d{2,5})x(\d{2,5})", out)
+    return (int(h) * 3600 + int(m) * 60 + float(s),
+            (int(size.group(1)), int(size.group(2))) if size else None)
 
 
-def _grab(video: Path, at_s: float, out: Path, layout: dict) -> None:
-    xs = [v[0] for v in layout.values()] + [v[1] for v in layout.values()]
-    ys = [v[2] for v in layout.values()] + [v[3] for v in layout.values()]
-    x0, y0 = min(xs), min(ys)
-    w, h = max(xs) - x0 + 1, max(ys) - y0 + 1
+def _grab(video: Path, at_s: float, out: Path) -> None:
+    """One whole frame, because the gauge is not always where it was.
+
+    **The whole canvas, not a crop of it.** The crop this used to take was the
+    calibrated rectangle for a 1720x916 canvas, which is not where the gauge
+    is on any other - and a crop cannot be searched, so cropping first threw
+    away the only thing that could have recovered the reading. A full frame
+    costs about 0.1 s more per sample and `read_gauge` still takes the
+    calibrated path when the canvas is the calibrated one.
+    """
     subprocess.run(
         [_ffmpeg(), "-hide_banner", "-loglevel", "error",
          # **Before -i, deliberately.** After it, ffmpeg decodes every frame up
          # to the seek point and a race takes half an hour instead of minutes.
          "-ss", f"{at_s:.3f}", "-i", str(video), "-frames:v", "1",
-         "-vf", f"crop={w}:{h}:{x0}:{y0}", "-q:v", "1", str(out), "-y"],
+         "-q:v", "1", str(out), "-y"],
         check=True, capture_output=True)
 
 
-def _read_bars(path: Path, layout: dict) -> dict:
-    import numpy as np
-    from PIL import Image
-
-    xs = [v[0] for v in layout.values()]
-    ys = [v[2] for v in layout.values()]
-    ox, oy = min(xs), min(ys)
-    frame = np.array(Image.open(path).convert("RGB")).astype(int)
-    out = {}
-    for corner, (x0, x1, y0, y1) in layout.items():
-        bar = frame[y0 - oy:y1 - oy + 1, x0 - ox:x1 - ox + 1]
-        r, g, b = bar[..., 0], bar[..., 1], bar[..., 2]
-        red = (r > 110) & (r - g > 55) & (r - b > 55)
-        white = (r > 150) & (g > 150) & (b > 150)
-        n_red = int((red.mean(axis=1) > 0.5).sum())
-        n_white = int((white.mean(axis=1) > 0.5).sum())
-        total = n_red + n_white
-        out[corner] = n_red / total if total >= MIN_CLASSIFIED_ROWS else None
-    return out
-
-
-def sample(video: Path, *, every_s: float, layout: dict,
-           start_s: float = 0.0,
-           limit_s: float | None = None) -> list[tuple[float, dict]]:
-    """Walk the capture and read the gauge. Returns (video_seconds, wear).
+def sample(video: Path, *, every_s: float, start_s: float = 0.0,
+           limit_s: float | None = None) -> list[tuple[float, Reading]]:
+    """Walk the capture and read the gauge. Returns (video_seconds, reading).
 
     **Bounded to the race, because a capture is usually longer than one.** The
     18 Aug Monza recording ran 3 h 39 m: 53 minutes of replay and then two and
@@ -141,35 +158,88 @@ def sample(video: Path, *, every_s: float, layout: dict,
     the bars' rectangles that classify as a full red bar - which reads as a
     dead tyre and would be recorded as one.
     """
-    end = limit_s if limit_s is not None else _duration_s(video)
-    rows = []
+    end = limit_s if limit_s is not None else probe(video)[0]
+    rows: list[tuple[float, Reading]] = []
     with tempfile.TemporaryDirectory() as tmp:
-        shot = Path(tmp) / "bars.png"
+        shot = Path(tmp) / "frame.png"
         at = max(0.0, start_s)
         while at < end:
             try:
-                _grab(video, at, shot, layout)
-                rows.append((at, _read_bars(shot, layout)))
+                _grab(video, at, shot)
+                rows.append((at, read_gauge(shot.read_bytes())))
             except subprocess.CalledProcessError:
                 pass                     # past the end, or a frame that failed
             at += every_s
     return rows
 
 
-def fresh_set_times(rows: list[tuple[float, dict]]) -> list[float]:
-    """Video seconds at which a fresh set appeared, one per tyre change."""
-    times, last = [], None
-    for at, wear in rows:
-        worst = max((v for v in wear.values() if v is not None), default=None)
-        if worst is None:
+def series_of(rows: list[tuple[float, Reading]]) -> list[tuple[float, dict]]:
+    """The readable samples, as (video seconds, wear)."""
+    return [(at, reading.wear) for at, reading in rows if reading.ok]
+
+
+def one_instrument(rows: list[tuple[float, Reading]], *,
+                   tolerance: float = BAR_HEIGHT_TOLERANCE):
+    """Keep the samples that read a bar the same size as the rest.
+
+    Returns `(kept, odd, modal height)`.
+
+    **The gauge does not change size, so a reading taken off a bar of another
+    size is not a reading of the gauge.** Measured 26 Aug 2026 on the driver's
+    own capture, sweeping 7 minutes at 30 s: twelve samples found a 36 px bar
+    and one a 35 px one - the seam between the red and the white, a pixel
+    either way - while two frames found something else entirely. One was a
+    16 px pair of shapes that read RL and RR as 100% worn, and one a 20 px
+    pair that read every corner as 0%.
+
+    Both come from the same thing and it is worth naming, because it is the
+    residual weakness of finding the gauge rather than knowing where it is:
+    **GT7's HUD is translucent.** With the car on a white kerb the panel
+    floods, the car icon between the bars classifies as white, and shapes that
+    are not bars pass a test that only knows what a bar looks like. Neither
+    frame was a missing reading - both produced confident, well-formed,
+    completely wrong numbers, and the all-zero one would have been filed as a
+    fresh set and cut the stint in two.
+
+    A quarter of the modal height is far wider than the seam (one pixel) and
+    far narrower than either misread (44% and 56% out).
+    """
+    heights = Counter(reading.rows for _, reading in rows
+                      if reading.ok and reading.rows)
+    if not heights:
+        return [], [], None
+    modal = heights.most_common(1)[0][0]
+    kept, odd = [], []
+    for at, reading in rows:
+        if not reading.ok:
             continue
-        if last is not None and last - worst > FRESH_SET_DROP:
+        if reading.rows and abs(reading.rows - modal) <= tolerance * modal:
+            kept.append((at, reading))
+        else:
+            odd.append((at, reading))
+    return kept, odd, modal
+
+
+def fresh_set_times(series: list[tuple[float, dict]]) -> list[float]:
+    """Video seconds at which a fresh set appeared, one per tyre change.
+
+    **`coherent`'s test, not a worst-corner drop.** A drop on the worst corner
+    alone is what the live sampler used to use, and `hud.py` records what it
+    cost: a relocated pit-lane gauge read 75% down to 42% on the worst corner,
+    was called a fresh set, and threw the stint's series away - three times in
+    one session. A tyre change puts EVERY corner back to near zero.
+    """
+    times = []
+    last = None
+    for at, wear in series:
+        _, fresh, _ = coherent(last, wear)
+        if fresh:
             times.append(at)
-        last = worst
+        last = wear
     return times
 
 
-def split_stints(rows: list[tuple[float, dict]]) -> list[list]:
+def split_stints(series: list[tuple[float, dict]]) -> list[list]:
     """Cut the trace where a fresh set goes on.
 
     The gauge snapping back to white is the tyre change, and it is a cleaner
@@ -178,14 +248,12 @@ def split_stints(rows: list[tuple[float, dict]]) -> list[list]:
     """
     stints: list[list] = [[]]
     last = None
-    for at, wear in rows:
-        worst = max((v for v in wear.values() if v is not None), default=None)
-        if worst is None:
-            continue
-        if last is not None and last - worst > FRESH_SET_DROP:
+    for at, wear in series:
+        _, fresh, _ = coherent(last, wear)
+        if fresh:
             stints.append([])
         stints[-1].append((at, wear))
-        last = worst
+        last = wear
     return [s for s in stints if len(s) > 1]
 
 
@@ -208,7 +276,7 @@ def _crossings(store: Store, session_id: int, offset_s: float) -> list:
               ).total_seconds() + offset_s, r) for r in laps]
 
 
-def attach(rows, crossings, boundaries=()) -> tuple[dict, list]:
+def attach(series, crossings, boundaries=()) -> tuple[dict, list]:
     """One reading per lap: the last sample before that lap's crossing.
 
     The last, not the nearest: the gauge at the line is what that lap left the
@@ -225,7 +293,7 @@ def attach(rows, crossings, boundaries=()) -> tuple[dict, list]:
     Returns the readings and the laps deliberately left without one.
     """
     per_lap = {}
-    for at, wear in rows:
+    for at, wear in series:
         for cross_at, lap in crossings:
             if at <= cross_at:
                 held = per_lap.get(lap["id"])
@@ -241,6 +309,26 @@ def attach(rows, crossings, boundaries=()) -> tuple[dict, list]:
             if per_lap.pop(lap["id"], None) is not None:
                 skipped.append(lap)
     return per_lap, skipped
+
+
+def quantisation(rows: list[tuple[float, Reading]]) -> tuple[int | None, float]:
+    """The coarsest bar height read, and the slack that follows from it.
+
+    **The bar height IS the reading's resolution**, and it is not constant:
+    30 px on the calibrated canvas, 36 on the 1920x1080 one the driver
+    broadcasts at, 8-20 on a VR dashboard. One pixel is 3.3%, 2.8% and up to
+    12.5% of tyre life respectively, and the three look identical once they
+    are floats in a column.
+
+    The COARSEST is taken, so the plausibility gate below allows a pixel of
+    the worst bar in the series rather than of the best one. A gate that
+    refuses honest quantisation is worse than no gate: it throws away the
+    only measured wear the app has.
+    """
+    heights = [r.rows for _, r in rows if r.ok and r.rows]
+    if not heights:
+        return None, GAUGE_SLACK
+    return min(heights), 1.0 / min(heights)
 
 
 def main() -> int:
@@ -270,18 +358,60 @@ def main() -> int:
     lap_s = (last_cross - first_cross) / max(1, len(crossings) - 1)
     start_s, end_s = max(0.0, first_cross - 2 * lap_s), last_cross + lap_s
 
-    print(f"sampling {video.name} every {args.every:g} s "
+    _, size = probe(video)
+    if size == CANVAS:
+        print(f"{video.name} is {size[0]}x{size[1]}, the calibrated canvas")
+    elif size:
+        print(f"{video.name} is {size[0]}x{size[1]}, not the calibrated "
+              f"{CANVAS[0]}x{CANVAS[1]} - the four bars are found in each "
+              f"frame instead")
+    print(f"sampling every {args.every:g} s "
           f"over {start_s:.0f}-{end_s:.0f} s (the race) ...")
-    rows = sample(video, every_s=args.every, layout=LAYOUT_1720x916,
-                  start_s=start_s, limit_s=end_s)
-    usable = [r for r in rows if any(v is not None for v in r[1].values())]
-    print(f"  {len(rows)} samples, {len(usable)} with a readable gauge")
-    if not usable:
+    rows = sample(video, every_s=args.every, start_s=start_s, limit_s=end_s)
+    readable = sum(1 for _, r in rows if r.ok)
+    print(f"  {len(rows)} samples, {readable} with a readable gauge")
+    if not readable:
+        why = Counter(r.reason for _, r in rows if r.reason)
         raise SystemExit(
-            "no readable gauge - the HUD is not where this layout expects it. "
-            "Check the capture resolution against LAYOUT_1720x916.")
+            "no readable gauge in any sample. The reasons given were:\n  "
+            + "\n  ".join(f"{n}x {reason}" for reason, n in why.most_common(5)))
 
-    stints = split_stints(usable)
+    kept, odd, modal = one_instrument(rows)
+    for at, reading in odd:
+        print(f"  {at:.0f} s: found a {reading.rows} px bar where the run "
+              f"reads {modal} px - not the same instrument, so it is not read")
+    series = series_of(kept)
+    if not series:
+        raise SystemExit(
+            f"no sample read a bar of a consistent height, so nothing here is "
+            f"reliably the gauge (heights seen: "
+            + ", ".join(f"{h} px" for h in sorted(
+                {r.rows for _, r in rows if r.ok and r.rows})) + ")")
+
+    bar_px, slack = quantisation(kept)
+    if bar_px:
+        # **Printed before anything is applied, because it is what the numbers
+        # below are worth.** A stint's slope over a 36 px bar and the same
+        # slope over an 8 px one are not the same claim.
+        heights = Counter(r.rows for _, r in kept if r.rows)
+        spread = (" (heights read: "
+                  + ", ".join(f"{h} px x{n}" for h, n in heights.most_common(4))
+                  + ")") if len(heights) > 1 else ""
+        print(f"  bar is {bar_px} px at its shortest, so one pixel is "
+              f"{100 / bar_px:.1f}% of tyre life{spread}")
+    located = sum(1 for _, r in kept if r.located)
+    if located:
+        # **Said, because it is a different instrument from the one the 0.5%
+        # verification was taken on.** A capture on the calibrated canvas can
+        # still be located frame by frame - every VR frame is dim, and a dim
+        # frame is searched rather than refused - so the canvas size does not
+        # answer this and the readings have to.
+        print(f"  {located} of {len(kept)} reading(s) came from a gauge that "
+              f"was FOUND in the frame, not from the calibrated rectangle - "
+              f"looser thresholds, and the bar height above is what they are "
+              f"worth")
+
+    stints = split_stints(series)
     print(f"  {len(stints)} stint(s) - the gauge resets to white on a fresh set")
     for i, stint in enumerate(stints, 1):
         first, last = stint[0], stint[-1]
@@ -289,21 +419,78 @@ def main() -> int:
         print(f"    stint {i}: {first[0]:.0f}-{last[0]:.0f} s, "
               f"ends at {worst:.2f} on its worst corner")
 
-    per_lap, skipped = attach(usable, crossings, fresh_set_times(usable))
+    per_lap, skipped = attach(series, crossings, fresh_set_times(series))
     print(f"\n  {len(per_lap)} of {len(crossings)} laps carry a reading")
     for lap in skipped:
         print(f"  lap {lap['lap_num']} spans a tyre change - no reading, "
               f"because the in-lap and the out-lap are different sets")
     print(f"{'lap':>4} {'video_s':>8} {'fl':>6} {'fr':>6} {'rl':>6} {'rr':>6}")
-    for lap_id, (at, wear, lap) in sorted(
-            per_lap.items(), key=lambda kv: kv[1][2]["lap_num"]):
+    ordered = sorted(per_lap.items(), key=lambda kv: kv[1][2]["lap_num"])
+    for lap_id, (at, wear, lap) in ordered:
         cell = lambda k: (f"{wear[k]:6.2f}" if wear[k] is not None else "     -")
         print(f"{lap['lap_num']:>4} {at:>8.0f} "
               f"{cell('fl')} {cell('fr')} {cell('rl')} {cell('rr')}")
 
+    # **The gate, and it runs on exactly what would be written.** Not on the
+    # sweep - a sample that never becomes a lap reading cannot poison the wear
+    # model, and one that does is the whole risk. See `hud.wear_faults`.
+    faults = wear_faults([(lap["lap_num"], wear)
+                          for _, (_, wear, lap) in ordered],
+                         slack=slack, max_rise=LAP_MAX_RISE,
+                         span=lambda before, after: after - before)
+    # **The ceiling is printed whether or not anything hit it.** CLAUDE.md
+    # rule 10: the number setting the bar was invisible for a whole race
+    # precisely because it only ever appeared beside a refusal.
+    print("")
+    print(f"gate: {slack * 100:.1f} points of slack (one pixel of a "
+          f"{bar_px or '?'} px bar), {LAP_MAX_RISE * 100:.0f} points of "
+          f"wear allowed per lap, and a fresh set allowed "
+          f"{FRESH_SET_MAX * 100:.0f} points plus a lap's wear for every "
+          f"lap skipped")
+    if faults:
+        print(f"{len(faults)} step(s) that no tyre could have made:")
+        for fault in faults:
+            print(f"  lap {fault}")
+
+    # **A series that never moves is not a reading of a tyre.**
+    #
+    # Every check above asks whether one STEP is possible, and all of them
+    # pass trivially on a series that is flat - which is exactly what a
+    # false quad produces. Rendered at 2560x1440 the locator returned a set
+    # of 16 px fragments reading 0.000 on all four corners in 57 of 60
+    # frames, with zero faults, and `--apply` would have filed a whole race
+    # of zeros under a source that says they were measured. The bar-height
+    # bounds now scale with the canvas so the real gauge can no longer be
+    # excluded from candidacy - but **the driver's monitor is 2560x1440**,
+    # and no locator is proof against a frame that does not contain the
+    # gauge at all.
+    #
+    # Rule 3, and the cheapest possible test of it: tyres wear. A run whose
+    # worst corner ends where it started did not measure one.
+    flat = flat_series_fault([(lap["lap_num"], wear)
+                              for _, (_, wear, lap) in ordered], slack=slack)
+    if flat is not None:
+        faults.append(f"whole run: {flat}. Check the capture size on the "
+                      f"first line above - the bar should be about one "
+                      f"thirtieth of the canvas height.")
+        print(f"  {faults[-1]}")
+
     if not args.apply:
         print("\nreport only - pass --apply to record these against the laps")
         return 0
+    if faults:
+        # **Refused rather than filed, and CLAUDE.md rule 3 is why.** These
+        # readings go into the `laps` table beside the driver's own, under a
+        # source that says they were measured. A wear figure that is wrong is
+        # indistinguishable downstream from one that is right, and the wear
+        # model divides consumed life by laps run - so one impossible step
+        # becomes a stint length the strategy engine will plan a race around.
+        print("\nrefusing to write: the readings above are not a possible "
+              "series on one set of tyres, so at least one of them is not of "
+              "the gauge. Nothing has been written. Re-sample with a shorter "
+              "--every, check the offset lines the laps up, or check what the "
+              "capture is showing at the laps named.")
+        return 2
 
     for lap_id, (_, wear, _) in per_lap.items():
         store.set_lap_wear(lap_id, wear["fl"], wear["fr"], wear["rl"],
