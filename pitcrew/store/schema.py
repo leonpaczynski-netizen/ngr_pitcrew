@@ -213,6 +213,38 @@ CREATE TABLE IF NOT EXISTS radio (
     created_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS traffic (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    lap_id      INTEGER REFERENCES laps(id) ON DELETE CASCADE,
+    lap_num     INTEGER NOT NULL,
+    -- Where in the capture this was read, so a row can be gone back to.
+    video_s     REAL NOT NULL,
+    -- 'ahead' or 'behind', decided at the crosshair and carried outward -
+    -- never from where the arrow sits, because on a hairpin the road ahead
+    -- is drawn below the car. Null where the ribbon was broken between the
+    -- contact and the crosshair: a car that could not be placed, which is
+    -- not the same as no car.
+    side        TEXT,
+    -- **The measurement.** Geodesic distance along the ribbon, in pixels.
+    ribbon_px   REAL,
+    -- **Metres, and only inside the near field.** The radar is a perspective
+    -- projection: fitted against his own path the near field wants about
+    -- 3.4 m/px and the far field 8 or more, so a single scale does not exist
+    -- and one applied at range would be a number this app invented. Null
+    -- beyond the near field rather than extrapolated - rule 3, and rule 5.
+    near_m      REAL,
+    -- The race-order neighbour, from `laps.position` at the side seen. An
+    -- INFERENCE, not a reading: it holds while nobody between them is a lap
+    -- down. Named `_position` rather than `rival` so nothing mistakes it for
+    -- the name on the leaderboard, which needs OCR nobody has written.
+    rival_position INTEGER,
+    source      TEXT NOT NULL,
+    read_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS traffic_by_lap ON traffic(session_id, lap_num);
+
 CREATE TABLE IF NOT EXISTS range_records (
     car_name      TEXT PRIMARY KEY,
     measured_date TEXT NOT NULL,

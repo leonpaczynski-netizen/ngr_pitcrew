@@ -1772,6 +1772,34 @@ class Store:
             (event_id,))
         return [dict(r) for r in rows]
 
+    def record_traffic(self, session_id: int, rows: list[dict]) -> int:
+        """File one session's radar contacts, replacing whatever was there.
+
+        Replaced rather than appended because a re-read of the same capture at
+        a finer interval is a better answer to the same question, not a second
+        set of cars. `source` says which instrument produced them so a future
+        one - a live feed that finally carries opponents - does not silently
+        merge with this.
+        """
+        stamp = datetime.datetime.now().replace(microsecond=0).isoformat()
+        with self._write() as conn:
+            conn.execute("DELETE FROM traffic WHERE session_id = ?",
+                         (session_id,))
+            conn.executemany(
+                "INSERT INTO traffic (session_id, lap_id, lap_num, video_s, "
+                "side, ribbon_px, near_m, rival_position, source, read_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(session_id, r.get("lap_id"), r["lap_num"], r["video_s"],
+                  r.get("side"), r.get("ribbon_px"), r.get("near_m"),
+                  r.get("rival_position"), r.get("source", "replay-radar"),
+                  stamp) for r in rows])
+        return len(rows)
+
+    def list_traffic(self, session_id: int) -> list[dict]:
+        return [dict(r) for r in self._query(
+            "SELECT * FROM traffic WHERE session_id = ? "
+            "ORDER BY video_s", (session_id,))]
+
     def append_revision(self, race_run_id: int, lap_num: int, reason: str,
                         plan: dict, *, accepted: bool = False) -> int:
         """Append to the immutable revision chain for a race run."""

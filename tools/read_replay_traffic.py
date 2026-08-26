@@ -96,6 +96,26 @@ RIVAL_MIN_PX = 12
 
 AHEAD, BEHIND = "ahead", "behind"
 
+# **The radar is a perspective projection, so there is no single metres per
+# pixel - and this is the measurement that says so.**
+#
+# Fitted against his own path out of `lap_frames`, rotating it heading-up and
+# scoring the overlay against the ribbon mask, on four frames of the Fuji
+# race: points within 60 m of the car want 2.80, 3.35 and 3.95 m/px; points
+# between 100 and 200 m want 7.95 or more, which is the top of the search
+# range. The best-fit ROTATION differs between the two bands on the same
+# frame too, which is the second signature of a transform that is not a
+# similarity.
+#
+# So metres are reported inside the near field and refused outside it. That
+# is where racing happens - a tow is tens of metres, not hundreds - and a
+# figure at range would be one this tool invented. Rule 5.
+NEAR_FIELD_PX = 20.0
+NEAR_M_PER_PX = 3.4
+# The spread of the three near-field fits, carried so the report can say what
+# the number is worth rather than printing it to a precision it has not got.
+NEAR_M_PER_PX_SPREAD = 0.6
+
 
 def _ffmpeg() -> str:
     try:
@@ -220,11 +240,16 @@ def contacts(pixels) -> list[dict] | None:
             # broken between here and the crosshair. Reported as unplaced
             # rather than dropped: it is a car, and pretending otherwise is
             # how "no traffic" comes to mean "the mask failed".
-            out.append({"px": None, "side": None, "size": len(points)})
+            out.append({"px": None, "side": None, "near_m": None,
+                        "size": len(points)})
             continue
         nearest = min(on, key=lambda pair: pair[0])
-        out.append({"px": round(nearest[0], 1),
+        px = round(nearest[0], 1)
+        out.append({"px": px,
                     "side": AHEAD if nearest[1] > 0 else BEHIND,
+                    # Null beyond the near field, never extrapolated.
+                    "near_m": (round(px * NEAR_M_PER_PX, 1)
+                               if px <= NEAR_FIELD_PX else None),
                     "size": len(points)})
     return out
 
@@ -264,6 +289,9 @@ def main() -> int:
                          "passed, and then sitting 7 px behind")
     ap.add_argument("--offset", type=float, default=0.0,
                     help="video seconds at the green flag")
+    ap.add_argument("--apply", action="store_true",
+                    help="write the contacts to `traffic`, replacing "
+                         "whatever that session already had")
     ap.add_argument("--scratch", default=None,
                     help="where to put the extracted frames")
     args = ap.parse_args()
@@ -281,6 +309,7 @@ def main() -> int:
           f"{start:.0f}-{end:.0f} s")
 
     per_lap: dict[int, list] = collections.defaultdict(list)
+    filed: list[dict] = []
     blind = collections.Counter()
     samples = 0
     at = start
@@ -301,6 +330,22 @@ def main() -> int:
                     blind[row["lap_num"]] += 1
                 else:
                     per_lap[row["lap_num"]].append(found)
+                    for contact in found:
+                        # The race-order neighbour: an inference, stored
+                        # under a name that says so. It holds while nobody
+                        # between them is a lap down.
+                        neighbour = None
+                        if contact["side"] == AHEAD and row["position"] > 1:
+                            neighbour = row["position"] - 1
+                        elif contact["side"] == BEHIND:
+                            neighbour = row["position"] + 1
+                        filed.append({
+                            "lap_id": row["id"], "lap_num": row["lap_num"],
+                            "video_s": round(at, 2), "side": contact["side"],
+                            "ribbon_px": contact["px"],
+                            "near_m": contact["near_m"],
+                            "rival_position": neighbour,
+                            "source": "replay-radar"})
         at += args.every
 
     print(f"  {samples} sample(s) read\n")
@@ -327,12 +372,23 @@ def main() -> int:
               f"{(f'{min(behind):.0f} px' if behind else '-'):>15}  "
               f"{blind.get(lap, 0):>5}{move}")
 
-    print("\nribbon pixels, NOT metres - the ribbon narrows toward its ends "
-          "and that scale is not calibrated yet.")
+    print("")
+    print(f"ribbon pixels. Metres only inside {NEAR_FIELD_PX:.0f} px at "
+          f"{NEAR_M_PER_PX:.1f} +/- {NEAR_M_PER_PX_SPREAD:.1f} m/px - the "
+          f"radar is a perspective projection and the far field wants 8 or "
+          f"more, so a metre figure at range would be invented.")
     print("`pos` and the position moves come from the packet and are already "
           "in the archive; they are the ground truth this is read against.")
     print("`blind` counts samples whose ribbon could not be found at all - "
           "not the same as nobody being there.")
+    if args.apply:
+        written = store.record_traffic(args.session, filed)
+        print("")
+        print(f"wrote {written} contact(s) to `traffic` as 'replay-radar'")
+    else:
+        print("")
+        print(f"report only - {len(filed)} contact(s) would be written; "
+              f"pass --apply")
     return 0
 
 
