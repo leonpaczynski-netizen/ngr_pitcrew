@@ -268,6 +268,12 @@ def compound_profiles(laps: list[LapInput],
             # The figures above stay exactly as measured. This says how far
             # they can be trusted, which is a different claim.
             window_note=qualification(code, window),
+            # Carried through rather than collapsed into `source`, which is
+            # MEASURED for any rate at all. What sets a stint is whether the
+            # gauge was read twice inside one run, and how deep it watched.
+            wear_confidence=(rate.get("confidence") if rate else None),
+            deepest_observed_frac=(rate.get("deepestObservedFrac")
+                                   if rate else None),
         )
     return profiles
 

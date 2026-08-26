@@ -641,6 +641,7 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
     { "compound": "RS", "paceDeltaSPerLap": 0.0,  "wearPerLap": 0.055,
       "source": "measured", "lapsMeasured": 12, "stintsMeasured": 1,
       "longestStintLaps": 12,
+      "wearConfidence": "measured", "deepestObservedFrac": 0.56,
       "tyreWindow": {
         "meanC": 103.4,
         "perCornerC": { "fl": 108.1, "fr": 101.7, "rl": 102.0, "rr": 101.8 },
@@ -654,6 +655,7 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
     { "compound": "RM", "paceDeltaSPerLap": 0.34, "wearPerLap": 0.038,
       "source": "measured", "lapsMeasured": 11, "stintsMeasured": 1,
       "longestStintLaps": 11,
+      "wearConfidence": "assumed", "deepestObservedFrac": 0.24,
       "tyreWindow": {
         "meanC": 71.2,
         "perCornerC": { "fl": 74.0, "fr": 70.1, "rl": 70.4, "rr": 70.3 },
@@ -978,6 +980,7 @@ race strategy if they had been believed.
 | 16 | `wear.gaugePinned` fires **within one run only** | Two equal readings on two different sets are two sets that came off equally worn, which is a coincidence and not a finding. Before `runs` existed the two cases were indistinguishable, and the 11 Aug session's 84% at lap 21 and 84% at lap 36 - the very reading P6 raised - was reported as a gauge that had stopped moving. It was a new set |
 | 17 | **New `strategy.raceLength`**, and `strategy.plan.laps` | A timed race and a lap race are different objects, and the payload said the same thing for both. For a race run to the clock the distance is an **output of the plan**: every stop is time spent stationary while the clock runs, so it is paid for in laps rather than seconds. Modelled as a fixed lap count, a 50-minute race came back as a **52-minute plan** - which is not a slow plan but an impossible one, since the flag falls at the first line crossing after the clock and the race can last at most the limit plus one lap. `maxDurationS` states that ceiling so a reader can check any plan against it |
 | 18 | **Wet compounds are never planned on**, and `compoundProfiles[].longestStintLaps` is new | GT7's weather cannot be known before the race and no wet running has ever been done, so a stint on Intermediates rests on nothing - and it *won*, because a compound with no profile inherits the reference's rate and is costed as though it were the measured one. They stay declared as available to the driver, who can still call for them; they are not a strategy. `longestStintLaps` is the third ceiling on a stint alongside the tyre and the tank: `0.85 / w` will extrapolate a stint nobody has ever completed, and when the rate behind it was understated that is exactly what it did |
+| 19 | **`compoundProfiles[].wearConfidence` and `.deepestObservedFrac` are new, and together they can lift the evidence cap** | `source` reads `measured` for any rate that exists at all, so a rate from two gauge readings inside one run and a rate from one reading over a set merely *assumed* fresh arrived indistinguishable - and the second is the one that proposed a twelve-lap stint on a set that never went past four. `wearConfidence` separates them. `deepestObservedFrac` is the load-bearing half: CLAUDE.md §5.1 makes wear piecewise, near-flat to about half worn and progressive after, so a rate fitted entirely inside the flat opening and run out to 85% crosses a boundary nobody has watched. Where the rate is `measured` **and** the gauge saw the set past 50%, `0.85 / w` is continuing an observed curve rather than projecting an unobserved one, and the longest-stint-ever-run ceiling no longer applies. Fuji is both cases in one weekend: two six-lap practice runs read once each to 24% held the cap at six laps and were right to; nineteen readings across two sets watched to 56% lift it, and a 20-lap race becomes the one stop the tank forces rather than the three the longest previous run implied |
 | 14 | `derived.thresholds.flagMinShareOfLaps` | Same rule as every other threshold: it is the app's choice, not the game's, so retuning it must read as a change in the detector rather than a change in the car |
 
 **The frame clock was GT7's in-game clock.** Not a payload field, but it reached every

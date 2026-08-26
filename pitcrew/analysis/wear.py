@@ -331,6 +331,22 @@ def wear_rate_by_compound(laps: list[LapInput]) -> dict[str, dict]:
             "runIds": [run.run_id for run in runs],
             "source": "driver-gauge",
             "confidence": CONFIDENCE_MEASURED if measured else CONFIDENCE_ASSUMED,
+            # **How deep into a set the gauge has actually been watched.**
+            #
+            # A rate is not the only thing that decides whether a stint can be
+            # planned. CLAUDE.md 5.1 says wear is piecewise - near-flat to
+            # about half worn, progressive from there, a cliff past 90% - so a
+            # rate fitted entirely inside the flat phase and extrapolated to
+            # 85% crosses a boundary it has never seen. Two runs can produce
+            # the same `wearPerLap` and mean very different things: one that
+            # watched a set to 56% has observed the curve bend; one that
+            # stopped at 24% has not.
+            #
+            # The worst corner of the deepest closing reading, because a stint
+            # ends when the worst single tyre is done.
+            "deepestObservedFrac": (
+                max((run.reading for run in rated if run.reading is not None),
+                    default=None)),
         }
         if not rated:
             entry["wearPerLapUnavailable"] = (

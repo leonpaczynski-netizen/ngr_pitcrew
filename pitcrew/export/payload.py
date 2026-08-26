@@ -1100,7 +1100,12 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "refuelRateSource", "mandatoryStops"}),
     "strategy.compoundProfiles[]": frozenset({
         "compound", "paceDeltaSPerLap", "paceBasis", "wearPerLap", "source",
-        "lapsMeasured", "stintsMeasured", "longestStintLaps", "tyreWindow",
+        "lapsMeasured", "stintsMeasured", "longestStintLaps",
+        # What the wear rate rests on, and how deep the gauge watched. See
+        # contract 19: `source` cannot separate a rate from two gauge
+        # readings from one over a set merely assumed fresh, and it is the
+        # second that extrapolates a stint nobody has run.
+        "wearConfidence", "deepestObservedFrac", "tyreWindow",
         "windowQualification"}),
     "strategy.compoundProfiles[].tyreWindow": frozenset({
         "meanC", "perCornerC", "band", "lapsSampled", "lapsInWindow",

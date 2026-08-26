@@ -740,3 +740,70 @@ def test_the_scratch_space_does_not_outlive_the_call():
     with pytest.raises(M.StrategyImpossible):
         M.recommend(_wide_inputs(3, stops=6), max_stops=4)
     assert M._SCRATCH.get() is None, "scratch left set after a refusal"
+
+# ------------------------------- the evidence cap, and when it stops applying
+
+def _fuji(**kw):
+    """Fuji as it actually was: 20 laps, RS at 4.10 points a lap."""
+    from pitcrew.strategy.model import CompoundProfile
+    base = dict(code="RS", wear_per_lap=0.0410, longest_stint_laps=6)
+    base.update(kw)
+    return CompoundProfile(**base)
+
+
+def _fuji_inputs():
+    from pitcrew.strategy.model import RaceInputs
+    return RaceInputs(race_laps=20, lap_time_ms=99_500,
+                      fuel_capacity_l=100.0, fuel_per_lap_l=5.975)
+
+
+def test_a_rate_over_a_set_only_assumed_fresh_is_still_capped():
+    """What the app knew before the Fuji race, and it was right to be cautious.
+
+    Two six-lap practice runs, one gauge reading each over a set nobody
+    declared fresh, deepest 24% consumed. `0.85 / w` says 20.7 laps; the
+    longest run on record says 6.
+    """
+    from pitcrew.strategy.model import CONSTRAINT_EVIDENCE, stint_limit
+    laps, why = stint_limit(_fuji_inputs(),
+                            _fuji(wear_confidence="assumed",
+                                  deepest_observed_frac=0.24))
+    assert (laps, why) == (6, CONSTRAINT_EVIDENCE)
+
+
+def test_a_gauge_watched_past_the_flat_phase_lifts_the_cap():
+    """And what it knows once the race replay is read.
+
+    Nineteen readings across two sets agreeing to 2.7%, watched to 56% - past
+    the bend CLAUDE.md 5.1 puts at half worn. `0.85 / w` is now continuing an
+    observed curve, so the longest-run ceiling no longer applies and the tank
+    is what actually binds.
+    """
+    from pitcrew.strategy.model import CONSTRAINT_FUEL, stint_limit
+    laps, why = stint_limit(_fuji_inputs(),
+                            _fuji(wear_confidence="measured",
+                                  deepest_observed_frac=0.56,
+                                  longest_stint_laps=15))
+    assert why == CONSTRAINT_FUEL
+    assert laps == 15
+
+
+def test_measured_but_shallow_is_still_capped():
+    """**The depth is the load-bearing half, not the confidence.**
+
+    Two readings inside one short run measure the rate honestly and still
+    watch only the flat opening. Extrapolating that to 85% crosses a boundary
+    nobody has seen, in the direction 5.1 calls the expensive one.
+    """
+    from pitcrew.strategy.model import CONSTRAINT_EVIDENCE, stint_limit
+    laps, why = stint_limit(_fuji_inputs(),
+                            _fuji(wear_confidence="measured",
+                                  deepest_observed_frac=0.24))
+    assert (laps, why) == (6, CONSTRAINT_EVIDENCE)
+
+
+def test_the_threshold_comes_from_the_phase_model_not_a_second_copy():
+    from pitcrew.analysis.wear import PHASE_FLAT, phase_for
+    from pitcrew.strategy.model import WEAR_CURVE_WATCHED_FRAC
+    assert phase_for(WEAR_CURVE_WATCHED_FRAC) != PHASE_FLAT
+    assert phase_for(WEAR_CURVE_WATCHED_FRAC - 0.01) == PHASE_FLAT

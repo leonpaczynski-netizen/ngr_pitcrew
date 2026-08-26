@@ -28,6 +28,7 @@ from functools import lru_cache
 from contextvars import ContextVar
 from itertools import permutations, product
 
+from pitcrew.analysis.wear import CONFIDENCE_MEASURED, PHASE_FLAT, phase_for
 from pitcrew.store.tyres import get_by_code
 
 # Stop the stint at 85% of modelled tyre life. Deliberate, and stated.
@@ -199,6 +200,13 @@ CONSTRAINT_FUEL = "fuel"
 # longest stint the evidence actually contains, which is what stops an
 # understated rate proposing a stint nobody has ever completed.
 CONSTRAINT_EVIDENCE = "evidence"
+# **How deep the gauge must have watched a set before `0.85 / w` stops being
+# an extrapolation.** The boundary between the flat opening and the
+# progressive phase, taken from `analysis/wear.phase_for` rather than written
+# down again here - one number, one home. See `_wear_curve_was_watched`.
+WEAR_CURVE_WATCHED_FRAC = next(
+    frac / 100 for frac in range(1, 101)
+    if phase_for(frac / 100) != PHASE_FLAT)
 CONSTRAINT_REGULATION = "regulation"
 CONSTRAINT_UNKNOWN = "unknown"
 
@@ -262,6 +270,17 @@ class CompoundProfile:
     # into `source` and every plan downstream is costed on nonsense.
     pace_known: bool = False
     pace_basis: str | None = None
+    # **What the wear rate rests on, which `source` does not say.** `source`
+    # is MEASURED whenever a rate exists at all, so a rate from two gauge
+    # readings inside one run and a rate from one reading over a set merely
+    # ASSUMED fresh arrive here indistinguishable - and the second is the one
+    # `analysis/wear.py` warns produced a twelve-lap stint on a set that never
+    # went past four. Rule 5: nothing derived is presented as measured.
+    wear_confidence: str | None = None
+    # How deep into a set the gauge was actually watched, worst corner. See
+    # `wear_rate_by_compound`: a rate fitted entirely inside the flat phase
+    # and extrapolated to 85% crosses a boundary nobody has observed.
+    deepest_observed_frac: float | None = None
 
     @property
     def is_measured(self) -> bool:
@@ -291,6 +310,9 @@ class CompoundProfile:
             "lapsMeasured": self.laps_measured,
             "stintsMeasured": self.stints_measured,
             "longestStintLaps": self.longest_stint_laps,
+            "wearConfidence": self.wear_confidence,
+            "deepestObservedFrac": (None if self.deepest_observed_frac is None
+                                    else round(self.deepest_observed_frac, 3)),
             "tyreWindow": self.window,
             "windowQualification": self.window_note,
         }
@@ -912,12 +934,47 @@ def stint_limit(inputs: RaceInputs,
         (tyre_limited_laps(profile.wear_per_lap), CONSTRAINT_TYRE),
         (fuel_limited_laps(inputs.fuel_capacity_l, inputs.fuel_per_lap_l),
          CONSTRAINT_FUEL),
-        (profile.longest_stint_laps or None, CONSTRAINT_EVIDENCE),
     ]
+    if not _wear_curve_was_watched(profile):
+        candidates.append((profile.longest_stint_laps or None,
+                           CONSTRAINT_EVIDENCE))
     known = [(laps, why) for laps, why in candidates if laps is not None]
     if not known:
         return None, CONSTRAINT_UNKNOWN
     return min(known, key=lambda pair: pair[0])
+
+
+def _wear_curve_was_watched(profile) -> bool:
+    """Has the gauge seen this compound bend, or only its flat opening?
+
+    **The evidence cap guards against extrapolation, and this is the one case
+    that is not extrapolating.** Its stated reason is a rate taken over four
+    laps and divided wrongly, which proposed a twelve-lap stint on a set that
+    had never gone past four. Two conditions between them exclude that:
+
+    * the rate came from **two gauge readings inside one run**, so nothing was
+      assumed about the set's age - that division error cannot occur; and
+    * the gauge watched the set **past the flat phase**, so `0.85 / w` is
+      continuing a curve that has been seen to bend rather than projecting one
+      that has not.
+
+    The second is the load-bearing half. `CLAUDE.md` 5.1: near-flat to about
+    half worn, progressive from there, a cliff past 90%. A rate fitted
+    entirely inside the flat opening and run out to 85% crosses a boundary
+    nobody has observed, and it will read optimistic in exactly the direction
+    5.1 calls the expensive one.
+
+    Fuji is both cases in one weekend. Before the race: two six-lap practice
+    runs, one reading each over a set only assumed fresh, deepest 24% - the
+    cap held at six laps and was right to. After the race is read: nineteen
+    readings across two sets agreeing to 2.7%, watched to 56% - the cap lifts
+    and a 20-lap race becomes the one stop the tank forces rather than the
+    three the longest previous run implied.
+    """
+    if profile.wear_confidence != CONFIDENCE_MEASURED:
+        return False
+    deepest = profile.deepest_observed_frac
+    return deepest is not None and deepest >= WEAR_CURVE_WATCHED_FRAC
 
 
 def _evidence_cap_note(inputs: RaceInputs, profiles: list,
