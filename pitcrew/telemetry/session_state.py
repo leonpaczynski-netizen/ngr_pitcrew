@@ -6,8 +6,14 @@ coaching).  What is kept here is the handful of detectors that were expensive
 to get right:
 
 * **Lap completion** fires on `last_lap_ms` changing to a new positive value,
-  never on `laps_completed` — GT7's lap counter is unreliable and its indexing
-  convention differs between race types.
+  latched against the last value FILED and never against the previous frame.
+  GT7's `laps_completed` is not the trigger — its indexing convention differs
+  between race types — but it **is** checked against the app's own count at
+  every crossing, and a disagreement is reported out loud. Those are two
+  different questions and conflating them cost a lap: an indexing offset is a
+  constant you can calibrate once, a dropped edge is not recoverable by
+  anything, and trading the second away to avoid the first is what filed 19
+  rows for a 20-lap race at Fuji.
 * **Race start** requires `(the car was seen below 30 km/h) AND speed > 80`,
   or the lap counter increasing.  The low-speed gate stops a formation lap, or
   the app being started mid-session, from faking lights-out.  The lap-counter
@@ -36,6 +42,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from pitcrew.analysis.refuel import MAX_PLAUSIBLE_LPS
+from pitcrew.diagnostics import log
 from pitcrew.telemetry.packet import GT7Packet
 from pitcrew.telemetry.pit_detect import entered_the_pits
 from pitcrew.telemetry.recorder import SAMPLE_HZ
@@ -266,6 +273,14 @@ class SessionState:
 
         self._grid_low_speed_seen = False
         self._prev_laps_completed = 0
+        # The lap time of the last lap actually FILED. See `_check_lap`: the
+        # edge is latched against this and never against the previous frame,
+        # so a frame the detector declines to act on cannot destroy it.
+        self._last_lap_filed_ms = -1
+        # GT7's counter less the app's own at the first lap filed. A constant
+        # while nothing is dropped; a step in it is a crossing that went
+        # missing, and `_check_lap` says so out loud.
+        self._gt7_lap_offset: int | None = None
         self._laps_in_race = 0
         self._laps_in_race_pre_start_max = 0
         self._race_started_at: float | None = None
@@ -423,6 +438,15 @@ class SessionState:
             # GT7 sends -1 before any lap is complete; clamp so the "increased"
             # comparison below cannot be satisfied spuriously.
             self._prev_laps_completed = max(0, p.laps_completed)
+            # **Seeded from the first packet, not left at -1.** The latch fires
+            # on a CHANGE, so an unseeded one files a lap the moment the app
+            # meets a stream that already carries a lap time - joining a
+            # session in progress, or opening on a menu still holding the last
+            # session's. That is what the `car_on_track` gate in `_check_lap`
+            # was really protecting against, and seeding here protects against
+            # it without also discarding the pit-lane crossing, which is the
+            # one crossing that gate reliably threw away.
+            self._last_lap_filed_ms = p.last_lap_ms
             # A car already stationary when first seen is on the grid.
             self._grid_low_speed_seen = p.speed_kmh < GRID_LOW_SPEED_KMH
             return []
@@ -632,16 +656,79 @@ class SessionState:
             return None
         return int(round((before + after) * 1000.0))
 
+    def _say_if_a_crossing_went_missing(self, p: GT7Packet) -> None:
+        """Compare the app's count with GT7's, and say so when they part.
+
+        **The witness was already being written and read by nothing.** Every
+        lap row carries `laps_completed`, GT7's own counter, and across
+        session 88 it steps by one on every row except the pit row, where it
+        steps 5 -> 7. That single difference is the whole diagnosis, and it
+        sat in the archive unexamined while the race ran a lap short, the
+        run-in counted down early, and the fuel at the stop was sized against
+        a lap that had already gone by.
+
+        Said at the crossing rather than at the flag, because a count that is
+        wrong is wrong for every call made after it, and **silence from an
+        adviser is indistinguishable from an adviser with nothing to say.**
+
+        It does not fabricate a row. The lap GT7 timed cannot be reconstructed
+        live - the app never saw its crossing and so never timed it - and a
+        lap time invented here would be indistinguishable downstream from one
+        the game reported. `tools/repair_dropped_laps.py` restores it
+        afterwards from GT7's own lap list, which is a number that exists.
+        """
+        if p.laps_completed is None or p.laps_completed < 0:
+            return
+        offset = p.laps_completed - len(self._laps)
+        if self._gt7_lap_offset is None:
+            self._gt7_lap_offset = offset
+            return
+        if offset == self._gt7_lap_offset:
+            return
+        missed = offset - self._gt7_lap_offset
+        self._gt7_lap_offset = offset
+        if missed < 0:
+            # The app counted a lap GT7 did not. Not a drop, and not
+            # something this has ever seen - reported rather than corrected,
+            # because a correction for a cause nobody has diagnosed is a guess.
+            log("race").error(
+                "the app has filed %d lap(s) MORE than GT7 counted by lap %d "
+                "- this has no known cause and the lap count should not be "
+                "trusted for the rest of this session", -missed, len(self._laps))
+            return
+        log("race").error(
+            "GT7 counted %d crossing(s) the app did not, inside lap %d. Its "
+            "counter reads %d against %d rows filed. This is what a stop at a "
+            "circuit whose pit lane spans the start/finish line does; the lap "
+            "count is short by that much from here until the race is "
+            "re-derived", missed, len(self._laps), p.laps_completed,
+            len(self._laps))
+
     def _check_lap(self, p: GT7Packet, now: float) -> list[SessionEvent]:
         if self._phase in (Phase.IDLE, Phase.FINISHED):
             return []
 
-        prev_last_lap_ms = self._prev.last_lap_ms if self._prev else -1
-        # The one reliable lap signal: a new positive last_lap_ms.
-        if not (p.last_lap_ms > 0 and p.last_lap_ms != prev_last_lap_ms):
+        # **Against the last time FILED, not the last frame seen.**
+        #
+        # This compared `p.last_lap_ms` with the previous frame's, so any
+        # frame on which the event was discarded destroyed the edge for good:
+        # the next frame's "previous" already carried the new time, the `!=`
+        # was false from then on, and the lap was gone with nothing logged.
+        # One skipped frame, one lap, silently.
+        #
+        # That is the same defect shape as the gauge ratchet - a baseline that
+        # advances even when nothing was believed - and it is why session 88
+        # filed 19 rows for a 20-lap race. Latched, a discarded frame costs a
+        # delay rather than a lap.
+        if not (p.last_lap_ms > 0 and p.last_lap_ms != self._last_lap_filed_ms):
             return []
-        if not p.car_on_track:
-            return []
+        # **`car_on_track` is deliberately NOT a gate here.** GT7 takes the car
+        # over at pit entry and clears the flag through the pit sequence -
+        # which is exactly when the crossing this method exists to catch
+        # happens, because at circuits whose pit lane spans the line the stop
+        # straddles a lap. Being off track is a reason to doubt this lap's
+        # fuel and tyre readings, not a reason to pretend the lap did not
+        # happen; the flag travels on the row so the doubt travels with it.
 
         lap_time_ms = p.last_lap_ms
         best_ms = p.best_lap_ms
@@ -678,6 +765,8 @@ class SessionState:
                             and p.laps_completed >= 0 else None),
         )
         self._laps.append(lap)
+        self._last_lap_filed_ms = lap_time_ms
+        self._say_if_a_crossing_went_missing(p)
         self._pit_entry_at = None
         self._pit_exit_at = None
         self._pit_lap = False

@@ -71,10 +71,46 @@ def test_delta_is_versus_best():
     assert state.laps[0].delta_ms == 2_000
 
 
-def test_no_lap_while_off_track():
+def test_a_crossing_off_track_is_still_a_crossing():
+    """GT7 clears `car_on_track` through its pit sequence.
+
+    This used to assert the opposite, and the opposite is what filed 19 rows
+    for the 20-lap Fuji race: at a circuit whose pit lane spans the line the
+    stop straddles a lap, so the one crossing the gate reliably threw away was
+    the one taken at pit-lane speed. Being off track is a reason to doubt the
+    lap's fuel and tyre readings, not a reason to pretend the lap did not
+    happen.
+    """
     state = SessionState(SessionKind.PRACTICE)
     feed(state, [make_packet(), make_packet(last_lap_ms=92_000, on_track=False)])
+    assert state.lap_count == 1
+
+
+def test_a_lap_time_already_on_the_stream_does_not_file_a_lap():
+    """What the off-track gate was really protecting against.
+
+    The latch fires on a change, so it has to be seeded from the first packet:
+    joining a session in progress - or opening on a menu still holding the
+    last session's time - otherwise files a lap nobody drove.
+    """
+    state = SessionState(SessionKind.PRACTICE)
+    feed(state, [make_packet(last_lap_ms=92_000),
+                 make_packet(last_lap_ms=92_000)])
     assert state.lap_count == 0
+
+
+def test_one_discarded_frame_does_not_cost_a_lap():
+    """The defect itself: an edge latched against the previous FRAME.
+
+    A paused frame carrying the new lap time used to advance the comparison
+    without filing anything, and the `!=` was false from then on - the lap
+    gone, silently, for one skipped frame.
+    """
+    state = SessionState(SessionKind.PRACTICE)
+    feed(state, [make_packet(),
+                 make_packet(last_lap_ms=92_000, flags_raw=0x0001 | 0x0002),
+                 make_packet(last_lap_ms=92_000)])
+    assert state.lap_count == 1
 
 
 def test_paused_packets_are_ignored():

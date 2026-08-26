@@ -150,6 +150,20 @@ FRAME_FIELDS: tuple[str, ...] = (
     # that is tyre saturation and how much is the steering rack. With this
     # column it is separable. Without it, no front cue should be built at all.
     "road_wheel_rad",
+    # **The three channels that decide which lap this is, and none of them was
+    # being kept.** Thirty-odd columns per frame and not one of them could say
+    # why a crossing went missing: `laps_completed` is GT7's own lap counter,
+    # `last_lap_ms` is the edge the detector actually triggers on, and
+    # `flags_raw` bit 0 is `car_on_track`, which GT7 clears through the pit
+    # sequence and which used to gate lap filing.
+    #
+    # Session 88 filed 19 rows for a 20-lap race and the archive could not be
+    # asked which of those two dropped it - the fault had to be read off a
+    # video replay of the race instead. Appended, so every lap already on disk
+    # still decodes: the blob carries its own field list.
+    "gt7_laps_completed",
+    "last_lap_ms",
+    "flags_raw",
 )
 
 # The driver's physical wheel rotation setting (Fanatec DD Extreme).  Reported
@@ -951,6 +965,9 @@ class LapRecorder:
                 round(packet.vel_x, 3), round(packet.vel_y, 3),
                 round(packet.vel_z, 3),
                 _round(packet.road_wheel_angle, 5),
+                packet.laps_completed if packet.laps_completed >= 0 else None,
+                packet.last_lap_ms if packet.last_lap_ms > 0 else None,
+                packet.flags_raw,
             ])
 
     def take_rows(self) -> list[list]:
