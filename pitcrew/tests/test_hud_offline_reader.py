@@ -346,7 +346,7 @@ def test_a_drop_onto_a_set_too_worn_to_be_new_is_a_fault():
                    (5, 0.42, 0.25, 0.39, 0.23)], bar_px=31)
 
     assert len(faults) == 1
-    assert "too worn for a fresh set" in faults[0].why
+    assert "too worn to be a set that has just gone on" in faults[0].why
 
 
 def test_one_pixel_of_quantisation_either_way_is_not_a_fault():

@@ -178,6 +178,13 @@ GAUGE_SLACK = 0.05
 # the same session dropped all four and landed at 42% worst, which is not a
 # new tyre and is not four laps of wear either.
 FRESH_SET_MAX = 0.15
+# How far apart the four corners of a just-fitted set may read, in pixels of
+# whatever bar is being read. Three, because a set that has run an out-lap has
+# genuinely worn a little and unevenly, and because the quantisation itself is
+# one pixel at each end. Measured: 0 points of spread at the Fuji change on a
+# 36 px bar, 3.3 at Monza's on a 31 px bar - against 16.8 across session 77's
+# refused step.
+FRESH_SET_SPREAD_SLACKS = 3.0
 # **The ceiling on how far a reading may climb in one sample, and it exists
 # because the refusal rule above only ever looks downward.**
 #
@@ -305,15 +312,35 @@ def coherent(previous: dict | None, wear: dict, *,
             + ", ".join(f"{k.upper()} {moved[k] * 100:+.0f}"
                         for k in sorted(shared))
             + ") - no tyre does that, so this is not the gauge")
-    if fell and len(fell) == len(shared):
+    # **A fresh set is identified by where the corners ARE, not by how far
+    # they fell.** This used to require every shared corner to have dropped,
+    # and a corner that was barely worn cannot drop: at the Fuji stop the
+    # front-right stood at 8% against a 2.8-point pixel, so it "held" while
+    # the other three fell, the step was refused as incoherent, and the honest
+    # tyre change the tool had already detected as a second stint was thrown
+    # away.
+    #
+    # What a set that has just gone on actually looks like is all four corners
+    # LOW and CLOSE TOGETHER - they started level and have run the same laps.
+    # A misread is neither: session 77 reads 37/22/35/20 across its step, a
+    # spread of six pixels, and stays refused.
+    if fell and not rose:
         worst = max(wear[k] for k in shared)
-        if worst <= fresh_max:
+        spread = worst - min(wear[k] for k in shared)
+        if worst <= fresh_max and spread <= FRESH_SET_SPREAD_SLACKS * slack:
             return True, True, ""
-        return False, False, (
-            f"every corner dropped but the set still reads "
-            f"{worst * 100:.0f}% worst against a {fresh_max * 100:.0f}% "
-            f"ceiling - too worn for a fresh set and too low to follow "
-            f"the last one")
+        # Not a fresh set. **Refused only where EVERY corner fell.** A lone
+        # corner falling while the rest hold is the race path's deliberate
+        # tolerance - it is tuned to keep sampling and the batch form
+        # reports that shape itself, so refusing it here would make
+        # `coherent` reject what `wear_faults` exists to name.
+        if len(fell) == len(shared):
+            return False, False, (
+                f"every corner dropped but the set still reads "
+                f"{worst * 100:.0f}% worst against a {fresh_max * 100:.0f}% "
+                f"ceiling, and they span {spread * 100:.0f} points - too "
+                f"worn to be a set that has just gone on, and too low to "
+                f"follow the last one")
     leapt = [k for k in rose if moved[k] > max_rise]
     if leapt:
         # The other direction of the same impossibility. See

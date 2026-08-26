@@ -305,10 +305,47 @@ def attach(series, crossings, boundaries=()) -> tuple[dict, list]:
     starts = [c[0] for c in crossings]
     for i, (cross_at, lap) in enumerate(crossings):
         opened = starts[i - 1] if i else float("-inf")
+        why = None
         if any(opened < b <= cross_at for b in boundaries):
-            if per_lap.pop(lap["id"], None) is not None:
-                skipped.append(lap)
+            why = "spans a tyre change"
+        elif spans_two_laps(crossings, i):
+            why = "is two GT7 laps in one row"
+        if why and per_lap.pop(lap["id"], None) is not None:
+            lap = dict(lap)
+            lap["_skip_why"] = why
+            skipped.append(lap)
     return per_lap, skipped
+
+
+def spans_two_laps(crossings, index: int) -> bool:
+    """Did GT7 count more crossings across this row than the app did?
+
+    **A row is not always a lap.** GT7 takes the car over at pit entry and
+    the crossing inside that sequence never reaches the app, so a pit row
+    covers two of the game's laps: session 88 filed 19 rows for 20 laps,
+    its row 5 spanning 256.2 s of a 141.3 s "lap", and `laps_completed`
+    stepping 5 -> 7 across it where every other row steps by one.
+
+    The reading attached to such a row is the gauge at the END of the LAST
+    of those laps, and the row says it is the end of the first. Filing it
+    dates the reading a lap early and, worse, hands the wear model a set
+    age short by one - which is the denominator of every rate it computes.
+
+    **GT7's own counter is the witness and it is already in the row.** It is
+    recorded on every lap and read by nothing; this is the first thing to
+    ask it a question. Silent where the column is null, because a session
+    recorded before it existed is unknown, not clean.
+    """
+    _, lap = crossings[index]
+    now = lap.get("laps_completed")
+    if now is None:
+        return False
+    if index == 0:
+        return False
+    before = crossings[index - 1][1].get("laps_completed")
+    if before is None:
+        return False
+    return now - before > 1
 
 
 def quantisation(rows: list[tuple[float, Reading]]) -> tuple[int | None, float]:
@@ -422,8 +459,10 @@ def main() -> int:
     per_lap, skipped = attach(series, crossings, fresh_set_times(series))
     print(f"\n  {len(per_lap)} of {len(crossings)} laps carry a reading")
     for lap in skipped:
-        print(f"  lap {lap['lap_num']} spans a tyre change - no reading, "
-              f"because the in-lap and the out-lap are different sets")
+        print(f"  lap {lap['lap_num']} "
+              f"{lap.get('_skip_why', 'is unreadable')}"
+              f" - no reading, because the reading and the row would "
+              f"not be about the same lap")
     print(f"{'lap':>4} {'video_s':>8} {'fl':>6} {'fr':>6} {'rl':>6} {'rr':>6}")
     ordered = sorted(per_lap.items(), key=lambda kv: kv[1][2]["lap_num"])
     for lap_id, (at, wear, lap) in ordered:
