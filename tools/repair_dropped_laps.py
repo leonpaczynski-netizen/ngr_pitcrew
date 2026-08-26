@@ -169,6 +169,13 @@ def main() -> int:
                          "replay gauge. GT7 broadcasts no such channel and "
                          "the temperature test the app falls back on has been "
                          "wrong here")
+    ap.add_argument("--set-position", metavar="LAP=N",
+                    help="the race position at a lap's crossing, read off the "
+                         "replay. `laps.position` is NOT NULL DEFAULT 0 and "
+                         "SQLite cannot relax that without rebuilding the "
+                         "table, which cascades into `lap_frames` - so a "
+                         "restored lap carries a 0 that is not a position at "
+                         "all, and the only honest fix is to measure it")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
@@ -229,6 +236,23 @@ def main() -> int:
                         "fuel_used = ? WHERE id = ?",
                         (round(start, 4), round(end, 4),
                          round(used, 4) if used >= 0 else None, lap["id"]))
+        print("")
+        print("applied" if args.apply else "report only - add --apply")
+        return 0
+
+    if args.set_position:
+        lap_num, _, want = args.set_position.partition("=")
+        row = [r for r in store.list_laps(args.session)
+               if r["lap_num"] == int(lap_num)]
+        if not row:
+            raise SystemExit(f"session {args.session} has no lap {lap_num}")
+        if int(want) < 1:
+            raise SystemExit("positions are 1-based; 0 is what this repairs")
+        print(f"  lap {lap_num}: position {row[0]['position']} -> {want}")
+        if args.apply:
+            with store._write() as conn:
+                conn.execute("UPDATE laps SET position = ? WHERE id = ?",
+                             (int(want), row[0]["id"]))
         print("")
         print("applied" if args.apply else "report only - add --apply")
         return 0
