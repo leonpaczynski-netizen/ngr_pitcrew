@@ -44,10 +44,19 @@ hairpin a car ahead can be drawn below the crosshair.
 ### Validation
 
 Position changes are the ground truth and they are already in the archive:
-`laps.position` comes from the packet. A contact that passes from behind to
-ahead should land on a lap where the position column steps. The report prints
+`laps.position` comes from the packet. A contact that moves from ahead to
+behind should land on a lap where the position column steps. The report prints
 both side by side so the two can be read against each other rather than the
 radar being believed on its own.
+
+Fuji, session 88, at 4 s: laps 1-5 crowded on both sides while he takes three
+places on lap 2; **zero contacts in 135 samples across laps 6-10**, the stint
+after his stop, in clear air and last; laps 11-14 a contact ahead at 68 px
+closing to 84, 102, 135 while he takes four places, and on the lap he takes
+P5 the closest contact is **7 px BEHIND** - the pass itself; then 21, 23 and
+20 samples of that car sitting on him through laps 16-18 before he breaks away
+to 86 and 125 px over the last two. Every step of that agrees with the
+position column, and none of it was in the archive.
 """
 from __future__ import annotations
 
@@ -246,9 +255,13 @@ def main() -> int:
     ap.add_argument("--db")
     ap.add_argument("--session", type=int, required=True)
     ap.add_argument("--video", required=True)
-    ap.add_argument("--every", type=float, default=5.0,
-                    help="seconds between samples (default 5). Traffic moves "
-                         "faster than tyre wear does")
+    ap.add_argument("--every", type=float, default=4.0,
+                    help="seconds between samples (default 4). Traffic moves "
+                         "faster than tyre wear does, and a pass is over in a "
+                         "few seconds: at 10 s the Fuji race showed laps 12-14 "
+                         "taking places against nothing but distant contacts, "
+                         "and at 4 s the same laps show the car being caught, "
+                         "passed, and then sitting 7 px behind")
     ap.add_argument("--offset", type=float, default=0.0,
                     help="video seconds at the green flag")
     ap.add_argument("--scratch", default=None,
