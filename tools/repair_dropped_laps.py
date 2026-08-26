@@ -35,6 +35,7 @@ counter already steps by one everywhere has nothing to repair.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import sys
 from pathlib import Path
 
@@ -154,6 +155,20 @@ def main() -> int:
                          "this lap, so the figure cannot come from the "
                          "archive, and a lap time this tool invented would "
                          "be indistinguishable from one the game reported")
+    ap.add_argument("--fix-crossings", action="store_true",
+                    help="repair rows that share a crossing timestamp with "
+                         "the row after them - what an earlier run of this "
+                         "tool left behind before it computed the restored "
+                         "lap's own crossing")
+    ap.add_argument("--fix-fuel", action="store_true",
+                    help="re-measure fuel_start/end/used from the frames each "
+                         "row owns - a split leaves both halves describing "
+                         "the wrong tank")
+    ap.add_argument("--tyres-changed", type=int, metavar="LAP",
+                    help="declare that the set came off on this lap, from the "
+                         "replay gauge. GT7 broadcasts no such channel and "
+                         "the temperature test the app falls back on has been "
+                         "wrong here")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
@@ -174,6 +189,93 @@ def main() -> int:
 
     if args.session is None:
         raise SystemExit("--session or --all")
+
+    if args.fix_fuel:
+        # **A split leaves both halves describing the wrong tank.** The lap
+        # that was restored inherits column defaults - `fuel_start = 0.0` is a
+        # fabricated zero, CLAUDE.md rule 3 - and the lap that survived keeps
+        # the fuel level from the START OF THE FIRST of the two laps it used
+        # to cover. Both are measurable from the frames each row now owns, so
+        # they are re-measured rather than left or nulled.
+        #
+        # `fuel_used` is start plus what went in, less end. On a pit lap the
+        # difference alone is negative and the burn is real: rule 9.
+        for lap in store.list_laps(args.session):
+            frames = store.get_lap_frames(lap["id"])
+            if not frames:
+                continue
+            litres = [f["fuel_l"] for f in frames["frames"]
+                      if f.get("fuel_l") is not None]
+            if len(litres) < 2:
+                continue
+            start, end = litres[0], litres[-1]
+            added = sum(max(0.0, b - a) for a, b in zip(litres, litres[1:]))
+            used = start + added - end
+            same = (lap["fuel_start"] is not None
+                    and abs(lap["fuel_start"] - start) < 0.01
+                    and lap["fuel_end"] is not None
+                    and abs(lap["fuel_end"] - end) < 0.01)
+            if same:
+                continue
+            print(f"  lap {lap['lap_num']}: "
+                  f"start {lap['fuel_start']} -> {start:.2f}, "
+                  f"end {lap['fuel_end']} -> {end:.2f}, "
+                  f"used {lap['fuel_used']} -> {used:.2f}"
+                  + (f", added {added:.2f}" if added > 0.25 else ""))
+            if args.apply:
+                with store._write() as conn:
+                    conn.execute(
+                        "UPDATE laps SET fuel_start = ?, fuel_end = ?, "
+                        "fuel_used = ? WHERE id = ?",
+                        (round(start, 4), round(end, 4),
+                         round(used, 4) if used >= 0 else None, lap["id"]))
+        print("")
+        print("applied" if args.apply else "report only - add --apply")
+        return 0
+
+    if args.tyres_changed is not None:
+        # **Declared, not derived.** Whether a set came off is evidence from
+        # the gauge in the replay - all four bars back to white - and the
+        # frame-side test the app uses (four temperatures converging) is the
+        # one CLAUDE.md records as unreliable, with fresh sets arriving at 45,
+        # 60 and 70 degrees C on file. So this takes the lap number from
+        # whoever read the video and writes it as the declaration it is.
+        row = [r for r in store.list_laps(args.session)
+               if r["lap_num"] == args.tyres_changed]
+        if not row:
+            raise SystemExit(f"session {args.session} has no lap "
+                             f"{args.tyres_changed}")
+        print(f"  lap {args.tyres_changed}: tyres_changed "
+              f"{row[0]['tyres_changed']} -> 1")
+        if args.apply:
+            with store._write() as conn:
+                conn.execute("UPDATE laps SET tyres_changed = 1, "
+                             "is_pit_lap = 1 WHERE id = ?", (row[0]["id"],))
+        print("")
+        print("applied" if args.apply else "report only - add --apply")
+        return 0
+
+    if args.fix_crossings:
+        laps = store.list_laps(args.session)
+        broken = [(a, b) for a, b in zip(laps, laps[1:])
+                  if a["recorded_at"] == b["recorded_at"]]
+        if not broken:
+            print(f"session {args.session}: every row has its own crossing")
+            return 0
+        for a, b in broken:
+            want = (dt.datetime.fromisoformat(b["recorded_at"])
+                    - dt.timedelta(milliseconds=b["lap_time_ms"])
+                    ).replace(microsecond=0).isoformat()
+            print(f"  lap {a['lap_num']} shares {a['recorded_at']} with lap "
+                  f"{b['lap_num']}; its own crossing is {want}")
+            if args.apply:
+                with store._write() as conn:
+                    conn.execute("UPDATE laps SET recorded_at = ? WHERE id = ?",
+                                 (want, a["id"]))
+        print("")
+        print("applied" if args.apply else
+              "report only - add --apply")
+        return 0
 
     found = report(store, args.session)
     if not found or not args.apply:
@@ -211,6 +313,20 @@ def main() -> int:
     print(f"  renumbering {len(after)} row(s) from "
           f"{drop.row['lap_num']} to {drop.row['lap_num'] + 1}")
 
+    # **The restored lap's crossing is the surviving row's, less the surviving
+    # row's own duration.** Copying the timestamp across instead gives two
+    # rows the same crossing, and `read_hud_wear._crossings` reads the shape
+    # of the race off exactly this column: two identical times put the tyre
+    # change on the wrong side of a lap boundary and cost the in-lap its
+    # reading. Whole seconds, because that is the resolution the column is
+    # stamped at.
+    restored_at = (
+        dt.datetime.fromisoformat(drop.row["recorded_at"])
+        - dt.timedelta(milliseconds=drop.row["lap_time_ms"])
+    ).replace(microsecond=0).isoformat()
+    print(f"  its crossing at {restored_at}, "
+          f"{drop.row['lap_time_ms'] / 1000:.3f} s before the row it split from")
+
     with store._write() as conn:
         # Descending, because `laps` is UNIQUE(session_id, lap_num) and an
         # ascending pass would collide with the row it has not moved yet.
@@ -233,7 +349,7 @@ def main() -> int:
             "is_pit_lap, is_out_lap, laps_completed, recorded_at, "
             "exclusion_reason) VALUES (?, ?, ?, 0, 1, 0, ?, ?, ?)",
             (args.session, drop.row["lap_num"], args.gt7_time,
-             drop.before["laps_completed"] + 1, drop.row["recorded_at"],
+             drop.before["laps_completed"] + 1, restored_at,
              "restored from GT7's own lap counter and lap list; the app "
              "never saw its crossing"))
         new_id = cur.lastrowid

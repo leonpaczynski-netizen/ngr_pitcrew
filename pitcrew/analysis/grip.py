@@ -917,6 +917,28 @@ def _session_context(store, event: dict, session: dict,
         if finding.tyres_changed:
             changed_at.add(finding.lap_num)
 
+    # **And the column the app already wrote, which outranks the frames.**
+    # `read_session` answers "did the tyres come off" from the frames alone -
+    # all four temperatures stepping to one value in a single frame - and
+    # never looks at `laps.tyres_changed`. So a change that the stream did not
+    # show cannot be told to it, and CLAUDE.md rule 1 is exactly backwards
+    # here: a derived test silently overrules a recorded one.
+    #
+    # It matters because the frame test is the unreliable half. Fresh sets
+    # have arrived at 45, 60 and 70 degrees C on file, and at Fuji on 24 Aug
+    # 2026 it saw nothing at all - the gauge in the replay shows all four bars
+    # back to white mid-stop, and the app filed `tyres_changed = 0`. Pooled as
+    # one set, that stint divides one set's wear by two sets' laps, which is
+    # the arithmetic CLAUDE.md §6 names as the reason runs are bounded by the
+    # set and not by the compound.
+    #
+    # A union, not a replacement: either witness seeing a change is a change.
+    # The two disagreeing is a finding, and it is left visible in the columns
+    # rather than resolved here.
+    for lap in laps:
+        if lap.get("tyres_changed"):
+            changed_at.add(lap["lap_num"])
+
     # A session is one run, so it opens a stint; an observed tyre change opens
     # another. **`laps_on_set` stays null unless the set's age is actually
     # known** - a declared fresh set or an observed change. GT7 broadcasts no
