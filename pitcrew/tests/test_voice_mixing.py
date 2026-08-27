@@ -42,6 +42,14 @@ def a_line(seconds: float = 1.88):
     return np.full(int(RATE * seconds), 8_000, dtype=np.int16)
 
 
+# What `a_line` is by the time the mixer sees it. Every spoken line passes
+# through `voice.LINE_GAIN` on its way to the card, so the level the duck
+# applies to is this one and not the 8,000 the fixture writes. Read off the
+# real function rather than restated, so re-tuning the gain re-tunes the test
+# instead of breaking it.
+LINE_LEVEL = int(voice._louder(a_line(0.01))[0])
+
+
 class FakeStream:
     def __init__(self) -> None:
         self.chunks: list[np.ndarray] = []
@@ -145,10 +153,10 @@ def test_the_beep_is_audible_over_the_line_and_louder_than_it():
     assert during.max() > after.max(), "the beep has to rise above the line"
     # Once the tone ends the line comes straight back to its own level - the
     # duck lasts exactly as long as the beep does.
-    assert after.max() == pytest.approx(8_000, abs=2)
+    assert after.max() == pytest.approx(LINE_LEVEL, abs=2)
 
     beep_alone = 10_000 * audio_devices.MIX_GAIN
-    ducked_line = 8_000 * audio_devices.MIX_DUCK
+    ducked_line = LINE_LEVEL * audio_devices.MIX_DUCK
     # Both are in there: the sum is above the beep on its own, so the engineer
     # is audible underneath rather than replaced by the tone.
     assert during.min() == pytest.approx(beep_alone + ducked_line, abs=2)
@@ -173,11 +181,16 @@ def test_a_beep_straddling_a_chunk_boundary_finishes_on_the_next_one():
                               RATE, line, mixer)
 
     # It ran continuously across the boundary rather than restarting.
-    assert stream.played.max() > 8_000
+    assert stream.played.max() > LINE_LEVEL
 
 
 def test_a_line_with_no_beep_in_it_is_passed_through_untouched():
-    """The common case must not pay for the arithmetic of the rare one."""
+    """The common case must not pay for the arithmetic of the rare one.
+
+    Untouched by the *mixer*, that is. The gain is not the rare case - it is
+    on every line - so what comes out is the line at `LINE_GAIN` and nothing
+    summed into it.
+    """
     stream, line = FakeStream(), FakeLine()
     mixer = voice._Mixer(DEVICE)
     clip = a_line(0.5)
@@ -185,7 +198,7 @@ def test_a_line_with_no_beep_in_it_is_passed_through_untouched():
     with audio_devices.mixing_on(DEVICE):
         voice._write_yielding(stream, clip, RATE, line, mixer)
 
-    assert np.array_equal(stream.played, clip)
+    assert np.array_equal(stream.played, voice._louder(clip))
     assert stream.chunks[0].dtype == np.int16
 
 

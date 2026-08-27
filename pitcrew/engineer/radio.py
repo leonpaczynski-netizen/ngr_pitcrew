@@ -26,7 +26,11 @@ from __future__ import annotations
 # of it is a millisecond he waits.
 BURST_MS = 130
 # Well under the voice, so it reads as radio furniture rather than as a call.
-LEVEL = 0.22
+# It was 13.7 dB under one, which is furniture nobody hears over an engine and
+# a headset - the driver, 27 Aug 2026, asked for both bursts louder. Doubled,
+# which is +6.2 dB, and still about 10 dB below a spoken line at
+# `voice.LINE_GAIN`, so it stays the same kind of sound it was.
+LEVEL = 0.45
 # The band a squelch burst lives in. Below this it is a thump, above it a hiss.
 LOW_HZ = 350.0
 HIGH_HZ = 2600.0

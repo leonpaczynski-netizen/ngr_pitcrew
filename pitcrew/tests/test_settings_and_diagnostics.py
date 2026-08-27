@@ -586,8 +586,12 @@ def test_synthesis_streams_rather_than_collecting_the_whole_line():
         def start(self):
             log.append("start")
 
-        def write(self, samples):
-            log.append(f"write {samples[0]}")
+        def write(self, _samples):
+            # The chunk itself is no longer a usable marker: it now arrives
+            # through `voice.LINE_GAIN`, so the sample that went in as 2 comes
+            # out as 3. Interleaving is what this test is about, and the
+            # position of a bare "write" carries that on its own.
+            log.append("write")
 
         def stop(self):
             log.append("stop")
@@ -615,13 +619,13 @@ def test_synthesis_streams_rather_than_collecting_the_whole_line():
         else:
             sys.modules["sounddevice"] = original
 
-    assert log == ["synth 0", "start", "write 0",
-                   "synth 1", "write 1",
-                   "synth 2", "write 2",
+    assert log == ["synth 0", "start", "write",
+                   "synth 1", "write",
+                   "synth 2", "write",
                    "stop", "close"]
     # The load-bearing assertion, stated plainly: the first sample was on its
     # way to the device before the last one had been synthesised.
-    assert log.index("write 0") < log.index("synth 2")
+    assert log.index("write") < log.index("synth 2")
 
 
 def test_a_line_that_synthesises_to_nothing_opens_no_stream():

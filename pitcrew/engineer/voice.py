@@ -65,6 +65,38 @@ def _play_lock():
 _YIELD_CHUNK_S = 0.1
 
 
+# **How much louder the engineer is than the model makes him.**
+#
+# The driver, 27 Aug 2026: George needs to be a bit louder. There is no
+# headroom to raise him with. Piper normalises every chunk it yields to full
+# scale, and a rendered call measures a peak of exactly 1.000 against a voiced
+# RMS of -14.1 dBFS - so a plain multiplier does not make him louder, it
+# clips. The 14 dB of crest factor is the only thing left to lift.
+#
+# `tanh` lifts it and is memoryless, so it cannot produce a seam at a chunk
+# boundary the way a compressor with an envelope would. Below about a third of
+# full scale it is a straight multiplier; above that it bends, and a sample at
+# 1.0 lands at 0.94 instead of clipping. Measured on a rendered call, 1.7 puts
+# +3.1 dB on the voiced samples and takes the peak DOWN from 1.000 to 0.936 -
+# so the beep keeps its stated ~3.5 dB over a ducked line unchanged.
+#
+# Applied in `_write_yielding` rather than in `synthesise` because that is the
+# one place every spoken line passes through. The pack was rendered before
+# this existed; a gain that only reached live synthesis would make a pack hit
+# and a pack miss two audibly different voices.
+LINE_GAIN = 1.7
+
+
+def _louder(chunk):
+    """`chunk` at `LINE_GAIN`, soft-limited so no sample can clip."""
+    import numpy as np
+
+    if LINE_GAIN == 1.0:
+        return chunk
+    return (np.tanh(np.asarray(chunk, dtype=np.float32)
+                    * (LINE_GAIN / 32767.0)) * 32767.0).astype(np.int16)
+
+
 class _Mixer:
     """Sums short sounds into a line that is already playing.
 
@@ -131,7 +163,7 @@ def _summed(a, b):
 
 
 def _write_yielding(stream, samples, rate: int, line, mixer=None) -> bool:
-    """Play `samples`, mixing in anything urgent that arrives on the way.
+    """Play `samples` at `LINE_GAIN`, mixing in anything urgent on the way.
 
     Returns True when it stopped early to let a beep through - which now only
     happens when there was no mixer to take it, because a beep that can be
@@ -145,7 +177,7 @@ def _write_yielding(stream, samples, rate: int, line, mixer=None) -> bool:
     """
     step = max(1, int(rate * _YIELD_CHUNK_S))
     for start in range(0, len(samples), step):
-        chunk = samples[start:start + step]
+        chunk = _louder(samples[start:start + step])
         stream.write(chunk if mixer is None else mixer.blend(chunk, rate))
         # A mixer that is still draining an overlay has a beep sounding right
         # now. Standing aside for a second one mid-tone would cut the first.
