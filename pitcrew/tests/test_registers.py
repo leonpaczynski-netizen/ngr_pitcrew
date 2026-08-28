@@ -100,18 +100,45 @@ def ink_of(widget) -> str:
     pixmap = widget.grab()
     image: QImage = pixmap.toImage()
 
-    counts: collections.Counter = collections.Counter()
+    every: collections.Counter = collections.Counter()
     for y in range(image.height()):
         for x in range(image.width()):
             colour = image.pixelColor(x, y)
-            # Text pixels are the ones brighter than the panel they sit on;
-            # antialiasing fills the gap, so the mode of the bright end is the
-            # authored colour.
-            if colour.red() + colour.green() + colour.blue() > 250:
-                counts[(colour.red(), colour.green(), colour.blue())] += 1
+            every[(colour.red(), colour.green(), colour.blue())] += 1
+    ground = every.most_common(1)[0][0]
+
+    counts = collections.Counter(
+        {rgb: n for rgb, n in every.items()
+         if sum(rgb) > 250 and rgb != ground})
     if not counts:
         return "none"
-    red, green, blue = counts.most_common(1)[0][0]
+
+    # **The pixels vote for a register; the fringes abstain.**
+    #
+    # ClearType renders each glyph across the three subpixels, so a stroke is
+    # a core of the authored colour with coloured fringes either side - and
+    # the fringes are numerous. Measured on the Race Engineer's `worst` combo,
+    # a 611 px widget: the authored `#807870` appears 114 times and the fringe
+    # `#4C6870` 116. The plain mode lost by two pixels, and which one wins is
+    # a function of how long the string happens to be - the six shorter combos
+    # beside it passed. Taking the colour furthest from the ground fails the
+    # other way: subpixel rendering OVERSHOOTS as well, and `#EBEBD8` beat the
+    # stencil `#E8E4DC` it was a fringe of.
+    #
+    # So the estimator asks the question the test asks. A fringe is a blend
+    # and lands near none of the four registers; a glyph's core lands on one.
+    # Counting only the pixels that are within tolerance of a register makes
+    # the answer the register the widget actually painted, and leaves a colour
+    # near none of them - the real failure this file is for - to fall through
+    # and be reported with its value.
+    def near_a_register(rgb: tuple[int, int, int]) -> bool:
+        return any(sum(abs(a - int(value[i:i + 2], 16))
+                       for a, i in zip(rgb, (1, 3, 5))) <= INK_TOLERANCE
+                   for value in REGISTERS.values())
+
+    voting = collections.Counter({rgb: n for rgb, n in counts.items()
+                                  if near_a_register(rgb)})
+    red, green, blue = (voting or counts).most_common(1)[0][0]
     return f"#{red:02X}{green:02X}{blue:02X}"
 
 
