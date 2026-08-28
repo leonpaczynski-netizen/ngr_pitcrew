@@ -718,6 +718,10 @@ class RaceState:
         # which is what this method has always been for.
         if call.kind == WEAR and call.tag:
             self.wear_said.add(call.tag)
+        if call.kind == STATUS and "Tyre gauge" in call.call:
+            # Once a stint, like every other occasion-based call. `clear_stint`
+            # drops the tags, so a fresh set asks again.
+            self.said_tags.add(GAUGE_ASK)
         if call.kind == STOPS_OFF:
             self.stops_off_said = True
         if call.kind == INCIDENT:
@@ -1898,7 +1902,8 @@ def _status(state: RaceState) -> Call | None:
         return None
     where = f"P{state.position}." if state.position else ""
     said = " ".join(part for part in (orientation(state), where,
-                                      _fuel_standing(state)) if part).strip()
+                                      _fuel_standing(state),
+                                      _gauge_ask(state)) if part).strip()
     if not said:
         return None
     return Call(STATUS, state.lap, said, "")
@@ -1985,12 +1990,16 @@ def orientation(state: RaceState) -> str:
     lap = state.lap_now()
     if lap < 1:
         return ""
-    # A missed crossing means the number is uncertain by exactly one, and
-    # saying which two it is between beats a confident wrong one.
-    if state.laps_missed() > 0:
-        where = f"Lap {lap - state.laps_missed()} or {lap}"
-    else:
-        where = f"Lap {lap}"
+    # **The corrected number, flat.** This said "Lap 20 or 22" at Road
+    # Atlanta's measured drop of two - a pair that excludes the truth - and
+    # the same breath then said "9 laps to go", which comes from
+    # `laps_remaining()` and treats the correction as certain. One quantity
+    # cannot be uncertain in one clause and certain in the next.
+    #
+    # It is certain enough to say flat: the correction comes from GT7's own
+    # `laps_completed`, which is the authority here and the whole reason the
+    # count is taken from it rather than from the app's own crossings.
+    where = f"Lap {lap}"
 
     # **One number per sentence, deliberately.** The voice pack plays a call
     # by peeling known sentences off the front and splitting what is left on
@@ -2025,6 +2034,40 @@ def orientation(state: RaceState) -> str:
     # unknown - it is one of two. Naming them beats picking one, and beats the
     # silence this used to fall to.
     return f"{where}. {clock} {laps_to_go(laps, uncertain=not state.laps_estimate_firm)}"
+
+
+# Laps a gauge reading may be old before the engineer asks for another, and
+# the tag under which the ask is remembered for the stint.
+GAUGE_STALE_LAPS = 5
+GAUGE_ASK = "gauge-ask"
+
+
+def _gauge_ask(state: RaceState) -> str:
+    """Ask him to read the in-game wear gauge, inside the heartbeat.
+
+    **It used to be a colour call and it cannot stay there.** The colour tier
+    only speaks on a crossing that had nothing else to say, and at the
+    every-lap setting the heartbeat has every crossing - so the tier retires
+    for the race and this goes with it. Speaking both breaks §5.5's one thing
+    at a time, which is on file from a race that produced two opposite
+    instructions on one crossing.
+
+    So it rides along. **It is the only wear evidence that exists in VR**,
+    where the live reader made 553 attempts at Fuji and accepted none, and
+    `colour._gauge`'s own docstring calls it worth more to the model than
+    anything else said all race. A fourth clause once a stint is a cheap price
+    for the thing the whole wear model rests on.
+    """
+    if GAUGE_ASK in state.said_tags or state.in_pit:
+        return ""
+    if state.wear_history:
+        last_lap, _ = state.wear_history[-1]
+        if state.lap - last_lap < GAUGE_STALE_LAPS:
+            return ""
+    elif state.lap < GAUGE_STALE_LAPS:
+        # Early in a fresh set there is nothing to read yet worth reading.
+        return ""
+    return "Tyre gauge when you get a straight."
 
 
 def _fuel_standing(state: RaceState) -> str:

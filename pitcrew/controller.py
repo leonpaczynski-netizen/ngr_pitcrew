@@ -2627,6 +2627,15 @@ class PitCrewController(QObject):
         """Qt thread: compress, store, and put the lap on the rack."""
         if self.session_id is None:
             return
+        # **The clock onto the lap BEFORE it is written.** The coordinator
+        # owns the clock and stamped it there, in `_on_lap` - which is a
+        # different queued slot, and Qt runs them FIFO, so the INSERT happened
+        # first and the three columns were NULL on every row ever written. A
+        # write-only column is worse than no column: the next audit trusts it.
+        # Here the row has not been written yet and the clock is a lap old at
+        # worst, which is the same instant the driver was told.
+        if self.race is not None and self.race.clock is not None:
+            self.race.stamp_clock(lap)
         frames = self.bridge.recorder.encode(rows)
 
         # **A lap has to have been driven for as long as it says it was.**
@@ -4449,7 +4458,7 @@ class PitCrewController(QObject):
         if replan is not None:
             self._voice_replan(replan)
         heartbeat_only = (call is not None and call.kind == STATUS)
-        if call is None or heartbeat_only:
+        if call is None:
             # **Colour calls rank below everything.** They only ever reach the
             # voice on a crossing that had nothing real to say - an engineer
             # who says "nice lap" over the top of a box call has actively hurt
@@ -4464,6 +4473,21 @@ class PitCrewController(QObject):
             # live reader made 553 attempts at Fuji and accepted none: its own
             # docstring calls it worth more to the model than anything else
             # said all race. Trading it for a lap count is not a trade.
+            #
+            # **So the heartbeat does not return here - it falls through and
+            # is SPOKEN.** The
+            # first attempt at this put the heartbeat in the branch above and
+            # deleted the voicing of the very thing it was protecting: STATUS
+            # took almost every crossing, hit this `return`, and never reached
+            # `voice.say`, `show_call` or the revision record. He would have
+            # turned the race HUD off and heard nothing about lap, position or
+            # time all night.
+            #
+            # The colour tier does NOT also speak on that crossing: §5.5 is
+            # one thing at a time and `test_only_one_thing_is_voiced_per_
+            # crossing` enforces it. What that tier held which could not be
+            # lost - the gauge prompt, the only wear input that exists in VR -
+            # is carried by the heartbeat itself now. See `calls._status`.
             if event.kind is EventKind.LAP_COMPLETED and replan is None:
                 self._voice_colour(event.data["lap"])
             return

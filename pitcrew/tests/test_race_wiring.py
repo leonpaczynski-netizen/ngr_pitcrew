@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import dataclasses
 
+import re
+
 import pytest
 
 from pitcrew.controller import PitCrewController
@@ -581,14 +583,27 @@ def test_colour_calls_never_speak_over_a_real_call(raced, voice, monkeypatch):
 
 
 def test_the_quiet_level_says_nothing(raced, voice):
+    """**The colour register, not the engineer.**
+
+    `"to go"` used to be a safe marker for a colour line because only
+    `_milestone` and the run-in said it. The heartbeat says "17 laps to go."
+    now, and it is not colour: it is the driver's orientation, and since
+    28 Aug 2026 it is his ONLY source for lap, position and time - he races
+    with GT7's race-information HUD off. Silencing it with a commentary
+    setting would take his instruments away to turn down the chat.
+
+    So the marker is the colour wording itself: `_milestone` says "N to go."
+    with no unit, where the heartbeat always says "N laps to go."
+    """
     controller, _, _, _ = raced
     controller.settings.colour_calls = "quiet"
     controller.start_race()
     green(controller)
     for lap_num in range(1, 10):
         a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
-    assert not any("to go" in line or "best lap" in line.lower()
-                   for line in voice.spoken)
+    colour = re.compile(r"^\d+ to go\.$")
+    assert not any(colour.match(line) or "best lap" in line.lower()
+                   for line in voice.spoken), voice.spoken
 
 
 # ------------------------------------------ the race lap's compound
@@ -886,3 +901,34 @@ def test_the_driver_is_told_when_the_engineer_stops_adapting(
     assert sum(1 for line in voice.spoken
                if "re-planning is off" in line) == said
 
+
+
+def test_the_heartbeat_actually_reaches_the_voice(raced):
+    """**The one that was missing, and the one that mattered.**
+
+    The guard that stops the heartbeat retiring the colour tier was written as
+    an early `return`, above `voice.say` - so a STATUS call, which at the
+    every-lap setting takes almost every crossing, was never spoken, never
+    shown on the screen, and never recorded in the revision chain. The driver
+    races with GT7's race-information HUD off: he would have heard nothing
+    about lap, position or time all night.
+
+    The two tests that were meant to cover it read the controller's SOURCE
+    with `inspect.getsource` and matched a string. A source-matching test
+    cannot see a `return` three lines above the call it is looking for. This
+    one drives the real slot through the real controller and watches the real
+    voice, which is the only way that defect was ever going to be caught.
+    """
+    controller, _screen, _store, _event_id = raced
+    assert controller.start_race() is True
+    controller._engineer_speaks = True
+    green(controller)
+    controller.race.state.status_every_laps = 1
+    fuel = 92.0
+    for lap_num in range(1, 5):
+        fuel -= 3.4
+        a_lap(controller, lap_num, fuel)
+
+    spoken = list(controller.voice.spoken)
+    heartbeats = [line for line in spoken if line.startswith("Lap ")]
+    assert heartbeats, f"no heartbeat reached the voice; said: {spoken}"

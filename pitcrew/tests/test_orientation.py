@@ -46,12 +46,25 @@ def test_the_lap_number_is_gt7s_count_not_the_app_s():
     assert state.lap_now() == 14
 
 
-def test_a_missed_crossing_is_named_as_two_laps_not_guessed_at():
-    """A confident wrong lap number is worse than an honest pair, and with the
-    HUD off he cannot check either against anything."""
+def test_a_corrected_crossing_is_said_flat_not_as_a_pair():
+    """**A pair that excludes the truth is worse than either number.**
+
+    This said "Lap N or M" and at Road Atlanta's measured drop of two that
+    renders "Lap 20 or 22" - a disjunction with the right answer missing from
+    it. And the same breath says "9 laps to go", which comes from
+    `laps_remaining()` and treats the same correction as certain: one quantity
+    cannot be uncertain in one clause and certain in the next.
+
+    It is certain enough to say flat. The correction comes from GT7's own
+    `laps_completed`, which is the authority here and the whole reason the
+    count is taken from it rather than from the app's own crossings.
+    """
     state = timed(lap=13)
-    state.laps_dropped_seen = 1
-    assert "Lap 13 or 14" in orientation(state)
+    state.laps_dropped_seen = 2
+    assert state.lap_now() == 15
+    said = orientation(state)
+    assert said.startswith("Lap 15."), said
+    assert " or " not in said.split(".")[0]
 
 
 def test_a_clean_count_says_one_number():
@@ -134,3 +147,36 @@ def test_a_lap_race_with_no_distance_still_says_the_lap():
 
 def test_nothing_is_said_before_the_first_crossing():
     assert orientation(RaceState(lap=0, laps_total=24)) == ""
+
+
+
+
+def test_the_clock_actually_reaches_the_lap_row(store, event_id):
+    """**A write-only column is worse than no column.**
+
+    The stamp lived in the coordinator's `_on_lap`, and the INSERT lives in
+    the controller's lap-completed slot. Both are queued to the Qt thread and
+    Qt runs them in order, so the row was written first and all three columns
+    were NULL on every lap of every race - while the schema comment promised
+    they were the record that would settle whether the lap estimate had ever
+    been right.
+    """
+    from pitcrew.race.coordinator import RaceCoordinator
+    from pitcrew.race.clock import RaceClock
+    from pitcrew.telemetry.session_state import Lap
+
+    race = RaceCoordinator({"stints": [{"laps": 20, "start_lap": 1}]})
+    race.clock = RaceClock(1800.0, now=lambda: 600.0)
+    race.clock.start()
+    lap = Lap(lap_num=5, lap_time_ms=94_000, best_lap_ms=94_000, delta_ms=0,
+              fuel_start=40.0, fuel_end=36.6, fuel_used=3.4, position=3,
+              is_pit_lap=False, is_out_lap=False)
+    race.stamp_clock(lap)
+
+    session_id = store.start_session(event_id, "race")
+    lap_id = store.add_lap(session_id, lap)
+    row = store._query("SELECT race_elapsed_s, race_remaining_s, laps_dropped "
+                       "FROM laps WHERE id = ?", (lap_id,))[0]
+    assert row["race_elapsed_s"] is not None, "the clock never reached the row"
+    assert row["race_remaining_s"] is not None
+    assert row["laps_dropped"] is not None

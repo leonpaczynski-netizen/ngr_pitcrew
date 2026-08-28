@@ -448,7 +448,6 @@ class RaceCoordinator:
     def _on_lap(self, event, packet) -> Call | None:
         lap = event.data["lap"]
         self.state.lap = lap.lap_num
-        self._stamp_clock(lap)
         # **The offset between the two lap counters, learned once, here.**
         # At a crossing the relationship is exact; mid-lap GT7 is already
         # counting the lap in progress and the offset would come out one high,
@@ -821,7 +820,7 @@ class RaceCoordinator:
             return left
         return self.clock.laps_left(lap_ms, less_s=pending * self.pit_loss_s)
 
-    def _stamp_clock(self, lap) -> None:
+    def stamp_clock(self, lap) -> None:
         """Write the race clock onto the lap, on the way past.
 
         **So that next time the answer can be checked.** A timed race's
@@ -835,6 +834,11 @@ class RaceCoordinator:
 
         Stored beside `laps_completed`, GT7's own answer to the neighbouring
         question, so one query settles both.
+
+        **Called from the controller's lap-completed slot, not from `_on_lap`
+        here.** Those are two queued slots on the same thread and Qt runs them
+        in order: the INSERT went first, so a stamp written here landed after
+        the row and never reached the database at all.
         """
         if self.clock is None or not self.clock.running:
             return
@@ -843,7 +847,11 @@ class RaceCoordinator:
             remaining = self.clock.remaining_s
             lap.race_remaining_s = (round(remaining, 2)
                                     if remaining is not None else None)
-            lap.laps_dropped = self.clock.laps_dropped
+            # **Both detectors, not just the clock's.** `laps_dropped_seen`
+            # is GT7's own counter disagreeing, and that is the one that
+            # caught Road Atlanta - recording only the clock's would omit the
+            # evidence the column exists to hold.
+            lap.laps_dropped = self.state.laps_missed()
         except Exception:                                    # noqa: BLE001
             # A lap that will not take the stamp is still a lap. The audit is
             # worth having and is worth nothing at the cost of the race.

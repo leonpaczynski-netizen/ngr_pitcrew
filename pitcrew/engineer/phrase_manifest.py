@@ -684,7 +684,14 @@ def _split_on_number(sentence: str) -> tuple[str, ...] | None:
     tail = sentence[match.end():]
     if match.group(3):
         tail = PERCENT + tail
-    return tuple(part for part in (head, *number, tail.strip()) if part)
+    tail = tail.strip()
+    # **A tail of nothing but punctuation is not a clip.** "Lap 5." ends on
+    # its number, so the tail is "." - and rendering that is a wav whose
+    # entire content is a full stop, looked up and concatenated into every
+    # heartbeat of the race. The sentence boundary is the join, not a sound.
+    if tail in {".", "!", "?", ",", ".."}:
+        tail = ""
+    return tuple(part for part in (head, *number, tail) if part)
 
 
 def _decompose(text: str) -> tuple[str, ...]:
@@ -728,26 +735,19 @@ def _decompose(text: str) -> tuple[str, ...]:
     if not rest:
         return tuple(parts)
 
-    found = _NUMBER.findall(rest)
-    if len(found) != 1:
+    # **One implementation of the split.** This was a second copy of
+    # `_split_on_number`, and the two drifted the moment one of them learned
+    # that a tail of bare punctuation is not a clip: `segments_for("Lap 5.")`
+    # went on asking for a wav containing a full stop while the per-sentence
+    # path had stopped. A line that asks for a clip the manifest no longer
+    # declares is a silent miss and a live synthesis.
+    split = _split_on_number(rest)
+    if split is None:
         # No number, or several: several means the line is combinatorial - the
         # plan summary is the one that reaches here - and splitting it would
         # invent an ordering the pack cannot honour.
         return (*parts, rest)
-
-    match = _NUMBER.search(rest)
-    whole = int(match.group(1))
-    if whole > MAX_LAPS:
-        return (*parts, rest)          # beyond the rendered words; a miss
-    number = [number_word(whole)]
-    if match.group(2) is not None:
-        number += [POINT, number_word(int(match.group(2)))]
-    head = rest[:match.start()].strip()
-    tail = rest[match.end():]
-    if match.group(3):
-        tail = PERCENT + tail
-    return tuple(part for part in (*parts, head, *number, tail.strip())
-                 if part)
+    return (*parts, *split)
 
 
 # The exact shape `_plan_summary` builds: a stop clause, an optional compound
