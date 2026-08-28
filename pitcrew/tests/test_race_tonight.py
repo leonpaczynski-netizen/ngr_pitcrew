@@ -610,9 +610,17 @@ def test_the_status_call_still_reports_when_it_has_the_lap_free():
                       laps_estimate_firm=True)
     # The heartbeat measures silence: nothing has been said for ten laps.
     state.last_said_lap = 0
+    # **The clock has to be on the state now.** He turned GT7's race HUD off
+    # on 28 Aug 2026, so minutes are a figure only this call carries - and a
+    # state without one says so out loud rather than dropping the clause,
+    # because silence there is indistinguishable from a race with no end.
+    state.race_remaining_s = 9 * 60.0
     call = next_call(state)
     assert call.kind == STATUS
-    assert "P4" in call.call and "about 5 to go" in call.call
+    assert "P4" in call.call
+    assert "Lap 10" in call.call
+    assert "9 minutes left" in call.call
+    assert "5 laps to go" in call.call
 
 
 # ------------------------------------------------------------ the register

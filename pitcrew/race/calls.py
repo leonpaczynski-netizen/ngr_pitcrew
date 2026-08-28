@@ -618,6 +618,26 @@ class RaceState:
     stops_off_said: bool = False
     # The kind of the last thing said, beside the lap it was said on.
     last_said_kind: str | None = None
+    # **Seconds left on the race clock**, for a timed race. The app timer from
+    # the green, which is the only measurement of it there is - GT7 broadcasts
+    # no race time. `None` in a lap race and before the green.
+    race_remaining_s: float | None = None
+
+    def lap_now(self) -> int:
+        """The lap he is actually on, GT7's count and not the app's.
+
+        **`state.lap` alone can run light for a whole race.** GT7 takes the
+        car over at pit entry and the crossing inside that sequence does not
+        reach the app; `laps_missed()` is what both detectors - the clock's
+        and GT7's own `laps_completed` - report about it. Road Atlanta is on
+        file: GT7's counter sat +1 above the app's on lap 1 and +2 by lap 20,
+        so the app has 21 laps of a race he drove 22 of.
+
+        `laps_remaining()` has always applied this correction. The lap NUMBER
+        never did, because nothing spoke it - and with the race HUD off it is
+        the one figure he cannot check against anything.
+        """
+        return self.lap + self.laps_missed()
 
     def only_the_heartbeat_this_lap(self) -> bool:
         """Whether this lap has had nothing but the heartbeat.
@@ -1876,22 +1896,9 @@ def _status(state: RaceState) -> Call | None:
     since = state.laps_since_anything_said()
     if since is None or since < max(1, state.status_every_laps):
         return None
-    remaining = state.laps_remaining()
     where = f"P{state.position}." if state.position else ""
-    # A timed race has no lap count to count down: the distance follows from
-    # the clock and the pace, so the figure is an estimate and is spoken as
-    # one - **and only once it can be resolved at all.** Measured on a real
-    # 30-minute race, the estimate at the first four crossings would have
-    # flipped on a median error of 0.12-0.66 s against a 2.04 s spread. In
-    # that window the honest output is the position and nothing else: a lap
-    # count no better than a coin toss, spoken with "about" in front of it, is
-    # still a lap count he will plan around.
-    about = "about " if state.race_minutes else ""
-    unresolved = state.race_minutes and not state.laps_estimate_firm
-    left = (f"{about}{remaining} to go."
-            if remaining is not None and not unresolved else "")
-    said = " ".join(part for part in (where, left, _fuel_standing(state))
-                    if part).strip()
+    said = " ".join(part for part in (orientation(state), where,
+                                      _fuel_standing(state)) if part).strip()
     if not said:
         return None
     return Call(STATUS, state.lap, said, "")
@@ -1912,6 +1919,112 @@ def fuel_reference(state: RaceState) -> str:
     without it.
     """
     return fuel_frame(state)[1]
+
+
+# Past this fraction of a timed race, he wants the laps as well as the clock.
+# **His call, and it matches the measurement.** The estimate is
+# `ceil(time left / lap)`, which is unresolvable early - on a real 30-minute
+# race the first four crossings would have flipped on a median error of
+# 0.12-0.66 s against a 2.04 s spread - and firms up as the remaining time
+# shrinks. "From the half way point I want time and laps remaining", 28 Aug
+# 2026.
+LAPS_FROM_FRACTION = 0.5
+
+# What he hears when the race clock is not available. **Said, not skipped**:
+# with GT7's race HUD off, a race with no clause about its own length is
+# indistinguishable from one with no end, and from an app that has died.
+NO_CLOCK = "I don't have the clock."
+
+
+def minutes_left(state: RaceState) -> str:
+    """The clock, in the only unit that is a measurement rather than a guess.
+
+    **Minutes are measured; the lap count is inferred over a noisy median.**
+    The app timer runs from the green and is reconciled against GT7's own
+    exact lap figures, so the seconds are as good as the green detection. The
+    lap estimate divides them by a median lap and is therefore wrong whenever
+    the median is - which is the whole argument of `laps_estimate_firm`.
+
+    With GT7's race HUD off, this is his only clock.
+    """
+    left = state.race_remaining_s
+    if left is None:
+        return ""
+    if left < 90:
+        return f"{max(0, int(round(left)))} seconds left."
+    return f"{int(round(left / 60.0))} minutes left."
+
+
+def laps_to_go(laps: int, *, uncertain: bool = False) -> str:
+    """`N laps to go.`, with its unit, because it is never said alone.
+
+    It arrives beside a clock in the same breath, and "11 minutes left, 9 to
+    go" names the unit of one figure and not the other - where the unnamed one
+    is the figure he plans around. Rule 13 is on file for exactly that.
+    """
+    if uncertain:
+        return f"{laps} or {laps + 1} laps to go."
+    return f"{laps} lap to go." if laps == 1 else f"{laps} laps to go."
+
+
+def orientation(state: RaceState) -> str:
+    """Where he is: the lap, and how much race is left.
+
+    **He turned GT7's race-information HUD off on 28 Aug 2026** - lap number,
+    position and time remaining all came off the screen, leaving car
+    information only. So none of this is a duplicate of something he can see;
+    it is the only place it exists. That is also why an unknown is said rather
+    than dropped: a clause that silently vanishes leaves him with no way to
+    tell "nothing to report" from "the app has lost the clock".
+
+    Ordering is orientation, then field, then consumable. **Not BLUF** - that
+    governs calls which instruct, and this one instructs nothing. The fuel
+    clause goes last because it is the one that escalates into next lap's
+    instruction, and the last clause is the one retained under a helmet.
+    """
+    lap = state.lap_now()
+    if lap < 1:
+        return ""
+    # A missed crossing means the number is uncertain by exactly one, and
+    # saying which two it is between beats a confident wrong one.
+    if state.laps_missed() > 0:
+        where = f"Lap {lap - state.laps_missed()} or {lap}"
+    else:
+        where = f"Lap {lap}"
+
+    # **One number per sentence, deliberately.** The voice pack plays a call
+    # by peeling known sentences off the front and splitting what is left on
+    # its single number; a sentence carrying two splits into nothing and the
+    # whole line falls through to live synthesis - a pause, on every crossing
+    # of the race, at the cadence he asked for. It is also better radio: three
+    # short units survive a helmet better than one long one.
+    if not state.race_minutes:
+        left = state.laps_remaining()
+        return f"{where}. {laps_to_go(left)}" if left else f"{where}."
+
+    clock = minutes_left(state)
+    if not clock:
+        # **Said, not skipped.** With the HUD off, a race with no clause about
+        # its own length is indistinguishable from one with no end.
+        return f"{where}. {NO_CLOCK}"
+
+    duration = state.race_minutes * 60.0
+    left = state.race_remaining_s or 0.0
+    if left > duration * (1.0 - LAPS_FROM_FRACTION):
+        return f"{where}. {clock}"
+
+    # **`laps_remaining()`, not `laps_to_go_estimate`.** The two agree once
+    # the coordinator has recomputed the distance, but only the accessor
+    # applies the missed-crossing correction - and a lap the app never saw is
+    # exactly the error this call exists to stop him inheriting.
+    laps = state.laps_remaining()
+    if laps is None:
+        return f"{where}. {clock}"
+    # **Both candidates when it genuinely is both.** `ceil` flips when the
+    # time left is near a whole number of laps, and there the answer is not
+    # unknown - it is one of two. Naming them beats picking one, and beats the
+    # silence this used to fall to.
+    return f"{where}. {clock} {laps_to_go(laps, uncertain=not state.laps_estimate_firm)}"
 
 
 def _fuel_standing(state: RaceState) -> str:

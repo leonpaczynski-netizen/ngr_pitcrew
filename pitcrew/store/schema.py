@@ -70,7 +70,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -832,6 +832,24 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # unreliable - and until now nothing recorded it, so the claim could
         # not be tested. See `session_state.Lap.laps_completed`.
         ("laps_completed", "INTEGER"),
+        # **The race clock as it read at this crossing, and what it was made
+        # of.** A timed race's whole distance is `ceil(time left / lap)`, and
+        # the driver has asked for that number to be right. Whether it IS
+        # right has never been checkable after the fact: nothing recorded the
+        # clock per lap, so a post-race audit can only re-derive elapsed time
+        # by summing lap times - which misses everything before lap 1. At
+        # Monza that gap is 67.9 s, over half a lap, and it is the difference
+        # between the estimate being wrong and the reconstruction being wrong.
+        # Three races on file and the two cannot be told apart in any of them.
+        #
+        # `race_elapsed_s` is the app timer from the green; `race_remaining_s`
+        # is what the driver is told; `laps_dropped` is the clock's own count
+        # of crossings it believes went missing. Stored beside
+        # `laps_completed`, which is GT7's answer to the same question, so one
+        # query settles it next time.
+        ("race_elapsed_s", "REAL"),
+        ("race_remaining_s", "REAL"),
+        ("laps_dropped", "INTEGER"),
         ("gear_ratios", "TEXT"),
         ("tyres_fresh", "INTEGER"),
         # Observed at the stop, not declared by the driver. `tyres_fresh` is

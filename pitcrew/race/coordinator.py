@@ -448,6 +448,7 @@ class RaceCoordinator:
     def _on_lap(self, event, packet) -> Call | None:
         lap = event.data["lap"]
         self.state.lap = lap.lap_num
+        self._stamp_clock(lap)
         # **The offset between the two lap counters, learned once, here.**
         # At a crossing the relationship is exact; mid-lap GT7 is already
         # counting the lap in progress and the offset would come out one high,
@@ -820,6 +821,35 @@ class RaceCoordinator:
             return left
         return self.clock.laps_left(lap_ms, less_s=pending * self.pit_loss_s)
 
+    def _stamp_clock(self, lap) -> None:
+        """Write the race clock onto the lap, on the way past.
+
+        **So that next time the answer can be checked.** A timed race's
+        distance is `ceil(time left / lap)`, and whether that has ever been
+        right is unanswerable from what is on disk: nothing recorded the clock
+        per lap, so an audit can only re-derive elapsed time by summing lap
+        times - which omits everything before lap 1. At Monza that omission is
+        67.9 s, over half a lap, and it is exactly the size of the error being
+        investigated. Three timed races on file and in none of them can "the
+        estimate was wrong" be told from "the reconstruction was wrong".
+
+        Stored beside `laps_completed`, GT7's own answer to the neighbouring
+        question, so one query settles both.
+        """
+        if self.clock is None or not self.clock.running:
+            return
+        try:
+            lap.race_elapsed_s = round(self.clock.elapsed_s, 2)
+            remaining = self.clock.remaining_s
+            lap.race_remaining_s = (round(remaining, 2)
+                                    if remaining is not None else None)
+            lap.laps_dropped = self.clock.laps_dropped
+        except Exception:                                    # noqa: BLE001
+            # A lap that will not take the stamp is still a lap. The audit is
+            # worth having and is worth nothing at the cost of the race.
+            log("race").warning("could not stamp the clock onto lap %s",
+                                getattr(lap, "lap_num", "?"), exc_info=True)
+
     def _update_clock_distance(self) -> Call | None:
         """A timed race's distance, from the app clock and the median lap.
 
@@ -843,6 +873,11 @@ class RaceCoordinator:
         # happened, while the clean-pace median of 119.62 s and the practice
         # median both predict sixteen. An incident lap does not make the car
         # slower but it does consume the clock, and the clock is the question.
+        # **The clock onto the state, so the engineer can say it.** With
+        # GT7's race HUD off this is the driver's only source for how much
+        # race is left, and minutes are a measurement where the lap count is
+        # an inference over a median.
+        self.state.race_remaining_s = self.clock.remaining_s
         lap_ms = self.expect.achieved_lap_time_ms() or self.planned_lap_time_ms
         left = self.clock.laps_left(lap_ms)
         self.state.clock_corroborated = self.clock.corroborated

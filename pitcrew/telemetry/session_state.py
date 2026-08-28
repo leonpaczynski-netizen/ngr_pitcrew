@@ -216,6 +216,13 @@ class Lap:
     #
     # Recorded, not yet trusted. One race settles it.
     laps_completed: int | None = None
+    # **The race clock at this crossing, stamped on the way past.** Filled by
+    # the coordinator, which owns the clock; None in practice and qualifying,
+    # where there is no race clock to read. See `schema.py`'s note on why a
+    # timed race's accuracy was never checkable without these.
+    race_elapsed_s: float | None = None
+    race_remaining_s: float | None = None
+    laps_dropped: int | None = None
     # **Seconds of this lap actually spent RACING, on a pit lap only.**
     #
     # The time from the last crossing to the moment GT7 took the car into the

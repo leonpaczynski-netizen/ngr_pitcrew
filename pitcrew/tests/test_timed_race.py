@@ -361,29 +361,61 @@ def test_a_timed_race_says_its_lap_count_is_an_estimate():
     # The status call is a heartbeat now: it needs a stretch of silence
     # behind it rather than a lap number divisible by five.
     state.last_said_lap = 0
+    # Past halfway of a 45-minute race, which is where he asked for the laps.
+    state.race_remaining_s = 1200.0
     call = next_call(state)
     assert call.kind == STATUS
-    assert call.call == "P3. about 19 to go."
+    assert "19 laps to go" in call.call, call.call
+    assert "20 minutes" in call.call, "the clock is the measurement"
 
 
-def test_a_lap_count_that_cannot_be_resolved_is_not_spoken_at_all():
-    """Measured on a real 30-minute race: at the first four crossings the
-    median only had to be wrong by 0.12-0.66 s to change the predicted lap
-    count, against a lap-to-lap spread of 2.04 s. In that window the answer is
-    not uncertain, it is unresolvable - and a coin toss with "about" in front
-    of it is still a number he will plan around."""
-    state = RaceState(lap=5, laps_total=24, race_minutes=45.0, position=3)
-    # The status call is a heartbeat now: it needs a stretch of silence
-    # behind it rather than a lap number divisible by five.
+def test_an_unresolvable_lap_count_is_named_as_two_rather_than_dropped():
+    """**This doctrine changed on 28 Aug 2026, and the reason is external.**
+
+    It used to be: at the first crossings of a timed race the median only had
+    to be wrong by 0.12-0.66 s to change the predicted lap count, against a
+    2.04 s spread, so the answer was unresolvable and the honest output was
+    the position and nothing else. That was right while GT7's HUD was showing
+    him the lap and the clock - the app was declining to add noise to figures
+    he already had.
+
+    **He turned that HUD off.** Lap, position and time remaining now exist
+    nowhere but in this call, so dropping the clause no longer means "I won't
+    guess", it means he has no orientation at all and no way to tell that from
+    an app that has died. `ceil` near a boundary is not unknown - it is one of
+    two - so both are named, and the clock, which is a measurement rather than
+    an inference, is said either way.
+    """
+    state = RaceState(lap=5, laps_total=24, race_minutes=45.0, position=3,
+                      laps_to_go_estimate=19)
+    state.race_remaining_s = 1200.0
     state.last_said_lap = 0
     call = next_call(state)
     assert call.kind == STATUS
-    assert call.call == "P3."
+    assert "19 or 20 laps to go" in call.call, call.call
+    assert "20 minutes" in call.call
+    assert "Lap 5" in call.call
 
 
-def test_with_no_position_and_no_resolvable_count_there_is_nothing_to_say():
+def test_a_clock_it_does_not_have_is_said_out_loud():
+    """With the HUD off, a race with no clause about its own length is
+    indistinguishable from one with no end."""
+    state = RaceState(lap=5, laps_total=24, race_minutes=45.0, position=3)
+    state.last_said_lap = 0
+    call = next_call(state)
+    assert call is not None
+    assert "I don't have the clock" in call.call
+
+
+def test_with_no_position_there_is_still_the_lap_and_the_clock():
+    """The other half of the same change: position was the only thing this
+    call had left when the count was dropped, so with no position there was
+    nothing at all. The lap number does not depend on either."""
     state = RaceState(lap=5, laps_total=24, race_minutes=45.0)
-    assert next_call(state) is None
+    state.race_remaining_s = 1200.0
+    state.last_said_lap = 0
+    call = next_call(state)
+    assert call is not None and "Lap 5" in call.call
 
 
 def test_a_timed_race_with_no_plan_counts_down_nothing():

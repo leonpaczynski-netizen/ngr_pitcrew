@@ -1128,8 +1128,9 @@ class Store:
                 " fuel_used, position, compound, is_pit_lap, is_out_lap, gear_ratios, "
                 " tyres_changed, fuel_added_l, tod_start_ms, tod_end_ms, "
                 " standing_start_ms, crawl_s, off_track_s, spin_s, "
-                " short_shift_rpm, laps_completed, recorded_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " short_shift_rpm, laps_completed, race_elapsed_s, "
+                " race_remaining_s, laps_dropped, recorded_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (session_id, lap.lap_num, lap.lap_time_ms, lap.delta_ms,
                  lap.fuel_start, lap.fuel_end, lap.fuel_used, lap.position,
                  lap.compound, int(lap.is_pit_lap), int(lap.is_out_lap),
@@ -1150,6 +1151,13 @@ class Store:
                  # claim that it was driven on the normal threshold.
                  getattr(lap, "short_shift_rpm", None),
                  getattr(lap, "laps_completed", None),
+                 # **The clock as it read at this crossing.** Carried on the
+                 # Lap because that is the only thing that reaches here, and
+                 # the whole point is that a post-race audit can compare the
+                 # app's answer against GT7's `laps_completed` beside it.
+                 getattr(lap, "race_elapsed_s", None),
+                 getattr(lap, "race_remaining_s", None),
+                 getattr(lap, "laps_dropped", None),
                  _now()))
             # **The declared fuel map, because no channel carries it.** It was
             # null on every lap of every session ever recorded - the cheapest

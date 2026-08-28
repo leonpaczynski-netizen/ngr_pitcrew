@@ -484,6 +484,130 @@ def spoken_openers() -> tuple[str, ...]:
     )
 
 
+# The two references the fuel clause is measured against, mirrored from
+# `calls.TO_THE_STOP` / `TO_THE_FLAG`. Imported lazily there would be a cycle;
+# a test asserts the two stay in step.
+# The uncertain form is only ever said from halfway through a timed race - his
+# rule, 28 Aug 2026 - so the count it carries is at most half a race. Forty is
+# generous against every format on file; beyond it the line falls to live
+# synthesis, which early in a race it can afford to.
+UNCERTAIN_LAPS = range(1, 41)
+
+
+def _no_clock_line() -> str:
+    from pitcrew.race.calls import NO_CLOCK
+
+    return NO_CLOCK
+
+
+def _laps_to_go_line(n: int) -> str:
+    from pitcrew.race.calls import laps_to_go
+
+    return laps_to_go(n)
+
+
+def _minutes_line() -> str:
+    from pitcrew.race.calls import RaceState, minutes_left
+
+    state = RaceState(lap=1)
+    state.race_remaining_s = 600.0
+    return minutes_left(state)
+
+
+def _seconds_line() -> str:
+    from pitcrew.race.calls import RaceState, minutes_left
+
+    state = RaceState(lap=1)
+    state.race_remaining_s = 45.0
+    return minutes_left(state)
+
+
+def _colour_milestone(laps: int) -> str:   # laps REMAINING, not lap number
+    """`colour.ColourCalls._milestone`'s wording, from the source.
+
+    **It is not enumerated anywhere and it does not produce its own tail.**
+    The tail came into the pack as a side effect of `_status` once saying
+    "about N to go.", and when that wording changed on 28 Aug 2026 the
+    milestone lines lost their clip with nothing failing except the one test
+    that names them. Taken from the source now, so the two cannot drift again.
+    """
+    from pitcrew.race.colour import ColourCalls
+
+    call = ColourCalls()._milestone(laps + 5, laps, laps + 5)
+    if call is None:
+        raise RuntimeError(
+            "the milestone wording could not be read from its source - the "
+            "pack must not fall back to a copy of it")
+    return call.call
+
+
+def _tails_of(*lines: str) -> tuple[str, ...]:
+    """What is left of each line once its one number is peeled off.
+
+    The number words are already in the pack and shared with four other
+    sentences, so a family of a hundred costs one clip.
+    """
+    tails = []
+    for line in lines:
+        split = _split_on_number(line)
+        if split:
+            tails.append(split[-1])
+    return tuple(dict.fromkeys(tails))
+
+
+TO_THE_STOP_REF = "to the stop"
+TO_THE_FLAG_REF = "to the flag"
+
+
+def orientation_lines() -> tuple[str, ...]:
+    """The heartbeat's own sentences, as families of one number each.
+
+    **He turned GT7's race HUD off on 28 Aug 2026**, so the lap, the clock and
+    the laps remaining reach him only here - and they reach him at every
+    crossing. A family that falls through to live synthesis is a pause on
+    every lap of the race, which is the one place the pack cannot afford one.
+
+    `"Lap N or M."` is deliberately absent: it is said only when a crossing
+    went missing, it carries two numbers, and it is a fault report rather than
+    a figure to plan on. It misses, and it is rare enough to.
+
+    `"N or M laps to go."` is NOT absent, though it has two numbers for the
+    same reason. It is not rare: it is what every crossing says while the
+    `ceil` sits near a boundary, which is a stretch of laps rather than an
+    instant, and it is the figure he plans the end of the race on.
+    """
+    laps = range(1, MAX_LAPS + 1)
+    return (
+        # Tails, not enumerations: `_split_on_number` peels the figure and the
+        # number words are already in the pack, shared with four other
+        # sentences. Only "N or M laps to go." is enumerated, because two
+        # numbers cannot be split - and it is not rare, it is what every
+        # crossing says while the `ceil` sits near a boundary.
+        "Lap",
+        *(f"{n} or {n + 1} laps to go." for n in UNCERTAIN_LAPS),
+        # `minutes_left` says "left" every time, so the bare form is not a
+        # family the app can produce - and 120 clips nothing will ever play
+        # is 120 clips of render time for nothing.
+        # **Derived by asking the source, never retyped.** Two copies of a
+        # spoken line drift, and the copy in the pack drifting is a silent
+        # fall to live synthesis - which is a pause on every crossing of the
+        # race at the cadence he asked for.
+        *_tails_of(_laps_to_go_line(2), _laps_to_go_line(1),
+                   _minutes_line(), _seconds_line(), _colour_milestone(10)),
+        # Where the fuel stands, which is the clause that ends every
+        # heartbeat. Both references, because `fuel_frame` produces both and
+        # a stop that gets cancelled mid-race swaps one for the other.
+        *(f"Fuel good {ref}." for ref in (TO_THE_STOP_REF, TO_THE_FLAG_REF)),
+        *(f"spare {ref}." for ref in (TO_THE_STOP_REF, TO_THE_FLAG_REF)),
+        *(f"short {ref} on current burn."
+          for ref in (TO_THE_STOP_REF, TO_THE_FLAG_REF)),
+        "No burn figure yet.",
+        # Imported, never retyped: two copies of a spoken line drift, and the
+        # one in the pack drifting is a silent fall to live synthesis.
+        _no_clock_line(),
+    )
+
+
 def clips() -> tuple[str, ...]:
     """Everything the render tool should produce, de-duplicated."""
     everything = [
@@ -496,6 +620,7 @@ def clips() -> tuple[str, ...]:
         *plan_single_part_lines(),
         *number_fragments(),
         *fuel_fragments(),
+        *orientation_lines(),
         *race_call_lines(),
         *spoken_openers(),
     ]
@@ -531,10 +656,35 @@ def _reusable_lines() -> frozenset[str]:
     proactive call costs the pack nothing but the words that join them.
     """
     return frozenset((*fixed_lines(), *position_lines(), *compound_lines(),
+                      *orientation_lines(),
                       *spoken_openers(),
                       *box_when_lines(), *box_fuel_lines(),
                       *laps_remaining_lines(), *plan_single_part_lines(),
                       *call_openers()))
+
+
+def _split_on_number(sentence: str) -> tuple[str, ...] | None:
+    """One sentence as (words before, the number, words after), or None.
+
+    None where it has no number or more than one - several means the wording
+    is combinatorial and splitting it would invent an ordering the pack cannot
+    honour.
+    """
+    found = _NUMBER.findall(sentence)
+    if len(found) != 1:
+        return None
+    match = _NUMBER.search(sentence)
+    whole = int(match.group(1))
+    if whole > MAX_LAPS:
+        return None
+    number = [number_word(whole)]
+    if match.group(2) is not None:
+        number += [POINT, number_word(int(match.group(2)))]
+    head = sentence[:match.start()].strip()
+    tail = sentence[match.end():]
+    if match.group(3):
+        tail = PERCENT + tail
+    return tuple(part for part in (head, *number, tail.strip()) if part)
 
 
 def _decompose(text: str) -> tuple[str, ...]:
@@ -556,9 +706,24 @@ def _decompose(text: str) -> tuple[str, ...]:
         if rest in _reusable_lines():
             return (*parts, rest)
         head, separator, tail = rest.partition(". ")
-        if not separator or f"{head}." not in _reusable_lines():
+        if not separator:
             break
-        parts.append(f"{head}.")
+        sentence = f"{head}."
+        if sentence in _reusable_lines():
+            parts.append(sentence)
+            rest = tail
+            continue
+        # **A sentence that is not a clip is split on its own number, and the
+        # walk goes on.** It used to stop here and hand back everything that
+        # followed as one clip, which was fine while at most one sentence in a
+        # call carried a number. The heartbeat carries up to four - the lap,
+        # the clock, the laps remaining and the fuel - so stopping at the
+        # first would have made every crossing of the race a pack miss, and
+        # rendering the combinations whole is tens of thousands of files.
+        split = _split_on_number(sentence)
+        if split is None:
+            break
+        parts.extend(split)
         rest = tail
     if not rest:
         return tuple(parts)
