@@ -400,14 +400,16 @@ def test_the_clock_is_rounded_down_so_it_never_flatters():
 # ------------------------- guards driven through the real coordinator, not by
 # ------------------------- hand-setting the state the coordinator computes
 
-def a_clocked_race(*, pit_loss_s=20.0, stints=2, minutes=30.0, elapsed=0.0):
+def a_clocked_race(*, pit_loss_s=20.0, stints=2, minutes=30.0, elapsed=0.0,
+                   pit_loss_measured=True):
     from pitcrew.race.clock import RaceClock
     from pitcrew.race.coordinator import RaceCoordinator
 
     plan = {"stints": [{"laps": 10, "compound": "RS", "fuel_l": 60.0,
                         "start_lap": 1 + 10 * n} for n in range(stints)],
             "binding_constraint": "fuel"}
-    race = RaceCoordinator(plan, pit_loss_s=pit_loss_s)
+    race = RaceCoordinator(plan, pit_loss_s=pit_loss_s,
+                           pit_loss_measured=pit_loss_measured)
     race.state.race_minutes = minutes
     clock = {"s": elapsed}
     race.clock = RaceClock(minutes * 60.0, now=lambda: clock["s"])
@@ -496,10 +498,17 @@ def test_the_stop_is_priced_from_the_clock_and_is_usually_silent():
 
 
 def test_an_unmeasured_stop_cost_is_not_spoken_as_one():
-    """`pit_loss_secs` is `declared` on every event on file and Watkins
-    measured 15.7 s ex-fuel against a typed-in 20. Rules 3 and 5: a cost
-    nobody has measured is not a cost to state."""
-    race = a_clocked_race(pit_loss_s=None)
+    """**A typed-in default is not a measurement.**
+
+    `events.pit_loss_secs` is `REAL NOT NULL DEFAULT 20.0`, so a test on the
+    VALUE can never fire - the first draft of this guard had one, called it a
+    safeguard, and shipped the app's own default as a measured cost. The
+    source column is the only thing that knows, and it reads `declared` or
+    NULL on all ten events on file. Road Atlanta's real ex-fuel loss works out
+    at about 23.7 s against that typed 20, which is the difference between
+    silence and the one correct call of that race.
+    """
+    race = a_clocked_race(pit_loss_measured=False)
     state = drive(race, lap=5, lap_ms=100_000, elapsed=990.0)
     assert state.stop_costs_laps is None
     state.race_remaining_s = race.clock.remaining_s
@@ -521,3 +530,44 @@ def test_the_stop_question_is_answered_against_this_crossing_s_distance():
         "self.state.stop_pending = "), (
         "the stop question is being asked against a stale distance")
 
+
+
+def test_the_fill_flag_is_also_decided_against_this_crossing_s_distance():
+    """**The same stale read, in the branch that sizes fuel.**
+
+    `laps_estimate_firm` asks `_pending_stops()`, which asks
+    `stop_still_needed`, which reads `laps_remaining()` off `laps_total`. Asked
+    above the write it measures this crossing against the previous crossing's
+    distance - and unlike `stop_pending`, this one decides the FILL: at the
+    crossing where a stop stops being needed it asked for 6.00 L of margin
+    where 1.20 L is right, about 4.8 s stationary at the measured rate.
+
+    `stop_pending` was moved below the write for exactly this reason and this
+    branch was left above it, which is the worse half.
+    """
+    import inspect
+
+    from pitcrew.race.coordinator import RaceCoordinator
+
+    body = inspect.getsource(RaceCoordinator._update_clock_distance)
+    assert body.index("self.state.laps_total = ") < body.index(
+        "self.state.laps_estimate_firm = "), (
+        "the fill flag is being decided against a stale distance")
+
+
+def test_the_fill_flag_follows_the_stop_it_was_told_about():
+    """Behavioural, because the ordering check above is a source read and
+    those have been blind three times this week. Same state, both answers."""
+    race = a_clocked_race()
+    race.expect.sigma_ms = lambda: 500.0
+    state = drive(race, lap=12, lap_ms=100_000, elapsed=1350.0)
+    assert state.stop_pending is True
+    assert state.laps_estimate_firm is False, (
+        "a pending stop keeps the fill off firm")
+
+    # The stop is taken: the flag has to follow on the same crossing.
+    race._apply_stint(1)
+    state = drive(race, lap=13, lap_ms=100_000, elapsed=1450.0)
+    assert state.stop_pending is False
+    assert state.laps_estimate_firm is True, (
+        "with no stop left the fill goes back to the scatter margin")

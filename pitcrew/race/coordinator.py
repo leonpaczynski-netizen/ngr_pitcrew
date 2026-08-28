@@ -139,6 +139,7 @@ class RaceCoordinator:
                  # path reads it. None leaves every figure exactly as it was.
                  pit_loss_s: float | None = None,
                  mandatory_stops: int = 0,
+                 pit_loss_measured: bool = False,
                  now=None) -> None:
         self.phase = RacePhase.IDLE
         self.plan = plan or {}
@@ -187,6 +188,7 @@ class RaceCoordinator:
         # does not say keeps every stop it named - see `calls.stop_still_needed`
         # for the Fuji race this is on file from.
         self.state.plan_binding_constraint = self.plan.get("binding_constraint")
+        self.pit_loss_measured = bool(pit_loss_measured)
         self._mandatory_stops = int(mandatory_stops or 0)
         self._note_mandatory_stops()
         # **The app's own race clock**, built at arming and started at the
@@ -878,13 +880,22 @@ class RaceCoordinator:
         on a 100 s lap only removes a lap when the remaining time happens to
         sit inside 20 s of a whole number of them.
 
-        `None` where nothing has measured a stop at this circuit -
-        `pit_loss_s` is `NOT NULL DEFAULT 20.0` on the event but the source is
-        `declared` on every row on file, and Watkins measured 15.7 s ex-fuel
-        against that 20. An unmeasured cost is not a cost to speak.
+        **`None` unless `events.pit_loss_source` says `measured`**, and that
+        is the whole of the check. The column is `REAL NOT NULL DEFAULT 20.0`,
+        so `pit_loss_s` is never falsy and a test on the VALUE is unreachable
+        - the first draft of this had one, called it a safeguard, and shipped
+        the app's own untouched default as a measured cost. `schema.py` says
+        it in as many words: no reader may treat the value as declared without
+        the source saying so.
+
+        It is not academic. Road Atlanta's real ex-fuel loss works out at
+        about 23.7 s from the archive - the pit lap less the green median,
+        less the fuel taken at the declared rate - against the typed 20, and
+        that difference is the one crossing of that race where the stop truly
+        cost a lap and this said nothing.
         """
         pending = self._pending_stops()
-        if not pending or not self.pit_loss_s or left is None:
+        if not pending or not self.pit_loss_s or not self.pit_loss_measured:
             return None
         with_stop = self.clock.laps_left(
             lap_ms, less_s=pending * self.pit_loss_s)
@@ -1014,10 +1025,8 @@ class RaceCoordinator:
         # direction, changed by accident and stated nowhere. Whether he wants
         # that narrower fill is his call to make out loud, not one to inherit
         # from a refactor.
-        self.state.laps_estimate_firm = bool(
-            margin is not None and sigma is not None
-            and margin >= sigma / 1000.0
-            and not self._pending_stops())
+        _firm_noise = bool(margin is not None and sigma is not None
+                           and margin >= sigma / 1000.0)
         # What the VOICE needs, which is a different question: is the number
         # good enough to say flat? Noise, plus the bias the noise test cannot
         # see. Nothing sizes a fill off this.
@@ -1089,6 +1098,17 @@ class RaceCoordinator:
         # stop question wrongly whenever the two differed.
         self.state.stop_pending = self._pending_stops() > 0
         self.state.stop_costs_laps = self._stop_costs_laps(lap_ms, left)
+        # **Below the `laps_total` write, and this is why.** `_pending_stops`
+        # asks `stop_still_needed`, which reads `laps_remaining()`, which
+        # reads `laps_total` - so asked above the write it measures this
+        # crossing against the previous crossing's distance. `stop_pending`
+        # was moved for exactly that reason and this branch was left behind,
+        # which is worse: it sizes the FILL. Measured at the crossing where a
+        # stop stops being needed, it asked for 6.00 L of margin where 1.20 L
+        # is right - 4.8 L, about 4.8 s stationary at the measured rate, in
+        # the direction he has refused.
+        self.state.laps_estimate_firm = bool(
+            _firm_noise and not self.state.stop_pending)
         if left > 0:
             return None
         # **The flag.** The app timer has expired and a lap has just been

@@ -4133,6 +4133,11 @@ class PitCrewController(QObject):
             # fuel path only, to keep a stop's own minute of clock out of the
             # distance the next fill is sized against.
             pit_loss_s=event.get("pit_loss_secs"),
+            # **The source, not just the value.** The column carries a
+            # `NOT NULL DEFAULT 20.0`, so the figure alone cannot say
+            # whether anyone ever measured a stop here.
+            pit_loss_measured=(event.get("pit_loss_source")
+                               == "measured"),
             practice_lap_samples=practice_laps,
             practice_fuel_samples=practice_laps)
         # **The interval he asked for, reaching the race.** Built, tested, and
