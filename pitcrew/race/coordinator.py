@@ -288,18 +288,32 @@ class RaceCoordinator:
 
     # ------------------------------------------------------------------ laps
 
-    def _apply_stint(self, index: int) -> None:
+    def _apply_stint(self, index: int, *, over_a_stop: bool = False) -> None:
+        """Move to stint `index`.
+
+        `over_a_stop` says a set of tyres has just been fitted, which is the
+        one time an unnamed compound must not be read as "unchanged".
+        """
         self.state.stint_index = index
         if index >= len(self._stints):
             self.state.stint_ends_on_lap = None
             self.state.next_compound = None
             return
         stint = self._stints[index]
-        # The compound on the car now. Kept where the plan names one and left
-        # alone where it does not - a re-plan adopted mid-race carries no
-        # compound, and the rubber on the car has not changed because of it.
+        # The compound on the car now. Named by the plan, or - when the plan
+        # does not name one - unchanged, because a re-plan adopted mid-race
+        # carries no compound and the rubber has not changed because of it.
+        #
+        # **Except across a stop, where "unchanged" is false and stale.**
+        # Fresh rubber went on and the plan cannot say which, so the honest
+        # value is `None` and not the last stint's compound (CLAUDE.md §4.3).
+        # `_tag_lap_compound` writes this onto every lap of the stint, and its
+        # own docstring is the argument: a wear rate attributed to the wrong
+        # tyre is not a gap in the model, it is a corruption of it.
         if stint.get("compound"):
             self.state.tyre_compound = stint["compound"]
+        elif over_a_stop:
+            self.state.tyre_compound = None
         start = stint.get("start_lap") or 1
         self.state.stint_ends_on_lap = start + stint.get("laps", 0) - 1
         following = self._stints[index + 1] if index + 1 < len(self._stints) else None
@@ -347,7 +361,8 @@ class RaceCoordinator:
             # call for the stint after it.
             clear_stint(self.state,
                         tyres_changed=event.data.get("tyres_changed"))
-            self._apply_stint(self.state.stint_index + 1)
+            self._apply_stint(self.state.stint_index + 1,
+                              over_a_stop=True)
             return None
         if event.kind is EventKind.RACE_FINISHED:
             return self._on_finish(event)
@@ -997,7 +1012,7 @@ class RaceCoordinator:
         """Stops still in the plan from here, for the re-plan comparison."""
         return max(0, len(self._stints) - 1 - self.state.stint_index)
 
-    def adopt(self, stint_laps) -> None:
+    def adopt(self, stint_laps, *, compounds=None, fuel_l=None) -> None:
         """Take on a re-plan the driver accepted.
 
         The stints already completed are left alone: what changes is the
@@ -1009,9 +1024,29 @@ class RaceCoordinator:
         done = self._stints[:self.state.stint_index]
         start = self.state.lap + 1
         fresh = []
-        for laps in stint_laps:
-            fresh.append({"laps": laps, "compound": None, "fuel_l": None,
-                          "start_lap": start})
+        planned = list(self._stints[self.state.stint_index:])
+        for offset, laps in enumerate(stint_laps):
+            # **What the re-planner did not decide is carried, not nulled.**
+            # A re-plan changes the SHAPE of the race - how many laps each
+            # stint runs - and it says nothing about what rubber goes on or
+            # how much fuel goes in. Writing `None` over the plan's answers
+            # threw both away on the first adaptation: "Box this lap" lost the
+            # compound it was going to name, and "how much fuel do I take"
+            # lost its answer, on a plan that had said RM and 48 litres.
+            #
+            # Carried positionally off the plan of record, and only where the
+            # re-planner supplied nothing of its own. Where the shapes no
+            # longer line up there is no answer to carry, and `None` there is
+            # the truth rather than a discard.
+            was = planned[offset] if offset < len(planned) else {}
+            compound = (compounds[offset]
+                        if compounds is not None and offset < len(compounds)
+                        else was.get("compound"))
+            litres = (fuel_l[offset]
+                      if fuel_l is not None and offset < len(fuel_l)
+                      else None)
+            fresh.append({"laps": laps, "compound": compound,
+                          "fuel_l": litres, "start_lap": start})
             start += laps
         self._stints = done + fresh
         self._apply_stint(self.state.stint_index)
@@ -1085,11 +1120,21 @@ def context_from_stored(stored: dict, event: dict) -> PlanContext:
     beside the event they still describe the race they were built for; read
     literally they would refuse every timed plan ever approved, on race day,
     which is the one moment a refusal cannot be worked around.
+
+    **Read key by key, never splatted.** `PlanContext(**stored)` raises
+    `TypeError` on any key the dataclass does not declare, and the caller is
+    `start_race`, on the grid, with no guard around it - so one extra field in
+    a plan written outside the app would take the race down at the moment a
+    refusal cannot be worked around. A context is data from a file now, not
+    only something this app wrote.
     """
     if "race_minutes" in stored:
-        return PlanContext(**stored)
-    length = context_from_event({"race_type": event.get("race_type"),
-                                 "race_laps": stored.get("race_laps")})
+        length = PlanContext(car="", track="", layout=None,
+                             race_laps=int(stored.get("race_laps") or 0),
+                             race_minutes=stored.get("race_minutes"))
+    else:
+        length = context_from_event({"race_type": event.get("race_type"),
+                                     "race_laps": stored.get("race_laps")})
     return PlanContext(
         car=stored.get("car") or "",
         track=stored.get("track") or "",

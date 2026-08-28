@@ -71,8 +71,9 @@ from pitcrew.store.db import (DEFAULT_SHEET_PURPOSE, WEAR_HUD_VIDEO,
                               Store)
 from pitcrew.store.identity import IDENTITY_OK
 from pitcrew.race.calls import STAY_OUT, fuel_target_l, fuel_to_flag_l
-from pitcrew.race.coordinator import PlanContext, RaceCoordinator
-from pitcrew.race.expectations import PRACTICE, Expectation
+from pitcrew.race.coordinator import (PlanContext, RaceCoordinator,
+                                      context_from_stored)
+from pitcrew.race.expectations import PRACTICE
 from pitcrew.race.hud_calibration import note_frame_red
 from pitcrew.race.incident_watch import IncidentWatch
 from pitcrew.race.straight import Straight
@@ -93,8 +94,9 @@ from pitcrew.race.temps import measured_temp_window
 from pitcrew.race.brief import Instruments, brief, lost_the_gauge
 from pitcrew.race.quali_fuel import qualifying_fuel
 from pitcrew.race.quali_fuel import refusal as quali_fuel_refusal
-from pitcrew.strategy.certify import certify
+from pitcrew.strategy.certify import certify, certify_for_event
 from pitcrew.strategy.evidence import build_inputs
+from pitcrew.strategy.execution import stamp
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.selftest import LISTEN_S, check_feed
 from pitcrew.telemetry.listener import (
@@ -3955,38 +3957,17 @@ class PitCrewController(QObject):
         plan = self._plans[index]
         payload = plan.as_dict()
         payload["export"] = plan.as_export(self._inputs)
-        # **The plan carries the two numbers it expects to execute.** The
-        # driver asked for exactly this: a median lap time and a fuel burn
-        # stored with the plan, so the engineer has something to reference lap
-        # to lap when deciding if and how the plan needs adjusting. Both
-        # travel with their sample count and their source, because a burn from
-        # three practice laps and one from fourteen are not the same claim.
-        # `hydrate=set()`: this is a COUNT. The default decodes every
-        # practice lap's telemetry to produce one integer - 2.5 s on the
-        # active event and 9.4 s on the largest, against 1.0 ms, and on the
-        # Qt thread at every race start and plan approval.
-        practice_laps = len(counted_laps(
-            event_lap_inputs(self.store, event["id"], "practice",
-                             hydrate=set())))
-        payload["expects"] = Expectation(
-            lap_time_ms=self._inputs.lap_time_ms or None,
-            lap_time_samples=practice_laps,
-            lap_time_source=PRACTICE,
-            fuel_per_lap_l=self._inputs.fuel_per_lap_l,
-            fuel_samples=practice_laps,
-            fuel_source=PRACTICE,
-            wear_per_lap=self._inputs.wear_per_lap,
-        ).as_plan()
-        # What the plan was built for. Without this the race-day guard
-        # has nothing to check against and silently always passes.
-        context = self._race_context(event)
-        payload["context"] = {
-            "car": context.car,
-            "track": context.track,
-            "layout": context.layout,
-            "race_laps": context.race_laps,
-            "race_minutes": context.race_minutes,
-        }
+        # **The plan carries the two numbers it expects to execute, and what it
+        # was built for.** Both blocks come from `strategy.execution.stamp`,
+        # which is the one implementation of them - the app's optimiser is no
+        # longer the only author, and a plan from the desk that arrived without
+        # them armed and then ran blind, every per-lap comparison reporting
+        # nothing rather than reporting a problem. `inputs` and `event` are
+        # handed in because this caller already has them: without them `stamp`
+        # rebuilds `build_inputs`, which walks every practice lap, on the Qt
+        # thread at every plan approval.
+        payload = stamp(self.store, event["id"], payload,
+                        inputs=self._inputs, event=event)
         strategy_id = self.store.save_strategy(
             event["id"], payload, label=plan.label(),
             evidence={"missing": self._inputs.missing()})
@@ -4001,6 +3982,59 @@ class PitCrewController(QObject):
         self._refresh_race_options(event)
         self.refresh_nav_state()
         return strategy_id
+
+    def approve_stored_strategy(self, strategy_id: int) -> bool:
+        """Approve a plan already in the store, whoever wrote it.
+
+        **The other approval path can only approve the app's own work.**
+        `approve_strategy` takes an INDEX into `self._plans`, which is
+        `recommend()`'s output and nothing else, so a plan authored at the desk
+        could be stored and certified and then had no route to the grid at all
+        - it was visible to nobody and approvable by nothing.
+
+        Certified here and not merely on the way in. A candidate can be days
+        old: the tyre evidence behind it, the compounds declared for the event
+        and the race distance itself can all have moved since, and the plan
+        that was driveable when it was written may not be driveable now.
+        `start_race` certifies once more against the evidence of the moment,
+        which is the last gate; this is the one that stops an undriveable plan
+        wearing the word "approved" on the Race screen in the meantime.
+        """
+        event = self.active_event()
+        if event is None:
+            return False
+        row = next((s for s in self.store.list_strategies(event["id"])
+                    if s["id"] == strategy_id), None)
+        if row is None:
+            if self.strategy is not None:
+                self.strategy.set_status(
+                    "That plan is not on file for this event.", warn=True)
+            return False
+
+        certificate = certify_for_event(self.store, event["id"], row["plan"])
+        if not certificate.certified:
+            if self.strategy is not None:
+                self.strategy.set_status(
+                    f"Not approved. {certificate.describe()}", warn=True)
+            log("strategy").warning("refused %r: %s", row["label"],
+                                    "; ".join(certificate.refusals))
+            return False
+
+        self.store.approve_strategy(strategy_id)
+        # **The accepts are logged too, not only the refusals** - CLAUDE.md
+        # rule 10. A log that only ever records refusals cannot answer "which
+        # plan was armed", which is the first question a debrief asks.
+        log("strategy").info("approved %r (id %d): %s", row["label"],
+                             strategy_id, certificate.describe())
+        if self.strategy is not None:
+            self.strategy.note(
+                f"{row['label'] or 'That plan'} approved. It is the race plan "
+                f"until you approve another."
+                + (" " + certificate.describe() if certificate.warnings
+                   or certificate.unchecked else ""))
+        self._refresh_race_options(event)
+        self.refresh_nav_state()
+        return True
 
     # ------------------------------------------------------------------ race
 
@@ -4094,7 +4128,15 @@ class PitCrewController(QObject):
 
         actual = self._race_context(event)
         stored = (plan or {}).get("context")
-        planned = PlanContext(**stored) if stored else None
+        # **`context_from_stored`, not `PlanContext(**stored)`.** It was
+        # written for this call site, its docstring says so, and it was reached
+        # only from a test file - the same shape of defect as every other
+        # "exists, documented, never called" in this codebase. Splatting a
+        # stored dict raises `TypeError` on any key the dataclass does not
+        # declare, on the grid, with nothing catching it; and a context saved
+        # with the minutes in `race_laps` reads as a lap race and gets a valid
+        # timed plan refused on race day.
+        planned = context_from_stored(stored, event) if stored else None
         if not self.race.arm(planned, actual):
             self.race_screen.set_status(
                 f"Plan refused: {self.race.refusal}", warn=True)
@@ -4777,7 +4819,8 @@ class PitCrewController(QObject):
         self._record_resolution(resolution)
         offer = resolution.offer
         if accepted and offer.stint_laps and self.race is not None:
-            self.race.adopt(offer.stint_laps)
+            self.race.adopt(offer.stint_laps,
+                            compounds=offer.stint_compounds or None)
         # The question is answered, so it stops being asked.
         if self.race_screen is not None:
             self.race_screen.hide_offer()

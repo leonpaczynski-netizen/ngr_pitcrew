@@ -263,6 +263,11 @@ class Replan:
     reason: str
     stops: int | None = None
     stint_laps: tuple[int, ...] = ()
+    # The rubber the re-planner chose for each of those stints. `recommend`
+    # has always returned it on `Stint.compound` and this dataclass dropped it
+    # on the floor, so `adopt` had nothing to take and wrote `None` over the
+    # plan's own answer. A compound is not a detail of a stop, it is the stop.
+    stint_compounds: tuple[str | None, ...] = ()
     gain_s: float = 0.0
     confidence: str = "medium"
     # The lap the next stop would fall on under this answer, or None where the
@@ -325,6 +330,7 @@ class Replan:
             "verdict": self.verdict,
             "stops": self.stops,
             "stint_laps": list(self.stint_laps),
+            "stint_compounds": list(self.stint_compounds),
             "next_stop_lap": self.next_stop_lap,
             "laps_to_next_stop": self.laps_to_next_stop,
             "gain_s": round(self.gain_s, 1),
@@ -844,6 +850,7 @@ def assess(*, laps_done: int, laps_total: int | None,
         detail,
         stops=best.stops,
         stint_laps=tuple(stint.laps for stint in best.stints),
+        stint_compounds=tuple(stint.compound for stint in best.stints),
         gain_s=gain,
         confidence=confidence,
         next_stop_lap=next_stop,
