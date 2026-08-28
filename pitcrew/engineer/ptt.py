@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import queue
 import threading
 
 from pitcrew.diagnostics import log
@@ -50,6 +51,31 @@ from pitcrew.engineer.intents import (
 # `gate.check_audio`, which threw away the entire transcript for being long.
 MAX_CAPTURE_S = 6.0
 SAMPLE_RATE = 16_000
+
+# **How long a key-down may stand with no key-up before it is assumed lost.**
+#
+# `KeyboardListener._down` exists to swallow auto-repeat: a held key produces
+# more key-downs with no key-up between them, and each one would otherwise
+# toggle the radio. The latch is right, and it is also a trap, because the one
+# thing that clears it is the key-up - and on Windows a key-up is not
+# guaranteed to arrive. `pynput` reads the button through a `WH_KEYBOARD_LL`
+# hook, and a hook procedure that does not return inside
+# `HKCU\Control Panel\Desktop\LowLevelHooksTimeout` - unset on this machine,
+# so the 300 ms default - simply stops being given events. Measured 28 Aug
+# 2026: the opening burst alone took 382-787 ms on the button thread, so
+# **every** press overran it, **every** opening key-up was dropped, and the
+# next press was then eaten by the latch. Eleven exchanges on record between
+# 22 and 28 Aug, and all eleven closed on `MAX_CAPTURE_S` rather than on a
+# second tap. The driver, 28 Aug: *"second push either went quiet or did not
+# work."*
+#
+# Running the work off the hook thread is the fix; this is the guard that
+# stops a future slow frame - or a machine under load - putting the button
+# back in the same state silently. Two seconds is far longer than any tap and
+# far shorter than the radio cap, so a lost key-up costs him nothing.
+# **Toggle mode only.** In hold mode the latch tracks a key that really is
+# held, and clearing it would end his question mid-sentence.
+LOST_KEY_UP_S = 2.0
 
 # What the microphone calls itself while it holds a stream open, for the log
 # line a deferred device rebuild writes. See `audio_devices.begin_playback`.
@@ -170,6 +196,12 @@ class PushToTalk:
         self._toggle = toggle
         self._recording = False
         self._deadline: threading.Timer | None = None
+        # The thread that actually does what a press asks for. Built on the
+        # first dispatch rather than here, so the many `PushToTalk`s a test
+        # session constructs do not each leave a thread parked on a queue.
+        self._presses: queue.Queue | None = None
+        self._worker: threading.Thread | None = None
+        self._worker_lock = threading.Lock()
         # Never built under pytest: rendering one opens a real PortAudio
         # output stream, which `conftest` forbids and is right to. A test that
         # wants the bursts injects them.
@@ -220,20 +252,85 @@ class PushToTalk:
             self.start()
 
     def start(self) -> None:
+        """Wire the button up - to the worker, never to the work.
+
+        **Nothing slow may run on pynput's thread.** Its callbacks are the
+        body of a `WH_KEYBOARD_LL` hook procedure (`pynput/_util/win32.py`
+        calls them from inside `_handler`), and Windows stops delivering
+        events to a hook that does not return inside `LowLevelHooksTimeout` -
+        300 ms by default, against a measured 382-787 ms for the opening
+        burst alone. What that cost was not a slow button but a *dead* one:
+        see `LOST_KEY_UP_S` for the whole mechanism. So the hook thread only
+        ever puts a callable on a queue now, and the queue is what keeps two
+        taps in the order he pressed them.
+        """
         if self._listener is not None:
             if self._toggle:
                 # Button-up does nothing: one tap opens, the next closes.
-                self._listener.start(self.tap, lambda: None)
+                self._listener.start(lambda: self._dispatch(self.tap),
+                                     lambda: None,
+                                     lost_key_up_after_s=LOST_KEY_UP_S)
             else:
-                self._listener.start(self.begin, self.end)
+                self._listener.start(lambda: self._dispatch(self.begin),
+                                     lambda: self._dispatch(self.end))
             self._listening = True
+
+    # ------------------------------------------------------------- the worker
+    #
+    # One thread, one queue, in order. Order is why it is a queue and not a
+    # thread per press: an open still sitting in its half-second burst and a
+    # close arriving on top of it have to happen that way round, or the close
+    # ends a radio that is not open yet.
+
+    def _dispatch(self, action) -> None:
+        """Run `action` off the button thread, in the order it was asked."""
+        with self._worker_lock:
+            if self._presses is None:
+                self._presses = queue.Queue()
+                self._worker = threading.Thread(
+                    target=self._serve, args=(self._presses,),
+                    name="PitCrewPTT", daemon=True)
+                self._worker.start()
+            self._presses.put(action)
+
+    @staticmethod
+    def _serve(presses) -> None:
+        """Take the queue as an argument, not off `self`.
+
+        `stop` drops the attribute so a restart builds a fresh queue; a worker
+        reading `self._presses` each time round would then start serving the
+        new one and the sentinel meant for it would never be seen.
+        """
+        while True:
+            action = presses.get()
+            if action is None:
+                return
+            try:
+                action()
+            except Exception:                   # noqa: BLE001
+                # `tap`, `begin` and `end` all guard themselves and answer the
+                # driver. This is the backstop that keeps the thread alive if
+                # one of them ever fails to - a dead worker is a dead button.
+                log("ptt").error("push to talk failed off the button thread",
+                                 exc_info=True)
+
+    def _settle(self, timeout: float = 5.0) -> bool:
+        """Wait for every dispatched press to finish. The tests' join point."""
+        with self._worker_lock:
+            if self._presses is None:
+                return True
+        done = threading.Event()
+        self._dispatch(done.set)
+        return done.wait(timeout)
 
     def tap(self) -> None:
         """One press of the button, in toggle mode.
 
-        Open the radio, or close it and answer. Guarded the same way `begin`
-        and `end` are, because this is the outermost frame on pynput's hook
-        thread and an escaping exception there kills the button for the race.
+        Open the radio, or close it and answer. Reached through `_dispatch`
+        rather than from the hook itself - see `start` - so it may now take as
+        long as opening a card and a microphone actually takes. Still guarded:
+        it is the outermost frame the driver has, and an exception getting
+        past it would leave the radio armed with nothing ever coming back.
         """
         try:
             if self._recording:
@@ -269,11 +366,23 @@ class PushToTalk:
         # guaranteed; here it is not, and a radio left open would swallow the
         # capture cap and then sit there. The cap closes it and answers.
         self._cancel_deadline()
-        self._deadline = threading.Timer(MAX_CAPTURE_S + 0.5, self._expired)
+        # Through the queue rather than straight off the timer thread: the cap
+        # and a second tap can land together, and one of them has to be second.
+        self._deadline = threading.Timer(
+            MAX_CAPTURE_S + 0.5, lambda: self._dispatch(self._expired))
         self._deadline.daemon = True
         self._deadline.start()
 
-    def _close_radio(self) -> None:
+    def _close_radio(self, why: str = "the second press") -> None:
+        """Shut the radio, and say which of the two ways it shut.
+
+        **The accept is logged, not only the refusal** - CLAUDE.md rule 10.
+        Only the cap used to write a line, so a log full of *"closed on the
+        cap - no second press"* read as a driver who never pressed again
+        rather than as a button that was eating every second press, and it
+        read that way for eleven exchanges over six days.
+        """
+        log("ptt").info("radio closed on %s", why)
         self._recording = False
         self._cancel_deadline()
         self.end()
@@ -282,9 +391,7 @@ class PushToTalk:
         """The capture cap reached with no second press."""
         if not self._recording:
             return
-        log("ptt").info("radio closed on the %.0fs cap - no second press",
-                        MAX_CAPTURE_S)
-        self._close_radio()
+        self._close_radio(f"the {MAX_CAPTURE_S:.0f}s cap - no second press")
 
     @staticmethod
     def _burst(tone) -> None:
@@ -310,6 +417,15 @@ class PushToTalk:
         if self._listener is not None:
             self._listener.stop()
         self._listening = False
+        self._cancel_deadline()
+        # The radio does not survive the session it was opened in. Left set,
+        # it makes the first tap of the next session a close - CLAUDE.md's
+        # rule 11, and the shape it always takes.
+        self._recording = False
+        with self._worker_lock:
+            presses, self._presses, self._worker = self._presses, None, None
+        if presses is not None:
+            presses.put(None)           # the sentinel that ends `_serve`
 
     # ------------------------------------------------------------- the cycle
     #
@@ -527,16 +643,27 @@ class KeyboardListener:
         self._key = key.lower()
         self._listener = None
         self._down = False
+        self._stuck: threading.Timer | None = None
 
-    def start(self, on_press, on_release) -> None:
+    def start(self, on_press, on_release, *,
+              lost_key_up_after_s: float | None = None) -> None:
+        """Bind the button.
+
+        `lost_key_up_after_s` is how long `_down` may stand unreleased before
+        the key-up is written off as never having arrived - `LOST_KEY_UP_S`
+        has the measurements and the reason. `None` means the latch is only
+        ever cleared by a real key-up, which is what hold mode needs.
+        """
         def pressed(key):
             if self._matches(key) and not self._down:
                 self._down = True
+                self._watch(lost_key_up_after_s)
                 on_press()
 
         def released(key):
             if self._matches(key) and self._down:
                 self._down = False
+                self._cancel_watch()
                 on_release()
 
         self._listener = self._keyboard.Listener(
@@ -548,7 +675,40 @@ class KeyboardListener:
         name = getattr(key, "name", None) or getattr(key, "char", None)
         return (name or "").lower() == self._key
 
+    def _watch(self, after_s: float | None) -> None:
+        self._cancel_watch()
+        if after_s is None:
+            return
+        self._stuck = threading.Timer(after_s, self._assume_it_came_up,
+                                      args=(after_s,))
+        self._stuck.daemon = True
+        self._stuck.start()
+
+    def _assume_it_came_up(self, after_s: float) -> None:
+        """The key-up never came, so stop waiting for it.
+
+        Said out loud rather than fixed quietly. A press that goes missing is
+        invisible from the driver seat - he pressed, nothing happened, and
+        there is no line in the log to say a press was ever seen - which is
+        how this went eleven exchanges without being noticed. If this starts
+        appearing, something is blocking the hook thread again.
+        """
+        if not self._down:
+            return
+        self._down = False
+        log("ptt").warning(
+            "no key-up for %r after %.1fs - taking the button as released, "
+            "or the next press is swallowed. Something held the hook thread.",
+            self._key, after_s)
+
+    def _cancel_watch(self) -> None:
+        if self._stuck is not None:
+            self._stuck.cancel()
+            self._stuck = None
+
     def stop(self) -> None:
+        self._cancel_watch()
+        self._down = False
         if self._listener is not None:
             self._listener.stop()
             self._listener = None

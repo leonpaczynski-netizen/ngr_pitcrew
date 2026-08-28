@@ -410,7 +410,9 @@ class Hook:
     def __init__(self):
         self.running = False
 
-    def start(self, _press, _release):
+    def start(self, _press, _release, **_options):
+        # `**_options` is the lost-key-up cap - see `ptt.LOST_KEY_UP_S`. These
+        # tests are about which hook is running, not about what it was told.
         self.running = True
 
     def stop(self):
