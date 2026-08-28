@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pitcrew.diagnostics import log
 from pitcrew.race.calls import (
     STATUS,
+    stop_still_needed,
     BOX_IGNORED_LAPS,
     BOX_NOW,
     HIGH,
@@ -806,13 +807,24 @@ class RaceCoordinator:
                 lap.lap_num, racing_ms / 1000.0, pace / 1000.0, ratio)
 
     def _pending_stops(self) -> int:
-        """Stops still ahead of the stint being run.
+        """Stops still ahead of the stint being run, that will actually happen.
 
         During the stop itself `stint_index` has not advanced - `_apply_stint`
-        moves it on PIT_EXIT - so the stop in progress still counts, which is
-        right: the clock has not absorbed its time at a crossing yet.
+        moves it on PIT_EXIT - so the stop in progress still counts.
+
+        **A stop that has been declared off does not count.** `_stops_off`
+        says "no more stops on fuel" and `stop_still_needed` is what decided
+        it, but neither touches `_stints` - so the discount went on
+        subtracting a stop the engineer had just cancelled, for the rest of
+        the race. Worse in the stay-out: `stay_out_call` returns None exactly
+        when the fuel cannot reach, so in the case where the stop is real the
+        cancellation never happens and in the case where it is not the
+        discount is permanent.
         """
-        return max(0, len(self._stints) - 1 - self.state.stint_index)
+        pending = max(0, len(self._stints) - 1 - self.state.stint_index)
+        if pending and not stop_still_needed(self.state):
+            return 0
+        return pending
 
     def _laps_to_flag(self, lap_ms: int | None,
                       left: int | None) -> int | None:
@@ -981,8 +993,23 @@ class RaceCoordinator:
         # a lap of fuel out of the fill. That is the under-fuelling direction,
         # and running dry loses the race where a lap too many costs three
         # seconds in the box.
+        # **`left`, not `to_flag`.** Putting the discounted count here moved
+        # the race distance under NINE readers, four of which decide fuel:
+        # `fuel_frame`, `fuel_reaches_flag`, `fuel_target_l` and
+        # `stay_out_call` all measure against `laps_remaining()`. Measured on
+        # the real coordinator at lap 12 with 19.0 L aboard and four crossings
+        # left, the discounted distance turned a correct "box, you cannot make
+        # it" into **"Staying out? You can make it."** at 0.83 laps short -
+        # about five litres - by subtracting a stop he was in the act of
+        # refusing. The comment three lines above says exactly why: that is
+        # the under-fuelling direction, and running dry loses the race where a
+        # lap too many costs three seconds in the box.
+        #
+        # The spoken count reads `laps_to_flag` instead, which is kept apart
+        # for the same reason `laps_after_stops` is kept apart for the fill.
         self.state.laps_total = (self.state.lap + self.state.laps_missed()
-                                 + (to_flag if to_flag is not None else left))
+                                 + left)
+        self.state.laps_to_flag = to_flag
         # **What the fuel path counts, which is not what the flag counts.**
         # A stop is a minute of clock that covers no ground. `laps_total`
         # ceilings over the whole window including it, so before a stop is

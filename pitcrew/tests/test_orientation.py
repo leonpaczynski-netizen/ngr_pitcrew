@@ -121,11 +121,18 @@ def test_from_halfway_it_is_both():
 def test_an_unresolved_count_names_both_candidates():
     """`ceil` flips when the time left is near a whole number of laps. There
     the answer is not unknown - it is one of two, and naming them beats
-    picking one and beats the silence this used to fall to."""
+    picking one and beats the silence this used to fall to.
+
+    **The pair runs downward.** Every known error in this count is in the same
+    direction - it reads long: the stop discount uses an ex-fuel pit loss and
+    is therefore too small, and the achieved median is dragged down by
+    fresh-tyre laps. `N or N+1` asserts the truth may be HIGHER than the
+    estimate, which is the one thing it cannot be.
+    """
     state = timed(lap=13, laps_total=22)
     state.race_remaining_s = 660.0
     state.laps_estimate_firm = False
-    assert orientation(state) == "Lap 13. 11 minutes left. 9 or 10 laps to go."
+    assert orientation(state) == "Lap 13. 11 minutes left. 8 or 9 laps to go."
 
 
 # -------------------------------------------------------------- the lap race
@@ -244,3 +251,76 @@ def test_a_pending_stop_makes_the_count_uncertain():
     race._apply_stint(1)                       # the stop has been taken
     assert race._pending_stops() == 0
     assert race._stop_discount_is_short() is False
+
+
+# --------------------------------------- the last crossings, on the real thing
+
+def a_timed_race(pit_loss_s=25.0, stints=2, minutes=30.0):
+    """A coordinator with a real clock, driven by a clock the test moves."""
+    from pitcrew.race.clock import RaceClock
+    from pitcrew.race.coordinator import RaceCoordinator
+
+    plan = {"stints": [{"laps": 10, "compound": "RS", "fuel_l": 60.0,
+                        "start_lap": 1 + 10 * n} for n in range(stints)],
+            "binding_constraint": "fuel"}
+    race = RaceCoordinator(plan, pit_loss_s=pit_loss_s)
+    race.state.race_minutes = minutes
+    elapsed = {"s": 0.0}
+    race.clock = RaceClock(minutes * 60.0, now=lambda: elapsed["s"])
+    race.clock.start()
+    race.elapsed = elapsed
+    return race
+
+
+def test_the_spoken_count_never_moves_the_fuel_distance():
+    """**The defect this test exists for, and it was shipped.**
+
+    Putting the stop discount into `laps_total` moved the race distance under
+    every fuel calculation - `fuel_frame`, `fuel_reaches_flag`,
+    `fuel_target_l` and `stay_out_call` all measure against
+    `laps_remaining()`. On the real coordinator at four crossings from the
+    flag with a stop pending that turned "box, you cannot make it" into
+    "Staying out? You can make it." at about five litres short.
+
+    The two figures are different questions and stay apart: `laps_remaining()`
+    is the distance the tank has to cover, `laps_to_flag` is how many
+    crossings there will be.
+    """
+    race = a_timed_race()
+    race.state.lap = 12
+    race.state.laps_total = 16
+    race.state.laps_to_flag = 3
+    race.state.race_remaining_s = 400.0
+    assert race.state.laps_remaining() == 4, "the fuel distance is untouched"
+    assert "3 laps to go" in orientation(race.state), orientation(race.state)
+
+
+def test_the_count_stops_being_discounted_once_the_stop_is_off():
+    """`_stops_off` says "no more stops on fuel" and nothing retired the stop
+    from the plan, so the discount outlived its own cancellation - and in the
+    stay-out it outlived it permanently, because `stay_out_call` returns None
+    exactly when the fuel cannot reach."""
+    race = a_timed_race()
+    race.state.lap = 12
+    race.state.laps_total = 20
+    race.state.stint_ends_on_lap = 14
+    race.state.fuel_per_lap_l = 6.0
+    race.state.fuel_l = 20.0
+    race.state.plan_binding_constraint = "fuel"
+    race.state.mandatory_stops_left = 0
+    assert race._pending_stops() == 1, "a stop the fuel still needs"
+
+    race.state.fuel_l = 90.0            # now it reaches the flag
+    assert race._pending_stops() == 0, \
+        "the discount survived the stop being declared off"
+
+
+def test_under_one_lap_the_count_stands_down_for_the_run_in():
+    """"0 or 1 laps to go." is not a thing to say, and it is not in the pack
+    either - `UNCERTAIN_LAPS` starts at one. The run-in owns this ground."""
+    state = timed(lap=21, laps_total=22)
+    state.race_remaining_s = 20.0
+    state.laps_to_flag = 0
+    said = orientation(state)
+    assert "to go" not in said, said
+    assert "20 seconds left" in said

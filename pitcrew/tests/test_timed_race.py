@@ -392,7 +392,7 @@ def test_an_unresolvable_lap_count_is_named_as_two_rather_than_dropped():
     state.last_said_lap = 0
     call = next_call(state)
     assert call.kind == STATUS
-    assert "19 or 20 laps to go" in call.call, call.call
+    assert "18 or 19 laps to go" in call.call, call.call
     assert "20 minutes" in call.call
     assert "Lap 5" in call.call
 

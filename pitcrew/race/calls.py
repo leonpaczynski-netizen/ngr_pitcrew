@@ -616,6 +616,11 @@ class RaceState:
     mandatory_stops_left: int | None = None
     # Said once. The driver does not need telling twice that the stops are off.
     stops_off_said: bool = False
+    # **How many crossings there will actually be**, stops taken out of the
+    # clock. Deliberately NOT `laps_total`: that is the race distance every
+    # fuel calculation measures against, and a stop discount belongs in what
+    # the driver is TOLD, not in what the tank is filled for.
+    laps_to_flag: int | None = None
     # The kind of the last thing said, beside the lap it was said on.
     last_said_kind: str | None = None
     # **Seconds left on the race clock**, for a timed race. The app timer from
@@ -1966,9 +1971,20 @@ def laps_to_go(laps: int, *, uncertain: bool = False) -> str:
     It arrives beside a clock in the same breath, and "11 minutes left, 9 to
     go" names the unit of one figure and not the other - where the unnamed one
     is the figure he plans around. Rule 13 is on file for exactly that.
+
+    **The uncertain pair runs DOWNWARD, and that is not cosmetic.** Every
+    known error in this count is in the same direction - it reads long. The
+    stop discount uses `pit_loss_s`, which is measured ex-fuel and is
+    therefore too small, so the ceiling comes out high; with no pit loss
+    measured at all there is no discount and it is a whole stop high; and the
+    achieved median is dragged down by fresh-tyre laps, so a stint in phase 2
+    is slower than the divisor. `N or N+1` asserts the truth may be higher
+    than the estimate, which is the one thing it cannot be - and it was the
+    same defect as "Lap 20 or 22", a pair that excludes the truth, in the
+    other clause of the same sentence.
     """
-    if uncertain:
-        return f"{laps} or {laps + 1} laps to go."
+    if uncertain and laps > 1:
+        return f"{laps - 1} or {laps} laps to go."
     return f"{laps} lap to go." if laps == 1 else f"{laps} laps to go."
 
 
@@ -2026,8 +2042,16 @@ def orientation(state: RaceState) -> str:
     # the coordinator has recomputed the distance, but only the accessor
     # applies the missed-crossing correction - and a lap the app never saw is
     # exactly the error this call exists to stop him inheriting.
-    laps = state.laps_remaining()
-    if laps is None:
+    # **The spoken count is `laps_to_flag`, not `laps_remaining()`.** They
+    # answer different questions: how many crossings there will be, against
+    # what distance the fuel has to cover. Keeping them apart is what stops a
+    # stop discount reaching the fill - see `coordinator._update_clock_distance`.
+    laps = (state.laps_to_flag if state.laps_to_flag is not None
+            else state.laps_remaining())
+    if laps is None or laps < 1:
+        # Under one lap the count has run out before the flag has fallen, and
+        # "0 or 1 laps to go." is not a thing to say - nor is it in the pack.
+        # The run-in owns this ground: `_laps_to_go` says "Last lap."
         return f"{where}. {clock}"
     # **Both candidates when it genuinely is both.** `ceil` flips when the
     # time left is near a whole number of laps, and there the answer is not

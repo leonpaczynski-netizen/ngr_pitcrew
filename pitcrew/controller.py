@@ -4457,7 +4457,6 @@ class PitCrewController(QObject):
             self.race_screen.show_snapshot(self._race_snapshot())
         if replan is not None:
             self._voice_replan(replan)
-        heartbeat_only = (call is not None and call.kind == STATUS)
         if call is None:
             # **Colour calls rank below everything.** They only ever reach the
             # voice on a crossing that had nothing real to say - an engineer

@@ -521,9 +521,23 @@ class RaceClock:
         stop makes it 13.89, and both ceiling to 14 - but 15 minus a rounded
         stop is 14 only by luck and 15 the rest of the time.
 
-        Default zero, so the flag, "two to go" and the last lap are untouched:
-        they count crossings, and a crossing still happens on the lap the stop
-        is taken. Only the fuel path passes this.
+        Default zero, so the flag, "two to go" and the last lap are
+        untouched: those are driven off the raw clock, which self-corrects at
+        every crossing as the stop is actually taken.
+
+        **Two callers pass it, for two different questions.**
+        `_laps_after_stops` sizes a FILL and deliberately under-discounts, so
+        an overstated discount cannot run him dry. `_laps_to_flag` is the
+        distance the driver is TOLD, where too long and too short are both
+        simply wrong. They are separate methods on purpose.
+
+        This docstring used to argue against discounting at all - "a crossing
+        still happens on the lap the stop is taken" - which is true and is not
+        the point: that lap is slower, so the LAST lap of the race falls off
+        the end. Simulated against the flag rule at remaining 600/610/650/
+        700/720 s on a 100 s lap with a 30 s stop, the undiscounted count is
+        wrong at two of the five and the discounted count is right at all of
+        them.
         """
         remaining = self.remaining_s
         if remaining is None or not lap_time_ms or lap_time_ms <= 0:
