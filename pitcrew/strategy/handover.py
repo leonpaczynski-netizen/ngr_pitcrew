@@ -28,6 +28,7 @@ the fallback and the comparison.
 """
 from __future__ import annotations
 
+import pathlib
 from dataclasses import dataclass, field
 
 # The triggers George is allowed to act on alone. A playbook entry naming
@@ -56,6 +57,11 @@ ACTIONS = (
 # Named because they are the two the driver has refused outright, and a
 # playbook that contained either would be executed. See `brain/driver.md`.
 FORBIDDEN_ACTIONS = ("fuel_map", "brake_bias_forward")
+
+# Names the stored payload owns. A plan carrying one of these is refused
+# rather than merged - see `Handover.as_stored`.
+RESERVED_KEYS = frozenset(("handover", "author", "playbook", "unhandled",
+                           "certificate"))
 
 
 @dataclass(frozen=True)
@@ -111,6 +117,16 @@ class Handover:
         problems: list[str] = []
         if not isinstance(self.plan, dict) or not self.plan.get("stints"):
             problems.append("the plan has no stints")
+        # **Refused, never merged.** The stored payload is the plan's own keys
+        # with the handover's alongside under one key, so a plan carrying one
+        # of the reserved names would have it silently replaced. `assumptions`
+        # is the live collision: `Plan.as_export` emits a dict of that name
+        # and a handover's is a list of prose, and a reader taking the wrong
+        # one gets no warning at all.
+        for key in sorted(RESERVED_KEYS & set(self.plan or ())):
+            problems.append(
+                f"the plan carries {key!r}, which is the handover's own - "
+                f"rename it, because storing both would silently keep one")
         seen = set()
         for entry in self.playbook:
             problems.extend(entry.validate())
@@ -130,26 +146,66 @@ class Handover:
         return [t for t in TRIGGERS if t not in covered]
 
     def as_dict(self) -> dict:
+        """The handover's own half, for storing under one key."""
         return {
             "author": self.author,
-            "plan": self.plan,
             "playbook": [e.as_dict() for e in self.playbook],
             "assumptions": list(self.assumptions),
             "unhandled": self.unhandled(),
         }
 
+    def as_stored(self, plan: dict) -> dict:
+        """The row as `strategies.plan_json`: the PLAN, with this alongside.
+
+        **Flat for the plan, namespaced for the handover.** `RaceCoordinator`
+        and `certify` read `stints`, `stops`, `expects` and `context` off the
+        top level, so nesting the plan under a `"plan"` key - which is what
+        this used to store - produced a row that saved cleanly and was then
+        refused on the grid for naming no stints. And merging the handover's
+        fields in flat collides: `assumptions` is a dict from
+        `Plan.as_export` and a list of prose here.
+        """
+        return {**plan, "handover": self.as_dict()}
+
+
+def playbook_of(stored: dict) -> list[PlaybookEntry]:
+    """The playbook off a stored plan, or empty. The read half of `as_stored`."""
+    section = (stored or {}).get("handover") or {}
+    return [PlaybookEntry(trigger=e.get("trigger", ""),
+                          action=e.get("action", ""),
+                          when=e.get("when", ""),
+                          until=e.get("until", ""),
+                          note=e.get("note", ""))
+            for e in (section.get("playbook") or [])]
+
+
+def author_of(stored: dict) -> str | None:
+    """Who wrote a stored plan, or None for the app's own optimiser."""
+    return ((stored or {}).get("handover") or {}).get("author") or None
+
 
 def from_dict(payload: dict) -> Handover:
-    """Rebuild a handover as stored. Unknown keys are ignored, not guessed at."""
+    """Rebuild a handover from the JSON an author writes.
+
+    Accepts either shape: the plan at the top with the handover's fields
+    beside it, or the plan nested under `"plan"`. Ludo writes the first;
+    `as_stored` produces it too, so a stored row round-trips.
+    """
+    section = payload.get("handover") if isinstance(
+        payload.get("handover"), dict) else payload
     entries = [PlaybookEntry(trigger=e.get("trigger", ""),
                              action=e.get("action", ""),
                              when=e.get("when", ""),
                              until=e.get("until", ""),
                              note=e.get("note", ""))
-               for e in (payload.get("playbook") or [])]
-    return Handover(plan=payload.get("plan") or {}, playbook=entries,
-                    author=payload.get("author") or "ludo",
-                    assumptions=list(payload.get("assumptions") or []))
+               for e in (section.get("playbook") or [])]
+    plan = payload.get("plan")
+    if not isinstance(plan, dict):
+        plan = {k: v for k, v in payload.items()
+                if k not in RESERVED_KEYS and k != "plan"}
+    return Handover(plan=plan, playbook=entries,
+                    author=section.get("author") or "ludo",
+                    assumptions=list(section.get("assumptions") or []))
 
 
 def accept(store, event_id: int, handover: Handover, *,
@@ -168,16 +224,27 @@ def accept(store, event_id: int, handover: Handover, *,
     """
     from pitcrew.strategy.certify import certify_for_event
 
+    from pitcrew.strategy.execution import stamp
+
     problems = handover.validate()
     if problems:
         return None, problems
 
-    certificate = certify_for_event(store, event_id, handover.plan)
+    # **Stamped before it is certified.** `expects` and `context` are what the
+    # race reads once it is running, and a plan without them arms and then
+    # runs blind - every per-lap comparison reporting nothing rather than
+    # reporting a problem. `stamp` leaves an author's own figures alone.
+    try:
+        plan = stamp(store, event_id, handover.plan)
+    except ValueError as exc:
+        return None, [str(exc)]
+
+    certificate = certify_for_event(store, event_id, plan)
     if not certificate.certified:
         return None, list(certificate.refusals)
 
-    payload = handover.as_dict()
-    payload["certificate"] = {
+    payload = handover.as_stored(plan)
+    payload["handover"]["certificate"] = {
         "warnings": list(certificate.warnings),
         # **Recorded, because silence is never a pass.** A check that could not
         # run is not a check that passed, and the race audit has to be able to
@@ -188,3 +255,71 @@ def accept(store, event_id: int, handover: Handover, *,
         event_id, payload, label=label or f"{handover.author} plan",
         status="candidate")
     return strategy_id, list(certificate.warnings)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Load a handover from a JSON file. **The door Ludo comes through.**
+
+        python -m pitcrew.strategy.handover --event 6 --file plan.json
+
+    Ludo already runs Python in this repo - the skill's own instructions say
+    to call `build_inputs` then `recommend` rather than hand-rolling stint
+    arithmetic - so the load route is a command, not a service. There is no
+    `.mcp.json` in this repo and registering a server is the driver's call.
+
+    **This is the gap that cost the Fuji race.** Ludo wrote a one-stop plan
+    with a fifteen-lap opening stint; the app's optimiser would not offer one
+    because the evidence cap stood at six laps - two six-lap practice runs,
+    deepest 24% worn, nothing had gone further. The certifier would have
+    ACCEPTED the plan (its only tyre refusal is `0.85 / w`, which was 22 laps),
+    but approval took an INDEX into `recommend()`'s output, so a plan the app
+    had not thought of could not be chosen. He raced three stops. Read back
+    afterwards the same set was watched to 56% and the cap lifted, and the
+    optimiser now proposes 15 and 5 on one stop - Ludo's plan, arrived at
+    independently.
+
+    Exit 1 on refusal, so a refusal cannot be mistaken for a load.
+    """
+    import argparse
+    import json
+    import sys
+
+    from pitcrew.store.db import Store
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--event", type=int, required=True)
+    parser.add_argument("--file", required=True,
+                        help="the handover as JSON: the plan, plus playbook "
+                             "and assumptions")
+    parser.add_argument("--label", default=None)
+    args = parser.parse_args(argv)
+
+    payload = json.loads(pathlib.Path(args.file).read_text(encoding="utf-8"))
+    handover = from_dict(payload)
+
+    store = Store()
+    try:
+        strategy_id, problems = accept(store, args.event, handover,
+                                       label=args.label)
+    finally:
+        store.close()
+
+    if strategy_id is None:
+        print("REFUSED - not loaded:")
+        for problem in problems:
+            print(f"  - {problem}")
+        return 1
+
+    print(f"loaded as candidate {strategy_id} for event {args.event}.")
+    print("It is NOT armed: approve it on the Strategy screen, which "
+          "certifies it again against the evidence of the day.")
+    for warning in problems:
+        print(f"  warning: {warning}")
+    for trigger in handover.unhandled():
+        print(f"  no playbook entry for {trigger} - George will report it "
+              f"and decide nothing")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

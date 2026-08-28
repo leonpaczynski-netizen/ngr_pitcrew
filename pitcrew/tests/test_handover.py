@@ -117,10 +117,15 @@ def test_unhandled_travels_on_the_stored_form():
 
 
 def test_it_round_trips():
+    """**Through the stored shape**, which is the plan's own keys with the
+    handover's alongside under one key. `as_dict` is now only the handover's
+    half - the plan is not nested inside it, because nesting produced a row
+    that saved cleanly and was then refused on the grid for naming no
+    stints."""
     h = Handover(plan=a_plan(), playbook=[an_entry()],
                  assumptions=["burn measured at 3x, raced at 3x"])
 
-    back = from_dict(h.as_dict())
+    back = from_dict(h.as_stored(h.plan))
 
     assert back.plan == h.plan
     assert back.assumptions == h.assumptions
