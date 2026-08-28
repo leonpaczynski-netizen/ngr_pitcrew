@@ -137,6 +137,7 @@ class RaceCoordinator:
                  # (CLAUDE.md 5.4), off `events.pit_loss_secs`. Only the fuel
                  # path reads it. None leaves every figure exactly as it was.
                  pit_loss_s: float | None = None,
+                 mandatory_stops: int = 0,
                  now=None) -> None:
         self.phase = RacePhase.IDLE
         self.plan = plan or {}
@@ -180,6 +181,13 @@ class RaceCoordinator:
         # being handled. See `_corroborate_pit_lap`.
         self._dropped_before_lap = 0
         self._stints = list(self.plan.get("stints") or ())
+        # **Why the plan's stops exist**, in the plan's own word for it. Only
+        # a fuel-bound stop can be cancelled by a tankful, and a plan that
+        # does not say keeps every stop it named - see `calls.stop_still_needed`
+        # for the Fuji race this is on file from.
+        self.state.plan_binding_constraint = self.plan.get("binding_constraint")
+        self._mandatory_stops = int(mandatory_stops or 0)
+        self._note_mandatory_stops()
         # **The app's own race clock**, built at arming and started at the
         # green. GT7's clock is not accurate - the driver measured it - so
         # nothing in race control reads `remaining_time_ms` any more. See
@@ -289,6 +297,22 @@ class RaceCoordinator:
 
     # ------------------------------------------------------------------ laps
 
+    def _note_mandatory_stops(self) -> None:
+        """How many required stops are still owed.
+
+        **Known, not unknown.** `events.mandatory_stops` is a real column with
+        a real default, so this is a count and never a `None` standing in for
+        one - and that matters because the first draft of `stop_still_needed`
+        treated it as unknown, kept every stop on that basis, and could
+        therefore never fire at all. A rule that cannot fire is the thing this
+        codebase keeps building by accident.
+
+        Stops taken is the stint index: the car is in stint N having made N
+        stops, and `_apply_stint` advances it across each one.
+        """
+        self.state.mandatory_stops_left = max(
+            0, self._mandatory_stops - self.state.stint_index)
+
     def _apply_stint(self, index: int, *, over_a_stop: bool = False) -> None:
         """Move to stint `index`.
 
@@ -300,6 +324,7 @@ class RaceCoordinator:
             self.state.stint_ends_on_lap = None
             self.state.next_compound = None
             return
+        self._note_mandatory_stops()
         stint = self._stints[index]
         # The compound on the car now. Named by the plan, or - when the plan
         # does not name one - unchanged, because a re-plan adopted mid-race

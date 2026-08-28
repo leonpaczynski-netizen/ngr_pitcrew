@@ -74,6 +74,13 @@ POINT = "point"
 # The tail of `colour.py`'s running fuel line. Kept beside the fuel answer's
 # own fragments because it shares its number words; see `fuel_fragments`.
 COLOUR_FUEL_TAIL = "laps of fuel in hand to the flag."
+# **The same tail against the other reference.** `calls._fuel`'s FUEL_LONG
+# line used to end "to the box" as a constant; it now takes its reference
+# from `calls.fuel_reference`, because a stop can be cancelled mid-race and
+# a fixed word then names a box the driver is no longer driving to. Two
+# references, two clips - and neither may fall through to live synthesis,
+# which is a pause at the moment a call arrives mid-corner.
+STOP_FUEL_TAIL = "laps of fuel in hand to the stop."
 
 # `answer()` produces this shape for the fuel question. Parsed rather than
 # re-formatted, so the fragments are derived from what the function actually
@@ -214,7 +221,7 @@ def fuel_fragments() -> tuple[str, ...]:
     the fuel one is the most repeated of them, and it shares this family's
     number words, so one tail clip covers it.
     """
-    return (POINT, _fuel_tail(), COLOUR_FUEL_TAIL)
+    return (POINT, _fuel_tail(), COLOUR_FUEL_TAIL, STOP_FUEL_TAIL)
 
 
 @lru_cache(maxsize=1)
@@ -362,6 +369,17 @@ def _call_states() -> list:
         return state
 
     states = [
+        # **The stop that stops being a stop.** `_stops_off` fires once, when
+        # a fuel-bound plan's tank starts covering the flag, and it cancels a
+        # box call - so it is the one call in the race whose absence from the
+        # pack would be heard as the app having died rather than as the plan
+        # having changed. Two shapes: with the spare litres and without.
+        _state(lap=8, laps_total=20, fuel_l=82.3, fuel_per_lap_l=6.0,
+               position=11, stint_ends_on_lap=10, fuel_capacity_l=100.0,
+               plan_binding_constraint="fuel", mandatory_stops_left=0),
+        _state(lap=19, laps_total=20, fuel_l=7.0, fuel_per_lap_l=6.0,
+               position=11, stint_ends_on_lap=19, fuel_capacity_l=100.0,
+               plan_binding_constraint="fuel", mandatory_stops_left=0),
         _state(lap=0),                                        # bare green
         _state(lap=0, laps_total=20),                         # green + laps
         _state(lap=6, finished=True),                         # bare chequer

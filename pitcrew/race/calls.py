@@ -85,6 +85,9 @@ TYRE_TEMP = "tyre-temp"
 STATUS = "status"
 GREEN = "green"
 STAY_OUT = "stay-out"
+# The tank now reaches the flag and the plan's remaining stops were only ever
+# there to fill it. See `_stops_off`.
+STOPS_OFF = "stops-off"
 # **The answer to a saving the engineer asked for.** Not an
 # instruction, so it is ranked below every call that is one - but it
 # closes a loop the engineer opened, and an unclosed loop leaves the
@@ -114,7 +117,9 @@ LAPS_TO_GO = "laps-to-go"
 # **Every kind in `_candidates` must appear here.** `next_call` sorts on
 # `URGENCY.index(kind)`, so a kind that is emitted but not ranked raises on the
 # race path - which is exactly what `WEAR` did until a test asked for it.
-URGENCY = (CHEQUER, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
+# **`STOPS_OFF` sits with the box calls, above them.** It is the call that
+# cancels one, so it cannot rank below the thing it cancels.
+URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            # **`WEAR` sits below the fuel calls and above temperature.** A car
            # out of fuel stops on the circuit; a car on worn tyres is still
            # moving, so fuel wins. But a measured wear figure beats an
@@ -148,6 +153,11 @@ STATUS_EVERY_LAPS = 5
 # figure rather than reassurance - the same threshold the fuel call itself
 # acts on, deliberately, so the heartbeat and the instruction cannot disagree
 # about whether he is short.
+# What the fuel is measured against, in the words the driver hears. There are
+# two of them and they are ten laps apart.
+TO_THE_STOP = "to the stop"
+TO_THE_FLAG = "to the flag"
+
 FUEL_STANDING_TOLERANCE_LAPS = 0.5
 FUEL_SHORT_LAPS = 0.5
 # Fuel surplus above which he is carrying a lap he does not need.
@@ -595,6 +605,17 @@ class RaceState:
     last_said_lap: int | None = None
     # How often the heartbeat speaks. `1` is the driver's every-lap setting.
     status_every_laps: int = STATUS_EVERY_LAPS
+    # **What the plan's stops were FOR**, off `plan["binding_constraint"]`.
+    # A stop exists because of fuel, or the tyre, or a rule, and only the
+    # first kind can be cancelled by a tankful. `None` means the plan did not
+    # say, and a stop nobody can account for is never cancelled.
+    plan_binding_constraint: str | None = None
+    # Stops the regulations require that have not been taken. `None` where the
+    # app does not know - the event page has no field for it - and unknown is
+    # not the same as none, so it never cancels a stop on its own.
+    mandatory_stops_left: int | None = None
+    # Said once. The driver does not need telling twice that the stops are off.
+    stops_off_said: bool = False
 
     def note_wear(self, lap: int, wear: dict[str, float] | None) -> None:
         """File a gauge reading against a lap. Ignores a repeat of one lap.
@@ -658,25 +679,46 @@ class RaceState:
         # which is what this method has always been for.
         if call.kind == WEAR and call.tag:
             self.wear_said.add(call.tag)
+        if call.kind == STOPS_OFF:
+            self.stops_off_said = True
         if call.kind == INCIDENT:
             self.incident_lap = None
             self.incident_cost_ms = None
             self.incident_reported = False
 
 
-def _fuel_target(state: RaceState) -> float | None:
-    """Laps that have to be covered on the fuel now aboard.
+def fuel_frame(state: RaceState) -> tuple[float | None, str]:
+    """`(laps the fuel aboard has to cover, what that distance is called)`.
 
-    The stop when there is one still to come, the flag when there is not.
+    **One expression produces both, and that is the whole point.** The number
+    and the words for it were computed in two places and drifted apart the
+    moment a stop was cancelled: the target became the flag while the sentence
+    went on saying "to the stop", so the driver heard a figure measured
+    against a distance nobody was driving to. Rule 12 is about exactly this -
+    the reported reason has to come from the same expression as the decision -
+    and rule 13 is what it costs when it does not.
+
+    Three ways the flag becomes the frame: no stop planned, the box lap has
+    gone by, or the stop is no longer a stop (`stop_still_needed`).
+
     **Flooring `laps_to_stop` at zero is not enough on its own**: at a target
     of zero the gap becomes the whole tank and the "you can push" call fires
     harder than ever. Once the box lap has gone by, the honest target is the
     rest of the race - he is running on this fuel until he actually stops.
     """
-    if state.past_box_lap:
-        return state.laps_remaining()
+    if state.stint_ends_on_lap is None or state.past_box_lap:
+        return state.laps_remaining(), TO_THE_FLAG
+    if not stop_still_needed(state):
+        return state.laps_remaining(), TO_THE_FLAG
     to_stop = state.laps_to_stop()
-    return state.laps_remaining() if to_stop is None else to_stop
+    if to_stop is None:
+        return state.laps_remaining(), TO_THE_FLAG
+    return to_stop, TO_THE_STOP
+
+
+def _fuel_target(state: RaceState) -> float | None:
+    """Laps that have to be covered on the fuel now aboard."""
+    return fuel_frame(state)[0]
 
 
 def _fuel_gap(state: RaceState) -> float | None:
@@ -747,6 +789,8 @@ def _candidates(state: RaceState) -> list[Call | None]:
         _chequer(state),
         _laps_to_go(state),
         _green(state),
+        # Above the box calls because it is the call that cancels one.
+        _stops_off(state),
         _box_now(state),
         _box_soon(state),
         _fuel(state),
@@ -858,9 +902,86 @@ def _laps_to_go(state: RaceState) -> Call | None:
                 tag=f"to-go-{to_go}")
 
 
+def fuel_reaches_flag(state: RaceState) -> bool | None:
+    """Whether the fuel aboard covers the rest of the race, margin included.
+
+    `None` where it cannot be known - no burn, no lap count - and `None` is
+    never read as yes. This is a projection off a measured burn, not a
+    reading, so it carries the same margin `fuel_to_flag_l` sizes a fill with.
+    """
+    if not state.fuel_per_lap_l or state.fuel_l is None:
+        return None
+    remaining = state.laps_remaining()
+    if remaining is None:
+        return None
+    margin_l, _ = fuel_margin_l(remaining, state.fuel_per_lap_l,
+                                sd_l=state.fuel_sd_l,
+                                timed=state.race_minutes is not None,
+                                lap_count_firm=state.laps_estimate_firm)
+    return state.fuel_l >= remaining * state.fuel_per_lap_l + (margin_l or 0.0)
+
+
+def stop_still_needed(state: RaceState) -> bool:
+    """Whether the next planned stop is still a stop.
+
+    **A fuel-bound stop that the fuel no longer needs is not a stop.** Fuji,
+    Round 4: the plan was fuel-bound, three stops, and the tyre was good for
+    20.7 laps of a 20-lap race - so every stop in it existed to put fuel in.
+    He took 94.0 L on lap 6 with fourteen laps to run and a burn of 6.0 L, and
+    was then told to box twice more for fuel he was already carrying. He
+    ignored both, finished P5, and crossed the line with 8.3 L aboard.
+
+    Three things keep a stop, and each is a different kind of claim:
+
+    * **The plan was not fuel-bound.** A stop for the tyre is not answered by
+      a tankful, and `binding_constraint` is the plan's own word for which it
+      was. Where the plan does not say, the stop stands - CLAUDE.md §4.3, an
+      unknown is not a no.
+    * **The regulations require one.** `events.mandatory_stops` is a real
+      column, so this is a count: Fuji required one, he took it on lap 6, and
+      it was satisfied from that moment. `None` would keep the stop, and the
+      first draft of this made it `None` always - which kept every stop and
+      made the whole rule dead code.
+    * **The fuel does not actually reach**, which is the arithmetic this is
+      about, and `None` from it keeps the stop for the same reason.
+    """
+    if state.mandatory_stops_left is None or state.mandatory_stops_left > 0:
+        return True
+    if (state.plan_binding_constraint or "").lower() != "fuel":
+        return True
+    return fuel_reaches_flag(state) is not True
+
+
+def _stops_off(state: RaceState) -> Call | None:
+    """Said once, when the tank stops being the reason to come in.
+
+    It has to be a call and not a silence. Suppressing the box call alone
+    would leave a driver who was told "Box in 2" hearing nothing on the lap
+    the stop was due - and silence there reads as the app having died, not as
+    the plan having changed.
+    """
+    if state.stops_off_said or state.in_pit or state.finished:
+        return None
+    if state.stint_ends_on_lap is None or state.lap < 1:
+        return None
+    if stop_still_needed(state):
+        return None
+    remaining = state.laps_remaining()
+    spare = None
+    if state.fuel_l is not None and state.fuel_per_lap_l and remaining:
+        spare = state.fuel_l - remaining * state.fuel_per_lap_l
+    reason = (f"{spare:.0f} litres more than the flag needs."
+              if spare is not None and spare >= 1 else "")
+    return Call(STOPS_OFF, state.lap,
+                "You're fuelled to the flag. No more stops on fuel.",
+                reason)
+
+
 def _box_now(state: RaceState) -> Call | None:
     to_stop = state.laps_to_stop()
     if to_stop is None or state.in_pit or state.finished:
+        return None
+    if not stop_still_needed(state):
         return None
     if to_stop > 0 or _crossing_the_line(state):
         return None
@@ -907,6 +1028,8 @@ def _box_now(state: RaceState) -> Call | None:
 def _box_soon(state: RaceState) -> Call | None:
     to_stop = state.laps_to_stop()
     if to_stop is None or state.in_pit or state.finished:
+        return None
+    if not stop_still_needed(state):
         return None
     if not 1 <= to_stop <= 2 or _crossing_the_line(state):
         return None
@@ -1216,14 +1339,19 @@ def _fuel(state: RaceState) -> Call | None:
         return Call(
             FUEL_LONG, state.lap,
             "You can push.",
-            # **"to the box" is load-bearing and it was missing.** The colour
-            # line says "Fuel: N laps in hand" against the FLAG, this one says
+            # **The reference is load-bearing and it was missing.** The colour
+            # line says "Fuel: N laps in hand" against the FLAG, this one said
             # it against the STOP, and at Fuji they were spoken two minutes
             # apart - "9.4 laps of fuel in hand" at 20:29:34 and "Fuel: 0.6
             # laps in hand" at 20:31:33. Same words, quantities ten laps
             # apart, no reference stated in either. Under a helmet that is
             # CLAUDE.md 5.5's failure mode exactly.
-            f"{gap:.1f} laps of fuel in hand to the box.",
+            #
+            # It said "to the box" as a constant, which was right until a stop
+            # could be cancelled: `stop_still_needed` retires one mid-race, and
+            # a fixed word then names a box the driver is no longer driving to.
+            # `fuel_reference` comes off the same expression as the figure.
+            f"{gap:.1f} laps of fuel in hand {fuel_reference(state)}.",
             confidence,
             severity=gap)
     return None
@@ -1750,13 +1878,7 @@ def _status(state: RaceState) -> Call | None:
     return Call(STATUS, state.lap, said, "")
 
 
-# What the fuel is measured against, in the words the driver hears. There are
-# two of them and they are ten laps apart.
-TO_THE_STOP = "to the stop"
-TO_THE_FLAG = "to the flag"
-
-
-def fuel_reference(state: RaceState) -> str | None:
+def fuel_reference(state: RaceState) -> str:
     """Which distance `_fuel_gap` is a gap TO, named.
 
     **Rule 13, and this is the call that would break it.** `_fuel_target`
@@ -1770,9 +1892,7 @@ def fuel_reference(state: RaceState) -> str | None:
     the reference is not optional and not a suffix - the sentence is not built
     without it.
     """
-    if state.stint_ends_on_lap is None or state.past_box_lap:
-        return TO_THE_FLAG
-    return TO_THE_STOP
+    return fuel_frame(state)[1]
 
 
 def _fuel_standing(state: RaceState) -> str:

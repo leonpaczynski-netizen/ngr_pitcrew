@@ -160,7 +160,10 @@ def test_the_calls_the_review_measured_as_missing_are_covered():
     for line in ("10 to go.",
                  "Chequered flag.",
                  "Chequered flag. P2.",
-                 "You can push. 2.1 laps of fuel in hand to the box.",
+                 # Was "to the box", a constant, until a stop could be
+                 # cancelled mid-race. Both references are clips now.
+                 "You can push. 2.1 laps of fuel in hand to the stop.",
+                 "You can push. 2.1 laps of fuel in hand to the flag.",
                  "Box next lap. Stop 1, on the plan.",
                  "Green, green, green. 20 laps.",
                  "Box this lap. RS. On the plan."):

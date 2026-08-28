@@ -126,6 +126,7 @@ def main() -> int:
             fuel_capacity_l=100.0,
             planned_fuel_per_lap_l=expects.get("expected_fuel_per_lap_l"),
             planned_lap_time_ms=expects.get("expected_lap_time_ms"),
+            mandatory_stops=int(event["mandatory_stops"] or 0),
             now=lambda: elapsed["s"])
         actual = context_from_event(event)
         stored = (plan or {}).get("context")
