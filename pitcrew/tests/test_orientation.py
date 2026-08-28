@@ -131,7 +131,7 @@ def test_an_unresolved_count_names_both_candidates():
     """
     state = timed(lap=13, laps_total=22)
     state.race_remaining_s = 660.0
-    state.laps_estimate_firm = False
+    state.laps_count_hedged = True
     assert orientation(state) == "Lap 13. 11 minutes left. 8 or 9 laps to go."
 
 
@@ -234,23 +234,33 @@ def test_a_pending_stop_takes_a_lap_off_the_count():
     assert wrong_without == 2, "the undiscounted count is the defect under test"
 
 
-def test_a_pending_stop_makes_the_count_uncertain():
-    """`pit_loss_s` is the track constant and is measured EX-FUEL; §5.4 puts
-    the fill on top at 0.5-1.0 s per 10% of tank. So the discount is knowingly
-    short by an amount nobody has measured, and the honest output while a stop
-    is pending is two numbers rather than a flat one. Guessing a coefficient
-    for the fill is what this project refuses everywhere else."""
-    from pitcrew.race.coordinator import RaceCoordinator
+def test_a_pending_stop_prices_the_stop_rather_than_hedging_it():
+    """**He may simply not stop, and he often does not.**
 
-    race = RaceCoordinator(
-        {"stints": [{"laps": 10, "start_lap": 1},
-                    {"laps": 10, "start_lap": 11}]}, pit_loss_s=20.0)
-    assert race._pending_stops() == 1
-    assert race._stop_discount_is_short() is True
+    The count used to have the stop DISCOUNTED out of it, which assumes he
+    takes it. He skipped one in two recorded races and was right both times,
+    and the discounted count was then a lap short - "3 or 4 laps to go" for an
+    answer of 5, a pair with the truth outside it.
 
-    race._apply_stint(1)                       # the stop has been taken
-    assert race._pending_stops() == 0
-    assert race._stop_discount_is_short() is False
+    So the number is what he gets if he stays out, and the stop is named as
+    what it would cost. That is not an error bar: it is a decision he is about
+    to make, and it says which way and what decides it.
+    """
+    state = timed(lap=13, laps_total=22)
+    state.race_remaining_s = 660.0
+    state.stop_pending = True
+    said = orientation(state)
+    assert said == "Lap 13. 11 minutes left. 9 laps to go, one less if you stop."
+    assert " or " not in said
+
+
+def test_the_priced_stop_stands_down_on_the_last_lap():
+    """"1 lap to go, one less if you stop." claims zero laps, and it has no
+    clip either."""
+    state = timed(lap=21, laps_total=22)
+    state.race_remaining_s = 95.0
+    state.stop_pending = True
+    assert orientation(state) == "Lap 21. 95 seconds left. 1 lap to go."
 
 
 # --------------------------------------- the last crossings, on the real thing
@@ -289,10 +299,15 @@ def test_the_spoken_count_never_moves_the_fuel_distance():
     race = a_timed_race()
     race.state.lap = 12
     race.state.laps_total = 16
-    race.state.laps_to_flag = 3
     race.state.race_remaining_s = 400.0
+    race.state.stop_pending = True
     assert race.state.laps_remaining() == 4, "the fuel distance is untouched"
-    assert "3 laps to go" in orientation(race.state), orientation(race.state)
+    # **The same four, spoken.** There is one count now. A second, discounted
+    # one was the defect: inside `laps_total` it moved the distance under
+    # every fuel calculation, and once isolated it disagreed with what
+    # push-to-talk and the colour line answer to the same question in the
+    # same words.
+    assert "4 laps to go, one less if you stop" in orientation(race.state)
 
 
 def test_the_count_stops_being_discounted_once_the_stop_is_off():
@@ -318,9 +333,8 @@ def test_the_count_stops_being_discounted_once_the_stop_is_off():
 def test_under_one_lap_the_count_stands_down_for_the_run_in():
     """"0 or 1 laps to go." is not a thing to say, and it is not in the pack
     either - `UNCERTAIN_LAPS` starts at one. The run-in owns this ground."""
-    state = timed(lap=21, laps_total=22)
+    state = timed(lap=22, laps_total=22)
     state.race_remaining_s = 20.0
-    state.laps_to_flag = 0
     said = orientation(state)
     assert "to go" not in said, said
     assert "20 seconds left" in said
@@ -358,15 +372,14 @@ def test_a_fresh_stint_carries_almost_no_degradation_headroom():
     assert race._degradation_headroom_s() == 0.0
 
 
-def test_no_measured_pit_loss_names_the_direction_rather_than_a_pair():
-    """**A whole stop is not "one of two".** With no `pit_loss_s` on file the
-    discount is absent, not short, and the count carries a stop that will not
-    be driven. Dressing that as a resolvable pair is the "Lap 20 or 22"
-    defect again - a hedge whose size is a lie about the error."""
+def test_a_priced_stop_beats_a_pair_that_cannot_say_which_way():
+    """**A stop he may or may not take is not "one of two".** A pair says the
+    truth is one of two values and cannot say which; this says exactly which
+    way and what decides it - and it is a decision he is about to make rather
+    than an error bar."""
     state = timed(lap=13, laps_total=22)
     state.race_remaining_s = 660.0
-    state.laps_to_flag = 9
-    state.no_pit_loss_measured = True
+    state.stop_pending = True
     said = orientation(state)
     assert "one less if you stop" in said, said
     assert " or " not in said
@@ -380,9 +393,77 @@ def test_the_unmeasured_pit_loss_wording_can_be_played_from_the_pack():
 
     state = timed(lap=13, laps_total=22)
     state.race_remaining_s = 660.0
-    state.laps_to_flag = 9
-    state.no_pit_loss_measured = True
+    state.stop_pending = True
     line = orientation(state)
     clips = set(manifest.clips())
     missing = [c for c in (manifest.segments_for(line) or ()) if c not in clips]
     assert not missing, (line, missing)
+
+
+def test_the_clock_is_rounded_down_so_it_never_flatters():
+    """At 91 s, rounding to nearest says "2 minutes left" - 29 s more race
+    than there is, at the point where 29 s is a third of a lap. The green
+    detection already runs the countdown long by an unmeasured amount in the
+    same direction, and two overstatements compounding is how he plans a lap
+    he does not have."""
+    state = timed()
+    for seconds, expected in ((91.0, "91 seconds left."),
+                              (99.0, "99 seconds left."),
+                              (119.0, "1 minute left."),
+                              (150.0, "2 minutes left."),
+                              (179.0, "2 minutes left."),
+                              (180.0, "3 minutes left.")):
+        state.race_remaining_s = seconds
+        assert minutes_left(state) == expected, seconds
+
+
+# ------------------------------- tests that bite on behaviour, not on presence
+
+def test_putting_the_stop_discount_back_would_break_the_stay_out_call():
+    """**Three rounds of review found tests that could not fail.** This one
+    drives the fuel decision that the discount actually broke.
+
+    With the stop discounted out of the distance, `stay_out_call` said
+    "Staying out? You can make it. Fuel is good to the flag." on 19.0 L with
+    four crossings left at 6.0 L/lap - 0.83 laps short, about five litres. The
+    guard is not "is there a second field" but "does the fuel answer change".
+    """
+    from pitcrew.race.calls import stay_out_call
+
+    state = timed(lap=12, laps_total=16)
+    state.race_remaining_s = 320.0
+    state.stint_ends_on_lap = 10          # the box lap has gone by
+    state.fuel_l = 19.0
+    state.fuel_per_lap_l = 6.0
+    assert state.laps_remaining() == 4
+    assert stay_out_call(state) is None, (
+        "the fuel does not reach - the box call has to stand")
+
+    # And the discounted distance is exactly what flipped it.
+    state.laps_total = 15                 # one lap taken out, as the bug did
+    assert state.laps_remaining() == 3
+    assert stay_out_call(state) is not None, (
+        "this is the failure the discount caused; if it no longer reproduces "
+        "the guard above is testing nothing")
+
+
+def test_the_fuel_margin_does_not_widen_just_because_the_count_is_hedged():
+    """`laps_estimate_firm` sizes fuel margins - `fuel_margin_l` returns a
+    WHOLE LAP when it is False - so widening it for the voice put a spare lap
+    in every timed-race tank. About six litres at Yas, six seconds parked at
+    the measured 1.002 L/s, and he refused exactly that on file. Two readers,
+    two flags."""
+    from pitcrew.race.coordinator import RaceCoordinator
+
+    firm = [name for name in dir(RaceCoordinator) if "degradation" in name]
+    assert firm, "the headroom exists"
+    source = RaceCoordinator._update_clock_distance.__doc__ or ""
+    import inspect
+    body = inspect.getsource(RaceCoordinator._update_clock_distance)
+    firm_line = [ln for ln in body.splitlines()
+                 if "laps_estimate_firm = bool(" in ln]
+    assert firm_line, "the flag is still set here"
+    after = body[body.index("laps_estimate_firm = bool("):]
+    fill_expr = after[:after.index(")")]
+    assert "_degradation_headroom_s" not in fill_expr, (
+        "the fuel-sizing flag must not carry the voice's hedge")

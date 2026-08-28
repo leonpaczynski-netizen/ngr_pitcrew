@@ -826,27 +826,12 @@ class RaceCoordinator:
             return 0
         return pending
 
-    def _laps_to_flag(self, lap_ms: int | None,
-                      left: int | None) -> int | None:
-        """How many crossings there will actually be, stops taken out.
-
-        The same arithmetic as `_laps_after_stops` and a different question,
-        which is why it is a second method rather than a shared one. That one
-        sizes a FILL and deliberately under-discounts so an overstated
-        discount cannot run him dry; this one is the distance the driver is
-        told, where under and over are both simply wrong.
-        """
-        pending = self._pending_stops()
-        if not pending or not self.pit_loss_s:
-            return left
-        return self.clock.laps_left(lap_ms, less_s=pending * self.pit_loss_s)
-
     # **The top of CLAUDE.md 5.1's phase-2 degradation band**, in seconds per
-    # lap of cumulative loss. `[DOCTRINE]`, and it is used here for one thing
-    # only: to make the engineer LESS certain. Using an assumed figure to
-    # widen a hedge is legitimate where using it to assert would not be - it
-    # can only ever move the answer from "flat number" to "one of two", never
-    # the other way, so no claim rests on it being right.
+    # lap of cumulative loss. `[DOCTRINE]`, and it is used for one thing only:
+    # to make the engineer LESS certain. Using an assumed figure to widen a
+    # hedge is legitimate where using it to assert would not be - it can only
+    # move the answer from a flat number to one of two, never the other way,
+    # so no claim rests on it being right.
     DEGRADATION_S_PER_LAP = 1.5
 
     def _degradation_headroom_s(self) -> float:
@@ -869,37 +854,20 @@ class RaceCoordinator:
         degradation is below this driver's own detection floor - sigma 0.918 s
         puts it at 1.74 s/lap against a 0.5-1.5 band - so no trend can be
         fitted from his laps, and swapping the median for a recent window
-        scored WORSE on the three timed races on file (30% against 58%). What
-        can be done honestly is to stop calling the answer firm when it is
-        knowingly biased, which is what this is for.
+        scored WORSE on the three timed races on file, 30% against 58%.
 
         Halved because the bias grows through the stint and this is its
         average over the laps that made the median.
+
+        **`laps_since_stop` is an imperfect proxy** and is named as one: the
+        predictor is a whole-race median, not a stint one, so a tyre change
+        snaps this to zero at the crossing where the median is most
+        contaminated by the worn laps before it. It errs toward saying the
+        count is firm just after a stop, which is where the margin is widest
+        anyway. Fixing it properly means a stint-scoped predictor.
         """
         stint_laps = max(0, self.state.laps_since_stop)
         return self.DEGRADATION_S_PER_LAP * stint_laps / 2.0
-
-    def _stop_discount_is_short(self) -> bool:
-        """Whether the laps-to-flag discount is known to be incomplete.
-
-        Two different claims, and both keep the count off "firm":
-
-        * **A discount that is short.** `pit_loss_s` is the track constant and
-          is measured ex-fuel; CLAUDE.md §5.4 puts the fill on top at 0.5-1.0 s
-          per 10% of tank. The count is a little long because of it.
-        * **No discount at all.** With no `pit_loss_s` measured for the
-          circuit, `_laps_to_flag` returns the raw count and it is a WHOLE
-          STOP long - a much larger error wearing the same hedge. It is named
-          separately by `no_pit_loss_measured` so the call can say which.
-
-        Guessing a coefficient for either is the thing this project refuses
-        everywhere else.
-        """
-        return self._pending_stops() > 0
-
-    def _no_pit_loss_measured(self) -> bool:
-        """A stop is coming and nothing has measured what one costs here."""
-        return self._pending_stops() > 0 and not self.pit_loss_s
 
     def _laps_after_stops(self, lap_ms: int | None,
                           left: int | None) -> int | None:
@@ -1000,7 +968,6 @@ class RaceCoordinator:
         # right at all five. This is the figure the driver is told, and he
         # asked for it to be right.
         left = self.clock.laps_left(lap_ms)
-        to_flag = self._laps_to_flag(lap_ms, left)
         self.state.clock_corroborated = self.clock.corroborated
         # Carried onto the state so the lap-count calls can say which fault
         # they are living with - see `calls._laps_to_go`.
@@ -1025,15 +992,28 @@ class RaceCoordinator:
         # unquantified amount - so the count is offered as one of two rather
         # than flat. Inventing a coefficient for the fill would be the thing
         # this project refuses everywhere else.
-        # Both uncertainties, in the units the margin is in. The noise term
-        # is what the median may be out by from lap to lap; the degradation
-        # term is what it is out by on purpose, because it was measured on
-        # laps the tyre was younger for.
+        # **The noise test, and only the noise test.** This flag has a second
+        # reader - `fuel_margin_l(lap_count_firm=...)`, which returns a WHOLE
+        # LAP of margin when it is False - so widening it to cover the
+        # degradation bias made every timed-race fill carry a spare lap for
+        # the whole race. About six litres at Yas and six seconds parked at
+        # the measured 1.002 L/s, which is the thing the driver refused
+        # outright. One name doing two jobs is rule 13 inside the code.
         self.state.laps_estimate_firm = bool(
             margin is not None and sigma is not None
-            and margin >= (sigma / 1000.0) + self._degradation_headroom_s()
-            and not self._stop_discount_is_short())
-        self.state.no_pit_loss_measured = self._no_pit_loss_measured()
+            and margin >= sigma / 1000.0)
+        # What the VOICE needs, which is a different question: is the number
+        # good enough to say flat? Noise, plus the bias the noise test cannot
+        # see. Nothing sizes a fill off this.
+        self.state.laps_count_hedged = bool(
+            margin is None or sigma is None
+            or margin < (sigma / 1000.0) + self._degradation_headroom_s())
+        # **He may simply not stop, and he often does not.** A count that has
+        # had a stop taken out of it is wrong by a lap when the stop is not
+        # taken - and he skipped one in two recorded races and was right both
+        # times. So the count is the undiscounted one, which is right if he
+        # stays out, and the stop is named as what it would cost.
+        self.state.stop_pending = self._pending_stops() > 0
         if left is None:
             # No lap time to divide by. The plan's frozen distance is all
             # there is, and it stands rather than being replaced by a guess.
@@ -1062,7 +1042,6 @@ class RaceCoordinator:
         # for the same reason `laps_after_stops` is kept apart for the fill.
         self.state.laps_total = (self.state.lap + self.state.laps_missed()
                                  + left)
-        self.state.laps_to_flag = to_flag
         # **What the fuel path counts, which is not what the flag counts.**
         # A stop is a minute of clock that covers no ground. `laps_total`
         # ceilings over the whole window including it, so before a stop is

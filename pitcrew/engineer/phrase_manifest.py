@@ -500,17 +500,16 @@ def _no_clock_line() -> str:
     return NO_CLOCK
 
 
-def _no_pit_loss_line() -> str:
-    """`orientation`'s wording when no pit loss has been measured here.
+def _stop_pending_line() -> str:
+    """`orientation`'s wording while a stop is still on the plan.
 
-    It lands at every crossing of the second half at a circuit nobody has
-    measured a stop for, which is most of them - so a miss is a live
-    synthesis on every lap of that half.
+    It lands at every crossing of the second half of any race with a stop
+    still to come, so a miss here is a live synthesis on every one of them.
     """
     from pitcrew.race.calls import RaceState, orientation
 
     state = RaceState(lap=13, laps_total=22, race_minutes=30.0,
-                      laps_to_flag=9, no_pit_loss_measured=True)
+                      stop_pending=True)
     state.race_remaining_s = 660.0
     # The final sentence only: `_tails_of` splits ONE sentence on its ONE
     # number, and the whole line carries three.
@@ -523,11 +522,11 @@ def _laps_to_go_line(n: int) -> str:
     return laps_to_go(n)
 
 
-def _minutes_line() -> str:
+def _minutes_line(seconds: float = 600.0) -> str:
     from pitcrew.race.calls import RaceState, minutes_left
 
     state = RaceState(lap=1)
-    state.race_remaining_s = 600.0
+    state.race_remaining_s = seconds
     return minutes_left(state)
 
 
@@ -610,8 +609,11 @@ def orientation_lines() -> tuple[str, ...]:
         # fall to live synthesis - which is a pause on every crossing of the
         # race at the cadence he asked for.
         *_tails_of(_laps_to_go_line(2), _laps_to_go_line(1),
-                   _minutes_line(), _seconds_line(), _colour_milestone(10),
-                   _no_pit_loss_line()),
+                   # 110 s is the singular: "1 minute left." has its own
+                   # tail and would otherwise miss in the last two minutes.
+                   _minutes_line(), _minutes_line(110.0),
+                   _seconds_line(), _colour_milestone(10),
+                   _stop_pending_line()),
         # Where the fuel stands, which is the clause that ends every
         # heartbeat. Both references, because `fuel_frame` produces both and
         # a stop that gets cancelled mid-race swaps one for the other.

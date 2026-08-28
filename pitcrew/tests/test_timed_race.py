@@ -390,6 +390,7 @@ def test_an_unresolvable_lap_count_is_named_as_two_rather_than_dropped():
                       laps_to_go_estimate=19)
     state.race_remaining_s = 1200.0
     state.last_said_lap = 0
+    state.laps_count_hedged = True
     call = next_call(state)
     assert call.kind == STATUS
     assert "18 or 19 laps to go" in call.call, call.call

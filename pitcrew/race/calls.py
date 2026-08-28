@@ -620,10 +620,13 @@ class RaceState:
     # clock. Deliberately NOT `laps_total`: that is the race distance every
     # fuel calculation measures against, and a stop discount belongs in what
     # the driver is TOLD, not in what the tank is filled for.
-    laps_to_flag: int | None = None
-    # A stop is coming and nothing has measured what one costs at this
-    # circuit, so the count carries a whole stop it cannot take off.
-    no_pit_loss_measured: bool = False
+    # Whether the spoken count needs a hedge - noise, plus the degradation
+    # bias `laps_estimate_firm` cannot see. Deliberately NOT that flag: it
+    # sizes fuel margins, and widening it put a spare lap in every tank.
+    laps_count_hedged: bool = False
+    # A stop is still on the plan. The count assumes he does NOT take it,
+    # because he may not, so the stop is named as what it would cost.
+    stop_pending: bool = False
     # The kind of the last thing said, beside the lap it was said on.
     last_said_kind: str | None = None
     # **Seconds left on the race clock**, for a timed race. The app timer from
@@ -1963,9 +1966,20 @@ def minutes_left(state: RaceState) -> str:
     left = state.race_remaining_s
     if left is None:
         return ""
-    if left < 90:
-        return f"{max(0, int(round(left)))} seconds left."
-    return f"{int(round(left / 60.0))} minutes left."
+    # **Under one hundred, not under two minutes.** The pack renders number
+    # words to `MAX_LAPS`, which is 99, so "119 seconds left." cannot be split
+    # into a number and a tail and falls whole to live synthesis - a pause in
+    # the last two minutes of the race. Ninety-nine seconds is also the point
+    # past which minutes are the unit he thinks in.
+    if left < 100:
+        return f"{max(0, int(left))} seconds left."
+    # **Rounded DOWN, never to nearest.** At 91 s to-nearest says "2 minutes
+    # left", overstating by 29 s at the moment of the race where 29 s is a
+    # third of a lap - and the green-detection lag already runs the clock
+    # long by an unmeasured amount in the same direction. Two overstatements
+    # compounding is how he plans a lap he does not have.
+    minutes = int(left // 60)
+    return f"{minutes} minute left." if minutes == 1 else         f"{minutes} minutes left."
 
 
 def laps_to_go(laps: int, *, uncertain: bool = False) -> str:
@@ -2045,31 +2059,33 @@ def orientation(state: RaceState) -> str:
     # the coordinator has recomputed the distance, but only the accessor
     # applies the missed-crossing correction - and a lap the app never saw is
     # exactly the error this call exists to stop him inheriting.
-    # **The spoken count is `laps_to_flag`, not `laps_remaining()`.** They
-    # answer different questions: how many crossings there will be, against
-    # what distance the fuel has to cover. Keeping them apart is what stops a
-    # stop discount reaching the fill - see
-    # `coordinator._update_clock_distance`.
-    laps = (state.laps_to_flag if state.laps_to_flag is not None
-            else state.laps_remaining())
+    # **One count, and it is the one everything else uses.** A second,
+    # stop-discounted figure lived here and was wrong twice over: inside
+    # `laps_total` it moved the race distance under the whole fuel path, and
+    # once isolated it disagreed with the answer push-to-talk and the colour
+    # line give to the same question in the same words - two numbers, one
+    # phrase, and he cannot ask which one he just heard.
+    laps = state.laps_remaining()
     if laps is None or laps < 1:
         # Under one lap the count has run out before the flag has fallen, and
         # "0 or 1 laps to go." is not a thing to say - nor is it in the pack.
         # The run-in owns this ground: `_laps_to_go` says "Last lap."
         return f"{where}. {clock}"
+    if state.stop_pending and laps > 1:
+        # **The count is what he gets if he stays out, and the stop is
+        # priced.** Discounting the stop instead assumed he takes it, and he
+        # may not: he skipped one in two recorded races and was right both
+        # times, and the discounted count was then a lap short - "3 or 4" for
+        # an answer of 5. This is not an error bar, it is a decision he is
+        # about to make, so it names which way and what decides it.
+        return (f"{where}. {clock} {laps_to_go(laps)[:-1]}, "
+                f"one less if you stop.")
     # **Both candidates when it genuinely is both.** `ceil` flips when the
     # time left is near a whole number of laps, and there the answer is not
     # unknown - it is one of two. Naming them beats picking one, and beats the
     # silence this used to fall to.
-    if state.no_pit_loss_measured:
-        # **A different claim, and a bigger one.** With no pit loss on file
-        # the count has a whole stop in it that will not be driven, which is
-        # not the "one of two" a short discount deserves. Name the direction
-        # instead of dressing an unmeasured error as a resolvable pair.
-        return (f"{where}. {clock} {laps_to_go(laps)[:-1]}, "
-                f"one less if you stop.")
     return (f"{where}. {clock} "
-            f"{laps_to_go(laps, uncertain=not state.laps_estimate_firm)}")
+            f"{laps_to_go(laps, uncertain=state.laps_count_hedged)}")
 
 
 # Laps a gauge reading may be old before the engineer asks for another, and
