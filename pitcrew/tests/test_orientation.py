@@ -180,3 +180,67 @@ def test_the_clock_actually_reaches_the_lap_row(store, event_id):
     assert row["race_elapsed_s"] is not None, "the clock never reached the row"
     assert row["race_remaining_s"] is not None
     assert row["laps_dropped"] is not None
+
+
+# ------------------------------------------------ the stop that spends clock
+
+def crossings_truth(remaining_s: float, lap_s: float, stop_s: float,
+                    stop_on: int = 1) -> int:
+    """How many crossings there will be, simulated rather than derived.
+
+    The flag falls at the first crossing after the clock expires, so this
+    walks the laps and counts them - which is the ground truth the estimate is
+    supposed to predict.
+    """
+    elapsed, laps = 0.0, 0
+    while elapsed < remaining_s:
+        elapsed += lap_s + (stop_s if laps == stop_on else 0.0)
+        laps += 1
+    return laps
+
+
+def test_a_pending_stop_takes_a_lap_off_the_count():
+    """**The systematic error the driver asked to have removed.**
+
+    A stop spends clock and covers no ground, so fewer laps fit in the time
+    left. `laps_left`'s docstring argued the other way - "a crossing still
+    happens on the lap the stop is taken" - which is true and is not the
+    point: the lap the stop is on is slower, so the LAST lap of the race falls
+    off the end.
+
+    Checked against a simulation rather than against the formula that is being
+    tested, at five remaining times. The undiscounted count is wrong at two of
+    them and the discounted count is right at all five.
+    """
+    from pitcrew.race.clock import RaceClock
+
+    lap_s, stop_s = 100.0, 30.0
+    wrong_without = 0
+    for remaining in (600.0, 610.0, 650.0, 700.0, 720.0):
+        clock = RaceClock(remaining, now=lambda: 0.0)
+        clock.start()
+        truth = crossings_truth(remaining, lap_s, stop_s)
+        plain = clock.laps_left(int(lap_s * 1000))
+        discounted = clock.laps_left(int(lap_s * 1000), less_s=stop_s)
+        assert discounted == truth, (remaining, discounted, truth)
+        wrong_without += plain != truth
+    assert wrong_without == 2, "the undiscounted count is the defect under test"
+
+
+def test_a_pending_stop_makes_the_count_uncertain():
+    """`pit_loss_s` is the track constant and is measured EX-FUEL; §5.4 puts
+    the fill on top at 0.5-1.0 s per 10% of tank. So the discount is knowingly
+    short by an amount nobody has measured, and the honest output while a stop
+    is pending is two numbers rather than a flat one. Guessing a coefficient
+    for the fill is what this project refuses everywhere else."""
+    from pitcrew.race.coordinator import RaceCoordinator
+
+    race = RaceCoordinator(
+        {"stints": [{"laps": 10, "start_lap": 1},
+                    {"laps": 10, "start_lap": 11}]}, pit_loss_s=20.0)
+    assert race._pending_stops() == 1
+    assert race._stop_discount_is_short() is True
+
+    race._apply_stint(1)                       # the stop has been taken
+    assert race._pending_stops() == 0
+    assert race._stop_discount_is_short() is False

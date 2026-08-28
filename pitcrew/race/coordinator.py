@@ -805,6 +805,42 @@ class RaceCoordinator:
                 "measures disagree; this may have been a pause",
                 lap.lap_num, racing_ms / 1000.0, pace / 1000.0, ratio)
 
+    def _pending_stops(self) -> int:
+        """Stops still ahead of the stint being run.
+
+        During the stop itself `stint_index` has not advanced - `_apply_stint`
+        moves it on PIT_EXIT - so the stop in progress still counts, which is
+        right: the clock has not absorbed its time at a crossing yet.
+        """
+        return max(0, len(self._stints) - 1 - self.state.stint_index)
+
+    def _laps_to_flag(self, lap_ms: int | None,
+                      left: int | None) -> int | None:
+        """How many crossings there will actually be, stops taken out.
+
+        The same arithmetic as `_laps_after_stops` and a different question,
+        which is why it is a second method rather than a shared one. That one
+        sizes a FILL and deliberately under-discounts so an overstated
+        discount cannot run him dry; this one is the distance the driver is
+        told, where under and over are both simply wrong.
+        """
+        pending = self._pending_stops()
+        if not pending or not self.pit_loss_s:
+            return left
+        return self.clock.laps_left(lap_ms, less_s=pending * self.pit_loss_s)
+
+    def _stop_discount_is_short(self) -> bool:
+        """Whether the laps-to-flag discount is known to be incomplete.
+
+        `pit_loss_s` is the track constant and is measured ex-fuel - CLAUDE.md
+        §5.4 puts the fuel-dependent part at 0.5-1.0 s per 10% of tank on top.
+        So with a stop still to come the discount is short by the fill, by an
+        amount nobody here has measured, and the count can be a lap long
+        because of it. That is a reason to offer two numbers, not to guess a
+        third.
+        """
+        return self._pending_stops() > 0
+
     def _laps_after_stops(self, lap_ms: int | None,
                           left: int | None) -> int | None:
         """`laps_left` again, with the stops still to come out of the clock.
@@ -887,7 +923,24 @@ class RaceCoordinator:
         # an inference over a median.
         self.state.race_remaining_s = self.clock.remaining_s
         lap_ms = self.expect.achieved_lap_time_ms() or self.planned_lap_time_ms
+        # **Two counts, and they are different questions.**
+        #
+        # `left` is the raw clock: how many laps fit if every one of them is a
+        # green lap. It is what decides the FLAG, because it is recomputed at
+        # every crossing off the time actually remaining and therefore
+        # self-corrects as the stop is taken.
+        #
+        # `to_flag` is how many crossings there will actually BE, which is
+        # fewer when a stop is still to come: the stop spends clock and covers
+        # no ground. `laps_left`'s own docstring argued the other way - "a
+        # crossing still happens on the lap the stop is taken" - and that is
+        # true and is not the point. Simulated against ground truth at
+        # remaining 600/610/650/700/720 s on a 100 s lap with a 30 s stop, the
+        # undiscounted count is wrong at 610 and 720 and the discounted one is
+        # right at all five. This is the figure the driver is told, and he
+        # asked for it to be right.
         left = self.clock.laps_left(lap_ms)
+        to_flag = self._laps_to_flag(lap_ms, left)
         self.state.clock_corroborated = self.clock.corroborated
         # Carried onto the state so the lap-count calls can say which fault
         # they are living with - see `calls._laps_to_go`.
@@ -899,9 +952,23 @@ class RaceCoordinator:
         # number. From lap five the margin runs 0.9 s and upward.
         margin = self.clock.laps_left_margin_s(lap_ms)
         sigma = self.expect.sigma_ms()
+        # **"Firm" has to mean firm against everything that can move it, not
+        # just against lap-to-lap noise.** It compared the margin to sigma
+        # alone, which is silent on the two systematic offsets that can each
+        # shift the answer by a whole lap - so it could read True while the
+        # count was one out for a reason it had never looked at.
+        #
+        # The pending stop is now IN the estimate rather than being an error
+        # in it, but only to the extent of `pit_loss_s`, which is the track
+        # constant and excludes the fill. With a stop still to come and no
+        # measured fill time, the discount is known to be short by an
+        # unquantified amount - so the count is offered as one of two rather
+        # than flat. Inventing a coefficient for the fill would be the thing
+        # this project refuses everywhere else.
         self.state.laps_estimate_firm = bool(
             margin is not None and sigma is not None
-            and margin >= sigma / 1000.0)
+            and margin >= sigma / 1000.0
+            and not self._stop_discount_is_short())
         if left is None:
             # No lap time to divide by. The plan's frozen distance is all
             # there is, and it stands rather than being replaced by a guess.
@@ -915,7 +982,7 @@ class RaceCoordinator:
         # and running dry loses the race where a lap too many costs three
         # seconds in the box.
         self.state.laps_total = (self.state.lap + self.state.laps_missed()
-                                 + left)
+                                 + (to_flag if to_flag is not None else left))
         # **What the fuel path counts, which is not what the flag counts.**
         # A stop is a minute of clock that covers no ground. `laps_total`
         # ceilings over the whole window including it, so before a stop is
