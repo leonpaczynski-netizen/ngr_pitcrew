@@ -792,6 +792,8 @@ class PitCrewController(QObject):
             self.strategy.qualifying_requested.connect(
                 self.plan_qualifying)
             self.strategy.approve_requested.connect(self.approve_strategy)
+            self.strategy.approve_loaded_requested.connect(
+                self.approve_stored_strategy)
         if self.race_screen is not None:
             self.race_screen.start_requested.connect(self.start_race)
             self.race_screen.replan_accepted.connect(
@@ -3859,6 +3861,11 @@ class PitCrewController(QObject):
 
         inputs, evidence = build_inputs(self.store, event["id"])
         self._inputs = inputs
+        # **Shown before the optimiser runs, and whatever it returns.** A plan
+        # loaded from the desk does not depend on the app being able to build
+        # one of its own - and `recommend` refusing is exactly when a loaded
+        # plan matters most.
+        self._show_loaded_plans(event["id"])
         try:
             plans = recommend(inputs)
         except StrategyImpossible as exc:
@@ -3904,6 +3911,23 @@ class PitCrewController(QObject):
         else:
             self.strategy.note("Every input measured.")
         return plans
+
+    def _show_loaded_plans(self, event_id: int) -> None:
+        """Put the plans somebody else wrote on the screen.
+
+        A stored candidate carrying a `handover` was written outside the app -
+        by the race engineer at the desk - and until now it was visible to
+        nobody: the screen rendered `recommend()`'s output and nothing else,
+        and approval took an index into that list. Fuji is the cost. Ludo's
+        one-stop plan certified clean and could not be chosen, because the
+        optimiser would not offer a fifteen-lap stint against an evidence cap
+        of six and there was no other way in.
+        """
+        if self.strategy is None:
+            return
+        rows = [row for row in self.store.list_strategies(event_id)
+                if (row.get("plan") or {}).get("handover")]
+        self.strategy.show_loaded(rows)
 
     def _forget_plans(self) -> None:
         """Drop plans built for the event we are leaving.

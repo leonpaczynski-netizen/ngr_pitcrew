@@ -235,17 +235,176 @@ class PlanCard(QWidget):
         painter.end()
 
 
+class LoadedCard(QWidget):
+    """A plan the app did not write, and the contract that came with it.
+
+    **It must not look like the optimiser's cards, and the reason is this
+    world's whole thesis: provenance never looks alike.** A loaded plan is not
+    a candidate ranked against the others - it was never costed by the same
+    model - so it carries no `+N s` delta. Rendering one would be a fabricated
+    comparison, and a fabricated comparison in stencil is exactly the failure
+    the registers exist to prevent.
+
+    What it carries instead is the thing the optimiser's plans cannot have:
+    an author, and a playbook. `strategy/handover.py` states the split - Ludo
+    plans, George executes, and the bounds George may move inside are part of
+    the handover rather than something the app decides. The driver has to know
+    those bounds before the green, not after, so they are on the card he
+    approves rather than a screen away.
+
+    Three registers, doing the work they already do. The author and the plan's
+    own figures are **crayon**: a human declared them, the same as a setup
+    sheet he pastes in. The certificate is **derived**: the app worked out
+    whether the car can execute someone else's plan. What the certificate
+    could not check is named too, because silence is never a pass, and a plan
+    certified by a gate that skipped half its tests carries the authority
+    without the arithmetic.
+    """
+
+    selected = pyqtSignal(int)
+
+    def __init__(self, strategy_id: int, row: dict,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        from pitcrew.strategy.handover import author_of, playbook_of
+
+        self.strategy_id = strategy_id
+        self._chosen = False
+        plan = row.get("plan") or {}
+        handover = plan.get("handover") or {}
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        author = author_of(plan) or "the desk"
+        self.setAccessibleName(f"{row.get('label') or 'Loaded plan'}, "
+                               f"written by {author}")
+
+        column = QVBoxLayout(self)
+        column.setContentsMargins(16, 12, 16, 14)
+        column.setSpacing(theme.GAP_TIGHT)
+
+        head = QHBoxLayout()
+        head.setSpacing(theme.GAP)
+        head.addWidget(StencilLabel(row.get("label") or "Loaded plan",
+                                    size=15, colour=theme.STENCIL,
+                                    tracking=10.0))
+        head.addStretch(1)
+        # **Who wrote it, where the others carry their ranking.** The
+        # optimiser's cards say "Fastest" or "+1.4 s" because they were costed
+        # against each other. This one was not, so the slot says the thing
+        # that IS true about it.
+        head.addWidget(Declared(author.upper()))
+        column.addLayout(head)
+
+        stints = plan.get("stints") or []
+        column.addWidget(StintBar(_as_stints(stints)))
+
+        laps = plan.get("pit_laps") or []
+        detail = ", ".join(f"box lap {lap}" for lap in laps) or "run to the flag"
+        constraint = plan.get("binding_constraint") or "an unnamed limit"
+        column.addWidget(BodyLabel(
+            f"{detail}. Limited by {constraint}.",
+            size=13, colour=theme.STENCIL_DIM, wrap=True))
+
+        certificate = handover.get("certificate") or {}
+        for warning in certificate.get("warnings") or ():
+            column.addWidget(Derived(warning, colour=theme.DERIVED))
+        for gap in certificate.get("unchecked") or ():
+            # Named, not dropped. A check that could not run is not a check
+            # that passed, and the driver is the only one who can decide
+            # whether to race on it.
+            column.addWidget(Derived(f"Not checked: {gap}",
+                                     colour=theme.STENCIL_DIM))
+
+        entries = playbook_of(plan)
+        if entries:
+            column.addWidget(StencilLabel(
+                "George may, on his own", size=11,
+                colour=theme.STENCIL_DIM, tracking=14.0))
+            for entry in entries:
+                column.addWidget(BodyLabel(
+                    f"{entry.trigger.replace('_', ' ')} - "
+                    f"{entry.action.replace('_', ' ')} "
+                    f"when {entry.when}"
+                    + (f", until {entry.until}" if entry.until else ""),
+                    size=13, colour=theme.CRAYON, wrap=True))
+
+        unhandled = handover.get("unhandled") or []
+        if unhandled:
+            # **The half of the contract he actually has to know.** Anything
+            # outside the playbook is George reporting rather than deciding,
+            # and a driver who has not been told that will read the silence as
+            # the situation being handled.
+            # **`STENCIL_DIM`, not `STRUCK`.** Struck means removed from the
+            # count - placeholders, disabled controls, an excluded lap. This
+            # is prose, and it is the most consequential prose on the card:
+            # the driver reading it is learning what George will stay silent
+            # about. Setting it in the ink for things that do not count, at
+            # 2.93:1, would be the register saying the opposite of the words.
+            column.addWidget(BodyLabel(
+                "He will report and decide nothing on: "
+                + ", ".join(t.replace("_", " ") for t in unhandled) + ".",
+                size=13, colour=theme.STENCIL_DIM, wrap=True))
+
+    def setChosen(self, chosen: bool) -> None:  # noqa: N802 - Qt naming
+        self._chosen = chosen
+        self.update()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.selected.emit(self.strategy_id)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return,
+                           Qt.Key.Key_Enter):
+            self.selected.emit(self.strategy_id)
+            return
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(
+            theme.SHOULDER_HI if self._chosen else theme.SHOULDER))
+        painter.setPen(QPen(QColor(
+            theme.CRAYON if self._chosen else theme.TREAD), 1))
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        painter.end()
+
+
+class _Stint:
+    """What `StintBar` reads, off a stored plan's plain dicts."""
+
+    __slots__ = ("laps", "compound")
+
+    def __init__(self, laps: int, compound: str | None) -> None:
+        self.laps, self.compound = laps, compound
+
+
+def _as_stints(rows: list) -> list:
+    return [_Stint(int(r.get("laps") or 0), r.get("compound"))
+            for r in rows if isinstance(r, dict)]
+
+
 class StrategyScreen(QWidget):
     """Build a plan from the practice evidence, then approve one."""
 
     build_requested = pyqtSignal()
     qualifying_requested = pyqtSignal()
     approve_requested = pyqtSignal(int)
+    # **A separate signal, because it carries a different kind of number.**
+    # `approve_requested` sends an INDEX into the optimiser's list; this sends
+    # a stored row's id. One signal carrying both would be two meanings on one
+    # wire, which is how a plan gets approved by ordinal against a list it was
+    # never in.
+    approve_loaded_requested = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._cards: list[PlanCard] = []
+        self._loaded_cards: list[LoadedCard] = []
         self._chosen = 0
+        # The stored id of a loaded plan the driver picked, or None while the
+        # selection is one of the app's own.
+        self._chosen_loaded: int | None = None
         self._build()
 
     def _build(self) -> None:
@@ -330,6 +489,14 @@ class StrategyScreen(QWidget):
              "a compound tagged on those laps",
              "a tyre-gauge reading, for the wear rate"))
         self.plan_layout.addWidget(self.plan_empty)
+        # **Loaded plans sit above the optimiser's, and the rule says why.**
+        # `handover.py`'s own words: Ludo's plan is the plan, and the app's is
+        # the fallback and the comparison. Ordering them the other way would
+        # put the fallback first on the screen where the choice is made.
+        self.loaded_layout = QVBoxLayout()
+        self.loaded_layout.setContentsMargins(0, 0, 0, 0)
+        self.loaded_layout.setSpacing(theme.GAP)
+        self.plan_layout.insertLayout(0, self.loaded_layout)
         self.plan_layout.addStretch(1)
         scroller.setWidget(self.plan_holder)
 
@@ -470,12 +637,19 @@ class StrategyScreen(QWidget):
         row.addWidget(self.footer_note, 1)
         self.approve_button = MarkButton("Approve for the race", primary=True)
         self.approve_button.setEnabled(False)
-        self.approve_button.clicked.connect(
-            lambda: self.approve_requested.emit(self._chosen))
+        self.approve_button.clicked.connect(self._on_approve)
         row.addWidget(self.approve_button)
         return row
 
     # ------------------------------------------------------------------ data
+
+    def _on_approve(self) -> None:
+        """Approve whichever card is chosen, by the route that fits it."""
+        if self._chosen_loaded is not None:
+            self.approve_loaded_requested.emit(self._chosen_loaded)
+            return
+        if self._cards:
+            self.approve_requested.emit(self._chosen)
 
     def _on_save(self) -> None:
         """The primary action, under the name the shell looks for.
@@ -485,12 +659,42 @@ class StrategyScreen(QWidget):
         Strategy answered to none of them, so the key was silently inert on
         the screen whose primary action is approving the race plan.
         """
-        if self._cards:
-            self.approve_requested.emit(self._chosen)
+        self._on_approve()
+
+    def show_loaded(self, rows) -> None:
+        """Plans written elsewhere and loaded in, above the app's own.
+
+        `rows` are stored strategy rows carrying a `handover`. They are kept in
+        their own layout rather than merged into the optimiser's list, because
+        merging them would put a plan nobody costed into a ranking - and the
+        ranking is the only thing "+1.4 s" means.
+        """
+        self._clear(self.loaded_layout)
+        self._loaded_cards.clear()
+        for row in rows or ():
+            card = LoadedCard(row["id"], row)
+            card.selected.connect(self._on_loaded_selected)
+            self.loaded_layout.addWidget(card)
+            self._loaded_cards.append(card)
+        if rows:
+            # A rule that names the division, the way a `Plate`'s label is
+            # struck through its own edge. Without it two groups of cards read
+            # as one list with an unexplained gap.
+            self.loaded_layout.addWidget(StencilLabel(
+                "The app's own, for comparison", size=11,
+                colour=theme.STENCIL_DIM, tracking=14.0))
+        self._sync_selection()
+        self.approve_button.setEnabled(
+            bool(self._cards) or bool(self._loaded_cards))
+
+    def _on_loaded_selected(self, strategy_id: int) -> None:
+        self._chosen = None
+        self._chosen_loaded = strategy_id
+        self._sync_selection()
 
     def show_plans(self, plans, evidence, *, approved_index: int | None = None,
                    timed: bool = False) -> None:
-        self._clear(self.plan_layout)
+        self._clear(self.plan_layout, keep_layouts=True)
         self._cards.clear()
         # The empty state survives _clear so it can come back: a rebuild that
         # produces nothing has to say so again, not leave a blank plate.
@@ -507,14 +711,21 @@ class StrategyScreen(QWidget):
         for index, plan in enumerate(plans):
             card = PlanCard(index, plan, best=index == 0)
             card.selected.connect(self._on_selected)
-            self.plan_layout.insertWidget(index, card)
+            # After the loaded sub-layout, which is item 0.
+            self.plan_layout.insertWidget(index + 1, card)
             self._cards.append(card)
         self.plan_layout.addStretch(1)
 
         self._show_evidence(evidence)
-        self._chosen = 0 if approved_index is None else approved_index
+        # **A loaded plan keeps the selection.** Rebuilding the app's own
+        # list is not a reason to move the driver off a plan he chose from the
+        # desk - and defaulting back to card 0 would silently re-select the
+        # optimiser's fastest, which is the plan the load exists to replace.
+        if self._chosen_loaded is None:
+            self._chosen = 0 if approved_index is None else approved_index
         self._sync_selection()
-        self.approve_button.setEnabled(bool(plans))
+        self.approve_button.setEnabled(
+            bool(plans) or bool(self._loaded_cards))
 
         # **Cleared whether or not there is anything to put back.** Both the
         # clear and every `add` sat inside `if plans:`, so a refused rebuild -
@@ -565,28 +776,51 @@ class StrategyScreen(QWidget):
         for item in evidence:
             self.evidence_layout.addWidget(_EvidenceRow(item))
 
-    def _clear(self, layout) -> None:
+    def _clear(self, layout, *, keep_layouts: bool = False) -> None:
         """Empty a layout, keeping the empty-state block alive.
 
         It is detached rather than destroyed, because a rebuild that produces
         no plans has to say so again - and a deleted widget cannot.
+
+        `keep_layouts` puts back any nested layout it takes out. The plan
+        plate holds the loaded cards in a sub-layout, and rebuilding the app's
+        own plans must not throw away a plan the driver loaded from the desk -
+        a `takeAt` that drops the layout leaves those cards parented to
+        nothing and they vanish on the next build.
         """
         keep = (getattr(self, "plan_empty", None),
                 getattr(self, "evidence_empty", None))
+        nested = []
         while layout.count():
             entry = layout.takeAt(0)
+            if entry.layout() is not None:
+                if keep_layouts:
+                    nested.append(entry.layout())
+                continue
             widget = entry.widget()
             if widget is None or widget in keep:
                 continue
             widget.deleteLater()
+        for sub in nested:
+            layout.insertLayout(0, sub)
 
     def _on_selected(self, index: int) -> None:
+        self._chosen_loaded = None
         self._chosen = index
         self._sync_selection()
 
     def _sync_selection(self) -> None:
+        """One selection across both groups.
+
+        They are two lists on one plate and the driver approves ONE plan, so
+        choosing in either has to clear the other - otherwise two cards read
+        as chosen and the button acts on whichever branch happens to win.
+        """
         for card in self._cards:
-            card.setChosen(card.index == self._chosen)
+            card.setChosen(self._chosen_loaded is None
+                           and card.index == self._chosen)
+        for loaded in self._loaded_cards:
+            loaded.setChosen(loaded.strategy_id == self._chosen_loaded)
 
     def note(self, text: str, *, warn: bool = False) -> None:
         self.footer_note.setText(text)
