@@ -509,7 +509,7 @@ def _stop_pending_line() -> str:
     from pitcrew.race.calls import RaceState, orientation
 
     state = RaceState(lap=13, laps_total=22, race_minutes=30.0,
-                      stop_pending=True)
+                      stop_pending=True, stop_costs_laps=1)
     state.race_remaining_s = 660.0
     # The final sentence only: `_tails_of` splits ONE sentence on its ONE
     # number, and the whole line carries three.

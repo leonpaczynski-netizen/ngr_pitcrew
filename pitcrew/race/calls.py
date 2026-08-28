@@ -625,8 +625,12 @@ class RaceState:
     # sizes fuel margins, and widening it put a spare lap in every tank.
     laps_count_hedged: bool = False
     # A stop is still on the plan. The count assumes he does NOT take it,
-    # because he may not, so the stop is named as what it would cost.
+    # because he may not, so the stop is priced beside it.
     stop_pending: bool = False
+    # What that stop actually costs in laps, from the clock and the measured
+    # pit loss. Usually zero. `None` where no pit loss has been measured here,
+    # and an unmeasured cost is not spoken.
+    stop_costs_laps: int | None = None
     # The kind of the last thing said, beside the lap it was said on.
     last_said_kind: str | None = None
     # **Seconds left on the race clock**, for a timed race. The app timer from
@@ -2071,15 +2075,22 @@ def orientation(state: RaceState) -> str:
         # "0 or 1 laps to go." is not a thing to say - nor is it in the pack.
         # The run-in owns this ground: `_laps_to_go` says "Last lap."
         return f"{where}. {clock}"
-    if state.stop_pending and laps > 1:
-        # **The count is what he gets if he stays out, and the stop is
-        # priced.** Discounting the stop instead assumed he takes it, and he
-        # may not: he skipped one in two recorded races and was right both
-        # times, and the discounted count was then a lap short - "3 or 4" for
-        # an answer of 5. This is not an error bar, it is a decision he is
-        # about to make, so it names which way and what decides it.
+    cost = state.stop_costs_laps
+    if state.stop_pending and cost and laps > cost:
+        # **The count is what he gets if he stays out, and the stop is priced
+        # from the model.** Discounting it instead assumed he takes it, and he
+        # may not - he skipped one in two recorded races and was right both
+        # times. Asserting a flat "one less" was worse still: on the two timed
+        # races on file the stop costs no lap at all on 15 of the 18 crossings
+        # this is spoken, so a constant told him there was less race than
+        # there is on five sixths of them.
+        #
+        # Silent when the stop costs nothing, which is the common case, and
+        # silent when nothing has measured a stop here - `stop_costs_laps` is
+        # `None` there and an unmeasured cost may not be spoken as one.
+        fewer = "one" if cost == 1 else str(cost)
         return (f"{where}. {clock} {laps_to_go(laps)[:-1]}, "
-                f"one less if you stop.")
+                f"{fewer} less if you stop.")
     # **Both candidates when it genuinely is both.** `ceil` flips when the
     # time left is near a whole number of laps, and there the answer is not
     # unknown - it is one of two. Naming them beats picking one, and beats the

@@ -869,6 +869,29 @@ class RaceCoordinator:
         stint_laps = max(0, self.state.laps_since_stop)
         return self.DEGRADATION_S_PER_LAP * stint_laps / 2.0
 
+    def _stop_costs_laps(self, lap_ms: int | None,
+                         left: int | None) -> int | None:
+        """How many laps a remaining stop actually costs, or None.
+
+        The difference between the crossings that fit with the stop's clock
+        spent and the crossings that fit without it. Usually zero: a 20 s stop
+        on a 100 s lap only removes a lap when the remaining time happens to
+        sit inside 20 s of a whole number of them.
+
+        `None` where nothing has measured a stop at this circuit -
+        `pit_loss_s` is `NOT NULL DEFAULT 20.0` on the event but the source is
+        `declared` on every row on file, and Watkins measured 15.7 s ex-fuel
+        against that 20. An unmeasured cost is not a cost to speak.
+        """
+        pending = self._pending_stops()
+        if not pending or not self.pit_loss_s or left is None:
+            return None
+        with_stop = self.clock.laps_left(
+            lap_ms, less_s=pending * self.pit_loss_s)
+        if with_stop is None:
+            return None
+        return max(0, left - with_stop)
+
     def _laps_after_stops(self, lap_ms: int | None,
                           left: int | None) -> int | None:
         """`laps_left` again, with the stops still to come out of the clock.
@@ -951,22 +974,6 @@ class RaceCoordinator:
         # an inference over a median.
         self.state.race_remaining_s = self.clock.remaining_s
         lap_ms = self.expect.achieved_lap_time_ms() or self.planned_lap_time_ms
-        # **Two counts, and they are different questions.**
-        #
-        # `left` is the raw clock: how many laps fit if every one of them is a
-        # green lap. It is what decides the FLAG, because it is recomputed at
-        # every crossing off the time actually remaining and therefore
-        # self-corrects as the stop is taken.
-        #
-        # `to_flag` is how many crossings there will actually BE, which is
-        # fewer when a stop is still to come: the stop spends clock and covers
-        # no ground. `laps_left`'s own docstring argued the other way - "a
-        # crossing still happens on the lap the stop is taken" - and that is
-        # true and is not the point. Simulated against ground truth at
-        # remaining 600/610/650/700/720 s on a 100 s lap with a 30 s stop, the
-        # undiscounted count is wrong at 610 and 720 and the discounted one is
-        # right at all five. This is the figure the driver is told, and he
-        # asked for it to be right.
         left = self.clock.laps_left(lap_ms)
         self.state.clock_corroborated = self.clock.corroborated
         # Carried onto the state so the lap-count calls can say which fault
@@ -992,28 +999,32 @@ class RaceCoordinator:
         # unquantified amount - so the count is offered as one of two rather
         # than flat. Inventing a coefficient for the fill would be the thing
         # this project refuses everywhere else.
-        # **The noise test, and only the noise test.** This flag has a second
-        # reader - `fuel_margin_l(lap_count_firm=...)`, which returns a WHOLE
-        # LAP of margin when it is False - so widening it to cover the
-        # degradation bias made every timed-race fill carry a spare lap for
-        # the whole race. About six litres at Yas and six seconds parked at
-        # the measured 1.002 L/s, which is the thing the driver refused
-        # outright. One name doing two jobs is rule 13 inside the code.
+        # **The noise test, plus the pending stop, and nothing else.** This
+        # flag has a second reader - `fuel_margin_l(lap_count_firm=...)`,
+        # which returns a WHOLE LAP of margin when it is False - so widening
+        # it to cover the degradation bias made every timed-race fill carry a
+        # spare lap for the whole race. About six litres at Yas and six
+        # seconds parked at the measured 1.002 L/s, which is the thing the
+        # driver refused outright. One name doing two jobs is rule 13 inside
+        # the code, and the voice has its own flag now.
+        #
+        # **The pending-stop term is restored, deliberately.** Taking it out
+        # along with the headroom narrowed the fill by 4.8 L at Road Atlanta
+        # and 2.2 L at Yas while a stop was still to come - the running-dry
+        # direction, changed by accident and stated nowhere. Whether he wants
+        # that narrower fill is his call to make out loud, not one to inherit
+        # from a refactor.
         self.state.laps_estimate_firm = bool(
             margin is not None and sigma is not None
-            and margin >= sigma / 1000.0)
+            and margin >= sigma / 1000.0
+            and not self._pending_stops())
         # What the VOICE needs, which is a different question: is the number
         # good enough to say flat? Noise, plus the bias the noise test cannot
         # see. Nothing sizes a fill off this.
         self.state.laps_count_hedged = bool(
             margin is None or sigma is None
             or margin < (sigma / 1000.0) + self._degradation_headroom_s())
-        # **He may simply not stop, and he often does not.** A count that has
-        # had a stop taken out of it is wrong by a lap when the stop is not
-        # taken - and he skipped one in two recorded races and was right both
-        # times. So the count is the undiscounted one, which is right if he
-        # stays out, and the stop is named as what it would cost.
-        self.state.stop_pending = self._pending_stops() > 0
+
         if left is None:
             # No lap time to divide by. The plan's frozen distance is all
             # there is, and it stands rather than being replaced by a guess.
@@ -1038,8 +1049,6 @@ class RaceCoordinator:
         # the under-fuelling direction, and running dry loses the race where a
         # lap too many costs three seconds in the box.
         #
-        # The spoken count reads `laps_to_flag` instead, which is kept apart
-        # for the same reason `laps_after_stops` is kept apart for the fill.
         self.state.laps_total = (self.state.lap + self.state.laps_missed()
                                  + left)
         # **What the fuel path counts, which is not what the flag counts.**
@@ -1058,6 +1067,28 @@ class RaceCoordinator:
         # 13 and 14 - which is well clear of anything the median can be wrong
         # by, and it is why those two are the only lap-count facts spoken.
         self.state.laps_to_go_estimate = left
+        # **He may simply not stop, and he often does not.** A count with the
+        # stop taken out of it is wrong by a lap when the stop is not taken -
+        # he skipped one in two recorded races and was right both times. So
+        # the count is the undiscounted one, right if he stays out, and the
+        # stop is priced beside it.
+        #
+        # **Priced from the model, never asserted.** "one less if you stop"
+        # as a constant is wrong on 15 of the 18 second-half crossings of the
+        # two timed races on file: at 20 s of pit loss against a 82-120 s lap
+        # the stop usually costs no lap at all, and saying otherwise told him
+        # there was less race than there is - the same direction as the clock
+        # rounding this file just fixed. `None` where no pit loss has been
+        # measured, because a cost nobody has measured may not be spoken as
+        # one (rules 3 and 5).
+        #
+        # Computed AFTER `laps_total` is written: `_pending_stops` asks
+        # `stop_still_needed`, which reads `laps_remaining()`, which reads
+        # `laps_total` - so computing it above the write measured this
+        # crossing against the previous crossing's distance and answered the
+        # stop question wrongly whenever the two differed.
+        self.state.stop_pending = self._pending_stops() > 0
+        self.state.stop_costs_laps = self._stop_costs_laps(lap_ms, left)
         if left > 0:
             return None
         # **The flag.** The app timer has expired and a lap has just been

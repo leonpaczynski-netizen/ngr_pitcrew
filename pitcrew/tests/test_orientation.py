@@ -206,34 +206,6 @@ def crossings_truth(remaining_s: float, lap_s: float, stop_s: float,
     return laps
 
 
-def test_a_pending_stop_takes_a_lap_off_the_count():
-    """**The systematic error the driver asked to have removed.**
-
-    A stop spends clock and covers no ground, so fewer laps fit in the time
-    left. `laps_left`'s docstring argued the other way - "a crossing still
-    happens on the lap the stop is taken" - which is true and is not the
-    point: the lap the stop is on is slower, so the LAST lap of the race falls
-    off the end.
-
-    Checked against a simulation rather than against the formula that is being
-    tested, at five remaining times. The undiscounted count is wrong at two of
-    them and the discounted count is right at all five.
-    """
-    from pitcrew.race.clock import RaceClock
-
-    lap_s, stop_s = 100.0, 30.0
-    wrong_without = 0
-    for remaining in (600.0, 610.0, 650.0, 700.0, 720.0):
-        clock = RaceClock(remaining, now=lambda: 0.0)
-        clock.start()
-        truth = crossings_truth(remaining, lap_s, stop_s)
-        plain = clock.laps_left(int(lap_s * 1000))
-        discounted = clock.laps_left(int(lap_s * 1000), less_s=stop_s)
-        assert discounted == truth, (remaining, discounted, truth)
-        wrong_without += plain != truth
-    assert wrong_without == 2, "the undiscounted count is the defect under test"
-
-
 def test_a_pending_stop_prices_the_stop_rather_than_hedging_it():
     """**He may simply not stop, and he often does not.**
 
@@ -249,6 +221,7 @@ def test_a_pending_stop_prices_the_stop_rather_than_hedging_it():
     state = timed(lap=13, laps_total=22)
     state.race_remaining_s = 660.0
     state.stop_pending = True
+    state.stop_costs_laps = 1
     said = orientation(state)
     assert said == "Lap 13. 11 minutes left. 9 laps to go, one less if you stop."
     assert " or " not in said
@@ -260,6 +233,7 @@ def test_the_priced_stop_stands_down_on_the_last_lap():
     state = timed(lap=21, laps_total=22)
     state.race_remaining_s = 95.0
     state.stop_pending = True
+    state.stop_costs_laps = 1
     assert orientation(state) == "Lap 21. 95 seconds left. 1 lap to go."
 
 
@@ -301,6 +275,7 @@ def test_the_spoken_count_never_moves_the_fuel_distance():
     race.state.laps_total = 16
     race.state.race_remaining_s = 400.0
     race.state.stop_pending = True
+    race.state.stop_costs_laps = 1
     assert race.state.laps_remaining() == 4, "the fuel distance is untouched"
     # **The same four, spoken.** There is one count now. A second, discounted
     # one was the defect: inside `laps_total` it moved the distance under
@@ -380,6 +355,7 @@ def test_a_priced_stop_beats_a_pair_that_cannot_say_which_way():
     state = timed(lap=13, laps_total=22)
     state.race_remaining_s = 660.0
     state.stop_pending = True
+    state.stop_costs_laps = 1
     said = orientation(state)
     assert "one less if you stop" in said, said
     assert " or " not in said
@@ -394,6 +370,7 @@ def test_the_unmeasured_pit_loss_wording_can_be_played_from_the_pack():
     state = timed(lap=13, laps_total=22)
     state.race_remaining_s = 660.0
     state.stop_pending = True
+    state.stop_costs_laps = 1
     line = orientation(state)
     clips = set(manifest.clips())
     missing = [c for c in (manifest.segments_for(line) or ()) if c not in clips]
@@ -419,51 +396,128 @@ def test_the_clock_is_rounded_down_so_it_never_flatters():
 
 # ------------------------------- tests that bite on behaviour, not on presence
 
-def test_putting_the_stop_discount_back_would_break_the_stay_out_call():
-    """**Three rounds of review found tests that could not fail.** This one
-    drives the fuel decision that the discount actually broke.
 
-    With the stop discounted out of the distance, `stay_out_call` said
-    "Staying out? You can make it. Fuel is good to the flag." on 19.0 L with
-    four crossings left at 6.0 L/lap - 0.83 laps short, about five litres. The
-    guard is not "is there a second field" but "does the fuel answer change".
-    """
-    from pitcrew.race.calls import stay_out_call
+# ------------------------- guards driven through the real coordinator, not by
+# ------------------------- hand-setting the state the coordinator computes
 
-    state = timed(lap=12, laps_total=16)
-    state.race_remaining_s = 320.0
-    state.stint_ends_on_lap = 10          # the box lap has gone by
-    state.fuel_l = 19.0
-    state.fuel_per_lap_l = 6.0
-    assert state.laps_remaining() == 4
-    assert stay_out_call(state) is None, (
-        "the fuel does not reach - the box call has to stand")
-
-    # And the discounted distance is exactly what flipped it.
-    state.laps_total = 15                 # one lap taken out, as the bug did
-    assert state.laps_remaining() == 3
-    assert stay_out_call(state) is not None, (
-        "this is the failure the discount caused; if it no longer reproduces "
-        "the guard above is testing nothing")
-
-
-def test_the_fuel_margin_does_not_widen_just_because_the_count_is_hedged():
-    """`laps_estimate_firm` sizes fuel margins - `fuel_margin_l` returns a
-    WHOLE LAP when it is False - so widening it for the voice put a spare lap
-    in every timed-race tank. About six litres at Yas, six seconds parked at
-    the measured 1.002 L/s, and he refused exactly that on file. Two readers,
-    two flags."""
+def a_clocked_race(*, pit_loss_s=20.0, stints=2, minutes=30.0, elapsed=0.0):
+    from pitcrew.race.clock import RaceClock
     from pitcrew.race.coordinator import RaceCoordinator
 
-    firm = [name for name in dir(RaceCoordinator) if "degradation" in name]
-    assert firm, "the headroom exists"
-    source = RaceCoordinator._update_clock_distance.__doc__ or ""
+    plan = {"stints": [{"laps": 10, "compound": "RS", "fuel_l": 60.0,
+                        "start_lap": 1 + 10 * n} for n in range(stints)],
+            "binding_constraint": "fuel"}
+    race = RaceCoordinator(plan, pit_loss_s=pit_loss_s)
+    race.state.race_minutes = minutes
+    clock = {"s": elapsed}
+    race.clock = RaceClock(minutes * 60.0, now=lambda: clock["s"])
+    race.clock.start()
+    race.clock_at = clock
+    return race
+
+
+def drive(race, *, lap, lap_ms, elapsed):
+    """Put the coordinator at a crossing and let it compute the distance."""
+    race.clock_at["s"] = elapsed
+    race.state.lap = lap
+    race.expect.achieved_lap_time_ms = lambda: lap_ms
+    race._update_clock_distance()
+    return race.state
+
+
+def test_the_race_distance_is_never_the_discounted_one():
+    """**The regression the whole line of work exists to prevent, guarded at
+    the level it actually happens.**
+
+    Two earlier tests claimed this and could not fail: both hand-assigned
+    `laps_total` and so never exercised `_update_clock_distance`, which is the
+    only place the defect can be reintroduced. Re-adding the discount there
+    left the whole suite green.
+
+    The distance must equal the RAW clock count, because `fuel_frame`,
+    `fuel_reaches_flag`, `fuel_target_l` and `stay_out_call` all measure
+    against it - and a lap taken out of it is the under-fuelling direction.
+    """
+    race = a_clocked_race()
+    state = drive(race, lap=12, lap_ms=100_000, elapsed=1390.0)
+    raw = race.clock.laps_left(100_000)
+    assert state.laps_total == state.lap + state.laps_missed() + raw, (
+        "laps_total is not the raw count - the fuel path has been moved")
+    assert race._pending_stops() > 0, "with no pending stop this proves nothing"
+    discounted = race.clock.laps_left(100_000, less_s=20.0)
+    assert discounted < raw, "and the discount would have differed here"
+
+
+def test_a_pending_stop_still_buys_a_full_lap_of_fuel_margin():
+    """`laps_estimate_firm` sizes fills - `fuel_margin_l` returns a WHOLE LAP
+    when it is False. The pending-stop term was dropped from it by accident
+    while splitting the voice's hedge out, narrowing the fill by 4.8 L at Road
+    Atlanta and 2.2 L at Yas: the running-dry direction, changed silently."""
+    from pitcrew.strategy.model import fuel_margin_l
+
+    race = a_clocked_race()
+    # **A margin that comfortably clears the noise**, so `firm` is decided by
+    # the pending stop and nothing else - without this the flag is False for
+    # want of a sigma and the test passes whatever the code does.
+    race.expect.sigma_ms = lambda: 500.0
+    state = drive(race, lap=12, lap_ms=100_000, elapsed=1350.0)
+    margin = race.clock.laps_left_margin_s(100_000)
+    assert margin is not None and margin > 0.5, margin
+    assert race._pending_stops() > 0
+    assert state.laps_estimate_firm is False, (
+        "a pending stop has to keep the count off firm for the FILL")
+    whole, _why = fuel_margin_l(5, 6.3, sd_l=0.225, timed=True,
+                                lap_count_firm=state.laps_estimate_firm)
+    scatter, _why = fuel_margin_l(5, 6.3, sd_l=0.225, timed=True,
+                                  lap_count_firm=True)
+    assert whole > scatter, "the fill lost its lap of margin"
+
+
+def test_the_stop_is_priced_from_the_clock_and_is_usually_silent():
+    """**A flat "one less if you stop" was wrong on 15 of 18 crossings** of
+    the two timed races on file: at 20 s of pit loss against an 82-120 s lap
+    the stop usually costs no lap at all. Saying otherwise told him there was
+    less race than there is."""
+    race = a_clocked_race()
+    # 850 s left on a 100 s lap, past halfway so the count is spoken: nine
+    # laps fit, and nine still fit with the stop's twenty seconds gone.
+    state = drive(race, lap=5, lap_ms=100_000, elapsed=950.0)
+    assert state.stop_costs_laps == 0
+    state.race_remaining_s = race.clock.remaining_s
+    state.position = 3
+    assert "if you stop" not in orientation(state), orientation(state)
+
+    # 810 s left: nine fit without the stop, eight with it.
+    state = drive(race, lap=5, lap_ms=100_000, elapsed=990.0)
+    assert state.stop_costs_laps == 1
+    state.race_remaining_s = race.clock.remaining_s
+    state.position = 3
+    assert "one less if you stop" in orientation(state), orientation(state)
+
+
+def test_an_unmeasured_stop_cost_is_not_spoken_as_one():
+    """`pit_loss_secs` is `declared` on every event on file and Watkins
+    measured 15.7 s ex-fuel against a typed-in 20. Rules 3 and 5: a cost
+    nobody has measured is not a cost to state."""
+    race = a_clocked_race(pit_loss_s=None)
+    state = drive(race, lap=5, lap_ms=100_000, elapsed=990.0)
+    assert state.stop_costs_laps is None
+    state.race_remaining_s = race.clock.remaining_s
+    state.position = 3
+    assert "if you stop" not in orientation(state), orientation(state)
+
+
+def test_the_stop_question_is_answered_against_this_crossing_s_distance():
+    """`_pending_stops` asks `stop_still_needed`, which reads
+    `laps_remaining()`, which reads `laps_total` - so asking it BEFORE the
+    distance was written measured this crossing against the previous one's,
+    and answered the stop question wrongly whenever the two differed."""
     import inspect
+
+    from pitcrew.race.coordinator import RaceCoordinator
+
     body = inspect.getsource(RaceCoordinator._update_clock_distance)
-    firm_line = [ln for ln in body.splitlines()
-                 if "laps_estimate_firm = bool(" in ln]
-    assert firm_line, "the flag is still set here"
-    after = body[body.index("laps_estimate_firm = bool("):]
-    fill_expr = after[:after.index(")")]
-    assert "_degradation_headroom_s" not in fill_expr, (
-        "the fuel-sizing flag must not carry the voice's hedge")
+    assert body.index("self.state.laps_total = ") < body.index(
+        "self.state.stop_pending = "), (
+        "the stop question is being asked against a stale distance")
+

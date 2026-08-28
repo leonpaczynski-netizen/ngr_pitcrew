@@ -525,11 +525,12 @@ class RaceClock:
         untouched: those are driven off the raw clock, which self-corrects at
         every crossing as the stop is actually taken.
 
-        **Two callers pass it, for two different questions.**
+        **Two callers pass it, and neither is the spoken distance.**
         `_laps_after_stops` sizes a FILL and deliberately under-discounts, so
-        an overstated discount cannot run him dry. `_laps_to_flag` is the
-        distance the driver is TOLD, where too long and too short are both
-        simply wrong. They are separate methods on purpose.
+        an overstated discount cannot run him dry. `_stop_costs_laps` uses it
+        to PRICE a stop the driver has not decided about - the difference
+        between the crossings that fit with its clock spent and without.
+        What he is told is the undiscounted count, because he may stay out.
 
         This docstring used to argue against discounting at all - "a crossing
         still happens on the lap the stop is taken" - which is true and is not
