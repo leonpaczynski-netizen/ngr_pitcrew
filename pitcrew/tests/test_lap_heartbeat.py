@@ -174,3 +174,44 @@ def test_a_heartbeat_does_not_withdraw_a_short_shift_instruction():
     source = inspect.getsource(controller.PitCrewController._on_race_event)
     assert "if call.kind != STATUS:" in source, \
         "the heartbeat must not reach set_short_shift"
+
+
+def test_the_heartbeat_does_not_retire_the_colour_tier():
+    """**The gauge prompt is not flavour, and it lives below the heartbeat.**
+
+    `ColourCalls._gauge` asks him to read the in-game wear gauge on a
+    straight, and its own docstring calls it worth more to the model than
+    anything else said all race - because in VR the live reader accepts
+    nothing (553 attempts at Fuji, none accepted), so his spoken reading is
+    the ONLY wear evidence that exists. The colour tier is reached on a
+    crossing that had nothing real to say. At the every-lap setting the
+    heartbeat wins every crossing, so a guard written as "was anything said"
+    retires that tier - and the gauge prompt with it - for the whole race.
+    """
+    state = a_state()
+    state.record(_status(state))
+    assert state.only_the_heartbeat_this_lap(), \
+        "the heartbeat has to be distinguishable from a real call"
+
+
+def test_a_real_call_still_owns_its_lap():
+    """The other half. A box call is not a heartbeat, and a number read out
+    over the top of one is the nine-box-calls defect with a second mouth."""
+    from pitcrew.race.calls import BOX_NOW, Call
+
+    state = a_state()
+    state.record(Call(BOX_NOW, state.lap, "Box this lap.", ""))
+    assert not state.only_the_heartbeat_this_lap()
+
+
+def test_the_interval_reaches_the_race_from_a_real_setting():
+    """It was settable only from a test file - rule 11's named failure, and
+    the fourth instance of it in this codebase this week."""
+    import inspect
+
+    from pitcrew import controller
+    from pitcrew.settings import Settings
+
+    assert hasattr(Settings(), "status_every_laps")
+    source = inspect.getsource(controller.PitCrewController.start_race)
+    assert "status_every_laps" in source, "the setting never reaches the race"

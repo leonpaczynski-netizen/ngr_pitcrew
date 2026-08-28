@@ -244,6 +244,13 @@ class Settings:
     obs_record_sessions: bool = False
 
     # --- shift beep
+    # **How often the engineer confirms where the race stands**, in laps.
+    # `1` is every crossing, which is what the driver asked for on 28 Aug
+    # 2026 and which he needs: he races with GT7's race-information HUD off -
+    # no lap number, no position, no time remaining - so those three exist
+    # nowhere except in this call. `5` is the old heartbeat, for anyone who
+    # wants silence to carry more.
+    status_every_laps: int = 1
     beep_enabled: bool = True
     # How far a short-shift moves every threshold down when the engineer asks
     # for fuel. He prefers this to leaning the fuel map, which costs power

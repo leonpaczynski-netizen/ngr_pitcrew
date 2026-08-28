@@ -616,6 +616,19 @@ class RaceState:
     mandatory_stops_left: int | None = None
     # Said once. The driver does not need telling twice that the stops are off.
     stops_off_said: bool = False
+    # The kind of the last thing said, beside the lap it was said on.
+    last_said_kind: str | None = None
+
+    def only_the_heartbeat_this_lap(self) -> bool:
+        """Whether this lap has had nothing but the heartbeat.
+
+        The question every "was the lap already spoken for" guard actually
+        wants. Asked as `last_said_lap == lap` it answers a different one, and
+        at the driver's every-lap setting the two diverge on every crossing of
+        the race.
+        """
+        return (self.last_said_lap == self.lap
+                and self.last_said_kind == STATUS)
 
     def note_wear(self, lap: int, wear: dict[str, float] | None) -> None:
         """File a gauge reading against a lap. Ignores a repeat of one lap.
@@ -659,6 +672,12 @@ class RaceState:
         # said is not silent - otherwise the status call would answer a
         # quietness that never happened.
         self.last_said_lap = call.lap
+        # **And what it was.** The heartbeat reports; it does not occupy the
+        # lap. Everything downstream that keys off "something was said this
+        # lap" has to be able to tell a real call from a heartbeat, or the
+        # every-lap setting silently takes the whole tier below it - and the
+        # gauge prompt lives in that tier.
+        self.last_said_kind = call.kind
         if call.kind not in self.said:
             self.said.append(call.kind)
         if call.severity is not None:

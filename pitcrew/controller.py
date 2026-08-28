@@ -70,8 +70,8 @@ from pitcrew.store import catalogs
 from pitcrew.store.db import (DEFAULT_SHEET_PURPOSE, WEAR_HUD_VIDEO,
                               Store)
 from pitcrew.store.identity import IDENTITY_OK
-from pitcrew.race.calls import (STATUS, STAY_OUT, fuel_target_l,
-                               fuel_to_flag_l)
+from pitcrew.race.calls import (STATUS, STATUS_EVERY_LAPS, STAY_OUT,
+                               fuel_target_l, fuel_to_flag_l)
 from pitcrew.race.coordinator import (PlanContext, RaceCoordinator,
                                       context_from_stored)
 from pitcrew.race.expectations import PRACTICE
@@ -4126,6 +4126,13 @@ class PitCrewController(QObject):
             pit_loss_s=event.get("pit_loss_secs"),
             practice_lap_samples=practice_laps,
             practice_fuel_samples=practice_laps)
+        # **The interval he asked for, reaching the race.** Built, tested, and
+        # settable only from a test file until now - CLAUDE.md rule 11's named
+        # failure, and the fourth instance of it found in this codebase this
+        # week. He races with the GT7 race HUD off, so lap, position and time
+        # remaining exist nowhere but here.
+        self.race.state.status_every_laps = max(
+            1, int(self.settings.status_every_laps or STATUS_EVERY_LAPS))
 
         actual = self._race_context(event)
         stored = (plan or {}).get("context")
@@ -4441,12 +4448,22 @@ class PitCrewController(QObject):
             self.race_screen.show_snapshot(self._race_snapshot())
         if replan is not None:
             self._voice_replan(replan)
-        if call is None:
+        heartbeat_only = (call is not None and call.kind == STATUS)
+        if call is None or heartbeat_only:
             # **Colour calls rank below everything.** They only ever reach the
             # voice on a crossing that had nothing real to say - an engineer
             # who says "nice lap" over the top of a box call has actively hurt
             # the race, and the register that stopped the nine-box-calls
             # defect must not be undone by adding a second mouth to it.
+            #
+            # **The heartbeat is not "something real to say" for this
+            # purpose.** At the driver's every-lap setting it wins every
+            # crossing, so gating on `call is None` alone retires the whole
+            # colour tier for the race - and `ColourCalls._gauge` lives there.
+            # That prompt is the ONLY wear input that exists in VR, where the
+            # live reader made 553 attempts at Fuji and accepted none: its own
+            # docstring calls it worth more to the model than anything else
+            # said all race. Trading it for a lap count is not a trade.
             if event.kind is EventKind.LAP_COMPLETED and replan is None:
                 self._voice_colour(event.data["lap"])
             return
@@ -4742,7 +4759,11 @@ class PitCrewController(QObject):
         # **Never over the engineer.** A call was made on this lap's crossing,
         # so the lap has already had its word - and a number read out on top
         # of a box call is the nine-box-calls defect with a second mouth.
-        if state.last_said_lap == state.lap:
+        # The heartbeat is the exception and has to be: it takes every
+        # crossing at the every-lap setting, and this line would then never be
+        # reached again for the rest of the race.
+        if (state.last_said_lap == state.lap
+                and not state.only_the_heartbeat_this_lap()):
             return
         call = self._colour.data_line(
             lap=state.lap,
