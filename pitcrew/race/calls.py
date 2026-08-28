@@ -621,6 +621,9 @@ class RaceState:
     # fuel calculation measures against, and a stop discount belongs in what
     # the driver is TOLD, not in what the tank is filled for.
     laps_to_flag: int | None = None
+    # A stop is coming and nothing has measured what one costs at this
+    # circuit, so the count carries a whole stop it cannot take off.
+    no_pit_loss_measured: bool = False
     # The kind of the last thing said, beside the lap it was said on.
     last_said_kind: str | None = None
     # **Seconds left on the race clock**, for a timed race. The app timer from
@@ -2045,7 +2048,8 @@ def orientation(state: RaceState) -> str:
     # **The spoken count is `laps_to_flag`, not `laps_remaining()`.** They
     # answer different questions: how many crossings there will be, against
     # what distance the fuel has to cover. Keeping them apart is what stops a
-    # stop discount reaching the fill - see `coordinator._update_clock_distance`.
+    # stop discount reaching the fill - see
+    # `coordinator._update_clock_distance`.
     laps = (state.laps_to_flag if state.laps_to_flag is not None
             else state.laps_remaining())
     if laps is None or laps < 1:
@@ -2057,7 +2061,15 @@ def orientation(state: RaceState) -> str:
     # time left is near a whole number of laps, and there the answer is not
     # unknown - it is one of two. Naming them beats picking one, and beats the
     # silence this used to fall to.
-    return f"{where}. {clock} {laps_to_go(laps, uncertain=not state.laps_estimate_firm)}"
+    if state.no_pit_loss_measured:
+        # **A different claim, and a bigger one.** With no pit loss on file
+        # the count has a whole stop in it that will not be driven, which is
+        # not the "one of two" a short discount deserves. Name the direction
+        # instead of dressing an unmeasured error as a resolvable pair.
+        return (f"{where}. {clock} {laps_to_go(laps)[:-1]}, "
+                f"one less if you stop.")
+    return (f"{where}. {clock} "
+            f"{laps_to_go(laps, uncertain=not state.laps_estimate_firm)}")
 
 
 # Laps a gauge reading may be old before the engineer asks for another, and

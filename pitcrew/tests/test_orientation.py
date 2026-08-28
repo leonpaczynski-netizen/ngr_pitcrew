@@ -324,3 +324,65 @@ def test_under_one_lap_the_count_stands_down_for_the_run_in():
     said = orientation(state)
     assert "to go" not in said, said
     assert "20 seconds left" in said
+
+
+# ------------------------------------------- what "firm" is allowed to mean
+
+def test_a_stint_that_has_run_long_is_not_called_firm():
+    """**The margin test was blind to the largest error in the count.**
+
+    The predictor is a median over laps already driven and the laps still to
+    come are slower than it. Against CLAUDE.md 5.1's phase-2 band at a 100 s
+    base lap: eighteen laps in, the remaining laps take 4.8 s/lap more than
+    the median at the bottom of the band and 14.2 s more at the top, against a
+    measured lap-to-lap sigma of 2.04 s. One lap long across the whole band,
+    two at the top of it over ten laps.
+
+    `laps_left_margin_s` is headroom before the ceiling flips, compared with
+    RANDOM noise. This is a SYSTEMATIC bias, so a test of resolvability was
+    being read as a test of correctness.
+    """
+    race = a_timed_race(stints=1)
+    race.state.laps_since_stop = 18
+    headroom = race._degradation_headroom_s()
+    assert headroom > 2.04, (
+        f"{headroom:.1f}s of bias must outweigh the 2.04s of noise the test "
+        f"used to compare against on its own")
+
+
+def test_a_fresh_stint_carries_almost_no_degradation_headroom():
+    """It has to shrink to nothing, or the count is never flat and the hedge
+    stops carrying information."""
+    race = a_timed_race(stints=1)
+    race.state.laps_since_stop = 0
+    assert race._degradation_headroom_s() == 0.0
+
+
+def test_no_measured_pit_loss_names_the_direction_rather_than_a_pair():
+    """**A whole stop is not "one of two".** With no `pit_loss_s` on file the
+    discount is absent, not short, and the count carries a stop that will not
+    be driven. Dressing that as a resolvable pair is the "Lap 20 or 22"
+    defect again - a hedge whose size is a lie about the error."""
+    state = timed(lap=13, laps_total=22)
+    state.race_remaining_s = 660.0
+    state.laps_to_flag = 9
+    state.no_pit_loss_measured = True
+    said = orientation(state)
+    assert "one less if you stop" in said, said
+    assert " or " not in said
+
+
+def test_the_unmeasured_pit_loss_wording_can_be_played_from_the_pack():
+    """It lands at every crossing of the second half of a race at a circuit
+    whose pit loss nobody has measured - which is most of them - so a miss
+    here is a live synthesis on every lap."""
+    from pitcrew.engineer import phrase_manifest as manifest
+
+    state = timed(lap=13, laps_total=22)
+    state.race_remaining_s = 660.0
+    state.laps_to_flag = 9
+    state.no_pit_loss_measured = True
+    line = orientation(state)
+    clips = set(manifest.clips())
+    missing = [c for c in (manifest.segments_for(line) or ()) if c not in clips]
+    assert not missing, (line, missing)

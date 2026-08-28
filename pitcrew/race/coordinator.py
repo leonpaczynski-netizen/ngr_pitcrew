@@ -841,17 +841,65 @@ class RaceCoordinator:
             return left
         return self.clock.laps_left(lap_ms, less_s=pending * self.pit_loss_s)
 
+    # **The top of CLAUDE.md 5.1's phase-2 degradation band**, in seconds per
+    # lap of cumulative loss. `[DOCTRINE]`, and it is used here for one thing
+    # only: to make the engineer LESS certain. Using an assumed figure to
+    # widen a hedge is legitimate where using it to assert would not be - it
+    # can only ever move the answer from "flat number" to "one of two", never
+    # the other way, so no claim rests on it being right.
+    DEGRADATION_S_PER_LAP = 1.5
+
+    def _degradation_headroom_s(self) -> float:
+        """How far the divisor may be optimistic because the tyre has gone off.
+
+        **The predictor is a median over laps already driven, and the laps
+        still to come are slower than it.** Computed against 5.1's band at a
+        base lap of 100 s: eighteen laps into a stint the remaining laps take
+        4.8 s/lap more than the median at the bottom of the band and 14.2 s
+        more at the top, against a measured lap-to-lap sigma of 2.04 s. The
+        count is one lap long across the whole band and two at the top of it
+        over ten laps.
+
+        `laps_left_margin_s` cannot see any of that: it is the headroom before
+        the ceiling flips, compared against RANDOM noise, and this is a
+        SYSTEMATIC bias. A test of resolvability was being read as a test of
+        correctness.
+
+        **The predictor itself is not changed, deliberately.** Lap-time
+        degradation is below this driver's own detection floor - sigma 0.918 s
+        puts it at 1.74 s/lap against a 0.5-1.5 band - so no trend can be
+        fitted from his laps, and swapping the median for a recent window
+        scored WORSE on the three timed races on file (30% against 58%). What
+        can be done honestly is to stop calling the answer firm when it is
+        knowingly biased, which is what this is for.
+
+        Halved because the bias grows through the stint and this is its
+        average over the laps that made the median.
+        """
+        stint_laps = max(0, self.state.laps_since_stop)
+        return self.DEGRADATION_S_PER_LAP * stint_laps / 2.0
+
     def _stop_discount_is_short(self) -> bool:
         """Whether the laps-to-flag discount is known to be incomplete.
 
-        `pit_loss_s` is the track constant and is measured ex-fuel - CLAUDE.md
-        §5.4 puts the fuel-dependent part at 0.5-1.0 s per 10% of tank on top.
-        So with a stop still to come the discount is short by the fill, by an
-        amount nobody here has measured, and the count can be a lap long
-        because of it. That is a reason to offer two numbers, not to guess a
-        third.
+        Two different claims, and both keep the count off "firm":
+
+        * **A discount that is short.** `pit_loss_s` is the track constant and
+          is measured ex-fuel; CLAUDE.md §5.4 puts the fill on top at 0.5-1.0 s
+          per 10% of tank. The count is a little long because of it.
+        * **No discount at all.** With no `pit_loss_s` measured for the
+          circuit, `_laps_to_flag` returns the raw count and it is a WHOLE
+          STOP long - a much larger error wearing the same hedge. It is named
+          separately by `no_pit_loss_measured` so the call can say which.
+
+        Guessing a coefficient for either is the thing this project refuses
+        everywhere else.
         """
         return self._pending_stops() > 0
+
+    def _no_pit_loss_measured(self) -> bool:
+        """A stop is coming and nothing has measured what one costs here."""
+        return self._pending_stops() > 0 and not self.pit_loss_s
 
     def _laps_after_stops(self, lap_ms: int | None,
                           left: int | None) -> int | None:
@@ -977,10 +1025,15 @@ class RaceCoordinator:
         # unquantified amount - so the count is offered as one of two rather
         # than flat. Inventing a coefficient for the fill would be the thing
         # this project refuses everywhere else.
+        # Both uncertainties, in the units the margin is in. The noise term
+        # is what the median may be out by from lap to lap; the degradation
+        # term is what it is out by on purpose, because it was measured on
+        # laps the tyre was younger for.
         self.state.laps_estimate_firm = bool(
             margin is not None and sigma is not None
-            and margin >= sigma / 1000.0
+            and margin >= (sigma / 1000.0) + self._degradation_headroom_s()
             and not self._stop_discount_is_short())
+        self.state.no_pit_loss_measured = self._no_pit_loss_measured()
         if left is None:
             # No lap time to divide by. The plan's frozen distance is all
             # there is, and it stands rather than being replaced by a guess.
