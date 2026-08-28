@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from pitcrew.diagnostics import log
 from pitcrew.race.calls import (
+    STATUS,
     BOX_IGNORED_LAPS,
     BOX_NOW,
     HIGH,
@@ -975,8 +976,21 @@ class RaceCoordinator:
     SAVING_RESPONSE_AFTER = 2
 
     def _emit(self) -> Call | None:
+        """The one thing said this lap, or nothing.
+
+        **The heartbeat reports; it never occupies the lap.** At the driver's
+        every-lap setting it wins almost every crossing, and three things in
+        this app key off "nothing was said" - the saving answer below, the
+        colour calls in the controller, and the short-shift beep, which is
+        cleared by any call that does not ask for one. Left ranked purely by
+        urgency, a heartbeat would have closed the saving loop forever and
+        withdrawn a short-shift instruction the lap after it was given, both
+        without a word. So it is taken out of the running here and put back
+        only once the things that key off silence have had the lap.
+        """
         call = next_call(self.state)
-        if call is not None:
+        heartbeat = call if call is not None and call.kind == STATUS else None
+        if call is not None and heartbeat is None:
             self.state.record(call)
             if call.short_shift_drop_rpm:
                 # The loop opens here. It has never closed.
@@ -985,12 +999,17 @@ class RaceCoordinator:
             return call
 
         # **Nothing else won the lap, so close the loop if one is open.**
-        # Ranked below every real call and above the colour tier: it is not an
-        # instruction, but it is the answer to one the engineer gave.
+        # Ranked below every real call and above the heartbeat: it is not an
+        # instruction, but it is the answer to one the engineer gave, and an
+        # unclosed loop leaves the driver believing a shortfall was covered
+        # when it was not.
         answer = self._saving_response()
         if answer is not None:
             self.state.record(answer)
-        return answer
+            return answer
+        if heartbeat is not None:
+            self.state.record(heartbeat)
+        return heartbeat
 
     def _saving_response(self) -> Call | None:
         asked = getattr(self, "_saving_asked_lap", None)

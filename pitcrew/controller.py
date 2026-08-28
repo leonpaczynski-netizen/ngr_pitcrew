@@ -70,7 +70,8 @@ from pitcrew.store import catalogs
 from pitcrew.store.db import (DEFAULT_SHEET_PURPOSE, WEAR_HUD_VIDEO,
                               Store)
 from pitcrew.store.identity import IDENTITY_OK
-from pitcrew.race.calls import STAY_OUT, fuel_target_l, fuel_to_flag_l
+from pitcrew.race.calls import (STATUS, STAY_OUT, fuel_target_l,
+                               fuel_to_flag_l)
 from pitcrew.race.coordinator import (PlanContext, RaceCoordinator,
                                       context_from_stored)
 from pitcrew.race.expectations import PRACTICE
@@ -4467,7 +4468,14 @@ class PitCrewController(QObject):
         # instruction when it is not spoken. Cleared by any later call that
         # does not ask for one: a box call ends the saving, and None here is
         # "stop short-shifting" rather than "no opinion".
-        self.bridge.set_short_shift(call.short_shift_drop_rpm)
+        # **The heartbeat is exempt.** It is a report, not an instruction, and
+        # at the every-lap setting it lands on the crossing after almost every
+        # real call - so clearing on it would withdraw a short-shift the lap
+        # after it was asked for, silently, every single time. `None` from a
+        # call that instructs still means "stop short-shifting"; `None` from
+        # one that only describes the race means nothing at all.
+        if call.kind != STATUS:
+            self.bridge.set_short_shift(call.short_shift_drop_rpm)
 
         if self._engineer_speaks and replan is None:
             self.voice.say(call.spoken())

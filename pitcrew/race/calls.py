@@ -128,9 +128,27 @@ URGENCY = (CHEQUER, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
 
 # A status call every few laps, so silence means "nothing to report" rather
 # than "the app has died".
+#
+# **Settable, because the driver asked for one every lap** (28 Aug 2026:
+# *"each lap making sure I'm on track"*). `RaceState.status_every_laps`
+# overrides it, and `1` is the every-lap setting.
+#
+# A second call kind was the obvious way to do that and it is the wrong one.
+# `record()` sets `last_said_lap` for every kind, so a per-lap call of any kind
+# takes `laps_since_anything_said()` to 1 forever - which silently kills this
+# heartbeat, `_saving_response` and the colour calls (both reached only through
+# the `next_call() is None` branch), and clears the short-shift beep the lap
+# after it was asked for. One heartbeat with one meaning and a rate on it does
+# all of that damage to none of them.
 STATUS_EVERY_LAPS = 5
 
 # Fuel margin below which the plan no longer reaches the stop.
+# Under this much short, "good" is the honest word: the shortfall is inside
+# the scatter of the burn it was measured from. Past it the driver gets the
+# figure rather than reassurance - the same threshold the fuel call itself
+# acts on, deliberately, so the heartbeat and the instruction cannot disagree
+# about whether he is short.
+FUEL_STANDING_TOLERANCE_LAPS = 0.5
 FUEL_SHORT_LAPS = 0.5
 # Fuel surplus above which he is carrying a lap he does not need.
 FUEL_LONG_LAPS = 1.5
@@ -575,6 +593,8 @@ class RaceState:
     # The last lap on which the engineer said anything at all. None until he
     # has: a race that has not started is not a race that has gone quiet.
     last_said_lap: int | None = None
+    # How often the heartbeat speaks. `1` is the driver's every-lap setting.
+    status_every_laps: int = STATUS_EVERY_LAPS
 
     def note_wear(self, lap: int, wear: dict[str, float] | None) -> None:
         """File a gauge reading against a lap. Ignores a repeat of one lap.
@@ -1707,7 +1727,7 @@ def _status(state: RaceState) -> Call | None:
     if _crossing_the_line(state):
         return None
     since = state.laps_since_anything_said()
-    if since is None or since < STATUS_EVERY_LAPS:
+    if since is None or since < max(1, state.status_every_laps):
         return None
     remaining = state.laps_remaining()
     where = f"P{state.position}." if state.position else ""
@@ -1723,10 +1743,70 @@ def _status(state: RaceState) -> Call | None:
     unresolved = state.race_minutes and not state.laps_estimate_firm
     left = (f"{about}{remaining} to go."
             if remaining is not None and not unresolved else "")
-    said = f"{where} {left}".strip()
+    said = " ".join(part for part in (where, left, _fuel_standing(state))
+                    if part).strip()
     if not said:
         return None
     return Call(STATUS, state.lap, said, "")
+
+
+# What the fuel is measured against, in the words the driver hears. There are
+# two of them and they are ten laps apart.
+TO_THE_STOP = "to the stop"
+TO_THE_FLAG = "to the flag"
+
+
+def fuel_reference(state: RaceState) -> str | None:
+    """Which distance `_fuel_gap` is a gap TO, named.
+
+    **Rule 13, and this is the call that would break it.** `_fuel_target`
+    returns laps-to-the-stop while a stop is still to come and laps-to-the-flag
+    once the box lap has gone by, so the same two words - "fuel good" - mean
+    figures ten laps apart on either side of one crossing. The rule is on file
+    from a race where "laps in hand" was spoken twice in two minutes meaning
+    both: *"under a helmet the driver cannot ask which one he just heard."*
+
+    Said every lap, an unnamed reference is that mistake made twenty times. So
+    the reference is not optional and not a suffix - the sentence is not built
+    without it.
+    """
+    if state.stint_ends_on_lap is None or state.past_box_lap:
+        return TO_THE_FLAG
+    return TO_THE_STOP
+
+
+def _fuel_standing(state: RaceState) -> str:
+    """Where the fuel stands, against a named distance, or an honest silence.
+
+    Three outcomes and no fourth:
+
+    * a gap, with what it is a gap to;
+    * **no burn figure yet**, which is what `None` means and is said out loud.
+      `laps_of_fuel` is `None` until a burn exists, and the race's own burn
+      needs green laps to measure. Rendering that as "fuel good" would be
+      §4.3 wearing a sentence - a confident, well-formed answer that no
+      listener can tell from a real one.
+    * nothing at all, before there is a lap to talk about.
+
+    **What it may never say is anything about pace.** "On plan" is heard as a
+    lap-time claim, and lap time is not detectable here: measured lap-to-lap
+    sigma is 0.68-2.04 s against a 0.5-1.5 s/lap degradation band, so a pace
+    verdict is a coin flip dressed as a finding. Said once a race that is a
+    bad call; said every lap it is twenty of them.
+    """
+    if state.fuel_l is None:
+        return ""
+    if not state.fuel_per_lap_l:
+        return "No burn figure yet."
+    gap = _fuel_gap(state)
+    if gap is None:
+        return "No burn figure yet."
+    reference = fuel_reference(state)
+    if gap < -FUEL_STANDING_TOLERANCE_LAPS:
+        return f"{abs(gap):.1f} short {reference} on current burn."
+    if gap > FUEL_LONG_LAPS:
+        return f"{gap:.1f} spare {reference}."
+    return f"Fuel good {reference}."
 
 
 def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
