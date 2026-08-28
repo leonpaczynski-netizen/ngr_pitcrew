@@ -1107,8 +1107,16 @@ class RaceCoordinator:
         # stop stops being needed, it asked for 6.00 L of margin where 1.20 L
         # is right - 4.8 L, about 4.8 s stationary at the measured rate, in
         # the direction he has refused.
-        self.state.laps_estimate_firm = bool(
-            _firm_noise and not self.state.stop_pending)
+        # **The noise test, and only the noise test - as it was before any of
+        # this.** The pending-stop term was added here by me, not inherited:
+        # it forced the flag False for the whole first stint of every timed
+        # race, and `fuel_margin_l` answers False with a WHOLE LAP of fuel -
+        # 2.2-4.7 L at Yas, 3.4-5.6 L at Road Atlanta, four seconds parked at
+        # the measured rate. The driver, 29 Aug 2026: *"I will only need to
+        # stop again if I need fuel and you can work that out."* Padding the
+        # tank against a stop he has not decided on is the app declining to
+        # work it out.
+        self.state.laps_estimate_firm = _firm_noise
         if left > 0:
             return None
         # **The flag.** The app timer has expired and a lap has just been

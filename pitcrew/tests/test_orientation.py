@@ -450,31 +450,6 @@ def test_the_race_distance_is_never_the_discounted_one():
     assert discounted < raw, "and the discount would have differed here"
 
 
-def test_a_pending_stop_still_buys_a_full_lap_of_fuel_margin():
-    """`laps_estimate_firm` sizes fills - `fuel_margin_l` returns a WHOLE LAP
-    when it is False. The pending-stop term was dropped from it by accident
-    while splitting the voice's hedge out, narrowing the fill by 4.8 L at Road
-    Atlanta and 2.2 L at Yas: the running-dry direction, changed silently."""
-    from pitcrew.strategy.model import fuel_margin_l
-
-    race = a_clocked_race()
-    # **A margin that comfortably clears the noise**, so `firm` is decided by
-    # the pending stop and nothing else - without this the flag is False for
-    # want of a sigma and the test passes whatever the code does.
-    race.expect.sigma_ms = lambda: 500.0
-    state = drive(race, lap=12, lap_ms=100_000, elapsed=1350.0)
-    margin = race.clock.laps_left_margin_s(100_000)
-    assert margin is not None and margin > 0.5, margin
-    assert race._pending_stops() > 0
-    assert state.laps_estimate_firm is False, (
-        "a pending stop has to keep the count off firm for the FILL")
-    whole, _why = fuel_margin_l(5, 6.3, sd_l=0.225, timed=True,
-                                lap_count_firm=state.laps_estimate_firm)
-    scatter, _why = fuel_margin_l(5, 6.3, sd_l=0.225, timed=True,
-                                  lap_count_firm=True)
-    assert whole > scatter, "the fill lost its lap of margin"
-
-
 def test_the_stop_is_priced_from_the_clock_and_is_usually_silent():
     """**A flat "one less if you stop" was wrong on 15 of 18 crossings** of
     the two timed races on file: at 20 s of pit loss against an 82-120 s lap
@@ -555,19 +530,22 @@ def test_the_fill_flag_is_also_decided_against_this_crossing_s_distance():
         "the fill flag is being decided against a stale distance")
 
 
-def test_the_fill_flag_follows_the_stop_it_was_told_about():
-    """Behavioural, because the ordering check above is a source read and
-    those have been blind three times this week. Same state, both answers."""
+def test_a_pending_stop_does_not_pad_the_tank_on_its_own():
+    """**The driver, 29 Aug 2026:** *"I will only need to stop again if I need
+    fuel and you can work that out."*
+
+    `laps_estimate_firm` sizes fills - `fuel_margin_l` answers False with a
+    WHOLE LAP of fuel - and a pending-stop term here forced it False for the
+    entire first stint of every timed race: 2.2-4.7 L at Yas, 3.4-5.6 L at
+    Road Atlanta, about four seconds parked at the measured rate. It was not
+    inherited; it was added during this work and then restored as though it
+    were the status quo. The original is the noise test, and padding the tank
+    against a stop he has not decided on is the app declining to work it out.
+    """
     race = a_clocked_race()
     race.expect.sigma_ms = lambda: 500.0
     state = drive(race, lap=12, lap_ms=100_000, elapsed=1350.0)
-    assert state.stop_pending is True
-    assert state.laps_estimate_firm is False, (
-        "a pending stop keeps the fill off firm")
-
-    # The stop is taken: the flag has to follow on the same crossing.
-    race._apply_stint(1)
-    state = drive(race, lap=13, lap_ms=100_000, elapsed=1450.0)
-    assert state.stop_pending is False
+    assert race._pending_stops() > 0, "a stop is pending here"
     assert state.laps_estimate_firm is True, (
-        "with no stop left the fill goes back to the scatter margin")
+        "the fill is sized on the noise, not on a stop he may not take")
+
