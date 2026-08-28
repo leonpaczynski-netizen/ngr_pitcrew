@@ -38,6 +38,24 @@ from pitcrew.race.expectations import PRACTICE, Expectation
 # through here without knowing what is inside them.
 CONTRACT_KEYS = ("expects", "context")
 
+# The keys the race actually reads out of `expects`. `None` is a legitimate
+# value for each - it means nobody measured it - but the KEY has to be there,
+# because a missing key and a null one are indistinguishable to `.get` and
+# only one of them is an author's mistake.
+REQUIRED_EXPECTS = ("expected_lap_time_ms", "expected_fuel_per_lap_l")
+# And what a context has to name for `arm` to compare it against the event.
+REQUIRED_CONTEXT = ("car", "track", "race_laps")
+
+
+def _is_execution_contract(expects) -> bool:
+    return (isinstance(expects, dict)
+            and all(key in expects for key in REQUIRED_EXPECTS))
+
+
+def _is_context(context) -> bool:
+    return (isinstance(context, dict)
+            and all(key in context for key in REQUIRED_CONTEXT))
+
 
 def practice_lap_count(store, event_id: int) -> int:
     """How many counted practice laps stand behind the plan's two figures.
@@ -92,6 +110,12 @@ def stamp(store, event_id: int, plan: dict, *, inputs=None,
     if event is None:
         raise ValueError(f"no event with id {event_id}")
 
+    supplied_context = stamped.get("context")
+    if supplied_context is not None and not _is_context(supplied_context):
+        raise ValueError(
+            "the plan's `context` does not name "
+            f"{', '.join(REQUIRED_CONTEXT)} - `arm` compares it against the "
+            f"event and would refuse a good plan or accept a wrong one")
     if not stamped.get("context"):
         context = context_from_event(event)
         stamped["context"] = {
@@ -100,6 +124,19 @@ def stamp(store, event_id: int, plan: dict, *, inputs=None,
             "race_minutes": context.race_minutes,
         }
 
+    # **An author's `expects` has to be the right shape, or it is not one.**
+    # It is left alone when present - it is what THAT plan was costed against
+    # - which means a typo in a handover file passed straight through: keys
+    # nothing reads, `expected_fuel_per_lap_l` absent, and the race arms and
+    # runs blind on every per-lap comparison. That is the exact failure this
+    # module's docstring says it exists to prevent, reachable by a typo.
+    supplied = stamped.get("expects")
+    if supplied is not None and not _is_execution_contract(supplied):
+        raise ValueError(
+            "the plan's `expects` does not carry "
+            f"{', '.join(REQUIRED_EXPECTS)} - a plan whose expectations "
+            f"cannot be read arms and then reports nothing, which from the "
+            f"driver's seat is a race going to plan")
     if not stamped.get("expects"):
         if inputs is None:
             from pitcrew.strategy.evidence import build_inputs

@@ -3944,6 +3944,11 @@ class PitCrewController(QObject):
         self._inputs = None
         self._plans_event_id = None
         if self.strategy is not None:
+            # **The loaded cards go with them.** They are another event's
+            # plans the moment the event changes, and this method exists
+            # because leaving the previous event's cards on screen with
+            # Approve enabled was a defect - reintroduced for the new list.
+            self.strategy.show_loaded([])
             self.strategy.show_plans([], [], timed=False)
             self.strategy.set_status("Build a plan for this event.")
 

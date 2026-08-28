@@ -643,6 +643,36 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     )
 
 
+def _section_from_plan(plan: dict) -> dict:
+    """The export's strategy shape, built from a plan's own flat keys.
+
+    For a plan authored outside the app, which has stints and stops and a
+    binding constraint but no `export` block. Everything `Plan.as_export`
+    derives from a `RaceInputs` it never had - the compound profiles, the
+    crossover, the costed assumptions - is absent rather than invented: a
+    handover's numbers came from somewhere else and guessing their provenance
+    here would put the app's name on the engineer's arithmetic.
+    """
+    stints = [s for s in (plan.get("stints") or []) if isinstance(s, dict)]
+    if not stints:
+        return {}
+    pit_laps = plan.get("pit_laps") or []
+    return {
+        "plan": {
+            "stops": plan.get("stops"),
+            "laps": sum(int(s.get("laps") or 0) for s in stints) or None,
+            "stintLaps": [int(s.get("laps") or 0) for s in stints],
+            "compounds": [s.get("compound") for s in stints],
+            # Only the first stop travels - `pitLaps` is not in the contract's
+            # key allow-list, and `to_json` refuses a payload carrying one.
+            "pitLap": pit_laps[0] if pit_laps else None,
+        },
+        "bindingConstraint": plan.get("binding_constraint"),
+        "compoundCrossover": None,
+        "compoundProfiles": [],
+    }
+
+
 def _strategy_section(store, event_id: int) -> dict | None:
     """The approved plan, its assumptions, and every call the engineer made.
 
@@ -654,6 +684,15 @@ def _strategy_section(store, event_id: int) -> dict | None:
         return None
 
     section = dict(approved["plan"].get("export") or {})
+    if not section:
+        # **A plan the app did not write has no `export` block**, because only
+        # `Plan.as_export` makes one and a handover never goes through it. The
+        # whole strategy section then vanished - the plan, its assumptions,
+        # every call the engineer made and the outcome line - and `validate`
+        # returned no problems, so a race run to a loaded plan exported
+        # silently gutted. CLAUDE.md 5.5 requires the calls and the
+        # assumptions behind them; this is the case that had neither.
+        section = _section_from_plan(approved["plan"])
     if not section:
         return None
 

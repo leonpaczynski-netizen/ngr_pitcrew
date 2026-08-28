@@ -235,6 +235,13 @@ class PlanCard(QWidget):
         painter.end()
 
 
+# Triggers the feed carries nothing for. GT7 broadcasts no weather and no
+# flag state in any packet format, so George cannot detect either whatever a
+# playbook says - and the card must say "he cannot see it", not "he has no
+# rule", because those ask different things of the driver.
+CANNOT_SEE = ("rain", "safety_car")
+
+
 class LoadedCard(QWidget):
     """A plan the app did not write, and the contract that came with it.
 
@@ -306,14 +313,21 @@ class LoadedCard(QWidget):
             size=13, colour=theme.STENCIL_DIM, wrap=True))
 
         certificate = handover.get("certificate") or {}
+        # **Wrapped, like every other prose line here.** `Derived` does not,
+        # and a real certify warning is a sentence: measured, one of them set
+        # the card's minimum width to 1,352 px and an `unchecked` line to
+        # 1,607 px against a ~733 px plate, pushing the very thing the card
+        # exists to carry off the side of the screen. The plate's
+        # `ScrollBarAsNeeded` hid it from the width guard.
         for warning in certificate.get("warnings") or ():
-            column.addWidget(Derived(warning, colour=theme.DERIVED))
+            column.addWidget(BodyLabel(warning, size=13,
+                                       colour=theme.DERIVED, wrap=True))
         for gap in certificate.get("unchecked") or ():
             # Named, not dropped. A check that could not run is not a check
             # that passed, and the driver is the only one who can decide
             # whether to race on it.
-            column.addWidget(Derived(f"Not checked: {gap}",
-                                     colour=theme.STENCIL_DIM))
+            column.addWidget(BodyLabel(f"Not checked: {gap}", size=13,
+                                       colour=theme.STENCIL_DIM, wrap=True))
 
         entries = playbook_of(plan)
         if entries:
@@ -329,11 +343,25 @@ class LoadedCard(QWidget):
                     size=13, colour=theme.CRAYON, wrap=True))
 
         unhandled = handover.get("unhandled") or []
-        if unhandled:
-            # **The half of the contract he actually has to know.** Anything
-            # outside the playbook is George reporting rather than deciding,
-            # and a driver who has not been told that will read the silence as
-            # the situation being handled.
+        blind = [t for t in unhandled if t in CANNOT_SEE]
+        no_rule = [t for t in unhandled if t not in CANNOT_SEE]
+        if blind:
+            # **These he cannot see at all**, whatever any playbook says. GT7
+            # broadcasts no weather and no flag state in any packet format, so
+            # a rule for either is a rule that can never fire - which is worse
+            # than no rule, because the driver believes it is armed.
+            column.addWidget(BodyLabel(
+                "He cannot see " + ", ".join(t.replace("_", " ")
+                                             for t in blind)
+                + " at all - tell him.",
+                size=13, colour=theme.STENCIL_DIM, wrap=True))
+        if no_rule:
+            # **"No rule from the desk", not "he will do nothing".** The card
+            # said the second and it was false in the direction that matters:
+            # `stop_still_needed` and `stay_out_call` decide fuel and a missed
+            # stop with or without a playbook, so a driver told George would
+            # stay out of it would have been told the opposite of the truth on
+            # the one screen where he is reading the contract.
             # **`STENCIL_DIM`, not `STRUCK`.** Struck means removed from the
             # count - placeholders, disabled controls, an excluded lap. This
             # is prose, and it is the most consequential prose on the card:
@@ -341,8 +369,9 @@ class LoadedCard(QWidget):
             # about. Setting it in the ink for things that do not count, at
             # 2.93:1, would be the register saying the opposite of the words.
             column.addWidget(BodyLabel(
-                "He will report and decide nothing on: "
-                + ", ".join(t.replace("_", " ") for t in unhandled) + ".",
+                "No rule from the desk on "
+                + ", ".join(t.replace("_", " ") for t in no_rule)
+                + " - George falls back to his own.",
                 size=13, colour=theme.STENCIL_DIM, wrap=True))
 
     def setChosen(self, chosen: bool) -> None:  # noqa: N802 - Qt naming
@@ -671,6 +700,12 @@ class StrategyScreen(QWidget):
         """
         self._clear(self.loaded_layout)
         self._loaded_cards.clear()
+        # **Disarmed with the cards.** It survived them: the layout emptied,
+        # nothing rendered as chosen, Approve stayed enabled, and pressing it
+        # emitted the id of a card that was no longer on screen. A selection
+        # that is invisible and live at the same time is the worst of both.
+        if not any(row.get("id") == self._chosen_loaded for row in rows or ()):
+            self._chosen_loaded = None
         for row in rows or ():
             card = LoadedCard(row["id"], row)
             card.selected.connect(self._on_loaded_selected)
