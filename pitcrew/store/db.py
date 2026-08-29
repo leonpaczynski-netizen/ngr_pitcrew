@@ -558,6 +558,27 @@ class Store:
                 "ORDER BY updated_at DESC, id DESC", (car_name,))
         return [_setup_sheet(r) for r in rows]
 
+    def sheet_filed_on(self, sheet_id: int) -> str | None:
+        """When a sheet was last written into the app, as `YYYY-MM-DD`.
+
+        **`SetupSheet` carries no timestamp and should not.** It is the sheet
+        as a setup - values, gears, purpose, circuit - and a filing date is a
+        fact about the record rather than about the car. But the record's date
+        is exactly what `setup/doubt.py` needs: a revision document issued
+        after it is one the app was never told about, which is the highest
+        severity defect in the whole loop and the one nothing inside the app
+        could see.
+
+        The first draft of the doubt detector read `sheet.updated_at`, which
+        does not exist, so `_sheet_date` returned `None` on every sheet and the
+        detector was silent on all eight events - correct-looking, and dead.
+        """
+        rows = self._query(
+            "SELECT COALESCE(updated_at, created_at) AS filed "
+            "FROM setup_sheets WHERE id = ?", (sheet_id,))
+        filed = rows[0]["filed"] if rows else None
+        return str(filed)[:10] if filed else None
+
     def add_setup_change(self, session_id: int, change) -> int:
         change.validate()
         with self._write() as conn:

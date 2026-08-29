@@ -64,6 +64,7 @@ from pitcrew.prompts.build import KIND_LABELS, PromptRefused, build_prompt
 from pitcrew.prompts.context import gather
 from pitcrew.prompts.report import DriverReport
 from pitcrew.prompts.templates import PROMPT_VERSION
+from pitcrew.setup import doubt
 from pitcrew.setup.parse import parse_reply
 from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
 from pitcrew.store import catalogs
@@ -1959,6 +1960,7 @@ class PitCrewController(QObject):
         # somebody remembering is the ledger that held zero rows for 88
         # sessions. Silent and harmless when nothing changed.
         self._note_sheet_change()
+        self._check_setup_record(event)
 
         # The rack is NOT cleared. Going out again adds to the session's
         # evidence; it does not replace it. Three runs at one circuit are one
@@ -2364,6 +2366,40 @@ class PitCrewController(QObject):
             log("store").warning(
                 "could not file this session's setup delta: %s: %s",
                 type(exc).__name__, exc)
+
+    def _check_setup_record(self, event: dict) -> None:
+        """Ask, at the top of a session, whether anybody has checked the car.
+
+        **Rank zero, and the app has never once caught it itself.** The setup
+        record was wrong in five consecutive sessions - a Yas Marina sheet at
+        Road Atlanta, a v1 sheet against a Rev B car, `bb -1` in the car
+        against `0` on every sheet on file - and every one was found by the
+        driver mentioning it in passing.
+
+        **It prompts and it never blocks.** A session not recorded cannot be
+        re-driven, and a sheet can be corrected afterwards and the session
+        re-bound. The place that refuses is the export, because that is where
+        a wrong premise stops being a local error and becomes a knowledge
+        base's permanent learning. See `setup/doubt.py` and `export/build.py`.
+
+        The gearbox detector needs a fitted box and there is none before the
+        first lap, so at this point only the unfiled-revision half can speak.
+        That is the half that matters here anyway: it is answerable at the
+        desk, with the headset off, before he goes out.
+        """
+        try:
+            found = doubt.for_event(self.store, event)
+        except Exception as exc:                            # noqa: BLE001
+            log("setup").warning("could not check the setup record: %s: %s",
+                                 type(exc).__name__, exc)
+            return
+        if not found:
+            return
+        note = (f"Setup record unverified. {found.describe()} "
+                f"Photograph the setup and gear screens before you go out.")
+        log("setup").warning("%s", note)
+        if self.practice is not None:
+            self.practice.note(note, warn=True)
 
     def _new_hud_session(self) -> None:
         """Tell the gauge reader a new session has started.

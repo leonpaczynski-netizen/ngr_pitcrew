@@ -37,7 +37,9 @@ from pitcrew.analysis.session import (
 )
 from pitcrew.analysis.wear import wear_export
 from pitcrew.race.outcome import fuel_left_note, race_outcome
-from pitcrew.export.payload import Derived, Meta, build_payload
+from pitcrew.export.payload import (Derived, ExportRefused, Meta,
+                                    build_payload)
+from pitcrew.setup import doubt as setup_doubt
 from pitcrew.store.tyres import get_by_code
 
 # GT7 multipliers are shown as "Off" or "Nx". "Off" means the thing does not
@@ -240,6 +242,7 @@ def _reference_frames(laps: list[LapInput]) -> list[dict] | None:
 
 def build_session_export(store, session_id: int, *, notes: str = "",
                          game_version: str | None = None,
+                         acknowledge_setup_doubt: bool = False,
                          calibrated_at_race_multiplier: bool = True) -> dict:
     """The payload for one run on its own."""
     session = store.get_session(session_id)
@@ -247,12 +250,14 @@ def build_session_export(store, session_id: int, *, notes: str = "",
         raise ValueError(f"no session with id {session_id}")
     return _build(store, session, session_lap_inputs(store, session_id),
                   notes=notes, game_version=game_version,
+                  acknowledge_setup_doubt=acknowledge_setup_doubt,
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
 
 
 def build_event_export(store, event_id: int, *, kind: str = "practice",
                        notes: str = "",
                        game_version: str | None = None,
+                       acknowledge_setup_doubt: bool = False,
                        calibrated_at_race_multiplier: bool = True,
                        laps: list[LapInput] | None = None) -> dict:
     """The payload for everything run at this event.
@@ -278,6 +283,7 @@ def build_event_export(store, event_id: int, *, kind: str = "practice",
         laps = event_lap_inputs(store, event_id, kind)
     return _build(store, _merged_session(sessions), laps, notes=notes,
                   game_version=game_version,
+                  acknowledge_setup_doubt=acknowledge_setup_doubt,
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
 
 
@@ -443,6 +449,7 @@ def _fuel_capacity(session) -> tuple[float | None, str]:
 
 def _build(store, session: dict, laps: list[LapInput], *, notes: str,
            game_version: str | None = None,
+           acknowledge_setup_doubt: bool = False,
            calibrated_at_race_multiplier: bool) -> dict:
     """Assemble the `gt7-pitcrew/1.7` payload."""
     event = store.get_event(session["event_id"])
@@ -597,6 +604,42 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
 
     gearing = gearing_export(counted, sheet_gears,
                              sheet_final_gear=sheet_final_gear)
+
+    # **Rank zero: is this the setup that was actually in the car?**
+    #
+    # The record was wrong in five consecutive sessions and the app caught
+    # none of them - every one was found by the driver mentioning it in
+    # passing. An export is where a wrong premise becomes permanent: it is
+    # read by a knowledge base, which reasons from it and issues a revision
+    # built on a car that was not on the circuit.
+    #
+    # **The export refuses; the capture never does.** A session not recorded
+    # cannot be re-driven. A sheet can be corrected afterwards and the session
+    # re-bound, so the honest place to stop is here, on the way out, and not
+    # at the green.
+    doubt = setup_doubt.for_event(store, event, gearing)
+    doubt_note = ""
+    if doubt and not acknowledge_setup_doubt:
+        raise ExportRefused(
+            "the setup record for this event is not trustworthy, and an "
+            "export is where a wrong premise becomes permanent learning. "
+            + doubt.describe()
+            + " Confirm what is in the car - a photograph of the setup and "
+              "gear screens settles it - file the sheet, and export again. "
+              "If the record cannot be repaired, export with "
+              "acknowledge_setup_doubt and the doubt travels with the "
+              "payload instead of being suppressed.")
+    if doubt:
+        # **Acknowledged, never suppressed.** A refusal with no way forward
+        # makes every historical event permanently unexportable, and three of
+        # the eight on file fail this on the day it was written. But a
+        # payload that quietly drops the warning is worse than the refusal it
+        # replaced: the reader would diagnose a car nobody has confirmed and
+        # have no way to know. So the doubt goes into the notes, which is
+        # where the reader looks, in the driver's own words.
+        doubt_note = ("SETUP RECORD UNVERIFIED, exported anyway on the "
+                      "driver's instruction: " + doubt.describe())
+
     strategy = _strategy_section(store, event["id"])
 
     range_record = None
@@ -605,7 +648,7 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         if record is not None:
             range_record = record.as_export()
 
-    all_notes = " ".join(part for part in (exclusion_note(laps),
+    all_notes = " ".join(part for part in (doubt_note, exclusion_note(laps),
                                            capacity_note, length_note,
                                            notes) if part)
 
