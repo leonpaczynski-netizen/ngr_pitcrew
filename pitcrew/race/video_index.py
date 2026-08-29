@@ -120,6 +120,40 @@ def build(session: dict, laps: list[dict]) -> VideoIndex:
     return VideoIndex(path=path, started_at=started, crossings=crossings)
 
 
+def for_session(store, session_id: int) -> VideoIndex:
+    """This session's index, read straight out of the store.
+
+    **The seam that was missing.** `build` has existed since the day it was
+    written and was called from one test file and nothing else - so both replay
+    tools went on asking for `--offset` by hand, and a number typed at a prompt
+    is what stands between "run the traffic pass after every race" and "run it
+    when somebody has ten minutes". Same defect as `LiveWearSampler
+    .new_session` and `setup_changes`: built, documented, and wired to nothing.
+    """
+    session = store.get_session(session_id)
+    if session is None:
+        return VideoIndex(path=None, started_at=None, crossings={})
+    return build(session, [dict(row) for row in store.list_laps(session_id)])
+
+
+def offset_for(store, session_id: int) -> float | None:
+    """Video seconds at the first crossing, or None if it cannot be known.
+
+    This is the number both replay tools call `--offset`: the point in the
+    capture their own lap arithmetic is measured from. Derived by subtraction
+    from two stamps taken on this machine, so it is exact rather than the
+    "few seconds early" estimate the tools admit to.
+
+    **None where the app did not start the recording.** A capture made by hand
+    has no stored zero and guessing one would seek to the wrong lap in silence;
+    `--offset` stays the way in for those.
+    """
+    index = for_session(store, session_id)
+    if not index.usable:
+        return None
+    return index.at_lap(min(index.crossings))
+
+
 def seconds_into_lap(frames: list[dict], distance_m: float) -> float | None:
     """How far into a lap, in seconds, the car reached a lap distance.
 

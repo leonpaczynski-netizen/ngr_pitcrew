@@ -561,23 +561,51 @@ class Store:
     def get_race_knowledge(self, circuit_key: str, event_id: int | None = None):
         """Ludo's briefing for this race, or None where nobody wrote one.
 
-        **The event's own record wins over the circuit's**, which is what lets
-        the track constants - pit loss, the tow - be written once with a null
-        `event_id` and not re-typed for every round, while rival tendencies and
-        the expected constraint stay attached to the race they describe.
+        **The event's own record wins over the circuit's FIELD BY FIELD, not
+        row by row**, and the difference is a defect this shipped with for
+        about an hour. The track constants - pit loss, the tow, the measured
+        wear rates - are written once against the circuit with a null
+        `event_id`; rival tendencies and the expected binding constraint belong
+        to one race and are written against it. Taking the whole event row when
+        one exists meant the first traffic pass to write rivals **shadowed
+        every wear rate on that circuit**, and George silently went back to
+        modelling wear.
+
+        So the circuit record is the base and the event's non-null fields are
+        laid over it. A field the event does not set is not a claim that the
+        circuit's answer is wrong.
 
         None is a state George announces rather than one he papers over. See
         `race/knowledge.NO_NOTES`.
         """
+        from dataclasses import fields, replace
+
         from pitcrew.race.knowledge import from_row
 
         rows = self._query(
             "SELECT * FROM race_knowledge WHERE circuit_key = ? "
             "AND (event_id = ? OR event_id IS NULL) "
             # NULLs last, so the event's own record is row zero when it exists.
-            "ORDER BY event_id IS NULL, id DESC LIMIT 1",
+            "ORDER BY event_id IS NULL, id DESC",
             (circuit_key, event_id))
-        return from_row(rows[0]) if rows else None
+        if not rows:
+            return None
+
+        specific = [from_row(row) for row in rows if row["event_id"] is not None]
+        general = [from_row(row) for row in rows if row["event_id"] is None]
+        if not specific:
+            return general[0]
+        if not general:
+            return specific[0]
+
+        over, base = specific[0], general[0]
+        # `circuit_key` and `event_id` come from the overlay; everything else
+        # is taken from it only where it has something to say.
+        laid = {field.name: getattr(over, field.name)
+                for field in fields(over)
+                if field.name in ("circuit_key", "event_id")
+                or getattr(over, field.name) not in (None, (), {}, "")}
+        return replace(base, **laid)
 
     def save_race_knowledge(self, knowledge) -> int:
         """Write or replace one briefing. Validated before it is stored.

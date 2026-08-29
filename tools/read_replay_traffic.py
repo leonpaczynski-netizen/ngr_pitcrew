@@ -272,6 +272,37 @@ def lap_at(marks, seconds: float):
     return None
 
 
+def resolve_offset(store, session_id: int, given):
+    """The video offset: what was typed, or what the app already wrote down.
+
+    **`--offset` was the thing standing between "run this after every race"
+    and "run it when somebody has ten minutes."** The app records the wall
+    clock at video second zero when it starts the recording, and every lap
+    carries the wall clock at its crossing, so the number is a subtraction -
+    exact, rather than the few-seconds-early estimate this used to take.
+
+    An explicit `--offset` still wins: a capture made by hand, or a replay
+    recorded from partway through, has no stored zero and the operator is the
+    only one who knows it.
+    """
+    if given is not None:
+        return float(given), "given on the command line"
+    from pitcrew.race.video_index import offset_for
+
+    derived = offset_for(store, session_id)
+    if derived is not None:
+        return derived, "derived from the recording the app started"
+    # **Zero, and SAID.** A capture made by hand has no stored zero, and zero
+    # is the right assumption for a replay trimmed to the race - it is what
+    # this defaulted to silently before any of it was derivable. What is new
+    # is that it says so: a plausible default standing in for "nobody knows"
+    # is this codebase's most repeated defect, and the fix is not to refuse,
+    # it is to make the assumption audible.
+    return 0.0, ("ASSUMED zero - the app did not start this recording, so "
+                 "there is no stored video zero. Pass --offset if the "
+                 "capture does not begin at the first crossing")
+
+
 def main() -> int:
     import numpy as np
     from PIL import Image
@@ -287,8 +318,13 @@ def main() -> int:
                          "taking places against nothing but distant contacts, "
                          "and at 4 s the same laps show the car being caught, "
                          "passed, and then sitting 7 px behind")
-    ap.add_argument("--offset", type=float, default=0.0,
-                    help="video seconds at the green flag")
+    ap.add_argument("--offset", type=float, default=None,
+                    help="video seconds at the first crossing. **Derived when "
+                         "the app started the recording** - it wrote down the "
+                         "wall clock at video second zero, so the offset is a "
+                         "subtraction rather than the few-seconds-early "
+                         "estimate this used to take. Pass it only for a "
+                         "capture made by hand, which has no stored zero")
     ap.add_argument("--apply", action="store_true",
                     help="write the contacts to `traffic`, replacing "
                          "whatever that session already had")
@@ -303,7 +339,9 @@ def main() -> int:
     scratch = Path(args.scratch) if args.scratch else Path.cwd() / "_traffic"
     scratch.mkdir(parents=True, exist_ok=True)
 
-    marks = crossings(store, args.session, args.offset)
+    offset, how = resolve_offset(store, args.session, args.offset)
+    print(f"video offset {offset:.2f} s, {how}")
+    marks = crossings(store, args.session, offset)
     start, end = 0.0, marks[-1][0]
     print(f"sampling {video.name} every {args.every:g} s over "
           f"{start:.0f}-{end:.0f} s")

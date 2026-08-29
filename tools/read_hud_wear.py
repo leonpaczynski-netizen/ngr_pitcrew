@@ -368,6 +368,37 @@ def quantisation(rows: list[tuple[float, Reading]]) -> tuple[int | None, float]:
     return min(heights), 1.0 / min(heights)
 
 
+def resolve_offset(store, session_id: int, given):
+    """The video offset: what was typed, or what the app already wrote down.
+
+    **`--offset` was the thing standing between "run this after every race"
+    and "run it when somebody has ten minutes."** The app records the wall
+    clock at video second zero when it starts the recording, and every lap
+    carries the wall clock at its crossing, so the number is a subtraction -
+    exact, rather than the few-seconds-early estimate this used to take.
+
+    An explicit `--offset` still wins: a capture made by hand, or a replay
+    recorded from partway through, has no stored zero and the operator is the
+    only one who knows it.
+    """
+    if given is not None:
+        return float(given), "given on the command line"
+    from pitcrew.race.video_index import offset_for
+
+    derived = offset_for(store, session_id)
+    if derived is not None:
+        return derived, "derived from the recording the app started"
+    # **Zero, and SAID.** A capture made by hand has no stored zero, and zero
+    # is the right assumption for a replay trimmed to the race - it is what
+    # this defaulted to silently before any of it was derivable. What is new
+    # is that it says so: a plausible default standing in for "nobody knows"
+    # is this codebase's most repeated defect, and the fix is not to refuse,
+    # it is to make the assumption audible.
+    return 0.0, ("ASSUMED zero - the app did not start this recording, so "
+                 "there is no stored video zero. Pass --offset if the "
+                 "capture does not begin at the first crossing")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db")
@@ -375,10 +406,14 @@ def main() -> int:
     ap.add_argument("--video", required=True)
     ap.add_argument("--every", type=float, default=15.0,
                     help="seconds between samples (default 15)")
-    ap.add_argument("--offset", type=float, default=0.0,
-                    help="video seconds at the race's first line crossing "
-                         "minus the app's own; a replay recorded from partway "
-                         "through needs one")
+    ap.add_argument("--offset", type=float, default=None,
+                    help="video seconds at the race's first line crossing. "
+                         "**Derived when the app started the recording** - it "
+                         "wrote down the wall clock at video second zero, so "
+                         "the offset is a subtraction rather than the "
+                         "few-seconds-early estimate this used to take. Pass "
+                         "it only for a capture made by hand, or a replay "
+                         "recorded from partway through")
     ap.add_argument("--apply", action="store_true",
                     help="write the readings; without it, report only")
     args = ap.parse_args()
@@ -390,7 +425,9 @@ def main() -> int:
 
     # The race window first, so the sweep covers the race and not the two and a
     # half hours of menus a capture can carry after it.
-    crossings = _crossings(store, args.session, args.offset)
+    offset, how = resolve_offset(store, args.session, args.offset)
+    print(f"video offset {offset:.2f} s, {how}")
+    crossings = _crossings(store, args.session, offset)
     first_cross, last_cross = crossings[0][0], crossings[-1][0]
     lap_s = (last_cross - first_cross) / max(1, len(crossings) - 1)
     start_s, end_s = max(0.0, first_cross - 2 * lap_s), last_cross + lap_s
