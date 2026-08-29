@@ -558,6 +558,23 @@ class Store:
                 "ORDER BY updated_at DESC, id DESC", (car_name,))
         return [_setup_sheet(r) for r in rows]
 
+    def layout_length_m(self, circuit_key: str) -> float | None:
+        """How long this circuit is, in metres, from the shipped catalogue.
+
+        `track_layouts.slug` holds exactly the key `analysis/resolve
+        .circuit_key` builds, so this is a lookup rather than a match.
+
+        It is the anchor `analysis/distance.py` needs: `lap_distance_m` is
+        integrated from speed and comes out 0.2-0.9% short on all three
+        circuits with laps on file, which shifts every corner window in every
+        export - and Ludo reads corner aggregates to build setups.
+        """
+        rows = self._query(
+            "SELECT length_m FROM track_layouts WHERE slug = ?",
+            (circuit_key,))
+        length = rows[0]["length_m"] if rows else None
+        return float(length) if length else None
+
     def sheet_filed_on(self, sheet_id: int) -> str | None:
         """When a sheet was last written into the app, as `YYYY-MM-DD`.
 

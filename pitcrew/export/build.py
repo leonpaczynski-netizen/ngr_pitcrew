@@ -17,6 +17,7 @@ from pitcrew.analysis.corners import (
     length_gate,
     observed_minimum,
 )
+from pitcrew.analysis import distance
 from pitcrew.analysis.gearing import gearing_export
 from pitcrew.analysis.resolve import resolve_corner_model
 from pitcrew.race.expectations import audit_line_from_laps
@@ -230,6 +231,31 @@ def _counted_lap(lap: LapInput) -> CountedLap:
     """
     return CountedLap(lap.lap_num, lap.frames,
                       setup_sheet_id=lap.setup_sheet_id)
+
+
+def _anchor_note(anchor) -> str:
+    """What the circuit anchor did, in the notes, or why it did nothing.
+
+    **Never silent.** A corrected distance that does not say it was corrected
+    is a derived number wearing a measured one's clothes (CLAUDE.md rule 5),
+    and an export from a circuit whose length is unknown would otherwise be
+    indistinguishable from one that was anchored.
+    """
+    if not anchor.ran:
+        return ("Lap distance is integrated from speed and was NOT anchored: "
+                "this layout has no length in the catalogue, so every corner "
+                "window carries the integration bias uncorrected - measured "
+                "at 0.2-0.9% short on the three circuits that can be checked.")
+    said = (f"Lap distance anchored to the circuit's own "
+            f"{anchor.circuit_length_m:.0f} m: `lap_distance_m` is integrated "
+            f"from speed, not broadcast, and runs short.")
+    if anchor.refused:
+        worst = max(length for _, length in anchor.refused)
+        said += (f" {len(anchor.refused)} lap(s) could not be anchored and "
+                 f"carry a null distance rather than a corrected one - the "
+                 f"furthest integrated {worst:.0f} m, which is a swallowed "
+                 f"crossing or a fragment rather than an imprecise lap.")
+    return said
 
 
 def _reference_frames(laps: list[LapInput]) -> list[dict] | None:
@@ -473,6 +499,24 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     laps, incidents = mark_incidents(laps)
     fuel_capacity_l, capacity_note = _fuel_capacity(session)
     laps = classify_exclusions(laps, fuel_capacity_l)
+
+    # **Anchored to the circuit here, before anything is derived from it.**
+    #
+    # `lap_distance_m` is not in the packet - `telemetry/recorder.py`
+    # integrates it from speed - and measured against each circuit's own
+    # length it comes out 0.2-0.9% SHORT on all three circuits with laps on
+    # file, while individual laps range from a third of a lap to twice one.
+    # The bias shifts every corner window in every export, and corner
+    # aggregates are what Ludo reads to build a setup.
+    #
+    # Anchor what can be anchored, null what cannot. **Once, on `laps`**, so
+    # `counted`, `diagnostic` and `runs` all inherit one answer rather than
+    # each being corrected separately - which was the first version of this
+    # and is how two sets of the same laps come to disagree about where a
+    # corner is. See `analysis/distance.py`.
+    anchor = distance.anchor(laps, distance.circuit_length(store, event))
+    laps = anchor.laps
+
     counted = counted_laps(laps)
     diagnostic = diagnostic_laps(laps)
     runs = split_runs(laps)
@@ -575,7 +619,8 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         # not optional - an exclusion nobody is told about is worse than no
         # exclusion.
         gate = length_gate(counted_with_frames)
-        length_note = gate.as_note()
+        length_note = " ".join(part for part in (_anchor_note(anchor),
+                                                 gate.as_note()) if part)
         corners = aggregate_corners(
             model, gate.kept, bottoming_ref,
             wheelbase_m=_session_field(session, "wheelbase_m"),
