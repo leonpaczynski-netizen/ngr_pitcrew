@@ -68,6 +68,12 @@ KNOWN_BRIDGES = (
 # removes a negotiation step that could fail.
 BOOT_BAUD = 19200
 
+# **The firmware's deadman, named rather than described.** `SHShakeitBase.h`
+# zeroes every channel this long after the last frame it accepted. It is the
+# only number that decides whether the fans are turning, so every gap this
+# module measures is measured against it.
+DEADMAN_S = 1.0
+
 # Comfortably inside the firmware's 1000 ms deadman, with room for a missed
 # frame or two before the fans drop out.
 SEND_INTERVAL_S = 0.25
@@ -137,11 +143,26 @@ UNANSWERED_LIMIT = 4
 # has to be beaten. So a timeout is now a hiccup: cancel what is stuck, purge
 # the output buffer, count it, and send the next one.
 #
-# Twenty frames is five seconds. Long enough to ride out a USB stall that
-# heals - the two that did reopened inside a fifth of a second - and short
-# enough that a board which is genuinely gone is rebuilt while the session it
-# belongs to is still running. Past that the fans have been dead for four
-# seconds anyway and the port is worth more than the handle.
+# **"Twenty frames is five seconds" was wrong, and it is the same arithmetic
+# error this file already corrected for `UNANSWERED_LIMIT` twenty lines
+# above.** A timeout costs `WRITE_TIMEOUT_S` blocked in the write AND
+# `SEND_INTERVAL_S` before the next one goes out - 0.50 s a frame, not 0.25.
+# Measured off the one run that ever reached the limit, 24 Aug 16:10:20 to
+# 16:10:29.674: nineteen timeouts in 9.216 s, **0.512 s each**.
+#
+# So twenty frames is 9.75 s to the raise and 10.75 s to a torn-down link,
+# and about **8.75 s of that is dead fans** - the firmware's deadman fires
+# 1.0 s into it. Throughout, `connected` reads True and nothing above INFO is
+# written. That is the best explanation on file for the thing the driver
+# actually reports: the fans drop, they come back on their own, and the log
+# says the link was healthy the whole time.
+#
+# The number is left at twenty deliberately. Lowering it makes a teardown
+# easier to reach, and a teardown is the expensive failure here - seven of
+# eleven link losses orphaned the port and cost between two and thirteen
+# hours, one of them a whole race. The fix is to SAY what is happening, which
+# `max_ack_gap_s` now does, not to tear the port down sooner. Revisit only
+# once the abandoned close is measured at zero over a week.
 WRITE_TIMEOUT_LIMIT = 20
 
 # This device declares four, though only two fans are wired. All four bytes go
@@ -204,7 +225,33 @@ class WindState:
     write_timeouts: int = 0
     resyncs: int = 0
     stale_bytes: int = 0
+    # **Frames the device acknowledged, and the worst gap between two of
+    # them.** These are about the FIRMWARE, not about the fans.
+    #
+    # The inference runs one way only. No acknowledgement for longer than the
+    # firmware's 1000 ms deadman means the fans were zeroed - that is sound,
+    # given a live I2C bus. An acknowledgement means the frame was parsed. It
+    # does **not** mean a motor turned: there is no tachometer, no current
+    # sense, and no back-channel from the motor shield. Nothing here may ever
+    # be phrased as "the fans are running", because that would be a confident
+    # well-formed claim about the one thing this app cannot observe.
+    frames_accepted: int = 0
+    last_ack_at: float | None = None
+    max_ack_gap_s: float = 0.0
+    # The slowest turn of the 250 ms send loop this session. A loop that
+    # overran the deadman is a PC-side cause, and it is otherwise invisible.
+    max_loop_s: float = 0.0
     error: str | None = None
+
+    def deadman_gap_s(self, now: float | None = None) -> float | None:
+        """How long since the firmware last accepted a frame, or None.
+
+        None before the first acknowledgement of a session - never 0.0, which
+        would read as "answered just now" and is the opposite of the truth.
+        """
+        if self.last_ack_at is None:
+            return None
+        return (now if now is not None else time.monotonic()) - self.last_ack_at
 
     def describe(self) -> str:
         if self.error:
@@ -218,7 +265,15 @@ class WindState:
         # because it keeps resynchronising is not a healthy link, and the
         # driver has no other way to know it is happening.
         note = f", {self.resyncs} resyncs" if self.resyncs else ""
-        return f"Wind simulator {where}. {self.frames_sent} frames sent{note}."
+        # The worst gap is said whenever it exceeded the firmware's deadman,
+        # because that is the app finally able to state what the driver has
+        # been reporting: the fans were off, for this long.
+        if self.max_ack_gap_s > DEADMAN_S:
+            note += (f", worst {self.max_ack_gap_s:.1f}s without an "
+                     f"acknowledgement - the fans were off for "
+                     f"{self.max_ack_gap_s - DEADMAN_S:.1f}s of that")
+        return (f"Wind simulator {where}. {self.frames_sent} frames sent, "
+                f"{self.frames_accepted} accepted{note}.")
 
 
 def available() -> bool:
@@ -307,6 +362,19 @@ class WindLink:
         # stalls all the way through or met exactly one.
         self.write_timeouts = 0
         self.consecutive_write_timeouts = 0
+        # **Acknowledgements, which nothing has ever counted.**
+        #
+        # `frames_sent` measures intent - it counted a write that timed out -
+        # and `connected` only goes False when the link is torn down. Between
+        # them they were compatible with ten seconds of dead fans, which is
+        # exactly the gap between what the driver reports and what the log
+        # says. An accepted frame is the only event that proves the firmware
+        # heard us, so it is the only one worth timing.
+        self.acks = 0
+        self.last_ack_at: float | None = None
+        # What became of the most recent frame: "acked", "timeout", "silent",
+        # or "rejected". Read by the sender for the per-frame log.
+        self.last_outcome: str | None = None
 
     def open(self, settle: bool = True) -> None:
         """Open without resetting the board into a full-speed blast.
@@ -667,6 +735,7 @@ class WindLink:
             # No frame went out, so there is no reply to wait for. Report the
             # link as alive: this is a hiccup, and the next frame is 250 ms
             # away against a 1000 ms deadman.
+            self.last_outcome = "timeout"
             return True
         self.consecutive_write_timeouts = 0
         reply = self._read_reply()
@@ -676,9 +745,13 @@ class WindLink:
             # down a working link - `WindSim` counts these and acts on a run
             # of them.
             self.unanswered += 1
+            self.last_outcome = "silent"
             return self.unanswered < UNANSWERED_LIMIT
         self.unanswered = 0
         if reply.acknowledged:
+            self.acks += 1
+            self.last_ack_at = time.monotonic()
+            self.last_outcome = "acked"
             return True
         # Rejected. Resynchronise on the broadcast id rather than carrying a
         # disagreement about sequence for the rest of the session.
@@ -687,6 +760,7 @@ class WindLink:
         # length fault rather than a lost place. Counted and reported, because
         # a link that keeps being rejected is not a healthy one.
         self.resyncs += 1
+        self.last_outcome = "rejected"
         log("wind").info("%s %s", self.port, reply.describe())
         return True
 
@@ -706,6 +780,12 @@ class WindSim:
         # When it was last set, so a value nobody has refreshed can be faded
         # out rather than blown for ever - see `_decayed_locked`.
         self._wanted_at: float | None = None
+        # What the car was doing when the value was set, carried so the frame
+        # log can be read against a lap without guessing. None where the
+        # caller did not say - never 0.0, which would read as a stopped car.
+        self._context: dict = {}
+        # A driver-pressed marker waiting to be stamped on the next frame.
+        self._marker: str | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -713,18 +793,69 @@ class WindSim:
 
     # ------------------------------------------------------------- control
 
-    def set_output(self, values: tuple[int, ...] | list[int]) -> None:
+    def set_output(self, values: tuple[int, ...] | list[int],
+                   context: dict | None = None) -> None:
         """The value the fans should be at. Supersedes anything waiting.
 
         Deliberately last-wins rather than queued: a fan command from four
         seconds ago describes a corner the driver has already left, and
         replaying it faithfully is worse than skipping it.
+
+        `context` is whatever the caller knows about the car - speed, whether
+        it is on track, whether the game is paused. It is carried only into
+        the frame log, never into what is sent, and it is optional because the
+        bench and the replay paths have no car to describe.
         """
         clamped = tuple(snap_duty(v) for v in values[:self._channels])
         padded = clamped + tuple([0] * (self._channels - len(clamped)))
         with self._lock:
             self._wanted = padded
             self._wanted_at = time.monotonic()
+            if context is not None:
+                self._context = context
+
+    def mark(self, note: str) -> None:
+        """Stamp the next frame with something the driver noticed.
+
+        **The one channel that carries what no instrument here can see.**
+        Nothing on this side observes a fan - no tachometer, no current sense
+        - so a driver saying "now" is the only evidence that will ever exist
+        for a fan that stopped while the link stayed perfect. Stamped on the
+        next frame rather than logged on its own so it lands in the same row
+        as the duty and the speed it belongs to.
+        """
+        with self._lock:
+            self._marker = note
+
+    def _log_frame(self, values: tuple[int, ...], outcome: str | None) -> None:
+        """One line per frame, at the send rate, continuously.
+
+        **Continuously, and not a ring buffer dumped when something goes
+        wrong.** The failure this is built to catch - a fan that stops while
+        the link stays healthy - produces no adverse event at all, so a buffer
+        waiting for one would never dump and the whole exercise would be blind
+        to the case it exists for.
+
+        The wall clock goes in beside the monotonic one so this aligns to
+        `lap_frames`, which the last attempt could only do through
+        `laps.recorded_at` at one-second truncation - and that slop was large
+        enough to swing the finding from below chance to nothing.
+
+        Twelve bytes a frame at 4 Hz is about 40 kB an hour. `speed_kmh` is
+        None rather than 0.0 where the caller did not say, because a stopped
+        car and an unknown one need opposite readings.
+        """
+        with self._lock:
+            context = dict(self._context)
+            marker, self._marker = self._marker, None
+        speed = context.get("speed_kmh")
+        log("wind.frames").info(
+            "%.3f %.3f duty=%s outcome=%s speed=%s on_track=%s paused=%s%s",
+            time.time(), time.monotonic(),
+            ",".join(str(v) for v in values), outcome or "none",
+            "?" if speed is None else f"{speed:.1f}",
+            context.get("on_track", "?"), context.get("paused", "?"),
+            f" MARK={marker}" if marker else "")
 
     def stop_fans(self) -> None:
         self.set_output(tuple([0] * self._channels))
@@ -781,6 +912,7 @@ class WindSim:
         the board every time.
         """
         backoff = RECONNECT_S
+        last_turn: float | None = None
         # A link that has just dropped after working is a re-enumeration, not
         # an absent device: try it at once, and without the bootloader settle.
         # Only once - if the quick attempt fails, it gets the full treatment.
@@ -806,6 +938,22 @@ class WindSim:
                 continue
             backoff = RECONNECT_S
             quick = False
+            # **How long a turn of this loop actually took.** The send is a
+            # fixed 250 ms timer against a 1000 ms deadman, so a turn that
+            # overran is a PC-side cause of dead fans - and it would otherwise
+            # be completely invisible, because every counter here would look
+            # perfect either side of it.
+            now = time.monotonic()
+            if last_turn is not None:
+                took = now - last_turn
+                if took > self.state.max_loop_s:
+                    self.state.max_loop_s = took
+                    if took > DEADMAN_S:
+                        log("wind").warning(
+                            "the wind send loop took %.2fs for one turn "
+                            "against a %.1fs deadman - the fans were off and "
+                            "this side is the reason.", took, DEADMAN_S)
+            last_turn = now
             self._stop.wait(SEND_INTERVAL_S)
         self._drop_link()
 
@@ -915,8 +1063,27 @@ class WindSim:
         self.state.resyncs = link.resyncs
         self.state.stale_bytes = link.stale_bytes
         self.state.write_timeouts = link.write_timeouts
-        self.state.frames_sent += 1
+        # **A frame that timed out did not go anywhere.** Counting it as sent
+        # made `frames_sent` a measure of intent while reading as a measure of
+        # delivery - rule 3, in the counter the health report leads with.
+        if link.last_outcome != "timeout":
+            self.state.frames_sent += 1
+        self.state.frames_accepted = link.acks
+        self.state.last_ack_at = link.last_ack_at
+        gap = self.state.deadman_gap_s()
+        if gap is not None and gap > self.state.max_ack_gap_s:
+            self.state.max_ack_gap_s = gap
+            # Said once, when it crosses, because this is the line that has
+            # been missing from every fan report the driver has ever made.
+            if gap > DEADMAN_S:
+                log("wind").warning(
+                    "%s has not acknowledged a frame for %.2fs - the "
+                    "firmware's %.1fs deadman will have zeroed the fans "
+                    "%.2fs ago. Last outcome %s.",
+                    link.port, gap, DEADMAN_S, gap - DEADMAN_S,
+                    link.last_outcome)
         self.state.last_values = values
+        self._log_frame(values, link.last_outcome)
         return True
 
     def _decayed_locked(self) -> tuple[int, ...]:

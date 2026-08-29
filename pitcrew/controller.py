@@ -652,8 +652,15 @@ class TelemetryBridge(QObject):
                 self.haptics = None
         if self.wind is not None:
             try:
-                self.wind.set_output(self.wind_curve.update(
-                    packet, _FRAME_S, racing=self.racing))
+                # The car's own state goes with the duty, so the frame log
+                # aligns to a lap without the one-second anchor that made the
+                # last attempt at this unresolvable.
+                self.wind.set_output(
+                    self.wind_curve.update(packet, _FRAME_S,
+                                           racing=self.racing),
+                    context={"speed_kmh": packet.speed_kmh,
+                             "on_track": packet.car_on_track,
+                             "paused": packet.paused})
             except Exception as exc:                        # noqa: BLE001
                 log("wind").error(
                     "the wind path raised on the telemetry thread and has "
@@ -3744,7 +3751,16 @@ class PitCrewController(QObject):
                 "replanOverBudget": self._replan_over_budget}
 
     def _ptt_snapshot(self) -> dict:
-        """What the engineer is allowed to answer from."""
+        """What the engineer is allowed to answer from.
+
+        Also where a press becomes a mark in the wind frame log. **Every
+        press, before anything else here can return early**, because the
+        thing worth marking - fans that stopped while the link stayed
+        perfect - happens in practice as readily as in a race, and the driver
+        cannot be asked to remember which button means which.
+        """
+        if self.wind is not None:
+            self.wind.mark("ptt")
         if self.race is None:
             return {}
         snapshot = self._race_snapshot()

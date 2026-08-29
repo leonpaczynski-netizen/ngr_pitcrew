@@ -40,6 +40,9 @@ LOG_FILE = LOG_DIR / "pitcrew.log"
 # Native faults are written raw by faulthandler, which cannot use the logging
 # module - it runs inside a signal handler.
 FAULT_FILE = LOG_DIR / "pitcrew-fault.log"
+# The 4 Hz wind frame log, kept apart from the main record - see
+# `_install_frame_log` for why that separation is not a tidiness preference.
+FRAME_FILE = LOG_DIR / "pitcrew-wind-frames.log"
 
 MAX_BYTES = 2_000_000
 BACKUPS = 3
@@ -82,6 +85,8 @@ def install(*, level: int = logging.INFO, log_dir: Path | None = None) -> Path:
         console.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
         logger.addHandler(console)
 
+    _install_frame_log(directory)
+
     _fault_file = (directory / FAULT_FILE.name).open("a", encoding="utf-8")
     faulthandler.enable(file=_fault_file, all_threads=True)
 
@@ -90,6 +95,28 @@ def install(*, level: int = logging.INFO, log_dir: Path | None = None) -> Path:
 
     _installed = True
     return path
+
+
+def _install_frame_log(directory: Path) -> None:
+    """A file of its own for the 4 Hz wind frame log.
+
+    **It must not share `pitcrew.log`.** Four lines a second is ~14,000 an
+    hour, which would roll the main log past its two backups in an evening -
+    and the main log's history is the only reason the fan dropouts could be
+    investigated at all. Diagnosing one fault must not destroy the record of
+    the next.
+
+    `propagate = False`, so these lines go here and nowhere else.
+    """
+    frames = logging.getLogger(f"{LOGGER_NAME}.wind.frames")
+    handler = logging.handlers.RotatingFileHandler(
+        directory / FRAME_FILE.name, maxBytes=MAX_BYTES,
+        backupCount=BACKUPS, encoding="utf-8")
+    # No level or thread name: every line is INFO from the wind thread, and
+    # the row is the data.
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    frames.addHandler(handler)
+    frames.propagate = False
 
 
 def _resolve(log_dir: Path | None) -> Path:

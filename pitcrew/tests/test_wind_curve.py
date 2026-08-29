@@ -208,7 +208,7 @@ def test_a_packet_reaches_the_fans():
     seen = []
 
     class Sink:
-        def set_output(self, values):
+        def set_output(self, values, context=None):
             seen.append(tuple(values))
 
     bridge.wind = Sink()
@@ -224,7 +224,7 @@ def test_a_wind_sim_that_raises_cannot_cost_him_the_session():
     bridge = _bridge()
 
     class Broken:
-        def set_output(self, values):
+        def set_output(self, values, context=None):
             raise RuntimeError("COM5 stopped functioning")
 
     bridge.wind = Broken()
@@ -249,7 +249,7 @@ def test_a_session_boundary_clears_the_smoothing():
     bridge = _bridge()
 
     class Sink:
-        def set_output(self, values):
+        def set_output(self, values, context=None):
             pass
 
     bridge.wind = Sink()
