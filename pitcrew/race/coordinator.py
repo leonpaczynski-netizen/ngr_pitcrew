@@ -366,6 +366,7 @@ class RaceCoordinator:
             self.state.tyre_compound = stint["compound"]
         elif over_a_stop:
             self.state.tyre_compound = None
+        self._brief_the_wear_rate()
         start = stint.get("start_lap") or 1
         self.state.stint_ends_on_lap = start + stint.get("laps", 0) - 1
         following = self._stints[index + 1] if index + 1 < len(self._stints) else None
@@ -382,6 +383,28 @@ class RaceCoordinator:
         # The last stint runs to the flag; there is no stop at the end of it.
         if following is None:
             self.state.stint_ends_on_lap = None
+
+    def _brief_the_wear_rate(self) -> None:
+        """The measured rate for the compound now on the car, or nothing.
+
+        **Re-read at every stint**, because the rate belongs to a compound and
+        the compound changes at a stop. A briefed rate that survived a change
+        from RS to RH would be the app's own standing rule 11 all over again:
+        state that outlives the thing it describes gets read as if it belongs
+        to what came after.
+
+        **Cleared where the compound is unknown**, which is what a stop with
+        no compound in the plan leaves behind. A rate attributed to the wrong
+        tyre is not a gap in the model, it is a corruption of it.
+        """
+        self.state.briefed_wear_per_lap = None
+        self.state.briefed_wear_samples = 0
+        if self.knowledge is None or not self.state.tyre_compound:
+            return
+        rate, samples = self.knowledge.wear_per_lap(self.state.tyre_compound)
+        if rate:
+            self.state.briefed_wear_per_lap = rate
+            self.state.briefed_wear_samples = samples
 
     def handle(self, event, packet=None) -> Call | None:
         """Feed one telemetry event. Returns the call to make, if any."""

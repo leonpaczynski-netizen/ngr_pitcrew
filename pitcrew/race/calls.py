@@ -517,6 +517,21 @@ class RaceState:
     # laps actually remaining would send him back out to run dry.
     further_stop_planned: bool | None = None
     wear_per_lap: float | None = None
+    # **The wear rate measured off a replay of an earlier race here**, for the
+    # compound actually on the car, with the number of stints behind it.
+    #
+    # This is what makes a wear call possible in VR at all. GT7 draws the HUD
+    # on the car's dashboard in 3D, so the gauge moves with his head and reads
+    # about 6 crossings in 22 - a live fit needs three in one stint and rarely
+    # gets them. Read off the replay afterwards the same gauge is good to
+    # 0.5%, against a model that was ~21% low, and `race/knowledge.py` carries
+    # it forward. Set by the coordinator when the compound is known; None
+    # where nobody has driven a measured stint on this compound here.
+    briefed_wear_per_lap: float | None = None
+    # How many stints stand behind that rate. Every aggregate carries its
+    # sample count (CLAUDE.md 4.4) - a rate from one stint and one from six
+    # are not the same claim.
+    briefed_wear_samples: int = 0
     # **What a short-shift is worth on this car, in litres per lap per 1000
     # rpm.** Measured by `tools/shortshift_trade.py` from laps where his own
     # upshift rpm varied: 1.762 on the Porsche at Monza, 95% CI [0.92, 2.60],
@@ -1665,8 +1680,36 @@ def _wear_worst(wear: dict[str, float]) -> tuple[str, float]:
     return max(wear.items(), key=lambda kv: kv[1])
 
 
-def _wear_rate(state: RaceState) -> float | None:
-    """Fraction of the worst corner consumed per lap, or None.
+# Where a wear rate came from. It decides what may be said out loud about it.
+GAUGE = "gauge"          # fitted from this stint's own readings
+BRIEFED = "briefed"      # measured off a replay of an earlier race, carried in
+
+
+def _wear_rate(state: RaceState) -> tuple[float | None, str | None]:
+    """Fraction of the worst corner consumed per lap, and where it came from.
+
+    **The live fit first, the briefed rate second, and never the other way
+    round.** A slope fitted from this stint's own gauge readings is about
+    these tyres on this fuel load at this pace; a briefed rate is about a race
+    already driven. Where both exist the live one is better evidence.
+
+    **The briefed rate is why this exists at all.** In VR the gauge reads
+    about 6 crossings in 22 - GT7 draws the HUD on the car's dashboard in 3D
+    and it moves with his head - so `_live_rate` returns None for most of most
+    races, and wear is the quantity the whole strategy rests on. Measured off
+    the replay afterwards it is good to 0.5%, against a model that was ~21%
+    low, and `race/knowledge.py` is what carries it into the next race.
+    """
+    live = _live_rate(state)
+    if live is not None:
+        return live, GAUGE
+    if state.briefed_wear_per_lap:
+        return state.briefed_wear_per_lap, BRIEFED
+    return None, None
+
+
+def _live_rate(state: RaceState) -> float | None:
+    """Fraction of the worst corner consumed per lap, from this stint's gauge.
 
     A least-squares slope over this stint's readings. None where there are too
     few, where the gauge has not moved far enough to be distinguishable from
@@ -1689,32 +1732,62 @@ def _wear_rate(state: RaceState) -> float | None:
     return slope if slope > 0 else None
 
 
-def _wear_laps_left(state: RaceState) -> tuple[float, str, float, float] | None:
-    """(laps to the stint limit, worst corner, what it READ, where it IS now).
+@dataclass(frozen=True)
+class WearView:
+    """Where the tyre is, how it was worked out, and what was actually read.
 
-    **The last two are different numbers and the difference is the point.**
-    The reading is a transcription of the game's own gauge and may be spoken
-    plainly. The carry-forward is the reading plus the fitted rate across the
-    laps since - a projection, and CLAUDE.md 4.5 forbids presenting one as a
-    measurement. So the decisions below are taken on the projection, because
-    that is where the tyre actually is, and every number said out loud is the
-    reading, because that is what was measured. Conflating them had the
-    engineer saying "RL measured at 99 percent" off a gauge that read 88.
+    **`reading` and `consumed` are different numbers and the difference is the
+    point.** The reading is a transcription of the game's own gauge and may be
+    spoken plainly. `consumed` is that reading carried forward at the fitted
+    rate - a projection, and CLAUDE.md 4.5 forbids presenting one as a
+    measurement. Decisions are taken on the projection, because that is where
+    the tyre actually is; every number said out loud is the reading, because
+    that is what was measured. Conflating them had the engineer saying
+    "RL measured at 99 percent" off a gauge that read 88.
+
+    `reading` is `None` on the briefed path, where the gauge never read at all
+    and there is nothing measured to quote.
     """
-    if not state.wear_history:
-        return None
-    lap, wear = state.wear_history[-1]
-    if state.lap - lap > WEAR_MAX_STALENESS_LAPS:
-        # The gauge stopped reading. Silence is the honest answer: a
-        # projection from a reading four laps old is about a tyre he was on,
-        # not the one he is on.
-        return None
-    rate = _wear_rate(state)
+    laps_left: float
+    corner: str
+    reading: float | None
+    consumed: float
+    source: str
+
+
+def _wear_laps_left(state: RaceState) -> WearView | None:
+    """How much stint is left, from the gauge if it read and the briefing if not."""
+    rate, source = _wear_rate(state)
     if rate is None:
         return None
-    corner, worn = _wear_worst(wear)
-    consumed = worn + rate * max(0, state.lap - lap)
-    return (WEAR_STINT_LIMIT - consumed) / rate, corner, worn, consumed
+
+    fresh = state.wear_history and (
+        state.lap - state.wear_history[-1][0] <= WEAR_MAX_STALENESS_LAPS)
+    if fresh:
+        lap, wear = state.wear_history[-1]
+        corner, worn = _wear_worst(wear)
+        consumed = worn + rate * max(0, state.lap - lap)
+        return WearView((WEAR_STINT_LIMIT - consumed) / rate, corner, worn,
+                        consumed, source)
+
+    # --- nothing readable, and a rate measured off an earlier race ----------
+    #
+    # **This is the VR case, and it is the normal one.** GT7 draws the HUD on
+    # the car's dashboard in 3D, so the gauge moves with his head and reads
+    # about 6 crossings in 22; a wear model that needs three readings in a
+    # stint therefore says nothing for most of most races. Anchored at a fresh
+    # set instead - which is a fact, not a reading: the bar is full white the
+    # moment new rubber goes on - and carried forward at the measured rate.
+    #
+    # **Only on a briefed rate.** A live fit needs readings by definition, so
+    # reaching here with `GAUGE` is impossible; and projecting from a stale
+    # reading was already refused above, because a projection from a reading
+    # four laps old is about a tyre he was on rather than the one he is on.
+    if source != BRIEFED or state.laps_since_stop is None:
+        return None
+    consumed = rate * max(0, state.laps_since_stop)
+    return WearView((WEAR_STINT_LIMIT - consumed) / rate, "worst", None,
+                    consumed, source)
 
 
 def _wear(state: RaceState) -> Call | None:
@@ -1724,11 +1797,31 @@ def _wear(state: RaceState) -> Call | None:
     projection = _wear_laps_left(state)
     if projection is None:
         return None
-    laps_left, corner, reading, consumed = projection
-    name = corner.upper()
+    laps_left = projection.laps_left
+    consumed = projection.consumed
+    reading = projection.reading
+    name = projection.corner.upper()
+    # **"measured" is only sayable about a gauge that actually read.** On the
+    # briefed path there is no reading at all - the rate was measured off the
+    # replay of an earlier race and the anchor is a fresh set - so the word
+    # would be a projection wearing a measurement's clothes, which is the
+    # single most repeated defect in this codebase.
+    briefed = projection.source is BRIEFED or projection.source == BRIEFED
+    # And the confidence follows the evidence: a rate from THESE tyres on THIS
+    # fuel load beats one carried in from a race already driven.
+    sure = MEDIUM if briefed else HIGH
 
     # --- past the limit. An instruction, and the reading is enough on its own.
     if consumed >= WEAR_STINT_LIMIT and "cliff" not in state.wear_said:
+        if briefed:
+            return Call(
+                WEAR, state.lap,
+                "Box this lap.",
+                f"Tyres are past the stint limit on the measured rate for "
+                f"this compound. No gauge reading this stint.",
+                MEDIUM,
+                severity=consumed,
+                tag="cliff")
         return Call(
             WEAR, state.lap,
             "Box this lap.",
@@ -1755,12 +1848,21 @@ def _wear(state: RaceState) -> Call | None:
             WEAR, state.lap,
             f"Tyres are the constraint, not fuel. About {whole} "
             f"lap{'' if whole == 1 else 's'} left on them.",
-            f"{name} at {reading * 100:.0f} percent, measured.",
+            ("On the measured rate for this compound. No gauge reading "
+             "this stint." if briefed
+             else f"{name} at {reading * 100:.0f} percent, measured."),
             MEDIUM,
             severity=consumed,
             tag="limited")
 
     # --- one corner going first. A balance call, not a pit call.
+    #
+    # **Never on the briefed path.** A rate is one number for the worst
+    # corner; which corner is going first is a fact about four bars, and there
+    # are no bars to read here. Inventing an axle would send him to the brake
+    # balance on the strength of nothing.
+    if briefed:
+        return None
     ordered = sorted(state.wear_history[-1][1].values(), reverse=True)
     if (len(ordered) >= 2 and "asymmetry" not in state.wear_said
             and ordered[0] - ordered[1] >= WEAR_ASYMMETRY):

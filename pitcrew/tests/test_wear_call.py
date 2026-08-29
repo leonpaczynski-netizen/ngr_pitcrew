@@ -72,7 +72,9 @@ def test_wear_going_backwards_is_a_reading_problem_not_a_finding():
     backwards = [(lap, wear) for lap, wear in
                  zip([6, 7, 8, 9],
                      [w for _, w in reversed(a_stint())])]
-    assert _wear_rate(state_with(backwards, lap=10)) is None
+    # `_wear_rate` returns (rate, source) since the briefed rate landed: the
+    # source is what decides whether the word "measured" may be said.
+    assert _wear_rate(state_with(backwards, lap=10)) == (None, None)
 
 
 def test_nothing_is_said_in_the_pits_or_after_the_flag():
@@ -139,7 +141,7 @@ def test_inside_a_lap_of_each_other_the_ordering_is_noise():
 
 def _wear_laps(state) -> float:
     from pitcrew.race.calls import _wear_laps_left
-    return _wear_laps_left(state)[0]
+    return _wear_laps_left(state).laps_left
 
 
 def test_past_the_limit_is_an_instruction_at_high_confidence():
