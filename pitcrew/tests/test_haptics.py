@@ -354,13 +354,18 @@ def test_a_silent_lap_is_not_mistaken_for_a_dead_transducer():
     """A driver crawling out of the pits produces almost nothing. Asking the
     card whether it played that would prove nothing either way, so the check
     only fires when we know we were loud."""
-    from pitcrew.controller import PitCrewController
+    # **The rig came out of the controller on 29 Aug 2026.** These tests
+    # already treated it as separable - they borrow the methods onto a
+    # minimal `Rack` rather than standing up a controller - which is
+    # most of why it was the safe cut to make first. Same methods, one
+    # class along. See `rig/supervisor.py`.
+    from pitcrew.rig.supervisor import RigSupervisor
 
     engine = _engine()
     for _ in range(40):
         engine.set_intensities([0.0] * len(engine._wanted))
         _pump(engine, 1)
-    assert engine.take_recent_peak() < PitCrewController._AUDIBLE_PEAK
+    assert engine.take_recent_peak() < RigSupervisor._AUDIBLE_PEAK
 
 
 # ------------------------------------------------- recovering without dying
@@ -987,15 +992,20 @@ class _WedgedForGood:
 
 def _rack(engine):
     """A controller pared down to the endpoint-reading path."""
-    from pitcrew.controller import PitCrewController
+    # **The rig came out of the controller on 29 Aug 2026.** These tests
+    # already treated it as separable - they borrow the methods onto a
+    # minimal `Rack` rather than standing up a controller - which is
+    # most of why it was the safe cut to make first. Same methods, one
+    # class along. See `rig/supervisor.py`.
+    from pitcrew.rig.supervisor import RigSupervisor
 
     class Bridge:
         haptics = engine
 
     class Rack:
-        _act_on_endpoint_reading = PitCrewController._act_on_endpoint_reading
-        _climb_ladder = PitCrewController._climb_ladder
-        _deliver_rig_notice = PitCrewController._deliver_rig_notice
+        _act_on_endpoint_reading = RigSupervisor._act_on_endpoint_reading
+        _climb_ladder = RigSupervisor._climb_ladder
+        _deliver_rig_notice = RigSupervisor._deliver_rig_notice
         _endpoint_note = ""
 
         def __init__(self):
@@ -1082,7 +1092,12 @@ def test_report_rig_feeds_the_engines_block_counter_to_the_watchdog():
     blind the corroboration - and without the frames the cadence line cannot
     tell a longer buffer from a slower clock, which is the distinction the
     session of 17 Aug 2026 needed and did not have."""
-    from pitcrew.controller import PitCrewController
+    # **The rig came out of the controller on 29 Aug 2026.** These tests
+    # already treated it as separable - they borrow the methods onto a
+    # minimal `Rack` rather than standing up a controller - which is
+    # most of why it was the safe cut to make first. Same methods, one
+    # class along. See `rig/supervisor.py`.
+    from pitcrew.rig.supervisor import RigSupervisor
 
     engine = _engine()
     _pump_live(engine, 7)
@@ -1101,8 +1116,8 @@ def test_report_rig_feeds_the_engines_block_counter_to_the_watchdog():
         wind = None
 
     class Rack:
-        _report_rig = PitCrewController._report_rig
-        _apply_clock_verdict = PitCrewController._apply_clock_verdict
+        _report_rig = RigSupervisor._report_rig
+        _apply_clock_verdict = RigSupervisor._apply_clock_verdict
 
         def __init__(self):
             self.bridge = Bridge()
@@ -1608,7 +1623,12 @@ def test_the_stand_down_admits_when_it_has_also_stopped_sending():
 
 
 def test_a_transposed_stream_is_refused_and_he_is_told_once():
-    from pitcrew.controller import PitCrewController
+    # **The rig came out of the controller on 29 Aug 2026.** These tests
+    # already treated it as separable - they borrow the methods onto a
+    # minimal `Rack` rather than standing up a controller - which is
+    # most of why it was the safe cut to make first. Same methods, one
+    # class along. See `rig/supervisor.py`.
+    from pitcrew.rig.supervisor import RigSupervisor
 
     class Watchdog:
         clock_hz = 30611.0
@@ -1625,7 +1645,7 @@ def test_a_transposed_stream_is_refused_and_he_is_told_once():
             self.settled_at = now
 
     class Rack:
-        _apply_clock_verdict = PitCrewController._apply_clock_verdict
+        _apply_clock_verdict = RigSupervisor._apply_clock_verdict
 
         def __init__(self):
             self.voice = _RecordingVoice()
@@ -1652,7 +1672,12 @@ def test_the_meter_is_not_asked_about_audio_nobody_sent(monkeypatch):
     """Polling it here would write down "it is accepting the audio and
     playing none of it" - true, and entirely about a silence of our own
     making. The ladder still has to climb, off the clock instead."""
-    from pitcrew.controller import PitCrewController
+    # **The rig came out of the controller on 29 Aug 2026.** These tests
+    # already treated it as separable - they borrow the methods onto a
+    # minimal `Rack` rather than standing up a controller - which is
+    # most of why it was the safe cut to make first. Same methods, one
+    # class along. See `rig/supervisor.py`.
+    from pitcrew.rig.supervisor import RigSupervisor
     from pitcrew.engineer import endpoint_meter as meter
 
     polled = []
@@ -1671,8 +1696,8 @@ def test_the_meter_is_not_asked_about_audio_nobody_sent(monkeypatch):
         haptics_device = "Speakers (ButtKicker PRO)"
 
     class Rack:
-        _check_transducer_is_heard =             PitCrewController._check_transducer_is_heard
-        _AUDIBLE_PEAK = PitCrewController._AUDIBLE_PEAK
+        _check_transducer_is_heard =             RigSupervisor._check_transducer_is_heard
+        _AUDIBLE_PEAK = RigSupervisor._AUDIBLE_PEAK
         _endpoint_note = ""
 
         def __init__(self):

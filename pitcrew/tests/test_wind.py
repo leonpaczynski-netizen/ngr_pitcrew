@@ -512,7 +512,13 @@ def test_a_session_boundary_parks_the_fans_and_keeps_the_link():
 
     The device is not per-session. Only closing the app really lets it go.
     """
-    from pitcrew.controller import PitCrewController
+    # **The rig came out of the controller on 29 Aug 2026**, and this test is
+    # one of the reasons it could: it was already exercising the wind
+    # lifecycle through a hand-built rack, borrowing three methods onto it.
+    # It builds the real object now, because the real object takes exactly
+    # what the rack was faking - a bridge, the settings, and a reader for the
+    # active event. See `rig/supervisor.py`.
+    from pitcrew.rig.supervisor import RigSupervisor
 
     class Sim:
         def __init__(self):
@@ -540,17 +546,7 @@ def test_a_session_boundary_parks_the_fans_and_keeps_the_link():
     class Settings:
         wind_enabled = True
 
-    class Rack:
-        start_wind = PitCrewController.start_wind
-        stop_wind = PitCrewController.stop_wind
-        shutdown_wind = PitCrewController.shutdown_wind
-        active_event = staticmethod(lambda: None)
-
-        def __init__(self):
-            self.bridge = Bridge()
-            self.settings = Settings()
-
-    rack = Rack()
+    rack = RigSupervisor(bridge=Bridge(), settings=Settings(), voice=None)
     rack.bridge.wind = sim = Sim()
 
     rack.stop_wind()
@@ -571,7 +567,7 @@ def test_a_session_boundary_parks_the_fans_and_keeps_the_link():
 def test_switching_the_wind_off_stops_a_link_that_is_already_up():
     """The one non-boundary case that must still tear down: a running link
     when the driver unticks the box."""
-    from pitcrew.controller import PitCrewController
+    from pitcrew.rig.supervisor import RigSupervisor
 
     class Sim:
         def __init__(self):
@@ -591,15 +587,7 @@ def test_switching_the_wind_off_stops_a_link_that_is_already_up():
     class Settings:
         wind_enabled = False
 
-    class Rack:
-        start_wind = PitCrewController.start_wind
-        shutdown_wind = PitCrewController.shutdown_wind
-
-        def __init__(self):
-            self.bridge = Bridge()
-            self.settings = Settings()
-
-    rack = Rack()
+    rack = RigSupervisor(bridge=Bridge(), settings=Settings(), voice=None)
     sim = rack.bridge.wind
     assert rack.start_wind() is False
     assert sim.shut == 1, "wind was switched off and the fans kept their link"
