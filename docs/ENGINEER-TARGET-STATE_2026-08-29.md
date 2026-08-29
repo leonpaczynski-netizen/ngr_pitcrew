@@ -269,6 +269,58 @@ H3 is not a row: it runs through every one of them.
 
 ---
 
+## 5a. What shipped, 29 Aug 2026
+
+**All eight workstreams are in**, on `feat/direct-feed-and-endpoint-verification`,
+nine commits from `df19d04` to `992e111`. Four test quarters green, exit 0 on
+every one, after every workstream.
+
+| # | Workstream | State | What it turned out to be |
+|---|---|---|---|
+| 1 | **A** what George says | ✅ | Position was decoded correctly all along and read by nothing. Two registers, enforced. Rail narrowed to the structural four. "How long left" answered a timed race in laps while the measured clock sat unquoted beside it. |
+| 2 | **B** setup integrity | ✅ | Two detectors; the export refuses and the capture never does. **Three of eight events refuse today**, all on a gearbox that disagrees with its sheet. `setup_changes` backfilled to 142 rows from zero. |
+| 3 | **H** foundations | ✅ | Monza sd 1,187 m → 0.00. 18 of 176 laps refused. Full race fixture checked in (session 49, 9.9 MB). |
+| 4 | **D** knowledge record | ✅ | `race_knowledge`, six fields plus wear rates. Absent is announced at the green. |
+| 5 | **E** wear | ✅ | Fitted per stint, per compound. **Reproduces the 0.0493/lap Monza figure measured by hand.** Six of eight circuits now carry a rate. George can speak about tyres in VR with no gauge reading at all. |
+| 6 | **F** rivals | ✅ | The `--offset` is derived; `video_index.build` had no caller. Fuji tendencies written. |
+| 7 | **C** Ludo's channel | ✅ | ⚠ Writes apply, with an audit trail and an undo. `prompts/questions.py` — 500 lines — had no caller anywhere in the app. |
+| 8 | **G** qualifying | ✅ | One briefing, one plan door. Qualifying was the last place the app still authored. |
+
+### What was NOT done, and it is D19
+
+**`controller.py` went from 5,299 lines to 5,464.** Every new *concern* landed
+in a module of its own — `setup/doubt.py`, `race/knowledge.py`,
+`analysis/distance.py`, `analysis/wear_rates.py`, `analysis/rivals.py` — and
+what the controller gained was wiring. But D19 asked for extraction as a
+precondition of landing, and that did not happen. It is still owed.
+
+### Five things that were built and wired to nothing
+
+Found while doing the above, and worth recording as a pattern rather than five
+incidents:
+
+* `packet.current_position` — decoded correctly, read by no module in `race/`.
+* `video_index.build` — the exact-offset derivation, called only from its own
+  test file, while both replay tools went on asking for `--offset` by hand.
+* `prompts/questions.py` — the whole confirm-not-recall design, no caller.
+* `setup_changes` — both ends built, zero rows after 88 sessions.
+* `SetupSheet.updated_at` — read by the first draft of the doubt detector and
+  **it does not exist**, so `getattr` returned None on every sheet and the
+  detector was silent on all eight events while looking entirely correct.
+
+The last one is the shape to watch: it is not a missing caller, it is a caller
+reading a field nobody has. Both fail the same way — correct-looking and dead.
+
+### One defect this work introduced and caught
+
+The event-level knowledge record **shadowed the circuit's measured wear rates**
+for about an hour. "The event's record wins" has to mean field by field, not
+row by row; row by row, the first traffic pass to write rivals took every wear
+rate on that circuit out of George's view and he went quietly back to
+modelling. There is a test named after it.
+
+---
+
 ## 6. Risks, stated rather than discovered later
 
 1. **The replay offset is hand-found.** `--offset` is required for every replay
