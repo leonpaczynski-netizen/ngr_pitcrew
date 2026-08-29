@@ -7,25 +7,38 @@ the shape. **What changes here is the clipboard, not the contract.**
 
 ### What it may and may not do
 
-**Reads are open. Writes propose; they never apply.**
+**Reads are open. Writes apply, and every one of them is recorded.**
 
-`CLAUDE.md` §4.1 makes the driver's report primary evidence, and §7 would
-rather refuse than emit something wrong. A model that could write a setup sheet
-straight into the store would be deciding what was in the car, which is the one
-thing only he knows - and the 17 Aug audit is what that costs: the app reported
-a sheet the car was not running for three sessions out of three, and would have
-produced a completely coherent diagnosis of a car that was not on the circuit.
+⚠ **This reverses what this file said until 29 Aug 2026**, and the reversal is
+the driver's decision, taken in a design interview on that date. The old rule
+was *"writes propose; they never apply"*, and its reason was good: the app had
+been wrong about which sheet was in the car three sessions out of three, so a
+tool that wrote one directly would make that unrecoverable.
 
-So the two write tools land where the app already has an approval step:
+What changed is that **the database is now the single source of truth for the
+app and for the race engineer both**. A correction that lives in a
+conversation leaves 96 sessions of history wrong and the export still shipping
+a sheet the car was not running - which is the same defect the old rule was
+protecting against, arriving by the other road.
 
-* `propose_strategy` writes an **unapproved** row. `Store.approve_strategy` is
-  a separate call the app makes when he says so, and nothing arms a plan that
-  has not been through it.
-* `propose_setup_sheet` files the reply into the **prompt log**, which is where
-  a pasted reply goes today. He reads it and applies it on the Event screen,
-  exactly as now.
+So the writes apply, and `unrecoverable` is the word that had to stop being
+true:
 
-Neither one can put a number under a lap.
+* `write_setup_sheet` lands in `setup_sheets` and the session re-binds. **Every
+  write records the row it replaced, in full** (`engineer_writes`), and
+  `undo_setup_sheet` puts it back. That table is also the only record of who
+  changed the car and when - without it a sheet written from outside is
+  indistinguishable from one the driver typed himself.
+* `write_strategy` writes an **approved** plan, but `certify.py` has to pass or
+  it cannot arm. A sheet describes something that already exists; a plan is an
+  instruction that will be executed under a helmet, and the failure on record
+  is a plan priced 50 s slower than its own alternative that certified as fine.
+  A plan is never undone - it may already be armed and partly executed - it is
+  replaced by writing a better one.
+* `write_race_knowledge` writes the briefing George's rules read.
+
+`propose_setup_sheet` and `propose_strategy` remain, unchanged, for a reply he
+wants to read before it touches anything.
 
 ### Running it
 
@@ -278,6 +291,227 @@ def propose_strategy(event_id: int, plan: str, label: str = "") -> str:
         return _dump({"saved": False, "error": f"{type(exc).__name__}: {exc}"})
     finally:
         store.close()
+
+
+# ------------------------------------------------- authoritative writes ⚠
+#
+# See the module docstring for why these exist and what makes them safe. Every
+# one records what it replaced; the sheet write can be undone.
+
+@mcp.tool()
+def write_setup_sheet(car_name: str, reply: str, purpose: str = "race",
+                      circuit_key: str = "", event_id: int = 0) -> str:
+    """Write a setup sheet straight into the app's record of the car. ⚠
+
+    **This changes what the app believes is bolted to the car**, which is rank
+    zero of every diagnosis. Use it when the sheet has actually been typed into
+    GT7; use `propose_setup_sheet` when it is a suggestion he should read first.
+
+    The previous sheet is recorded in full before it is replaced, so
+    `undo_setup_sheet` can put it back, and `engineer_writes` is the record of
+    who changed it and when.
+    """
+    store = _store()
+    try:
+        parsed = parse_reply(reply)
+        race = getattr(parsed, "race", None) or getattr(parsed, "sheet", None)
+        if race is None or not getattr(race, "values", None):
+            return _dump({
+                "written": False,
+                "error": "nothing in that reply parsed as a setup sheet",
+                "unmatched": list(getattr(parsed, "unmatched", []) or [])[:20]})
+
+        key = circuit_key or None
+        before = store.sheet_for(car_name, purpose, key)
+        sheet = _sheet_from(race, car_name, purpose, key)
+        sheet_id = store.save_setup_sheet(sheet)
+        store.note_engineer_write(
+            "setup_sheet", target_id=sheet_id,
+            event_id=event_id or None, author="race engineer (MCP)",
+            summary=f"wrote {sheet.sheet_name!r} for {car_name}"
+                    + (f" at {key}" if key else ""),
+            before=_as_dict(before), after=_as_dict(sheet))
+        return _dump({
+            "written": True, "sheetId": sheet_id,
+            "values": getattr(race, "values", None),
+            "unmatched": list(getattr(parsed, "unmatched", []) or [])[:20],
+            "note": "this is now the app's record of what is in the car. "
+                    "`undo_setup_sheet` puts the previous one back.",
+        })
+    except Exception as exc:                                 # noqa: BLE001
+        return _dump({"written": False, "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        store.close()
+
+
+@mcp.tool()
+def undo_setup_sheet(write_id: int = 0) -> str:
+    """Put back the sheet an authoritative write replaced.
+
+    With no `write_id`, undoes the most recent sheet write that has not already
+    been undone. Returns what it did, in words.
+    """
+    store = _store()
+    try:
+        if not write_id:
+            recent = [row for row in store.list_engineer_writes(
+                kind="setup_sheet", limit=20) if not row["undone_at"]]
+            if not recent:
+                return _dump({"undone": False,
+                              "error": "no sheet write left to undo"})
+            write_id = recent[0]["id"]
+        return _dump({"undone": True, "writeId": write_id,
+                      "result": store.undo_engineer_write(write_id)})
+    except Exception as exc:                                 # noqa: BLE001
+        return _dump({"undone": False, "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        store.close()
+
+
+@mcp.tool()
+def write_strategy(event_id: int, plan: str, label: str = "") -> str:
+    """Write an APPROVED race plan. It still cannot arm unless it certifies. ⚠
+
+    A sheet describes something that already exists; a plan is an instruction
+    that will be executed under a helmet. So this is the one authoritative
+    write with a machine check in front of it - `certify.py` prices the plan
+    against the evidence, and a plan that fails is stored as a candidate rather
+    than approved, because the failure on record is a plan priced 50 s slower
+    than its own alternative.
+
+    Never undone. It may already be armed and partly executed; a plan is
+    replaced by writing a better one.
+    """
+    store = _store()
+    try:
+        payload = json.loads(plan) if isinstance(plan, str) else plan
+    except json.JSONDecodeError as exc:
+        return _dump({"written": False, "error": f"plan is not JSON: {exc}"})
+    try:
+        from pitcrew.strategy.certify import certify_for_event
+        from pitcrew.strategy.execution import stamp
+
+        payload = stamp(store, event_id, payload)
+        certificate = certify_for_event(store, event_id, payload)
+        strategy_id = store.save_strategy(
+            event_id, payload, label=label or "written by the race engineer",
+            evidence={"certified": certificate.certified,
+                      "refusals": certificate.refusals,
+                      "warnings": certificate.warnings,
+                      "unchecked": certificate.unchecked},
+            status="candidate")
+        if certificate.certified:
+            store.approve_strategy(strategy_id)
+        store.note_engineer_write(
+            "strategy", target_id=strategy_id, event_id=event_id,
+            author="race engineer (MCP)",
+            summary=("approved" if certificate.certified
+                     else "stored as a candidate - it did not certify"),
+            after={"label": label, "certified": certificate.certified})
+        return _dump({
+            "written": True, "strategyId": strategy_id,
+            "approved": certificate.certified,
+            "certified": certificate.certified,
+            "refusals": certificate.refusals,
+            "warnings": certificate.warnings,
+            "unchecked": certificate.unchecked,
+            "verdict": certificate.describe(),
+            "note": ("approved and ready to arm." if certificate.certified else
+                     "NOT approved: it did not certify, so the car cannot "
+                     "execute it as written. Fix the refusals and write again."),
+        })
+    except Exception as exc:                                 # noqa: BLE001
+        return _dump({"written": False, "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        store.close()
+
+
+@mcp.tool()
+def write_race_knowledge(circuit_key: str, briefing: str,
+                         event_id: int = 0) -> str:
+    """Write the briefing George's rules read during the race.
+
+    `briefing` is JSON with any of: `pit_loss_s`, `refuel_l_per_s`,
+    `undercut_s`, `overcut_s`, `expected_constraint`, `constraint_watch`,
+    `rivals`, `tow_s_per_lap`, `calls_off`, `notes`.
+
+    `event_id` 0 writes the circuit's own record - the track constants, which
+    every round here inherits. A real event id writes that race's, and the two
+    are merged field by field with the race's winning.
+
+    **`calls_off` is checked before anything is stored.** It names calls George
+    will not make, and a typo there is a call that quietly never happens.
+    """
+    store = _store()
+    try:
+        payload = json.loads(briefing) if isinstance(briefing, str) else briefing
+    except json.JSONDecodeError as exc:
+        return _dump({"written": False, "error": f"briefing is not JSON: {exc}"})
+    try:
+        from dataclasses import replace
+
+        from pitcrew.race.knowledge import Knowledge
+
+        base = store.get_race_knowledge(circuit_key, event_id or None)
+        base = base or Knowledge(circuit_key=circuit_key,
+                                 event_id=event_id or None)
+        fields = {key: value for key, value in payload.items()
+                  if key in Knowledge.__dataclass_fields__}
+        for key in ("rivals", "calls_off"):
+            if key in fields:
+                fields[key] = tuple(fields[key] or ())
+        written = replace(base, circuit_key=circuit_key,
+                          event_id=event_id or None,
+                          author="race engineer (MCP)", **fields)
+        store.save_race_knowledge(written)
+        store.note_engineer_write(
+            "knowledge", event_id=event_id or None,
+            author="race engineer (MCP)",
+            summary=f"briefing for {circuit_key}",
+            before=base.as_export(), after=written.as_export())
+        return _dump({"written": True, "briefing": written.as_export(),
+                      "ignored": sorted(set(payload) - set(fields))})
+    except Exception as exc:                                 # noqa: BLE001
+        return _dump({"written": False, "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        store.close()
+
+
+@mcp.tool()
+def engineer_writes(kind: str = "", limit: int = 20) -> str:
+    """What has been written into the app from outside, newest first.
+
+    The audit trail the authoritative writes exist behind. Without it a sheet
+    written from here is indistinguishable from one the driver typed himself.
+    """
+    store = _store()
+    try:
+        return _dump(store.list_engineer_writes(kind=kind or None,
+                                                limit=min(limit, MAX_ROWS)))
+    finally:
+        store.close()
+
+
+def _sheet_from(race, car_name: str, purpose: str, circuit_key: str | None):
+    """A parsed reply as a `SetupSheet` bound to this car and circuit."""
+    from pitcrew.setup.sheet import SetupSheet
+
+    return SetupSheet(
+        car_name=car_name,
+        sheet_name=getattr(race, "sheet_name", None) or "written by the engineer",
+        values=dict(getattr(race, "values", None) or {}),
+        gears=list(getattr(race, "gears", None) or []),
+        purpose=purpose,
+        circuit_key=circuit_key)
+
+
+def _as_dict(sheet):
+    """A `SetupSheet` as plain JSON for the audit trail, or None."""
+    if sheet is None:
+        return None
+    from dataclasses import asdict
+
+    return asdict(sheet)
 
 
 def main() -> None:

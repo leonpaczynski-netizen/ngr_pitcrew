@@ -558,6 +558,88 @@ class Store:
                 "ORDER BY updated_at DESC, id DESC", (car_name,))
         return [_setup_sheet(r) for r in rows]
 
+    def note_engineer_write(self, kind: str, *, summary: str,
+                            target_id: int | None = None,
+                            event_id: int | None = None,
+                            author: str | None = None,
+                            before: dict | None = None,
+                            after: dict | None = None) -> int:
+        """Record an authoritative write made from outside the app.
+
+        **This is what makes the doctrine change survivable.** `mcp/server.py`
+        used to refuse to apply anything, and its stated reason was that the
+        app had been wrong about which sheet was in the car three sessions out
+        of three - so a direct write would make that unrecoverable. The driver
+        decided on 29 Aug that Ludo writes directly; `unrecoverable` is
+        therefore the word that had to stop being true.
+
+        `before` is the row exactly as it stood. That is the undo, and it is
+        also the only record of who changed the car and when: without it a
+        wrong sheet written from outside is indistinguishable from one the
+        driver typed himself.
+        """
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO engineer_writes (kind, target_id, event_id, "
+                "author, summary, before_json, after_json, written_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (kind, target_id, event_id, author, summary,
+                 json.dumps(before) if before is not None else None,
+                 json.dumps(after) if after is not None else None, _now()))
+            return int(cur.lastrowid)
+
+    def list_engineer_writes(self, *, kind: str | None = None,
+                             limit: int = 50) -> list[dict]:
+        """The most recent authoritative writes, newest first."""
+        if kind:
+            rows = self._query(
+                "SELECT * FROM engineer_writes WHERE kind = ? "
+                "ORDER BY id DESC LIMIT ?", (kind, limit))
+        else:
+            rows = self._query(
+                "SELECT * FROM engineer_writes ORDER BY id DESC LIMIT ?",
+                (limit,))
+        return [dict(row) for row in rows]
+
+    def undo_engineer_write(self, write_id: int) -> str:
+        """Put back what an authoritative write replaced. Returns what it did.
+
+        **Only a `setup_sheet` write, and deliberately.** A sheet describes
+        something that already exists, so restoring the previous description is
+        always meaningful. A plan is an instruction that may already have been
+        armed and partly executed, and rewinding one mid-race would leave the
+        coordinator running against a document nobody approved; a plan is
+        replaced by writing a better one, not by undoing.
+
+        A write with no `before` created the row rather than replacing one, and
+        there is nothing to restore - said rather than silently doing nothing.
+        """
+        rows = self._query("SELECT * FROM engineer_writes WHERE id = ?",
+                           (write_id,))
+        if not rows:
+            raise ValueError(f"no engineer write with id {write_id}")
+        row = rows[0]
+        if row["undone_at"]:
+            return f"write {write_id} was already undone at {row['undone_at']}"
+        if row["kind"] != "setup_sheet":
+            raise ValueError(
+                f"only a setup_sheet write can be undone, not {row['kind']!r} "
+                f"- a plan is replaced by writing a better one, because it may "
+                f"already be armed and partly executed")
+        if not row["before_json"]:
+            return (f"write {write_id} created a sheet rather than replacing "
+                    f"one, so there is nothing to put back. Delete it instead.")
+
+        from pitcrew.setup.sheet import SetupSheet
+
+        before = json.loads(row["before_json"])
+        self.save_setup_sheet(SetupSheet(**before))
+        with self._write() as conn:
+            conn.execute("UPDATE engineer_writes SET undone_at = ? WHERE id = ?",
+                         (_now(), write_id))
+        return (f"restored {before.get('sheet_name')!r} for "
+                f"{before.get('car_name')}")
+
     def get_race_knowledge(self, circuit_key: str, event_id: int | None = None):
         """Ludo's briefing for this race, or None where nobody wrote one.
 

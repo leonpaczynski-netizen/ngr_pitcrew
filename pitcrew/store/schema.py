@@ -349,6 +349,36 @@ CREATE TABLE IF NOT EXISTS track_clock (
     PRIMARY KEY (circuit_key, preset)
 );
 
+-- Every authoritative write the race engineer made from outside the app.
+--
+-- **The doctrine changed on 29 Aug 2026 and this is what makes it safe.**
+-- `mcp/server.py` used to state that reads are open and writes only propose,
+-- and gave its reason: the app was wrong about which sheet was in the car
+-- three sessions out of three, so a tool that wrote one directly would make
+-- that unrecoverable. The driver's decision is that Ludo writes sheets and
+-- plans straight into the database - the DB is the single source of truth for
+-- both of them - so "unrecoverable" is the word that has to stop being true.
+--
+-- Every direct write records what it replaced, in full, as JSON. That is the
+-- undo, and it is also the only record of who changed the car's setup and
+-- when; without it a wrong sheet written from outside is indistinguishable
+-- from one the driver typed himself.
+CREATE TABLE IF NOT EXISTS engineer_writes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT    NOT NULL,   -- 'setup_sheet' | 'strategy' | 'knowledge'
+    target_id   INTEGER,            -- the row written, where it has an id
+    event_id    INTEGER,
+    author      TEXT,
+    summary     TEXT    NOT NULL,   -- what changed, in words, for the log
+    before_json TEXT,               -- the row as it was, or NULL if it is new
+    after_json  TEXT,
+    undone_at   TEXT,               -- set when the write has been rolled back
+    written_at  TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_engineer_writes_kind
+    ON engineer_writes(kind, written_at DESC);
+
 -- What Ludo knows about racing HERE that George's rules cannot work out.
 --
 -- **The load-bearing piece of "smarter".** George is deterministic and no model

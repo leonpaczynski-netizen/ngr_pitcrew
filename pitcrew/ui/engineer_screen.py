@@ -189,6 +189,16 @@ class EngineerScreen(QWidget):
             "with the car, the circuit and what has been measured.",
             size=14, colour=theme.STENCIL_DIM)
         self.knows_plate.body.addWidget(self.knows_note)
+        # **What the data already answered, and what is left worth asking.**
+        # `prompts/questions.py` decides it - a question with a working
+        # resolver may never be asked, and one that survives states what is
+        # already known before it asks. It sits inside this plate because it
+        # is the same argument at a finer grain: the plate says what the app
+        # knows, and this says which of the form's questions that retires.
+        self.questions_note = BodyLabel(
+            "", size=14, colour=theme.CHALK)
+        self.questions_note.setWordWrap(True)
+        self.knows_plate.body.addWidget(self.questions_note)
         stack.addWidget(self.knows_plate)
 
         self.symptoms_plate = self._symptoms_plate()
@@ -513,6 +523,40 @@ class EngineerScreen(QWidget):
 
     def set_context_note(self, text: str) -> None:
         self.knows_note.setText(text)
+
+    def set_questions(self, resolution) -> None:
+        """Say what the data already answered, and what is left for him.
+
+        **The form asks thirteen things every time, decided once at design
+        time**, and `prompts/questions.py` is the rebuttal: a question with a
+        working resolver may never be asked, and one that survives states what
+        is already known before it asks. Its whole registry had no caller
+        until now.
+
+        This is the smallest honest surfacing of it - a line above the form
+        naming what was resolved and what is worth his attention. The fields
+        themselves stay, because a resolved answer is handed to the question
+        beside it rather than deleted, and he is still the one who can
+        contradict it. `CLAUDE.md` 4.1: his report is primary evidence.
+        """
+        parts = []
+        if resolution.answered:
+            parts.append(
+                f"{len(resolution.answered)} answered from the data - "
+                + "; ".join(sorted(resolution.answered)))
+        if resolution.asked:
+            parts.append("worth your time: "
+                         + " ".join(one.text for one in resolution.asked))
+        if resolution.failed:
+            # Said, not swallowed. A resolver that stopped working is a
+            # question that quietly came back, and he is the only one who
+            # would notice.
+            parts.append("could not check: " + ", ".join(resolution.failed))
+        self.questions_note.setText(
+            " · ".join(parts) if parts
+            else "Nothing the data could answer for you.")
+        self.questions_note.set_ink(
+            theme.WARNING if resolution.failed else theme.CHALK)
 
     def note(self, text: str, *, warn: bool = False) -> None:
         self.footer_note.setText(text)

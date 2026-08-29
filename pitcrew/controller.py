@@ -1781,6 +1781,46 @@ class PitCrewController(QObject):
         if gaps:
             note += ". Not on file: " + ", ".join(gaps) + "."
         self.engineer.set_context_note(note)
+        self._ask_only_what_is_left(context)
+
+    def _ask_only_what_is_left(self, context) -> None:
+        """Show the questions the data cannot answer, and answer the rest.
+
+        **`prompts/questions.py` is the whole confirm-not-recall design and it
+        had no caller anywhere in the app.** Five hundred lines, a registry, a
+        gate and working resolvers, reachable only from its own test file -
+        which is the fourth instance of that pattern found this week, and the
+        one that cost the most, because what stood in its place was the
+        thirteen-field form its own docstring is a rebuttal of.
+
+        The rule it enforces is one line: **a question with a working resolver
+        may never be asked.** It exists because on 23 Aug the driver was asked
+        to watch the tyre indicators and report whether one rear wheel was
+        spinning alone - a question `lap_frames` had answered seventeen
+        thousand times over. He noticed before the app did.
+
+        Silent on failure. A prompt screen that will not open because a
+        resolver raised is worse than one asking a question it need not.
+        """
+        if self.engineer is None or not hasattr(self.engineer, "set_questions"):
+            return
+        try:
+            from pitcrew.prompts.questions import resolve
+
+            found = resolve(self.store, context, kind=self.engineer.kind())
+        except Exception as exc:                            # noqa: BLE001
+            log("prompts").warning(
+                "could not work out what still needs asking: %s: %s",
+                type(exc).__name__, exc)
+            return
+        if found.failed:
+            # **A broken resolver ASKS rather than silently answering**, and
+            # it says so here: the driver would otherwise never learn the app
+            # had stopped looking at something it used to check.
+            log("prompts").warning(
+                "resolvers raised and their questions are being asked "
+                "instead: %s", ", ".join(found.failed))
+        self.engineer.set_questions(found)
 
     def generate_prompt(self, kind: str) -> str | None:
         """Compose a prompt and log it as issued."""
