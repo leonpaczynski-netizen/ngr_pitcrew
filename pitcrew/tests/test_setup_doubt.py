@@ -287,3 +287,37 @@ def test_the_archive_stopped_refusing_the_events_that_were_correct():
             assert build_event_export(store, event_id, kind="practice")["format"]
     finally:
         store.close()
+
+
+def test_a_change_made_in_a_later_run_reaches_the_payload():
+    """**Red Bull Ring is the case.** `de_r` was 32 in session 93 and 38 in
+    94, and `setup_changes` is per session - so an export reading only the
+    merged session's id came out naming the v1 sheet, a gearbox that sheet
+    does not hold, and no statement that anything had moved. The reader would
+    have diagnosed a car on de_r 32.
+    """
+    from pitcrew.export.build import build_event_export
+    from pitcrew.store.db import Store
+
+    store = Store()
+    try:
+        setup = build_event_export(store, 8, kind="practice")["setup"]
+    finally:
+        store.close()
+
+    changes = {one["key"]: one for one in (setup.get("driverChanges") or ())}
+    assert "de_r" in changes, \
+        "the change made in the second run never reached the payload"
+    assert (changes["de_r"]["from"], changes["de_r"]["to"]) == (32.0, 38.0)
+
+
+def test_the_merged_session_carries_every_session_id():
+    from pitcrew.export.build import _merged_session
+    from pitcrew.store.db import Store
+
+    store = Store()
+    try:
+        merged = _merged_session(store.list_sessions(8, "practice"))
+    finally:
+        store.close()
+    assert merged["session_ids"] == [93, 94]

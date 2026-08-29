@@ -355,6 +355,13 @@ def _merged_session(sessions: list[dict]) -> dict:
     """
     ordered = sorted(sessions, key=lambda s: (s["started_at"], s["id"]))
     merged = dict(ordered[0])
+    # **Every session's id, not just the one standing for them all.**
+    # `setup_changes` is per session, and reading only the merged id lost
+    # every change made in a later run of the same event: Red Bull Ring ran
+    # `de_r` 32 in session 93 and 38 in 94, and the payload came out naming
+    # the v1 sheet, a gearbox that sheet does not hold, and no statement that
+    # anything had moved. The reader would have diagnosed a car on de_r 32.
+    merged["session_ids"] = [s["id"] for s in ordered]
 
     # **An event may not span two versions of the game.** Everything else here
     # merges by picking the first run that had an answer, and for a packet
@@ -644,7 +651,13 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
             setup = sheet.as_export()
             sheet_gears = sheet.gears
             sheet_final_gear = _sheet_final_gear(sheet)
-            changes = store.list_setup_changes(session["id"])
+            # **Across every session of the event.** A change made in a later
+            # run belongs to this body of evidence as much as one made in the
+            # first, and the merged record names only one id - see
+            # `_merged_session`.
+            changes = []
+            for one in session.get("session_ids") or [session["id"]]:
+                changes.extend(store.list_setup_changes(one))
             driver_changes = [c.as_export() for c in changes] or None
 
     gearing = gearing_export(counted, sheet_gears,
