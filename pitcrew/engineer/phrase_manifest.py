@@ -556,6 +556,20 @@ def _no_clock_line() -> str:
     return NO_CLOCK
 
 
+def _no_notes_line() -> str:
+    """What George says at the green when nobody wrote a briefing.
+
+    It rides on the green call, which is the one sentence of the race that is
+    true exactly once - so a fall to live synthesis here is a pause on the
+    lights, and there is no second chance to say it.
+
+    Imported, never retyped, like every other line in this file.
+    """
+    from pitcrew.race.knowledge import NO_NOTES
+
+    return NO_NOTES
+
+
 def _stop_pending_line() -> str:
     """`orientation`'s wording while a stop is still on the plan.
 
@@ -681,6 +695,7 @@ def orientation_lines() -> tuple[str, ...]:
         # Imported, never retyped: two copies of a spoken line drift, and the
         # one in the pack drifting is a silent fall to live synthesis.
         _no_clock_line(),
+        _no_notes_line(),
     )
 
 

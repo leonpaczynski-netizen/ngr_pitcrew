@@ -558,6 +558,74 @@ class Store:
                 "ORDER BY updated_at DESC, id DESC", (car_name,))
         return [_setup_sheet(r) for r in rows]
 
+    def get_race_knowledge(self, circuit_key: str, event_id: int | None = None):
+        """Ludo's briefing for this race, or None where nobody wrote one.
+
+        **The event's own record wins over the circuit's**, which is what lets
+        the track constants - pit loss, the tow - be written once with a null
+        `event_id` and not re-typed for every round, while rival tendencies and
+        the expected constraint stay attached to the race they describe.
+
+        None is a state George announces rather than one he papers over. See
+        `race/knowledge.NO_NOTES`.
+        """
+        from pitcrew.race.knowledge import from_row
+
+        rows = self._query(
+            "SELECT * FROM race_knowledge WHERE circuit_key = ? "
+            "AND (event_id = ? OR event_id IS NULL) "
+            # NULLs last, so the event's own record is row zero when it exists.
+            "ORDER BY event_id IS NULL, id DESC LIMIT 1",
+            (circuit_key, event_id))
+        return from_row(rows[0]) if rows else None
+
+    def save_race_knowledge(self, knowledge) -> int:
+        """Write or replace one briefing. Validated before it is stored.
+
+        **Refused rather than half-stored.** `calls_off` names calls George
+        will not make, and a typo there is a call that quietly never happens -
+        which is indistinguishable from an engineer who had nothing to say.
+        `Knowledge.validate` is what catches it, and it runs here so no writer,
+        including the MCP seam, can skip it.
+        """
+        import json
+
+        knowledge.validate()
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO race_knowledge ("
+                " circuit_key, event_id, pit_loss_s, refuel_l_per_s,"
+                " undercut_s, overcut_s, expected_constraint, constraint_watch,"
+                " rivals_json, tow_s_per_lap, calls_off_json, wear_rates_json,"
+                " author, game_version, notes, written_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(circuit_key, event_id) DO UPDATE SET"
+                "  pit_loss_s=excluded.pit_loss_s,"
+                "  refuel_l_per_s=excluded.refuel_l_per_s,"
+                "  undercut_s=excluded.undercut_s,"
+                "  overcut_s=excluded.overcut_s,"
+                "  expected_constraint=excluded.expected_constraint,"
+                "  constraint_watch=excluded.constraint_watch,"
+                "  rivals_json=excluded.rivals_json,"
+                "  tow_s_per_lap=excluded.tow_s_per_lap,"
+                "  calls_off_json=excluded.calls_off_json,"
+                "  wear_rates_json=excluded.wear_rates_json,"
+                "  author=excluded.author,"
+                "  game_version=excluded.game_version,"
+                "  notes=excluded.notes,"
+                "  written_at=excluded.written_at",
+                (knowledge.circuit_key, knowledge.event_id,
+                 knowledge.pit_loss_s, knowledge.refuel_l_per_s,
+                 knowledge.undercut_s, knowledge.overcut_s,
+                 knowledge.expected_constraint, knowledge.constraint_watch,
+                 json.dumps(list(knowledge.rivals)) if knowledge.rivals else None,
+                 knowledge.tow_s_per_lap,
+                 json.dumps(list(knowledge.calls_off)) if knowledge.calls_off else None,
+                 json.dumps(knowledge.wear_rates) if knowledge.wear_rates else None,
+                 knowledge.author, knowledge.game_version, knowledge.notes,
+                 knowledge.written_at or _now()))
+            return int(cur.lastrowid)
+
     def layout_length_m(self, circuit_key: str) -> float | None:
         """How long this circuit is, in metres, from the shipped catalogue.
 

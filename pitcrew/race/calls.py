@@ -20,6 +20,11 @@ from dataclasses import dataclass, field
 
 from pitcrew.strategy.model import fuel_margin_l
 
+# What George says at the green when nobody wrote a briefing. Imported rather
+# than restated: `race/knowledge.py` owns the sentence, and two copies of one
+# line is how the app comes to say it two ways.
+from pitcrew.race.knowledge import NO_NOTES
+
 
 
 # --- the measured wear call ------------------------------------------------
@@ -473,6 +478,12 @@ class RaceState:
     # What the tank actually holds. Without it the engineer will ask for a
     # fuel figure the car cannot take - and it did: "Fuel to 510 litres."
     fuel_capacity_l: float | None = None
+    # **Nobody wrote a briefing for this circuit**, so George is on the generic
+    # model. Said once, at the green - see `_green`. Set by the coordinator
+    # from `race/knowledge.for_event`; False when a briefing exists, and the
+    # default is False because a state built by hand in a test is not a claim
+    # that the briefing is missing.
+    no_notes: bool = False
     position: int | None = None
     # **How many cars are out there.** `packet.cars_in_race` decodes it and
     # nothing in this package has ever read it. "P8" and "P8 of 9" are
@@ -1001,6 +1012,20 @@ def _green(state: RaceState) -> Call | None:
     if state.lap != 0 or state.finished:
         return None
     laps = f"{state.laps_total} laps." if state.laps_total else ""
+    # **"No notes for this circuit" is said HERE or it is never said.**
+    #
+    # The briefing is what makes George anything other than generic - the
+    # measured pit loss, the tow, what a stop is worth against the cars around
+    # him - and a race can arrive without one. Falling back to the model is
+    # right; falling back silently is the defect pattern that made the gauge
+    # ratchet invisible for a whole race, where the number setting the bar
+    # never appeared anywhere he could see it.
+    #
+    # The green is the only crossing where it is both true and free: nothing
+    # else is competing, and by lap two it is news about a decision already
+    # taken.
+    if state.no_notes:
+        laps = f"{laps} {NO_NOTES}".strip()
     return Call(GREEN, 0, "Green, green, green.", laps)
 
 

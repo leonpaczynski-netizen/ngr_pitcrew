@@ -349,6 +349,59 @@ CREATE TABLE IF NOT EXISTS track_clock (
     PRIMARY KEY (circuit_key, preset)
 );
 
+-- What Ludo knows about racing HERE that George's rules cannot work out.
+--
+-- **The load-bearing piece of "smarter".** George is deterministic and no model
+-- runs in the live loop, so everything clever has to be precomputed - and the
+-- app's own archive holds measurements (`track_clock`, `tyre_models`, the
+-- refuel rate) but no judgement. It has never known that pit loss at Watkins is
+-- 15.7 s ex-fuel against the 20 s declared, that the undercut is dead in GT7,
+-- or that a particular rival always pits early. Written at the desk, before the
+-- flag; read by the rules, during the race.
+--
+-- **`event_id` NULL means "any race at this circuit".** Pit loss is a track
+-- constant (CLAUDE.md 5.4) and so is the tow; rival tendencies and the expected
+-- binding constraint belong to one race. Both live here and the lookup prefers
+-- the more specific, so the track constants are written once and not re-typed
+-- for every round.
+--
+-- Absent is a legitimate state and George says so out loud at the green. See
+-- `race/knowledge.py`.
+CREATE TABLE IF NOT EXISTS race_knowledge (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    circuit_key        TEXT    NOT NULL,
+    event_id           INTEGER REFERENCES events(id) ON DELETE CASCADE,
+    -- 1. the stop, measured rather than declared
+    pit_loss_s         REAL,
+    refuel_l_per_s     REAL,
+    -- 2. what a stop is worth against the cars around him. Signed: positive
+    --    means the manoeuvre GAINS that many seconds here.
+    undercut_s         REAL,
+    overcut_s          REAL,
+    -- 3. which limit Ludo expects to bind, and what would change it
+    expected_constraint TEXT,
+    constraint_watch    TEXT,
+    -- 4. who he is racing, as JSON [{"rival": ..., "tendency": ...}]
+    rivals_json        TEXT,
+    -- 5. what a slipstream is worth here, seconds per lap
+    tow_s_per_lap      REAL,
+    -- 6. the rail expressed as knowledge rather than as a veto, as JSON
+    --    [{"kind": "...", "why": "..."}] - calls Ludo does not want made here
+    calls_off_json     TEXT,
+    -- Filled by the post-race replay pass, per compound, as JSON
+    -- {"RS": {"perLap": ..., "samples": ..., "source": ...}}
+    wear_rates_json    TEXT,
+    -- Provenance. A knowledge record with no author and no date is a rumour.
+    author             TEXT,
+    game_version       TEXT,
+    notes              TEXT,
+    written_at         TEXT    NOT NULL,
+    UNIQUE(circuit_key, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_circuit
+    ON race_knowledge(circuit_key);
+
 CREATE TABLE IF NOT EXISTS corner_models (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     circuit_key  TEXT    NOT NULL UNIQUE,   -- track + layout, slugged

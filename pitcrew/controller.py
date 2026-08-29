@@ -64,6 +64,7 @@ from pitcrew.prompts.build import KIND_LABELS, PromptRefused, build_prompt
 from pitcrew.prompts.context import gather
 from pitcrew.prompts.report import DriverReport
 from pitcrew.prompts.templates import PROMPT_VERSION
+from pitcrew.race import knowledge
 from pitcrew.setup import doubt
 from pitcrew.setup.parse import parse_reply
 from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
@@ -4225,7 +4226,16 @@ class PitCrewController(QObject):
             # require, and say so.
             mandatory_stops=int(event.get("mandatory_stops") or 0),
             practice_lap_samples=practice_laps,
-            practice_fuel_samples=practice_laps)
+            practice_fuel_samples=practice_laps,
+            # **Ludo's briefing for this circuit**, or None where nobody wrote
+            # one. It is the only route by which anything George cannot derive
+            # enters a race - no model runs in the live loop, so everything
+            # clever is precomputed. Absent is a state he announces at the
+            # green, never one he papers over.
+            knowledge=knowledge.for_event(self.store, event))
+        # Set here rather than inside the coordinator so a state built by hand
+        # in a test is not a claim that the briefing is missing.
+        self.race.state.no_notes = self.race.knowledge is None
         # **The interval he asked for, reaching the race.** Built, tested, and
         # settable only from a test file until now - CLAUDE.md rule 11's named
         # failure, and the fourth instance of it found in this codebase this

@@ -140,9 +140,17 @@ class RaceCoordinator:
                  pit_loss_s: float | None = None,
                  mandatory_stops: int = 0,
                  pit_loss_measured: bool = False,
+                 # **Ludo's briefing for this circuit**, or None where nobody
+                 # wrote one. It is the only route by which anything George
+                 # cannot derive gets into a race: no model runs in the live
+                 # loop, so everything clever is precomputed. See
+                 # `race/knowledge.py`. Absent is announced at the green, not
+                 # papered over.
+                 knowledge=None,
                  now=None) -> None:
         self.phase = RacePhase.IDLE
         self.plan = plan or {}
+        self.knowledge = knowledge
         self.state = RaceState(
             fuel_per_lap_l=fuel_per_lap_l, wear_per_lap=wear_per_lap,
             # **Seeded from this event's own practice, then replaced by the
@@ -164,6 +172,14 @@ class RaceCoordinator:
         self.planned_lap_time_ms = (
             planned_lap_time_ms if planned_lap_time_ms is not None
             else lap_time_ms)
+        # **The briefing's measured stop beats the event's declared one.**
+        # Watkins: 15.7 s measured against 20 s declared, and nothing carried
+        # the measurement into the next race. Only where the briefing actually
+        # names one - `None` there leaves every figure exactly as it was - and
+        # it is not marked `pit_loss_measured`, because a figure typed at the
+        # desk is declared however carefully it was arrived at.
+        if knowledge is not None and knowledge.pit_loss_s:
+            pit_loss_s = knowledge.pit_loss_s
         self.pit_loss_s = pit_loss_s
         self._burns: list[float] = []
         # **Laps completed after arming but before the green was detected.**
@@ -1330,6 +1346,12 @@ class RaceCoordinator:
         only once the things that key off silence have had the lap.
         """
         call = next_call(self.state)
+        # **The briefing first, then the playbook.** They cut different
+        # things: the briefing can drop a whole call Ludo does not want made
+        # here, the playbook strips a structural instruction off one that is
+        # still said. Running the briefing first means the playbook is never
+        # asked about a call nobody is going to hear.
+        call = self._within_the_briefing(call)
         call = self._within_the_playbook(call)
         heartbeat = call if call is not None and call.kind == STATUS else None
         if call is not None and heartbeat is None:
@@ -1352,6 +1374,42 @@ class RaceCoordinator:
         if heartbeat is not None:
             self.state.record(heartbeat)
         return heartbeat
+
+    def _within_the_briefing(self, call: Call | None) -> Call | None:
+        """The call, unless Ludo said not to make this one here.
+
+        **The rail expressed as knowledge rather than as a veto.** The playbook
+        gates four structural actions and nothing else; this is the other half
+        of the same idea, and it is the half that carries a reason: *"don't
+        call short-shift here, the straights are too short to pay."* Ludo
+        teaching George, not muzzling him.
+
+        **A DECISION may be silenced; an EVENT may not.** The green, the flag,
+        an incident and the run-in are true exactly once and cannot be asked
+        for afterwards, so turning one off does not quiet the engineer, it
+        deletes the only chance the driver had to hear it. A record trying to
+        is refused at `Knowledge.validate` time for a kind that does not exist,
+        and here for one that does but must not be silenced.
+
+        Logged with the reason, because a call that does not happen is
+        indistinguishable from an engineer with nothing to say - which is the
+        silence this app keeps having to explain afterwards.
+        """
+        from pitcrew.race.calls import DECISION, register_of
+
+        if call is None or self.knowledge is None:
+            return call
+        why = self.knowledge.silences(call.kind)
+        if not why:
+            return call
+        if register_of(call.kind) is not DECISION:
+            log("race").warning(
+                "the briefing asks for %r to be off, and it is not a decision "
+                "- it is true once and cannot be asked for afterwards, so it "
+                "is being said anyway. Reason on file: %s", call.kind, why)
+            return call
+        log("race").info("%r withheld: the briefing says %s", call.kind, why)
+        return None
 
     def _within_the_playbook(self, call: Call | None) -> Call | None:
         """The call as made, with any structural instruction the desk withheld.
