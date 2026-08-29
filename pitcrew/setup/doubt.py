@@ -84,16 +84,44 @@ class Doubt:
         return " ".join(self.notes)
 
 
-def gearbox_doubt(gearing: dict | None) -> Doubt:
-    """The gearbox on track against the gearbox on the sheet.
+def gearbox_doubt(gearing: dict | None, disagreeing_sheets=None) -> Doubt:
+    """The gearbox on track against the gearbox on the sheet it ran under.
 
     `matchesSheet` is a tri-state and only `False` is doubt. `None` means one
     side is unknown - no fitted ratios, or a sheet with no gears - and an
     unknown is not a disagreement.
+
+    **`matchesSheet` alone is the wrong question on an event that spans
+    revisions, and that mistake refused three real exports.** It takes the
+    most recent lap's box and compares it against whichever single sheet the
+    merged session carries, so a driver who revised his gearbox mid-event -
+    the ordinary way of testing one - read as a wrong setup record. Measured
+    on the archive: Yas Marina ran two boxes on two sheets and Watkins Glen
+    ran two on two, and **all four matched their own sheets exactly.**
+
+    So where the caller can say which sheets disagree with their OWN laps
+    (`analysis.gearing.sheets_disagree`), that is the answer, and an empty
+    list clears the doubt however `matchesSheet` came out. The flat boolean is
+    the fallback for a caller that cannot group laps by sheet.
     """
     if not gearing or gearing.get("matchesSheet") is not False:
         return Doubt()
     covers = gearing.get("matchesSheetCovers") or "the ratios"
+
+    if disagreeing_sheets is not None:
+        if not disagreeing_sheets:
+            # Every sheet matched the laps driven on it. The event ran more
+            # than one gearbox, which the export already declares in
+            # `gearboxChangedMidSession` - a change is a known state, not a
+            # wrong record.
+            return Doubt()
+        named = ", ".join(str(one) for one in disagreeing_sheets)
+        return Doubt(
+            (GEARBOX,),
+            (f"Sheet(s) {named} name a gearbox the laps driven on them did "
+             f"not run ({covers}). That is the one setup value the feed can "
+             f"check, and it disagrees.",))
+
     return Doubt(
         (GEARBOX,),
         (f"The gearbox on track does not match the sheet ({covers}). "
@@ -163,7 +191,8 @@ def unfiled_revisions(store, car_name: str,
          f"car, every value the app is about to report is the wrong one.",))
 
 
-def for_event(store, event: dict, gearing: dict | None = None) -> Doubt:
+def for_event(store, event: dict, gearing: dict | None = None,
+              disagreeing_sheets=None) -> Doubt:
     """Everything doubtful about this event's setup record, in one answer.
 
     **The event, not the session.** `sessions` carries `setup_sheet_id` and
@@ -175,7 +204,7 @@ def for_event(store, event: dict, gearing: dict | None = None) -> Doubt:
     car = event.get("car_name") or ""
     track = event.get("track")
     circuit = circuit_key(track, event.get("layout")) if track else None
-    found = [gearbox_doubt(gearing)]
+    found = [gearbox_doubt(gearing, disagreeing_sheets)]
     if car:
         found.append(unfiled_revisions(store, car, circuit))
     reasons, notes = [], []

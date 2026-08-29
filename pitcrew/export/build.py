@@ -18,7 +18,7 @@ from pitcrew.analysis.corners import (
     observed_minimum,
 )
 from pitcrew.analysis import distance
-from pitcrew.analysis.gearing import gearing_export
+from pitcrew.analysis.gearing import gearing_export, sheets_disagree
 from pitcrew.analysis.resolve import resolve_corner_model
 from pitcrew.race.expectations import audit_line_from_laps
 from pitcrew.analysis.runs import classify_exclusions, runs_export, split_runs
@@ -662,7 +662,14 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
     # cannot be re-driven. A sheet can be corrected afterwards and the session
     # re-bound, so the honest place to stop is here, on the way out, and not
     # at the green.
-    doubt = setup_doubt.for_event(store, event, gearing)
+    # **Which sheets disagree with THEIR OWN laps**, not whether the last box
+    # matches whichever sheet the merged session happens to carry. An event
+    # that spans a gearbox revision is the ordinary way of testing one, and
+    # the flat comparison read every such event as a wrong setup record.
+    disagreeing = sheets_disagree(
+        laps, lambda sheet_id: getattr(store.get_setup_sheet(sheet_id),
+                                       "gears", None))
+    doubt = setup_doubt.for_event(store, event, gearing, disagreeing)
     doubt_note = ""
     if doubt and not acknowledge_setup_doubt:
         raise ExportRefused(

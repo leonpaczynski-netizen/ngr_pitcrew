@@ -56,6 +56,42 @@ def fitted_ratios(laps) -> list[float] | None:
     return list(seen[-1]) if seen else None
 
 
+def sheets_disagree(laps, sheet_of) -> list[int]:
+    """Sheet ids whose own laps ran a gearbox the sheet does not name.
+
+    **The question `matchesSheet` cannot answer on an event that spans
+    revisions**, and every event on file that refused an export was one.
+    `fitted_ratios` takes the most recent lap's box and the export compares it
+    against whichever single sheet the merged session happens to carry - so a
+    driver who revised his gearbox mid-event, which is the ordinary way of
+    testing one, reads as a wrong setup record.
+
+    Measured on the archive: Yas Marina ran two boxes on two sheets, Watkins
+    Glen ran two on two, and **every one of those four matched its own sheet
+    exactly.** Nothing was wrong with any of them. Red Bull Ring ran two boxes
+    against one sheet whose ratios matched neither - and that one is a wrong
+    record, which is what this separates.
+
+    `sheet_of` maps a lap to the sheet id it was driven on. Laps carrying no
+    sheet, and sheets nobody supplied gears for, are skipped rather than
+    reported: an unknown is not a disagreement.
+    """
+    by_sheet: dict[int, list] = {}
+    for lap in laps:
+        sheet_id = getattr(lap, "setup_sheet_id", None)
+        if sheet_id is not None and getattr(lap, "gear_ratios", None):
+            by_sheet.setdefault(sheet_id, []).append(lap)
+
+    disagree = []
+    for sheet_id, group in by_sheet.items():
+        gears = sheet_of(sheet_id)
+        if not gears:
+            continue
+        if matches_sheet(group, gears) is False:
+            disagree.append(sheet_id)
+    return sorted(disagree)
+
+
 def gearbox_changed_mid_session(laps) -> bool:
     """True when not every lap ran the same box.
 
