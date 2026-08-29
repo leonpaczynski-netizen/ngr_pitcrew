@@ -2029,9 +2029,20 @@ class PitCrewController(QObject):
         window = measured_temp_window(self.store, event["id"])
         reference = reference_lap(self.store, event["id"])
         speaks = self.practice.coach_speaks()
+        brief = knowledge.for_event(self.store, event)
         self.bridge.quali = QualifyingCoach(
             window=window, reference=reference,
-            speak=self.voice.say if speaks else None, mid_lap=mid_lap)
+            speak=self.voice.say if speaks else None, mid_lap=mid_lap,
+            # **The same briefing the race reads, and there is no quali
+            # variant of it.** A circuit where the temperature call is noise
+            # is a circuit where it is noise on a flying lap too, so a second
+            # record shape would be a second thing to keep in step.
+            knowledge=brief)
+        if brief is None and speaks:
+            # Said once, at the top of the session, for the same reason the
+            # green says it in a race: silent fallback is how the gauge
+            # ratchet stayed invisible for a whole race.
+            self.voice.say(knowledge.NO_NOTES)
         # **The fuel call, before he goes out rather than after.**
         # Qualifying is the one run where carrying fuel is pure loss: there is
         # no stint to survive, so every litre is mass dragged round the only
@@ -2893,6 +2904,28 @@ class PitCrewController(QObject):
         burn = getattr(inputs, "fuel_per_lap_l", None) if inputs else None
         if burn is None:
             burn = self._measured_burn(event)
+
+        # **A plan the app did not write wins.** Under the 29 Aug
+        # architecture Ludo authors and the app costs, certifies and
+        # executes; `build` below stays as the fallback for an event nobody
+        # has written one for, and it says which it showed.
+        written = self.store.qualifying_plan(event["id"])
+        if written:
+            from pitcrew.race.qualifying_plan import QualifyingPlan, Run
+
+            plan = QualifyingPlan(
+                runs=[Run(**run) for run in written.get("runs") or ()],
+                fuel_l=written.get("fuel_l"),
+                weight_saved_kg=written.get("weight_saved_kg"),
+                estimated_gain_s=written.get("estimated_gain_s"),
+                assumptions=list(written.get("assumptions") or ()),
+                refusals=list(written.get("refusals") or ()))
+            self.strategy.show_qualifying(plan)
+            self.strategy.note("Qualifying plan written by the race engineer "
+                               "- the app did not cost this one.")
+            log("pitcrew").info("showed the written qualifying plan for "
+                                "event %s", event["id"])
+            return True
 
         window = measured_temp_window(self.store, event["id"])
         plan = build(QualifyingInputs(

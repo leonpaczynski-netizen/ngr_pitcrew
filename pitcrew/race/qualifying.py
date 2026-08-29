@@ -239,9 +239,17 @@ class QualifyingCoach:
 
     def __init__(self, *, window: TempWindow | None,
                  reference: ReferenceLap | None,
-                 speak=None, mid_lap: bool = False) -> None:
+                 speak=None, mid_lap: bool = False,
+                 # **The same briefing the race reads**, and there is no quali
+                 # variant of it. A circuit's tow value, its measured wear
+                 # rate and the calls Ludo does not want made here are facts
+                 # about the circuit, not about the session type - so a second
+                 # record shape would be a second thing to keep in step. See
+                 # `race/knowledge.py`.
+                 knowledge=None) -> None:
         self.window = window
         self.reference = reference
+        self.knowledge = knowledge
         self._speak = speak
         # Everything said, spoken or not - the auditable record, mirrored
         # into log("quali") line by line.
@@ -594,6 +602,19 @@ class QualifyingCoach:
         if (temp_call and now is not None and self._last_call_at is not None
                 and now - self._last_call_at < TEMP_CALL_SPACING_S):
             return False
+        # **The briefing can turn a call off here too**, and it is the same
+        # record and the same rule as in the race: a circuit where the tyre
+        # temperature call is noise is a circuit where it is noise on a
+        # qualifying lap as well. Only the temperature family is silenceable
+        # from here - the line calls and the out-lap are events, true exactly
+        # once, and turning one off deletes the only chance he had to hear it
+        # rather than quieting the engineer.
+        if temp_call and self.knowledge is not None:
+            why = self.knowledge.silences("tyre-temp")
+            if why:
+                log("quali").info(
+                    "temperature call withheld: the briefing says %s", why)
+                return False
         self.said.append(text)
         # **The spoken form loses the thousandth on purpose; the log keeps
         # it.** He cannot act on a thousandth between two corners, but he can

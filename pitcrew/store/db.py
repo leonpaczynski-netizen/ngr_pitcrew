@@ -1950,6 +1950,38 @@ class Store:
                  json.dumps(evidence) if evidence is not None else None, _now()))
             return int(cur.lastrowid)
 
+    # The status a qualifying plan written at the desk carries.
+    #
+    # **A distinct status rather than a distinct table.** A quali plan is a
+    # plan for this event, stored the way every other plan for this event is,
+    # and `approved_strategy` filters on `'approved'` so the two cannot
+    # collide. A second table would be a second migration, a second lookup and
+    # a second thing to keep in step - which is the whole argument against a
+    # separate quali machinery in the first place.
+    QUALI_STATUS = "quali"
+
+    def save_qualifying_plan(self, event_id: int, plan: dict, *,
+                             label: str | None = None) -> int:
+        """Store a qualifying plan written outside the app."""
+        return self.save_strategy(event_id, plan,
+                                  label=label or "written by the race engineer",
+                                  status=self.QUALI_STATUS)
+
+    def qualifying_plan(self, event_id: int) -> dict | None:
+        """The most recent qualifying plan written for this event, or None.
+
+        None means nobody wrote one and the app's own `qualifying_plan.build`
+        is what the screen shows - which is the app authoring, and it stays
+        only as the fallback. Under the 29 Aug architecture Ludo authors; the
+        app costs, certifies and executes.
+        """
+        rows = self._query(
+            "SELECT * FROM strategies WHERE event_id = ? AND status = ? "
+            "ORDER BY id DESC LIMIT 1", (event_id, self.QUALI_STATUS))
+        if not rows:
+            return None
+        return json.loads(rows[0]["plan_json"])
+
     def approve_strategy(self, strategy_id: int) -> None:
         """Make this the approved plan, demoting whatever held that status."""
         with self._write() as conn:

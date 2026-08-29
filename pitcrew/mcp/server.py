@@ -478,6 +478,52 @@ def write_race_knowledge(circuit_key: str, briefing: str,
 
 
 @mcp.tool()
+def write_qualifying_plan(event_id: int, plan: str, label: str = "") -> str:
+    """Write the qualifying plan: fuel, runs and what each one is for.
+
+    **The same door the race plan comes through**, and deliberately not a
+    second one. `race/qualifying_plan.build` still exists and still costs a
+    plan from this car's measured burn - but under the 29 Aug architecture
+    that is the app authoring, and it stays only as the fallback for an event
+    nobody has written one for.
+
+    `plan` is JSON: `{"fuel_l": 22.0, "runs": [{"laps": 3, "flying_laps": 1}],
+    "assumptions": [...], "notes": "..."}`. Everything in it is declared - the
+    litres are the engineer's call, not a measurement this app took.
+
+    Not certified. `certify.py` prices stints, fuel and stops against a race
+    distance, and a qualifying run has none of those; pretending it applied
+    would be a check that passes because it tested nothing.
+    """
+    store = _store()
+    try:
+        payload = json.loads(plan) if isinstance(plan, str) else plan
+    except json.JSONDecodeError as exc:
+        return _dump({"written": False, "error": f"plan is not JSON: {exc}"})
+    try:
+        if not isinstance(payload, dict) or payload.get("fuel_l") is None:
+            return _dump({
+                "written": False,
+                "error": "a qualifying plan has to say how much fuel goes in "
+                         "- that is the whole point of one. Qualifying is the "
+                         "run where every litre is mass dragged round the "
+                         "only lap that counts."})
+        plan_id = store.save_qualifying_plan(event_id, payload, label=label)
+        store.note_engineer_write(
+            "quali_plan", target_id=plan_id, event_id=event_id,
+            author="race engineer (MCP)",
+            summary=f"qualifying plan, fuel to {payload['fuel_l']} litres",
+            after=payload)
+        return _dump({"written": True, "planId": plan_id,
+                      "note": "the Strategy screen shows this instead of the "
+                              "app's own costing."})
+    except Exception as exc:                                 # noqa: BLE001
+        return _dump({"written": False, "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        store.close()
+
+
+@mcp.tool()
 def engineer_writes(kind: str = "", limit: int = 20) -> str:
     """What has been written into the app from outside, newest first.
 
