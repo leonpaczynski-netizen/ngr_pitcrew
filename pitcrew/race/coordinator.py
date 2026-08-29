@@ -12,7 +12,7 @@ Two rules from the brief shape this:
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pitcrew.diagnostics import log
 from pitcrew.race.calls import (
@@ -183,6 +183,13 @@ class RaceCoordinator:
         # being handled. See `_corroborate_pit_lap`.
         self._dropped_before_lap = 0
         self._stints = list(self.plan.get("stints") or ())
+        # **The bounds the engineer at the desk set on the engineer in the
+        # car.** Empty for a plan the app wrote itself, and empty is not the
+        # same as absent: see `_may`.
+        from pitcrew.strategy.handover import playbook_of
+
+        self._playbook = {entry.trigger: entry
+                          for entry in playbook_of(self.plan)}
         # **Why the plan's stops exist**, in the plan's own word for it. Only
         # a fuel-bound stop can be cancelled by a tankful, and a plan that
         # does not say keeps every stop it named - see `calls.stop_still_needed`
@@ -808,6 +815,30 @@ class RaceCoordinator:
                 "measures disagree; this may have been a pause",
                 lap.lap_num, racing_ms / 1000.0, pace / 1000.0, ratio)
 
+    def _may(self, trigger: str, action: str) -> bool:
+        """Whether the playbook lets George do this on his own.
+
+        **It gates DECIDING, never REPORTING**, and that distinction is the
+        whole of it. Anything George says is advice the driver can ignore -
+        the fuel gap, the shortfall, the stay-out question - and silencing
+        that because an author left a trigger out would make the engineer
+        worse, not more obedient. What the playbook bounds is the short list
+        of things George changes without being asked: the plan he is running
+        to, and the cue in the driver's ear.
+
+        **No playbook at all means no bounds.** A plan the app wrote itself
+        has none, `Handover.validate` allows one with none - a short sprint
+        with one stop and no weather in it needs no adaptations - and in both
+        cases the answer is the behaviour that was there before any of this.
+        A playbook that exists and omits a trigger IS a decision, and it is
+        the one `handover.py` states: anything outside it is George reporting
+        rather than deciding.
+        """
+        if not self._playbook:
+            return True
+        entry = self._playbook.get(trigger)
+        return entry is not None and entry.action == action
+
     def _pending_stops(self) -> int:
         """Stops still ahead of the stint being run, that will actually happen.
 
@@ -1164,8 +1195,19 @@ class RaceCoordinator:
         # Internally adopt the zero-stop shape for the remainder: one stint
         # to the flag, no compound waiting, the fuel target becomes the flag.
         remaining = state.laps_remaining()
-        if remaining:
+        # **Said either way; adopted only if the desk allowed it.** The
+        # stay-out call is a question the driver answers with his hands, and
+        # it costs him nothing to hear. Rewriting the plan to a zero-stop is
+        # George deciding - it retires the box call, moves the fuel target to
+        # the flag and changes what every later call is measured against - and
+        # that is the half a playbook is for.
+        if remaining and self._may("stop_missed", "offer_stay_out"):
             self.adopt((remaining,))
+        elif remaining:
+            log("race").info(
+                "stay-out said and NOT adopted: the playbook has no "
+                "%r entry for %r, so the plan of record stands",
+                "offer_stay_out", "stop_missed")
         else:
             state.stint_ends_on_lap = None
             state.next_stint_laps = None
@@ -1242,6 +1284,7 @@ class RaceCoordinator:
         only once the things that key off silence have had the lap.
         """
         call = next_call(self.state)
+        call = self._within_the_playbook(call)
         heartbeat = call if call is not None and call.kind == STATUS else None
         if call is not None and heartbeat is None:
             self.state.record(call)
@@ -1263,6 +1306,30 @@ class RaceCoordinator:
         if heartbeat is not None:
             self.state.record(heartbeat)
         return heartbeat
+
+    def _within_the_playbook(self, call: Call | None) -> Call | None:
+        """The call as made, with any instruction the desk did not allow off.
+
+        **The words stay; the instruction goes.** A fuel call that names the
+        shortfall is a report and he keeps it whatever the playbook says. The
+        `short_shift_drop_rpm` riding on it is not a report - it moves the
+        shift beep in his ear, which is George changing the car's cue on his
+        own - so it is dropped where the playbook did not grant it, and the
+        sentence still tells him he is short.
+
+        Logged when it is dropped, because a lever the driver expects and
+        does not get is exactly the silence this app keeps having to explain
+        afterwards.
+        """
+        if call is None or not call.short_shift_drop_rpm:
+            return call
+        if self._may("fuel_short", "short_shift"):
+            return call
+        log("race").info(
+            "short-shift instruction withheld: the playbook has no "
+            "'short_shift' entry for 'fuel_short'. The call still names the "
+            "shortfall.")
+        return replace(call, short_shift_drop_rpm=None)
 
     def _saving_response(self) -> Call | None:
         asked = getattr(self, "_saving_asked_lap", None)
