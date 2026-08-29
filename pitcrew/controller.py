@@ -192,6 +192,12 @@ class TelemetryBridge(QObject):
     # for the whole straight so the caller does not have to catch
     # one particular frame, and the edge is what is worth a signal.
     straight_reached = pyqtSignal()
+    # **A place gained or lost**, composed on the telemetry thread and spoken
+    # on the Qt one. It carries the `Call` itself rather than a position,
+    # because the coordinator holds the state that decides whether a moved
+    # byte is news - and that state is not thread-safe, so the decision has
+    # to be taken where the frames are and only the answer crosses over.
+    position_changed = pyqtSignal(object)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -601,7 +607,13 @@ class TelemetryBridge(QObject):
         lap_watch = self.lap_watch
         if lap_watch is not None:
             try:
-                lap_watch.note_packet(packet)
+                # **Returns a call now.** `note_packet` reads the position
+                # byte as well as GT7's lap counter, and a place changed is
+                # the one fact the engineer volunteers - see `calls.POSITION`.
+                # Emitted rather than spoken: this is the telemetry thread.
+                moved = lap_watch.note_packet(packet)
+                if moved is not None:
+                    self.position_changed.emit(moved)
             except Exception as exc:                        # noqa: BLE001
                 log("race").error(
                     "the lap-counter watch raised on the telemetry thread and "
@@ -775,6 +787,7 @@ class PitCrewController(QObject):
         self.bridge.session_event.connect(self._on_race_event)
         self.bridge.incident_seen.connect(self._on_incident_seen)
         self.bridge.straight_reached.connect(self._on_straight_reached)
+        self.bridge.position_changed.connect(self._on_position_changed)
 
         self.event_screen.saved.connect(self._on_event_saved)
         self.event_screen.discarded.connect(self.discard_event_edits)
@@ -4850,6 +4863,39 @@ class PitCrewController(QObject):
         if self.race_screen is not None:
             self.race_screen.set_status(spoken)
         self._file_informational(call)
+
+    def _on_position_changed(self, call) -> None:
+        """Qt thread: he has gained or lost a place. Say so.
+
+        **The one fact the engineer volunteers**, and the reasons are on
+        `calls.POSITION`: he races with GT7's race HUD off, so this is not a
+        fact he could look up, and a place changed moves what a stop costs.
+
+        **It does not go through `_on_race_event`'s arbitration and must
+        not.** That arbitration exists to stop two *instructions* landing on
+        one crossing. This is not an instruction and it does not arrive on a
+        crossing - it is composed mid-lap, off a frame, in the gap where
+        nothing else is speaking. Routing it through the crossing would make
+        it compete with the box call and lose, which is the same as deleting
+        it: places change between crossings, and by the next one the news is
+        a lap old.
+
+        Recorded like any other call. A place lost two laps before a stop is
+        evidence about the plan, and the ledger is where the debrief reads it.
+        """
+        if self.race is None or call is None:
+            return
+        if self._engineer_speaks:
+            self.voice.say(call.spoken())
+            self.ptt.last_call = call.spoken()
+        if self.race_screen is not None:
+            self.race_screen.show_call(call)
+        if self.race_run_id is not None:
+            self.store.append_revision(
+                self.race_run_id, call.lap, call.call,
+                {"call": call.as_export(), "confidence": call.confidence,
+                 "kind": call.kind},
+                accepted=False)
 
     def _on_incident_seen(self) -> None:
         """Qt thread: the car stopped mid-lap. Decide what it is worth.

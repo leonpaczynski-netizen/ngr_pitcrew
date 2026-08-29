@@ -84,6 +84,24 @@ INCIDENT = "incident"
 TYRE_TEMP = "tyre-temp"
 STATUS = "status"
 GREEN = "green"
+# **A place gained or lost, said as it happens.**
+#
+# It is a fact, not an instruction, so under the two registers it has no
+# business being volunteered - and it is volunteered anyway, as the single
+# documented exception (`docs/ENGINEER-TARGET-STATE_2026-08-29.md` D7). Two
+# reasons, and the second is the one that decides it:
+#
+# 1. **He races with the GT7 race HUD off.** A fact he cannot look up is not
+#    a fact on request; it is a fact he does not have.
+# 2. **Position changes what a stop costs.** Dropping into traffic before a
+#    stop, or sitting behind a car that is about to pit, moves the box
+#    decision - so the fact is the leading edge of a decision, and saying it
+#    late is saying it after the decision was needed.
+#
+# Said MID-LAP, off `note_packet`, not at the crossing. That is not a detail:
+# it is what keeps §5.5's one-thing-at-a-time intact, because a call made
+# between crossings never competes with the crossing's own.
+POSITION = "position"
 STAY_OUT = "stay-out"
 # The tank now reaches the flag and the plan's remaining stops were only ever
 # there to fill it. See `_stops_off`.
@@ -129,7 +147,75 @@ URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            # It is true exactly once, on the crossing after the lap it
            # describes, and a wear note said instead of it is a note
            # that could have been said on any of the next five laps.
-           FUEL_LONG, INCIDENT, WEAR, TYRE_TEMP, GREEN, STATUS)
+           # **`POSITION` ranks second from last, above the heartbeat only.**
+           # It is a fact and the register says facts do not outrank
+           # instructions. It never actually contends here - it is emitted
+           # mid-lap, off `note_packet`, where nothing else is speaking - but
+           # `next_call` raises on any kind absent from this tuple, and a kind
+           # that only ever arrives by another road is exactly the one that
+           # goes unranked until a race finds it.
+           FUEL_LONG, INCIDENT, WEAR, TYRE_TEMP, GREEN, POSITION, STATUS)
+
+# --- the two registers -----------------------------------------------------
+#
+# **What George volunteers, and what he only answers.** The driver's account
+# of what was wrong, 29 Aug 2026: *the engineer reports where he should
+# advise*. Reading the inventory he was right - most of the vocabulary above
+# is status wearing an instruction's clothes.
+#
+# So every kind declares which register it is in, and the registers mean
+# different things about when a thing may be said:
+#
+#   DECISION  an instruction. Volunteered, ranked, one per crossing.
+#   EVENT     true exactly once and not askable afterwards - the green, the
+#             flag, an incident, the run-in. Volunteered because a fact that
+#             expires is not a fact on request.
+#   FACT      volunteered only where he cannot obtain it himself. Today that
+#             is POSITION and the heartbeat, and BOTH are there for the same
+#             reason: he races with GT7's race HUD off.
+#
+# **This is a register, not a rank.** `URGENCY` still decides what wins a
+# crossing. What this decides is whether a kind may open its mouth unasked,
+# and it is asserted in the tests so a new kind cannot be added without
+# someone saying which of the three it is.
+DECISION = "decision"
+EVENT = "event"
+FACT = "fact"
+
+REGISTER = {
+    BOX_NOW: DECISION,
+    BOX_SOON: DECISION,
+    STOPS_OFF: DECISION,
+    FUEL_SHORT: DECISION,
+    FUEL_LONG: DECISION,
+    STAY_OUT: DECISION,
+    SAVING_RESPONSE: DECISION,
+    WEAR: DECISION,
+    TYRE_TEMP: DECISION,
+    TYRE: DECISION,
+    GREEN: EVENT,
+    CHEQUER: EVENT,
+    INCIDENT: EVENT,
+    LAPS_TO_GO: EVENT,
+    POSITION: FACT,
+    STATUS: FACT,
+}
+
+
+def register_of(kind: str) -> str:
+    """Which register a kind speaks in. Raises on a kind nobody classified.
+
+    Deliberately not `.get(kind, FACT)`. A default here would let a new
+    instruction be added and silently treated as a fact - which is the exact
+    direction of the defect this whole split exists to correct.
+    """
+    try:
+        return REGISTER[kind]
+    except KeyError:                                         # pragma: no cover
+        raise KeyError(
+            f"{kind!r} has no register. Every call kind must declare whether "
+            f"it is a {DECISION}, an {EVENT} or a {FACT} - see REGISTER."
+        ) from None
 
 # A status call every few laps, so silence means "nothing to report" rather
 # than "the app has died".
@@ -332,6 +418,17 @@ class Call:
     # a value. He was asked to short-shift with no cue, and the app then had
     # no record of having asked.
     short_shift_drop_rpm: float | None = None
+    # **A change to the plan's SHAPE riding on this call**, named from
+    # `handover.STRUCTURAL_ACTIONS`, or None where the call changes nothing
+    # structural - which is every call today.
+    #
+    # It exists because the rail has to gate something nameable. George may
+    # not add a stop, drop a reachable one, change compound or abandon the
+    # plan unless the desk wrote it down, and a gate needs the instruction to
+    # be a field it can strip rather than a side effect it cannot see. The
+    # words are never stripped; only this is. See
+    # `RaceCoordinator._within_the_playbook`.
+    structural_action: str | None = None
 
     def spoken(self) -> str:
         """Instruction, then reason. Confidence only when it is not high."""
@@ -377,6 +474,19 @@ class RaceState:
     # fuel figure the car cannot take - and it did: "Fuel to 510 litres."
     fuel_capacity_l: float | None = None
     position: int | None = None
+    # **How many cars are out there.** `packet.cars_in_race` decodes it and
+    # nothing in this package has ever read it. "P8" and "P8 of 9" are
+    # different pieces of news and the second one is the one he can act on.
+    field_size: int | None = None
+    # The position the last position call was made at, so a change is said
+    # once and a jitter is not said at all. `None` until the first reading.
+    # Written by `RaceCoordinator.note_packet`; read by `_position_change`.
+    position_said: int | None = None
+    # How many consecutive frames have agreed on a position that disagrees
+    # with `position`. A place change is worth a word; a single frame of a
+    # field that was being written as it was read is not.
+    position_pending: int = 0
+    position_pending_value: int | None = None
     in_pit: bool = False
     finished: bool = False
     # Stint accounting against the approved plan.
@@ -1918,6 +2028,102 @@ def _status(state: RaceState) -> Call | None:
     if not said:
         return None
     return Call(STATUS, state.lap, said, "")
+
+
+# How many agreeing frames a new position needs before it is believed.
+#
+# **Not a de-bounce for a noisy field - a guard against a true one.** The
+# position byte is exact; what is not exact is the moment it turns over. A
+# side-by-side into a braking zone swaps the two cars for a handful of frames
+# and swaps them back, and "down to P8, up to P7, down to P8" inside two
+# seconds is three sentences about nothing. At 60 Hz this is a third of a
+# second of the new position actually holding.
+POSITION_HOLD_FRAMES = 20
+
+# Places gained or lost in one step past which this is not a place change.
+# A restart, a re-grid, or the field being renumbered around a pit sequence
+# moves the byte by more than anyone overtook. Said as a plain position
+# rather than as a gain or a loss, because the count would be a fiction.
+POSITION_MAX_STEP = 3
+
+
+def position_change(state: RaceState) -> "Call | None":
+    """A place gained or lost, ready to say. `None` when there is no news.
+
+    Called from `RaceCoordinator.note_packet` on the telemetry thread and
+    therefore **on a frame, not on a crossing** - which is the point: he
+    should hear about a place while it is still the thing that just happened.
+
+    Silent in the pit lane and on either side of it. Positions during a stop
+    are arithmetic about cars that are still circulating, every one of them
+    reverses on exit, and none of it is a place he won or lost on the road.
+    """
+    if state.finished or state.in_pit or state.lap < 1:
+        return None
+    now = state.position
+    if not now:
+        return None
+    was = state.position_said
+    if was is None:
+        # The first reading is the baseline, not news. He knows where he
+        # started; what he cannot see is the next change.
+        state.position_said = now
+        return None
+    if now == was:
+        state.position_pending = 0
+        state.position_pending_value = None
+        return None
+    if now != state.position_pending_value:
+        state.position_pending_value = now
+        state.position_pending = 1
+        return None
+    state.position_pending += 1
+    if state.position_pending < POSITION_HOLD_FRAMES:
+        return None
+
+    state.position_said = now
+    state.position_pending = 0
+    state.position_pending_value = None
+    places = was - now                      # positive is a gain
+    # **The position IS the call and the direction is the reason**, which is
+    # §5.5's shape - the figure first, the why second and short - and it is
+    # also what keeps the voice pack affordable. A position carries two
+    # numbers ("P6 of 12") and `phrase_manifest` cannot peel two, so this
+    # family has to be enumerated; written as "Up to P6 of 12." it would be a
+    # second and third enumeration of the same 300 lines with a word bolted
+    # on the front. Written this way it reuses the line the PTT answer to
+    # "where am i" already renders, and the direction is six fixed clips.
+    return Call(POSITION, state.lap, position_line(now, state.field_size),
+                _places_moved(places))
+
+
+def position_line(position: int, field_size: int | None) -> str:
+    """`P6 of 12.` - the one rendering of a position in the whole app.
+
+    Shared by the engineer's own call and by the PTT answer to "where am i",
+    so the two can never drift into saying it differently, and so the voice
+    pack renders one family rather than two.
+    """
+    if field_size:
+        return f"P{position} of {field_size}."
+    return f"P{position}."
+
+
+def _places_moved(places: int) -> str:
+    """Why the position changed, in the six ways it can be said.
+
+    Empty above `POSITION_MAX_STEP`: a restart or a re-grid moves the byte by
+    more than anyone overtook, so the position is still real and the count
+    would be a fiction. Rule 3 - the honest answer is to say nothing about it
+    rather than to say a number nobody measured.
+    """
+    if not places or abs(places) > POSITION_MAX_STEP:
+        return ""
+    if places > 0:
+        got = "a place" if places == 1 else f"{places} places"
+        return f"You've made {got}."
+    lost = "a place" if places == -1 else f"{-places} places"
+    return f"You've lost {lost}."
 
 
 def fuel_reference(state: RaceState) -> str:

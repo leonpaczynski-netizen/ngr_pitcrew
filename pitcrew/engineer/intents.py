@@ -503,8 +503,21 @@ def answer(intent: str, snapshot: dict, *,
         # carries one car. Telling him the reason once is worth more than
         # telling him "say again" every time, and it is the difference between
         # an engineer who cannot see the timing screen and one who is broken.
-        return Answer("I can't see other cars - the feed only carries yours. "
-                      "Position I have.", intent, answered=False)
+        # **Reworded 29 Aug 2026: the refusal is narrower than it was.** The
+        # feed carries no gap, no closing speed and no rival, and that part is
+        # permanent. What it does carry, and what this used to under-claim, is
+        # where he is IN THE FIELD - position and car count, both live since
+        # the position wiring landed. So the line names what he can have
+        # instead, which is the whole point of refusing by name.
+        #
+        # **Fixed text, deliberately.** It is pre-rendered in the phrase
+        # manifest because it is spoken often and a pause at the moment he has
+        # just failed to get an answer lands on the one exchange that has
+        # already gone wrong. Interpolating the position here would make every
+        # utterance unique and send all of them to live synthesis.
+        return Answer("I can't see other cars - no gaps, no closing speed. "
+                      "Position and the field I have - ask me for position.",
+                      intent, answered=False)
 
     if intent == TYRES_RED:
         # Acknowledged, never analysed out loud. One observation is one
@@ -532,14 +545,21 @@ def answer(intent: str, snapshot: dict, *,
         position = snapshot.get("position")
         if not position:
             return Answer("I don't have position.", intent, answered=False)
-        return Answer(f"P{position}.", intent)
+        # **Out of how many.** The field size has been in the packet all
+        # along; without it "P8" is a number he cannot place, and P8 of 9 is
+        # a different race from P8 of 20.
+        #
+        # Rendered by `calls.position_line`, which the engineer's own
+        # unprompted position call uses too. One renderer, so the answer he
+        # asks for and the one he is given cannot say it two ways - and so
+        # the voice pack has one family to enumerate rather than two.
+        from pitcrew.race.calls import position_line
+
+        return Answer(position_line(position, snapshot.get("fieldSize")),
+                      intent)
 
     if intent == LAPS_LEFT:
-        remaining = snapshot.get("lapsRemaining")
-        if remaining is None:
-            return Answer("I don't know the race length.", intent,
-                          answered=False)
-        return Answer(f"{_laps(remaining)} to go.", intent)
+        return _how_much_longer(snapshot, intent)
 
     if intent == FUEL:
         laps_of_fuel = snapshot.get("lapsOfFuel")
@@ -610,6 +630,69 @@ def answer(intent: str, snapshot: dict, *,
         return Answer(f"{seconds:.1f} {way} the plan.", intent)
 
     return Answer("Say again.", UNKNOWN, answered=False)
+
+
+# Past this fraction of a timed race he wants the laps as well as the clock.
+# **Restated from `calls.LAPS_FROM_FRACTION` rather than imported**, and
+# asserted equal to it in the tests: the same rule, on the same driver's
+# request of 28 Aug 2026, reached over two different roads - what the engineer
+# volunteers, and what he answers when asked.
+LAPS_FROM_FRACTION = 0.5
+
+
+def _clock(seconds: float) -> str:
+    """The clock, in the unit he thinks in, rounded the safe way.
+
+    **Rounded DOWN, never to nearest**, exactly as `calls.minutes_left` does
+    and for the same reason: at 91 s, to-nearest says "2 minutes" and
+    overstates by a third of a lap at the moment of the race where a third of
+    a lap decides whether he takes another one.
+    """
+    if seconds < 100:
+        return f"{max(0, int(seconds))} seconds"
+    minutes = int(seconds // 60)
+    return "1 minute" if minutes == 1 else f"{minutes} minutes"
+
+
+def _how_much_longer(snapshot: dict, intent: str) -> Answer:
+    """"How long left" - answered from the clock where there IS one.
+
+    **This used to answer a timed race in laps, and the laps are the derived
+    figure.** `remainingS` is the app's own timer, started at the green and
+    reconciled against GT7's exact lap figures; the lap count divides it by a
+    noisy median and is wrong whenever the median is. Quoting the inference
+    and withholding the measurement, to a driver who asked "how long", is
+    rule 5 in the one place he cannot check it.
+
+    A lap race has no clock and its lap count is a regulation rather than an
+    estimate, so there the laps ARE the measurement and are quoted alone.
+    """
+    remaining = snapshot.get("lapsRemaining")
+    seconds = snapshot.get("remainingS")
+    timed = bool(snapshot.get("raceMinutes"))
+
+    if not timed:
+        if remaining is None:
+            return Answer("I don't know the race length.", intent,
+                          answered=False)
+        return Answer(f"{_laps(remaining)} to go.", intent)
+
+    if seconds is None:
+        # `calls.NO_CLOCK`'s case, and said rather than skipped: with GT7's
+        # race HUD off, a race with no clause about its own length is
+        # indistinguishable from one with no end.
+        if remaining is None:
+            return Answer("I don't have the clock.", intent, answered=False)
+        return Answer(f"No clock. About {_laps(remaining)} to go.", intent,
+                      answered=False)
+
+    said = f"{_clock(seconds)} left."
+    # The lap count joins the clock only once it has firmed up. Early in a
+    # timed race the estimate flips on a median error far smaller than the
+    # spread, so it would change every crossing while the clock did not.
+    if remaining is not None and snapshot.get("lapsEstimateFirm"):
+        said = f"{said} {_laps(remaining)} to go."
+    return Answer(said, intent)
 
 
 def _on_plan(snapshot: dict) -> str:

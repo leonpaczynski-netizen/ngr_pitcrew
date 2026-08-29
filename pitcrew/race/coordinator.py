@@ -647,7 +647,57 @@ class RaceCoordinator:
             lap.lap_num, "driver-reported" if reported else "detected",
             f"{cost} ms" if cost else "not costed - no pace reference")
 
-    def note_packet(self, packet) -> None:
+    def note_packet(self, packet) -> "Call | None":
+        """Everything that has to be read on a FRAME rather than a crossing.
+
+        Two jobs, and they are independent on purpose - a packet that cannot
+        serve one still serves the other:
+
+        * **the lap counter**, in `_note_lap_counter`, which is the only
+          detector that can see a missed crossing while the car is still in
+          the box;
+        * **race position**, which is read here and returned as a call.
+
+        **The position half returns a call and the counter half does not**,
+        because they answer to different clocks. A missed crossing changes the
+        fuel arithmetic and is acted on silently; a place changed is news and
+        has to be said while it is still what just happened.
+
+        The caller speaks whatever comes back. `None` is the ordinary answer.
+        """
+        call = None
+        if packet is not None and self.phase is RacePhase.RUNNING \
+                and not getattr(packet, "paused", False) \
+                and not getattr(packet, "loading", False):
+            call = self._note_position(packet)
+        self._note_lap_counter(packet)
+        return call
+
+    def _note_position(self, packet) -> "Call | None":
+        """Where he is in the field, off the packet, at 60 Hz.
+
+        **The field has been decoded correctly all along and read by
+        nothing.** `packet.current_position` and `cars_in_race` reach
+        `session_state.py` and stop there; no module in this package has ever
+        looked at either, so every race the engineer has run was run as though
+        the driver were alone on the circuit. Verified against the archive
+        before wiring it: `laps.position` reads P3 to P1 across session 49 -
+        the Watkins race won from P3 - and P10 to P5 at Fuji.
+
+        Guarded rather than trusted. `current_position` already returns 0 for
+        anything outside 1..100, and 0 is "no reading" here, never a position.
+        """
+        from pitcrew.race.calls import position_change
+
+        position = getattr(packet, "current_position", None)
+        if position:
+            self.state.position = position
+        field = getattr(packet, "cars_in_race", None)
+        if field:
+            self.state.field_size = field
+        return position_change(self.state)
+
+    def _note_lap_counter(self, packet) -> None:
         """Compare GT7's own lap counter against the app's, every packet.
 
         **This is the only detector that can see a missed crossing while the
@@ -816,25 +866,31 @@ class RaceCoordinator:
                 lap.lap_num, racing_ms / 1000.0, pace / 1000.0, ratio)
 
     def _may(self, trigger: str, action: str) -> bool:
-        """Whether the playbook lets George do this on his own.
+        """Whether George may do this on his own.
 
-        **It gates DECIDING, never REPORTING**, and that distinction is the
-        whole of it. Anything George says is advice the driver can ignore -
-        the fuel gap, the shortfall, the stay-out question - and silencing
-        that because an author left a trigger out would make the engineer
-        worse, not more obedient. What the playbook bounds is the short list
-        of things George changes without being asked: the plan he is running
-        to, and the cue in the driver's ear.
+        **The bound is the ACTION, not the playbook.** Four actions change
+        the plan's shape - `handover.STRUCTURAL_ACTIONS` - and George may take
+        one only where the desk wrote it down. Everything else is free, and
+        free means free: it does not consult the playbook, it does not care
+        whether one exists, and an author who forgot an entry cannot silence
+        a lever the driver is expecting.
 
-        **No playbook at all means no bounds.** A plan the app wrote itself
-        has none, `Handover.validate` allows one with none - a short sprint
-        with one stop and no weather in it needs no adaptations - and in both
-        cases the answer is the behaviour that was there before any of this.
-        A playbook that exists and omits a trigger IS a decision, and it is
-        the one `handover.py` states: anything outside it is George reporting
-        rather than deciding.
+        **This replaces two failure modes of one mechanism.** The gate used to
+        permit whatever a playbook happened to name, and to permit everything
+        when there was no playbook - so a plan the app wrote itself left
+        George unbounded, while a handover that omitted `short_shift` took the
+        shift beep away from a driver who had been promised it. Neither was a
+        decision anybody took. The driver's, 29 Aug 2026: the rail gates the
+        structural four and nothing else.
+
+        A structural action with no playbook at all is REFUSED, which is the
+        one place absence now means no rather than yes. That is the safe
+        direction: George cannot put him in the pit lane on the strength of a
+        file nobody wrote.
         """
-        if not self._playbook:
+        from pitcrew.strategy.handover import STRUCTURAL_ACTIONS
+
+        if action not in STRUCTURAL_ACTIONS:
             return True
         entry = self._playbook.get(trigger)
         return entry is not None and entry.action == action
@@ -1182,19 +1238,22 @@ class RaceCoordinator:
         # Internally adopt the zero-stop shape for the remainder: one stint
         # to the flag, no compound waiting, the fuel target becomes the flag.
         remaining = state.laps_remaining()
-        # **Said either way; adopted only if the desk allowed it.** The
-        # stay-out call is a question the driver answers with his hands, and
-        # it costs him nothing to hear. Rewriting the plan to a zero-stop is
-        # George deciding - it retires the box call, moves the fuel target to
-        # the flag and changes what every later call is measured against - and
-        # that is the half a playbook is for.
-        if remaining and self._may("stop_missed", "offer_stay_out"):
+        # **The fold is free, and it is free because it is not George's
+        # decision.** It reads like `drop_stop` - the plan goes from one stop
+        # to none - and it is the opposite: the driver has already declined
+        # the stop with his hands, two laps ago, by driving past the box.
+        # George is recognising that, not taking it.
+        #
+        # Refusing to recognise it is not caution, it is the nine-box-calls
+        # defect: the plan of record still holds a stop that will never
+        # happen, so the box call fires on the next lap, and the next, all
+        # the way to the flag. `_reconsider_ignored_box` exists to stop
+        # exactly that, and gating it gave the fault back.
+        #
+        # George deciding a *planned and still-reachable* stop is unnecessary
+        # is `drop_stop`, it is structural, and it is gated. This is not it.
+        if remaining:
             self.adopt((remaining,))
-        elif remaining:
-            log("race").info(
-                "stay-out said and NOT adopted: the playbook has no "
-                "%r entry for %r, so the plan of record stands",
-                "offer_stay_out", "stop_missed")
         else:
             state.stint_ends_on_lap = None
             state.next_stint_laps = None
@@ -1295,28 +1354,35 @@ class RaceCoordinator:
         return heartbeat
 
     def _within_the_playbook(self, call: Call | None) -> Call | None:
-        """The call as made, with any instruction the desk did not allow off.
+        """The call as made, with any structural instruction the desk withheld.
 
-        **The words stay; the instruction goes.** A fuel call that names the
-        shortfall is a report and he keeps it whatever the playbook says. The
-        `short_shift_drop_rpm` riding on it is not a report - it moves the
-        shift beep in his ear, which is George changing the car's cue on his
-        own - so it is dropped where the playbook did not grant it, and the
-        sentence still tells him he is short.
+        **The words always stay; only a structural instruction can go.** A
+        fuel call that names the shortfall is a report and he keeps it
+        whatever the playbook says.
 
-        Logged when it is dropped, because a lever the driver expects and
-        does not get is exactly the silence this app keeps having to explain
-        afterwards.
+        **`short_shift` no longer passes through here, and that is the
+        change.** It used to be stripped whenever the playbook omitted it -
+        so a handover that forgot one entry took the shift beep away from a
+        driver who had been told to short-shift, silently. Short-shifting
+        changes how a lap is driven, not what the plan is; it costs a lap, it
+        is reversible on the next one, and the driver's levers are his own.
+        The rail is for the four that are not reversible - see
+        `handover.STRUCTURAL_ACTIONS`.
+
+        Nothing today rides a structural instruction on a call, so this is a
+        seam rather than a filter. It is kept, and kept called, because the
+        one defect this whole area has produced twice is a gate that existed,
+        was correct, and reached no race.
         """
-        if call is None or not call.short_shift_drop_rpm:
+        if call is None or not call.structural_action:
             return call
-        if self._may("fuel_short", "short_shift"):
+        if self._may(call.kind.replace("-", "_"), call.structural_action):
             return call
         log("race").info(
-            "short-shift instruction withheld: the playbook has no "
-            "'short_shift' entry for 'fuel_short'. The call still names the "
-            "shortfall.")
-        return replace(call, short_shift_drop_rpm=None)
+            "structural instruction %r withheld on a %r call: the playbook "
+            "does not grant it. The call still says what it saw.",
+            call.structural_action, call.kind)
+        return replace(call, structural_action=None)
 
     def _saving_response(self) -> Call | None:
         asked = getattr(self, "_saving_asked_lap", None)
@@ -1401,6 +1467,16 @@ class RaceCoordinator:
             "raceMinutes": self.state.race_minutes,
             "lapsRemaining": self.state.laps_remaining(),
             "position": self.state.position,
+            # **How many cars he is a position OUT OF.** "P8" and "P8 of 9"
+            # are different pieces of news and only the second one is
+            # actionable. Decoded from the packet since the parser was
+            # written and read by nothing until 29 Aug 2026.
+            "fieldSize": self.state.field_size,
+            # Whether the remaining-lap figure of a timed race is worth
+            # quoting as a count. It divides a measured clock by a noisy
+            # median, so early in a race it is unresolvable - and the PTT
+            # answers "how long left" from it.
+            "lapsEstimateFirm": self.state.laps_estimate_firm,
             "fuelL": self.state.fuel_l,
             "lapsOfFuel": self.state.laps_of_fuel(),
             "lapsToStop": self.state.laps_to_stop(),

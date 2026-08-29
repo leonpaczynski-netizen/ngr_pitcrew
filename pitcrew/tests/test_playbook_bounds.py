@@ -1,21 +1,30 @@
 """What the desk lets George do on his own.
 
-`strategy/handover.py` states the split and nothing enforced it: the playbook
-was validated on the way in, stored, and rendered on the Strategy screen,
-while `RaceCoordinator` never read it. So the card told the driver which
-adaptations George could make and George made whichever he liked.
+**Rewritten 29 Aug 2026.** The rail used to gate whatever a playbook happened
+to name and to gate nothing at all when there was no playbook - which is two
+failure modes of one mechanism. A plan the app wrote itself left George
+unbounded; a handover that omitted `short_shift` took the shift beep away from
+a driver who had been told to short-shift, silently. Neither was a decision
+anybody took.
 
-**It gates deciding, never reporting.** Anything George says is advice the
-driver can ignore, and silencing that because an author left a trigger out
-would make the engineer worse rather than more obedient. What it bounds is
-the short list of things George changes without being asked: the plan he is
-running to, and the cue in the driver's ear.
+The bound is now the **action**, in code, and it does not depend on a document
+being present: four actions change the plan's SHAPE and are gated; everything
+that changes only its TIMING is free. A stop is twenty seconds and cannot be
+taken back. A lap either side of the box window is worth a second or two and
+the next lap can revise it.
 """
 from __future__ import annotations
 
+import pytest
+
 from pitcrew.race.calls import BOX_NOW, STAY_OUT, Call, RaceState
 from pitcrew.race.coordinator import RaceCoordinator
-from pitcrew.strategy.handover import Handover, PlaybookEntry
+from pitcrew.strategy.handover import (
+    ACTIONS,
+    STRUCTURAL_ACTIONS,
+    Handover,
+    PlaybookEntry,
+)
 
 
 def a_plan(playbook=None) -> dict:
@@ -47,33 +56,70 @@ def ignoring_the_box(plan) -> RaceCoordinator:
     return race
 
 
-# ------------------------------------------------------------- no playbook
+# ------------------------------------------------------- the free side
 
-def test_a_plan_with_no_playbook_leaves_george_exactly_as_he_was():
-    """**Empty is not the same as absent.** The app's own plans carry none,
-    and `Handover.validate` allows a handover with none - a short sprint with
-    one stop and no weather in it needs no adaptations. Reading that as "he
-    may do nothing" would silence the engineer on every race he has ever run."""
+def test_a_timing_lever_is_free_with_no_playbook():
     race = RaceCoordinator(a_plan())
     assert race._may("fuel_short", "short_shift") is True
+    assert race._may("fuel_short", "lift_and_coast") is True
     assert race._may("stop_missed", "offer_stay_out") is True
-    assert race._may("anything", "at_all") is True
 
 
-# --------------------------------------------------- a playbook that bounds
-
-def test_a_playbook_permits_only_what_it_names():
-    race = RaceCoordinator(a_plan([an_entry()]))
+def test_a_timing_lever_is_free_even_when_a_playbook_omits_it():
+    """**The change.** A playbook that names `incident` says nothing at all
+    about whether he may short-shift, and reading omission as refusal is how
+    a lever the driver was promised went missing without a word."""
+    race = RaceCoordinator(a_plan([an_entry(trigger="incident",
+                                            action="report_only")]))
     assert race._may("fuel_short", "short_shift") is True
-    assert race._may("fuel_short", "lift_and_coast") is False, \
-        "a different action for a named trigger is still not what was granted"
-    assert race._may("stop_missed", "offer_stay_out") is False
+    assert race._may("fuel_short", "lift_and_coast") is True
+    assert race._may("fuel_long", "recost_to_flag") is True
 
 
-def test_the_shortfall_is_still_spoken_when_the_lever_is_not_granted():
-    """**The words stay, the instruction goes.** A fuel call that names the
-    shortfall is a report; the rpm drop riding on it moves the shift beep in
-    his ear, which is George changing the car's cue on his own."""
+def test_the_free_actions_are_everything_that_is_not_structural():
+    free = set(ACTIONS) - STRUCTURAL_ACTIONS
+    race = RaceCoordinator(a_plan())
+    for action in free:
+        assert race._may("fuel_short", action) is True, action
+
+
+# ------------------------------------------------------- the gated four
+
+def test_the_structural_four_are_refused_with_no_playbook():
+    """The one place absence means no. George cannot put him in the pit lane
+    on the strength of a file nobody wrote."""
+    race = RaceCoordinator(a_plan())
+    for action in STRUCTURAL_ACTIONS:
+        assert race._may("fuel_short", action) is False, action
+
+
+def test_the_structural_four_are_refused_when_the_playbook_omits_them():
+    race = RaceCoordinator(a_plan([an_entry()]))
+    for action in STRUCTURAL_ACTIONS:
+        assert race._may("fuel_short", action) is False, action
+
+
+def test_a_structural_action_the_desk_granted_is_allowed():
+    race = RaceCoordinator(a_plan([an_entry(trigger="fuel_short",
+                                            action="add_stop",
+                                            when="the tank cannot reach")]))
+    assert race._may("fuel_short", "add_stop") is True
+    assert race._may("fuel_short", "drop_stop") is False, \
+        "a different structural action for the same trigger is not the grant"
+    assert race._may("incident", "add_stop") is False, \
+        "a grant is for one trigger, not for the action everywhere"
+
+
+def test_the_structural_set_is_the_four_and_only_the_four():
+    assert STRUCTURAL_ACTIONS == {
+        "add_stop", "drop_stop", "change_compound", "abandon_plan"}
+
+
+# ------------------------------- the shortfall, and the lever riding on it
+
+def test_the_shortfall_and_its_lever_both_reach_him_without_a_grant():
+    """`short_shift` is a timing lever: it changes how a lap is driven, not
+    what the plan is, and the next lap can revise it."""
     race = RaceCoordinator(a_plan([an_entry(trigger="incident",
                                             action="report_only")]))
     call = Call("fuel-short", 8, "Short-shift and lift into the slow corners.",
@@ -81,50 +127,63 @@ def test_the_shortfall_is_still_spoken_when_the_lever_is_not_granted():
 
     kept = race._within_the_playbook(call)
 
-    assert kept.call == call.call, "the report is not the playbook's to take"
+    assert kept.call == call.call
     assert kept.reason == call.reason
-    assert kept.short_shift_drop_rpm is None, "the beep moved without a grant"
+    assert kept.short_shift_drop_rpm == 450.0, \
+        "the beep is the instruction when it is not spoken, and it is free"
 
 
-def test_the_lever_survives_when_the_playbook_grants_it():
+def test_a_structural_instruction_is_stripped_and_the_words_are_not():
     race = RaceCoordinator(a_plan([an_entry()]))
-    call = Call("fuel-short", 8, "Short-shift.", "1.2 laps short.",
-                short_shift_drop_rpm=450.0)
+    call = Call("fuel-short", 8, "Box this lap.", "The tank will not reach.",
+                structural_action="add_stop")
 
-    assert race._within_the_playbook(call).short_shift_drop_rpm == 450.0
+    stripped = race._within_the_playbook(call)
 
-
-# ------------------------------------------- the one plan rewrite he makes alone
-
-def test_a_missed_stop_is_still_said_when_the_fold_is_not_granted():
-    """Saying it costs the driver nothing and he answers with his hands.
-    REWRITING the plan to a zero-stop retires the box call, moves the fuel
-    target to the flag and changes what every later call is measured against -
-    that is deciding, and it is the half a playbook is for."""
-    race = ignoring_the_box(a_plan([an_entry()]))    # no stop_missed entry
-    before = [dict(s) for s in race._stints]
-
-    call = race._reconsider_ignored_box()
-
-    assert call is not None and call.kind == STAY_OUT, "he must still say it"
-    assert race._stints == before, "the plan was rewritten without a grant"
+    assert stripped.call == call.call, "the report is not the playbook's to take"
+    assert stripped.reason == call.reason
+    assert stripped.structural_action is None
 
 
-def test_a_granted_fold_rewrites_the_plan():
-    race = ignoring_the_box(a_plan([an_entry(trigger="stop_missed",
-                                             action="offer_stay_out",
-                                             when="the box lap has gone by")]))
+def test_a_granted_structural_instruction_survives():
+    race = RaceCoordinator(a_plan([an_entry(trigger="fuel_short",
+                                            action="add_stop",
+                                            when="the tank cannot reach")]))
+    call = Call("fuel-short", 8, "Box this lap.", "The tank will not reach.",
+                structural_action="add_stop")
 
-    call = race._reconsider_ignored_box()
-
-    assert call is not None and call.kind == STAY_OUT
-    assert len(race._stints) == race.state.stint_index + 1, \
-        "the fold to a zero-stop did not happen"
+    assert race._within_the_playbook(call).structural_action == "add_stop"
 
 
-def test_the_app_s_own_plan_still_folds():
-    """The behaviour every race before this had, and the one a playbook must
-    not take away by accident."""
+def test_the_gate_is_still_wired_into_the_call_the_driver_gets():
+    """**The mutant that survived the first draft of this file**, kept.
+
+    Every gate test can pass while the gate reaches no race - which has been
+    the defect twice in this area. This drives the real `_emit` and asserts on
+    what the driver would actually be handed.
+    """
+    race = RaceCoordinator(a_plan([an_entry(trigger="incident",
+                                            action="report_only")]))
+    state = race.state
+    state.lap, state.laps_total = 8, 20
+    state.fuel_l, state.fuel_per_lap_l = 12.0, 3.0
+    state.position, state.stint_ends_on_lap = 3, 18
+    state.laps_since_stop = 8
+    state.short_shift_l_per_1000rpm = 0.9
+
+    call = race._emit()
+
+    assert call is not None and call.kind == "fuel-short"
+    assert "short" in (call.call + call.reason).lower()
+    assert call.short_shift_drop_rpm, \
+        "the lever is free now and must reach him through the real path"
+
+
+# ----------------------------------------- the fold the driver made himself
+
+def test_a_missed_stop_folds_the_plan_with_no_playbook():
+    """The behaviour every race before the rail had, and the one the rail
+    must not take away."""
     race = ignoring_the_box(a_plan())
 
     call = race._reconsider_ignored_box()
@@ -133,37 +192,17 @@ def test_the_app_s_own_plan_still_folds():
     assert len(race._stints) == race.state.stint_index + 1
 
 
-def test_the_gate_is_actually_wired_into_the_call_the_driver_gets():
-    """**The mutant that survived the first draft of this file.**
-
-    Every test above called `_within_the_playbook` directly, so removing its
-    one call site in `_emit` broke nothing - the gate existed, was correct,
-    and reached no race. That is the defect this whole session keeps finding,
-    written into the test for the fix for it.
-
-    This drives the real `_emit` with a state that genuinely produces a
-    fuel-short call carrying an rpm drop, and asserts on what the driver
-    would actually be handed.
+def test_a_missed_stop_folds_even_when_the_playbook_omits_it():
+    """**It reads like `drop_stop` and it is the opposite.** The driver
+    declined the stop with his hands two laps ago; George is recognising
+    that, not taking it. Refusing to recognise it leaves a stop in the plan
+    of record that will never happen - so the box call fires on the next lap,
+    and the next, all the way to the flag.
     """
-    granted = RaceCoordinator(a_plan([an_entry()]))
-    withheld = RaceCoordinator(a_plan([an_entry(trigger="incident",
-                                                action="report_only")]))
-    for race in (granted, withheld):
-        state = race.state
-        state.lap, state.laps_total = 8, 20
-        state.fuel_l, state.fuel_per_lap_l = 12.0, 3.0
-        state.position, state.stint_ends_on_lap = 3, 18
-        state.laps_since_stop = 8
-        state.short_shift_l_per_1000rpm = 0.9
+    race = ignoring_the_box(a_plan([an_entry()]))    # no stop_missed entry
 
-    kept = granted._emit()
-    assert kept is not None and kept.kind == "fuel-short"
-    assert kept.short_shift_drop_rpm, "the granted lever never reached him"
+    call = race._reconsider_ignored_box()
 
-    stripped = withheld._emit()
-    assert stripped is not None and stripped.kind == "fuel-short"
-    assert "short" in (stripped.call + stripped.reason).lower(), \
-        "the shortfall must still be spoken - the report is not the "\
-        "playbook's to take"
-    assert stripped.short_shift_drop_rpm is None, \
-        "the beep moved with no grant, so the gate is not wired into _emit"
+    assert call is not None and call.kind == STAY_OUT
+    assert len(race._stints) == race.state.stint_index + 1, \
+        "the fold is the driver's decision being recognised, not George's"

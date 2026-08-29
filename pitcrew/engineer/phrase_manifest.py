@@ -87,6 +87,12 @@ STOP_FUEL_TAIL = "laps of fuel in hand to the stop."
 # returned; `test_every_fuel_line_decomposes` fails loudly if the shape moves.
 _FUEL_LINE = re.compile(r"^(\d+)\.(\d) laps of fuel\.$")
 
+# `calls.position_line`'s two-number form. Given its own shape for the same
+# reason the fuel line has one: `_split_on_number` peels a single number and
+# refuses a sentence with two, so a family with a known fixed shape is
+# decomposed by that shape rather than generically.
+_POSITION_LINE = re.compile(r"^P(\d+) of (\d+)\.$")
+
 # The one number inside a race call, wherever it sits. Deliberately strict
 # about its edges, because each edge is a line that decomposed wrongly once:
 #
@@ -159,10 +165,60 @@ def rejection_lines() -> tuple[str, ...]:
         gate.spoken_reason(reason) for reason in gate.ALL_REASONS))
 
 
+# The largest grid GT7 fields. Positions are enumerated against it because a
+# position and a field size are two numbers in one sentence and
+# `_split_on_number` peels one - the same reason "N or M laps to go." is
+# enumerated rather than decomposed.
+MAX_FIELD = 24
+
+
 @lru_cache(maxsize=1)
 def position_lines() -> tuple[str, ...]:
+    """`P8.` - a position with no field size, said whole.
+
+    **One family serves the answer AND the engineer's own call**, because
+    `calls.position_line` renders a position everywhere: the PTT answer to
+    "where am i", and the unprompted call when he gains or loses one. Written
+    as "Up to P8 of 12." that call would have needed its own enumeration of
+    these same lines with a word bolted on the front; the direction is
+    carried in the reason instead, and the reason is six clips
+    (`place_change_lines`).
+    """
     return tuple(_text(POSITION, {"position": n})
                  for n in range(1, MAX_POSITION + 1))
+
+
+@lru_cache(maxsize=1)
+def position_fragments() -> tuple[str, ...]:
+    """The two halves `P8 of 12.` is played from.
+
+    **Enumerating it whole is 329 clips and it broke the pack's budget on the
+    first attempt** - a position and a field size are two numbers in one
+    sentence, and even taking the triangle rather than the rectangle (a
+    position cannot exceed the field it is in, so `P14 of 9` is not a sentence
+    anybody can be handed) it is a third of the pack for one family.
+
+    So it is played from two, the way `{x.x} laps of fuel.` is played from
+    four: the position without its stop, and the field with one. Fifty-three
+    clips instead of three hundred and twenty-nine, and one join - fewer than
+    the fuel line already carries.
+    """
+    return (*(f"P{n}" for n in range(1, MAX_POSITION + 1)),
+            *(f"of {n}." for n in range(2, MAX_FIELD + 1)))
+
+
+@lru_cache(maxsize=1)
+def place_change_lines() -> tuple[str, ...]:
+    """Why the position moved: made or lost, one place or up to three.
+
+    Taken from the function that says it, never copied - a wording change
+    there fails the coverage test rather than going stale in the pack.
+    """
+    from pitcrew.race.calls import POSITION_MAX_STEP, _places_moved
+
+    steps = range(-POSITION_MAX_STEP, POSITION_MAX_STEP + 1)
+    return tuple(dict.fromkeys(
+        said for said in (_places_moved(n) for n in steps) if said))
 
 
 @lru_cache(maxsize=1)
@@ -633,6 +689,8 @@ def clips() -> tuple[str, ...]:
     everything = [
         *fixed_lines(),
         *position_lines(),
+        *position_fragments(),
+        *place_change_lines(),
         *laps_remaining_lines(),
         *box_when_lines(),
         *box_fuel_lines(),
@@ -664,6 +722,12 @@ def segments_for(text: str) -> tuple[str, ...] | None:
         if whole > MAX_FUEL_LAPS:
             return None
         return (number_word(whole), POINT, number_word(tenth), _fuel_tail())
+    match = _POSITION_LINE.match(text)
+    if match is not None:
+        position, field = int(match.group(1)), int(match.group(2))
+        if not 1 <= position <= MAX_POSITION or not 2 <= field <= MAX_FIELD:
+            return None
+        return (f"P{position}", f"of {field}.")
     return _decompose(text)
 
 
@@ -676,6 +740,10 @@ def _reusable_lines() -> frozenset[str]:
     proactive call costs the pack nothing but the words that join them.
     """
     return frozenset((*fixed_lines(), *position_lines(), *compound_lines(),
+                      # The engineer's position call is a position line and a
+                      # place-change line, both whole and both already here -
+                      # so the call itself costs the pack nothing.
+                      *place_change_lines(),
                       *orientation_lines(),
                       *spoken_openers(),
                       *box_when_lines(), *box_fuel_lines(),

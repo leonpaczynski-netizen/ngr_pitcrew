@@ -236,10 +236,25 @@ def test_the_pack_stays_within_budget():
     the proactive calls as well - the half he cannot ask for a second time -
     costs about ninety clips, of which forty are number words now shared by
     four different sentences. Measured on the rendered en_GB-alan-medium pack:
-    33 MB for 417 clips, so ~81 KB each and ~48 MB at this ceiling. Raise it
-    again only for something that buys as much.
+    33 MB for 417 clips, so ~81 KB each and ~48 MB at 600. Raise it again only
+    for something that buys as much.
+
+    **Raised to 700 on 29 Aug 2026, for the field.** `packet.current_position`
+    and `cars_in_race` had been decoded correctly since the parser was written
+    and read by nothing, so every race the engineer ran was run as though the
+    driver were alone on the circuit. Wiring them costs 59 clips - 53 for the
+    two halves of `P8 of 12.` and six for which way he moved - and it buys the
+    single thing he asked for when he said the engineer should *adapt to the
+    race*. That is the test this docstring sets, and it passes.
+
+    **It cost 329 on the first attempt** and that version is the reason
+    `position_fragments` exists: enumerated whole, a position and a field size
+    are a third of the pack for one family. Decomposed into two clips, the way
+    the fuel line already is, it is 53. If this ceiling comes under pressure
+    again, look for a family being enumerated that could be split before
+    raising it.
     """
-    assert len(manifest.clips()) < 600
+    assert len(manifest.clips()) < 700
 
 
 def test_the_same_line_always_names_the_same_file():

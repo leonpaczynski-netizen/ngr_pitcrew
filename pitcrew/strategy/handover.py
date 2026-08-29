@@ -52,7 +52,36 @@ ACTIONS = (
     "offer_stay_out",
     "bring_stop_forward",
     "report_only",       # say it and decide nothing
+    # --- the structural four. See STRUCTURAL_ACTIONS. ---
+    "add_stop",
+    "drop_stop",
+    "change_compound",
+    "abandon_plan",
 )
+
+# **The four things George may not do unless the desk wrote them down.**
+#
+# The rail used to gate whatever a playbook happened to name and to gate
+# nothing at all when there was no playbook, which is the two failure modes of
+# one mechanism: a plan the app wrote itself left George unbounded, and a
+# handover that forgot an entry silenced a lever the driver was expecting.
+# Neither is a decision anybody took.
+#
+# **So the bound is here, in code, and it does not depend on a document being
+# present.** The line is whether the call changes the plan's SHAPE or only its
+# TIMING. A stop is twenty seconds and cannot be taken back; a lap either side
+# of the box window is worth a second or two and the next lap can revise it.
+# Everything on the timing side is free - short-shift, lift-and-coast,
+# re-costing, bringing a stop forward, reporting - because George being
+# cautious with those makes him useless without making him safe.
+#
+# **`drop_stop` is George deciding a planned stop is unnecessary. It is NOT
+# George acknowledging a stop the driver has already declined** by driving
+# past the box. That fold is the driver's decision being recognised, and
+# refusing to recognise it is how the box call fires every lap to the flag.
+STRUCTURAL_ACTIONS = frozenset({
+    "add_stop", "drop_stop", "change_compound", "abandon_plan",
+})
 
 # Named because they are the two the driver has refused outright, and a
 # playbook that contained either would be executed. See `brain/driver.md`.

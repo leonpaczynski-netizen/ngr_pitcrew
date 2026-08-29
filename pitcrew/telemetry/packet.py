@@ -168,6 +168,8 @@ def _decrypt(data: bytes) -> bytes:
 # 0x7C=124  last_lap_ms      i   (4) signed; -1 = no time set
 # 0x80=128  time_of_day_ms   I   (4) unsigned ms
 # 0x84=132  start_pos_cars   I   (4) byte0=live_pos, byte1=0, byte2=total_cars, byte3=0
+#                                    byte0 MOVES during a race - verified against
+#                                    session 49 (P3 to P1) and 88 (P10 to P5)
 # 0x88=136  rpm_alert_min    H   (2)
 # 0x8A=138  rpm_alert_max    H   (2)
 # 0x8C=140  car_max_speed_r  H   (2)
@@ -271,7 +273,18 @@ class GT7Packet:
     best_lap_ms: int         # signed int32; -1 = none set
     last_lap_ms: int         # signed int32; -1 = none
     time_of_day_ms: int
-    start_pos_and_cars: int  # bits[31:4] = start_pos, bits[7:0] = cars_in_race
+    # byte0 = LIVE race position, byte2 = cars in race. See `current_position`
+    # and `cars_in_race`, which are the readings, and never unpack this field
+    # by hand.
+    #
+    # **This comment used to say `bits[31:4] = start_pos, bits[7:0] =
+    # cars_in_race`**, which is the two bytes the wrong way round and the
+    # position frozen at the start. Two accounts of four bytes, in one file,
+    # and the properties below disagreed with it. The data settles it:
+    # `laps.position` reads P3 to P1 across session 49 - the Watkins race won
+    # from P3 - and P10 to P5 at Fuji, so byte 0 moves during a race and is
+    # the live position. The field name is kept for the archive's sake.
+    start_pos_and_cars: int
     rpm_alert_min: int
     rpm_alert_max: int
     car_max_speed_raw: int
