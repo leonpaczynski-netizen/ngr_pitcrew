@@ -17,7 +17,7 @@ which hook actually loaded — because that is measured, not chosen.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QScrollArea,
     QFrame,
@@ -631,12 +631,25 @@ class SettingsScreen(QWidget):
 
         self.audio_output = QComboBox()
         self.audio_input = QComboBox()
-        for combo, kind in ((self.audio_output, "output"),
-                            (self.audio_input, "input")):
+        # **Not filled here.** `audio_devices.devices()` tears PortAudio down
+        # and rebuilds it to enumerate, twice, and this ran at every launch
+        # purely to populate two combo boxes on a screen the driver opens
+        # perhaps once a month.
+        #
+        # It is also more correct filled late than early. The label above this
+        # promises that a device connected after the app started will be
+        # found; a list built at launch cannot keep that promise, and the
+        # headset gets plugged in on the way to the desk.
+        self._audio_filled = False
+        # Set by `load`, which runs before the fill below and therefore
+        # cannot find a device the list does not hold yet. The fill re-reads
+        # it, so a configured headset is not quietly replaced by the default.
+        self._loaded = getattr(self, "_loaded", None)
+        self._session_open = False
+        self._audio_syncs = []
+        for combo in (self.audio_output, self.audio_input):
             combo.addItem("System default", "")
-            for _index, name in audio_devices.devices(kind):
-                combo.addItem(name, name)
-            mark_unset(combo, unset="")
+            self._audio_syncs.append(mark_unset(combo, unset=""))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(theme.GAP)
@@ -719,6 +732,53 @@ class SettingsScreen(QWidget):
         return bar
 
     # ---------------------------------------------------------------- state
+
+    def set_session_open(self, open_now: bool) -> None:
+        """Whether a session is running, so the device list knows to wait."""
+        self._session_open = bool(open_now)
+
+    def showEvent(self, event) -> None:                  # noqa: N802 - Qt
+        super().showEvent(event)
+        # Scheduled, not run inline: the screen paints first, and PortAudio
+        # is touched after the driver can already see where he is.
+        QTimer.singleShot(0, self._fill_audio_devices)
+
+    def _fill_audio_devices(self) -> None:
+        """Enumerate the sound devices, once, when the screen is looked at.
+
+        **Not while a session is open.** Enumerating tears PortAudio down and
+        rebuilds it; `audio_devices` defers that for up to six seconds per
+        call while something is playing, and there are two calls. A visit to
+        this screen mid-race would freeze the window for twelve seconds and
+        drop the transducer for the duration. A list that is one headset out
+        of date, and says so, is the better failure.
+        """
+        if self._audio_filled or getattr(self, "_session_open", False):
+            if not self._audio_filled:
+                self.note_rig("Device list not refreshed - a session is "
+                              "open. Close it to re-read the sound devices.",
+                              warn=True)
+            return
+        self._audio_filled = True
+        for combo, kind, sync in ((self.audio_output, "output",
+                                   self._audio_syncs[0]),
+                                  (self.audio_input, "input",
+                                   self._audio_syncs[1])):
+            chosen = combo.currentData()
+            for _index, name in audio_devices.devices(kind):
+                if combo.findData(name) < 0:
+                    combo.addItem(name, name)
+            # **Re-selected, or the setting is silently lost.** `load` runs
+            # before this and cannot find a device that was not listed yet,
+            # so it falls back to index 0 - and `values()` would then report
+            # "System default" for a device the driver had actually chosen.
+            if self._loaded is not None:
+                chosen = (self._loaded.audio_output_device if kind == "output"
+                          else self._loaded.audio_input_device)
+            index = combo.findData(chosen)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            if callable(sync):
+                sync()
 
     def load(self, settings: Settings) -> None:
         # Kept so `values()` can carry through the fields with no control on

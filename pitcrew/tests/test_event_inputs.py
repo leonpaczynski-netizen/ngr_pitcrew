@@ -233,6 +233,10 @@ def test_a_saved_event_reopens_with_its_track_and_car(qt_app, store: Store):  # 
 
     reopened = EventScreen()
     PitCrewController(store, reopened, PracticeScreen())
+    # Loading the active event into the screens is deferred to the first turn
+    # of the event loop, so the window paints without waiting for it. The
+    # round trip is unchanged; it just is not finished on the ctor's return.
+    qt_app.processEvents()
     assert reopened.track_edit.currentText() == "Fuji Speedway"
     assert reopened.car_edit.currentText() == "Porsche 911 RSR (991) '17"
     controller.shutdown()

@@ -41,8 +41,7 @@ from pitcrew.diagnostics import log
 from pitcrew.engineer.ptt import (
     PushToTalk,
     best_listener,
-    best_recogniser_for,
-    best_semantic_matcher,
+    speech_from,
 )
 from pitcrew.engineer.shift_beep import ShiftBeep
 from pitcrew.rig.effects import EffectDeriver
@@ -674,7 +673,7 @@ class PitCrewController(QObject):
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
                  car_screen=None, engineer_screen=None, settings_screen=None,
-                 port: int | None = None, voice=None,
+                 port: int | None = None, voice=None, warm=None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.store = store
@@ -740,15 +739,18 @@ class PitCrewController(QObject):
         # there is no distance, so the whole five-stage gate was skipped on the
         # one path that needs it. Only free dictation needs it; SAPI's closed
         # grammar is exact by construction.
-        recogniser = best_recogniser_for(self.settings.speech_backend)
-        free_dictation = getattr(recogniser, "name", "") == "moonshine"
+        # `warm` is the launch's background load, joined here. It is None
+        # everywhere else - tests, replay, the bench - and `speech_from` then
+        # builds exactly what this line used to build inline, which is why
+        # there is no second code path to keep in step.
+        recogniser, matcher = speech_from(warm, self.settings.speech_backend)
         self.ptt = PushToTalk(
             snapshot=self._ptt_snapshot,
             speak=self.voice.say,
             recogniser=recogniser,
             listener=best_listener(self.settings.ptt_key),
             on_answer=self._on_ptt_answer,
-            matcher=best_semantic_matcher() if free_dictation else None,
+            matcher=matcher,
             sensitivity=self.settings.speech_sensitivity,
             toggle=self.settings.ptt_toggle)
         self._plans: list = []
@@ -767,7 +769,8 @@ class PitCrewController(QObject):
         self.rig = RigSupervisor(
             bridge=self.bridge, settings=lambda: self.settings,
             voice=self.voice,
-            settings_screen=self.settings_screen, event=self.active_event)
+            settings_screen=lambda: self.settings_screen,
+            event=self.active_event)
         # **The wear gauge and the recording**, likewise out of this file. It
         # hands back four values - the latest reading, its lap, a blind note,
         # and whether a request was taken - and those used to be four loose
@@ -781,7 +784,7 @@ class PitCrewController(QObject):
         # than the one it is listening on.
         self.bench = Bench(
             settings=lambda: self.settings,
-            settings_screen=self.settings_screen, bridge=self.bridge,
+            settings_screen=lambda: self.settings_screen, bridge=self.bridge,
             voice=self.voice, rig=self.rig,
             listener=lambda: self.listener, practice=self.practice,
             confirm_audio=lambda: self._confirm_audio,
@@ -790,6 +793,10 @@ class PitCrewController(QObject):
         self.session_id: int | None = None
         self._parse_errors = 0
         self._store_errors = 0
+
+        # Set once, so an attach that runs twice does not connect twice.
+        self._engineer_wired = False
+        self._settings_wired = False
 
         self.bridge.lap_completed.connect(self._on_lap_completed)
         self.bridge.stream_seen.connect(self._on_stream_seen)
@@ -830,23 +837,9 @@ class PitCrewController(QObject):
             self.car_screen.car_changed.connect(self.load_car)
             self.car_screen.saved.connect(self.save_ranges)
         if self.engineer is not None:
-            self.engineer.generate_requested.connect(self.generate_prompt)
-            self.engineer.copy_requested.connect(self.copy_prompt)
-            self.engineer.reply_saved.connect(self.file_prompt_reply)
+            self.attach_engineer_screen(self.engineer)
         if self.settings_screen is not None:
-            self.settings_screen.saved.connect(self.save_settings)
-            self.settings_screen.test_beep_requested.connect(self.test_beep)
-            self.settings_screen.test_voice_requested.connect(self.test_voice)
-            self.settings_screen.test_haptics_requested.connect(
-                self.test_haptics)
-            self.settings_screen.test_feed_requested.connect(self.test_feed)
-            self.settings_screen.test_gauge_requested.connect(
-                self.test_gauge)
-            self.settings_screen.capture_toggled.connect(self.toggle_capture)
-            self.settings_screen.listen_toggled.connect(self.probe_button)
-            self.settings_screen.load(self.settings)
-            self.settings_screen.show_capabilities(
-                speech=self.voice.engine_name, hook=self.ptt.has_listener)
+            self.attach_settings_screen(self.settings_screen)
 
         # Ranges measured before the app had anywhere to keep them. Seeded
         # once, and never allowed to overwrite something read off a car.
@@ -859,13 +852,106 @@ class PitCrewController(QObject):
         self._health.timeout.connect(self._report_health)
 
         self.refresh_catalogs()
+        # **Scheduled, not called.** See `_first_paint_work`: this is ~130 ms
+        # of widget filling that the window does not need in order to appear.
+        self._first_paint_done = False
+        QTimer.singleShot(0, self._first_paint_work)
+
+    def _first_paint_work(self) -> None:
+        """Fill the screens, once, after the window has had a chance to paint.
+
+        A named method rather than a lambda, and one callback rather than two,
+        because **the order of these two calls is load-bearing and Qt will not
+        tell anyone who breaks it.** Loading the event writes the practice
+        status line; closing orphaned sessions writes the one message saying
+        the app died last time. Run the other way round - or split across two
+        `singleShot`s, which is the same thing with extra steps - and that
+        message is overwritten before anyone sees it, silently.
+
+        Idempotent, and `shutdown` calls it if the event loop never did. The
+        orphan sweep used to be unconditional in `__init__`, so deferring it
+        would otherwise turn the app's only unclean-shutdown detector into a
+        best-effort one: `main()` can raise between here and `app.exec()`, and
+        then this would never run at all.
+        """
+        if self._first_paint_done:
+            return
+        self._first_paint_done = True
         self.load_active_event()
-        # Last, so its warning survives: loading the event writes the practice
-        # status line, and running this first meant the one message saying the
-        # app had died was overwritten before anyone saw it.
         self._close_orphaned_sessions()
 
     # --------------------------------------------------------------- catalog
+
+    # ------------------------------------------------------- late screens
+    #
+    # Two screens are built when the driver first navigates to them rather
+    # than at launch - see `app.NavRail`'s builder. That saves ~300 ms off a
+    # startup nobody was enjoying, and it costs this: the wiring that used to
+    # be a block inside `__init__` has to be callable twice, from either
+    # order, without doubling anything.
+    #
+    # **Both are idempotent**, because a doubled `connect` is permanent for
+    # the life of the process, fires every handler twice, and is invisible -
+    # no exception, no log, nothing to see until a Save writes two records.
+
+    def _tell_settings_about_the_session(self) -> None:
+        """Let the Settings screen know whether a session is running.
+
+        It re-enumerates the sound devices when it is first opened, and that
+        tears PortAudio down and rebuilds it. Doing so mid-race would stall
+        the window and drop the transducer, so the screen skips the refresh
+        and says it did. None outside a session, so nothing is blocked when
+        it does not need to be.
+        """
+        screen = self.settings_screen
+        if screen is not None and hasattr(screen, "set_session_open"):
+            screen.set_session_open(self.session_kind is not None)
+
+    def attach_engineer_screen(self, screen) -> None:
+        """Wire the Engineer screen, whenever it turns up."""
+        if self.engineer is screen and self._engineer_wired:
+            return
+        self.engineer = screen
+        if screen is None:
+            return
+        if not self._engineer_wired:
+            screen.generate_requested.connect(self.generate_prompt)
+            screen.copy_requested.connect(self.copy_prompt)
+            screen.reply_saved.connect(self.file_prompt_reply)
+            self._engineer_wired = True
+        # What `load_active_event` would have pushed into it had it existed.
+        self.refresh_engineer()
+
+    def attach_settings_screen(self, screen) -> None:
+        """Wire the Settings screen, whenever it turns up.
+
+        `rig` and `bench` reach this screen through a reader that resolves
+        `self.settings_screen` on every read, so nothing has to be handed to
+        them here. That is deliberate: assigning the screen into two other
+        objects by hand is the shape of a reset with no caller, and the five
+        buttons it would silently disable are the pre-race checks.
+        """
+        if self.settings_screen is screen and self._settings_wired:
+            return
+        self.settings_screen = screen
+        if screen is None:
+            return
+        if not self._settings_wired:
+            screen.saved.connect(self.save_settings)
+            screen.test_beep_requested.connect(self.test_beep)
+            screen.test_voice_requested.connect(self.test_voice)
+            screen.test_haptics_requested.connect(self.test_haptics)
+            screen.test_feed_requested.connect(self.test_feed)
+            screen.test_gauge_requested.connect(self.test_gauge)
+            screen.capture_toggled.connect(self.toggle_capture)
+            screen.listen_toggled.connect(self.probe_button)
+            self._settings_wired = True
+        screen.load(self.settings)
+        screen.show_capabilities(speech=self.voice.engine_name,
+                                 hook=self.ptt.has_listener)
+        # Built lazily, so it can arrive mid-session and would otherwise
+        # think nothing was running.
+        self._tell_settings_about_the_session()
 
     def refresh_catalogs(self) -> None:
         """Shipped names, plus anything added straight to the store.
@@ -1767,6 +1853,7 @@ class PitCrewController(QObject):
             practice_intent=intent,
             game_version=self.settings.game_version)
         self.session_kind = "practice"
+        self._tell_settings_about_the_session()
         # **Every change is an experiment, and this is where it is filed.**
         # The session that opens against a different sheet from the last one on
         # this car and circuit IS the run that tests the difference. Recorded
@@ -2132,6 +2219,7 @@ class PitCrewController(QObject):
             log("session").info("practice session %s closed", closing)
             self.session_id = None
             self.session_kind = None
+            self._tell_settings_about_the_session()
             # After the session is closed, so a slow websocket cannot hold the
             # close open - the session row is what matters and it is written.
             self._stop_video(closing)
@@ -3297,6 +3385,7 @@ class PitCrewController(QObject):
             event["id"], "race", setup_sheet_id=sheet.id if sheet else None,
             rehearsal=rehearsal, game_version=self.settings.game_version)
         self.session_kind = "race"
+        self._tell_settings_about_the_session()
         # **Every change is an experiment, and this is where it is filed.**
         # The session that opens against a different sheet from the last one on
         # this car and circuit IS the run that tests the difference. Recorded
@@ -3403,6 +3492,7 @@ class PitCrewController(QObject):
             self._stop_video(self.session_id)
             self.store.end_session(self.session_id)
             self.session_kind = None
+            self._tell_settings_about_the_session()
             # `stop_practice` clears this and `stop_race` did not, so the
             # Practice screen's pickers went on writing `practice_mode` onto
             # the closed race session - which `list_evidence_laps` reads back
@@ -4352,6 +4442,12 @@ class PitCrewController(QObject):
         return path
 
     def shutdown(self) -> None:
+        # **The orphan sweep, if the event loop never got to it.** It is
+        # deferred to first paint now, and `main()` can return through its
+        # `finally` without ever reaching `app.exec()` - so without this, the
+        # one thing that notices the previous run died could itself be skipped
+        # by a run that dies. Idempotent, so a normal exit does nothing here.
+        self._first_paint_work()
         # Close the session before anything else. Shutting the window while
         # recording used to leave `ended_at` null, which is exactly what a
         # crash leaves - so a clean exit was indistinguishable from a lost one.

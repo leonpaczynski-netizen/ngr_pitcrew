@@ -799,9 +799,16 @@ class MoonshineRecogniser:
         # This was briefly changed to small on a single ten-phrase pass that
         # showed a large gap. Repeating it three times removed the gap: ten
         # samples of a noisy quantity looked like a finding and was scatter.
-        path, arch = moonshine.get_model_for_language(
-            "en", ModelArch.TINY_STREAMING)
-        self._transcriber = Transcriber(path, arch)
+        # Serialised against the other moonshine load - see `_MOONSHINE_LOAD`
+        # for the vendor race this is guarding, and why the lock rather than
+        # a fix at the source.
+        lock = _hold_moonshine_load()
+        try:
+            path, arch = moonshine.get_model_for_language(
+                "en", ModelArch.TINY_STREAMING)
+            self._transcriber = Transcriber(path, arch)
+        finally:
+            lock.release()
         self._max_capture_s = max_capture_s
         # Energy, not Silero. moonshine-voice 0.1.1 exposes no VAD threshold -
         # its voice activity detection is internal to the streaming line
@@ -1260,7 +1267,14 @@ class SemanticMatcher:
             # The variant has to be passed here as well as to the download:
             # the q4 weights land as `model_q4.ort` and the loader looks for
             # `model.ort` unless it is told which one it wants.
-            return EmbeddingModel(path, arch, "q4")
+            #
+            # Under `_MOONSHINE_LOAD` with the transcriber: both go through
+            # the same unsynchronised singleton in the vendor package.
+            lock = _hold_moonshine_load()
+            try:
+                return EmbeddingModel(path, arch, "q4")
+            finally:
+                lock.release()
         except Exception as exc:                 # noqa: BLE001
             log("ptt").info(
                 "no semantic matcher (%s: %s) - falling back to literal "
@@ -1335,6 +1349,50 @@ def matcher_for(recogniser):
     if getattr(recogniser, "name", "") in CLOSED_GRAMMAR:
         return None
     return best_semantic_matcher()
+
+
+# **Both moonshine models are loaded under this, and never concurrently.**
+#
+# `moonshine_api._MoonshineLib.__new__` publishes its singleton *before*
+# `_load_library()` has filled it in:
+#
+#     if cls._instance is None:
+#         cls._instance = super().__new__(cls)   # published here
+#         cls._instance._load_library()          # filled in here
+#
+# A second thread arriving between those two lines gets a non-None instance
+# whose `.lib` is None, and dies with `AttributeError: 'NoneType' object has
+# no attribute 'moonshine_get_stt_catalog'`. That leaves `ptt.available`
+# False for the whole session - push to talk silently gone, for a race.
+#
+# The bug is in the package and cannot be fixed from this side, so the two
+# loads are serialised here instead. Today they already share one thread (see
+# `start_warm_up`) and this is uncontended; it exists so that a future caller
+# who splits them across two threads is merely slower rather than broken.
+#
+# It must never be held across anything that can acquire it again - neither
+# `MoonshineRecogniser.__init__` nor `SemanticMatcher._load` calls the other,
+# and that is what keeps this a lock rather than a deadlock.
+_MOONSHINE_LOAD = threading.Lock()
+
+
+def _hold_moonshine_load():
+    """Take the load lock, saying so in the log if the wait was real.
+
+    Non-blocking first, because a silent wait here is charged against
+    `RECOGNISER_TIMEOUT_S` by the caller above: a queued load would be
+    reported as `MoonshineRecogniser is still loading after 5s`, the app would
+    fall through to SAPI, and SAPI does not come back. A contended lock and a
+    slow model are different faults and must not read the same in the log.
+    """
+    if _MOONSHINE_LOAD.acquire(blocking=False):
+        return _MOONSHINE_LOAD
+    log("ptt").warning(
+        "waiting on the moonshine load lock - another thread is loading a "
+        "model; this wait is charged against RECOGNISER_TIMEOUT_S (%.0fs)",
+        RECOGNISER_TIMEOUT_S)
+    _MOONSHINE_LOAD.acquire()
+    return _MOONSHINE_LOAD
 
 
 # How long a recogniser gets to come up before the app gives up on it.
@@ -1445,6 +1503,93 @@ def build_within(factory, timeout_s: float, *args):
     if "error" in outcome:
         raise outcome["error"]
     return outcome.get("value")
+
+
+def start_warm_up(backend: str, phrases=None):
+    """Build the recogniser and the matcher on one background thread.
+
+    ### Why this exists
+
+    Both models are ONNX sessions - 51 MB for the transcriber, 198 MB for the
+    embedder - and building them cost **2.6 s of every launch**, on the main
+    thread, before the window was shown. The measurement that makes this safe
+    is that ONNX session creation releases the GIL almost completely: 1.4 s of
+    pure-Python main-thread work ran alongside both loads at **+0.0 ms**. So
+    the window builds while the models load, and the launch is ~880 ms shorter
+    for it.
+
+    ### Why one thread and not two
+
+    `moonshine_api._MoonshineLib` publishes its singleton before it has
+    loaded - see `_MOONSHINE_LOAD`. Split across two threads, this killed the
+    recogniser in **four launches out of five**, leaving push to talk
+    unavailable for the whole session with nothing but an `AttributeError` in
+    the log. Both loads go on one thread, in order. `_MOONSHINE_LOAD` is the
+    belt to this brace.
+
+    ### What it does not do
+
+    **It does not defer anything.** The controller joins this before it builds
+    `PushToTalk`, so the object graph at the end of `__init__` is identical to
+    the one built inline - the same recogniser, the same matcher, or the same
+    `None`. Nothing arrives late, so no first press can find a half-built
+    stack. Returns `(outcome, thread)`; the outcome carries `"recogniser"` and
+    `"matcher"`, each `None` where the load failed. `None`, never a stub that
+    would answer `""` and read as a driver who said nothing.
+    """
+    outcome: dict = {}
+
+    def load() -> None:
+        # `BaseException`, and logged with a traceback, because this runs
+        # under `pythonw`: there is no console, and a warm thread that dies
+        # quietly takes push to talk with it for the session. Both factories
+        # are called by name so the fallback order and the closed-grammar
+        # rule stay in one place - this thread must not reimplement either.
+        try:
+            outcome["recogniser"] = best_recogniser_for(backend, phrases)
+        except BaseException as exc:              # noqa: BLE001
+            outcome["recogniser"] = None
+            log("ptt").error("the recogniser did not load: %s: %s",
+                             type(exc).__name__, exc, exc_info=True)
+        try:
+            outcome["matcher"] = matcher_for(outcome.get("recogniser"))
+        except BaseException as exc:              # noqa: BLE001
+            outcome["matcher"] = None
+            log("ptt").error("the semantic matcher did not load: %s: %s",
+                             type(exc).__name__, exc, exc_info=True)
+
+    # Daemon, because `main()` can return through its `finally` without ever
+    # reaching the event loop, and a non-daemon thread holding 250 MB of ONNX
+    # would leave a windowless process alive with no way to see it. A named
+    # mutex outliving a process that could not die has already cost a morning
+    # here once.
+    thread = threading.Thread(target=load, daemon=True, name="warm-speech")
+    thread.start()
+    return outcome, thread
+
+
+def speech_from(warm, backend: str):
+    """`(recogniser, matcher)` from a warm-up, or built here and now.
+
+    The one place that decides what the controller gets, so the warmed path
+    and the un-warmed one cannot drift. `warm` is None for every test, every
+    replay and the bench - none of which start a warm-up - and for those this
+    is exactly the code that ran inline before.
+
+    A warm-up that produced nothing is **not** taken as an answer: it falls
+    through and builds inline, so no arrangement of failures can hand
+    `PushToTalk` a `None` that the old code would have filled.
+    """
+    if warm is not None:
+        outcome, thread = warm
+        thread.join()
+        recogniser = outcome.get("recogniser")
+        if recogniser is not None:
+            return recogniser, outcome.get("matcher")
+        log("ptt").warning(
+            "the warm-up produced no recogniser - building inline")
+    recogniser = best_recogniser_for(backend)
+    return recogniser, matcher_for(recogniser)
 
 
 def best_recogniser_for(backend: str, phrases=None):

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import QApplication
 
+from pitcrew.diagnostics import log
 from pitcrew.engineer.ptt import best_listener
 from pitcrew.settings import FEED_PS5
 from pitcrew.telemetry.listener import GT7_STREAM_PORT
@@ -63,7 +64,18 @@ class Bench:
         # controller because the parse-failure handler increments it; this
         # only ever reads it.
         self._parse_errors = parse_errors or (lambda: 0)
-        self.settings_screen = settings_screen
+        # **A reader too, and for the same reason one line up.** The settings
+        # screen is built lazily now - it does not exist when this is
+        # constructed, and it arrives when the driver first navigates to it.
+        # Held as the object it was wired with, that is permanently None and
+        # every hardware test button below returns at its own `is None` guard:
+        # silently, with no log and no exception. Those buttons are the
+        # pre-race checks - "test the feed", "read the gauge now" - so the
+        # failure is a driver who verified nothing and was told it was fine.
+        #
+        # A plain object is still accepted, for a test that wires one by hand.
+        self._settings_screen = (settings_screen if callable(settings_screen)
+                                 else (lambda: settings_screen))
         self.bridge = bridge
         self.voice = voice
         self.rig = rig
@@ -83,6 +95,15 @@ class Bench:
     @property
     def settings(self):
         return self._settings()
+
+    @property
+    def settings_screen(self):
+        """Whichever settings screen exists now, or None before one is built.
+
+        Resolved on every read rather than captured, so a screen that arrives
+        after this object does is not invisible to it.
+        """
+        return self._settings_screen()
 
     def listener(self):
         return self._listener()
@@ -111,6 +132,13 @@ class Bench:
         something this screen can fix.
         """
         if self.settings_screen is None:
+            # **Said, not swallowed.** This is a pre-race check with
+            # a visible result, and returning quietly leaves a driver
+            # who pressed the button and got nothing. Under pythonw
+            # this line is the only evidence there will ever be.
+            log("bench").warning(
+                "%s was asked for, but the settings screen is not "
+                "built", "test the feed")
             return False
         wanted = self.settings_screen.values()
         direct = (wanted.feed_source == FEED_PS5
@@ -183,6 +211,13 @@ class Bench:
         nothing, so neither can disturb a session already running.
         """
         if self.settings_screen is None:
+            # **Said, not swallowed.** This is a pre-race check with
+            # a visible result, and returning quietly leaves a driver
+            # who pressed the button and got nothing. Under pythonw
+            # this line is the only evidence there will ever be.
+            log("bench").warning(
+                "%s was asked for, but the settings screen is not "
+                "built", "read the gauge")
             return False
         from pitcrew.settings import HUD_SOURCE_SCREEN
         from pitcrew.telemetry.hud import ObsSource, ScreenSource, read_gauge
@@ -260,6 +295,13 @@ class Bench:
         complaining - see `endpoint_meter` for the measurement that proved it.
         """
         if self.settings_screen is None:
+            # **Said, not swallowed.** This is a pre-race check with
+            # a visible result, and returning quietly leaves a driver
+            # who pressed the button and got nothing. Under pythonw
+            # this line is the only evidence there will ever be.
+            log("bench").warning(
+                "%s was asked for, but the settings screen is not "
+                "built", "test the beep")
             return False
         beep = self.bridge.shift_beep
         outcome: dict[str, bool] = {}
@@ -285,6 +327,13 @@ class Bench:
 
     def test_voice(self) -> None:
         if self.settings_screen is None:
+            # **Said, not swallowed.** This is a pre-race check with
+            # a visible result, and returning quietly leaves a driver
+            # who pressed the button and got nothing. Under pythonw
+            # this line is the only evidence there will ever be.
+            log("bench").warning(
+                "%s was asked for, but the settings screen is not "
+                "built", "test the voice")
             return
         self.voice.warm()
         line = "Radio check. Box this lap or next."
@@ -338,6 +387,13 @@ class Bench:
         app cannot see any of that. Pressing it here is the only proof.
         """
         if self.settings_screen is None:
+            # **Said, not swallowed.** This is a pre-race check with
+            # a visible result, and returning quietly leaves a driver
+            # who pressed the button and got nothing. Under pythonw
+            # this line is the only evidence there will ever be.
+            log("bench").warning(
+                "%s was asked for, but the settings screen is not "
+                "built", "listen for the button")
             return
         if self._button_probe is not None:
             self._button_probe.stop()

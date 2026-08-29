@@ -360,6 +360,11 @@ def test_a_session_left_open_is_closed_and_reported_on_the_next_run(qt_app,
 
     practice = PracticeScreen()
     controller = PitCrewController(store, EventScreen(), practice)
+    # The sweep runs from a zero-delay timer now, so that ~130 ms of screen
+    # filling happens after the window can paint rather than before it
+    # appears. See `PitCrewController._first_paint_work` - which `shutdown`
+    # also runs, for the case where the loop never turns at all.
+    qt_app.processEvents()
     try:
         assert store.open_sessions() == []
         assert store.get_session(session_id)["ended_at"] is not None

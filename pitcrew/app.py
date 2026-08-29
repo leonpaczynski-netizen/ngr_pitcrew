@@ -10,7 +10,7 @@ import time
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPainter, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -21,7 +21,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from pitcrew import diagnostics
+from pitcrew import diagnostics, settings
+from pitcrew.engineer import ptt
 from pitcrew.controller import DEFAULT_PORT, PitCrewController
 from pitcrew.export.payload import APP_VERSION
 from pitcrew.store.db import DEFAULT_DB_PATH, Store
@@ -522,8 +523,12 @@ class NavRail(QWidget):
     """
 
     def __init__(self, stack: QStackedWidget, groups,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, builder=None) -> None:
         super().__init__(parent)
+        # Called with an index just before that screen is shown, for the ones
+        # that are not built until they are wanted. None everywhere else -
+        # the three tests that build a rail by hand pass nothing.
+        self._builder = builder
         self.setFixedWidth(178)
         self.setStyleSheet(f"background: {theme.RUBBER_DEEP};")
         self._stack = stack
@@ -605,6 +610,12 @@ class NavRail(QWidget):
     def select(self, index: int) -> None:
         if index >= self._stack.count():
             return
+        # **Built before it is shown, never after.** Switching to a
+        # placeholder first would put an empty frame on screen for however
+        # long the real screen takes to construct, which on the slowest of
+        # them is a third of a second of blank panel.
+        if self._builder is not None:
+            self._builder(index)
         self._stack.setCurrentIndex(index)
         for position, label in enumerate(self._labels):
             if position >= self._stack.count():
@@ -652,7 +663,8 @@ def fit_to_screen(widget, width: int, height: int) -> tuple[int, int]:
 
 
 class PitCrewWindow(QMainWindow):
-    def __init__(self, store: Store, *, port: int = DEFAULT_PORT) -> None:
+    def __init__(self, store: Store, *, port: int = DEFAULT_PORT,
+                 warm=None) -> None:
         super().__init__()
         self.setWindowTitle("Next Gear Racing Pit Crew")
         # The floor is the *smaller* of what the layout wants and what the
@@ -671,23 +683,38 @@ class PitCrewWindow(QMainWindow):
         row.setSpacing(0)
 
         self.stack = QStackedWidget()
+        # **Three of the eight are not built here.** Engineer, Reference and
+        # Settings are made when the driver first navigates to them, which
+        # takes ~300 ms off every launch. Event and Practice are unconditional
+        # in the controller; Strategy and Race are 16 and 8 ms and are wanted
+        # on race day, so all four stay eager and none of that is worth the
+        # deferral. Car stays eager too, and that one is a measurement rather
+        # than a judgement: its 300 ms hides entirely inside the wait for the
+        # speech warm-up, so deferring it saves nothing and costs a freeze on
+        # first click.
         self.event_screen = EventScreen()
         self.car_screen = CarScreen()
         self.practice_screen = PracticeScreen()
         self.strategy_screen = StrategyScreen()
         self.race_screen = RaceScreen()
-        self.engineer_screen = EngineerScreen()
-        self.reference_screen = ReferenceScreen()
-        self.settings_screen = SettingsScreen()
+        self.engineer_screen = None
+        self.reference_screen = None
+        self.settings_screen = None
         # Order must match SCREENS, which NAV_GROUPS defines: the rail
         # indexes straight into the stack.
+        #
+        # **The placeholders are load-bearing.** `NavRail` disables an item
+        # when its index is past `stack.count()` and labels it "Not built
+        # yet". A screen that is merely waiting to be built is not that, and
+        # must not read as that - so the stack is eight wide from the start.
         for screen in (self.event_screen, self.car_screen,
                        self.practice_screen, self.engineer_screen,
                        self.strategy_screen, self.race_screen,
                        self.reference_screen, self.settings_screen):
-            self.stack.addWidget(screen)
+            self.stack.addWidget(screen if screen is not None else QWidget())
 
-        self.rail = NavRail(self.stack, NAV_GROUPS)
+        self.rail = NavRail(self.stack, NAV_GROUPS,
+                            builder=self._ensure_screen)
         row.addWidget(self.rail)
         row.addWidget(self.stack, 1)
         self.setCentralWidget(shell)
@@ -696,13 +723,84 @@ class PitCrewWindow(QMainWindow):
             store, self.event_screen, self.practice_screen,
             self.strategy_screen, self.race_screen,
             car_screen=self.car_screen,
-            engineer_screen=self.engineer_screen,
-            settings_screen=self.settings_screen, port=port)
+            engineer_screen=None, settings_screen=None,
+            port=port, warm=warm)
         # The rail says where the work stands, not only where it goes. Every
         # figure here is already in the store; nothing new is computed for it.
         self.controller.nav_state_changed.connect(self._update_rail)
         self._update_rail(self.controller.nav_state())
         self._install_shortcuts()
+
+    # Index in the stack -> (attribute, class, how to wire it up). The rail
+    # indexes straight into the stack, so these are positions in SCREENS.
+    LATE_SCREENS = {
+        3: ("engineer_screen", EngineerScreen, "attach_engineer_screen"),
+        6: ("reference_screen", ReferenceScreen, None),
+        7: ("settings_screen", SettingsScreen, "attach_settings_screen"),
+    }
+
+    def _ensure_screen(self, index: int):
+        """Build a deferred screen, or return the one already there.
+
+        **Idempotent by construction**, not by a flag someone has to
+        remember to check: a second call finds a real screen in the stack and
+        returns it. A doubled `attach` would connect every signal twice, for
+        the life of the process, with nothing to see until one Save wrote two
+        records.
+        """
+        late = self.LATE_SCREENS.get(index)
+        if late is None:
+            return self.stack.widget(index)
+        name, factory, attach = late
+        existing = getattr(self, name)
+        if existing is not None:
+            return existing
+
+        screen = factory()
+        # The attribute first, then the wiring, and only then the stack.
+        # `_trigger_primary` reads these attributes, and the controller's
+        # attach can push state into the screen - both must find a screen
+        # that is fully itself before anything can show it.
+        setattr(self, name, screen)
+        if attach is not None:
+            getattr(self.controller, attach)(screen)
+        placeholder = self.stack.widget(index)
+        self.stack.insertWidget(index, screen)
+        if placeholder is not None:
+            self.stack.removeWidget(placeholder)
+            placeholder.deleteLater()
+        # The rail's notes come from the store, so they were never wrong -
+        # but the newly attached screen may have just changed what they say.
+        self._update_rail(self.controller.nav_state())
+        return screen
+
+    def warm_screens(self) -> None:
+        """Build the deferred screens in the background, one per event-loop
+        turn, so the first visit to one is not the first time it is made.
+
+        One per turn rather than all at once: the window stays answerable
+        between them. Every index is attempted exactly once - **a chain that
+        re-armed on the index it just failed would spin a core for the rest
+        of the race with nothing in the log**, which is a worse fault than
+        the 90 ms of building it was trying to hide.
+        """
+        pending = [i for i in sorted(self.LATE_SCREENS)
+                   if getattr(self, self.LATE_SCREENS[i][0]) is None]
+        if not pending:
+            return
+        index = pending[0]
+        try:
+            self._ensure_screen(index)
+        except Exception:                         # noqa: BLE001
+            # Named, and with a traceback: under pythonw this is the only
+            # trace a screen that cannot be built will ever leave. The rail
+            # will try again if he navigates there, and fail visibly.
+            diagnostics.log().error(
+                "could not warm the %s screen in the background",
+                self.LATE_SCREENS[index][0], exc_info=True)
+            setattr(self, self.LATE_SCREENS[index][0], None)
+            return
+        QTimer.singleShot(0, self.warm_screens)
 
     def _update_rail(self, state: dict) -> None:
         for index, name in enumerate(SCREENS):
@@ -783,8 +881,21 @@ def main() -> int:
 
     try:
         store = Store(DEFAULT_DB_PATH)
-        window = PitCrewWindow(store)
+        # **Started here and joined inside the controller.** The two speech
+        # models are 250 MB of ONNX and cost 2.6 s to build; ONNX releases the
+        # GIL while it does it, so they load while the screens are being made
+        # and the window appears ~880 ms sooner. Nothing is deferred - see
+        # `ptt.start_warm_up`.
+        #
+        # After the sole-instance claim, deliberately: a second copy that is
+        # about to be refused must not first load a quarter of a gigabyte.
+        warm = ptt.start_warm_up(settings.load(store).speech_backend)
+        window = PitCrewWindow(store, warm=warm)
         window.show()
+        # After `show`, so none of this is between the launch and the window.
+        # It only removes the pause on the first visit to a deferred screen;
+        # it saves nothing, and it must not be moved above this line.
+        QTimer.singleShot(0, window.warm_screens)
         if claim.message:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(None, "The previous Pit Crew is stuck",

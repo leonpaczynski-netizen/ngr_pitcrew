@@ -78,13 +78,33 @@ class RigSupervisor:
         # A plain object is still accepted, for a test that wires one by hand.
         self._settings = settings if callable(settings) else (lambda: settings)
         self.voice = voice
-        self.settings_screen = settings_screen
+        # **A reader too, and for the same reason one line up.** The settings
+        # screen is built lazily now - it does not exist when this is
+        # constructed, and it arrives when the driver first navigates to it.
+        # Held as the object it was wired with, that is permanently None and
+        # every hardware test button below returns at its own `is None` guard:
+        # silently, with no log and no exception. Those buttons are the
+        # pre-race checks - "test the feed", "read the gauge now" - so the
+        # failure is a driver who verified nothing and was told it was fine.
+        #
+        # A plain object is still accepted, for a test that wires one by hand.
+        self._settings_screen = (settings_screen if callable(settings_screen)
+                                 else (lambda: settings_screen))
         # **A callable, not an event.** The active event changes under the
         # supervisor and `start_wind` needs whichever one is current; holding
         # a dict here would scale the fans to whatever was loaded when the app
         # started. `lambda: None` is a legitimate wiring - the curve then falls
         # back to the car's broadcast maximum and says which it used.
         self._event = event or (lambda: None)
+
+    @property
+    def settings_screen(self):
+        """Whichever settings screen exists now, or None before one is built.
+
+        Resolved on every read rather than captured, so a screen that arrives
+        after this object does is not invisible to it.
+        """
+        return self._settings_screen()
 
     @property
 
@@ -124,6 +144,12 @@ class RigSupervisor:
         effect at half, which is the one he will spend a lap inside.
         """
         if self.settings_screen is None:
+            # Said, not swallowed - see the same guard in `bench`. A
+            # transducer test that returns quietly is a driver who pressed
+            # the button, felt nothing, and learned nothing from it.
+            log("rig").warning(
+                "test the transducer was asked for, but the settings screen "
+                "is not built")
             return
         wanted = self.settings_screen.values()
         engine = self.bridge.haptics
