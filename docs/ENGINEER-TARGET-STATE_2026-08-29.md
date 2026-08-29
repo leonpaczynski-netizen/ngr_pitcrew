@@ -286,13 +286,41 @@ every one, after every workstream.
 | 7 | **C** Ludo's channel | ✅ | ⚠ Writes apply, with an audit trail and an undo. `prompts/questions.py` — 500 lines — had no caller anywhere in the app. |
 | 8 | **G** qualifying | ✅ | One briefing, one plan door. Qualifying was the last place the app still authored. |
 
-### What was NOT done, and it is D19
+### D19 — owed, then paid
 
-**`controller.py` went from 5,299 lines to 5,464.** Every new *concern* landed
-in a module of its own — `setup/doubt.py`, `race/knowledge.py`,
-`analysis/distance.py`, `analysis/wear_rates.py`, `analysis/rivals.py` — and
-what the controller gained was wiring. But D19 asked for extraction as a
-precondition of landing, and that did not happen. It is still owed.
+The eight workstreams left `controller.py` at **5,464** lines against the
+5,299 they started from: every new *concern* landed in a module of its own,
+but nothing was extracted, and D19 asked for extraction as a precondition of
+landing. Three cuts followed.
+
+| Cut | Lines | Why it was safe, and what it hides |
+|---|---|---|
+| `rig/supervisor.py` | 597 | Fourteen methods calling **one** controller method between them, and state nothing else touched. D18 freezes the rig, so nothing moves under it. Hides the watchdog, the endpoint note and the recovery ladder. |
+| `telemetry/hud_session.py` | 183 | The gauge session around `telemetry/hud.py`'s instrument. Its interface is the **four loose attributes** the controller actually read — from three different places, written on a worker thread. |
+| `bench.py` | 343 | The Settings screen's hardware checks and the health line. **None of it runs during a session.** Hides the three-valued audio verdict. |
+
+**5,464 → 4,373. Down 20%, and 18% below where the week started.**
+
+**Three collaborators, and all three take readers rather than objects.** The
+controller rebinds `settings` on every save, `listener` on every session, and
+the tests rebind `_confirm_audio` after construction. A module holding what it
+was built with reads the world as it was when the app opened — the driver
+turns the haptics off and the rig carries on. The bench's first draft did
+exactly that and two tests caught it, three lines below a docstring describing
+the trap.
+
+**Two tests got better rather than merely moved**, and that is the argument
+for the cuts. The wind tests built a hand-made rack and borrowed three methods
+onto it; they build the real `RigSupervisor` now, because it takes exactly
+what the rack was faking. The stale-wear test grepped its own source for
+`_wear_now = None` because there was nothing to construct; it drives a real
+`HudSession` now — a good reading, then a refusal, then what the radio would
+be handed.
+
+What is left in `controller.py` is what the class is for: `start_race` (274),
+`__init__` (182), and the two event handlers (159, 146). The next cut worth
+making is the re-planner, and it is not as clean — it calls out to nothing,
+but it touches thirteen pieces of race state.
 
 ### Five things that were built and wired to nothing
 
