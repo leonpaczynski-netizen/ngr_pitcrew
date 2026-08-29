@@ -47,6 +47,7 @@ from pitcrew.engineer.ptt import (
 from pitcrew.engineer.shift_beep import ShiftBeep
 from pitcrew.rig.effects import EffectDeriver
 from pitcrew.rig.supervisor import RigSupervisor
+from pitcrew.telemetry.hud_session import HudSession
 from pitcrew.rig.wind_curve import WindCurve
 from pitcrew.engineer import audio_devices, endpoint_meter
 from pitcrew.engineer.voice import Voice
@@ -65,8 +66,7 @@ from pitcrew.setup import doubt
 from pitcrew.setup.parse import parse_reply
 from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
 from pitcrew.store import catalogs
-from pitcrew.store.db import (DEFAULT_SHEET_PURPOSE, WEAR_HUD_VIDEO,
-                              Store)
+from pitcrew.store.db import DEFAULT_SHEET_PURPOSE, Store
 from pitcrew.store.identity import IDENTITY_OK
 from pitcrew.race.calls import (STATUS, STATUS_EVERY_LAPS, STAY_OUT,
                                fuel_target_l, fuel_to_flag_l)
@@ -663,12 +663,6 @@ class TelemetryBridge(QObject):
         return True
 
 
-# How many in-flight gauge readings the lap-id lookup keeps. A reading is
-# answered within a second or two; anything older than a handful of laps
-# is never going to be claimed.
-HUD_LAP_MEMORY = 8
-
-
 class PitCrewController(QObject):
     """Owns the store and the live session, and drives the screens."""
 
@@ -690,13 +684,6 @@ class PitCrewController(QObject):
         self.car_screen = car_screen
         self.engineer = engineer_screen
         self.settings_screen = settings_screen
-        # lap id -> lap number, for gauge readings still in
-        # flight. See `_on_lap_completed`.
-        self._hud_lap_nums: dict[int, int] = {}
-        # What the sampler last said about the gauge being unreadable, written
-        # on its worker thread and consumed on the Qt thread at a crossing.
-        # None means it has said nothing - not that the gauge is fine.
-        self._hud_blind_note: str | None = None
         # An exclusion reason the driver gave mid-lap, waiting for
         # that lap to land. See `_note_driver_report`.
         self._exclude_next_lap: str | None = None
@@ -781,6 +768,12 @@ class PitCrewController(QObject):
             bridge=self.bridge, settings=lambda: self.settings,
             voice=self.voice,
             settings_screen=self.settings_screen, event=self.active_event)
+        # **The wear gauge and the recording**, likewise out of this file. It
+        # hands back four values - the latest reading, its lap, a blind note,
+        # and whether a request was taken - and those used to be four loose
+        # attributes here, written on a worker thread and read from three
+        # different places. See `telemetry/hud_session.py`.
+        self.hud = HudSession(settings=lambda: self.settings, store=self.store)
         self.listener: UDPListener | None = None
         self.session_id: int | None = None
         self._parse_errors = 0
@@ -2209,94 +2202,26 @@ class PitCrewController(QObject):
 
     # ------------------------------------------------ tyre wear off the video
 
-    def _hud_sampler(self):
-        """The live gauge reader, built on first use, or None if it is off.
+    # ------------------------------------------------------- the wear gauge
+    #
+    # 183 lines of sampler lifecycle, worker-thread callbacks and OBS
+    # recording moved to `telemetry/hud_session.py`. What it hands back is
+    # four values - the latest reading, its lap, a blind note and a request -
+    # which used to be four loose attributes on this class read from three
+    # different places. See that module for why `new_session` matters.
 
-        **Nothing about it may reach the race path.** It is constructed here
-        rather than at start-up so that a driver who never turns it on never
-        opens a socket, and every failure inside it is logged and swallowed -
-        the lap is recorded whatever the gauge does.
-        """
-        if not self.settings.hud_wear_enabled:
-            return None
-        existing = getattr(self, "_hud", None)
-        if existing is not None:
-            return existing
-        from pitcrew.settings import HUD_SOURCE_SCREEN
-        from pitcrew.telemetry.hud import (LiveWearSampler, ObsSource,
-                                           ScreenSource)
+    def _new_hud_session(self) -> None:
+        self.hud.new_session()
 
-        if self.settings.hud_source == HUD_SOURCE_SCREEN:
-            # Reads an OBS projector window off the desktop. No socket is
-            # opened at all, which is also why nothing here can hang on one.
-            source = ScreenSource()
-        else:
-            source = ObsSource(self.settings.obs_host, self.settings.obs_port,
-                               self.settings.obs_password)
-        interval = float(self.settings.hud_sample_interval_s or 0.0)
-        sampler = LiveWearSampler(source, self._write_hud_wear,
-                                  on_status=self._hud_status,
-                                  interval_s=interval)
-        sampler.start()
-        log("pitcrew").info(
-            "hud-wear: %s source, %s", self.settings.hud_source,
-            f"sampling every {interval:g}s" if interval
-            else "sampling at each crossing only")
-        self._hud = sampler
-        return sampler
+    def _stop_hud_sampler(self) -> None:
+        self.hud.stop()
 
-    def _hud_status(self, reading) -> None:
-        """Worker thread. What the sampler wants the driver to know.
+    def _start_video(self) -> None:
+        self.hud.start_video(self.session_id)
 
-        **Only refusals arrive here as news.** A good reading already reaches
-        the race through `_write_hud_wear`; this is the other half - the gauge
-        having gone blind, which used to be a log line and nothing else. He
-        raced Road Atlanta believing the instrument was watching while it
-        answered six of twenty-two crossings.
+    def _stop_video(self, session_id: int | None) -> None:
+        self.hud.stop_video(session_id)
 
-        **No Qt from this thread.** Same rule as `_write_hud_wear`: a plain
-        attribute write, picked up by the Qt side at the next crossing. A
-        `set_status` call from here is the cross-thread defect the PTT answer
-        path already had to have fixed once.
-
-        **And it expires the stale reading.** `_wear_now` is only ever written
-        on a good reading and was never cleared, so a blind gauge left the
-        radio quoting a transcription many laps old as though it were current.
-        A wear number nobody can refresh is exactly the zero-that-means-missing
-        CLAUDE.md refuses.
-        """
-        if reading is None or reading.ok:
-            return
-        self._wear_now = None
-        self._wear_now_lap = None
-        self._hud_blind_note = reading.reason
-
-    def _write_hud_wear(self, lap_id: int, wear: dict) -> None:
-        """Worker thread. Writes the reading and nothing else.
-
-        `set_lap_wear` already refuses to let a video reading overwrite one the
-        driver gave: CLAUDE.md makes his report primary evidence and this
-        corroboration, so where the two disagree the disagreement stays visible
-        instead of being settled by whichever arrived last.
-        """
-        # Kept for the radio as well as the store: "how are my tyres" is asked
-        # mid-lap and cannot wait for the lap to be written and read back.
-        present = {c: wear.get(c) for c in ("fl", "fr", "rl", "rr")
-                   if wear.get(c) is not None}
-        self._wear_now = present or None
-        # **And which lap it describes**, for the measured wear call. Two plain
-        # attribute writes rather than a lock: this thread only ever writes and
-        # the Qt thread only ever reads, and a reader that catches the pair
-        # mid-update sees a reading against the previous lap - which
-        # `RaceState.note_wear` already declines as a repeat. A lock here would
-        # be a lock a lap handler could wait on.
-        self._wear_now_lap = self._hud_lap_nums.get(lap_id)
-        try:
-            self.store.set_lap_wear(
-                lap_id, wear.get("fl"), wear.get("fr"),
-                wear.get("rl"), wear.get("rr"), source=WEAR_HUD_VIDEO)
-        except Exception as exc:                             # noqa: BLE001
-            log("hud").warning("could not store lap %s wear: %s", lap_id, exc)
 
     def _note_sheet_change(self) -> None:
         """File this session's setup delta, and never let it cost a session.
@@ -2349,41 +2274,6 @@ class PitCrewController(QObject):
         if self.practice is not None:
             self.practice.note(note, warn=True)
 
-    def _new_hud_session(self) -> None:
-        """Tell the gauge reader a new session has started.
-
-        **`LiveWearSampler.new_session` existed, documented why it was needed,
-        and had no caller in the app at all** - only two lines in
-        `tests/test_hud_blind_gauge.py`. The sampler is cached on this
-        controller and torn down only in `shutdown`, so without this every
-        piece of state it holds crosses session boundaries: the one-shot
-        "I cannot see the gauge" announcement, and - worse - the comparison
-        baseline every later reading is judged against. A race then opens
-        measuring its fresh set against whatever practice left behind.
-
-        Resets an existing sampler only. Building one here would open a socket
-        at session start for a driver who has the reader switched on but never
-        crosses a line, which is the cost `_hud_sampler` is lazy to avoid.
-        """
-        sampler = getattr(self, "_hud", None)
-        if sampler is not None:
-            sampler.new_session()
-        # **The lap-id map outlives the session too, and it leaked a practice
-        # wear figure into a race.** `_write_hud_wear` looks a lap_id up here
-        # to decide which lap a reading belongs to; the ids carried over, so
-        # at the Fuji race's first crossing the controller filed session 87's
-        # gauge reading - FL 19 / FR 29 / RL 29 / RR 23, a different set of
-        # tyres fitted twenty minutes earlier - against race lap 6, a lap that
-        # had not happened. The engineer then said "FR 29." out loud on lap 2,
-        # in the register `colour.py` reserves for measured numbers.
-        self._hud_lap_nums.clear()
-        self._wear_now_lap = None
-        self._hud_blind_note = None
-
-    def _stop_hud_sampler(self) -> None:
-        sampler, self._hud = getattr(self, "_hud", None), None
-        if sampler is not None:
-            sampler.stop()
 
     def start_practice(self) -> None:
         # Starting one session over another left the first with no `ended_at`
@@ -2449,70 +2339,6 @@ class PitCrewController(QObject):
 
     # ------------------------------------------- the capture's own zero point
 
-    def _start_video(self) -> None:
-        """Ask OBS to record, and write down the wall clock at second zero.
-
-        **The zero is the whole point.** With it, a lap's position in the
-        capture is `recorded_at - video_started_at`; without it the offline
-        tool has to be handed an offset by hand and admits its estimate is a
-        few seconds early.
-
-        Silent on every failure. A recording is a convenience and a session is
-        not, so nothing here may stop one opening.
-        """
-        if not self.settings.obs_record_sessions or self.session_id is None:
-            return
-        from pitcrew.telemetry.hud import ObsSource
-
-        source = ObsSource(self.settings.obs_host, self.settings.obs_port,
-                           self.settings.obs_password)
-        started, why = source.start_recording()
-        if started is None:
-            log("session").info("could not start the OBS recording: %s", why)
-            return
-        if not started:
-            # **Already running, so the app does not own it and cannot know
-            # its zero.** Recording nothing is better than recording a zero
-            # that is wrong by however long it had been going.
-            log("session").info(
-                "OBS was already recording - this session gets no video zero, "
-                "because the app did not start the capture and cannot know "
-                "where in it second zero fell")
-            return
-        stamp = datetime.datetime.now().isoformat(timespec="seconds")
-        self.store.set_session_video(self.session_id, path=None,
-                                     started_at=stamp)
-        self._video_started = True
-        log("session").info("OBS recording started, video zero at %s", stamp)
-
-    def _stop_video(self, session_id: int | None) -> None:
-        """Stop the recording this app started, and file where OBS put it.
-
-        **Never stops one it did not start** - `ObsSource.stop_recording`
-        already refuses, and `_video_started` is the app's own half of the
-        same rule.
-        """
-        if not getattr(self, "_video_started", False):
-            return
-        self._video_started = False
-        from pitcrew.telemetry.hud import ObsSource
-
-        source = ObsSource(self.settings.obs_host, self.settings.obs_port,
-                           self.settings.obs_password)
-        path, why = source.stop_recording()
-        if path is None:
-            log("session").info("OBS recording not stopped cleanly: %s", why)
-            return
-        if session_id is not None:
-            # **The zero was written at the start and must survive.** Only the
-            # path is new here, so it is read back and passed through rather
-            # than left to default to None - which would throw away the one
-            # thing this whole path exists to record.
-            row = self.store.get_session(session_id) or {}
-            self.store.set_session_video(
-                session_id, path=path,
-                started_at=row.get("video_started_at"))
-        log("session").info("OBS recording written to %s", path)
 
     def stop_practice(self) -> None:
         # The coach before the listener, so no frame can arrive for a coach
@@ -2737,18 +2563,14 @@ class PitCrewController(QObject):
         # is the capture that is running anyway. The request returns at once
         # and may be dropped; nothing here waits on it, and a fragment never
         # gets one because it is not a lap.
-        sampler = self._hud_sampler()
-        if sampler is not None:
-            # **The lap NUMBER, kept against the id the sampler answers with.**
-            # The reading comes back on a worker thread carrying only the lap
-            # id, and the race state files wear by lap number - so the pairing
-            # has to be made here, where both are in hand. Bounded to the last
-            # few laps: this is a lookup for a reading that is already in
-            # flight, not a record of the session.
-            self._hud_lap_nums[lap_id] = lap.lap_num
-            while len(self._hud_lap_nums) > HUD_LAP_MEMORY:
-                self._hud_lap_nums.pop(next(iter(self._hud_lap_nums)))
-            sampler.request(lap_id)
+        # **The lap NUMBER, kept against the id the sampler answers with.**
+        # The reading comes back on a worker thread carrying only the lap id,
+        # and the race state files wear by lap number - so the pairing has to
+        # be made where both are in hand. `note_lap` bounds what it keeps: it
+        # is a lookup for a reading already in flight, not a record of the
+        # session.
+        self.hud.note_lap(lap_id, lap.lap_num)
+        self.hud.request(lap_id)
         self._tag_race_compound(lap_id)
         self.refresh_nav_state()
         # Race laps belong to the race session, not to the practice rack.
@@ -4013,14 +3835,12 @@ class PitCrewController(QObject):
             # The sampler decided; this is the Qt thread, where speaking is
             # allowed. Cleared as it is taken so it is said once per
             # diagnosis - see `LiveWearSampler._note_blind`.
-            blind = getattr(self, "_hud_blind_note", None)
+            blind = self.hud.take_blind_note()
             if blind:
-                self._hud_blind_note = None
                 if self._engineer_speaks:
                     self.voice.say(blind)
                 log("pitcrew").warning("hud-wear: told the driver: %s", blind)
-            wear_lap = getattr(self, "_wear_now_lap", None)
-            wear_now = getattr(self, "_wear_now", None)
+            wear_now, wear_lap = self.hud.latest_wear()
             if wear_lap and wear_now:
                 self.race.state.note_wear(wear_lap, wear_now)
         call = self.race.handle(event)
@@ -4160,7 +3980,7 @@ class PitCrewController(QObject):
         # keys stay absent: `intents.TYRES` answers "no tyre gauge" rather than
         # a number, because §3.3 gives the feed no wear channel and a figure
         # invented in reply to a direct question is the worst kind there is.
-        wear = getattr(self, "_wear_now", None)
+        wear = self.hud.latest_wear()[0]
         if wear:
             corner, worst = max(wear.items(), key=lambda kv: kv[1])
             snapshot["wearWorst"] = worst
@@ -4323,7 +4143,7 @@ class PitCrewController(QObject):
     def _live_worst_wear(self) -> tuple[float | None, str | None]:
         """The worst corner the gauge has read, and which one. (None, None)
         where it is not reading - never a zero, which would say fresh."""
-        wear = getattr(self, "_wear_now", None)
+        wear = self.hud.latest_wear()[0]
         if not wear:
             return None, None
         corner, worst = max(wear.items(), key=lambda kv: kv[1])
@@ -4369,7 +4189,7 @@ class PitCrewController(QObject):
             # **The live gauge, not a lap row.** There is no lap to read here
             # - this is mid-lap - and `_worst_wear(None)` would return None
             # for every corner, so the straight would never once carry a wear
-            # figure. `_wear_now` is what the sampler last transcribed, which
+            # figure. `hud.latest_wear` is what the sampler last transcribed,
             # is fresher than a stored lap in any case.
             wear_worst=self._live_worst_wear()[0],
             wear_corner=self._live_worst_wear()[1],

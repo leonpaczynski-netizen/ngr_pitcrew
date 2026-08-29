@@ -196,10 +196,14 @@ def test_a_new_session_forgets_what_was_already_said():
 
 def test_the_sampler_is_built_with_a_status_consumer():
     """The first version of this change passed every test while `on_status`
-    was never once supplied in production, so nothing ever reached him."""
-    from pitcrew.controller import PitCrewController
+    was never once supplied in production, so nothing ever reached him.
 
-    body = inspect.getsource(PitCrewController._hud_sampler)
+    The gauge came out of the controller on 29 Aug 2026 - see
+    `telemetry/hud_session.py`. Same code, one class along.
+    """
+    from pitcrew.telemetry.hud_session import HudSession
+
+    body = inspect.getsource(HudSession.sampler)
     assert "on_status" in body, (
         "LiveWearSampler is built without a status consumer, so every refusal "
         "goes nowhere")
@@ -212,10 +216,28 @@ def test_the_blind_path_calls_note_blind():
 
 
 def test_a_refusal_clears_the_stale_wear_reading():
-    """`_wear_now` was only ever written on a good reading and never cleared,
+    """The reading was only ever written on a good sample and never cleared,
     so a blind gauge left the radio quoting a transcription many laps old as
-    though it were current."""
-    from pitcrew.controller import PitCrewController
+    though it were current.
 
-    body = inspect.getsource(PitCrewController._hud_status)
-    assert "_wear_now = None" in body
+    **This used to read the source, because there was nothing to build.** The
+    gauge session is its own object now, so the test drives the real thing:
+    a good reading, then a refusal, and what the radio would be handed.
+    """
+    from pitcrew.telemetry.hud import Reading
+    from pitcrew.telemetry.hud_session import HudSession
+
+    class Store:
+        def set_lap_wear(self, *a, **k):
+            pass
+
+    hud = HudSession(settings=lambda: None, store=Store())
+    hud.note_lap(1, 7)
+    hud._write_wear(1, {"fl": 0.4, "fr": 0.4, "rl": 0.5, "rr": 0.4})
+    assert hud.latest_wear() == ({"fl": 0.4, "fr": 0.4, "rl": 0.5, "rr": 0.4}, 7)
+
+    hud._status(Reading({}, reason="gauge not on the canvas"))
+
+    assert hud.latest_wear() == (None, None),         "a blind gauge left a stale transcription standing"
+    assert hud.take_blind_note() == "gauge not on the canvas"
+    assert hud.take_blind_note() is None, "the note is said once"
