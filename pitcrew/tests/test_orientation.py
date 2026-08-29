@@ -549,3 +549,21 @@ def test_a_pending_stop_does_not_pad_the_tank_on_its_own():
     assert state.laps_estimate_firm is True, (
         "the fill is sized on the noise, not on a stop he may not take")
 
+
+def test_the_race_clock_actually_reaches_the_state():
+    """**The mutant that survived a whole-session review.**
+
+    `state.race_remaining_s` is the driver's only source of time remaining
+    with the race HUD off, and deleting the single line that sets it left the
+    entire suite green - every test in this file sets it by hand, so none of
+    them touched the one assignment that matters.
+    """
+    race = a_clocked_race(minutes=30.0)
+    assert race.state.race_remaining_s is None, "nothing has run yet"
+
+    state = drive(race, lap=5, lap_ms=100_000, elapsed=600.0)
+
+    assert state.race_remaining_s is not None, \
+        "the clock never reached the state"
+    assert abs(state.race_remaining_s - 1200.0) < 1.0, state.race_remaining_s
+

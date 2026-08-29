@@ -92,6 +92,41 @@ def expectation_for(inputs, samples: int) -> Expectation:
         wear_per_lap=inputs.wear_per_lap if inputs else None)
 
 
+def _with_start_laps(stints) -> list:
+    """Every stint carrying the lap it begins on, derived where it is absent.
+
+    **`or 1` on a missing `start_lap` is a plausible default standing in for
+    "the author did not say", and it produces the worst call this app can
+    make.** `_apply_stint` reads `start = stint.get("start_lap") or 1`, so a
+    handover written in the shape the CLI documents - stints, compounds, fuel,
+    no start laps - puts every stint's end at `1 + laps - 1`. Driven through
+    the real coordinator on a Spa plan: the box call fires on the lap after
+    the stop and then **every lap to the flag**, "2 laps overdue", "3 laps
+    overdue", twelve in a row. That is the nine-box-calls defect, worse, on
+    the path this whole feature exists for - and `_reconsider_ignored_box`
+    cannot rescue it, because `stay_out_call` returns None exactly when the
+    fuel cannot reach, which is that state.
+
+    Derived rather than refused because it is not a judgement: stints run
+    back to back and the arithmetic has one answer. An author's own value is
+    kept - a plan may legitimately start at a lap other than one - and only
+    the gaps are filled.
+    """
+    rows = [s for s in (stints or []) if isinstance(s, dict)]
+    if not rows:
+        return list(stints or [])
+    filled, lap = [], None
+    for stint in rows:
+        row = dict(stint)
+        if row.get("start_lap"):
+            lap = int(row["start_lap"])
+        else:
+            row["start_lap"] = lap = 1 if lap is None else lap
+        filled.append(row)
+        lap += int(row.get("laps") or 0)
+    return filled
+
+
 def stamp(store, event_id: int, plan: dict, *, inputs=None,
           event=None) -> dict:
     """`plan` with its execution contract on it. A new dict; the input is left.
@@ -105,6 +140,7 @@ def stamp(store, event_id: int, plan: dict, *, inputs=None,
     would quietly replace the figures it was costed against with today's.
     """
     stamped = dict(plan)
+    stamped["stints"] = _with_start_laps(stamped.get("stints"))
     if event is None:
         event = store.get_event(event_id)
     if event is None:

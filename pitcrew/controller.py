@@ -4167,6 +4167,14 @@ class PitCrewController(QObject):
             # whether anyone ever measured a stop here.
             pit_loss_measured=(event.get("pit_loss_source")
                                == "measured"),
+            # **The regulations, which never reached here.** `_note_mandatory_
+            # stops`' own docstring says a rule that cannot fire is the thing
+            # this codebase keeps building by accident - and the only caller
+            # passing this was a hand-run tool, so `mandatory_stops_left` was
+            # 0 in every race and `stop_still_needed` short-circuited past the
+            # regulation test forever. George would cancel a stop the rules
+            # require, and say so.
+            mandatory_stops=int(event.get("mandatory_stops") or 0),
             practice_lap_samples=practice_laps,
             practice_fuel_samples=practice_laps)
         # **The interval he asked for, reaching the race.** Built, tested, and

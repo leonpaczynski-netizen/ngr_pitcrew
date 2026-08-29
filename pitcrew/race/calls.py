@@ -616,10 +616,6 @@ class RaceState:
     mandatory_stops_left: int | None = None
     # Said once. The driver does not need telling twice that the stops are off.
     stops_off_said: bool = False
-    # **How many crossings there will actually be**, stops taken out of the
-    # clock. Deliberately NOT `laps_total`: that is the race distance every
-    # fuel calculation measures against, and a stop discount belongs in what
-    # the driver is TOLD, not in what the tank is filled for.
     # Whether the spoken count needs a hedge - noise, plus the degradation
     # bias `laps_estimate_firm` cannot see. Deliberately NOT that flag: it
     # sizes fuel margins, and widening it put a spare lap in every tank.

@@ -161,21 +161,6 @@ def test_the_saving_answer_still_gets_its_lap():
         f"the heartbeat took the lap the saving answer needed: {call}"
 
 
-def test_a_heartbeat_does_not_withdraw_a_short_shift_instruction():
-    """The controller clears the beep on any call that does not ask for one -
-    `None` there means "stop short-shifting". At the every-lap setting the
-    heartbeat lands on the crossing after almost every real call, so without
-    an exemption it withdraws the instruction the lap after it was given,
-    every time, without a word."""
-    import inspect
-
-    from pitcrew import controller
-
-    source = inspect.getsource(controller.PitCrewController._on_race_event)
-    assert "if call.kind != STATUS:" in source, \
-        "the heartbeat must not reach set_short_shift"
-
-
 def test_the_heartbeat_does_not_retire_the_colour_tier():
     """**The gauge prompt is not flavour, and it lives below the heartbeat.**
 
@@ -204,14 +189,15 @@ def test_a_real_call_still_owns_its_lap():
     assert not state.only_the_heartbeat_this_lap()
 
 
-def test_the_interval_reaches_the_race_from_a_real_setting():
-    """It was settable only from a test file - rule 11's named failure, and
-    the fourth instance of it in this codebase this week."""
-    import inspect
+# **The two `inspect.getsource` tests that stood here are gone.**
+#
+# They asserted that a string appeared in the controller's source -
+# `"status_every_laps"`, `"if call.kind != STATUS:"` - and a review built
+# mutants that kept the string and broke the behaviour: a line reading
+# `status_every_laps = 5` contains the first, and a `pass` under the guard
+# leaves the second's text intact. Both survived. They read as coverage and
+# were worse than nothing, because they made the gap look filled.
+#
+# What they claimed is asserted by driving the real controller, in
+# `test_controller_wiring.py`.
 
-    from pitcrew import controller
-    from pitcrew.settings import Settings
-
-    assert hasattr(Settings(), "status_every_laps")
-    source = inspect.getsource(controller.PitCrewController.start_race)
-    assert "status_every_laps" in source, "the setting never reaches the race"

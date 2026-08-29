@@ -1028,34 +1028,29 @@ class RaceCoordinator:
         # number. From lap five the margin runs 0.9 s and upward.
         margin = self.clock.laps_left_margin_s(lap_ms)
         sigma = self.expect.sigma_ms()
-        # **"Firm" has to mean firm against everything that can move it, not
-        # just against lap-to-lap noise.** It compared the margin to sigma
-        # alone, which is silent on the two systematic offsets that can each
-        # shift the answer by a whole lap - so it could read True while the
-        # count was one out for a reason it had never looked at.
+        # **What the margin has to clear, and what it deliberately does not.**
         #
-        # The pending stop is now IN the estimate rather than being an error
-        # in it, but only to the extent of `pit_loss_s`, which is the track
-        # constant and excludes the fill. With a stop still to come and no
-        # measured fill time, the discount is known to be short by an
-        # unquantified amount - so the count is offered as one of two rather
-        # than flat. Inventing a coefficient for the fill would be the thing
-        # this project refuses everywhere else.
-        # **The noise test, plus the pending stop, and nothing else.** This
-        # flag has a second reader - `fuel_margin_l(lap_count_firm=...)`,
-        # which returns a WHOLE LAP of margin when it is False - so widening
-        # it to cover the degradation bias made every timed-race fill carry a
-        # spare lap for the whole race. About six litres at Yas and six
-        # seconds parked at the measured 1.002 L/s, which is the thing the
-        # driver refused outright. One name doing two jobs is rule 13 inside
-        # the code, and the voice has its own flag now.
+        # `laps_left_margin_s` is the headroom before the ceiling flips,
+        # compared against lap-to-lap NOISE. It is silent on the two
+        # systematic offsets - a pending stop's clock, and the degradation
+        # bias in a median taken over younger tyres - and both can move the
+        # answer by a whole lap.
         #
-        # **The pending-stop term is restored, deliberately.** Taking it out
-        # along with the headroom narrowed the fill by 4.8 L at Road Atlanta
-        # and 2.2 L at Yas while a stop was still to come - the running-dry
-        # direction, changed by accident and stated nowhere. Whether he wants
-        # that narrower fill is his call to make out loud, not one to inherit
-        # from a refactor.
+        # Those belong to the VOICE, not to this flag: `laps_count_hedged`
+        # below carries them and turns a flat number into a pair. This one
+        # sizes fills - `fuel_margin_l` answers False with a WHOLE LAP - and
+        # widening it put a spare lap in every timed-race tank, 2.2-4.7 L at
+        # Yas and 3.4-5.6 L at Road Atlanta, four seconds parked. The driver,
+        # 29 Aug 2026: *"I will only need to stop again if I need fuel and you
+        # can work that out."*
+        #
+        # So: the noise test, and only the noise test, which is also what it
+        # was before any of this work. Three stacked comment blocks here said
+        # the opposite - two of them that a pending-stop term was "restored,
+        # deliberately" - describing an expression that has not carried one
+        # since `6d15652`. In a codebase whose method is that the comment is
+        # the argument, a comment asserting conservatism the code does not
+        # have is the most dangerous thing in the file.
         _firm_noise = bool(margin is not None and sigma is not None
                            and margin >= sigma / 1000.0)
         # What the VOICE needs, which is a different question: is the number
@@ -1077,7 +1072,8 @@ class RaceCoordinator:
         # a lap of fuel out of the fill. That is the under-fuelling direction,
         # and running dry loses the race where a lap too many costs three
         # seconds in the box.
-        # **`left`, not `to_flag`.** Putting the discounted count here moved
+        # **The raw clock, never a discounted count.** Putting a
+        # stop-discounted distance here moved
         # the race distance under NINE readers, four of which decide fuel:
         # `fuel_frame`, `fuel_reaches_flag`, `fuel_target_l` and
         # `stay_out_call` all measure against `laps_remaining()`. Measured on
@@ -1138,15 +1134,6 @@ class RaceCoordinator:
         # stop stops being needed, it asked for 6.00 L of margin where 1.20 L
         # is right - 4.8 L, about 4.8 s stationary at the measured rate, in
         # the direction he has refused.
-        # **The noise test, and only the noise test - as it was before any of
-        # this.** The pending-stop term was added here by me, not inherited:
-        # it forced the flag False for the whole first stint of every timed
-        # race, and `fuel_margin_l` answers False with a WHOLE LAP of fuel -
-        # 2.2-4.7 L at Yas, 3.4-5.6 L at Road Atlanta, four seconds parked at
-        # the measured rate. The driver, 29 Aug 2026: *"I will only need to
-        # stop again if I need fuel and you can work that out."* Padding the
-        # tank against a stop he has not decided on is the app declining to
-        # work it out.
         self.state.laps_estimate_firm = _firm_noise
         if left > 0:
             return None
