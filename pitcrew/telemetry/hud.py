@@ -238,6 +238,10 @@ STALE_MARGIN_S = 3.0
 # enough that stop() is prompt; the free-run interval is enforced against
 # the clock, so this does not set the sample rate.
 QUEUE_WAIT_S = 0.5
+# How long `stop` waits for the reader to come out of its current grab.
+# An OBS grab measures about 2050 ms, so this is regularly not enough -
+# which is why a timed-out join is reported rather than assumed away.
+STOP_JOIN_S = 2.0
 # Free-run failures are logged no more often than this.
 FREE_RUN_LOG_SPACING_S = 30.0
 # Sentinel: no crossing asked, take a free-running sample.
@@ -1427,22 +1431,59 @@ class LiveWearSampler:
         self._latest = None
 
     def start(self) -> None:
-        if self._thread is not None:
+        """Start the reader. A no-op while one is already running.
+
+        **Each thread owns its stop event rather than sharing the sampler's.**
+        The old pair could resurrect the thread it had just been asked to kill:
+        `stop` set the shared flag, joined for two seconds and cleared
+        `_thread` whether or not the join had succeeded - and an OBS grab
+        measures about 2050 ms, so it usually had not. `start` then saw `None`,
+        called `_stop.clear()`, and the flag the surviving thread was about to
+        read on its next pass was gone. One live thread became two, both
+        driving the same unlocked `series` and `_latest`.
+
+        That is the 30 Aug practice crash arriving one session boundary at a
+        time instead of one lap at a time - `HudSession.sampler` had the
+        per-lap version of it, and 13 threads took the process down with an
+        access violation. Until that fix this path was unreachable, because
+        `HudSession.stop` never found a sampler to stop.
+
+        With an event per thread nothing `start` does can reach a departing
+        thread: its flag stays set and it leaves when its grab returns.
+        """
+        if self._thread is not None and self._thread.is_alive():
             return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="hud-wear",
-                                        daemon=True)
+        stop = self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, args=(stop,),
+                                        name="hud-wear", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
-        self._stop.set()
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
+    def stop(self) -> bool:
+        """Ask the reader to stop. True if it had actually stopped.
+
+        **A timed-out join is no longer silent, and no longer a leak.** The
+        thread is released either way - a fresh one may now start safely
+        alongside it, since it cannot be resurrected and writes nothing
+        further - but a caller that wanted the gauge quiet is told that it is
+        not, rather than left to assume it.
+
+        No sentinel is queued any more. The loop wakes every `QUEUE_WAIT_S`
+        regardless, and a `None` left behind by a thread that had already gone
+        would be drawn by the *next* thread and stop it dead on its first pass
+        - a sampler that is silently not running at all.
+        """
         thread, self._thread = self._thread, None
-        if thread is not None:
-            thread.join(timeout=2.0)
+        self._stop.set()
+        if thread is None:
+            return True
+        thread.join(timeout=STOP_JOIN_S)
+        if thread.is_alive():
+            _log.warning(
+                "hud-wear: the reader was still mid-grab after %.1fs. It has "
+                "been released and will exit when that grab returns; it files "
+                "nothing further.", STOP_JOIN_S)
+            return False
+        return True
 
     def request(self, lap_id: int) -> None:
         """Ask for a reading. Never blocks, never raises, may be dropped."""
@@ -1459,27 +1500,27 @@ class LiveWearSampler:
             except (queue.Empty, queue.Full):
                 pass
 
-    def _run(self) -> None:
-        while not self._stop.is_set():
+    def _run(self, stop: threading.Event) -> None:
+        while not stop.is_set():
             try:
                 lap_id = self._queue.get(timeout=QUEUE_WAIT_S)
             except queue.Empty:
                 # Nothing asked. Free-running turns the idle wait into a
                 # sample; without it the loop simply goes round again.
                 lap_id = _FREE_RUN
-            if lap_id is None:
+            if lap_id is None or stop.is_set():
                 return
             try:
                 if lap_id is _FREE_RUN:
-                    self._free_run()
+                    self._free_run(stop)
                 else:
-                    self._sample(lap_id)
+                    self._sample(lap_id, stop)
             except Exception as exc:                         # noqa: BLE001
                 # Nothing here may reach the caller. The lap is recorded
                 # whatever the gauge does.
                 _log.warning(f"hud-wear: unhandled {type(exc).__name__}: {exc}")
 
-    def _free_run(self) -> None:
+    def _free_run(self, stop: threading.Event | None = None) -> None:
         """One un-asked-for sample, kept but never filed against a lap."""
         if not self._interval_s or self.stood_down:
             return
@@ -1487,6 +1528,15 @@ class LiveWearSampler:
         if self._latest is not None and now - self._latest[0] < self._interval_s:
             return
         reading, _ = self._read()
+        if stop is not None and stop.is_set():
+            # **A grab that outlived its session may not be filed.** `_read`
+            # blocks for about two seconds on OBS, so a thread asked to stop
+            # part way through still comes back holding a frame - of the
+            # session that has just ended. Keeping it seeds the next session's
+            # comparison series with the last one's tyres, which is the
+            # stale-state failure of CLAUDE.md rule 11 and the reason
+            # `new_session` exists.
+            return
         if reading.ok:
             if not self._keep(now, reading):
                 self._saw_nothing()
@@ -1594,7 +1644,8 @@ class LiveWearSampler:
         """The most recent good reading, or None."""
         return self._latest[1] if self._latest else None
 
-    def _sample(self, lap_id: int) -> None:
+    def _sample(self, lap_id: int,
+                stop: threading.Event | None = None) -> None:
         now = time.monotonic()
         held = self._latest
         if (self._interval_s
@@ -1606,6 +1657,8 @@ class LiveWearSampler:
             reading = held[1]
         else:
             reading, source_failed = self._read()
+            if stop is not None and stop.is_set():
+                return      # see `_free_run`: a grab that outlived its session
             if source_failed:
                 self._failed(f"lap {lap_id}: {reading.reason}")
                 return

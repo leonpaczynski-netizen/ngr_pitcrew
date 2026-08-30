@@ -125,7 +125,7 @@ class HudSession:
         """
         if not self.settings.hud_wear_enabled:
             return None
-        existing = getattr(self, "_hud", None)
+        existing = self._sampler
         if existing is not None:
             return existing
         from pitcrew.settings import HUD_SOURCE_SCREEN
@@ -220,7 +220,7 @@ class HudSession:
         at session start for a driver who has the reader switched on but never
         crosses a line, which is the cost `sampler` is lazy to avoid.
         """
-        sampler = getattr(self, "_hud", None)
+        sampler = self._sampler
         if sampler is not None:
             sampler.new_session()
         # **The lap-id map outlives the session too, and it leaked a practice
@@ -236,7 +236,7 @@ class HudSession:
         self._blind_note = None
 
     def stop(self) -> None:
-        sampler, self._sampler = getattr(self, "_hud", None), None
+        sampler, self._sampler = self._sampler, None
         if sampler is not None:
             sampler.stop()
 
