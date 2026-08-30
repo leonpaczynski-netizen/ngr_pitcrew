@@ -74,9 +74,35 @@ BOOT_BAUD = 19200
 # module measures is measured against it.
 DEADMAN_S = 1.0
 
-# Comfortably inside the firmware's 1000 ms deadman, with room for a missed
-# frame or two before the fans drop out.
-SEND_INTERVAL_S = 0.25
+# **60 Hz, which is the rate the duty is computed at.**
+#
+# This was 0.25 s, and that number came only from the deadman above - far
+# enough inside 1000 ms to survive a missed frame. Nothing about it was
+# derived from the fans, and it quantised every change the curve computed to
+# 250 ms before the board ever heard it. `WindCurve.update` runs on every
+# telemetry frame at 60 Hz; fourteen of every fifteen values it produced were
+# thrown away.
+#
+# **Measured on this link before changing it:** send-plus-acknowledgement
+# round trip over 200 frames at 19200 baud is 9.17 ms median, 9.44 ms p95,
+# 10.65 ms worst. A 16.7 ms budget clears the p95 by 7 ms, so the rate is
+# reachable with room, and the driver - who asked the question - reports the
+# difference through Monza T1 as "much smoother and more realistic".
+#
+# Two consequences worth stating rather than discovering later:
+#
+# * The link is no longer nearly idle. Seven bytes out and an acknowledgement
+#   back, sixty times a second, occupies the sender thread about 55% of the
+#   time. It is blocked on I/O rather than burning CPU, but it is not the 1%
+#   the baud-rate note above was written against.
+# * **`UNANSWERED_LIMIT` and `WRITE_TIMEOUT_LIMIT` are counts, and this
+#   changes what they mean in seconds.** Both get shorter, which is the safe
+#   direction: see their own comments, which now carry both figures.
+#
+# It degrades gracefully. If the machine is too busy to keep up the loop
+# simply runs slower, and the deadman is 1000 ms away - sixty times this
+# interval - so falling behind costs responsiveness and never the fans.
+SEND_INTERVAL_S = 1.0 / 60.0
 # A write that has not completed in this long is a link that is not working.
 WRITE_TIMEOUT_S = 0.25
 READ_TIMEOUT_S = 0.15
@@ -127,6 +153,12 @@ CLOSE_TIMEOUT_S = 1.0
 #
 # Four: 1.6 seconds, which is what "about two seconds" was always meant to
 # be, and still comfortably longer than a single late reply.
+#
+# **At 60 Hz that is 0.67 s**, because the interval term collapses from
+# 250 ms to 17 ms and only `READ_TIMEOUT_S` remains. Shorter is the safe
+# direction - the device answers in about a millisecond, so four unanswered
+# frames is still far more than a busy moment - but the number in the
+# paragraph above is the 4 Hz one and this is the one that now applies.
 UNANSWERED_LIMIT = 4
 
 # **How many write timeouts in a row before the link is given up on.**
@@ -156,6 +188,11 @@ UNANSWERED_LIMIT = 4
 # written. That is the best explanation on file for the thing the driver
 # actually reports: the fans drop, they come back on their own, and the log
 # says the link was healthy the whole time.
+#
+# **At 60 Hz that is 5.3 s, not 10.2**, because each timeout costs
+# `WRITE_TIMEOUT_S` plus a 17 ms interval rather than a 250 ms one. Half the
+# dead-fan window for the same count, which is the safe direction and needs
+# no adjustment.
 #
 # The number is left at twenty deliberately. Lowering it makes a teardown
 # easier to reach, and a teardown is the expensive failure here - seven of
@@ -913,6 +950,7 @@ class WindSim:
         """
         backoff = RECONNECT_S
         last_turn: float | None = None
+        due = time.monotonic()
         # A link that has just dropped after working is a re-enumeration, not
         # an absent device: try it at once, and without the bootloader settle.
         # Only once - if the quick attempt fails, it gets the full treatment.
@@ -954,7 +992,18 @@ class WindSim:
                             "against a %.1fs deadman - the fans were off and "
                             "this side is the reason.", took, DEADMAN_S)
             last_turn = now
-            self._stop.wait(SEND_INTERVAL_S)
+            # **Wait the remainder of the period, not the whole of it.** The
+            # send blocks for the round trip - 9.2 ms measured - and sleeping
+            # a further full interval on top made the period the sum of the
+            # two. At 250 ms that was a 4% error nobody would notice; at
+            # 16.7 ms it is 55%, and the loop ran at 33 Hz while claiming 60.
+            # Scheduling against a deadline keeps the rate honest, and a turn
+            # that overruns simply sends the next frame at once rather than
+            # trying to catch up on a backlog that no longer describes the car.
+            due += SEND_INTERVAL_S
+            self._stop.wait(max(0.0, due - time.monotonic()))
+            if due < time.monotonic() - SEND_INTERVAL_S:
+                due = time.monotonic()
         self._drop_link()
 
     def _port_is_held_by_us(self, port: str) -> bool:
