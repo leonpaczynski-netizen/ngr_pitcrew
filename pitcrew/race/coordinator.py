@@ -560,6 +560,13 @@ class RaceCoordinator:
         green = self.expect.race_fuel_per_lap_l()
         if green is not None and self.expect.green_laps() >= self.BURN_LAPS_NEEDED:
             self.state.fuel_per_lap_l = green
+            # **And the load it was measured at, or the burn is unanchored.**
+            # A median taken over the heavy first half of a stint over-states
+            # what the light second half will use; without this the fill at the
+            # stop is sized on laps the car is no longer running. Installed on
+            # the same terms as the rate - this race's own laps, or nothing.
+            self.state.fuel_reference_load_l = (
+                self.expect.race_fuel_reference_load_l())
         # **And the scatter beside it, because the scatter sizes the fill.**
         # Installed on the same terms as the rate: this race's own laps, or
         # nothing. Where it is None the fill falls back to CLAUDE.md's flat

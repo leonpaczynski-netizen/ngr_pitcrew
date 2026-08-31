@@ -312,6 +312,18 @@ def test_a_change_made_in_a_later_run_reaches_the_payload():
 
 
 def test_the_merged_session_carries_every_session_id():
+    """The merge keeps every session id, not just the first.
+
+    **Containment, not equality, because this reads the live database.** It
+    asserted `== [93, 94]` and went red on 30 Aug 2026 the moment three more
+    practice sessions were driven at Red Bull Ring - the test broke because the
+    driver drove, which is not a defect in the code under test and is not
+    something a green suite should depend on him not doing.
+
+    What the test is actually for is that the merge does not drop ids on the
+    floor, so that is what it checks: the two known sessions are present, the
+    list is sorted, and it carries no duplicates.
+    """
     from pitcrew.export.build import _merged_session
     from pitcrew.store.db import Store
 
@@ -320,4 +332,7 @@ def test_the_merged_session_carries_every_session_id():
         merged = _merged_session(store.list_sessions(8, "practice"))
     finally:
         store.close()
-    assert merged["session_ids"] == [93, 94]
+    ids = merged["session_ids"]
+    assert {93, 94} <= set(ids)
+    assert ids == sorted(ids)
+    assert len(ids) == len(set(ids))

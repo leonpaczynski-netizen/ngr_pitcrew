@@ -30,6 +30,8 @@ from itertools import permutations, product
 
 from pitcrew.analysis.wear import CONFIDENCE_MEASURED, PHASE_FLAT, phase_for
 from pitcrew.store.tyres import get_by_code
+from pitcrew.strategy.fuel_model import fill_for_l, stint_burn_l
+
 
 # Stop the stint at 85% of modelled tyre life. Deliberate, and stated.
 STINT_SAFETY_FACTOR = 0.85
@@ -345,6 +347,13 @@ class RaceInputs:
     # falls back to CLAUDE.md's flat lap and says so. See `fuel_margin_l`.
     fuel_sd_l: float | None = None
     fuel_samples: int = 0
+    # **The mean fuel aboard across the laps `fuel_per_lap_l` was taken from.**
+    # A median burn already carries whatever load its own laps were running, so
+    # correcting it to another load needs an origin or the correction
+    # double-counts. None means the origin is unknown and every fuel sum falls
+    # back to `laps * fuel_per_lap_l`, which is what it did before this field
+    # existed. See `strategy/fuel_model.py`.
+    fuel_reference_load_l: float | None = None
     # Lap-to-lap scatter on the reference lap, seconds. Only a timed race
     # needs it, and only to decide whether its own distance is resolvable -
     # see `lap_count_firm`. None where too few laps exist to take one from,
@@ -757,6 +766,28 @@ def fuel_limited_laps(fuel_capacity_l: float | None,
     return max(0, int(fuel_capacity_l / fuel_per_lap_l - FUEL_MARGIN_LAPS))
 
 
+def fuel_limited_laps_at_load(inputs: "RaceInputs") -> int | None:
+    """`fuel_limited_laps`, but costing each lap at the load it carries.
+
+    A full tank is heavy and the first laps of it are expensive; the old
+    product priced every lap at the median. Falls back to `fuel_limited_laps`
+    whenever the reference load is unknown.
+    """
+    if not inputs.fuel_capacity_l or not inputs.fuel_per_lap_l:
+        return None
+    if inputs.fuel_reference_load_l is None:
+        return fuel_limited_laps(inputs.fuel_capacity_l, inputs.fuel_per_lap_l)
+    laps = 0
+    while laps < 200:
+        need = stint_burn_l(inputs.fuel_per_lap_l, laps + 1,
+                            inputs.fuel_capacity_l,
+                            reference_load_l=inputs.fuel_reference_load_l)
+        if need + FUEL_MARGIN_LAPS * inputs.fuel_per_lap_l > inputs.fuel_capacity_l:
+            break
+        laps += 1
+    return laps
+
+
 def max_stint_laps(inputs: RaceInputs) -> tuple[int | None, str]:
     """The longest runnable stint, and what limits it."""
     tyre = tyre_limited_laps(inputs.wear_per_lap)
@@ -1076,7 +1107,19 @@ def build_plan(inputs: RaceInputs, stops: int,
             # stop for the difference. The requirement is reported honestly and
             # the plan is rejected.
             margin_l, margin_why = inputs.margin_for(laps)
-            fuel_needed = laps * inputs.fuel_per_lap_l + (margin_l or 0.0)
+            # **Integrated over the stint, not multiplied.** Burn rises with
+            # what is in the tank - measured +0.0061 L per litre aboard, which
+            # is 0.61 L/lap between a full tank and an empty one - so a stint
+            # that starts heavy costs more than `laps x median` and one that
+            # starts light costs less. `fill_for_l` solves the fill that runs
+            # the distance and leaves the margin, which is self-referential
+            # because the fuel is its own weight. Falls back to the old product
+            # exactly when `fuel_reference_load_l` is None.
+            fuel_needed = fill_for_l(
+                inputs.fuel_per_lap_l, laps,
+                reference_load_l=inputs.fuel_reference_load_l,
+                buffer_l=(margin_l or 0.0),
+                capacity_l=inputs.fuel_capacity_l)
             if inputs.fuel_capacity_l and fuel_needed > inputs.fuel_capacity_l:
                 feasible = False
                 notes.append(
@@ -1366,10 +1409,18 @@ def optimal_split(inputs: RaceInputs, profiles: list[CompoundProfile],
 
 
 def stint_fuel_l(laps: int, inputs: RaceInputs) -> float | None:
-    """What a stint of this length is fuelled for: the distance plus a lap."""
+    """What a stint of this length is fuelled for: the distance plus a lap.
+
+    Integrated over the stint rather than multiplied, because burn rises with
+    the fuel aboard - see `strategy/fuel_model.py`. Identical to the old
+    product whenever `fuel_reference_load_l` is None.
+    """
     if not inputs.fuel_per_lap_l:
         return None
-    return (laps + FUEL_MARGIN_LAPS) * inputs.fuel_per_lap_l
+    return fill_for_l(inputs.fuel_per_lap_l, laps,
+                      reference_load_l=inputs.fuel_reference_load_l,
+                      buffer_l=FUEL_MARGIN_LAPS * inputs.fuel_per_lap_l,
+                      capacity_l=inputs.fuel_capacity_l)
 
 
 def elapsed_for_s(inputs: RaceInputs, stint_lengths: list[int],

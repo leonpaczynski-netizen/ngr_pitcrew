@@ -556,13 +556,23 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     # flattered spread is a margin that runs the car dry.
     by_session: dict[object, list[float]] = {}
     burns: list[float] = []
+    loads: list[float] = []
     for lap in counted:
         if lap.fuel_start <= lap.fuel_end:
             continue
         used = lap.fuel_start - lap.fuel_end
         burns.append(used)
+        # **The load that burn was measured at.** Burn rises with what is in
+        # the tank (+0.0061 L per litre aboard, measured), so `fuel_per_lap_l`
+        # is only meaningful beside the load its own laps were carrying -
+        # correcting it to another load without an origin double-counts. The
+        # mid-lap value is the lap's mean load. See `strategy/fuel_model.py`.
+        loads.append((lap.fuel_start + lap.fuel_end) / 2.0)
         by_session.setdefault(getattr(lap, "session_id", None), []).append(used)
     fuel_sd = consecutive_sd(by_session.values())
+    # None rather than 0.0 where nothing was measured: zero is a real fuel
+    # load and would tell the model the burn was taken on an empty tank.
+    fuel_reference_load = (sum(loads) / len(loads)) if loads else None
     # **Two disciplines look like one number unless somebody checks.** On
     # session 60 ten laps were deliberately short-shifted and two run at full
     # RPM: 5.15-5.36 L against 6.66-6.81 L, a clean 27% step. `short_shift_rpm`
@@ -687,6 +697,7 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         fuel_per_lap_l=fuel_per_lap,
         fuel_sd_l=fuel_sd,
         fuel_samples=len(burns),
+        fuel_reference_load_l=fuel_reference_load,
         lap_time_sd_s=lap_time_sd,
         fuel_capacity_l=capacity,
         refuel_rate_lps=refuel["rateLps"] or event["refuel_rate_lps"],
@@ -725,6 +736,17 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
                  (f"weighted median of {weighting.sessions} "
                   f"{'session' if weighting.sessions == 1 else 'sessions'}, "
                   f"half-life {weighting.half_life_sessions:g}"
+                  # **And the load it was measured at, because a burn without
+                  # one is not comparable to the session being planned.**
+                  # Practice runs whatever fuel happened to be in the car; a
+                  # race starts on a full tank and a qualifying run starts
+                  # near-empty, and burn moves +0.0061 L per litre aboard. A
+                  # median taken light under-fuels a race; taken heavy it
+                  # over-fuels a flyer. See `strategy/fuel_model.py`.
+                  + (f", measured at a mean {fuel_reference_load:.0f} L aboard"
+                     if fuel_reference_load is not None else
+                     ", and no lap reported a tank level, so it cannot be "
+                     "corrected for fuel load")
                   if fuel_per_lap else "no fuel burn recorded")),
         Evidence("Fuel capacity",
                  f"{capacity:.0f} L" if capacity is not None else "—",

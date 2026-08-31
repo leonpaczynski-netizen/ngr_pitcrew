@@ -24,6 +24,8 @@ from pitcrew.strategy.model import fuel_margin_l
 # than restated: `race/knowledge.py` owns the sentence, and two copies of one
 # line is how the app comes to say it two ways.
 from pitcrew.race.knowledge import NO_NOTES
+from pitcrew.strategy.fuel_model import fill_for_l, stint_burn_l
+
 
 
 
@@ -467,6 +469,14 @@ class RaceState:
     race_minutes: float | None = None
     fuel_l: float | None = None
     fuel_per_lap_l: float | None = None
+    # **The mean fuel aboard across the laps `fuel_per_lap_l` was taken from.**
+    # Burn rises with what is in the tank, so a burn measured over a heavy
+    # stretch over-states a stint that runs the tank down - at Spa on 31 Aug
+    # the median was taken at 66 L aboard while a full stint averages 41 L,
+    # and the difference was 1.5 L of fill, i.e. 1.5 s standing still. None
+    # means unknown, and every fuel sum then falls back to `laps x burn`
+    # exactly as it did before. See `strategy/fuel_model.py`.
+    fuel_reference_load_l: float | None = None
     # **Lap-to-lap scatter on the burn, which is what sizes the fill.** The
     # fill used to be the stint plus a flat lap; at Watkins on 17 Aug 2026
     # that was 6.3 L still aboard at the flag and, at the measured 1.001 L/s,
@@ -1122,7 +1132,9 @@ def fuel_reaches_flag(state: RaceState) -> bool | None:
                                 sd_l=state.fuel_sd_l,
                                 timed=state.race_minutes is not None,
                                 lap_count_firm=state.laps_estimate_firm)
-    return state.fuel_l >= remaining * state.fuel_per_lap_l + (margin_l or 0.0)
+    needed = stint_burn_l(state.fuel_per_lap_l, remaining, state.fuel_l,
+                          reference_load_l=state.fuel_reference_load_l)
+    return state.fuel_l >= needed + (margin_l or 0.0)
 
 
 def stop_still_needed(state: RaceState) -> bool:
@@ -1294,7 +1306,13 @@ def fuel_target_l(state: RaceState) -> float | None:
                                 sd_l=state.fuel_sd_l,
                                 timed=state.race_minutes is not None,
                                 lap_count_firm=state.laps_estimate_firm)
-    return after_stop * state.fuel_per_lap_l + (margin_l or 0.0)
+    # Solved, not multiplied: the fuel is its own weight, so a smaller fill
+    # burns less and permits a smaller fill again. Identical to the old
+    # product when `fuel_reference_load_l` is None.
+    return fill_for_l(state.fuel_per_lap_l, after_stop,
+                      reference_load_l=state.fuel_reference_load_l,
+                      buffer_l=(margin_l or 0.0),
+                      capacity_l=state.fuel_capacity_l)
 
 
 def fuel_to_flag_l(state: RaceState) -> float | None:
@@ -1327,7 +1345,10 @@ def fuel_to_flag_l(state: RaceState) -> float | None:
                                 sd_l=state.fuel_sd_l,
                                 timed=state.race_minutes is not None,
                                 lap_count_firm=state.laps_estimate_firm)
-    needed = remaining * state.fuel_per_lap_l + (margin_l or 0.0)
+    needed = fill_for_l(state.fuel_per_lap_l, remaining,
+                        reference_load_l=state.fuel_reference_load_l,
+                        buffer_l=(margin_l or 0.0),
+                        capacity_l=state.fuel_capacity_l)
     capacity = state.fuel_capacity_l
     if capacity and needed > capacity:
         return None

@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pitcrew.strategy.fuel_model import fill_for_l
+
 # A qualifying run is out lap, the flyer, and the lap back to the pits. The
 # in-lap is included because the tank has to survive it - a car that runs dry
 # on the cool-down has still set the time, but it has also stopped on circuit.
@@ -79,16 +81,31 @@ def qualifying_fuel(*, fuel_per_lap_l: float | None,
                     flying_laps: int = 1,
                     fuel_capacity_l: float | None = None,
                     fuel_weight_s_per_l_per_lap: float | None = None,
-                    weight_is_derived: bool = True) -> QualifyingFuel | None:
+                    weight_is_derived: bool = True,
+                    fuel_reference_load_l: float | None = None
+                    ) -> QualifyingFuel | None:
     """The load for a qualifying run, or None where the burn is not known.
 
     **None is the answer, not zero and not a default.** Guessing the burn puts
     a number on the one lap of the weekend that cannot be redone.
+
+    **`fuel_reference_load_l` is the mean fuel aboard across the laps the burn
+    was measured on, and it matters more here than anywhere else.** Practice is
+    run on a race-ish tank; a qualifying run is deliberately near-empty, and
+    burn falls with what is aboard - measured +0.0061 L per litre. So the
+    practice median is a HEAVY-car number and multiplying it by three
+    over-fuels the one lap whose entire purpose is to carry nothing. At Spa
+    that is about 0.3 L/lap between the practice median and a 12 L quali run.
+    None leaves the old flat product exactly as it was.
     """
     if not fuel_per_lap_l or fuel_per_lap_l <= 0:
         return None
     laps = OUT_LAP + max(1, int(flying_laps)) + IN_LAP
-    litres = laps * fuel_per_lap_l + MARGIN_L
+    # Solved rather than multiplied: the fuel is its own weight, so a lighter
+    # run burns less and permits a lighter run again. See `strategy/fuel_model`.
+    litres = fill_for_l(fuel_per_lap_l, laps,
+                        reference_load_l=fuel_reference_load_l,
+                        buffer_l=MARGIN_L, capacity_l=fuel_capacity_l)
     if fuel_capacity_l and litres > fuel_capacity_l:
         # A run that will not fit in the tank is a run that needs fewer flying
         # laps, and saying so beats quietly clipping the figure.

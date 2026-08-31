@@ -214,6 +214,12 @@ class ExpectationTracker:
         # best, because a lap is only an outlier relative to laps that came
         # after it as well as before.
         self._green: list[tuple[int, float, bool, int]] = []
+        # **The mean fuel aboard on each of those laps, same order.** Kept
+        # beside the burns rather than inside the tuple so that every existing
+        # reader of `_green` and `_clean` keeps its shape - both are unpacked
+        # positionally in several places. Empty where the lap did not report a
+        # tank level, and then the load correction stands down.
+        self._green_loads: list[float | None] = []
 
     # ------------------------------------------------------------------ feed
 
@@ -243,6 +249,11 @@ class ExpectationTracker:
         # to answer "did the saving work" - see `saving_response`.
         self._green.append((int(lap.lap_time_ms), float(lap.fuel_used or 0.0),
                             saving, int(lap.lap_num)))
+        start = getattr(lap, "fuel_start", None)
+        end = getattr(lap, "fuel_end", None)
+        self._green_loads.append((start + end) / 2.0
+                                 if start is not None and end is not None
+                                 else None)
 
     def _clean(self) -> list[tuple[int, float, bool]]:
         """The laps that are evidence: no incident, no saving instruction.
@@ -418,6 +429,29 @@ class ExpectationTracker:
         if not clean:
             return None
         return round(median(clean), 3)
+
+    def race_fuel_reference_load_l(self) -> float | None:
+        """The mean fuel aboard across the laps `race_fuel_per_lap_l` came from.
+
+        **Burn rises with what is in the tank**, so the median burn is only
+        usable once the load it was taken at is known - see
+        `strategy/fuel_model.py`. Early in a stint that median is measured on a
+        heavy car and over-states the rest of the stint; sizing the fill off it
+        puts litres in that come straight back out at the flag, and at the
+        measured 1.0009 L/s each one is a second.
+
+        None where no lap reported a tank level, and every fuel sum then falls
+        back to `laps x burn` exactly as it did before.
+        """
+        clean = self._clean()
+        if not clean or len(self._green_loads) != len(self._green):
+            return None
+        keep = set(id(row) for row in clean)
+        loads = [load for row, load in zip(self._green, self._green_loads)
+                 if id(row) in keep and load is not None]
+        if not loads:
+            return None
+        return round(sum(loads) / len(loads), 3)
 
     def race_fuel_sd_l(self) -> float | None:
         """Lap-to-lap scatter on the green burn, **measured on this race**.

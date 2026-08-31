@@ -1996,7 +1996,12 @@ class PitCrewController(QObject):
             fuel_capacity_l=getattr(inputs, "fuel_capacity_l", None)
             if inputs else None,
             fuel_weight_s_per_l_per_lap=getattr(
-                inputs, "fuel_weight_s_per_l_per_lap", None) if inputs else None)
+                inputs, "fuel_weight_s_per_l_per_lap", None) if inputs else None,
+            # The load the burn was measured at. Practice runs a race-ish tank
+            # and a quali run is near-empty, so without this the flat product
+            # over-fuels the one lap that must carry nothing.
+            fuel_reference_load_l=getattr(
+                inputs, "fuel_reference_load_l", None) if inputs else None)
         said = load.call() if load is not None else quali_fuel_refusal(burn)
         if not said:
             return
