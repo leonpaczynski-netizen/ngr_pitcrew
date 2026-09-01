@@ -129,12 +129,98 @@ def render(debrief) -> None:
     print()
 
 
+def _gear(value) -> str:
+    """Gears are said as words in the copy, not as column headings."""
+    names = {1: "first", 2: "second", 3: "third", 4: "fourth",
+             5: "fifth", 6: "sixth", 7: "seventh", 8: "eighth"}
+    return names.get(value, f"gear {value}")
+
+
+def _clock(second: float | None) -> str:
+    if second is None:
+        return "  --:--  "
+    mins, secs = divmod(max(0.0, second), 60)
+    return f"{int(mins):02d}:{secs:05.2f}"
+
+
+def walk_through(store, event_id: int, lap_num: int | None) -> int:
+    from pitcrew.analysis.walkthrough import NOTABLE_SIGMA, from_store as walk
+
+    result = walk(store, event_id, lap_num=lap_num)
+    if result is None:
+        print(f"No lap to talk through for event {event_id}.")
+        return 1
+
+    _head(f"LAP {result.lap_num} — {_ms(result.lap_time_ms)}")
+    if result.reference_ms is not None:
+        gap = result.delta_ms / 1000.0
+        print(f"  against the median of your other {result.reference_laps} "
+              f"clean laps ({_ms(result.reference_ms)}): {gap:+.3f} s")
+    else:
+        print("  no other clean lap to compare against — described, not judged")
+
+    _head("CORNER BY CORNER")
+    print("  %-4s %-12s %8s %8s %7s %6s %6s %s"
+          % ("", "corner", "time", "vs med", "sigma", "min", "gear", "video"))
+    for seg in result.segments:
+        delta = f"{seg.delta:+.3f}" if seg.delta is not None else "     —"
+        sigma = f"{seg.sigma:+.1f}" if seg.sigma is not None else "    —"
+        mark = "*" if seg.notable else " "
+        gear = f"G{seg.gear}" if seg.gear else " —"
+        if seg.gear_differs:
+            gear += f"({seg.usual_gear})"
+        print("  %-4s %-12s %7.3fs %8s %7s %6.1f %6s %s"
+              % (mark, seg.corner_name, seg.seconds, delta, sigma,
+                 seg.min_kph, gear, _clock(seg.video_second)))
+
+    if result.unaccounted_s is not None:
+        _head("WHERE THE TIME WENT")
+        print(f"  corners      {result.accounted_s:+.3f} s")
+        print(f"  everything else {result.unaccounted_s:+.3f} s   "
+              "— straights and transitions, which no corner window covers")
+        print(f"  lap          {result.delta_ms / 1000.0:+.3f} s")
+
+    _head("WHAT STANDS OUT")
+    if not result.notable:
+        print(f"  Nothing. Every corner on this lap sits inside "
+              f"{NOTABLE_SIGMA:.0f} standard deviation of")
+        print("  your own normal there — which is what an ordinary lap looks "
+              "like, and it")
+        print("  is why the lap time came from somewhere else.")
+    for seg in result.notable:
+        way = "quicker" if seg.delta < 0 else "slower"
+        print(f"  {seg.corner_name}: {abs(seg.delta):.3f} s {way} than usual, "
+              f"{abs(seg.sigma):.1f} sigma.")
+        if seg.gear_differs:
+            print(f"      and in {_gear(seg.gear)} where you normally use "
+                  f"{_gear(seg.usual_gear)}.")
+        print(f"      watch it at {_clock(seg.video_second)}")
+    if result.video_path:
+        print(f"\n  {Path(result.video_path).name}")
+
+    if result.silences:
+        _head("SILENCES")
+        for line in result.silences:
+            print(f"  - {line}")
+    print("\n  Corner times are measured on both sides. Whether a difference "
+          "REPEATS is a")
+    print("  separate question this cannot answer from one lap.\n")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("event_id", type=int)
     parser.add_argument("--sessions", type=int, nargs="*", default=None,
                         help="limit to these session ids")
+    parser.add_argument("--lap", type=int, default=None,
+                        help="talk through this lap instead of the debrief")
+    parser.add_argument("--walk", action="store_true",
+                        help="talk through the quickest clean lap")
     args = parser.parse_args()
+
+    if args.walk or args.lap is not None:
+        return walk_through(Store(), args.event_id, args.lap)
 
     debrief = from_store(Store(), args.event_id, session_ids=args.sessions)
     if debrief is None:
