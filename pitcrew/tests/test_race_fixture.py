@@ -154,8 +154,22 @@ def test_this_race_is_the_case_the_median_gate_cannot_catch(bundle):
 
     result = anchor(laps, LENGTH_M)
     assert not result.refused, "nothing here is broken, only biased"
+
+    # **Two laps of this race did teleport, and they are not "biased".** Their
+    # integrated length is as plausible as everyone else's - the speed channel
+    # reads zero through a reset - so no length check of any kind can see them.
+    # Position can: 18 of the 20 laps have a largest per-frame step of 1.26 m,
+    # and these two carry a single step of 238 m and 181 m. They come back with
+    # a null distance, which is the whole point of the check.
+    jumped = {lap.lap_num for lap, _ in result.teleported}
+    assert jumped == {1, 12}, "the standing start and the lap 12 reset"
+
+    anchored = [lap for lap in result.laps if lap.lap_num not in jumped]
+    assert anchored, "the bias case still has to be exercised"
     assert all(integrated_length(lap) == pytest.approx(LENGTH_M, abs=0.5)
-               for lap in result.laps)
+               for lap in anchored)
+    assert all(integrated_length(lap) is None
+               for lap in result.laps if lap.lap_num in jumped)
 
 
 # --- the frames themselves --------------------------------------------------

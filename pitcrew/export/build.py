@@ -255,6 +255,14 @@ def _anchor_note(anchor) -> str:
                  f"carry a null distance rather than a corrected one - the "
                  f"furthest integrated {worst:.0f} m, which is a swallowed "
                  f"crossing or a fragment rather than an imprecise lap.")
+    if anchor.teleported:
+        biggest = max(found.longest_m for _, found in anchor.teleported)
+        said += (f" A further {len(anchor.teleported)} lap(s) carry a null "
+                 f"distance because the car JUMPED position mid-lap, the "
+                 f"furthest by {biggest:.0f} m in a single frame - a reset or "
+                 f"a garage return. Their integrated length is plausible, so "
+                 f"no length check can see them; it is read off the position "
+                 f"channel.")
     return said
 
 

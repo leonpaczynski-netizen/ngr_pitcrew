@@ -114,8 +114,10 @@ def render(debrief) -> None:
                       f"{int(mins):02d}:{secs:05.2f}")
             if len(cues) > 6:
                 print(f"    … and {len(cues) - 6} more")
-        print("\n  Seek rests on integrated lap distance, unreliable on 8-12% "
-              "of laps.\n  Somewhere to look, not a frame-accurate claim.")
+        print("\n  Good to about a metre. The speed-integrated and "
+              "position-measured axes\n  place a corner within half a metre of "
+              "each other, and every lap above\n  has passed the teleport "
+              "check. What moves is where you actually apexed.")
 
     _head("SILENCES — what I could not see")
     if not debrief.silences:

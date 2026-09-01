@@ -58,6 +58,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from pitcrew.analysis import distance
 from pitcrew.analysis.corner_model import Corner, CornerModel
 from pitcrew.analysis.corners import CountedLap, _slice, length_gate
 
@@ -480,7 +481,20 @@ def from_store(store, event_id: int, *, session_ids=None) -> Debrief | None:
                 median_l=burns[len(burns) // 2] if burns else None,
                 sd_l=_sd(burns))
 
-    clean = [lap for lap in counted if is_clean(lap.off_track_s) and lap.frames]
+    # **Two filters, and the second one was invisible until 1 Sep.** An
+    # excursion makes a corner reading wrong; a TELEPORT makes the distance
+    # axis itself wrong, and 7% of stored laps contain one. A teleport that
+    # leaves the total length plausible sails through `length_gate`, and every
+    # corner window after it is indexed against an axis that jumped. See
+    # `analysis.distance`.
+    clean, teleported = [], []
+    for lap in counted:
+        if not (is_clean(lap.off_track_s) and lap.frames):
+            continue
+        if not distance.teleports(lap.frames).happened:
+            clean.append(lap)
+        else:
+            teleported.append(lap)
     # **Counted by the reason `classify_exclusions` assigned, not by the stored
     # flags.** That function names an out-lap by the rule rather than by
     # `is_out_lap`, which is zero on every lap ever recorded - so counting the
@@ -510,6 +524,16 @@ def from_store(store, event_id: int, *, session_ids=None) -> Debrief | None:
                                  "there is nothing to say about any corner.",))
 
     debrief = analyse(model, pairs, census=census, pace=pace, burn=burn)
+    if teleported:
+        debrief = Debrief(
+            census=debrief.census, pace=debrief.pace, burn=debrief.burn,
+            scatter=debrief.scatter, gears=debrief.gears,
+            correlations=debrief.correlations, video=debrief.video,
+            silences=debrief.silences + (
+                f"{len(teleported)} lap(s) left out: the car jumped position "
+                "mid-lap, so their corners are indexed against an axis that "
+                "moved. A reset or a garage return.",),
+            notes=debrief.notes)
     return _with_video(store, debrief, model, clean)
 
 
@@ -525,10 +549,17 @@ def _with_video(store, debrief: Debrief, model: CornerModel, clean) -> Debrief:
     """Timecodes for the corner worth looking at, where a capture exists.
 
     Uses `race.video_index`, which knows the zero exactly because the app
-    started the recording — no offset to type. The corner seek rests on
-    integrated lap distance, which the 22 Aug measurement found unreliable on
-    8-12% of laps, so this is offered as somewhere to look and never as a
-    frame-accurate claim.
+    started the recording — no offset to type.
+
+    **The old caveat here was wrong and is corrected.** It said the seek rests
+    on a distance axis "unreliable on 8-12% of laps". Re-measured against the
+    position channel on 672 stored laps, the two axes place a corner within
+    half a metre of each other and disagree materially on 1.6% — and every lap
+    reaching this point has already passed the teleport check. What the 8-12%
+    figure actually counted was laps of a different piece of road, which are
+    filtered long before here. The seek is good to about a metre; the residual
+    is the driver apexing in a slightly different place, which is a real
+    difference and the thing worth watching.
     """
     from pitcrew.race import video_index
 
