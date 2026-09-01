@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime
 import sqlite3
+import threading
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic as _monotonic
@@ -180,6 +181,10 @@ class TelemetryBridge(QObject):
     stream_seen = pyqtSignal(object)             # first packet's fixed facts
     parse_failed = pyqtSignal()
     ptt_answered = pyqtSignal(str, str)      # heard, said - off the hook thread
+    # The practice debrief, built off the Qt thread because it decodes
+    # every lap's telemetry - 2.5 s on the active event, 9.4 s on the
+    # largest. Emitted queued so the speaking happens on the Qt thread.
+    debriefed = pyqtSignal(object)           # analysis.debrief.Debrief
     button_probed = pyqtSignal(str)          # probe note - off the hook thread
     # **The car stopped mid-lap.** Emitted on the telemetry thread and
     # handled on the Qt one, like every other cross-thread edge here:
@@ -807,6 +812,7 @@ class PitCrewController(QObject):
         self._settings_wired = False
 
         self.bridge.lap_completed.connect(self._on_lap_completed)
+        self.bridge.debriefed.connect(self._on_debriefed)
         self.bridge.stream_seen.connect(self._on_stream_seen)
         self.bridge.parse_failed.connect(self._on_parse_failed)
         self.bridge.ptt_answered.connect(self._show_ptt_answer)
@@ -2248,8 +2254,65 @@ class PitCrewController(QObject):
             self.practice.set_status(
                 f"Session closed. {len(rows)} laps recorded - mark them up, "
                 f"then export.{learned}")
+            self._start_debrief(event)
         elif event:
             self.practice.set_status(self._idle_status(event))
+
+    def _start_debrief(self, event) -> None:
+        """Build the practice debrief off the Qt thread, then speak it.
+
+        **This is the half of the practice gap that can be answered honestly.**
+        Every live call in the app comes from `RaceCoordinator`, built only in
+        `start_race()` - so George owns the race and nothing owned practice, and
+        three Daytona sessions were driven with the engineer silent throughout
+        while every number he would have wanted was computed and stored.
+
+        **Off the Qt thread, and not with `QTimer.singleShot`.** Building it
+        decodes every practice lap's telemetry: 2.5 s on the active event and
+        9.4 s on the largest, which is a frozen window at the moment the driver
+        has just stopped. `Store` opens sqlite with `check_same_thread=False`
+        and this path only reads. The hop back is a queued signal for the
+        reason spelled out in `_on_ptt_answer`: a `singleShot` posted from a
+        worker builds its dispatch object on the calling thread and never
+        fires.
+        """
+        if event is None:
+            return
+        event_id = event["id"]
+
+        def work() -> None:
+            try:
+                from pitcrew.analysis.debrief import from_store
+                debrief = from_store(self.store, event_id)
+            except Exception:
+                # A debrief that cannot be built is not worth taking the app
+                # down for, and it happens for an honest reason: no corner
+                # model for this circuit yet.
+                log("session").exception("debrief failed for event %s", event_id)
+                return
+            if debrief is not None:
+                self.bridge.debriefed.emit(debrief)
+
+        threading.Thread(target=work, name="debrief", daemon=True).start()
+
+    def _on_debriefed(self, debrief) -> None:
+        """Say it, and put the same words on the screen.
+
+        **The screen gets the lines whether or not the voice is on.** The
+        engineer being muted is a preference about audio, not an instruction to
+        withhold the finding - and a debrief that exists only as speech cannot
+        be re-read, which is most of what a debrief is for.
+        """
+        from pitcrew.analysis.debrief import spoken_lines
+
+        lines = spoken_lines(debrief)
+        if not lines:
+            return
+        for line in lines:
+            if self._engineer_speaks:
+                self.voice.say(line)
+        self.practice.set_status(" ".join(lines))
+        log("session").info("debrief: %s", " | ".join(lines))
 
     def announce(self, headline: str, subtitle: str = "", *,
                  warn: bool = False) -> None:

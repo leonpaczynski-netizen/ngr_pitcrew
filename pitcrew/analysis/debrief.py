@@ -577,3 +577,103 @@ def _with_video(store, debrief: Debrief, model: CornerModel, clean) -> Debrief:
         scatter=debrief.scatter, gears=debrief.gears,
         correlations=debrief.correlations, video=tuple(cues),
         silences=debrief.silences, notes=debrief.notes)
+
+
+# --------------------------------------------------------------- the radio
+
+# **A debrief is not a live call and the register is different.** CLAUDE.md
+# §5.5 governs what is said at racing speed: one thing, instruction first,
+# reason second. This is said with the car stopped, so it may carry more than
+# one thing - but not many more. Six lines is about twenty seconds of speech
+# and it is where a spoken summary stops being listened to.
+MAX_SPOKEN_LINES = 6
+
+
+def _say_seconds(ms) -> str | None:
+    """A lap time as the radio should say it.
+
+    One decimal, not three. `format_lap_time` is right on a screen he can
+    re-read; spoken, "one oh six point oh four two" is a number nobody holds.
+    """
+    return None if ms is None else f"{ms / 1000.0:.1f}"
+
+
+def spoken_lines(debrief: Debrief) -> list[str]:
+    """What the engineer says when the session closes, in order.
+
+    Ordered the way an engineer talks rather than the way the data is
+    computed: what happened, then the one thing worth doing about it, then
+    what could not be seen. **Numbers are kept to two per clause** — the voice
+    pack is per-phrase clips and a clause carrying three numbers needs a clip
+    per combination, which is tens of thousands of files, so it falls through
+    to live synthesis every time (measured on the qualifying out-lap call).
+    """
+    lines: list[str] = []
+    census, pace = debrief.census, debrief.pace
+
+    if census.analysed == 0:
+        return ["Session done. No lap survived clean enough to read. "
+                "I have nothing for you."]
+
+    lines.append(f"Session done. {census.analysed} laps analysed "
+                 f"of {census.recorded}.")
+    if pace.median_ms is not None and pace.best_ms is not None:
+        lines.append(f"Median {_say_seconds(pace.median_ms)}. "
+                     f"Best {_say_seconds(pace.best_ms)}.")
+
+    # **The actionable thing goes before the descriptive one.** A gear split
+    # with laps on both sides is the only item here he can act on directly;
+    # everything else is a place to look.
+    balanced = [g for g in debrief.gears if g.balanced and g.quickest]
+    if balanced:
+        # **Ranked by the SIZE OF THE DIFFERENCE, not by which arm posted the
+        # quickest absolute lap.** Selecting on absolute time picks whichever
+        # corner happened to be taken in one gear during the driver's quickest
+        # run, which is a statement about the run and not about the gear. The
+        # claim being made is "this gear was worth something", so the ranking
+        # has to be that quantity - CLAUDE.md rule 12, report the constraint
+        # that actually produced the answer.
+        best_split = max(balanced, key=_gear_gap_ms)
+        quickest = best_split.quickest
+        others = [a for a in best_split.arms if a.gear != quickest.gear
+                  and a.mean_lap_ms is not None]
+        against = min(others, key=lambda a: a.mean_lap_ms) if others else None
+        if against is not None:
+            lines.append(
+                f"At {best_split.corner_name}, {_ordinal(quickest.gear)} gear "
+                f"was quicker than {_ordinal(against.gear)}. "
+                f"{quickest.n} laps against {against.n}. Worth a proper test.")
+
+    worst = debrief.least_repeatable
+    if worst is not None and worst.sd_kph is not None:
+        lines.append(f"{worst.corner_name} is your least repeatable corner. "
+                     f"{worst.sd_kph:.1f} kilometres an hour of spread.")
+
+    for found in debrief.spoken[:1]:
+        way = "faster" if found.r < 0 else "slower"
+        lines.append(f"Your quick laps are the ones you are {way} "
+                     f"through {found.corner_name}.")
+
+    # **Silence is reported, never left as absence.** The standing rule from
+    # the degradation work: a corner nobody mentions reads as a corner where
+    # nothing is happening, and that is not what it means.
+    if debrief.silences and not debrief.spoken:
+        lines.append("Nothing else cleared the bar. That is me not seeing it, "
+                     "not nothing happening.")
+
+    return lines[:MAX_SPOKEN_LINES]
+
+
+def _gear_gap_ms(split: GearSplit) -> float:
+    """Lap time between the quickest arm and the next. Zero if unrateable."""
+    rated = sorted(a.mean_lap_ms for a in split.arms if a.mean_lap_ms is not None)
+    return (rated[1] - rated[0]) if len(rated) > 1 else 0.0
+
+
+_ORDINALS = {1: "first", 2: "second", 3: "third", 4: "fourth",
+             5: "fifth", 6: "sixth", 7: "seventh", 8: "eighth"}
+
+
+def _ordinal(gear: int) -> str:
+    """Gears are spoken, not printed. "G2" is a column heading, not a word."""
+    return _ORDINALS.get(gear, f"gear {gear}")

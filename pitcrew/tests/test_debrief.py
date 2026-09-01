@@ -220,3 +220,98 @@ def test_the_census_arithmetic_closes():
     assert out.census.analysed + out.census.excursions == out.census.recorded
     assert "11 of 13" in out.census.describe()
     assert "excursion" in out.census.describe()
+
+
+# ------------------------------------------------------------------- radio
+
+from pitcrew.analysis.debrief import (  # noqa: E402
+    MAX_SPOKEN_LINES,
+    GearArm,
+    GearSplit,
+    spoken_lines,
+)
+
+
+def _spoken(laps, **kw):
+    census = kw.pop("census", _census(len(laps)))
+    pace = kw.pop("pace", Pace(n=len(laps), median_ms=106_042,
+                               best_ms=104_306, sd_ms=2083.0))
+    return spoken_lines(analyse(MODEL, laps, census=census, pace=pace,
+                                burn=_BURN))
+
+
+def test_the_radio_says_nothing_it_cannot_stand_behind():
+    """A session with no clean lap gets a refusal, not an empty summary that
+    reads as "all fine"."""
+    lines = spoken_lines(analyse(
+        MODEL, [], census=_census(0, excursions=4), pace=_PACE, burn=_BURN))
+    assert len(lines) == 1
+    assert "nothing" in lines[0].lower()
+
+
+def test_the_radio_names_the_silence_rather_than_leaving_it_out():
+    laps = [(_lap(i, t1_min=90 + (i % 3), t2_min=120.0), 100_000 + i * 37)
+            for i in range(1, 13)]
+    lines = _spoken(laps)
+    assert any("not nothing happening" in line for line in lines)
+
+
+def test_the_radio_is_bounded():
+    """Six lines is about twenty seconds. Past that it stops being listened
+    to, and a debrief nobody hears is worse than a short one."""
+    laps = []
+    for i in range(14):
+        low = 88.0 + (i % 7)
+        laps.append((_lap(i + 1, t1_min=low, t2_min=120.0 + (i % 5) * 4,
+                          t1_gear=2 if i % 2 else 3),
+                     int(112_000 - low * 60 + (-1) ** i * 60)))
+    assert len(_spoken(laps)) <= MAX_SPOKEN_LINES
+
+
+def test_gears_are_spoken_as_words_not_as_column_headings():
+    laps = [(_lap(i + 1, t1_min=90.0, t2_min=120.0,
+                  t1_gear=2 if i % 2 else 3), 100_000 + (i % 2) * 900)
+            for i in range(10)]
+    lines = " ".join(_spoken(laps))
+    assert "second gear" in lines or "third gear" in lines
+    assert "G2" not in lines and "G3" not in lines
+
+
+def test_the_gear_call_is_ranked_by_the_difference_not_the_quickest_lap():
+    """Selecting on absolute lap time picks whichever corner happened to be
+    taken in one gear during the driver's quickest run — a statement about the
+    run, not about the gear. CLAUDE.md rule 12."""
+    from pitcrew.analysis.debrief import _gear_gap_ms
+
+    tiny = GearSplit("T1", "Turn 1", (
+        GearArm(gear=2, n=5, mean_min_kph=90.0, mean_lap_ms=100_000.0),
+        GearArm(gear=3, n=5, mean_min_kph=91.0, mean_lap_ms=100_100.0)))
+    wide = GearSplit("T2", "Turn 2", (
+        GearArm(gear=2, n=4, mean_min_kph=80.0, mean_lap_ms=106_800.0),
+        GearArm(gear=3, n=4, mean_min_kph=85.0, mean_lap_ms=105_500.0)))
+    # T1 holds the quickest absolute lap; T2 holds the real difference.
+    assert tiny.quickest.mean_lap_ms < wide.quickest.mean_lap_ms
+    assert _gear_gap_ms(wide) > _gear_gap_ms(tiny)
+    assert max([tiny, wide], key=_gear_gap_ms) is wide
+
+
+def test_an_unbalanced_gear_split_is_never_spoken():
+    """It is still in the debrief — that is how the Spa Bus Stop hypothesis
+    was found — but the radio does not carry an n of one."""
+    laps = [(_lap(i + 1, t1_min=90.0, t2_min=120.0,
+                  t1_gear=3 if i == 0 else 2),
+             100_000 if i == 0 else 108_000) for i in range(9)]
+    debrief = analyse(MODEL, laps, census=_census(9),
+                      pace=Pace(n=9, median_ms=108_000, best_ms=100_000,
+                                sd_ms=2000.0), burn=_BURN)
+    assert any(not g.balanced for g in debrief.gears)
+    assert not any("gear was quicker" in line
+                   for line in spoken_lines(debrief))
+
+
+def test_a_lap_time_is_spoken_to_one_decimal():
+    """"One oh six point oh four two" is a number nobody holds."""
+    laps = [(_lap(i, t1_min=90.0, t2_min=120.0), 106_042) for i in range(1, 6)]
+    lines = _spoken(laps)
+    assert any("106.0" in line for line in lines)
+    assert not any("106.042" in line for line in lines)
