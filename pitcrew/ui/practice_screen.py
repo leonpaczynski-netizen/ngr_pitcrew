@@ -31,7 +31,9 @@ from pitcrew.analysis.runs import (
     FOR_RACE,
     LOBBY,
     TIME_TRIAL,
+    REASON_FUEL_IMPLAUSIBLE,
     auto_out_laps,
+    fuel_implausible_laps,
     split_runs,
     starts_run,
 )
@@ -640,6 +642,11 @@ class PracticeScreen(QWidget):
         self._rows: list[LapRow] = []
         self._row_widgets: list[RackRow] = []
         self._rendered_ends: set[int] = set()
+        # The event's tank, for the fuel-implausibility floor. None until the
+        # controller has an event; `fuel_implausible_laps` accepts that and
+        # only refuses on a capacity of zero, which is a real value for an
+        # electric car and not an error.
+        self._fuel_capacity: float | None = None
         self._recording = False
         self._build()
 
@@ -1028,8 +1035,55 @@ class PracticeScreen(QWidget):
     def set_laps(self, rows: list[LapRow]) -> None:
         self._rows = list(rows)
         self._mark_out_laps()
+        self._mark_fuel_implausible()
         self._rebuild_rack()
         self.refresh()
+
+    def set_fuel_capacity(self, capacity: float | None) -> None:
+        """The tank this event ran, which the implausibility floor needs.
+
+        Stored rather than acted on: the only caller sets it immediately
+        before `set_laps`, and the marking happens there and on every append
+        after it.
+        """
+        self._fuel_capacity = capacity
+
+    def _mark_fuel_implausible(self) -> set[int]:
+        """Strike laps that cannot have gone round, and return what moved.
+
+        A lap boundary landing inside a garage transition burns a twentieth
+        of a lap's fuel and, being short, is promoted to the rack's best -
+        the 11 Aug Monza session read 1.9 s quicker than its own payload that
+        way. `controller._rows_for_event` struck those on a rebuild; this
+        path did not, so like the out-lap above it was right when the event
+        was selected and wrong for every lap that landed live afterwards.
+
+        **This one can clear its own mark, and has to be able to.** The floor
+        is half the MEDIAN burn, so it moves as laps arrive: at two laps the
+        median is barely an estimate, and a lap struck against it can be
+        entirely ordinary by lap eight. A mark that could only be set would
+        latch that early mistake for the rest of the session and there would
+        be nothing to retire it - CLAUDE.md rule 10. So the set is recomputed
+        from scratch each time and rows fall out of it as readily as they
+        fall in.
+
+        **A hand strike is never touched.** Only exclusions this rule wrote,
+        identified by their reason, are its to withdraw.
+        """
+        implausible = fuel_implausible_laps(self._rows, self._fuel_capacity)
+        moved: set[int] = set()
+        for row in self._rows:
+            wanted = row.lap_num in implausible
+            if wanted and not row.excluded:
+                row.excluded = True
+                row.exclusion_reason = REASON_FUEL_IMPLAUSIBLE
+                moved.add(row.lap_id)
+            elif (not wanted and row.excluded
+                    and row.exclusion_reason == REASON_FUEL_IMPLAUSIBLE):
+                row.excluded = False
+                row.exclusion_reason = None
+                moved.add(row.lap_id)
+        return moved
 
     def _mark_out_laps(self) -> set[int]:
         """Name the out-laps on the rack, and return the ids newly named.
@@ -1081,7 +1135,7 @@ class PracticeScreen(QWidget):
         # came out of the database, which is zero on every lap ever recorded.
         # A mark reaching back past the new lap means an earlier row has just
         # been struck, which the rebuild test below turns into a full rebuild.
-        newly_marked = self._mark_out_laps()
+        newly_marked = self._mark_out_laps() | self._mark_fuel_implausible()
         ends = stint_end_ids(self._rows)
 
         # The tail always moves: the lap that was last stops being a stint end

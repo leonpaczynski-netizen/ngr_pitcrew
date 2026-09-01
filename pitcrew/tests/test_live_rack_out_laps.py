@@ -131,3 +131,102 @@ def test_a_time_trials_opening_lap_is_not_struck(qt_app):
     rows = screen.rows()
     assert not rows[0].is_out_lap
     assert min(row.lap_time_ms for row in rows if row.counted) == 93100
+
+
+# ---------------------------------------------------------- fuel-implausible
+
+def _burning(burns, times=None, *, tank=100.0, mode="lobby"):
+    """Rows whose tank actually chains, so no lap looks like a refuel.
+
+    Getting this wrong makes every lap a run start and therefore an out-lap,
+    which is a fixture bug that reads exactly like a product one.
+    """
+    from pitcrew.ui.practice_screen import LapRow
+
+    rows = []
+    for index, burn in enumerate(burns, 1):
+        start, tank = tank, tank - burn
+        rows.append(LapRow(
+            lap_id=2000 + index,
+            lap_num=index,
+            lap_time_ms=(times[index - 1] if times else 107_000),
+            fuel_used=burn,
+            fuel_start=start,
+            fuel_end=tank,
+            session_id=200,
+            practice_mode=mode,
+            lap_num_in_session=index,
+        ))
+    return rows
+
+
+def test_a_garage_transition_lap_does_not_become_the_live_best(qt_app):
+    """The 11 Aug Monza shape: a lap boundary inside a garage transition
+    burns a twentieth of a lap's fuel and, being short, is promoted to best.
+    The rebuild struck it; the live path did not."""
+    from pitcrew.ui.practice_screen import PracticeScreen
+
+    screen = PracticeScreen()
+    screen.set_fuel_capacity(100.0)
+    # The fifth boundary landed in the garage: 0.16 L, and 90 s.
+    for row in _burning([6.5, 6.4, 6.6, 6.5, 0.16, 6.5],
+                        [109_000, 107_500, 107_800, 108_100, 90_200, 107_200]):
+        screen.add_lap(row)
+
+    rows = screen.rows()
+    assert rows[4].excluded
+    assert rows[4].exclusion_reason == "fuel-implausible"
+    counted = [row.lap_time_ms for row in rows if row.counted]
+    assert min(counted) == 107_200, "not the 90.200 s garage lap"
+
+
+def test_the_rule_withdraws_a_mark_the_settling_median_no_longer_supports(qt_app):
+    """CLAUDE.md rule 10. The floor is half the MEDIAN burn, so it moves as
+    laps arrive - a mark that could only be set would latch an early estimate
+    for the rest of the session with nothing able to retire it."""
+    from pitcrew.ui.practice_screen import PracticeScreen
+
+    screen = PracticeScreen()
+    screen.set_fuel_capacity(100.0)
+    # Two heavy laps first, so the early median is high and the third lap -
+    # an ordinary one - falls under half of it. Then more ordinary laps
+    # arrive and the median settles onto them.
+    rows = _burning([9.0, 9.0, 4.0, 4.1, 4.0, 3.9, 4.0])
+    for row in rows[:3]:
+        screen.add_lap(row)
+    assert screen.rows()[2].excluded, "struck against the two-lap median"
+
+    for row in rows[3:]:
+        screen.add_lap(row)
+
+    assert not screen.rows()[2].excluded, "the mark has to be withdrawable"
+    assert screen.rows()[2].exclusion_reason is None
+    assert screen.rows()[2].counted
+
+
+def test_a_hand_strike_is_never_withdrawn_by_the_fuel_rule(qt_app):
+    """Only exclusions this rule wrote are its to take back."""
+    from pitcrew.ui.practice_screen import PracticeScreen
+
+    screen = PracticeScreen()
+    screen.set_fuel_capacity(100.0)
+    rows = _burning([6.5, 6.5, 6.5, 6.5])
+    rows[0].excluded = True
+    rows[0].exclusion_reason = "struck by hand"
+    for row in rows:
+        screen.add_lap(row)
+
+    assert screen.rows()[0].excluded
+    assert screen.rows()[0].exclusion_reason == "struck by hand"
+
+
+def test_an_electric_car_does_not_have_its_whole_session_struck(qt_app):
+    """A capacity of 0 is a real value and every lap burns nothing."""
+    from pitcrew.ui.practice_screen import PracticeScreen
+
+    screen = PracticeScreen()
+    screen.set_fuel_capacity(0.0)
+    for row in _burning([0.0, 0.0, 0.0, 0.0], tank=0.0):
+        screen.add_lap(row)
+
+    assert not any(row.excluded for row in screen.rows())

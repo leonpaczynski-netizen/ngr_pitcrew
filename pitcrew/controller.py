@@ -33,6 +33,7 @@ from pitcrew.analysis.resolve import circuit_key
 from pitcrew.analysis.session import counted_laps
 from pitcrew.analysis.runs import (
     FOR_QUALIFYING,
+    REASON_FUEL_IMPLAUSIBLE,
     auto_out_laps,
     carry_compound,
     fuel_implausible_laps,
@@ -2940,11 +2941,15 @@ class PitCrewController(QObject):
         # the rack did not, and the two disagreed about the number he judges
         # every session by.
         capacity = self._event_fuel_capacity(event_id)
+        # Handed to the rack because it applies this rule on every append as
+        # well as on a rebuild - the floor is half the median burn and moves
+        # as laps arrive, so it cannot be decided once here and left.
+        self.practice.set_fuel_capacity(capacity)
         for lap_num in fuel_implausible_laps(rows, capacity):
             for row in rows:
                 if row.lap_num == lap_num and not row.excluded:
                     row.excluded = True
-                    row.exclusion_reason = "fuel-implausible"
+                    row.exclusion_reason = REASON_FUEL_IMPLAUSIBLE
 
         # Incidents after the out-laps, because an out-lap loses time it is
         # supposed to lose and must not be judged for it. Answered from the
