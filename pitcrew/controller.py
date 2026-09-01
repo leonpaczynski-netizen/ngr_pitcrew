@@ -2468,6 +2468,16 @@ class PitCrewController(QObject):
             is_out_lap=lap.is_out_lap,
             is_pit_lap=lap.is_pit_lap,
             session_id=self.session_id,
+            # **The rack names out-laps itself and cannot do it without this.**
+            # `PracticeScreen.add_lap` applies `auto_out_laps`, whose one
+            # exception is the opening lap of a TIME TRIAL - the car starts on
+            # track there and that lap is the session best in six of the eight
+            # time trials on file. Left off, every row reached the rule as
+            # `practice_mode=None`, the exception could never fire, and the
+            # live path would have struck the best lap of the day and then
+            # handed it back on the next rebuild.
+            practice_mode=self.practice.practice_mode(),
+            lap_num_in_session=lap.lap_num,
         ))
 
     def plan_qualifying(self) -> bool:

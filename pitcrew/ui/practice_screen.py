@@ -31,6 +31,7 @@ from pitcrew.analysis.runs import (
     FOR_RACE,
     LOBBY,
     TIME_TRIAL,
+    auto_out_laps,
     split_runs,
     starts_run,
 )
@@ -1026,8 +1027,39 @@ class PracticeScreen(QWidget):
 
     def set_laps(self, rows: list[LapRow]) -> None:
         self._rows = list(rows)
+        self._mark_out_laps()
         self._rebuild_rack()
         self.refresh()
+
+    def _mark_out_laps(self) -> set[int]:
+        """Name the out-laps on the rack, and return the ids newly named.
+
+        **The rack owns this, not whoever filled it.** The rule lived in
+        `controller._rows_for_event` alone, so the rack was right when the
+        event was selected and wrong for every lap that landed live
+        afterwards - the stored `is_out_lap` column this path used instead is
+        zero on every lap ever recorded. Holding the invariant here means
+        neither caller can be the one that forgets.
+
+        It is not cosmetic. A lobby session's opening lap is driven out of
+        the box and is SHORT - 93.100 s against 105-112 s for the rest of the
+        Daytona session it was found on - so an unstruck out-lap does not
+        merely join the count, it becomes the session best by twelve seconds,
+        on the one number every session is judged by.
+
+        Taken across the whole rack rather than decided per row, because a
+        new lap is what opens a run: a refuel on it makes ITSELF a run start,
+        and only a set taken over all the rows says so. Marked, never
+        cleared - a lap the driver or the live path already flagged keeps its
+        flag, which is what `_rows_for_event` does.
+        """
+        out = auto_out_laps(self._rows)
+        newly = {row.lap_id for row in self._rows
+                 if not row.is_out_lap and row.lap_num in out}
+        for row in self._rows:
+            if row.lap_id in newly:
+                row.is_out_lap = True
+        return newly
 
     def add_lap(self, row: LapRow) -> None:
         """One row appended, not the whole rack rebuilt.
@@ -1045,6 +1077,11 @@ class PracticeScreen(QWidget):
         """
         previous_last = self._rows[-1] if self._rows else None
         self._rows.append(row)
+        # See `_mark_out_laps`: this path used to append whatever `is_out_lap`
+        # came out of the database, which is zero on every lap ever recorded.
+        # A mark reaching back past the new lap means an earlier row has just
+        # been struck, which the rebuild test below turns into a full rebuild.
+        newly_marked = self._mark_out_laps()
         ends = stint_end_ids(self._rows)
 
         # The tail always moves: the lap that was last stops being a stint end
@@ -1055,7 +1092,10 @@ class PracticeScreen(QWidget):
         tail = {row.lap_id}
         if previous_last is not None:
             tail.add(previous_last.lap_id)
-        if not (ends ^ self._rendered_ends) <= tail:
+        # A row that has just become an out-lap is drawn struck and drops out
+        # of the count, so if the marking above reached back past the rows
+        # this path redraws anyway, the rack has to go.
+        if not (ends ^ self._rendered_ends) <= tail or not newly_marked <= tail:
             self._rebuild_rack()
             self.refresh()
             return
