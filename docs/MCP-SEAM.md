@@ -21,7 +21,7 @@ It speaks stdio, so the client launches it rather than finding it listening.
     "pitcrew": {
       "command": "python",
       "args": ["-m", "pitcrew.mcp.server"],
-      "cwd": "C:\Projects\VR_Dashboard"
+      "cwd": "C:\Projects\Pit_Crew"
     }
   }
 }
