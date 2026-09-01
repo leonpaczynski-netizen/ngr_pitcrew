@@ -32,8 +32,10 @@ from pitcrew.race.calls import (
     stay_out_call,
 )
 from pitcrew.race.clock import RaceClock
+from pitcrew.race.composure import Composure
 from pitcrew.race.expectations import ExpectationTracker
 from pitcrew.store.tyres import gap_association_for
+from pitcrew.telemetry.recorder import SAMPLE_HZ
 from pitcrew.telemetry.session_state import EventKind, Phase
 
 # **How much racing either side of the box means a crossing went missing.**
@@ -224,6 +226,12 @@ class RaceCoordinator:
         # What the plan expects to execute, and what it is executing. Built
         # from the practice figures the plan was costed with and refreshed by
         # every completed lap - the lap-to-lap reference the driver asked for.
+        # **Built here and reset with the race, not at app start.** State that
+        # outlives a session is read as belonging to it (CLAUDE.md rule 11) -
+        # and a coordinator carrying a stale recovery would open a race with
+        # the engineer already holding its tongue.
+        self.composure = Composure()
+        self.composure.reset()
         self.expect = ExpectationTracker(
             planned_lap_time_ms=self.planned_lap_time_ms,
             planned_fuel_per_lap_l=self.planned_fuel_per_lap_l,
@@ -715,9 +723,46 @@ class RaceCoordinator:
         if packet is not None and self.phase is RacePhase.RUNNING \
                 and not getattr(packet, "paused", False) \
                 and not getattr(packet, "loading", False):
-            call = self._note_position(packet)
+            self._note_composure(packet)
+            call = self._compose(self._note_position(packet))
         self._note_lap_counter(packet)
         return call
+
+    def _note_composure(self, packet) -> None:
+        """Watch the surface, so the engineer knows when to stop volunteering.
+
+        Reported from the seat: *"I came off track and was frustrated, and then
+        George kept telling me every time someone passed me, which made me more
+        angry."* See `race/composure.py`. The register that goes quiet is FACT
+        only, and a decision is never withheld.
+        """
+        self.composure.update(getattr(packet, "surface_types", None),
+                              1.0 / SAMPLE_HZ)
+
+    def _compose(self, call):
+        """Hold a volunteered fact while he is off the road or regathering.
+
+        **Silence is only half of what he asked for.** The other half is a word
+        on the way back, and it is deliberately a FACT rather than
+        encouragement - what the moment actually cost. An engineer who tells a
+        driver he is fine right after the driver lost four seconds is an
+        engineer that driver stops believing.
+        """
+        from pitcrew.race.calls import POSITION, Call, register_of
+
+        owed = self.composure.owed()
+        if owed is not None:
+            # Ahead of any held position call: the first thing he hears on the
+            # way back is the account of the moment, not the places it cost.
+            return Call(POSITION, self.state.lap, "You're back on it.",
+                        f"That moment cost you about {owed:.0f} seconds.")
+        if call is None:
+            return None
+        if self.composure.may_volunteer(register_of(call.kind)):
+            return call
+        log("race").info("held a %s call: off the road or still regathering",
+                         call.kind)
+        return None
 
     def _note_position(self, packet) -> "Call | None":
         """Where he is in the field, off the packet, at 60 Hz.
