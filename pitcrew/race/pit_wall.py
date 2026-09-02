@@ -95,6 +95,10 @@ MIN_WATCHED_S = 15.0
 # misread. See `Roster.drivers`.
 MIN_SIGHTINGS = 20
 
+# ...and the compound letter needs this many agreeing frames. One frame is not
+# a vote, and the tyre a rival fitted is a fact about his whole remaining race.
+MIN_COMPOUND_READS = 2
+
 
 @dataclass
 class Visit:
@@ -119,14 +123,29 @@ class Visit:
 
     @property
     def compound(self) -> str | None:
-        """The letter seen most often on this stop, or `None`.
+        """The letter agreed on across this stop, or `None`.
 
-        A vote rather than the last reading: a pit crew walks in front of the
-        disc, and one obscured frame should not decide what tyre he fitted.
+        **A tie refuses, and it used to be decided by hash order.** Measured
+        across eight values of PYTHONHASHSEED, `max(set(...), key=count)` on
+        `['S','M','S','M']` returned S sometimes and M others: `set` iteration
+        over strings is randomised per process, so replaying one recorded race
+        twice filed a different tyre. A 2-2 split is the reader disagreeing
+        with itself about a fact that describes a rival's whole remaining
+        race, and an arbitrary winner is a confident answer where there is
+        none.
+
+        **And a vote of one is not a vote.** The fuel path has `MIN_READS` for
+        exactly this reason; this had no floor at all.
         """
-        if not self.compounds:
+        if len(self.compounds) < MIN_COMPOUND_READS:
             return None
-        return max(set(self.compounds), key=self.compounds.count)
+        tally: dict[str, int] = {}
+        for code in self.compounds:
+            tally[code] = tally.get(code, 0) + 1
+        ranked = sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
+        if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+            return None
+        return ranked[0][0]
 
     def as_stop(self) -> Stop:
         return Stop(lap=self.lap,
@@ -144,6 +163,11 @@ class Seen:
     driver_id: int
     stop: Stop
     reads: int
+    # **The FUEL readings and the COMPOUND readings are counted separately.**
+    # They are two different claims from the same stop and a single `reads`
+    # said nothing about which: a stop backed by forty fuel figures may have
+    # had one legible disc, or none. CLAUDE.md rule 4.
+    compound_reads: int
     watched_s: float
     partial: bool
 
@@ -180,8 +204,8 @@ class PitWall:
         # The two intervals GT7 publishes either side of us, per lap. Kept as
         # trends rather than instants because a closing RATE is the cheapest
         # pace signal on the screen - see `race/gaps.py`.
-        self.ahead = GapTrend()
-        self.behind = GapTrend()
+        self.ahead = GapTrend(side="ahead")
+        self.behind = GapTrend(side="behind")
         self._frames = 0
         self._clean = 0
 
@@ -254,10 +278,6 @@ class PitWall:
         if not rows:
             return []
         self._clean += 1
-        ahead, behind = read_gaps(frame, board)
-        self.ahead.note(lap, ahead)
-        self.behind.note(lap, behind)
-
         ids: dict[int, int] = {}
         identified: set[int] = set()
         for place, row in enumerate(rows, start=1):
@@ -312,6 +332,17 @@ class PitWall:
             if code:
                 visit.compounds.append(code)
 
+        # **The gaps are noted AFTER the rows are identified**, so each trend
+        # knows whose gap it is holding. A trend that does not know that
+        # regresses straight through an overtake and reports the new car's
+        # distance as our own lost pace.
+        ahead_gap, behind_gap = read_gaps(frame, board)
+        own_place = self._position.get(self._own_driver(ids, board))
+        self.ahead.note(lap, ahead_gap,
+                        subject=self._neighbour(ids, own_place, -1))
+        self.behind.note(lap, behind_gap,
+                         subject=self._neighbour(ids, own_place, +1))
+
         for driver in identified - in_lane:
             self._seen_clean.add(driver)
 
@@ -329,6 +360,25 @@ class PitWall:
                 if done is not None:
                     closed.append(done)
         return closed + self._close_stale(now)
+
+    def _own_driver(self, ids: dict, board) -> int | None:
+        own_y = (board[1] + board[3]) // 2
+        near = [y for y in ids if abs(y - own_y) <= ROW_MATCH_TOL]
+        return ids[near[0]] if near else None
+
+    def _neighbour(self, ids: dict, own_place: int | None, step: int):
+        """The driver one place ahead of or behind us, or `None`.
+
+        `None` rather than a guess: a gap whose owner is unknown must not be
+        folded into a trend that thinks it knows.
+        """
+        if own_place is None:
+            return None
+        wanted = own_place + step
+        for driver, place in self._position.items():
+            if place == wanted:
+                return driver
+        return None
 
     def _close_stale(self, now: float) -> list:
         """Close visits nobody has seen either way for a long time.
@@ -408,6 +458,7 @@ class PitWall:
         no_fill = (stop.litres is not None and stop.litres <= 0)
         seen = Seen(driver=name, driver_id=driver,
                     stop=stop, reads=len(visit.readings),
+                    compound_reads=len(visit.compounds),
                     watched_s=watched, partial=visit.partial or no_fill)
         self._stops.append(seen)
         _log.info("pit-wall: %s stopped - in %s L, out %s L, %d reads over "

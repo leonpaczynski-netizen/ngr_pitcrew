@@ -1761,50 +1761,75 @@ def compound_choice_is_moot(inputs: "RaceInputs") -> str | None:
     """Why comparing compounds cannot change this plan, or `None` if it can.
 
     **The search runs whatever the answer is, and until now it never said when
-    the answer was settled before it started.** Both reasons below are
-    arithmetic on figures already in the plan, and at this driver's 2x wear
-    both hold at once - so `crossover_table`, `_candidate_sequences` and their
-    4096 candidates are searching a decision the fuel load already made, while
+    the answer was settled before it started.** At this driver's 2x wear both
+    reasons below usually hold at once, so `crossover_table` and its 4096
+    candidates are settling a question the fuel load already answered while
     `_verdict` prints a confident comparison of two options that were never
     really two.
 
-    **One: fuel binds every stint.** A stop in GT7 is a refuel, so a compound
-    that lasts longer can only delete a stop if the TYRE is what ends the
-    stint. Measured at Spa - 100 L, 8 L a lap, wear about 0.05 a lap - the
-    tank runs out at 11 laps and the tyre at 17. The harder tyre's whole
-    advantage is unreachable, and all that is left of it is being slower.
+    ### It weighs the same three ceilings the plan is laid out against
 
-    **Two: the soft never wears into the gap.** `pace_loss_s` is flat to 0.50
-    and his stints end at 0.44-0.56 worst corner, so the soft gives back at
-    most 0.15 s a lap by the end of a stint. A compound gap smaller than that
-    is inside the noise floor; a realistic one is several times larger and is
-    never repaid.
+    A first cut compared `fuel_limited_laps_at_load` against `tyre_limited_laps`
+    - which is `max_stint_laps`, and `binding_limit`'s own docstring records
+    why that is not enough: it can only ever name tyre or fuel, while
+    `stint_limit` weighs a third ceiling, the longest stint anybody has
+    actually run. That omission is not academic. With RS wearing 0.05 but never
+    run past six laps, and RM wearing 0.03 with fourteen on record, RS gives
+    six-lap stints and RM eleven - **RM deletes two stops, about 160 seconds** -
+    and the two-ceiling version declared the comparison moot and told him to fit
+    the soft. So this uses `stint_limit` per compound, and the evidence ceiling
+    is in the comparison.
 
-    Returned as a sentence rather than a flag because it belongs in what the
-    driver is told: "the softest tyre wins by construction here" is a more
-    useful answer than a table of numbers comparing it with something that
-    cannot win.
+    ### And it refuses to conclude anything from a fabricated rate
+
+    `RaceInputs.profile_for` hands back the reference compound's wear rate under
+    another compound's name when that compound has never been gauge-read. So
+    "every tyre lasts longer than the tank" was routinely one measured number
+    duplicated, dressed as a finding about all of them. `crossover_lap` already
+    refuses when either side's pace is unknown, for the same reason; this now
+    applies the same discipline to wear.
     """
-    fuel_laps = fuel_limited_laps_at_load(inputs)
-    reasons = []
     profiles = [inputs.profile_for(code)
                 for code in inputs.planning_compounds()]
-    rates = [p.wear_per_lap for p in profiles if p and p.wear_per_lap]
-    if fuel_laps and rates:
-        tyre_laps = [tyre_limited_laps(rate) for rate in rates]
-        tyre_laps = [laps for laps in tyre_laps if laps]
-        if tyre_laps and min(tyre_laps) > fuel_laps:
-            reasons.append(
-                f"the tank ends every stint at {fuel_laps} laps and the "
-                f"shortest-lived tyre would last {min(tyre_laps)}, so no "
-                f"compound here can delete a stop")
-    if rates:
-        worst_wear = max(rates) * (fuel_laps or 0)
-        if worst_wear and pace_loss_s(worst_wear) < COMPOUND_GAP_FLOOR_S:
-            reasons.append(
-                f"a stint ends at {worst_wear:.0%} worn, where the softest "
-                f"tyre has given back {pace_loss_s(worst_wear):.2f} s a lap - "
-                f"less than any real compound gap")
+    profiles = [p for p in profiles if p is not None]
+    if not profiles:
+        return None
+    # **Rule 3: a limit of zero is known and a limit of None is not.**
+    # `fuel_limited_laps` says so in its own docstring, and `if fuel_laps` used
+    # to collapse the two.
+    fuel_laps = fuel_limited_laps_at_load(inputs)
+    if fuel_laps is None or fuel_laps <= 0:
+        return None
+    if not all(p.is_measured for p in profiles):
+        return None                      # see the docstring: not on a guess
+    rates = [p.wear_per_lap for p in profiles if p.wear_per_lap]
+    if len(rates) != len(profiles) or len(profiles) < 2:
+        return None
+
+    reasons = []
+    stints = []
+    for profile in profiles:
+        laps, _ = stint_limit(inputs, profile)
+        if laps:
+            stints.append(laps)
+    if stints and min(stints) > fuel_laps:
+        reasons.append(
+            f"the tank ends every stint at {fuel_laps} laps and the "
+            f"shortest-lived tyre would last {min(stints)}, so no compound "
+            f"here can delete a stop")
+
+    # **Against the measured gap, not a constant.** If the harder tyre is only
+    # 0.10 s/lap slower on this car then a soft giving back 0.13 by the end of
+    # a stint HAS repaid it, and the choice is live.
+    gaps = [p.pace_delta_s for p in profiles
+            if p.pace_known and p.pace_delta_s > 0]
+    floor = min(gaps) if gaps else COMPOUND_GAP_FLOOR_S
+    worst_wear = max(rates) * fuel_laps
+    if worst_wear and pace_loss_s(worst_wear) < floor:
+        reasons.append(
+            f"a stint ends at {worst_wear:.0%} worn, where the softest tyre "
+            f"has given back {pace_loss_s(worst_wear):.2f} s a lap - less "
+            f"than the {floor:.2f} s it would have to repay")
     if not reasons:
         return None
     return ("The compound comparison cannot decide this: "
@@ -1919,6 +1944,11 @@ def _verdict(crossover: dict, assumed: bool,
     if moot:
         # Said first and instead: a table comparing two options where one
         # cannot win is worse than no table, because it reads as a finding.
+        # **But the [ASSUMED] note still travels.** Returning early used to
+        # delete it, so a verdict could rest on an invented rate and read with
+        # no provenance at all.
+        if assumed:
+            moot += " [ASSUMED] One of these compounds has no measured rate."
         return moot + tail
     if assumed and gap < 0.5:
         return (f"{win} and {alt} come out level, but only because no wear "

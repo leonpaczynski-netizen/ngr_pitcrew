@@ -840,7 +840,10 @@ CREATE TABLE IF NOT EXISTS rival_stops (
     compound        TEXT,
     assumed_start_l REAL,                    -- the assumption, stored not hidden
     -- The evidence behind the two figures above.
+    -- Two different claims from one stop, counted separately: a row backed by
+    -- forty fuel figures may have had one legible compound disc, or none.
     reads           INTEGER NOT NULL DEFAULT 0,
+    compound_reads  INTEGER NOT NULL DEFAULT 0,
     watched_s       REAL,
     -- 1 = the watcher joined after the fill had begun, so `fuel_in_l` is an
     -- upper bound on what he came in with and the litres taken are a floor.

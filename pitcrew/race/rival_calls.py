@@ -55,12 +55,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pitcrew.race.calls import (
+    CLOSING,
     HIGH,
     MEDIUM,
+    REJOIN,
     RIVAL_BOXED,
     RIVAL_COMMITTED,
     STAY_OUT_FUEL,
     Call,
+)
+from pitcrew.race.gaps import (
+    MIN_LAPS_FOR_TREND,
+    TREND_WORTH_SAYING_S,
+    GapTrend,
+    rejoin_against,
+    stop_costs_s,
 )
 from pitcrew.race.rivals import (
     DEAD_TIME_S,
@@ -75,8 +84,9 @@ from pitcrew.race.rivals import (
 # against it and the two must be adjacent; the other two rank below every call
 # about our own car, because a car of ours about to run dry outranks news of
 # what somebody else just did.
-__all__ = ["RIVAL_BOXED", "RIVAL_COMMITTED", "STAY_OUT_FUEL", "Rival",
-           "rival_boxed", "stay_out", "must_stop_by"]
+__all__ = ["CLOSING", "REJOIN", "RIVAL_BOXED", "RIVAL_COMMITTED",
+           "STAY_OUT_FUEL", "Rival", "closing_call", "must_stop_by",
+           "rejoin_call", "rival_boxed", "stay_out"]
 
 # A rival's stop has to be worth this many seconds more than ours before it is
 # worth saying. Below it he is being told about a difference he cannot drive to.
@@ -248,3 +258,80 @@ def must_stop_by(rival: Rival, burn_per_lap_l: float | None,
     return Call(RIVAL_COMMITTED, lap,
                 f"{who} left on {out:.0f} litres.",
                 f"That reaches lap {last}, so he has to stop again.", MEDIUM)
+
+def rejoin_call(*, lap: int, gap_behind_s: float | None,
+                litres_to_take: float | None,
+                refuel_rate_lps: float | None,
+                pit_loss_s: float | None,
+                pit_loss_source: str | None = None,
+                who: str | None = None) -> Call | None:
+    """Where a stop taken now would put us against the car behind.
+
+    **The call that decides a PLACE where the rest of this module decides
+    seconds.** A stop costs the fill plus the lane and he gains every second of
+    it, so every car closer than that comes out in front of us. It is one
+    subtraction, and neither operand was available to the engineer before.
+
+    Silent when we come out comfortably ahead: that is the expected case and
+    saying it every lap is noise. Spoken when we come out behind, and spoken
+    when it is too close to call - "it is marginal" is something the driver can
+    act on, and a silence is not.
+    """
+    cost = stop_costs_s(litres_to_take, refuel_rate_lps, pit_loss_s,
+                        pit_loss_source)
+    rejoin = rejoin_against(gap_behind_s, cost)
+    if rejoin is None:
+        return None
+    them = who or "the car behind"
+    if rejoin.ahead is False:
+        return Call(REJOIN, lap,
+                    f"Box now and {them} comes out in front.",
+                    f"He is {rejoin.their_gap_s:.0f} seconds back and the stop "
+                    f"costs {rejoin.ours_lost_s:.0f}.", HIGH)
+    if rejoin.too_close:
+        return Call(REJOIN, lap,
+                    "Box now and it is too close to call.",
+                    f"He is {rejoin.their_gap_s:.0f} seconds back against a "
+                    f"{rejoin.ours_lost_s:.0f} second stop.", MEDIUM)
+    return None
+
+
+def closing_call(trend: GapTrend, *, lap: int, who: str | None = None,
+                 laps_left: int | None = None) -> Call | None:
+    """How fast a gap is closing, and when it reaches zero.
+
+    A FACT, not an instruction: what to do about catching somebody is the
+    driver's own call. Said only on a real trend - `MIN_LAPS_FOR_TREND`
+    CONSECUTIVE laps - and only when the rate is outside what a random walk
+    produces on its own, which is a much larger number than it looks. See
+    `gaps.TREND_WORTH_SAYING_S`.
+
+    **The sentence depends on which side the trend is.** The rate means the
+    same thing on both - the gap is shrinking - but a shrinking gap ahead is us
+    catching him and a shrinking gap behind is him catching us, and those two
+    demand opposite driving. Rule 13.
+    """
+    rate, count = trend.closing_s_per_lap()
+    if rate is None or count < MIN_LAPS_FOR_TREND:
+        return None
+    if abs(rate) < TREND_WORTH_SAYING_S:
+        return None
+    behind = getattr(trend, "side", "ahead") == "behind"
+    them = who or ("the car behind" if behind else "the car ahead")
+    closing = rate > 0
+    if behind:
+        if not closing:
+            return None          # he is dropping away: nothing to do about it
+        return Call(CLOSING, lap,
+                    f"{them} is taking {rate:.1f} a lap out of you.",
+                    f"Over the last {count} laps.", MEDIUM)
+    if not closing:
+        return Call(CLOSING, lap,
+                    f"You are losing {-rate:.1f} a lap to {them}.",
+                    f"Over the last {count} laps.", MEDIUM)
+    laps = trend.laps_to_catch(laps_left=laps_left)
+    reason = (f"Over the last {count} laps." if laps is None
+              else f"On him in about {laps:.0f} laps at that rate.")
+    return Call(CLOSING, lap,
+                f"You are taking {rate:.1f} a lap out of {them}.",
+                reason, MEDIUM)

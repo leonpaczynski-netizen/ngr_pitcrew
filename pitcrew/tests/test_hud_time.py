@@ -41,7 +41,9 @@ def a_time(text, scale=2, gap=3):
             block[int(tall * 0.65):int(tall * 0.75), :] = True
             pieces.append(block)
         elif char == ".":
-            block = np.zeros((tall, 2 * scale), dtype=bool)
+            # Three pixels square at scale 1, which is what the real banner
+            # draws - see `test_the_full_stop_is_only_three_pixels`.
+            block = np.zeros((tall, 3 * scale), dtype=bool)
             block[tall - 3 * scale:, :] = True
             pieces.append(block)
         else:
@@ -78,6 +80,34 @@ def dashes(scale=2):
 
 def test_a_lap_time_reads_back_in_seconds():
     assert read_seconds(a_time("2:13.484")) == pytest.approx(133.484)
+
+
+def test_the_full_stop_is_only_three_pixels_and_must_survive():
+    """Measured on the real banner: the stop is 3 x 3 px. A minimum-run floor
+    of 5 - safe for a fuel figure, which is all digits - threw the decimal
+    point away and turned a known 133.484 into a refusal. The synthetic
+    fixture did not catch it because it renders the stop at six pixels, so
+    this test uses the real proportions."""
+    patch = a_time("2:13.484", scale=1)
+    assert read_seconds(patch) == pytest.approx(133.484)
+
+
+def test_a_clipped_box_is_refused_rather_than_read_as_a_shorter_time():
+    """Sweeping a 1:23.456 across a too-narrow band, eleven offsets of 121
+    returned a well-formed WRONG answer - 3.456 for a true 83.456."""
+    full = a_time("1:23.456")
+    for cut in (14, 22, 30):
+        assert read_seconds(full[:, cut:]) is None
+
+
+def test_gt7_zero_pads_the_seconds_so_a_dropped_digit_is_refused():
+    """`1:2.345` is not a time GT7 draws - it is what `1:12.345` looks like
+    with a digit cut off, and it parsed as 62.345 against a true 72.345."""
+    assert read_seconds(a_time("1:2.345")) is None
+
+
+def test_more_than_one_digit_of_minutes_is_refused():
+    assert read_seconds(a_time("12:34.567")) is None
 
 
 def test_a_gap_without_minutes_reads_too():

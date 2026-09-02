@@ -148,6 +148,8 @@ LAPS_TO_GO = "laps-to-go"
 # `URGENCY` and `REGISTER` can name them without importing the module that
 # composes them - the ranking is a property of the vocabulary, not of the
 # thing that speaks it.
+REJOIN = "rejoin"
+CLOSING = "closing"
 RIVAL_BOXED = "rival-boxed"
 RIVAL_COMMITTED = "rival-committed"
 STAY_OUT_FUEL = "stay-out-fuel"
@@ -161,6 +163,12 @@ URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            # and the case for one more lap is worth seconds where being a lap
            # short of the flag is worth a stop.
            STAY_OUT_FUEL,
+           # **`REJOIN` sits with the other three answers to "when do I
+           # stop".** It is the one that decides a PLACE where the rest decide
+           # seconds - every car within our own pit loss behind us comes out in
+           # front - so it ranks above them, and below only the calls about
+           # running out of fuel altogether.
+           REJOIN,
            # **`WEAR` sits below the fuel calls and above temperature.** A car
            # out of fuel stops on the circuit; a car on worn tyres is still
            # moving, so fuel wins. But a measured wear figure beats an
@@ -188,6 +196,11 @@ URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            # true now and gone in a minute, where a forced second stop stays
            # true for the rest of the race.
            RIVAL_BOXED, RIVAL_COMMITTED,
+           # **`CLOSING` is a fact about pace and ranks with the other facts.**
+           # It is worth hearing and it is never an instruction: what to do
+           # about catching somebody is the driver's, and a closing rate that
+           # outranked a fuel call would be a pace note said instead of a stop.
+           CLOSING,
            GREEN, POSITION, STATUS)
 
 # --- the two registers -----------------------------------------------------
@@ -238,6 +251,8 @@ REGISTER = {
     # fuel in hand, and one word with two units on one voice is rule 13. They
     # say litres, seconds standing, and the lap a car must stop by, and each
     # names its own reference inside the call. See `race/rival_calls.py`.
+    REJOIN: DECISION,
+    CLOSING: FACT,
     RIVAL_BOXED: DECISION,
     RIVAL_COMMITTED: DECISION,
     STAY_OUT_FUEL: DECISION,

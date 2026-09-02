@@ -92,9 +92,26 @@ import numpy as np
 
 from pitcrew.telemetry.board import _runs
 
-# A compound disc is a saturated red circle. These bounds are loose because the
-# letter inside it is white and the disc is antialiased against whatever is
-# behind the HUD.
+# A compound disc is a saturated red circle with a DARK letter in it - see
+# `telemetry/compound.py`, which reads that letter. (This said "white" for a
+# while, which is wrong and was also stale: the next lines say the loose bounds
+# it was justifying were measured and rejected.)
+#
+# **KNOWN DEFECT: this finds red discs only, and the disc colour changes with
+# the compound.** Confirmed by the driver, 3 Sep 2026. The test below is red
+# dominance - `red > 130` and `red > green * 2` and `red > blue * 2` - and
+# every disc in the measured archive was (200, 25, 0) because the whole field
+# ran Racing Soft, so the footage could not reveal this on its own.
+#
+# The cost is the whole stop, not the letter. A disc of another colour is not
+# found, the row yields no `PitRow`, the driver never enters `in_lane` in
+# `race/pit_wall.py`, `has_pitted` stays False for a car standing in its box,
+# and an open visit closes three frames later in the middle of its own fill.
+# **So today the pit wall can only see rivals who are on the same tyre he is.**
+#
+# The fix is a colour set rather than a red test, and it needs one frame per
+# compound to measure - the letter is the discriminator once the disc is found,
+# and `telemetry/compound.py` already reads that.
 # **Strict, and the loose version was tried and was worse.** The HUD is
 # semi-transparent, so a pit crew in fluorescent green standing behind the
 # leaderboard washes the discs out and they are missed. Relaxing the ratio to

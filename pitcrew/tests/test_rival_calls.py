@@ -3,13 +3,23 @@
 Every figure in here is a real one: the Spa replay's own entry and exit fuel,
 his measured 8 L/lap at Spa and the 1.0 L/s refuel rate confirmed three ways.
 """
-from pitcrew.race.calls import DECISION, register_of
+from pitcrew.race.calls import (
+    CLOSING,
+    DECISION,
+    FACT,
+    HIGH,
+    REJOIN,
+    register_of,
+)
+from pitcrew.race.gaps import GapTrend
 from pitcrew.race.rival_calls import (
     RIVAL_BOXED,
     RIVAL_COMMITTED,
     STAY_OUT_FUEL,
     Rival,
+    closing_call,
     must_stop_by,
+    rejoin_call,
     rival_boxed,
     stay_out,
 )
@@ -193,3 +203,98 @@ def test_without_his_own_burn_ours_stands_in():
                      stop=Stop(lap=11, fuel_in_l=12.0, fuel_out_l=41.0))
     call = must_stop_by(borrowed, SPA_BURN, lap=11, laps_total=20)
     assert call is not None and "lap 16" in call.reason
+
+
+# --- the rejoin, which decides a place rather than seconds ------------------
+
+def test_a_car_closer_than_the_stop_is_told_about():
+    """The engineer's largest omission: every car within our own pit loss
+    behind us comes out in front, and it is one subtraction."""
+    call = rejoin_call(lap=11, gap_behind_s=40.0, litres_to_take=60.0,
+                       refuel_rate_lps=1.0, pit_loss_s=19.5, who="Rocky")
+    assert call is not None and call.confidence == HIGH
+    assert "comes out in front" in call.call
+    assert "40 seconds back" in call.reason and "costs 80" in call.reason
+
+
+def test_coming_out_comfortably_ahead_is_not_worth_saying():
+    assert rejoin_call(lap=11, gap_behind_s=140.0, litres_to_take=60.0,
+                       refuel_rate_lps=1.0, pit_loss_s=19.5) is None
+
+
+def test_marginal_is_said_because_a_silence_is_not_actionable():
+    call = rejoin_call(lap=11, gap_behind_s=80.0, litres_to_take=60.0,
+                       refuel_rate_lps=1.0, pit_loss_s=19.5)
+    assert call is not None and "too close to call" in call.call
+
+
+def test_no_gap_and_no_pit_loss_mean_no_rejoin_call():
+    """CLAUDE.md rule 3. An unread gap is not a gap of zero, and it must not
+    produce a confident "he comes out in front"."""
+    assert rejoin_call(lap=11, gap_behind_s=None, litres_to_take=60.0,
+                       refuel_rate_lps=1.0, pit_loss_s=19.5) is None
+    assert rejoin_call(lap=11, gap_behind_s=40.0, litres_to_take=60.0,
+                       refuel_rate_lps=1.0, pit_loss_s=None) is None
+
+
+# --- the closing rate, which is a fact and never an instruction -------------
+
+def test_closing_is_said_with_the_laps_behind_it():
+    """CLAUDE.md rule 4. The rate has to clear a random walk, which is a much
+    larger number than it looks - see `gaps.TREND_WORTH_SAYING_S`."""
+    trend = GapTrend(side="ahead")
+    for lap, gap in enumerate([10.0, 8.9, 7.8, 6.7, 5.6], start=6):
+        trend.note(lap, gap)
+    call = closing_call(trend, lap=10, who="Rocky")
+    assert call is not None
+    assert "taking" in call.call and "Rocky" in call.call
+    assert "laps at that rate" in call.reason
+
+
+def test_losing_ground_is_said_too():
+    trend = GapTrend(side="ahead")
+    for lap, gap in enumerate([5.0, 6.1, 7.2, 8.3, 9.4], start=6):
+        trend.note(lap, gap)
+    call = closing_call(trend, lap=10)
+    assert call is not None and "losing" in call.call
+
+
+def test_the_car_behind_closing_is_said_the_other_way_round():
+    """CLAUDE.md rule 13. The same shrinking gap means us catching him on one
+    side and him catching us on the other, and those demand opposite driving."""
+    behind = GapTrend(side="behind")
+    for lap, gap in enumerate([10.0, 8.9, 7.8, 6.7, 5.6], start=6):
+        behind.note(lap, gap)
+    call = closing_call(behind, lap=10, who="Rocky")
+    assert call is not None
+    assert "Rocky is taking" in call.call and "out of you" in call.call
+
+
+def test_a_car_behind_dropping_away_is_not_worth_saying():
+    behind = GapTrend(side="behind")
+    for lap, gap in enumerate([5.0, 6.1, 7.2, 8.3, 9.4], start=6):
+        behind.note(lap, gap)
+    assert closing_call(behind, lap=10) is None
+
+
+def test_too_few_laps_is_not_a_trend():
+    trend = GapTrend()
+    for lap, gap in enumerate([8.0, 7.0, 6.0], start=6):
+        trend.note(lap, gap)
+    assert closing_call(trend, lap=8) is None
+
+
+def test_a_rate_inside_the_random_walk_is_not_said():
+    """0.15 s/lap fired on three five-lap windows in four where the two cars
+    had identical pace. Half a second a lap is still inside it."""
+    trend = GapTrend()
+    for lap, gap in enumerate([8.0, 7.6, 7.2, 6.8, 6.4], start=6):
+        trend.note(lap, gap)
+    assert closing_call(trend, lap=10) is None
+
+
+def test_the_closing_call_is_a_fact_and_the_rejoin_a_decision():
+    """What to do about catching somebody is the driver's; where a stop puts
+    him is the engineer's."""
+    assert register_of(CLOSING) == FACT
+    assert register_of(REJOIN) == DECISION

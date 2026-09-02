@@ -19,13 +19,27 @@ A place is worth far more than the whole overcut argument, which - once its
 arithmetic was corrected - is worth a fraction of a second a lap.
 `rivals.deferring_costs_s` carries that account.
 
-### Closing rate is the cheapest pace signal on the screen
+### Closing rate, and what it is actually worth
 
-Comparing lap times to judge whether you are catching somebody costs 0.918 s of
-lap-to-lap noise. A difference of GAPS does not: both cars ran the same lap in
-the same traffic on the same track state, so most of that noise is common and
-cancels. Four laps of the gap ahead falling 0.4 s a lap is a finding; four laps
-of lap times looking 0.4 s quicker is not.
+**An earlier version of this file had the argument backwards and it is worth
+recording which way round it goes.** It claimed a difference of gaps was
+quieter than a lap-time comparison because the noise is common-mode and
+cancels. The 0.918 s figure is this driver's own execution scatter - his
+braking points, his small mistakes - which is idiosyncratic by definition and
+is exactly what does NOT cancel. What genuinely is common between two cars -
+track evolution, fuel-load trend, weather, rubbering-in - is slow and
+systematic and contributes almost nothing to lap-to-lap scatter in the first
+place.
+
+What a gap difference removes is systematic DRIFT. It leaves all of the
+execution scatter, from both cars. And because a gap is the cumulative sum of
+per-lap differences it is a random walk, so a slope fitted to five of them has
+a standard deviation near 0.5 s a lap - see `TREND_WORTH_SAYING_S`, which is
+set from that number rather than from an intuition about traffic.
+
+Traffic does not cancel either: two cars 5-40 s apart meet the same backmarker
+on different laps. One lapped car costing him 1.5 s and the rival 0.2 s puts a
+1.3 s step into a five-lap window, which is 0.26 s/lap of slope on its own.
 
 ### What is NOT validated here, and it matters
 
@@ -46,6 +60,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pitcrew.strategy.model import PIT_DEAD_TIME_S, PIT_LOSS_MEASURED
+from pitcrew.telemetry.board import gap_lines
 from pitcrew.telemetry.hud_time import read_seconds
 
 # Below this many seconds of difference, "you come out ahead of him" is a claim
@@ -57,35 +73,66 @@ REJOIN_MARGIN_S = 3.0
 # slope through noise; five is a trend.
 MIN_LAPS_FOR_TREND = 5
 
-# Seconds a lap below which a closing rate is not worth saying - it is inside
-# what one lap of traffic does.
-TREND_WORTH_SAYING_S = 0.15
-
-
-# The gap text sits in the right of the row and runs PAST the board's own right
-# edge - `board.own_row` stops at the country flag, and the interval is drawn
-# beyond it. Expressed in row heights so it survives a resolution change.
-GAP_BAND_LEFT, GAP_BAND_RIGHT = 1.6, 1.4
+# Seconds a lap below which a closing rate is not worth saying.
+#
+# **0.15 was wrong by a factor of five, and the reason is that a gap is a
+# random walk.** It is not a noisy measurement of a pace difference - it is the
+# cumulative SUM of per-lap pace differences, so fitting a line to it and
+# judging the slope against an iid-sized threshold is spurious regression.
+# With this driver's 0.918 s lap-to-lap sigma and the five-point window here,
+# the standard deviation of the returned slope is about 0.47-0.66 s/lap
+# depending on how much of the two cars' noise is common. Simulated against
+# this class, a threshold of 0.15 fired on **68-82% of five-lap windows where
+# the two cars had identical pace.**
+#
+# Lengthening the window barely helps, which is the signature of the walk: for
+# iid noise the slope's sd falls as n^-1.5, here it falls as n^-0.5. Twenty
+# laps still gives a coin flip at 0.15.
+#
+# 0.8 is one and a half standard deviations at the middle of that range. It
+# will miss real trends; that is the correct direction, because the failure it
+# replaces was telling the driver he was catching somebody three times in four
+# when nothing was happening.
+TREND_WORTH_SAYING_S = 0.8
 
 
 def read_gaps(frame, board) -> tuple[float | None, float | None]:
     """`(ahead, behind)` in seconds, from the two rows either side of ours.
 
-    GT7 inserts a gap readout immediately above and below the driver's own row.
+    **The boxes come from `board.gap_lines`, which has seen them.** This module
+    used to carry its own band - `x1 - 1.6h` to `x1 + 1.4h` - written in the
+    voice of a measurement and never measured, because no frame of available
+    footage draws a gap at all. Two things were wrong with it. It disagreed
+    with `gap_lines`, which was tuned against real frames and searches the
+    row's own width rather than a narrower band shifted right into the flag and
+    compound-disc columns. And it was too narrow: swept across a `1:23.456`,
+    eleven pixel offsets of 121 returned a well-formed WRONG answer - `3.456`
+    against a true 83.456 - which `rejoin_against` would then turn into a
+    confident call about a car eighty seconds away from where it is.
+
+    `hud_time` now refuses a box whose ink touches either edge, so a clipped
+    read is a refusal rather than a shorter time. That guard and this one are
+    both needed: one stops the band being wrong, the other stops a wrong band
+    being believed.
+
     `None` for either where the box carries no value - which on all footage
-    available is BOTH, always: a replay draws `--:--.---` and nothing else. See
-    the module docstring on what that leaves unvalidated.
+    available is BOTH, always, because a replay draws `--:--.---`.
     """
     if frame is None or getattr(frame, "ndim", 0) != 3 or board is None:
         return None, None
-    x0, y0, x1, y1 = board
-    height = y1 - y0 + 1
-    left = max(0, x1 - int(GAP_BAND_LEFT * height))
-    right = min(frame.shape[1], x1 + int(GAP_BAND_RIGHT * height))
+    row = getattr(board, "row", board)
+    try:
+        ahead_box, behind_box = gap_lines(frame, row)
+    except Exception:
+        return None, None
     out = []
-    for top in (y0 - height, y1 + 2):
-        band = frame[max(0, top):max(0, top) + height, left:right]
-        out.append(read_seconds(band) if band.size else None)
+    for box in (ahead_box, behind_box):
+        if box is None:
+            out.append(None)
+            continue
+        x0, y0, x1, y1 = box
+        patch = frame[y0:y1 + 1, x0:x1 + 1]
+        out.append(read_seconds(patch) if patch.size else None)
     return out[0], out[1]
 
 
@@ -108,19 +155,31 @@ class Rejoin:
 
 
 def stop_costs_s(litres: float | None, refuel_rate_lps: float | None,
-                 pit_loss_s: float | None) -> float | None:
+                 pit_loss_s: float | None,
+                 pit_loss_source: str | None = None) -> float | None:
     """Total time a stop costs: the fill, plus the lane.
 
-    `pit_loss_s` is the track constant - transit and the dead time - measured
-    once per circuit. `None` if either half is unknown: a stop cost built from
-    one of them is not a stop cost.
+    **The dead time is in a declared pit loss and not in a measured one**, so
+    the source has to travel with the figure. `strategy.model.stop_overhead_s`
+    already gates on exactly this, and its docstring records the eight-second
+    Monza over-estimate that forced the gate; this function took a bare float
+    and could not apply it. With `REJOIN_MARGIN_S` at 3 s, a 7.5 s error flips
+    the rejoin verdict outright for any rival in that window - so the same
+    figure reached the driver from two expressions that disagreed, which is
+    CLAUDE.md rule 12.
+
+    `None` if either half is unknown: a stop cost built from one of them is not
+    a stop cost.
     """
     if (litres is None or not refuel_rate_lps or refuel_rate_lps <= 0
             or pit_loss_s is None):
         return None
     if litres < 0:
         return None
-    return litres / refuel_rate_lps + pit_loss_s
+    lane = pit_loss_s
+    if pit_loss_source == PIT_LOSS_MEASURED:
+        lane += PIT_DEAD_TIME_S
+    return litres / refuel_rate_lps + lane
 
 
 def rejoin_against(gap_behind_s: float | None,
@@ -142,36 +201,88 @@ def rejoin_against(gap_behind_s: float | None,
 
 @dataclass
 class GapTrend:
-    """One car's gap over time, and how fast it is changing.
+    """One car's gap over time, and how fast it is CLOSING.
 
     Keyed by lap, so a gap sampled twice on the same lap replaces rather than
     doubles - the readers run at one or two hertz and a lap is a minute.
-    """
-    seen: dict[int, float] = field(default_factory=dict)
 
-    def note(self, lap: int | None, gap_s: float | None) -> None:
+    ### It has to know which car it is watching
+
+    **Without that it regresses through an overtake and reports the answer as
+    pace.** Measured on this class as it first stood: when we passed the car
+    ahead and the next one was 12 s up the road it reported "losing 1.72 s a
+    lap"; when the car ahead pitted, "losing 9.79". Both are well-formed
+    confident numbers about a car that is no longer there, which is the shape
+    CLAUDE.md rule 9 names. `subject` is whatever identifies the car - a driver
+    id from the roster - and a change of subject throws the history away,
+    because it IS a different history.
+
+    ### The number means "the gap is shrinking", on both sides
+
+    A single `GapTrend` class is built twice, once for the car ahead and once
+    for the car behind, and "positive means we are catching him" is only true
+    of one of them - on the car behind a shrinking gap means HE is catching US,
+    which demands the opposite driving. That is rule 13 exactly. So the rate
+    here means one thing on both sides - the gap is closing at this many
+    seconds a lap - and `side` says who that is good news for. The sentence
+    differs; the number does not.
+    """
+    side: str = "ahead"
+    seen: dict[int, float] = field(default_factory=dict)
+    subject: object = None
+
+    def note(self, lap: int | None, gap_s: float | None,
+             subject: object = None) -> None:
+        """Record one reading. A change of subject starts a new history."""
         if lap is None or gap_s is None:
             return
+        if subject is not None and subject != self.subject:
+            if self.subject is not None:
+                self.seen = {}
+            self.subject = subject
         self.seen[int(lap)] = float(gap_s)
 
     def new_session(self) -> None:
         """CLAUDE.md rule 11. A gap history is about one race."""
         self.seen = {}
+        self.subject = None
+
+    def _window(self, over_laps: int) -> list[int]:
+        """The last `over_laps` CONSECUTIVE laps, newest last.
+
+        **Consecutive, not merely the last N keys.** The board is unreadable
+        for long stretches by design, and taking the last five samples fitted a
+        line straight through the holes: five readings spanning laps 3, 4, 15,
+        16, 17 came back as a trend "over the last 5 laps", and a series broken
+        by our own pit stop reported the stop itself as ten seconds a lap of
+        lost pace.
+        """
+        laps = sorted(self.seen)
+        if not laps:
+            return []
+        run = [laps[-1]]
+        for lap in reversed(laps[:-1]):
+            if run[0] - lap != 1:
+                break
+            run.insert(0, lap)
+            if len(run) >= over_laps:
+                break
+        return run
 
     def closing_s_per_lap(self, over_laps: int = MIN_LAPS_FOR_TREND
                           ) -> tuple[float | None, int]:
-        """Seconds a lap the gap is closing, and the laps behind it.
+        """Seconds a lap the gap is CLOSING, and the consecutive laps behind it.
 
-        Positive means we are catching him. A least-squares slope over the last
-        `over_laps` samples, and the count travels with it because a slope
-        through three points is not a trend - CLAUDE.md rule 4.
+        Positive means the gap is shrinking, whichever side this is. See the
+        class docstring on why that is not "we are catching him".
 
-        **A difference of gaps, not of lap times.** Both cars ran the same lap
-        in the same traffic, so the lap-to-lap noise that makes a lap-time
-        comparison useless at this driver's 0.918 s sigma is largely common and
-        cancels here.
+        A least-squares slope, and the count travels with it because a slope
+        through three points is not a trend - CLAUDE.md rule 4. Note that for a
+        random walk the least-squares fit is barely better than subtracting the
+        first sample from the last; the machinery is kept because it degrades
+        more gracefully when one reading is off.
         """
-        laps = sorted(self.seen)[-over_laps:]
+        laps = self._window(over_laps)
         if len(laps) < 3:
             return None, len(laps)
         mean_lap = sum(laps) / len(laps)
@@ -181,17 +292,22 @@ class GapTrend:
             return None, len(laps)
         slope = sum((k - mean_lap) * (self.seen[k] - mean_gap)
                     for k in laps) / spread
-        # A shrinking gap means we are closing, so the sign is flipped for the
-        # caller: "closing at 0.4" reads better than "the gap is at minus 0.4".
         return -slope, len(laps)
 
-    def laps_to_catch(self, over_laps: int = MIN_LAPS_FOR_TREND
-                      ) -> float | None:
+    def laps_to_catch(self, over_laps: int = MIN_LAPS_FOR_TREND,
+                      laps_left: int | None = None) -> float | None:
         """Laps until the gap reaches zero at the present rate, or `None`.
 
         `None` where we are not closing, rather than a negative number or an
         infinity: "never, at this rate" is the answer, and it is not a quantity
         of laps.
+
+        **And `None` where the answer runs past the flag.** The denominator has
+        a standard deviation near 0.5 s a lap, so a "seven laps" call has a
+        one-sigma range of four to thirty-three; just above the threshold an
+        eight-second gap returns fifty laps in a twenty-lap race. A number that
+        large carries no information and it is spoken under a helmet, so it is
+        not spoken at all.
         """
         rate, count = self.closing_s_per_lap(over_laps)
         if rate is None or count < MIN_LAPS_FOR_TREND:
@@ -201,4 +317,7 @@ class GapTrend:
         latest = self.seen[max(self.seen)]
         if latest <= 0:
             return None
-        return latest / rate
+        laps = latest / rate
+        if laps_left is not None and laps > laps_left:
+            return None
+        return laps

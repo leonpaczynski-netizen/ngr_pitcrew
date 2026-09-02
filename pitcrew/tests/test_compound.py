@@ -91,7 +91,14 @@ def test_rubbish_never_raises():
     assert glyph(None) is None
 
 
-def test_the_floor_sits_between_the_measured_populations():
-    """0.064 was the 90th percentile of a real S; 0.494 the worst obscured
-    one."""
-    assert 0.064 < MATCH_FLOOR < 0.494
+def test_the_floor_leaves_room_for_a_real_s_and_none_for_a_digit():
+    """**The argument is what the OTHER compounds measure**, not that the floor
+    sits inside the S population.
+
+    With a bank of one class, `read` answers "S" for anything inside the floor.
+    Measured through this module's own normalisation: M is 0.455 away and H is
+    0.500 - 2.5x the floor - so a medium can never read as a soft. The binding
+    constraint in the other direction is a digit: a "5" lands at 0.202, so a
+    floor of 0.30 would classify 5, 6, 3, 8 and G as S.
+    """
+    assert 0.064 < MATCH_FLOOR < 0.202

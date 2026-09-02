@@ -1524,7 +1524,8 @@ class Store:
                           fuel_out_l: float | None = None,
                           compound: str | None = None,
                           assumed_start_l: float | None = None,
-                          reads: int = 0, watched_s: float | None = None,
+                          reads: int = 0, compound_reads: int = 0,
+                          watched_s: float | None = None,
                           partial: bool = False) -> int:
         """File one observed stop.
 
@@ -1541,11 +1542,11 @@ class Store:
                 """INSERT INTO rival_stops
                        (session_id, driver, lap, laps_total, fuel_in_l,
                         fuel_out_l, compound, assumed_start_l, reads,
-                        watched_s, partial, recorded_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        compound_reads, watched_s, partial, recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, driver, lap, laps_total, fuel_in_l, fuel_out_l,
-                 compound, assumed_start_l, int(reads), watched_s,
-                 1 if partial else 0, _now()))
+                 compound, assumed_start_l, int(reads), int(compound_reads),
+                 watched_s, 1 if partial else 0, _now()))
             return int(cur.lastrowid)
 
     def rename_driver(self, old: str, new: str) -> int:

@@ -34,10 +34,11 @@ def races(store):
 
 
 def a_stop(driver="Rocky", lap=11, fuel_in=8.0, fuel_out=93.0,
-           reads=14, partial=False):
+           reads=14, compound_reads=6, partial=False):
     return Seen(driver=driver, driver_id=0,
                 stop=Stop(lap=lap, fuel_in_l=fuel_in, fuel_out_l=fuel_out),
-                reads=reads, watched_s=120.0, partial=partial)
+                reads=reads, compound_reads=compound_reads, watched_s=120.0,
+                partial=partial)
 
 
 # --- identity across races --------------------------------------------------
@@ -209,3 +210,13 @@ def test_only_provisional_handles_are_listed_as_needing_a_name(store):
     store.save_driver("Car #1", np.ones((16, 64), dtype=bool))
     store.save_driver("Rocky", np.ones((16, 64), dtype=bool))
     assert [d["name"] for d in store.unnamed_drivers()] == ["Car #1"]
+
+
+def test_the_two_sample_counts_are_stored_apart(store):
+    """CLAUDE.md rule 4. A stop backed by forty fuel figures may have had one
+    legible compound disc, or none - and a single `reads` said nothing about
+    which."""
+    rival_book.record(store, None, a_stop(reads=21, compound_reads=3),
+                      laps_total=20)
+    row = store.rival_stops("Rocky")[0]
+    assert row["reads"] == 21 and row["compound_reads"] == 3

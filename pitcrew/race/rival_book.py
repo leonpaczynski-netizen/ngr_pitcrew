@@ -59,7 +59,8 @@ def record(store, session_id, seen, *, laps_total=None,
         session_id, seen.driver, lap=stop.lap, laps_total=laps_total,
         fuel_in_l=stop.fuel_in_l, fuel_out_l=stop.fuel_out_l,
         compound=stop.compound, assumed_start_l=assumed_start_l,
-        reads=seen.reads, watched_s=seen.watched_s, partial=seen.partial)
+        reads=seen.reads, compound_reads=seen.compound_reads,
+        watched_s=seen.watched_s, partial=seen.partial)
 
 
 def profile_of(store, driver: str, *,

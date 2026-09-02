@@ -58,8 +58,15 @@ COLON_MIN_HEIGHT = 0.45
 # one is not a clean time box.
 NOT_A_GLYPH_WIDE = 2.0
 
-# Fewer ink columns than this is not a time.
-MIN_INK_COLUMNS = 6
+# A run narrower or shorter than this is not a glyph - it is a sliver, and a
+# sliver would otherwise become a piece and be classified as punctuation.
+#
+# **Two, not the five `hud_digits.glyphs` uses.** That floor is safe for a fuel
+# figure, which is all digits; here the smallest legitimate glyph is the full
+# stop, measured at 3 x 3 px on the fastest-lap banner. Setting this to 5 threw
+# the decimal point away and turned a known 133.484 into a refusal - and the
+# synthetic fixture did not catch it, because it renders the stop at six pixels.
+MIN_RUN_WIDE, MIN_RUN_TALL = 2, 2
 
 
 def _pieces(ink):
@@ -69,7 +76,7 @@ def _pieces(ink):
     for run in _runs(used, 1):
         piece = ink[:, run[0]:run[-1] + 1]
         rows = np.where(piece.any(axis=1))[0]
-        if len(rows) == 0:
+        if len(run) < MIN_RUN_WIDE or len(rows) < MIN_RUN_TALL:
             continue
         out.append((int(run[0]), int(run[-1]), int(rows[0]), int(rows[-1])))
     return out
@@ -89,6 +96,13 @@ def tokens(patch) -> list[str] | None:
         return None
     pieces = _pieces(ink)
     if not pieces:
+        return None
+    # **Ink touching either edge means the box was cut, and a cut time can
+    # parse cleanly as a shorter one.** Sweeping a `1:23.456` across the band,
+    # eleven offsets of 121 returned a well-formed WRONG answer - `3.456` for a
+    # true 83.456 - against fifteen that were right. A clipped box is refused
+    # rather than read.
+    if pieces[0][0] <= 0 or pieces[-1][1] >= ink.shape[1] - 1:
         return None
     tallest = max(bottom - top + 1 for _, _, top, bottom in pieces)
     if tallest < 5:
@@ -126,9 +140,13 @@ def read_seconds(patch) -> float | None:
         return None
     text = "".join(found)
     minutes = 0.0
-    if ":" in text:
+    has_minutes = ":" in text
+    if has_minutes:
         head, _, text = text.partition(":")
-        if not head.isdigit() or text.count(":"):
+        # **One digit of minutes, and no more.** GT7 draws `M:SS.mmm`, so
+        # "12:34.567" is not a long lap - it is two glyphs that should not both
+        # be there, and it parsed happily as 754 seconds.
+        if len(head) != 1 or not head.isdigit() or text.count(":"):
             return None
         minutes = float(head)
     if "." not in text:
@@ -136,7 +154,16 @@ def read_seconds(patch) -> float | None:
     whole, _, fraction = text.partition(".")
     if not whole.isdigit() or not fraction.isdigit():
         return None
-    if len(fraction) != 3 or len(whole) > 2:
+    if len(fraction) != 3:
+        return None
+    # **The seconds field is zero-padded whenever minutes are shown, and that
+    # is the guard that catches a clipped box.** `1:2.345` is not a time GT7
+    # draws; it is what `1:12.345` looks like with a digit cut off, and it
+    # parsed as 62.345 against a true 72.345 - ten seconds wrong, silently, in
+    # a number the caller is about to subtract from something.
+    if has_minutes and len(whole) != 2:
+        return None
+    if len(whole) > 2 or (not has_minutes and not whole):
         return None
     seconds = float(whole) + float(fraction) / 1000.0
     if seconds >= 60.0:

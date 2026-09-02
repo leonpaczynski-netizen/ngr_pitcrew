@@ -24,13 +24,16 @@ the only glyph in the bank. Anything else is refused - `None`, not a guess -
 which is the right failure, but it does mean this cannot yet tell you a rival
 switched to a harder tyre. Add the glyph from the first race that shows one.
 
-**And a non-red disc may never reach here at all.** `pit_columns` finds a disc
-by red dominance: `red > green * 2 and red > blue * 2`. Every disc measured was
-(200, 25, 0), so nothing in the archive says what colour GT7 draws for a medium
-or a hard - but if it draws them yellow or white, the disc is not found, the
-whole pit column is not found, and the car reads as never having pitted. That
-is a bigger hole than an unread letter and it cannot be closed from footage in
-which everybody ran the same tyre.
+**And a non-red disc never reaches here at all - which is now a confirmed
+defect rather than a worry.** `pit_columns` finds a disc by red dominance, and
+the driver confirmed on 3 Sep 2026 that **GT7 changes the disc colour with the
+compound**. Every disc in the archive was (200, 25, 0) because the whole field
+ran Racing Soft, so the footage could not have shown it.
+
+The consequence is bigger than an unread letter: the disc is not found, the
+pit column is not found, and the car reads as never having pitted at all. Until
+`pit_columns` knows the colour set, **the pit wall can only see rivals who are
+on the same tyre he is.** One frame per compound closes it.
 """
 from __future__ import annotations
 
@@ -42,16 +45,40 @@ import numpy as np
 
 BANK_PATH = Path(__file__).with_name("compound_letters.json")
 
-# A glyph further than this from its best template is not read. The measured
-# populations are 0.046 median and 0.064 at the 90th against a 0.494 worst, so
-# this sits in the gap with room either side.
+# A glyph further than this from its best template is not read.
+#
+# **The argument is not "it sits between 0.046 and 0.494". It is what the other
+# compounds measure.** With a bank of one class, `read` answers "S" for
+# anything inside the floor, so the question that matters is how far away the
+# letters GT7 would actually draw instead are. Rendered through this module's
+# own normalisation and measured against the shipped template:
+#
+#     M                     0.455        H                  0.500
+#     a blank cell          0.461        5                  0.202
+#     6 / 3 / 8 / G         0.274-0.299  an S in another font  0.144-0.299
+#
+# **M and H are 2.5x the floor**, so there is no plausible route to reading a
+# medium as a soft, which is the only confusion that would matter on a pit
+# disc. The thin margin is against arbitrary glyphs - a "5" lands 0.022 outside
+# - and nothing on a GT7 pit disc is a 5. That margin is what bounds how far
+# this may ever be RAISED: at 0.30, five, six, three, eight and G all read as S.
 MATCH_FLOOR = 0.18
 
 # The disc body is saturated red; the letter is dark on it.
+#
+# **Deliberately stricter than `pit_columns.DISC_MIN` (130).** A disc washed out
+# by a fluorescent pit crew behind the translucent HUD can pass there and fail
+# here, and that is the right way round: `pit_columns` losing the disc costs the
+# whole stop, so it should be the more forgiving of the two, while a letter read
+# off a washed-out disc is a guess about a rival's whole remaining race.
 RED_MIN, RED_RATIO = 140, 2.0
 LETTER_MAX = 120
 # Fewer red pixels than this is not a disc, and fewer dark ones is not a letter.
-MIN_DISC_PIXELS, MIN_LETTER_PIXELS = 120, 10
+# **A fraction of the disc, not an absolute count.** 120 pixels needs a disc at
+# least 12.4 px across, which is above what `pit_columns.DISC_MIN_FRAC` accepts
+# below about 830 rows of frame - the exact shape of the defect that made the
+# live gauge go silent at the resolution he actually races at (`396dfcb`).
+MIN_DISC_FRACTION, MIN_LETTER_PIXELS = 0.30, 10
 
 
 @lru_cache(maxsize=1)
@@ -78,7 +105,7 @@ def glyph(patch):
         on = np.where(red[y])[0]
         if len(on) >= 4:
             inside[y, on[0]:on[-1] + 1] = True
-    if inside.sum() < MIN_DISC_PIXELS:
+    if inside.sum() < MIN_DISC_FRACTION * inside.size:
         return None
     dark = inside & (patch.max(axis=2) < LETTER_MAX)
     rows, cols = np.where(dark)

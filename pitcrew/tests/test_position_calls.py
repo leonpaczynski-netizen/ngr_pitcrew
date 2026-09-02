@@ -179,15 +179,24 @@ def test_an_unclassified_kind_raises_rather_than_defaulting():
         register_of("something-nobody-classified")
 
 
-def test_position_and_the_heartbeat_are_the_only_volunteered_facts():
-    """Both are there for one reason: he races with GT7's race HUD off.
+def test_only_three_facts_are_volunteered_and_each_had_to_be_argued():
+    """A fact is volunteered only where he cannot obtain it himself.
 
-    If a third joins them, someone has to have decided that he cannot obtain
-    it himself either - so this test exists to make that a decision rather
-    than a drift.
+    `POSITION` and `STATUS` were admitted because he raced with GT7's race HUD
+    off. **`CLOSING` was admitted on a different argument, and it survives his
+    leaving VR:** the HUD shows the gap, and no HUD shows the RATE. He can read
+    "5.1 seconds" off the screen at a glance; he cannot read "you are taking
+    0.7 a lap out of him", because that is a slope through five laps of
+    history. The instantaneous number and its trend are different facts and
+    only one of them is on the screen.
+
+    If a fourth joins them, someone has to have decided the same thing about
+    it - so this test exists to make that a decision rather than a drift.
     """
+    from pitcrew.race.calls import CLOSING
+
     facts = {kind for kind, reg in REGISTER.items() if reg == FACT}
-    assert facts == {POSITION, STATUS}
+    assert facts == {POSITION, STATUS, CLOSING}
 
 
 def test_the_box_call_is_an_instruction():
