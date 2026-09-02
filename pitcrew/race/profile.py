@@ -234,6 +234,16 @@ def field_stop_fraction(profiles: list[Profile]) -> float | None:
     return sum(seen) / len(seen) if seen else None
 
 
+def field_without(profiles: list[Profile], driver: str) -> float | None:
+    """Where the field stops, EXCLUDING the driver being judged against it.
+
+    Including him shrinks his own deviation by 1/n, so in a field of eight a
+    genuine 8% early stopper reads as 7%. The comparison is meant to be against
+    the others.
+    """
+    return field_stop_fraction([p for p in profiles if p.driver != driver])
+
+
 def burn_against(profile: Profile, ours_l: float | None
                  ) -> tuple[float | None, int]:
     """Litres a lap he uses more than us. Negative means he uses less."""
@@ -244,7 +254,8 @@ def burn_against(profile: Profile, ours_l: float | None
 
 
 def describe(profile: Profile, *, ours_burn_l: float | None = None,
-             field_fraction: float | None = None) -> list[str]:
+             field_fraction: float | None = None,
+             refuel_rate_lps: float | None = None) -> list[str]:
     """What is known about this driver, in plain sentences, or nothing.
 
     Sentences only where the evidence carries them. A profile from a single
@@ -272,9 +283,18 @@ def describe(profile: Profile, *, ours_burn_l: float | None = None,
     surplus, surplus_n = profile.fill_surplus_l()
     if surplus is not None and surplus_n:
         if surplus > FILL_SLACK_L:
-            lines.append("He leaves with about %.0f L more than he needs, so "
-                         "he stands %.0f seconds longer than he has to."
-                         % (surplus, surplus))
+            # **Litres are not seconds until a measured rate says so.** This
+            # printed the same number twice, which silently asserts 1.0 L/s -
+            # true on this driver's archive and nowhere stated in the sentence.
+            # Without a rate it says litres and stops. CLAUDE.md rule 5.
+            if refuel_rate_lps and refuel_rate_lps > 0:
+                lines.append(
+                    "He leaves with about %.0f L more than he needs, so he "
+                    "stands %.0f seconds longer than he has to."
+                    % (surplus, surplus / refuel_rate_lps))
+            else:
+                lines.append("He leaves with about %.0f L more than he needs "
+                             "and stands there loading it." % surplus)
         elif surplus < -FILL_SLACK_L:
             lines.append("He leaves short of the flag by about %.0f L, so he "
                          "is planning another stop." % (-surplus))

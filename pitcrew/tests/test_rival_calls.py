@@ -96,7 +96,9 @@ def test_without_our_own_stop_it_still_reports_his_standing_time():
                        burn_per_lap_l=SPA_BURN, refuel_rate_lps=RATE,
                        ours=None)
     assert call is not None
-    assert "62 seconds standing" in call.reason
+    # 72 L needed less 10 aboard = 62 s of fill, plus the 16.9 s dead time
+    # before a hose is connected. "Standing" means one thing on this voice.
+    assert "79 seconds standing" in call.reason
 
 
 # --- must_stop_by ----------------------------------------------------------
@@ -132,15 +134,27 @@ def test_before_the_tank_can_reach_the_flag_the_call_is_the_floor():
                     planned_stop_lap=11)
     assert call is not None
     assert call.call == "Stay out."
-    assert "cannot reach the flag" in call.reason
+    # NOT "the tank cannot reach the flag": under a helmet those are the words
+    # of an emergency and this call means the opposite - too much fuel aboard.
+    assert "Too much fuel aboard" in call.reason
+    assert "cannot reach" not in call.reason
 
 
-def test_after_the_floor_it_costs_a_lap_of_fuel_to_defer():
-    call = stay_out(lap=8, laps_left=12, burn_per_lap_l=SPA_BURN,
+def test_above_the_tank_clamp_there_is_no_seconds_argument_so_nothing_is_said():
+    """The correction. The fill is the same length whatever lap it happens on,
+    so "every lap you stay out is a shorter stop" was a claim of eight seconds
+    a lap where the true figure is zero."""
+    assert stay_out(lap=8, laps_left=12, burn_per_lap_l=SPA_BURN,
                     refuel_rate_lps=RATE, capacity_l=100.0, laps_total=20,
-                    planned_stop_lap=11)
-    assert call is not None
-    assert "8 seconds less standing" in call.reason
+                    planned_stop_lap=11) is None
+
+
+def test_a_rival_who_came_in_with_more_than_he_needs_is_refused_not_zeroed():
+    """CLAUDE.md rule 9, in the module that quotes it. He is not standing for
+    zero seconds - he is doing something this arithmetic does not describe."""
+    assert rival_boxed(_rival(came_in=90.0), lap=11, laps_left=9,
+                       burn_per_lap_l=SPA_BURN, refuel_rate_lps=RATE,
+                       ours=None) is None
 
 
 def test_on_and_after_the_planned_lap_it_goes_quiet():
@@ -150,7 +164,8 @@ def test_on_and_after_the_planned_lap_it_goes_quiet():
 
 
 def test_where_a_lap_of_fuel_is_not_worth_saying_nothing_is_said():
-    # A circuit burning 2 L/lap saves 2 s a lap deferred, under the threshold.
+    # A circuit burning 2 L/lap never comes near the tank clamp, so there is
+    # no lap on which deferring shortens the stop at all.
     assert stay_out(lap=8, laps_left=12, burn_per_lap_l=2.0,
                     refuel_rate_lps=RATE, capacity_l=100.0, laps_total=20,
                     planned_stop_lap=11) is None

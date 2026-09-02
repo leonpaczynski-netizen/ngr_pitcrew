@@ -1461,6 +1461,14 @@ class Store:
             rows, cols = int(array.shape[0]), int(array.shape[1])
             blob = np.packbits(array).tobytes()
         with self._write() as conn:
+            if is_teammate:
+                # **One teammate, and the old one is cleared.** Without this
+                # the flag accumulates and `teammate_name`'s unordered SELECT
+                # returns whichever row sqlite reaches first - the lowest
+                # rowid, which is the PREVIOUS teammate. Re-designating one
+                # would silently do nothing.
+                conn.execute("UPDATE drivers SET is_teammate = 0 "
+                             "WHERE name <> ?", (name,))
             conn.execute(
                 """INSERT INTO drivers (name, exemplar, rows, cols,
                                         races_seen, is_teammate, updated_at)
@@ -1497,7 +1505,8 @@ class Store:
 
     def teammate_name(self) -> str | None:
         rows = self._query(
-            "SELECT name FROM drivers WHERE is_teammate = 1 LIMIT 1")
+            "SELECT name FROM drivers WHERE is_teammate = 1 "
+            "ORDER BY updated_at DESC, id DESC LIMIT 1")
         return rows[0]["name"] if rows else None
 
     def note_races_seen(self, names) -> None:

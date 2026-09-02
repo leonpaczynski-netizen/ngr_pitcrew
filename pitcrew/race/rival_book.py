@@ -28,8 +28,13 @@ having, and excluded by default from anything that computes a rate.
 """
 from __future__ import annotations
 
-from pitcrew.race.profile import FULL_TANK_L, Observation, Profile, describe
-from pitcrew.race.profile import field_stop_fraction
+from pitcrew.race.profile import (
+    FULL_TANK_L,
+    Observation,
+    Profile,
+    describe,
+    field_without,
+)
 
 # A stop the watcher joined mid-fill is kept, but it does not get to set a
 # burn rate: its entry figure is an upper bound and nothing in the number says
@@ -87,7 +92,8 @@ def everyone(store) -> list[Profile]:
 
 
 def briefing(store, *, ours_burn_l: float | None = None,
-             drivers: list[str] | None = None) -> list[str]:
+             drivers: list[str] | None = None,
+             refuel_rate_lps: float | None = None) -> list[str]:
     """What is known about the field, in plain sentences, before a race.
 
     The pre-race read: who uses more fuel than us, who carries what he does not
@@ -101,11 +107,12 @@ def briefing(store, *, ours_burn_l: float | None = None,
         profiles = [p for p in profiles if p.driver in wanted]
     if not profiles:
         return []
-    middle = field_stop_fraction(profiles)
     lines: list[str] = []
     for profile in sorted(profiles, key=lambda p: -p.stops_seen):
+        # The field he is judged against excludes him.
         said = describe(profile, ours_burn_l=ours_burn_l,
-                        field_fraction=middle)
+                        field_fraction=field_without(profiles, profile.driver),
+                        refuel_rate_lps=refuel_rate_lps)
         if said:
             lines.extend(said)
     return lines

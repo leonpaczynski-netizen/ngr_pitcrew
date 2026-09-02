@@ -13,17 +13,26 @@ and a rival's is the swing across the stop cycle.
 
 ### Why nothing here recommends an undercut
 
-An adversarial review of the first design found it inverted, and the reason is
-measured rather than stylistic. **He fuels to the flag and carries no spare, so
-every lap he defers takes a lap's fuel out of his own stop** - 3.2 s at Road
-Atlanta, 5.6 at Monza, 8.0 at Spa, against an out-lap penalty measured at about
-1.2 s. Staying out is worth several times what fresh tyres are.
+**The tyre half of the argument is measured and it holds.** At the 2x wear he
+races, his stints end at 0.44-0.56 worst corner, which is CLAUDE.md 5.1 phase 1
+- "losses in tenths" - for the whole stint. There is no old-tyre pace loss to
+gain against, so an undercut model would be multiplying by a number never
+observed at his multiplier. Against a measured out-lap penalty of about 1.2 s,
+an undercut is roughly a second down before anything else happens.
 
-And the tyre half is not there to be won: at the 2x wear he races, his stints
-end at 0.44-0.56 worst corner, which is CLAUDE.md 5.1 phase 1 - "losses in
-tenths" - for the whole stint. There is no old-tyre pace loss to gain against,
-so an undercut model would be multiplying by a number never observed at his
-multiplier.
+**The fuel half of the argument was wrong and has been withdrawn.** This module
+was written claiming that every lap deferred takes a lap's fuel out of the stop
+- 8 s a lap at Spa - and that staying out was therefore worth several times
+what fresh tyres are. It is not. A lap deferred does shrink the fill by a lap's
+worth, and it also means arriving with a lap's worth less aboard, and the two
+cancel exactly: the litres that pass through the hose are `laps_total x burn -
+start`, with no lap term in them at all. See `rivals.deferring_costs_s` for the
+arithmetic and the measured table. Above the tank clamp the saving is zero;
+below it the sign inverts.
+
+So staying out is still right, for smaller and different reasons - fuel weight
+and the tank clamp - and this module no longer prices it at eight seconds a
+lap.
 
 ### What is knowable, and when
 
@@ -53,7 +62,12 @@ from pitcrew.race.calls import (
     STAY_OUT_FUEL,
     Call,
 )
-from pitcrew.race.rivals import Stop, deferring_saves_s, earliest_stop_lap
+from pitcrew.race.rivals import (
+    DEAD_TIME_S,
+    Stop,
+    deferring_costs_s,
+    earliest_stop_lap,
+)
 
 # The three kinds are defined in `calls.py`, beside the ranking that orders
 # them, and re-exported here because this is the module that composes them.
@@ -69,7 +83,10 @@ __all__ = ["RIVAL_BOXED", "RIVAL_COMMITTED", "STAY_OUT_FUEL", "Rival",
 WORTH_SAYING_S = 8.0
 
 # Seconds of our own standing time saved per lap deferred, below which staying
-# out is not worth a call of its own.
+# out is not worth a call of its own. It is rarely met: above the tank clamp the
+# saving is exactly zero - see `rivals.deferring_costs_s` - so this fires only
+# in the narrow band where the fill is still capped by the tank rather than by
+# the flag, which is the one place a lap deferred genuinely shortens the stop.
 DEFER_WORTH_SAYING_S = 3.0
 
 
@@ -119,13 +136,22 @@ def rival_boxed(rival: Rival, *, lap: int, laps_left: int | None,
     needs = _fill_to_the_flag(laps_left, burn_per_lap_l)
     if needs is None:
         return None
-    # He fills to what the remaining laps cost, from what he came in on.
-    theirs = max(0.0, needs - entered_on) / refuel_rate_lps
-    mine = None
-    if ours is not None:
-        mine_litres = ours.litres
-        if mine_litres is not None:
-            mine = mine_litres / refuel_rate_lps
+    # **No clamp, and this module quotes the rule it was breaking.** A rival
+    # who comes in with more fuel than the remaining laps cost is not a rival
+    # who stands still for zero seconds - he is a rival who is not doing what
+    # this arithmetic assumes: not filling to the flag, or taking tyres only,
+    # or burning at a rate that is not ours. All three are "I cannot tell you",
+    # and `max(x, 0.0)` renders them as a confident "about 0 seconds standing"
+    # which the swing branch then subtracts from. CLAUDE.md rule 9.
+    if needs < entered_on:
+        return None
+    theirs = (needs - entered_on) / refuel_rate_lps + DEAD_TIME_S
+    # **The same words must mean the same thing.** `Stop.standing_s` includes
+    # the 16.9 s dead time before a hose is connected, and this used to compute
+    # the fill alone - so "seconds standing" meant two quantities 16.9 s apart
+    # depending on which function said it, on one voice, with a threshold of
+    # 8 s deciding whether to speak at all. CLAUDE.md rule 13.
+    mine = ours.standing_s(refuel_rate_lps) if ours is not None else None
     if mine is None:
         if theirs < WORTH_SAYING_S:
             return None
@@ -160,20 +186,31 @@ def stay_out(*, lap: int, laps_left: int | None,
     earlier than that does not waste seconds, it forces a second stop worth
     most of a minute. Rule 12 - where that is what binds, that is what is said.
     """
-    saved = deferring_saves_s(burn_per_lap_l, refuel_rate_lps)
-    if saved is None or saved < DEFER_WORTH_SAYING_S:
-        return None
     floor = earliest_stop_lap(laps_total, lap, burn_per_lap_l, capacity_l)
     if floor is not None and lap < floor:
+        # **Not "the tank cannot reach the flag".** Under a helmet those are
+        # the words of an emergency, and this call means the opposite: there is
+        # too much fuel aboard to fill usefully yet. `calls.py` learned exactly
+        # this about leading with "No fuel" and the lesson did not travel.
         return Call(STAY_OUT_FUEL, lap,
                     "Stay out.",
-                    f"The tank cannot reach the flag before lap {floor}.",
-                    HIGH)
+                    f"Too much fuel aboard to fill. Lap {floor} at the "
+                    f"earliest.", HIGH)
     if planned_stop_lap is not None and lap >= planned_stop_lap:
+        return None
+    # **Above the clamp there is no seconds argument, so there is no call.**
+    # The fill is the same length whatever lap it happens on, and saying "every
+    # lap you stay out is a shorter stop" was not a small overstatement - it
+    # was a claim of eight seconds a lap where the true figure is zero. What
+    # remains in favour of staying out is fuel weight and tyre life, neither of
+    # which is a standing-time figure and neither of which this function has.
+    cost = deferring_costs_s(lap, laps_total, burn_per_lap_l, capacity_l,
+                             refuel_rate_lps)
+    if cost is None or cost > -DEFER_WORTH_SAYING_S:
         return None
     return Call(STAY_OUT_FUEL, lap,
                 "Every lap you stay out is a shorter stop.",
-                f"About {saved:.0f} seconds less standing, each lap.", MEDIUM)
+                f"About {-cost:.0f} seconds less standing, each lap.", MEDIUM)
 
 
 def must_stop_by(rival: Rival, burn_per_lap_l: float | None,

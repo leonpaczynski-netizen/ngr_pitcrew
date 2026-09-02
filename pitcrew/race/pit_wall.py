@@ -55,15 +55,39 @@ from pitcrew.telemetry.roster import read as read_rows_of_board
 
 _log = log(__name__)
 
-# Clean frames in a row without this car's columns before its stop is closed.
-# **Clean frames, not elapsed frames.** A frame the board could not be read on
-# says nothing about whether a car is in the lane, and counting it as absence
-# closes a stop in the middle of its own fill.
+# Frames in a row on which this car was SEEN ON THE BOARD without its columns,
+# before its stop is closed.
+#
+# **Seen, not merely elapsed - and the difference cost four stops out of one.**
+# Two things look like absence and only one of them is: a frame the board could
+# not be read on, and a frame where the board read but this driver's own name
+# did not. The second is common exactly when it hurts, because a car in its pit
+# box is half behind a pit crew, which is one of the cases `Roster.drivers`
+# names as a normal misread. Counting either as absence closes a stop in the
+# middle of its own fill and opens a fresh one when the name comes back:
+# measured over the whole Spa race, that turned one stop each for PUNISHED and
+# the driver himself into four apiece, with burn rates to match.
 CLOSE_AFTER_CLEAN_FRAMES = 3
+
+# ...and a stop nobody has seen either way for this long is over. A car can
+# leave the visible top eight while standing - `race/profile.py` has the
+# measured account of why that is the normal case rather than the exception -
+# and without a clock its visit would stay open to the flag. A GT7 stop is 50
+# to 100 seconds of standing, so this is comfortably past the longest real one.
+CLOSE_AFTER_SILENT_S = 180.0
 
 # Below this many fuel readings a stop is not worth filing: one reading cannot
 # distinguish an entry figure from an exit one.
 MIN_READS = 2
+
+# ...and below this many seconds it was not a stop at all. **The measured dead
+# time before a hose is even connected is 16.9 s** - see `rivals.DEAD_TIME_S` -
+# so nothing shorter than that can be a car standing in its box. Run over the
+# whole Spa race without this, two 12-to-15 second fragments came back as
+# stops, one of them with identical entry and exit fuel because it had caught
+# the same number twice. Real stops in that race were watched for 87 to 117 s,
+# so this discards fragments with a wide margin and no real stop near it.
+MIN_WATCHED_S = 15.0
 
 # A driver must be seen this many times before he is a driver rather than a
 # misread. See `Roster.drivers`.
@@ -122,6 +146,10 @@ class PitWall:
         self._on_stop = on_stop
         self._visits: dict[int, Visit] = {}
         self._absent: dict[int, int] = {}
+        # Drivers seen on the board WITHOUT pit columns. A visit that begins
+        # for a driver who is not in here started after the fill did, so far as
+        # anything can tell - which is what `partial` means.
+        self._seen_clean: set[int] = set()
         self._position: dict[int, int] = {}
         self._pitted: set[int] = set()
         self._stops: list[Seen] = []
@@ -138,6 +166,7 @@ class PitWall:
         """
         self._visits.clear()
         self._absent.clear()
+        self._seen_clean.clear()
         self._position.clear()
         self._pitted.clear()
         self._stops = []
@@ -182,31 +211,41 @@ class PitWall:
         self._frames += 1
         ladder = flag_ladder(frame)
         if not ladder:
-            return []                     # silence, not absence
-        board = own_row(frame)
+            return self._close_stale(now)      # silence, not absence
+        # **The ladder we already have, not a second search.** `own_row` finds
+        # one itself when it is not given one, and this runs on the sampler's
+        # worker thread where a duplicated O(n^2) scan over every saturated run
+        # in a 1920x1080 frame comes straight out of the wear gauge's budget.
+        board = own_row(frame, ladder=ladder)
         if board is None:
-            return []
+            return self._close_stale(now)
         rows = read_rows_of_board(frame, board, ladder)
         if not rows:
             return []
         self._clean += 1
 
         ids: dict[int, int] = {}
+        identified: set[int] = set()
         for place, row in enumerate(rows, start=1):
             driver = self._roster.see(row.name)
             if driver is None:
                 continue
             ids[row.y] = driver
+            identified.add(driver)
             self._position[driver] = place
 
         in_lane: set[int] = set()
         for pit in read_rows(frame, board, ladder):
             if not pit.fuel_box:
                 continue
-            near = [y for y in ids if abs(y - pit.y) <= ROW_MATCH_TOL]
-            if not near:
+            # The NEAREST row, not the first within tolerance: dict order is
+            # insertion order, which is board order, so "first" quietly means
+            # "highest up the screen".
+            near = min((y for y in ids if abs(y - pit.y) <= ROW_MATCH_TOL),
+                       key=lambda y: abs(y - pit.y), default=None)
+            if near is None:
                 continue
-            driver = ids[near[0]]
+            driver = ids[near]
             in_lane.add(driver)
             # **The columns being drawn is the fact; the digits are a reading
             # of it.** These are two different questions and an earlier version
@@ -221,8 +260,13 @@ class PitWall:
             if visit is None:
                 # Seen in the lane on the first clean frame of the session
                 # means the fill may already have been running.
+                # **Partial is about THIS driver, not about the session.** It
+                # means nobody ever saw this car on the board without its
+                # columns, so the fill may already have been running when the
+                # watching began - which is the normal case for a car that
+                # drops into the visible eight while it is already standing.
                 visit = Visit(driver=driver, lap=lap, started_s=now,
-                              partial=self._clean <= 1)
+                              partial=driver not in self._seen_clean)
                 self._visits[driver] = visit
             visit.last_s = now
             x0, y0, x1, y1 = pit.fuel_box
@@ -230,12 +274,35 @@ class PitWall:
             if litres is not None:
                 visit.readings.append(litres)
 
+        for driver in identified - in_lane:
+            self._seen_clean.add(driver)
+
         closed = []
         for driver in list(self._visits):
             if driver in in_lane:
                 continue
+            if driver not in identified:
+                # He was not on the board this frame, so this frame says
+                # nothing about whether he is standing in his box.
+                continue
             self._absent[driver] = self._absent.get(driver, 0) + 1
             if self._absent[driver] >= CLOSE_AFTER_CLEAN_FRAMES:
+                done = self._close(driver)
+                if done is not None:
+                    closed.append(done)
+        return closed + self._close_stale(now)
+
+    def _close_stale(self, now: float) -> list:
+        """Close visits nobody has seen either way for a long time.
+
+        A car can leave the visible top eight while it is standing, and then
+        neither the board nor its absence says anything about it ever again.
+        Without a clock that visit stays open to the flag.
+        """
+        closed = []
+        for driver, visit in list(self._visits.items()):
+            last = visit.last_s or visit.started_s
+            if now - last >= CLOSE_AFTER_SILENT_S:
                 done = self._close(driver)
                 if done is not None:
                     closed.append(done)
@@ -251,10 +318,15 @@ class PitWall:
         self._absent.pop(driver, None)
         if visit is None or len(visit.readings) < MIN_READS:
             return None
+        watched = max(0.0, visit.last_s - visit.started_s)
+        if watched < MIN_WATCHED_S:
+            _log.info("pit-wall: %s discarded - %d reads over %.0f s is too "
+                      "brief to be a stop", self._roster.name_of(driver)
+                      or f"driver {driver}", len(visit.readings), watched)
+            return None
         seen = Seen(driver=self._roster.name_of(driver), driver_id=driver,
                     stop=visit.as_stop(), reads=len(visit.readings),
-                    watched_s=max(0.0, visit.last_s - visit.started_s),
-                    partial=visit.partial)
+                    watched_s=watched, partial=visit.partial)
         self._stops.append(seen)
         _log.info("pit-wall: %s stopped - in %s L, out %s L, %d reads over "
                   "%.0f s%s", seen.driver or f"driver {driver}",

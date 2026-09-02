@@ -287,16 +287,25 @@ def _own_from_ladder(frame, found) -> tuple[int, int, int, int] | None:
             int(cols[-1]), int(top + rows[-1]))
 
 
-def own_row(frame) -> tuple[int, int, int, int] | None:
+def own_row(frame, ladder=None) -> tuple[int, int, int, int] | None:
     """The driver's own row, or None.
 
     The flag ladder first, because the plate alone cannot tell a leaderboard
     from a bright sky; the plate scan as a fallback, for a board drawn without
     flags. `frame` is an RGB array of the whole capture. Never raises.
+
+    `ladder` is `flag_ladder(frame)`. Pass it wherever the caller already has
+    one: finding it is an O(n^2) scan over every saturated run in the frame,
+    and on a track with red kerbs and coloured cars that is thousands of runs.
+    A live sampler that located the board once and then let this locate it
+    again would be paying for it twice on the worker thread that owes the wear
+    gauge its readings.
     """
     if frame is None or getattr(frame, "ndim", 0) != 3:
         return None
-    by_flags = _own_from_ladder(frame, flag_ladder(frame))
+    if ladder is None:
+        ladder = flag_ladder(frame)
+    by_flags = _own_from_ladder(frame, ladder)
     if by_flags is not None:
         return by_flags
     return _own_row_by_plate(frame)

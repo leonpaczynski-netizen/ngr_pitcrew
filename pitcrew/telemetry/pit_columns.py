@@ -281,16 +281,28 @@ def _disc_on_row(frame, y: int, left: int, right: int, height: int):
            & (patch[..., 0] > patch[..., 2] * DISC_RATIO))
     if not red.any():
         return None
+    # **The longest contiguous run, not the count of red columns.** Those are
+    # different numbers and mixing them passes a shape test the box then fails.
+    # Measured: a 26 px disc with a 4 px speck of red 40 px to its right counts
+    # 30 red columns - square enough - and returns a box spanning 70 px, aspect
+    # 2.7, far outside `DISC_SQUARENESS`. `_fuel_box` then reads that as a
+    # 70-wide disc and searches for the number some 200 px right of where it
+    # is. The disc-first path splits its runs for exactly this reason; this one
+    # did not.
     rows_on = np.where(red.any(axis=1))[0]
     cols_on = np.where(red.any(axis=0))[0]
-    tall, wide = len(rows_on), len(cols_on)
+    if len(rows_on) == 0 or len(cols_on) == 0:
+        return None
+    row_run = max(_runs(rows_on, 3), key=len)
+    col_run = max(_runs(cols_on, 3), key=len)
+    tall, wide = len(row_run), len(col_run)
     low, high = DISC_MIN_FRAC * frame.shape[0], DISC_MAX_FRAC * frame.shape[0]
     if not (low <= tall <= high and low <= wide <= high):
         return None
     if not DISC_SQUARENESS[0] <= wide / tall <= DISC_SQUARENESS[1]:
         return None
-    return (int(left + cols_on[0]), int(top + rows_on[0]),
-            int(left + cols_on[-1]), int(top + rows_on[-1]))
+    return (int(left + col_run[0]), int(top + row_run[0]),
+            int(left + col_run[-1]), int(top + row_run[-1]))
 
 
 def read_rows(frame, board, ladder) -> list[PitRow]:
@@ -308,7 +320,11 @@ def read_rows(frame, board, ladder) -> list[PitRow]:
     height = min(ys[i + 1] - ys[i] for i in range(len(ys) - 1))
     left = flag_x1 + 1
     right = min(frame.shape[1], flag_x1 + 4 * height)
-    board_left = board[0] if board else None
+    # **`is not None`, not truthiness.** A board flush against the left edge
+    # of the screen has `board[0] == 0`, which is falsy - and that reported
+    # "has not pitted" for every car on the frame. The measured Spa boards sit
+    # at x 0 whenever the pit flag is drawn, so this was the common case.
+    board_left = board[0] if board is not None else None
     out = []
     for y in ys:
         disc = _disc_on_row(frame, y, left, right, height)
@@ -320,7 +336,7 @@ def read_rows(frame, board, ladder) -> list[PitRow]:
         out.append(PitRow(
             disc=disc, fuel_box=box,
             has_pitted=(_pit_flag(frame, disc, board_left)
-                        if board_left else False)))
+                        if board_left is not None else False)))
     return out
 
 

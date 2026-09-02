@@ -3596,12 +3596,35 @@ class PitCrewController(QObject):
         """
         if self.hud is None:
             return
+        # **Refused loudly rather than started blind.** The wall sees only the
+        # frames the wear sampler grabs. With the gauge off none are grabbed at
+        # all; with `hud_sample_interval_s` at 0 one is grabbed per crossing,
+        # and a 90-second stop then yields a single reading against the two a
+        # stop needs - so every stop is discarded and the driver is told
+        # nothing, which is indistinguishable from a race in which nobody
+        # pitted.
+        if not self.settings.hud_wear_enabled:
+            log("pitcrew").warning(
+                "pit-wall: not watching - the tyre gauge is off, and the wall "
+                "sees only the frames it grabs.")
+            return
+        interval = float(self.settings.hud_sample_interval_s or 0.0)
+        if interval <= 0 or interval > 5.0:
+            log("pitcrew").warning(
+                "pit-wall: not watching - the gauge samples %s, which is too "
+                "slow to catch a pit stop. Set a sampling interval of a "
+                "second or two.",
+                "only at each crossing" if interval <= 0
+                else f"every {interval:g}s")
+            return
         try:
             from pitcrew.race.pit_wall import PitWall
             from pitcrew.telemetry.roster import Roster
 
             seed = self.store.driver_exemplars()
-            self._pit_wall = PitWall(Roster(seed=seed), on_stop=self._on_rival_stop)
+            self._last_session_id = self.session_id
+            self._pit_wall = PitWall(Roster(seed=seed),
+                                     on_stop=self._on_rival_stop)
             self.hud.watch_board(self._pit_wall, lap_of=self._our_lap)
             log("pitcrew").info(
                 "pit-wall: watching, seeded with %d known driver%s",
@@ -3624,11 +3647,17 @@ class PitCrewController(QObject):
         """
         race = self.race
         try:
-            return int(race.state.lap) if race is not None else None
+            # `lap_now()`, not `state.lap`. The raw counter is documented as
+            # systematically short - GT7 sat +1 above it on lap 1 at Road
+            # Atlanta and +2 by lap 20 - and this number divides a rival's fuel
+            # to give his burn rate. A two-lap deficit at lap 20 inflates that
+            # by 10%, five times the 0.4 L/lap at which the engineer starts
+            # telling the driver a rival uses more fuel than he does.
+            return int(race.state.lap_now()) if race is not None else None
         except Exception:
             return None
 
-    def _on_rival_stop(self, seen) -> None:
+    def _on_rival_stop(self, seen) -> None:  # noqa: D401
         """Worker thread. A rival has finished a stop: file it and say it.
 
         Filing happens here rather than at the flag because the watcher can
@@ -3636,10 +3665,16 @@ class PitCrewController(QObject):
         recovers it - and a race that crashes at lap 18 should still have the
         stops it watched at lap 11.
         """
+        # **The session id is read once, here, and a stop with none is still
+        # filed.** The worker can arrive after `stop_race` has cleared it, and
+        # `rival_book.profile_of` maps a null session to the literal race key
+        # "unknown" - so two races' stops would collapse into one and
+        # `races_seen` would under-report, which is rule 4's whole point.
+        session = self.session_id or getattr(self, "_last_session_id", None)
         try:
             from pitcrew.race import rival_book
 
-            rival_book.record(self.store, self.session_id, seen,
+            rival_book.record(self.store, session, seen,
                               laps_total=self._planned_laps())
         except Exception:
             log("pitcrew").exception("pit-wall: stop not filed")
@@ -3656,7 +3691,13 @@ class PitCrewController(QObject):
             return None
 
     def _stop_pit_wall(self) -> None:
-        """Close the wall, filing any stop still in progress at the flag."""
+        """Close the wall, filing any stop still in progress at the flag.
+
+        Called from `stop_race` AND from `shutdown`: closing the app mid-race
+        otherwise files nothing, and leaves the sampler - which may still be
+        inside a two-second grab it cannot be joined out of - pointing at a
+        wall whose session has gone.
+        """
         wall = getattr(self, "_pit_wall", None)
         if wall is None:
             return
@@ -4667,6 +4708,7 @@ class PitCrewController(QObject):
         # The one place the link is really let go: the app is closing. A
         # session boundary only parks the fans - see `start_wind`.
         self.shutdown_wind()
+        self._stop_pit_wall()
         self._stop_hud_sampler()
         if self.listener is not None:
             self.listener.stop()

@@ -28,11 +28,15 @@ corner — CLAUDE.md §5.1 phase 1, "losses in tenths" — so there is no old-ty
 pace loss to gain against. Any undercut model would be multiplying by a number
 never observed at his multiplier, which is rule 5.
 
-**It does not assume the pit delta cancels.** It does not, and believing it did
-was the central error of the first design: two cars pitting on different laps
-take different fuel loads, and for a driver who fuels to the flag, deferring a
-stop by one lap makes his own stop SHORTER by a lap's burn. That term is
-carried explicitly in `deferring_saves_s`.
+**It does not assume the pit delta cancels.** Two cars pitting on different
+laps take different fuel loads, so their stops are different lengths, and that
+difference is the whole of `fuel_swing`.
+
+**But a lap deferred does NOT shorten your own stop, and this file used to say
+it did.** It shrinks the fill by a lap's burn and it also means arriving with a
+lap's burn less aboard; the two cancel exactly, leaving `laps_total x burn -
+start` litres to be taken whatever lap the stop happens on. `deferring_costs_s`
+carries the corrected arithmetic and the measured table.
 
 **It does not speak.** It answers what a stop costs; the caller decides whether
 that is worth saying.
@@ -139,20 +143,71 @@ def fuel_swing(ours: Stop, theirs: Stop,
         ours_standing_s=mine, theirs_standing_s=yours)
 
 
-def deferring_saves_s(burn_per_lap_l: float | None,
-                      refuel_rate_lps: float | None) -> float | None:
-    """Seconds of our own standing time saved by staying out one more lap.
+def fill_at(stop_lap: int | None, laps_total: int | None,
+            burn_per_lap_l: float | None, capacity_l: float | None,
+            start_l: float | None = None) -> float | None:
+    """Litres taken if the stop happens on this lap, or `None`.
 
-    **The term the first design dropped, and it is the largest one.** A driver
-    who fuels to the flag and carries no spare — which this one does, and has
-    said so — takes one lap less fuel for every lap he defers. Measured across
-    his circuits that is 3.2 s a lap at Road Atlanta and 8.0 at Spa, against an
-    out-lap penalty measured at about 1.2 s. Staying out is worth several times
-    what the fresh tyres are.
+    He fuels to the flag and carries nothing spare, so the fill is what the
+    remaining laps cost, clamped by the tank, less what is still aboard.
     """
-    if not burn_per_lap_l or not refuel_rate_lps or refuel_rate_lps <= 0:
+    if (stop_lap is None or laps_total is None or not burn_per_lap_l
+            or burn_per_lap_l <= 0 or not capacity_l or capacity_l <= 0):
         return None
-    return burn_per_lap_l / refuel_rate_lps
+    if stop_lap < 0 or stop_lap > laps_total:
+        return None
+    aboard = (capacity_l if start_l is None else start_l) - stop_lap * burn_per_lap_l
+    if aboard < 0:
+        return None                 # he cannot reach that lap on this tank
+    needed = (laps_total - stop_lap) * burn_per_lap_l
+    return min(capacity_l, needed) - aboard
+
+
+def deferring_costs_s(lap_now: int | None, laps_total: int | None,
+                      burn_per_lap_l: float | None,
+                      capacity_l: float | None,
+                      refuel_rate_lps: float | None,
+                      start_l: float | None = None) -> float | None:
+    """Seconds a stop gets LONGER for each lap it is put off. `None` if unknown.
+
+    Positive means deferring costs standing time; negative means it saves it.
+
+    **This replaces a function that had the answer wrong in both directions,
+    and it was the headline claim of the module that used it.**
+    `deferring_saves_s` returned `burn / rate` - 8 s a lap at Spa - on the
+    argument that every lap deferred takes a lap's fuel out of the stop. It
+    does. It also means arriving with a lap's fuel less aboard, and the two
+    cancel exactly:
+
+        fill = (laps_total - lap) x burn - (start - lap x burn)
+             = laps_total x burn - start
+
+    There is no lap term. Over a 20-lap Spa on 8 L a lap from a full 100 L
+    tank, 60 litres passes through the hose whatever lap the stop happens on:
+
+        lap      5     6     7     8    10    12
+        fill    40    48    56    60    60    60
+
+    So above the tank clamp the saving is **zero**, not eight seconds; and
+    below it - where the fill is capped by capacity rather than by the flag -
+    the sign inverts and deferring makes the stop eight seconds LONGER per lap,
+    which is the one regime where the old figure had the right magnitude and
+    the wrong sign.
+
+    What genuinely remains above the clamp is second order and this does not
+    pretend otherwise: carrying less fuel for longer is worth about 0.003
+    s/L/lap of lap time, and burn falls with load at about 0.0061 L per litre
+    aboard. Those are lap time and fuel used, not standing time, so they belong
+    to whatever weighs a stint - not here.
+    """
+    if not refuel_rate_lps or refuel_rate_lps <= 0 or lap_now is None:
+        return None
+    here = fill_at(lap_now, laps_total, burn_per_lap_l, capacity_l, start_l)
+    later = fill_at(lap_now + 1, laps_total, burn_per_lap_l, capacity_l,
+                    start_l)
+    if here is None or later is None:
+        return None
+    return (later - here) / refuel_rate_lps
 
 
 def earliest_stop_lap(laps_total: int | None, lap_now: int | None,

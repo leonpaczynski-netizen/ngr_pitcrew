@@ -12,6 +12,7 @@ import numpy as np
 from pitcrew.race.pit_wall import (
     CLOSE_AFTER_CLEAN_FRAMES,
     MIN_READS,
+    MIN_WATCHED_S,
     PitWall,
     Visit,
 )
@@ -93,6 +94,18 @@ def a_frame(*, in_lane=(), fuel=None, names=True):
     return frame
 
 
+class Clock:
+    """A frame clock, because a stop is measured in seconds and the guard that
+    discards fragments is a duration."""
+
+    def __init__(self, step=10.0):
+        self.now, self.step = 0.0, step
+
+    def tick(self):
+        self.now += self.step
+        return self.now
+
+
 def blank():
     """A frame with no board at all - a menu, a replay cut, a paused game."""
     return np.full((H, W, 3), 90, dtype=int)
@@ -101,14 +114,16 @@ def blank():
 # --- what it does with a frame ---------------------------------------------
 
 def test_a_board_with_nobody_in_the_lane_closes_nothing():
+    clock = Clock()
     wall = PitWall()
-    assert wall.see(a_frame()) == []
+    assert wall.see(a_frame(), now=clock.tick()) == []
     assert wall.stops() == []
 
 
 def test_a_car_in_the_lane_is_latched_as_having_pitted():
+    clock = Clock()
     wall = PitWall()
-    wall.see(a_frame(in_lane=(1,)))
+    wall.see(a_frame(in_lane=(1,)), now=clock.tick())
     assert any(wall.has_pitted(d) for d, _ in wall.named(min_sightings=1))
 
 
@@ -119,20 +134,22 @@ def test_a_frame_that_cannot_be_read_is_silence_and_not_absence():
     standing in its box. Counting it as absence gives that car an exit figure
     taken from halfway through its own refuel.
     """
+    clock = Clock()
     wall = PitWall()
-    wall.see(a_frame(in_lane=(1,)))
+    wall.see(a_frame(in_lane=(1,)), now=clock.tick())
     for _ in range(CLOSE_AFTER_CLEAN_FRAMES + 3):
-        assert wall.see(blank()) == []
+        assert wall.see(blank(), now=clock.tick()) == []
     assert wall.stops() == []
 
 
 def test_a_stop_closes_once_the_columns_are_gone_from_clean_frames():
+    clock = Clock()
     wall = PitWall()
     for litres in (19, 40, 83):
-        wall.see(a_frame(in_lane=(1,), fuel={1: litres}))
+        wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     closed = []
     for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
-        closed += wall.see(a_frame())
+        closed += wall.see(a_frame(), now=clock.tick())
     assert len(closed) == 1
     assert closed[0].reads >= MIN_READS
     assert closed[0].stop.fuel_in_l == 19.0
@@ -143,6 +160,23 @@ def test_one_reading_is_not_a_stop():
     """One figure cannot tell an entry from an exit."""
     visit = Visit(driver=0, lap=11, started_s=0.0, readings=[19])
     assert len(visit.readings) < MIN_READS
+
+
+def test_something_briefer_than_the_dead_time_was_not_a_stop():
+    """A GT7 stop has 16.9 s of dead time before a hose is even connected, so
+    nothing shorter can be a car standing in its box. Over the whole Spa race
+    this discarded two twelve-second fragments, one of them reporting identical
+    entry and exit fuel because it had caught the same number twice - against
+    real stops watched for 87 to 117 s."""
+    clock = Clock(step=3.0)
+    wall = PitWall()
+    for litres in (19, 40):
+        wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
+    closed = []
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        closed += wall.see(a_frame(), now=clock.tick())
+    assert closed == []
+    assert MIN_WATCHED_S < 16.9
 
 
 def test_the_lowest_reading_is_the_entry_and_the_highest_the_exit():
@@ -163,36 +197,39 @@ def test_a_visit_with_no_readings_has_no_fuel_rather_than_zero():
 
 def test_joining_after_the_fill_has_begun_is_marked_partial():
     """A late first reading is a floor, and nothing in the number says so."""
+    clock = Clock()
     wall = PitWall()
-    wall.see(a_frame(in_lane=(1,), fuel={1: 40}))   # first clean frame, in
+    wall.see(a_frame(in_lane=(1,), fuel={1: 40}), now=clock.tick())   # first clean frame, in
     for litres in (60, 83):
-        wall.see(a_frame(in_lane=(1,), fuel={1: litres}))
+        wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     closed = []
     for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
-        closed += wall.see(a_frame())
+        closed += wall.see(a_frame(), now=clock.tick())
     assert closed and closed[0].partial
 
 
 def test_a_car_seen_out_of_the_lane_first_is_not_partial():
+    clock = Clock()
     wall = PitWall()
-    wall.see(a_frame())                      # clean frame, nobody in the lane
+    wall.see(a_frame(), now=clock.tick())                      # clean frame, nobody in the lane
     for litres in (19, 40, 83):
-        wall.see(a_frame(in_lane=(1,), fuel={1: litres}))
+        wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     closed = []
     for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
-        closed += wall.see(a_frame())
+        closed += wall.see(a_frame(), now=clock.tick())
     assert closed and not closed[0].partial
 
 
 def test_every_stop_carries_the_evidence_behind_it():
     """CLAUDE.md rule 4."""
+    clock = Clock()
     wall = PitWall()
-    wall.see(a_frame())
+    wall.see(a_frame(), now=clock.tick())
     for litres in (19, 30, 55, 83):
-        wall.see(a_frame(in_lane=(1,), fuel={1: litres}))
+        wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     closed = []
     for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
-        closed += wall.see(a_frame())
+        closed += wall.see(a_frame(), now=clock.tick())
     assert closed
     seen = closed[0]
     assert seen.reads >= 2
@@ -208,11 +245,12 @@ def test_a_new_session_forgets_the_last_race_but_keeps_the_drivers():
     Identity is the thing that SHOULD cross a session boundary; a race that
     opens holding the last one's pit flags is a race that reports them.
     """
+    clock = Clock()
     wall = PitWall()
     for litres in (19, 40, 83):
-        wall.see(a_frame(in_lane=(1,), fuel={1: litres}))
+        wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
-        wall.see(a_frame())
+        wall.see(a_frame(), now=clock.tick())
     before = len(wall.roster)
     assert wall.stops()
 
@@ -225,28 +263,31 @@ def test_a_new_session_forgets_the_last_race_but_keeps_the_drivers():
 
 def test_closing_the_session_files_a_stop_still_in_progress():
     """At the flag a car may still be standing. That is still a stop."""
+    clock = Clock()
     wall = PitWall()
-    wall.see(a_frame())
+    wall.see(a_frame(), now=clock.tick())
     for litres in (19, 40, 83):
-        wall.see(a_frame(in_lane=(1,), fuel={1: litres}))
+        wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     assert wall.stops() == []
     assert len(wall.close_all()) == 1
 
 
 def test_a_seeded_roster_recognises_a_driver_from_a_previous_race():
     """The whole reason the book joins up across races."""
+    clock = Clock()
     first = PitWall()
-    first.see(a_frame())
+    first.see(a_frame(), now=clock.tick())
     ids = first.roster.drivers(min_sightings=1)
     assert ids
     first.roster.label(ids[0], "Rocky")
 
     second = PitWall(Roster(seed=first.roster.exemplars()))
-    second.see(a_frame())
+    second.see(a_frame(), now=clock.tick())
     assert "Rocky" in second.positions()
 
 
 def test_it_never_raises_on_rubbish():
+    clock = Clock()
     wall = PitWall()
     assert wall.see(None) == []
     assert wall.see(np.zeros((4, 4, 3), dtype=int)) == []

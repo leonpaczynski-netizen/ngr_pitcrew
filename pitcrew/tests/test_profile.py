@@ -159,8 +159,18 @@ def test_a_burn_difference_too_small_to_matter_is_not_mentioned():
 def test_a_rival_carrying_fuel_he_does_not_need_is_worth_a_sentence():
     profile = Profile("Heavy")
     profile.add(spa("Heavy", lap=11, fuel_in=12.0, fuel_out=95.0))
-    said = " ".join(describe(profile))
+    said = " ".join(describe(profile, refuel_rate_lps=1.0))
     assert "more than he needs" in said and "seconds longer" in said
+
+
+def test_litres_are_not_seconds_until_a_measured_rate_says_so():
+    """Printing the litres figure twice silently asserts 1.0 L/s - true on
+    this driver's archive and nowhere stated in the sentence. Rule 5."""
+    profile = Profile("Heavy")
+    profile.add(spa("Heavy", lap=11, fuel_in=12.0, fuel_out=95.0))
+    said = " ".join(describe(profile))
+    assert "more than he needs" in said
+    assert "seconds" not in said
 
 
 def test_a_rival_who_must_stop_again_is_worth_a_sentence():

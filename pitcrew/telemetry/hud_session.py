@@ -183,10 +183,22 @@ class HudSession:
         """
         self._wall = wall
         self._wall_lap = lap_of
+        # **Ask for the whole screen.** With the projector at exactly the
+        # calibrated canvas the sampler grabs only the gauge rectangle, and
+        # there is no leaderboard in an 82x76 crop - so a wall attached to that
+        # configuration would see nothing, on every frame, in silence.
+        sampler = self._sampler
+        source = getattr(sampler, "_source", None) if sampler else None
+        if source is not None and hasattr(source, "whole"):
+            source.whole = True
 
     def stop_watching_board(self) -> None:
         self._wall = None
         self._wall_lap = None
+        sampler = self._sampler
+        source = getattr(sampler, "_source", None) if sampler else None
+        if source is not None and hasattr(source, "whole"):
+            source.whole = False
 
     def _pass_frame(self, frame) -> None:
         """Worker thread. Hand the grabbed frame to the pit wall.

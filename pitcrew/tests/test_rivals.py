@@ -12,7 +12,8 @@ import pytest
 from pitcrew.race.rivals import (
     DEAD_TIME_S,
     Stop,
-    deferring_saves_s,
+    deferring_costs_s,
+    fill_at,
     earliest_stop_lap,
     forced_stop_lap,
     fuel_swing,
@@ -90,23 +91,50 @@ def test_the_dead_time_cancels_between_two_cars():
 
 # -------------------------------------------------------- staying out
 
-def test_deferring_saves_a_lap_of_fuel_at_the_refuel_rate():
-    """The term the first design dropped, and the largest one. Spa burns
-    about 8 L a lap at 1.0 L/s, so a lap deferred is 8 s less standing."""
-    assert deferring_saves_s(8.0, 1.0) == pytest.approx(8.0)
-    assert deferring_saves_s(6.4, 2.0) == pytest.approx(3.2)
+def test_the_fill_is_the_same_length_whatever_lap_the_stop_happens_on():
+    """The correction, and it was this module's headline claim.
+
+    A lap deferred shrinks the fill by a lap's burn AND means arriving with a
+    lap's burn less aboard. They cancel: the litres through the hose are
+    `laps_total x burn - start`, with no lap term. Spa, 20 laps, 8 L a lap,
+    full 100 L tank.
+    """
+    assert [fill_at(lap, 20, 8.0, 100.0) for lap in (8, 10, 12)] == [60.0] * 3
 
 
-def test_it_dwarfs_the_out_lap_penalty():
-    """Measured out-lap penalty is about +1.2 s. Staying out one lap at Spa
-    saves 8. That is the whole argument for the overcut."""
-    assert deferring_saves_s(8.0, 1.0) > 1.2 * 5
+def test_below_the_tank_clamp_the_fill_is_capped_and_deferring_costs():
+    """The one regime where the lap matters - and the old figure had the right
+    magnitude with the wrong sign."""
+    assert [fill_at(lap, 20, 8.0, 100.0) for lap in (5, 6, 7)] == [40.0, 48.0,
+                                                                   56.0]
+    assert deferring_costs_s(5, 20, 8.0, 100.0, 1.0) == pytest.approx(8.0)
+
+
+def test_above_the_clamp_deferring_costs_and_saves_nothing():
+    """Not eight seconds a lap. Zero."""
+    assert deferring_costs_s(8, 20, 8.0, 100.0, 1.0) == pytest.approx(0.0)
+    assert deferring_costs_s(10, 20, 8.0, 100.0, 1.0) == pytest.approx(0.0)
+
+
+def test_a_lap_the_tank_cannot_reach_has_no_answer():
+    """Entry fuel would be negative, which is not a car with an empty tank -
+    it is a lap he cannot arrive at on this one."""
+    assert fill_at(14, 20, 8.0, 100.0) is None
+    assert deferring_costs_s(12, 20, 8.0, 100.0, 1.0) is None
 
 
 def test_no_burn_no_answer():
-    assert deferring_saves_s(None, 1.0) is None
-    assert deferring_saves_s(8.0, None) is None
-    assert deferring_saves_s(0.0, 1.0) is None
+    assert deferring_costs_s(8, 20, None, 100.0, 1.0) is None
+    assert deferring_costs_s(8, 20, 8.0, 100.0, None) is None
+    assert deferring_costs_s(8, 20, 0.0, 100.0, 1.0) is None
+    assert deferring_costs_s(None, 20, 8.0, 100.0, 1.0) is None
+    assert fill_at(8, None, 8.0, 100.0) is None
+    assert fill_at(8, 20, 8.0, None) is None
+
+
+def test_a_stop_lap_outside_the_race_is_refused():
+    assert fill_at(-1, 20, 8.0, 100.0) is None
+    assert fill_at(21, 20, 8.0, 100.0) is None
 
 
 # ------------------------------------------------------------- the floor

@@ -1016,6 +1016,46 @@ def _is_whole_canvas(crop: CropFrame) -> bool:
             and (width, height) == tuple(crop.canvas))
 
 
+def whole_frame(grabbed):
+    """A grab as a whole-screen RGB array, or `None` if it is not one.
+
+    **A grab is not an image, and a crop is not a screen.** `ScreenSource`
+    returns a `CropFrame` and `ObsSource` returns PNG bytes; `read_gauge` knows
+    how to unwrap both and nothing else did. A passenger handed the raw result
+    got an object with no `ndim`, every reader refused it as "not a frame", and
+    three layers of exception handling turned a dead feature into silence.
+
+    The second half matters as much as the first. When the projector IS the
+    calibrated 1720x916 canvas the sampler grabs only the gauge rectangle -
+    82x76 - and there is no leaderboard anywhere in it. Handing that on would
+    let a board reader search a picture of a tyre gauge and report, honestly
+    and uselessly, that it could not find a board. `None` says the difference.
+    """
+    import numpy as np
+
+    if isinstance(grabbed, CropFrame):
+        if not _is_whole_canvas(grabbed):
+            return None
+        return np.asarray(grabbed.pixels)
+    if isinstance(grabbed, (bytes, bytearray)):
+        # `io` is imported inside `read_gauge`, not at module level - and a
+        # bare `io.BytesIO` here raised NameError into a broad `except`, which
+        # is how a decode that works perfectly in isolation returns None
+        # forever. Import it where it is used.
+        import io as _io
+
+        from PIL import Image
+        try:
+            return np.asarray(
+                Image.open(_io.BytesIO(bytes(grabbed))).convert("RGB")
+            ).astype(int)
+        except (OSError, ValueError):
+            return None
+    if getattr(grabbed, "ndim", 0) == 3:
+        return np.asarray(grabbed)
+    return None
+
+
 def _as_png_bytes(pixels) -> bytes:
     """RGB array to PNG, so the full-frame path reads it like any capture.
 
@@ -1321,6 +1361,12 @@ class ScreenSource:
         # A hint narrows the search where several projectors are open. Empty
         # means "any program projector", which is the normal case.
         self.title_hint = title_hint.strip().lower()
+        # **Whole window rather than the gauge rectangle.** Set when something
+        # else needs the screen - the pit wall needs the leaderboard, which is
+        # nowhere near the gauge. Costed before offering it: a full 2560x1440
+        # grab is 33.14 ms wall against 16.68 for the gauge rectangle, and at
+        # the one-to-two-hertz this runs at that is nothing.
+        self.whole = False
 
     def _window(self):
         """(hwnd, title) of the projector, or (None, reason)."""
@@ -1349,7 +1395,7 @@ class ScreenSource:
         width, height = right - left, bottom - top
         if width <= 0 or height <= 0:
             return None, f"{title!r} has no client area"
-        if (width, height) != CANVAS:
+        if self.whole or (width, height) != CANVAS:
             # **The whole window, so the locator can find the gauge in it.**
             #
             # This used to refuse outright, and the reason it gave was sound
@@ -1447,6 +1493,8 @@ class LiveWearSampler:
         # the frame is handed on, and every failure in the handler is swallowed
         # here: nothing riding along may cost the gauge a reading.
         self._on_frame = on_frame
+        # Said once when the grab turns out to be a crop with no board in it.
+        self._said_crop_only = False
         self._interval_s = max(0.0, float(interval_s))
         self._queue: queue.Queue = queue.Queue(maxsize=1)
         self._thread: threading.Thread | None = None
@@ -1633,10 +1681,23 @@ class LiveWearSampler:
         if frame is None:
             return Reading(None, why), True
         if self._on_frame is not None:
-            try:
-                self._on_frame(frame)
-            except Exception:
-                _log.exception("hud-wear: frame passenger failed")
+            whole = whole_frame(frame)
+            if whole is None:
+                # **Said once, not swallowed.** A passenger that wants the
+                # board and is being handed a gauge crop will find no board on
+                # every frame forever, which is indistinguishable from a race
+                # in which nobody pitted.
+                if not self._said_crop_only:
+                    self._said_crop_only = True
+                    _log.warning(
+                        "hud-wear: the grab is a gauge crop, not the screen, "
+                        "so nothing riding along can see the leaderboard. Ask "
+                        "the source for whole frames if you need it.")
+            else:
+                try:
+                    self._on_frame(whole)
+                except Exception:
+                    _log.exception("hud-wear: frame passenger failed")
         return read_gauge(frame), False
 
     def _coherent(self, wear: dict) -> tuple[bool, bool, str]:
