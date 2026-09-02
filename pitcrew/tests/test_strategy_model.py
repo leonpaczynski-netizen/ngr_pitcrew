@@ -807,3 +807,56 @@ def test_the_threshold_comes_from_the_phase_model_not_a_second_copy():
     from pitcrew.strategy.model import WEAR_CURVE_WATCHED_FRAC
     assert phase_for(WEAR_CURVE_WATCHED_FRAC) != PHASE_FLAT
     assert phase_for(WEAR_CURVE_WATCHED_FRAC - 0.01) == PHASE_FLAT
+
+
+# ------------------------------------------- the stop overhead double-count
+
+def test_a_declared_pit_loss_is_the_whole_non_fuel_cost():
+    """A league-declared "pit loss" means what a stop costs you at this track.
+    Adding a further dead time charges the same seconds twice: measured off
+    the frames, Monza's total non-fuel loss is 17.65 and 18.97 s against a
+    declared 19.0, and the model was charging 26.5."""
+    from pitcrew.strategy.model import PIT_LOSS_DECLARED, RaceInputs
+
+    inputs = RaceInputs(race_laps=20, lap_time_ms=110_000,
+                        pit_loss_s=19.0, pit_loss_source=PIT_LOSS_DECLARED)
+    assert inputs.stop_overhead_s() == pytest.approx(19.0)
+
+
+def test_a_measured_pit_loss_still_takes_the_dead_time():
+    """Where the source really is a measurement it is a different quantity.
+    `race_knowledge` has Watkins at 15.7 s, and 15.7 + 7.5 = 23.2 against a
+    frame-measured total non-fuel loss of 23.07 — so the addition is right
+    there, and the term is gated rather than deleted."""
+    from pitcrew.strategy.model import (
+        PIT_DEAD_TIME_S,
+        PIT_LOSS_MEASURED,
+        RaceInputs,
+    )
+
+    inputs = RaceInputs(race_laps=20, lap_time_ms=110_000,
+                        pit_loss_s=15.7, pit_loss_source=PIT_LOSS_MEASURED)
+    assert inputs.stop_overhead_s() == pytest.approx(15.7 + PIT_DEAD_TIME_S)
+
+
+def test_the_default_source_is_declared_so_the_default_does_not_double_count():
+    """Nothing in the app measures a pit loss: `pit_loss_source` is `declared`
+    on every event that has one and NULL on the rest."""
+    from pitcrew.strategy.model import PIT_LOSS_DECLARED, RaceInputs
+
+    inputs = RaceInputs(race_laps=20, lap_time_ms=110_000, pit_loss_s=20.0)
+    assert inputs.pit_loss_source == PIT_LOSS_DECLARED
+    assert inputs.stop_overhead_s() == pytest.approx(20.0)
+
+
+def test_the_overhead_is_what_the_planner_charges_per_stop():
+    """Guards the two call sites: a plan with N stops must move by exactly
+    N times the change in overhead, or one of them is still adding its own."""
+    import inspect
+
+    from pitcrew.strategy import model
+
+    source = inspect.getsource(model)
+    assert "pit_loss_s + inputs.pit_dead_time_s" not in source, (
+        "a call site is still adding the dead time itself")
+    assert source.count("inputs.stop_overhead_s()") >= 2

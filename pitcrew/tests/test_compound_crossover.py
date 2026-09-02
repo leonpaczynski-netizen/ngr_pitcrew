@@ -85,12 +85,22 @@ def test_the_crossover_is_reported_not_just_acted_on():
 
 
 def test_the_break_even_says_how_close_the_call_was():
-    """A tenth either way is the difference between two race plans."""
-    close = winner(a_race(rh_delta=1.60)).crossover
-    assert close["alternativePaceDeltaSPerLap"] == 1.6
+    """A tenth either way is the difference between two race plans.
+
+    **The fixture delta moved from 1.60 to 1.25 on 2 Sep 2026, and the reason
+    is the point of the test.** A stop stopped costing 7.5 s it never cost -
+    `pit_loss_source` is `declared` on every event, a declared pit loss is
+    already the whole non-fuel cost, and the model was adding a dead time on
+    top of it. A cheaper stop makes the extra-stop strategy better, so the
+    break-even moved from about 1.45 to 1.213 s/lap. That is a quarter of a
+    second of compound delta, which is exactly the "tenth either way" this
+    test exists to protect.
+    """
+    close = winner(a_race(rh_delta=1.25)).crossover
+    assert close["alternativePaceDeltaSPerLap"] == 1.25
     # The hard loses, but only just: it would draw a little under its actual
     # deficit. That is a call worth re-measuring rather than settling.
-    assert 1.3 < close["breakEvenSPerLap"] < 1.6
+    assert 1.1 < close["breakEvenSPerLap"] < 1.25
 
 
 def test_a_harder_tyre_that_cannot_go_the_distance_is_not_offered():
@@ -186,8 +196,12 @@ def test_a_decided_call_says_by_how_much_it_was_decided():
 
 
 def test_a_close_call_says_it_is_close():
-    """A tenth either way decides the race, and he should know that."""
-    verdict = winner(a_race(rh_delta=1.60)).crossover["verdict"]
+    """A tenth either way decides the race, and he should know that.
+
+    Delta moved with the break-even - see
+    `test_the_break_even_says_how_close_the_call_was`.
+    """
+    verdict = winner(a_race(rh_delta=1.25)).crossover["verdict"]
     assert "It is close" in verdict
     assert "Re-measure before committing" in verdict
 

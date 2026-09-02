@@ -48,8 +48,18 @@ DEG_AT_CLIFF_S = 1.0
 # measured - the driver can overwrite it.
 FUEL_WEIGHT_S_PER_L_PER_LAP = 0.003
 
-# Every stop has dead time before refuelling begins, on top of the track's
-# own pit loss.
+# **Dead time before refuelling begins, and it is only ever added to a pit loss
+# that EXCLUDES it.** See `Inputs.stop_overhead_s`.
+#
+# Measured 2 Sep 2026 off the frames of three Monza stops: the interval from
+# pit entry to the first rise in the tank is 16.93 s, identical between the
+# three to 0.01 s. That is much larger than this figure and than the 5-10 s
+# CLAUDE.md 5.4 states - but it is NOT the same quantity, because it counts
+# time the car would partly have spent covering that ground anyway, and this
+# constant is a LOSS on top of a loss. The value is left where it is because
+# nothing in the app currently uses it (no event has a measured pit loss), and
+# changing an unused number on the strength of a differently-defined
+# measurement would be inventing agreement.
 PIT_DEAD_TIME_S = 7.5
 
 # **The fuel margin is a COST, and at a slow refuel rate it is the whole
@@ -367,6 +377,33 @@ class RaceInputs:
     # cannot disagree about it.
     pit_loss_source: str = PIT_LOSS_DECLARED
     pit_dead_time_s: float = PIT_DEAD_TIME_S
+
+    def stop_overhead_s(self) -> float:
+        """What one stop costs before any fuel goes in.
+
+        **The dead time is added only to a pit loss that excludes it, and no
+        event on file has one.** `pit_loss_s` arrives from a spin box on the
+        event page whose schema default is 20 s, and `pit_loss_source` is
+        `declared` on every event that has one and NULL on the rest - nothing
+        in this app has ever measured a pit loss. A league-declared "pit loss"
+        means what a stop costs you at this track, which is the whole non-fuel
+        cost; adding a further 7.5 s to it charges the same seconds twice.
+
+        Measured off the frames on 2 Sep 2026, the total non-fuel loss at Monza
+        is 17.65 and 18.97 s at the two clean stops, against a declared 19.0.
+        The model was charging 26.5 - **over-estimating a Monza stop by about
+        eight seconds**, on every plan that circuit has ever produced. Spa
+        agrees too: a tyres-only stop measured 19.46 s against a declared 20.0.
+
+        The term is kept rather than deleted because a genuinely measured
+        figure is a different quantity: `race_knowledge` records Watkins at
+        15.7 s, and 15.7 + 7.5 = 23.2 against a frame-measured total non-fuel
+        loss of 23.07 - so where the source really is a measurement, the
+        addition is right. It is gated on the source rather than assumed.
+        """
+        if self.pit_loss_source == PIT_LOSS_MEASURED:
+            return self.pit_loss_s + self.pit_dead_time_s
+        return self.pit_loss_s
     wear_per_lap: float | None = None
     wear_measured_at_race_multiplier: bool = True
     mandatory_stops: int = 0
@@ -1148,7 +1185,7 @@ def build_plan(inputs: RaceInputs, stops: int,
                     f"{total / 60:.1f} min, after the {inputs.race_minutes:g}-"
                     f"minute flag. Nobody pits on the last lap of a timed "
                     f"race; this plan cannot be run as written.")
-            total += inputs.pit_loss_s + inputs.pit_dead_time_s
+            total += inputs.stop_overhead_s()
             if fuel_needed:
                 total += refuel_time_s(fuel_needed, inputs)
 
@@ -1308,7 +1345,7 @@ def stint_cost_s(inputs: RaceInputs, profile: CompoundProfile, laps: int, *,
     fuel = stint_fuel_l(laps, inputs)
     total = stint_time_s(laps, inputs, fuel_at_start_l=fuel, profile=profile)
     if not first:
-        total += inputs.pit_loss_s + inputs.pit_dead_time_s
+        total += inputs.stop_overhead_s()
         if fuel:
             total += refuel_time_s(fuel, inputs)
     if key is not None:
