@@ -46,6 +46,7 @@ import time
 from dataclasses import dataclass, field
 
 from pitcrew.diagnostics import log
+from pitcrew.race.gap_signal import GapSample
 from pitcrew.race.gaps import GapTrend, read_gaps
 from pitcrew.race.rivals import Stop
 from pitcrew.telemetry.board import flag_ladder, own_row
@@ -181,7 +182,7 @@ class PitWall:
     """
 
     def __init__(self, roster: Roster | None = None, *, on_stop=None,
-                 name_for=None) -> None:
+                 name_for=None, where_on_lap=None) -> None:
         self._roster = roster if roster is not None else Roster()
         self._on_stop = on_stop
         # **Asked for a name at the moment a stop closes, not at the flag.** A
@@ -192,6 +193,12 @@ class PitWall:
         # provisional handle; the driver turns it into a person later, and
         # renaming carries the stops with it.
         self._name_for = name_for
+        # **Where on the road this frame was taken.** A callable, because it is
+        # asked at the moment the grab returns rather than at the moment the
+        # wall was built. Without it a gap cannot be binned into sectors later
+        # and the position cannot be recovered - the frame is gone and so is
+        # the packet. See `race/lap_ruler.py`.
+        self._where_on_lap = where_on_lap
         self._visits: dict[int, Visit] = {}
         self._absent: dict[int, int] = {}
         # Drivers seen on the board WITHOUT pit columns. A visit that begins
@@ -206,6 +213,10 @@ class PitWall:
         # pace signal on the screen - see `race/gaps.py`.
         self.ahead = GapTrend(side="ahead")
         self.behind = GapTrend(side="behind")
+        # Every gap reading with the road position it was taken at, which is
+        # what `race/sectors.py` bins. Kept raw here; the conditioning lives in
+        # `race/gap_signal.py`.
+        self.samples: list[GapSample] = []
         self._frames = 0
         self._clean = 0
 
@@ -225,6 +236,7 @@ class PitWall:
         self._stops = []
         self.ahead.new_session()
         self.behind.new_session()
+        self.samples = []
         self._frames = self._clean = 0
 
     @property
@@ -252,6 +264,15 @@ class PitWall:
         return driver_id in self._pitted
 
     # --- the frame ------------------------------------------------------
+
+    def where(self) -> float | None:
+        """Metres round the lap, or `None` where the ruler cannot say."""
+        if self._where_on_lap is None:
+            return None
+        try:
+            return self._where_on_lap()
+        except Exception:               # pragma: no cover - belt
+            return None
 
     def see(self, frame, *, lap: int | None = None, now: float | None = None):
         """Take one frame. Never raises; returns the stops it just closed."""
@@ -338,10 +359,16 @@ class PitWall:
         # distance as our own lost pace.
         ahead_gap, behind_gap = read_gaps(frame, board)
         own_place = self._position.get(self._own_driver(ids, board))
-        self.ahead.note(lap, ahead_gap,
-                        subject=self._neighbour(ids, own_place, -1))
-        self.behind.note(lap, behind_gap,
-                         subject=self._neighbour(ids, own_place, +1))
+        at_m = self.where()
+        for trend, gap, step in ((self.ahead, ahead_gap, -1),
+                                 (self.behind, behind_gap, +1)):
+            who = self._neighbour(ids, own_place, step)
+            trend.note(lap, gap, subject=who)
+            if gap is not None:
+                self.samples.append(GapSample(
+                    at_s=now, gap_s=gap, track_s=at_m, lap=lap,
+                    position=own_place, subject=who,
+                    ok=True))
 
         for driver in identified - in_lane:
             self._seen_clean.add(driver)

@@ -620,6 +620,23 @@ class TelemetryBridge(QObject):
         # 23 Aug 2026 was two minutes after the fill had been called and
         # thirteen litres too late. Same doctrine as its neighbours: guarded,
         # and dropped for the session on its first exception.
+        # **Where on the road we are, integrated from speed.** GT7 has no
+        # lap-distance channel, so a screen reading can only be tagged with a
+        # road position if something is counting - and it cannot be recovered
+        # afterwards, because the frame is gone and so is the packet. Guarded
+        # and dropped for the session on its first exception, like everything
+        # else on this thread.
+        ruler = getattr(self, "_lap_ruler", None)
+        if ruler is not None:
+            try:
+                ruler.note_packet(packet)
+            except Exception as exc:                        # noqa: BLE001
+                log("race").error(
+                    "the lap ruler raised on the telemetry thread and has "
+                    "been stopped for this race: %s: %s",
+                    type(exc).__name__, exc, exc_info=True)
+                self._lap_ruler = None
+
         lap_watch = self.lap_watch
         if lap_watch is not None:
             try:
@@ -2399,10 +2416,29 @@ class PitCrewController(QObject):
     def _on_parse_failed(self) -> None:
         self._parse_errors += 1
 
+    def _close_the_ruler_lap(self, lap_num: int | None) -> None:
+        """A crossing: the ruler closes the lap and says whether it measured it.
+
+        A lap that did not come out the length of the circuit was a teleport or
+        a long dropout, and every sector boundary on it is in the wrong place.
+        The caller throws those laps away rather than binning them wrongly -
+        see `race/sectors.py`.
+        """
+        ruler = getattr(self, "_lap_ruler", None)
+        if ruler is None:
+            return
+        try:
+            ruler.crossed_line(lap_num)
+        except Exception:
+            log("race").exception("the lap ruler could not close a lap")
+
     def _on_lap_completed(self, lap, rows) -> None:
         """Qt thread: compress, store, and put the lap on the rack."""
         if self.session_id is None:
             return
+        # **The ruler closes its lap on the crossing**, so the next one starts
+        # from zero and the finished one can be judged against the circuit.
+        self._close_the_ruler_lap(getattr(lap, "lap_num", None))
         # **The clock onto the lap BEFORE it is written.** The coordinator
         # owns the clock and stamped it there, in `_on_lap` - which is a
         # different queued slot, and Qt runs them FIFO, so the INSERT happened
@@ -3628,11 +3664,16 @@ class PitCrewController(QObject):
             from pitcrew.race.pit_wall import PitWall
             from pitcrew.telemetry.roster import Roster
 
+            from pitcrew.race.lap_ruler import LapRuler
+
+            self._lap_ruler = LapRuler(
+                circuit_length_m=self._circuit_length_m())
             seed = self.store.driver_exemplars()
             self._last_session_id = self.session_id
             self._pit_wall = PitWall(Roster(seed=seed),
                                      on_stop=self._on_rival_stop,
-                                     name_for=self.store.provisional_driver_name)
+                                     name_for=self.store.provisional_driver_name,
+                                     where_on_lap=self._where_on_lap)
             self.hud.watch_board(self._pit_wall, lap_of=self._our_lap)
             log("pitcrew").info(
                 "pit-wall: watching, seeded with %d known driver%s",
@@ -3642,6 +3683,35 @@ class PitCrewController(QObject):
             # the driver races without, exactly as he did before it existed.
             log("pitcrew").exception("pit-wall: could not start")
             self._pit_wall = None
+
+    def _circuit_length_m(self) -> float | None:
+        """The circuit's own length, for judging whether a lap measured it."""
+        try:
+            event = self.active_event()
+            if not event:
+                return None
+            layout = self.store.track_layout_for(event) if hasattr(
+                self.store, "track_layout_for") else None
+            if layout:
+                return float(layout.get("length_m") or 0.0) or None
+        except Exception:
+            return None
+        return None
+
+    def _where_on_lap(self) -> float | None:
+        """Metres round the lap, or `None` where the ruler cannot say.
+
+        Worker thread. `None` rather than a stale figure: a sector boundary
+        placed with a distance that has already lost packets is somewhere else
+        on the road, which is worse than no boundary.
+        """
+        ruler = getattr(self, "_lap_ruler", None)
+        if ruler is None:
+            return None
+        try:
+            return ruler.where()
+        except Exception:
+            return None
 
     def _our_lap(self) -> int | None:
         """Our current lap, for attributing a rival's stop. Worker thread.

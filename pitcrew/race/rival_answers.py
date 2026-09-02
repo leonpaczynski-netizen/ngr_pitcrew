@@ -6,8 +6,9 @@ it. A caller reaching past these into `gap_signal` or `ledger` is a caller that
 will eventually phrase one of them differently from the others.
 
     Are we catching?          `catching`
-    Where are we gaining?     `where_we_gain`     (not built - see below)
+    Where are we gaining?     `where_we_gain`
     When did he pit?          `his_stop`
+    When does he USUALLY?     `his_pit_pattern`
     Do we have to cover?      `must_cover`
     Will he run out of fuel?  `his_fuel`
     Can we undercut?          `can_undercut`
@@ -21,13 +22,18 @@ Losing the stream mid-race collapses to ego-only strategy with that said out
 loud; it does not quietly keep answering from values that stopped being true
 minutes ago.
 
-### One of the six is deliberately not here
+### The sector map, and what it rests on
 
-`where_we_gain` - the per-sector attribution of §4 - needs the ego track
-distance interpolated onto every 2 Hz gap sample, and that join does not exist
-yet: `GapSample.track_s` is carried for it and nothing fills it in. Building
-the binning on top of an unfilled field would produce a confident map of a lap
-from no positional information at all. It is left out rather than stubbed.
+`where_we_gain` was reported as blocked once and it was not: GT7 broadcasts no
+lap-distance channel, but `telemetry/recorder.py` has always integrated one
+from speed at 60 Hz and `race/qualifying.py` does it live. `race/lap_ruler.py`
+is the same integration on the race path, so every gap reading is now tagged
+with where on the road it was taken.
+
+What it inherits is that integration's known fault: about **7% of laps
+teleport**, and speed integration cannot see a teleport at all. What it CAN see
+is the consequence - a teleported lap does not come out the length of the
+circuit - so those laps are thrown away rather than binned somewhere wrong.
 """
 from __future__ import annotations
 
@@ -77,6 +83,10 @@ class RivalView:
     lap: int | None = None
     now_s: float = 0.0
     reader_alive: bool = True
+    # Where round the lap we gain and lose on him, from `race/sectors.py`.
+    sectors: object = None
+    # How far into a race he has stopped, one fraction per stop on file.
+    stop_history: tuple = ()
 
     @property
     def available(self) -> bool:
@@ -202,14 +212,53 @@ def can_undercut(view: RivalView) -> Answer:
 
 
 def where_we_gain(view: RivalView) -> Answer:
-    """"Where are we gaining on him?" - NOT BUILT, and it says so.
+    """"Where are we gaining on him?" - the two strongest sectors.
 
-    The per-sector split needs the ego track distance interpolated onto every
-    2 Hz gap sample. `GapSample.track_s` is carried for it and nothing fills it
-    in yet, so binning would divide a lap using no positional information at
-    all and return a confident map of nothing.
+    Past the standard-error gate only. Below twice its own error a bin is
+    noise, and reporting noise is how a driver learns to distrust the tool -
+    which costs more than the finding was worth.
+
+    Empty early in a race is the ordinary answer and not a failure: four laps
+    is the floor for a standard error to mean anything at all.
     """
-    return Answer(reason="track position not joined to gaps yet")
+    if view.sectors is None:
+        return Answer(reason="no sector map for him")
+    if view.sectors.laps_used < 1:
+        dropped = view.sectors.laps_dropped
+        return Answer(reason=(f"{dropped} laps dropped, none binned"
+                              if dropped else "no laps binned yet"))
+    best = view.sectors.worth_saying(2)
+    if not best:
+        return Answer(value=[], reason="nothing past the noise",
+                      confidence=THIN)
+    where = ", ".join(
+        f"{b.from_m:.0f}-{b.to_m:.0f} m {b.mean_s:+.2f}" for b in best)
+    gaining = sum(1 for b in best if b.gaining)
+    return Answer(value=best,
+                  reason=f"{gaining} of {len(best)} gaining",
+                  confidence=SURE if best[0].laps >= 6 else THIN)
+
+
+def his_pit_pattern(view: RivalView) -> Answer:
+    """"When does he stop?" - his stops on file, as a fraction of the race.
+
+    A map of WHEN rather than where: the lap he came in on, across every race
+    he has been watched in, against the field. It is the pre-race half of the
+    pit wall and it needs no live reading at all.
+
+    A fraction rather than a lap, so races of different lengths pool - a stop
+    on lap 11 means something quite different in a 20-lap race and a 40-lap
+    one.
+    """
+    if not view.stop_history:
+        return Answer(reason="never seen stopping")
+    fractions = [f for f in view.stop_history if f is not None]
+    if not fractions:
+        return Answer(reason="his stop laps are not on file")
+    mean = sum(fractions) / len(fractions)
+    return Answer(value=(mean, len(fractions)),
+                  reason=f"{mean:.0%} in, {len(fractions)} stops",
+                  confidence=SURE if len(fractions) >= 3 else THIN)
 
 
 def everything(view: RivalView) -> dict[str, Answer]:
@@ -221,4 +270,5 @@ def everything(view: RivalView) -> dict[str, Answer]:
         "must_cover": must_cover(view),
         "his_fuel": his_fuel(view),
         "can_undercut": can_undercut(view),
+        "his_pit_pattern": his_pit_pattern(view),
     }

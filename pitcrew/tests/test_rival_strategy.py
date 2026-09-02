@@ -260,9 +260,156 @@ def test_every_answer_carries_a_value_a_reason_and_a_confidence():
         assert answer.confidence in (SURE, THIN, UNKNOWN), name
 
 
-def test_the_sector_answer_says_it_is_not_built_rather_than_guessing():
-    """Binning needs the ego track distance joined onto each 2 Hz gap sample,
-    and nothing fills that field in yet."""
+def test_the_sector_answer_refuses_without_a_map_rather_than_guessing():
+    """It was reported as blocked once and it was not - GT7 broadcasts no
+    lap-distance channel, but the recorder has always integrated one from
+    speed. What it still refuses is answering with no map at all."""
     answer = where_we_gain(RivalView())
     assert answer.confidence == UNKNOWN
-    assert "track position" in answer.reason
+    assert "no sector map" in answer.reason
+
+
+# --- the sector map, which was reported as blocked and was not -------------
+
+def _a_lap(length_m=7004.0, samples=240, gain_in=None, gain_s=0.25,
+           start_gap=1.5):
+    gap, out = start_gap, []
+    for i in range(samples):
+        d = i * length_m / samples
+        here = int(d / (length_m / 12))
+        if gain_in is not None and here == gain_in:
+            gap -= gain_s / (samples / 12)
+        out.append((d, gap))
+    return out
+
+
+def test_a_sector_map_finds_where_the_gap_moves():
+    from pitcrew.race.sectors import SectorMap
+
+    sectors = SectorMap(circuit_length_m=7004.0)
+    for _ in range(8):
+        assert sectors.note_lap(_a_lap(gain_in=7), subject="rocky")
+    best = sectors.worth_saying(1)
+    assert best and best[0].gaining
+    assert best[0].index == 7
+
+
+def test_a_teleported_lap_is_dropped_rather_than_binned_wrongly():
+    """About 7% of laps teleport and speed integration cannot see it. What it
+    CAN see is that the lap did not come out the length of the circuit."""
+    from pitcrew.race.sectors import SectorMap
+
+    sectors = SectorMap(circuit_length_m=7004.0)
+    short = [(d * 0.6, g) for d, g in _a_lap()]
+    assert sectors.note_lap(short, subject="rocky") is False
+    assert sectors.laps_dropped == 1 and sectors.laps_used == 0
+
+
+def test_a_bin_inside_its_own_noise_is_not_surfaced():
+    """Reporting noise is how a driver learns to distrust the tool."""
+    from pitcrew.race.sectors import SectorMap
+
+    sectors = SectorMap(circuit_length_m=7004.0)
+    for _ in range(8):
+        sectors.note_lap(_a_lap(), subject="rocky")   # no gain anywhere
+    assert sectors.worth_saying() == []
+
+
+def test_a_slot_change_clears_the_sector_map():
+    from pitcrew.race.sectors import SectorMap
+
+    sectors = SectorMap(circuit_length_m=7004.0)
+    for _ in range(6):
+        sectors.note_lap(_a_lap(gain_in=7), subject="rocky")
+    sectors.note_lap(_a_lap(gain_in=2), subject="punished")
+    assert sectors.laps_used == 1
+
+
+def test_a_gap_too_large_to_attribute_switches_the_feature_off():
+    """At half a lap of separation the offset correction is larger than the
+    thing being corrected."""
+    from pitcrew.race.sectors import MAX_USEFUL_GAP_S, SectorMap
+
+    sectors = SectorMap(circuit_length_m=7004.0)
+    far = _a_lap(start_gap=MAX_USEFUL_GAP_S + 5.0, gain_in=7)
+    assert sectors.note_lap(far, subject="rocky") is False
+
+
+def test_where_we_gain_answers_now_that_track_position_is_joined():
+    from pitcrew.race.sectors import SectorMap
+
+    sectors = SectorMap(circuit_length_m=7004.0)
+    for _ in range(8):
+        sectors.note_lap(_a_lap(gain_in=7), subject="rocky")
+    answer = where_we_gain(RivalView(sectors=sectors))
+    assert answer.confidence == SURE and answer.value
+
+
+def test_where_we_gain_without_a_map_says_so_rather_than_guessing():
+    assert where_we_gain(RivalView()).confidence == UNKNOWN
+
+
+# --- the lap ruler ---------------------------------------------------------
+
+class _Packet:
+    def __init__(self, packet_id, speed_ms):
+        self.packet_id, self.speed_ms = packet_id, speed_ms
+
+
+def test_the_ruler_integrates_distance_because_gt7_broadcasts_none():
+    from pitcrew.race.lap_ruler import LapRuler
+
+    ruler = LapRuler(circuit_length_m=600.0)
+    for i in range(1, 601):
+        ruler.note_packet(_Packet(i, 50.0))
+    assert ruler.where() == pytest.approx(500.0)
+
+
+def test_a_lap_that_did_not_come_out_the_right_length_is_not_believable():
+    from pitcrew.race.lap_ruler import LapRuler
+
+    ruler = LapRuler(circuit_length_m=7004.0)
+    for i in range(1, 601):
+        ruler.note_packet(_Packet(i, 50.0))
+    ruler.crossed_line(1)
+    assert not ruler.believable
+
+
+def test_a_dropout_refuses_a_position_rather_than_guessing_across_it():
+    """Adding speed times the gap would assert the car held this speed through
+    a stretch nobody saw."""
+    from pitcrew.race.lap_ruler import LapRuler
+
+    ruler = LapRuler(circuit_length_m=7004.0)
+    for i in range(1, 60):
+        ruler.note_packet(_Packet(i, 50.0))
+    ruler.note_packet(_Packet(500, 50.0))     # a long dropout
+    assert ruler.dropped_packets == 1
+    assert ruler.where() is None
+
+
+def test_the_ruler_never_raises_on_a_bad_packet():
+    from pitcrew.race.lap_ruler import LapRuler
+
+    ruler = LapRuler(circuit_length_m=7004.0)
+    ruler.note_packet(None)
+    ruler.note_packet(_Packet("x", "y"))
+    assert ruler.where() == 0.0
+
+
+# --- the rival pit pattern -------------------------------------------------
+
+def test_his_pit_pattern_pools_races_as_a_fraction():
+    """A stop on lap 11 means something different in a 20-lap race and a
+    40-lap one."""
+    from pitcrew.race.rival_answers import his_pit_pattern
+
+    answer = his_pit_pattern(RivalView(stop_history=(0.50, 0.55, 0.51)))
+    assert answer.confidence == SURE and "52%" in answer.reason
+
+
+def test_one_stop_is_not_a_pattern():
+    from pitcrew.race.rival_answers import his_pit_pattern
+
+    assert his_pit_pattern(RivalView(stop_history=(0.5,))).confidence == THIN
+    assert his_pit_pattern(RivalView()).confidence == UNKNOWN
