@@ -141,9 +141,18 @@ class PitWall:
     opens holding the last one's is a race that reports it.
     """
 
-    def __init__(self, roster: Roster | None = None, *, on_stop=None) -> None:
+    def __init__(self, roster: Roster | None = None, *, on_stop=None,
+                 name_for=None) -> None:
         self._roster = roster if roster is not None else Roster()
         self._on_stop = on_stop
+        # **Asked for a name at the moment a stop closes, not at the flag.** A
+        # stop closes DURING the race, and whatever files it refuses a stop
+        # with no driver on it - so a cluster the archive did not recognise had
+        # its stop dropped, and naming the field afterwards was hours too late
+        # for a fact that cannot be observed twice. `name_for()` returns a
+        # provisional handle; the driver turns it into a person later, and
+        # renaming carries the stops with it.
+        self._name_for = name_for
         self._visits: dict[int, Visit] = {}
         self._absent: dict[int, int] = {}
         # Drivers seen on the board WITHOUT pit columns. A visit that begins
@@ -318,15 +327,59 @@ class PitWall:
         self._absent.pop(driver, None)
         if visit is None or len(visit.readings) < MIN_READS:
             return None
+        # **A cluster too rarely seen to be a driver cannot file a stop.**
+        # Same run-length argument `Roster.drivers` makes: a real driver is on
+        # the board through the race, a misread appears once or twice. Without
+        # this the Spa race filed twelve stops for eight drivers, the extra
+        # four being two-reading fragments that had founded clusters of their
+        # own - and each took a driver handle with it, so the book would have
+        # carried four people who never existed into the next race.
+        if self._roster.sightings(driver) < MIN_SIGHTINGS:
+            _log.info("pit-wall: a stop from a cluster seen only %d times is "
+                      "not filed - that is a misread, not a driver",
+                      self._roster.sightings(driver))
+            return None
         watched = max(0.0, visit.last_s - visit.started_s)
         if watched < MIN_WATCHED_S:
             _log.info("pit-wall: %s discarded - %d reads over %.0f s is too "
                       "brief to be a stop", self._roster.name_of(driver)
                       or f"driver {driver}", len(visit.readings), watched)
             return None
-        seen = Seen(driver=self._roster.name_of(driver), driver_id=driver,
-                    stop=visit.as_stop(), reads=len(visit.readings),
-                    watched_s=watched, partial=visit.partial)
+        name = self._roster.name_of(driver)
+        if not name and self._name_for is not None:
+            # **A handle already in use is not a handle.** `name_for` reads the
+            # archive, so two clusters named before either has been written
+            # back both come out as "Car #1" and the whole field collapses onto
+            # one driver. Run over a real race that filed thirteen stops
+            # against a single name. The roster knows what it has issued, so
+            # ask again until the answer is new.
+            taken = {self._roster.name_of(other)
+                     for other in self._roster.drivers()
+                     if self._roster.name_of(other)}
+            try:
+                candidate = self._name_for(taken)
+            except TypeError:
+                # A namer that does not want the set is still welcome.
+                candidate = self._name_for()
+            except Exception:               # pragma: no cover - belt
+                _log.exception("pit-wall: could not name a driver")
+                candidate = None
+            if candidate and candidate not in taken:
+                name = candidate
+                self._roster.label(driver, name)
+        # **A fill that did not move was not watched, whatever else happened.**
+        # `partial` means the entry figure is an upper bound rather than a
+        # measurement, and a visit whose lowest and highest readings are the
+        # same number is the strongest possible case of that: nothing was seen
+        # to change. Measured on the Spa race, one driver came back 19 L in and
+        # 19 L out on two readings - a fragment of a stop that really ran to
+        # 83 L. Filed, because he did stop and that is a fact worth keeping,
+        # but kept out of anything that computes a rate.
+        stop = visit.as_stop()
+        no_fill = (stop.litres is not None and stop.litres <= 0)
+        seen = Seen(driver=name, driver_id=driver,
+                    stop=stop, reads=len(visit.readings),
+                    watched_s=watched, partial=visit.partial or no_fill)
         self._stops.append(seen)
         _log.info("pit-wall: %s stopped - in %s L, out %s L, %d reads over "
                   "%.0f s%s", seen.driver or f"driver {driver}",

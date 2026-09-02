@@ -1548,6 +1548,66 @@ class Store:
                  1 if partial else 0, _now()))
             return int(cur.lastrowid)
 
+    def rename_driver(self, old: str, new: str) -> int:
+        """Give a driver his real name, and carry his stops across with him.
+
+        **Both tables in one transaction, or the rename loses the history.**
+        `rival_stops.driver` is the name, not an id - deliberately, so a stop
+        is readable without a join - which means renaming the driver and
+        renaming his stops are the same act. Returns the stops moved.
+
+        Merging onto an existing name is allowed: two provisional clusters that
+        turn out to be one person is the expected reason to do this at all.
+        """
+        if not new or old == new:
+            return 0
+        with self._write() as conn:
+            moved = conn.execute(
+                "UPDATE rival_stops SET driver = ? WHERE driver = ?",
+                (new, old)).rowcount
+            existing = conn.execute(
+                "SELECT id FROM drivers WHERE name = ?", (new,)).fetchone()
+            if existing is None:
+                conn.execute(
+                    "UPDATE drivers SET name = ?, updated_at = ? "
+                    "WHERE name = ?", (new, _now(), old))
+            else:
+                # The target already exists, so this is a merge: keep the one
+                # that is already named and retire the provisional row.
+                conn.execute("DELETE FROM drivers WHERE name = ?", (old,))
+            return int(moved)
+
+    def provisional_driver_name(self, taken=None) -> str:
+        """A handle for a cluster nobody has named yet.
+
+        **Provisional, not anonymous.** A stop filed against no name at all is
+        a stop thrown away, and there is no second chance at it - the pit
+        columns are gone the moment the car leaves. So an unrecognised driver
+        gets a handle, his stops are kept against it, his exemplar is saved so
+        the same handle finds him next race, and the driver renames it when he
+        gets round to it - at which point every stop already on file follows.
+        """
+        names = [str(r["name"]) for r in
+                 self._query("SELECT name FROM drivers WHERE name LIKE 'Car #%'")]
+        # **Plus whatever the caller has issued but not yet written back.**
+        # Two clusters named in the same breath both read the archive before
+        # either was saved to it, so both came out as "Car #1" and a whole
+        # field of thirteen stops collapsed onto one driver.
+        names += [str(n) for n in (taken or ()) if str(n).startswith("Car #")]
+        used = set()
+        for name in names:
+            try:
+                used.add(int(name.split("#", 1)[1]))
+            except (IndexError, ValueError):
+                continue
+        return "Car #%d" % (max(used) + 1 if used else 1)
+
+    def unnamed_drivers(self) -> list[dict]:
+        """Drivers still carrying a provisional handle, commonest first."""
+        return [dict(r) for r in self._query(
+            "SELECT name, races_seen, updated_at FROM drivers "
+            "WHERE name LIKE 'Car #%' ORDER BY races_seen DESC, name")]
+
     def rival_stops(self, driver: str | None = None,
                     *, include_partial: bool = True) -> list[dict]:
         """Every stop on file, newest last. One row is one observation."""

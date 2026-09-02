@@ -378,6 +378,13 @@ class Roster:
         return len(self._groups) - 1
 
     def label(self, driver_id: int, text: str) -> None:
+        """Name a cluster. Silently ignores an id that is not one.
+
+        Bounds-checked like `name_of`, because a caller holding an id from
+        before a merge is the ordinary case rather than a programming error.
+        """
+        if driver_id is None or not 0 <= driver_id < len(self._groups):
+            return
         self._groups[self._resolve(driver_id)]["label"] = text
 
     def name_of(self, driver_id: int | None) -> str | None:
@@ -386,6 +393,8 @@ class Roster:
         return self._groups[self._resolve(driver_id)]["label"]
 
     def sightings(self, driver_id: int) -> int:
+        if driver_id is None or not 0 <= driver_id < len(self._groups):
+            return 0
         return self._groups[self._resolve(driver_id)]["seen"]
 
     def drivers(self, min_sightings: int = 1) -> list[int]:
@@ -405,6 +414,12 @@ class Roster:
         return sorted((i for i in live
                        if self._groups[i]["seen"] >= min_sightings),
                       key=lambda i: -self._groups[i]["seen"])
+
+    def exemplar_of(self, driver_id: int):
+        """One cluster's bitmap, named or not. `None` for an unknown id."""
+        if driver_id is None or not 0 <= driver_id < len(self._groups):
+            return None
+        return self._groups[self._resolve(driver_id)]["bits"]
 
     def exemplars(self) -> dict[str, np.ndarray]:
         """Labelled clusters, for seeding the next race's roster."""

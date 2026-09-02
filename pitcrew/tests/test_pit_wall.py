@@ -292,3 +292,20 @@ def test_it_never_raises_on_rubbish():
     assert wall.see(None) == []
     assert wall.see(np.zeros((4, 4, 3), dtype=int)) == []
     assert wall.see(np.zeros((NAME_SHAPE[1], NAME_SHAPE[0]), dtype=int)) == []
+
+
+def test_a_fill_that_never_moved_was_not_watched():
+    """`partial` means the entry figure is an upper bound, and a visit whose
+    lowest and highest readings are the same number is the strongest case of
+    that. On the Spa race one driver came back 19 L in and 19 L out on two
+    readings - a fragment of a stop that really ran to 83."""
+    clock = Clock()
+    wall = PitWall()
+    wall.see(a_frame(), now=clock.tick())
+    for _ in range(3):
+        wall.see(a_frame(in_lane=(1,), fuel={1: 19}), now=clock.tick())
+    closed = []
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        closed += wall.see(a_frame(), now=clock.tick())
+    assert closed and closed[0].partial
+    assert closed[0].stop.litres == 0.0

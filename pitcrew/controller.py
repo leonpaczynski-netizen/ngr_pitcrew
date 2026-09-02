@@ -173,6 +173,13 @@ def circuit_key_for(event) -> str | None:
     return circuit_key(track, layout)
 
 
+# How often a cluster must be seen on the board before it is a driver rather
+# than a misread. See `telemetry.roster.Roster.drivers` for the two populations
+# this separates: eight real drivers at 17-26 sightings in 30 frames, against a
+# tail of forty-odd clusters seen once each.
+PIT_WALL_MIN_SIGHTINGS = 20
+
+
 class TelemetryBridge(QObject):
     """Turns the packet stream into Qt signals, on the right threads."""
 
@@ -3624,7 +3631,8 @@ class PitCrewController(QObject):
             seed = self.store.driver_exemplars()
             self._last_session_id = self.session_id
             self._pit_wall = PitWall(Roster(seed=seed),
-                                     on_stop=self._on_rival_stop)
+                                     on_stop=self._on_rival_stop,
+                                     name_for=self.store.provisional_driver_name)
             self.hud.watch_board(self._pit_wall, lap_of=self._our_lap)
             log("pitcrew").info(
                 "pit-wall: watching, seeded with %d known driver%s",
@@ -3671,6 +3679,15 @@ class PitCrewController(QObject):
         # "unknown" - so two races' stops would collapse into one and
         # `races_seen` would under-report, which is rule 4's whole point.
         session = self.session_id or getattr(self, "_last_session_id", None)
+        # Save the bitmap with the name at the same moment, so a handle issued
+        # mid-race can find the same driver in the next one.
+        wall = getattr(self, "_pit_wall", None)
+        if wall is not None and seen.driver:
+            try:
+                self.store.save_driver(seen.driver,
+                                       wall.roster.exemplar_of(seen.driver_id))
+            except Exception:
+                log("pitcrew").exception("pit-wall: could not save a driver")
         try:
             from pitcrew.race import rival_book
 
@@ -3690,6 +3707,25 @@ class PitCrewController(QObject):
         except Exception:
             return None
 
+    def _name_the_field(self, wall) -> None:
+        """Give every driver seen enough of a name, and remember his bitmap.
+
+        A cluster that already carries a name got it from the archive, and
+        re-saving keeps its exemplar current - a running average gets more
+        typical as evidence arrives, not less. A cluster with no name gets a
+        provisional handle rather than being dropped, because the alternative
+        is throwing away a stop that cannot be observed again.
+        """
+        for driver_id in wall.roster.drivers(min_sightings=PIT_WALL_MIN_SIGHTINGS):
+            try:
+                name = wall.roster.name_of(driver_id)
+                if not name:
+                    name = self.store.provisional_driver_name()
+                    wall.roster.label(driver_id, name)
+                self.store.save_driver(name, wall.roster.exemplar_of(driver_id))
+            except Exception:
+                log("pitcrew").exception("pit-wall: could not save a driver")
+
     def _stop_pit_wall(self) -> None:
         """Close the wall, filing any stop still in progress at the flag.
 
@@ -3704,6 +3740,13 @@ class PitCrewController(QObject):
         try:
             if self.hud is not None:
                 self.hud.stop_watching_board()
+            # **Named BEFORE the stops are closed, not after.** `rival_book`
+            # refuses a stop with no driver on it, and the pit columns are gone
+            # the moment the car leaves - so a stop filed after the flag with
+            # no name is a stop lost for good. Every cluster seen enough to be
+            # a driver gets a handle here, and its exemplar is saved so the
+            # same handle finds him next race.
+            self._name_the_field(wall)
             for seen in wall.close_all():
                 self._on_rival_stop(seen)
             named = [name for _, name in wall.named() if name]

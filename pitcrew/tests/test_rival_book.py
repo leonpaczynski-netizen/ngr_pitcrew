@@ -160,3 +160,52 @@ def test_races_seen_counts_up_per_race_not_per_stop(store):
     store.note_races_seen(["Rocky"])
     rows = store._query("SELECT races_seen FROM drivers WHERE name = 'Rocky'")
     assert rows[0]["races_seen"] == 2
+
+
+# --- naming, which is the only thing that lets a stop be filed at all -------
+
+def test_a_provisional_handle_is_issued_rather_than_dropping_a_stop(store):
+    """A stop with no name is a stop thrown away, and there is no second
+    chance at one: the columns are gone the moment the car leaves."""
+    first = store.provisional_driver_name()
+    assert first == "Car #1"
+    store.save_driver(first, np.ones((16, 64), dtype=bool))
+    assert store.provisional_driver_name() == "Car #2"
+
+
+def test_renaming_carries_every_stop_already_on_file(store, races):
+    """Retroactive on purpose: `rival_stops.driver` is the name, so renaming
+    the driver and renaming his stops are the same act."""
+    store.save_driver("Car #1", np.ones((16, 64), dtype=bool))
+    for lap in (9, 11):
+        rival_book.record(store, races[0], a_stop(driver="Car #1", lap=lap),
+                          laps_total=20)
+    assert store.rename_driver("Car #1", "Rocky") == 2
+    assert store.rival_stops("Car #1") == []
+    assert len(store.rival_stops("Rocky")) == 2
+    assert [d["name"] for d in store.unnamed_drivers()] == []
+
+
+def test_two_handles_that_are_one_person_merge(store, races):
+    """The expected reason to rename at all: a driver who came back as two
+    clusters in different races."""
+    for handle in ("Car #1", "Car #2"):
+        store.save_driver(handle, np.ones((16, 64), dtype=bool))
+        rival_book.record(store, races[0], a_stop(driver=handle), laps_total=20)
+    store.rename_driver("Car #1", "Rocky")
+    store.rename_driver("Car #2", "Rocky")
+    assert len(store.rival_stops("Rocky")) == 2
+    assert store.unnamed_drivers() == []
+
+
+def test_renaming_to_the_same_name_or_to_nothing_does_nothing(store):
+    store.save_driver("Rocky", np.ones((16, 64), dtype=bool))
+    assert store.rename_driver("Rocky", "Rocky") == 0
+    assert store.rename_driver("Rocky", "") == 0
+    assert store.driver_exemplars().get("Rocky") is not None
+
+
+def test_only_provisional_handles_are_listed_as_needing_a_name(store):
+    store.save_driver("Car #1", np.ones((16, 64), dtype=bool))
+    store.save_driver("Rocky", np.ones((16, 64), dtype=bool))
+    assert [d["name"] for d in store.unnamed_drivers()] == ["Car #1"]
