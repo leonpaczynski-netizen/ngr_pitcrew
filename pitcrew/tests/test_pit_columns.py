@@ -10,7 +10,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pitcrew.telemetry.pit_columns import PitRow, pitted_count, read
+from pitcrew.telemetry.pit_columns import (
+    PitRow,
+    pitted_count,
+    read,
+    read_rows,
+)
 
 W, H = 1920, 1080
 DARK = (22, 28, 34)
@@ -124,3 +129,74 @@ def test_it_never_raises_on_rubbish():
     assert read(None) == []
     assert read(np.zeros((10, 10, 3), dtype=int)) == []
     assert pitted_count(np.zeros((4, 4, 3), dtype=int)) == 0
+
+
+# --- given the rows, look for a disc on each one ---------------------------
+#
+# The disc-first search asks `red.any(axis=1)`: whether ANY pixel in a full
+# 1920-px row is red. A brake light at the far side of the screen therefore
+# joins that row to its neighbours, and the merged run fails the disc-height
+# bound. Measured on the Spa replay this lost the driver's OWN stop on every
+# frame of it - his disc was plainly there, saturated red at x 288-322 - while
+# rivals on the same frames came back fine, because nothing red happened to be
+# beside them.
+#
+# That is worse than a missing rival: `rivals.fuel_swing` exists to weigh his
+# stop against theirs, and it could be handed their half and never his.
+
+LADDER = (256, 282, [234, 274, 314])          # flag column, then row centres
+
+
+def test_a_known_ladder_finds_the_same_rows_as_the_disc_search():
+    frame = a_frame(rows=3)
+    assert len(read_rows(frame, BOARD, LADDER)) == 3
+
+
+def test_scenery_on_a_row_no_longer_loses_that_row():
+    """The measured failure, reproduced: something red far away on one row.
+
+    `read` merges that row into its neighbours and drops it; `read_rows` is
+    told where the row is and never asks the question that goes wrong.
+    """
+    frame = a_frame(rows=3)
+    # A brake light at the far side of the screen, spanning the middle row and
+    # the gap either side of it.
+    frame[250:300, 1500:1560] = DISC
+
+    by_rows = read_rows(frame, BOARD, LADDER)
+    assert len(by_rows) == 3
+    assert len(read(frame, board=BOARD)) < 3
+
+
+def test_a_row_with_no_disc_is_simply_not_a_pit_row():
+    frame = a_frame(rows=3, skip=(1,))
+    found = read_rows(frame, BOARD, LADDER)
+    assert len(found) == 2
+    assert all(abs(row.y - 274) > 8 for row in found)
+
+
+def test_a_disc_with_no_number_beside_it_is_still_refused():
+    """The column exists to carry the fuel figure; its absence is structural."""
+    assert read_rows(a_frame(rows=3, fuel=False), BOARD, LADDER) == []
+
+
+def test_without_a_ladder_there_is_nothing_to_ask():
+    assert read_rows(a_frame(rows=3), BOARD, None) == []
+    assert read_rows(a_frame(rows=3), BOARD, (256, 282, [234])) == []
+
+
+def test_it_never_raises_on_rubbish_either():
+    assert read_rows(None, BOARD, LADDER) == []
+    assert read_rows(np.zeros((10, 10, 3), dtype=int), BOARD, LADDER) == []
+
+
+def test_the_search_band_is_measured_in_row_heights_so_it_scales():
+    """The band right of the flag is expressed in row heights, not pixels.
+
+    The disc stays above `DISC_MIN_FRAC` of the frame here: a smaller one is
+    refused on purpose, and that floor belongs to the disc reader rather than
+    to this path.
+    """
+    small = a_frame(rows=3, disc_x=146, size=20, top=110, pitch=28)
+    ladder = (128, 141, [120, 148, 176])
+    assert len(read_rows(small, BOARD, ladder)) == 3

@@ -50,6 +50,27 @@ more useful of the two: columns appearing on a rival's row is the event
 means entry fuel must be caught while the car is standing, because it will not
 be there afterwards - so the sampler has to be running, not asked later.
 
+### Given the board's rows, look for a disc ON each one
+
+**The disc-first search loses the driver's own stop, every time.** It finds red
+row-runs with `red.any(axis=1)`, which asks whether ANY pixel in a full 1920-px
+row is red - so a brake light, a marshal's jacket or a kerb at the far side of
+the screen joins that row to its neighbours, and the merged run fails the
+disc-height bound. Measured across the window in which he actually pitted at
+Spa, his own disc was plainly there - saturated red at x 288-322, RGB (220,
+23, 6) - and was never once returned. Rivals came back on the same frames,
+because their rows happened not to have scenery beside them.
+
+That mattered more than a missing rival: `race/rivals.fuel_swing` exists to
+weigh HIS stop against theirs, and it could be given their half and never his.
+
+So where the caller can say where the board's rows are - `board.flag_ladder`
+now can, on every frame of a measured race - the search is inverted. Each known
+row is asked whether it carries a disc, in the narrow band right of the flag.
+Nothing is inferred from the discs, so nothing is lost when scenery drowns
+them, and the guards that existed only to FIND the board from its discs are not
+needed on that path.
+
 ### Only the top eight rows exist
 
 Every clean frame of that race carried eight rows, positions 1 to 8, with the
@@ -241,6 +262,66 @@ def _inside_board(discs, board):
     width = max(1, x1 - x0)
     left, right = x0, x0 + int(2.6 * width)
     return [d for d in discs if left <= d[0] <= right]
+
+
+def _disc_on_row(frame, y: int, left: int, right: int, height: int):
+    """A compound disc on one known row, or None.
+
+    The row is given, so this asks only whether the disc is there - which is
+    the question the disc-first search could not answer on a row with scenery
+    beside it.
+    """
+    half = max(3, int(height * 0.45))
+    top, bottom = max(0, y - half), y + half
+    patch = frame[top:bottom, left:right]
+    if patch.size == 0:
+        return None
+    red = ((patch[..., 0] > DISC_MIN)
+           & (patch[..., 0] > patch[..., 1] * DISC_RATIO)
+           & (patch[..., 0] > patch[..., 2] * DISC_RATIO))
+    if not red.any():
+        return None
+    rows_on = np.where(red.any(axis=1))[0]
+    cols_on = np.where(red.any(axis=0))[0]
+    tall, wide = len(rows_on), len(cols_on)
+    low, high = DISC_MIN_FRAC * frame.shape[0], DISC_MAX_FRAC * frame.shape[0]
+    if not (low <= tall <= high and low <= wide <= high):
+        return None
+    if not DISC_SQUARENESS[0] <= wide / tall <= DISC_SQUARENESS[1]:
+        return None
+    return (int(left + cols_on[0]), int(top + rows_on[0]),
+            int(left + cols_on[-1]), int(top + rows_on[-1]))
+
+
+def read_rows(frame, board, ladder) -> list[PitRow]:
+    """Pit columns for a board whose rows are already known.
+
+    `ladder` is `(flag_x0, flag_x1, [row centres])` from `board.flag_ladder`.
+    Preferred over `read` wherever it is available: it is the only path that
+    returns the driver's own row.
+    """
+    if frame is None or getattr(frame, "ndim", 0) != 3 or not ladder:
+        return []
+    flag_x0, flag_x1, ys = ladder
+    if len(ys) < 2:
+        return []
+    height = min(ys[i + 1] - ys[i] for i in range(len(ys) - 1))
+    left = flag_x1 + 1
+    right = min(frame.shape[1], flag_x1 + 4 * height)
+    board_left = board[0] if board else None
+    out = []
+    for y in ys:
+        disc = _disc_on_row(frame, y, left, right, height)
+        if disc is None:
+            continue
+        box = _fuel_box(frame, disc)
+        if box is None:
+            continue
+        out.append(PitRow(
+            disc=disc, fuel_box=box,
+            has_pitted=(_pit_flag(frame, disc, board_left)
+                        if board_left else False)))
+    return out
 
 
 def read(frame, board=None) -> list[PitRow]:
