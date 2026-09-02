@@ -8,7 +8,16 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pitcrew.telemetry.board import ASPECT, Board, find, gap_lines, own_row
+from pitcrew.telemetry.board import (
+    ASPECT,
+    Board,
+    _ladder,
+    _own_row_by_plate,
+    find,
+    flag_ladder,
+    gap_lines,
+    own_row,
+)
 
 W, H = 1920, 1080
 DARK = (24, 30, 38)
@@ -156,3 +165,120 @@ def test_the_guards_are_shape_based_so_they_survive_magnification(scale):
     assert row is not None
     width, height = row[2] - row[0] + 1, row[3] - row[1] + 1
     assert ASPECT[0] <= width / height <= ASPECT[1]
+
+
+# --- the flag ladder -------------------------------------------------------
+#
+# The plate alone cannot tell a leaderboard from a bright sky. Measured over a
+# whole race it found a board on 62 frames of 162 and about half were wrong,
+# returning boxes at (1680, 0) and (0, 1047) as confidently as real ones. Every
+# test below corresponds to a version that did exactly that.
+
+FLAG_BLUE = (30, 60, 190)
+FLAG_RED = (190, 40, 50)
+
+
+def a_board_with_flags(*, pitch=40, rows=8, own=4, flag_x=256, flag_w=26,
+                       sky=True, gap_lines_drawn=True):
+    """A board with a country flag on every row, sky above it, scenery below.
+
+    The scenery is the thing that mattered: fence palings make a perfectly
+    regular ladder of flag-coloured marks at a 7 px pitch.
+    """
+    frame = np.zeros((H, W, 3), dtype=int)
+    frame[:] = DARK
+    if sky:
+        frame[:260, :] = SKY
+    top = 190
+    ys = []
+    for index in range(rows):
+        y = top + index * pitch
+        # The gap readouts either side of the driver's own row push the rest
+        # down. Those two steps are pitch PLUS a constant and are equal to each
+        # other, because it is the same readout drawn twice.
+        if gap_lines_drawn:
+            y += 28 * (1 if index == own else (2 if index > own else 0))
+        ys.append(y)
+        frame[y - 9:y + 9, flag_x:flag_x + flag_w] = FLAG_BLUE
+        frame[y - 9:y - 4, flag_x:flag_x + flag_w] = FLAG_RED
+        plate = WHITE if index == own else PLATE
+        frame[y - 16:y + 16, 40:flag_x - 4] = plate
+        if index == own:
+            frame[y - 5:y + 5, 90:200] = DARK      # his name, dark on white
+    # Fence palings below: flag-coloured, regular, and one pixel tall.
+    for y in range(700, 900, 7):
+        frame[y:y + 1, 1684:1684 + 14] = FLAG_RED
+    return frame, ys
+
+
+def test_the_ladder_keeps_a_constant_pitch():
+    assert _ladder([100, 140, 180, 220], min_pitch=20) == [100, 140, 180, 220]
+
+
+def test_the_wide_steps_are_pitch_plus_a_constant_not_a_doubled_pitch():
+    """GT7 inserts a gap readout above and below the driver's own row. At 1440p
+    the pitch is 40 and those two steps are 68 - modelling them as 2x40 threw
+    away every row past the driver."""
+    ys = [192, 232, 272, 340, 408, 448, 488]
+    assert _ladder(ys, min_pitch=20) == ys
+
+
+def test_the_two_wide_steps_must_agree_with_each_other():
+    # One wide step of 68 and one of 100 is not a leaderboard.
+    ys = [192, 232, 272, 340, 440, 480]
+    assert len(_ladder(ys, min_pitch=20)) < len(ys)
+
+
+def test_a_pitch_finer_than_a_flag_is_wide_is_refused():
+    """Rows cannot be closer together than a flag is wide. Fence palings make a
+    perfectly regular ladder at a 7 px pitch."""
+    assert _ladder([700, 707, 714, 721], min_pitch=30) == []
+
+
+def test_a_one_pixel_sliver_is_not_a_flag():
+    """The guard that actually rejects palings is their SHAPE, not their pitch:
+    any coarse ladder can be found inside a fine one. On a measured frame a
+    stack of one-pixel marks at x 1684 in the trees beat the real board."""
+    frame, _ = a_board_with_flags()
+    found = flag_ladder(frame)
+    assert found is not None
+    assert found[0] < 1000
+
+
+def test_the_flag_column_is_found_through_sky():
+    frame, ys = a_board_with_flags()
+    found = flag_ladder(frame)
+    assert found is not None
+    x0, x1, rungs = found
+    assert abs(x0 - 256) <= 2
+    assert len(rungs) >= 5
+
+
+def test_sky_no_longer_defeats_the_locator():
+    """The measured failure: sky is bright AND unsaturated, so it passes the
+    plate test and merges every row into one blob."""
+    frame, ys = a_board_with_flags(sky=True)
+    assert own_row(frame) is not None
+
+
+def test_the_own_row_is_the_bright_plate_on_the_ladder():
+    frame, ys = a_board_with_flags(own=4)
+    box = own_row(frame)
+    assert box is not None
+    centre = (box[1] + box[3]) // 2
+    assert min(abs(centre - y) for y in ys) <= 6
+    # It ends where the flag begins, not somewhere across the screen.
+    assert box[2] < 256
+
+
+def test_a_board_drawn_without_flags_still_falls_back_to_the_plate():
+    plain = a_frame(sky=False)
+    assert flag_ladder(plain) is None
+    assert own_row(plain) == _own_row_by_plate(plain)
+
+
+def test_scenery_below_the_board_is_not_returned_as_the_board():
+    frame, _ = a_board_with_flags()
+    box = own_row(frame)
+    assert box is not None
+    assert box[1] < 700          # the palings are at y 700+
