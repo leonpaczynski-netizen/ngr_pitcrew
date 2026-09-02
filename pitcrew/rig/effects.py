@@ -115,6 +115,37 @@ TEXTURE_AT_TARMAC_P90 = 0.3910
 # a crawl, so a pit lane at walking pace does not set the scale for a lap.
 TEXTURE_LEARN_MIN_KPH = 18.0
 TEXTURE_LEARN_STEP = 2.0e-4
+
+# **The ceiling, learned from KERBS, and it is a different question from the
+# onset.** The tarmac-only guard above is right about where the bed STARTS -
+# it exists so a kerb cannot teach the road that rumble is normal. But it also
+# set where the bed TOPS OUT, and that number then had no relationship to how
+# big a kerb can be.
+#
+# Measured 1 Sep 2026 on 10 Daytona laps against 5 Spa sessions, same car:
+#
+#     learned scale top    Daytona 0.150 m/s   Spa 0.127
+#     kerb velocity p50            0.098             0.053
+#     kerb velocity p99            0.466             0.323
+#     KERB FRAMES PINNED AT 1.0      30.5%            13.7%
+#
+# Daytona's kerbs are 1.9x Spa's at the median and reach 3.1x the top of the
+# scale, so a third of the time he is on one the channel is flat out with
+# nothing left - every kerb rendering identically and maximally, through the
+# 34-41 Hz bed that sits on the rig's strongest response. Reported from the
+# seat as "the ButtKicker goes berserk on the banked kerb", and it is literal
+# saturation rather than a spurious trigger.
+# **Ten times the tarmac step, because it has a hundredth of the samples.** A
+# lap is mostly road and barely any kerb: 2,655 kerb frames across three
+# Daytona sessions against 63,785 of tarmac. At the tarmac step this tracker
+# reached 0.2008 by the end of the archive against a true kerb p90 of 0.2418 -
+# converging, but not within a race, which for a ceiling means it spends the
+# race too low and pins anyway. A ceiling is not a measurement and a little
+# jitter in it costs nothing; arriving late costs the whole effect.
+KERB_LEARN_STEP = 2.5e-3
+# Kerb frames are a few percent of a lap, so this settles in about a lap and a
+# half of kerb contact rather than in a lap of driving.
+KERB_SETTLE_FRAMES = 400
 # **And there is no settle gate, because the seeding below removes the need
 # for one.** Both trackers start exactly where the pair above puts them, so
 # the fit returns that pair at frame 0 and walks continuously from it. A gate
@@ -461,6 +492,13 @@ class EffectDeriver:
             0.50, TEXTURE_LEARN_STEP, initial=_seed_at(TEXTURE_AT_TARMAC_P50))
         self._tarmac_p90 = vehicle._Quantile(
             0.90, TEXTURE_LEARN_STEP, initial=_seed_at(TEXTURE_AT_TARMAC_P90))
+        # **Seeded at the tarmac top, so before it has settled the shape is
+        # exactly what it was.** A kerb ceiling below the tarmac knee would
+        # inverted the ramp, so `_shape` refuses one; seeding here means it is
+        # refused by arithmetic rather than by a special case.
+        self._kerb_p90 = vehicle._Quantile(
+            0.90, KERB_LEARN_STEP, initial=TEXTURE_FULL_MS,
+            settle_frames=KERB_SETTLE_FRAMES)
         self.state = vehicle.VehicleState()
 
     def set_abs(self, setting: str | None) -> None:
@@ -518,6 +556,7 @@ class EffectDeriver:
             # the seeds rather than to nothing, for the reason in `__init__`.
             self._tarmac_p50.reset(_seed_at(TEXTURE_AT_TARMAC_P50))
             self._tarmac_p90.reset(_seed_at(TEXTURE_AT_TARMAC_P90))
+            self._kerb_p90.reset(TEXTURE_FULL_MS)
             # And the differenced channels, which is what `reset`'s own
             # docstring is about: ride heights differ between cars by tens of
             # millimetres, and 0.03 m across one frame is 1.8 m/s - past
@@ -572,6 +611,41 @@ class EffectDeriver:
         onset = max(0.0, median - TEXTURE_AT_TARMAC_P50 * width)
         return onset, onset + width
 
+    def _shape(self, speed: float, onset: float, full: float) -> float:
+        """The ramp, with the top segment stretched to reach a real kerb.
+
+        **Below the tarmac p90 nothing changes, and that is deliberate.** The
+        proportions in `_texture_scale` are the ones he tuned by hand over
+        eight days, and moving the ceiling alone would drag tarmac down the
+        range with it - quieter road as the price of louder kerbs, which is
+        not what was asked for. So the curve has a knee at the tarmac p90:
+        below it the line is exactly the line it always was, and above it a
+        second segment carries `TEXTURE_AT_TARMAC_P90` up to 1.0 at the
+        learned kerb ceiling instead of at the tarmac top.
+
+        On the Daytona measurement that takes the median kerb from 0.61 to
+        0.49 - slightly softer - while taking the share of kerb frames pinned
+        at full scale from 30.5% to about a tenth. The kerb stops being one
+        flat maximum and becomes a range again, which is the complaint.
+        """
+        knee = onset + TEXTURE_AT_TARMAC_P90 * (full - onset)
+        ceiling = self._kerb_p90.value if self._kerb_p90.settled else None
+        # **The ceiling may only ever RAISE the top, never lower it.** A
+        # circuit whose kerbs are gentler than its road - Spa learned 0.107
+        # against a tarmac-derived top of 0.127 - would otherwise get a
+        # steeper second segment than the line it replaced and pin EARLIER,
+        # turning a fix for saturation into a cause of it. Bounded below by
+        # the original top, this change can only add headroom.
+        if ceiling is not None and ceiling <= full:
+            ceiling = None
+        if ceiling is None or ceiling <= knee or speed <= knee:
+            # Not yet learned, gentler than the road, or below the knee: the
+            # original line, unchanged.
+            return _ramp(speed, onset, full)
+        above = (speed - knee) / (ceiling - knee)
+        return min(1.0, TEXTURE_AT_TARMAC_P90
+                   + (1.0 - TEXTURE_AT_TARMAC_P90) * above)
+
     def _road(self, p: GT7Packet, s: vehicle.VehicleState, dt: float) -> float:
         """Road texture, and the honest account of what this is.
 
@@ -612,8 +686,14 @@ class EffectDeriver:
                 and p.speed_kmh >= TEXTURE_LEARN_MIN_KPH):
             self._tarmac_p50.update(speed)
             self._tarmac_p90.update(speed)
+        # **And teach the ceiling from kerbs, which is the other half.** Same
+        # guard in reverse: only frames actually ON a kerb, and never off the
+        # racing surface, so grass and a spin cannot raise the top either.
+        if (p.surface_types and s.on_kerb and not s.off_surface
+                and p.speed_kmh >= TEXTURE_LEARN_MIN_KPH):
+            self._kerb_p90.update(speed)
         onset, full = self._texture_scale()
-        texture = _ramp(speed, onset, full)
+        texture = self._shape(speed, onset, full)
 
         # **The speed scaling belongs to the texture, not to the surface.**
         #
