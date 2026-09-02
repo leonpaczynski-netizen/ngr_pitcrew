@@ -494,6 +494,17 @@ def read_gauge(png, layout: dict | None = None) -> Reading:
     """
     layout = layout or LAYOUT_1720x916
 
+    if isinstance(png, CropFrame) and _is_whole_canvas(png):
+        # **A "crop" of the entire canvas is not a crop.** The refusal below
+        # exists because a crop is a bet that the gauge did not move, so there
+        # is nowhere to search. A full canvas is the opposite: it is exactly
+        # what `locate_gauge` needs, and refusing it would be refusing the one
+        # frame that can answer the question. `ScreenSource` sends this shape
+        # deliberately when the driver's window is not the calibrated canvas.
+        import numpy as np
+
+        png = _as_png_bytes(np.asarray(png.pixels))
+
     if isinstance(png, CropFrame):
         # **A crop, whose geometry was verified where it was cut.** The source
         # measured the canvas it took this from; if that was not the calibrated
@@ -995,6 +1006,33 @@ class CropFrame:
     canvas: tuple[int, int]
 
 
+def _is_whole_canvas(crop: CropFrame) -> bool:
+    """Whether this `CropFrame` is actually the entire canvas."""
+    try:
+        height, width = crop.pixels.shape[0], crop.pixels.shape[1]
+    except AttributeError:
+        return False
+    return (tuple(crop.origin) == (0, 0)
+            and (width, height) == tuple(crop.canvas))
+
+
+def _as_png_bytes(pixels) -> bytes:
+    """RGB array to PNG, so the full-frame path reads it like any capture.
+
+    A re-encode rather than a second entry point into `read_gauge`: the
+    decode-and-locate path is the one the 1440p behaviour was verified on, and
+    a parallel path that skipped the encode would be a second implementation of
+    the same read. It costs a few milliseconds once a lap.
+    """
+    import io as _io
+
+    from PIL import Image
+
+    buffer = _io.BytesIO()
+    Image.fromarray(pixels.astype("uint8"), "RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def layout_bounds(layout: dict) -> tuple[int, int, int, int]:
     """The bounding box of a layout, as (x0, y0, x1, y1) inclusive."""
     xs = [v[0] for v in layout.values()] + [v[1] for v in layout.values()]
@@ -1302,22 +1340,48 @@ class ScreenSource:
         except Exception as exc:                             # noqa: BLE001
             return None, f"{title!r}: {type(exc).__name__}: {exc}"
 
-        width, height = right - left, bottom - top
-        if (width, height) != CANVAS:
-            # **Refused, not rescaled**, for the reason `read_gauge` refuses a
-            # PNG of the wrong size: a scaled projector moves every calibrated
-            # pixel. Resizing the window is a two-second fix; guessing at a
-            # scale factor is a wrong wear number.
-            return None, (f"{title!r} client area is {width}x{height}, not "
-                          f"{CANVAS[0]}x{CANVAS[1]} - resize the projector to "
-                          f"the canvas, or use the OBS source instead")
-
-        gx0, gy0, gx1, gy1 = layout_bounds(LAYOUT_1720x916)
         try:
             import mss
             import numpy as np
         except ImportError as exc:
             return None, f"{exc.name} is not installed"
+
+        width, height = right - left, bottom - top
+        if width <= 0 or height <= 0:
+            return None, f"{title!r} has no client area"
+        if (width, height) != CANVAS:
+            # **The whole window, so the locator can find the gauge in it.**
+            #
+            # This used to refuse outright, and the reason it gave was sound
+            # when it was written: the layout constants are pixel positions on
+            # a 1720x916 canvas and a scaled projector moves every one of them.
+            # But `read_gauge` grew a locate path for exactly this - it finds
+            # the four bars by their own red-over-white signature at whatever
+            # size, and `bar_height_bounds` scales with the canvas so a 1440p
+            # bar (48 px against the calibrated 30.5) is inside candidacy.
+            #
+            # **So the refusal outlived the problem.** The driver moved to
+            # 2560x1440 and the live sampler went silent - not wrong, which
+            # would have been worse, but silent, and a wear channel that
+            # returns a reason every lap looks identical to one nobody
+            # checked.
+            #
+            # Costed before choosing it. Measured in this file: a full
+            # 2560x1440 grab is 33.14 ms wall and 12.50 ms CPU against 16.68
+            # and 0.21 for the gauge rectangle. Sixty times the CPU, once a
+            # lap, on a worker thread - which is nothing against a lap of 105
+            # seconds, and the alternative is no reading at all.
+            try:
+                with mss.mss() as sct:
+                    shot = sct.grab({"left": ox, "top": oy,
+                                     "width": width, "height": height})
+                pixels = np.asarray(shot)[..., 2::-1]
+            except Exception as exc:                         # noqa: BLE001
+                return None, f"screen grab failed: {type(exc).__name__}: {exc}"
+            return CropFrame(pixels=pixels, origin=(0, 0),
+                             canvas=(width, height)), None
+
+        gx0, gy0, gx1, gy1 = layout_bounds(LAYOUT_1720x916)
         try:
             with mss.mss() as sct:
                 shot = sct.grab({"left": ox + gx0, "top": oy + gy0,
