@@ -36,6 +36,26 @@ does not need and standing still to load it. Measured against this driver's own
 policy - fill to the flag and carry nothing - it says whether a rival is giving
 away seconds in the lane or on the road.
 
+### The field is truncated, and it hides stops non-randomly
+
+**GT7 draws only the top of the order** - eight rows on every clean frame of
+the measured race - so a driver outside it is not on screen and cannot be read.
+That is the game's limit and there is nothing to do about it.
+
+What matters is that it does not hide stops at random. **A car drops places
+while it stands in the pit lane, and standing in the pit lane is the only time
+its columns are drawn.** So a driver running near the cut goes below it exactly
+when he becomes worth reading. Measured across the Spa race, K.Graebs was on
+the board for the first twenty minutes and the last ten, and absent through the
+window in which every other car stopped - which is why he is the one driver of
+eight with no stop on file.
+
+The bias runs one way: stops by cars near the front are captured, stops by cars
+near the cut are missed. A profile assembled from screen reads is therefore
+better evidence about the leaders than about the midfield, and `stops_seen` is
+the honest guard - a driver with none may simply never have been visible while
+it counted. Do not read an empty profile as a driver who does not stop.
+
 ### One data point per stop
 
 There is no continuous rival telemetry here. A twenty-lap race with one stop
