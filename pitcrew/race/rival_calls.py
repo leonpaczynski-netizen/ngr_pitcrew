@@ -100,6 +100,13 @@ class Rival:
     name: str | None = None
     position: int | None = None
     stop: Stop | None = None
+    # **His burn, where the book has watched him.** Every figure here used to
+    # apply OURS to him. `profile.py` computes his own and says plainly that
+    # 0.4 L/lap is already outside reading error - so at half a litre out over
+    # twelve remaining laps that is six litres, six seconds, on calls gated at
+    # eight. A call could fire on nothing but the mismatch. `None` falls back
+    # to ours, which is a stated assumption rather than a hidden one.
+    burn_per_lap_l: float | None = None
     # Whether the pit flag is showing. Absent is "has not pitted", which the
     # HUD asserts by drawing no columns - that is a fact, not a gap.
     pitted: bool = False
@@ -133,7 +140,7 @@ def rival_boxed(rival: Rival, *, lap: int, laps_left: int | None,
     entered_on = rival.stop.fuel_in_l
     if entered_on is None or not refuel_rate_lps or refuel_rate_lps <= 0:
         return None
-    needs = _fill_to_the_flag(laps_left, burn_per_lap_l)
+    needs = _fill_to_the_flag(laps_left, rival.burn_per_lap_l or burn_per_lap_l)
     if needs is None:
         return None
     # **No clamp, and this module quotes the rule it was breaking.** A rival
@@ -224,9 +231,10 @@ def must_stop_by(rival: Rival, burn_per_lap_l: float | None,
     if rival.stop is None or rival.stop.lap is None:
         return None
     out = rival.stop.fuel_out_l
-    if out is None or not burn_per_lap_l or burn_per_lap_l <= 0:
+    burn = rival.burn_per_lap_l or burn_per_lap_l
+    if out is None or not burn or burn <= 0:
         return None
-    last = rival.stop.lap + int(out / burn_per_lap_l)
+    last = rival.stop.lap + int(out / burn)
     # **Only when it actually binds.** A car that left the pits with enough
     # fuel to finish has no forced stop, and "he must stop by lap 22" in a
     # twenty-lap race is not a constraint - it is a true sentence about a race

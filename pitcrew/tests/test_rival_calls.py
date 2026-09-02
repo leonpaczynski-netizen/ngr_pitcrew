@@ -175,3 +175,21 @@ def test_an_unmeasured_refuel_rate_refuses_rather_than_assumes_one():
     assert stay_out(lap=8, laps_left=12, burn_per_lap_l=SPA_BURN,
                     refuel_rate_lps=None, capacity_l=100.0, laps_total=20,
                     planned_stop_lap=11) is None
+
+
+def test_a_rivals_own_burn_is_used_where_the_book_has_watched_him():
+    """Applying OUR rate to him is a stated fallback, not a measurement. At
+    0.5 L/lap out over twelve laps that is six litres - six seconds - on calls
+    gated at eight, so a call could fire on nothing but the mismatch."""
+    thirsty = Rival(name="Rocky", pitted=True, burn_per_lap_l=10.0,
+                    stop=Stop(lap=11, fuel_in_l=12.0, fuel_out_l=41.0))
+    # 41 L at HIS 10 L a lap reaches lap 15, not the lap 16 ours would give.
+    call = must_stop_by(thirsty, SPA_BURN, lap=11, laps_total=20)
+    assert call is not None and "lap 15" in call.reason
+
+
+def test_without_his_own_burn_ours_stands_in(): 
+    borrowed = Rival(name="Rocky", pitted=True,
+                     stop=Stop(lap=11, fuel_in_l=12.0, fuel_out_l=41.0))
+    call = must_stop_by(borrowed, SPA_BURN, lap=11, laps_total=20)
+    assert call is not None and "lap 16" in call.reason
