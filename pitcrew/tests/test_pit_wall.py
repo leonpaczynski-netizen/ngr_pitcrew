@@ -84,8 +84,15 @@ def a_frame(*, in_lane=(), fuel=None, names=True):
             frame[y - 5:y + 5, 96:96 + wide] = (
                 DARK if index == OWN else INK)
         if index in in_lane:
+            # **A circle, not a square.** The reader tests roundness - a filled
+            # circle fills pi/4 of its box, and the real discs measured 0.780
+            # and 0.798 - so a square fixture tests a shape GT7 does not draw.
+            ys, xs = np.mgrid[0:DISC_SIZE, 0:DISC_SIZE]
+            centre = (DISC_SIZE - 1) / 2.0
+            round_ = (ys - centre) ** 2 + (xs - centre) ** 2 <= (
+                DISC_SIZE / 2.0) ** 2
             frame[y - DISC_SIZE // 2:y + DISC_SIZE // 2,
-                  DISC_X:DISC_X + DISC_SIZE] = DISC
+                  DISC_X:DISC_X + DISC_SIZE][round_] = DISC
             number = _digits(fuel.get(index, 40))
             left = DISC_X + DISC_SIZE + int(DISC_SIZE * 0.7)
             top = y - number.shape[0] // 2

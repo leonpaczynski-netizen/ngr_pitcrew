@@ -7,22 +7,33 @@ where a pit crew stood in front of one. `MATCH_FLOOR` sits in that gap.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
-from pitcrew.telemetry.compound import MATCH_FLOOR, _bank, glyph, known, read
+from pitcrew.telemetry.compound import (
+    MATCH_FLOOR,
+    _bank,
+    colour_of,
+    glyph,
+    known,
+    known_letters,
+    known_measured,
+    letter,
+    read,
+)
 
 RED = (205, 42, 44)
 DARK = (20, 16, 18)
 BEHIND = (60, 64, 70)
 
 
-def a_disc(letter="S", size=28, filled=True):
-    """A red circle with a dark glyph in it, on a darker HUD."""
+def a_disc(letter="S", size=28, filled=True, colour=RED):
+    """A coloured circle with a dark glyph in it, on a darker HUD."""
     patch = np.zeros((size + 8, size + 8, 3), dtype=int)
     patch[:] = BEHIND
     centre, radius = (size + 8) / 2.0, size / 2.0
     ys, xs = np.mgrid[0:size + 8, 0:size + 8]
     inside = (ys - centre) ** 2 + (xs - centre) ** 2 <= radius ** 2
-    patch[inside] = RED
+    patch[inside] = colour
     if letter is None:
         return patch
     cell, templates = _bank()
@@ -44,11 +55,34 @@ def test_the_letter_in_the_disc_is_read():
     assert read(a_disc("S")) == "S"
 
 
-def test_the_bank_says_what_it_can_recognise():
-    """Only Racing Soft has ever been seen: the whole measured field ran it.
-    Anything else refuses rather than guessing, which is the right failure but
-    does mean a switch to a harder tyre cannot yet be reported."""
-    assert known() == ("S",)
+def test_all_five_compounds_are_named_from_their_disc_colour():
+    """The colour IS the compound, given by the driver from GT7's timing
+    totem: red soft, yellow medium, white hard, blue wet, green intermediate.
+    Until 3 Sep 2026 this searched for red alone, which cost the whole stop for
+    any rival on another tyre rather than merely the letter."""
+    assert known() == ("S", "M", "H", "W", "I")
+
+
+@pytest.mark.parametrize("code,rgb", [
+    ("S", (205, 42, 44)), ("M", (210, 190, 40)), ("H", (235, 238, 240)),
+    ("W", (40, 90, 210)), ("I", (40, 190, 70)),
+])
+def test_each_disc_colour_reads_as_its_compound(code, rgb):
+    assert colour_of(a_disc(letter=None, colour=rgb)) == code
+
+
+def test_only_red_is_measured_and_the_module_says_so():
+    """The other four thresholds come from a description, not from pixels, and
+    should be tightened the first time each is actually seen."""
+    assert known_measured() == ("S",)
+    assert known_letters() == ("S",)
+
+
+def test_the_body_colour_is_taken_from_the_disc_and_not_the_crop():
+    """Averaging the brightest half of a square crop of a circle mixes in the
+    grey HUD outside it, which dragged every colour towards white - only white
+    survived, because that is what red-averaged-with-grey looks like."""
+    assert colour_of(a_disc(letter=None, colour=(205, 42, 44))) == "S"
 
 
 def test_the_glyph_comes_from_inside_the_circle():
@@ -73,15 +107,25 @@ def test_something_that_is_not_a_disc_at_all_refuses():
     assert read(plain) is None
 
 
-def test_an_unknown_letter_refuses_rather_than_answering_with_the_nearest():
-    """A compound is a fact about a rival's whole remaining race, and a wrong
-    one is worse than a missing one."""
+def test_a_letter_that_disagrees_with_the_colour_refuses():
+    """The colour decides and the letter corroborates. Two readings that
+    disagree are not one reading, and a compound is a fact about a rival's
+    whole remaining race."""
     patch = a_disc(letter=None)
     centre = patch.shape[0] // 2
     # A bold cross: dark, inside the circle, and nothing like an S.
     patch[centre - 6:centre + 6, centre - 1:centre + 2] = DARK
     patch[centre - 1:centre + 2, centre - 6:centre + 6] = DARK
+    assert colour_of(patch) == "S"      # the disc is still red
+    assert letter(patch) is None
     assert read(patch) is None
+
+
+def test_a_colour_with_no_glyph_on_file_stands_on_its_own():
+    """Only the S glyph is in the bank. A yellow disc has nothing to
+    corroborate against, and refusing it would throw away the colour - which
+    is the stronger evidence of the two."""
+    assert read(a_disc(letter=None, colour=(210, 190, 40))) == "M"
 
 
 def test_rubbish_never_raises():

@@ -97,21 +97,30 @@ from pitcrew.telemetry.board import _runs
 # while, which is wrong and was also stale: the next lines say the loose bounds
 # it was justifying were measured and rejected.)
 #
-# **KNOWN DEFECT: this finds red discs only, and the disc colour changes with
-# the compound.** Confirmed by the driver, 3 Sep 2026. The test below is red
-# dominance - `red > 130` and `red > green * 2` and `red > blue * 2` - and
-# every disc in the measured archive was (200, 25, 0) because the whole field
-# ran Racing Soft, so the footage could not reveal this on its own.
+# **The disc colour IS the compound**, and there are five of them. Given by the
+# driver, 3 Sep 2026, from GT7's timing totem:
 #
-# The cost is the whole stop, not the letter. A disc of another colour is not
-# found, the row yields no `PitRow`, the driver never enters `in_lane` in
-# `race/pit_wall.py`, `has_pitted` stays False for a car standing in its box,
-# and an open visit closes three frames later in the middle of its own fill.
-# **So today the pit wall can only see rivals who are on the same tyre he is.**
+#     red (S) soft      yellow (M) medium     white (H) hard
+#     blue (W) wet      green (I) intermediate
 #
-# The fix is a colour set rather than a red test, and it needs one frame per
-# compound to measure - the letter is the discriminator once the disc is found,
-# and `telemetry/compound.py` already reads that.
+# This searched for red alone until then, because every disc in the archive was
+# (200, 25, 0) - the whole field ran Racing Soft, so the footage could not
+# reveal the rest. The cost of that was not an unread letter but the whole
+# stop: a disc of another colour was not found, the row yielded no `PitRow`,
+# the driver never entered `in_lane` in `race/pit_wall.py`, `has_pitted` stayed
+# False for a car standing in its box, and an open visit closed three frames
+# later in the middle of its own fill. **The pit wall could only see rivals on
+# the same tyre he was.**
+#
+# **Only the red one is measured.** The other four are built from the driver's
+# description of the colour scheme, so their thresholds are wider than red's
+# and should be tightened against real pixels the first time each is seen.
+# `telemetry/compound.py` reads the letter as corroboration.
+#
+# **White is the awkward one** and is why the shape and position guards matter
+# more than the colour: a white disc has the same signature as the leaderboard
+# plate and the fuel digits. It is separated by being round, disc-sized, and
+# the leftmost such blob in the band right of the flag.
 # **Strict, and the loose version was tried and was worse.** The HUD is
 # semi-transparent, so a pit crew in fluorescent green standing behind the
 # leaderboard washes the discs out and they are missed. Relaxing the ratio to
@@ -122,9 +131,21 @@ from pitcrew.telemetry.board import _runs
 # obscured HUD costs nothing, and a wrong rival fuel figure costs a stop call.
 DISC_MIN = 130
 DISC_RATIO = 2.0
+# A white (hard) disc is bright and unsaturated. Wider than the plate test in
+# `board.py` on purpose - this one is bounded by being round and disc-sized in
+# a band one flag-width wide, where the plate and the name are not.
+WHITE_DISC_MIN, WHITE_DISC_SPREAD = 170, 40
 
 # Discs are square to within antialiasing, and a column of them shares an x.
 DISC_SQUARENESS = 0.65, 1.55
+
+# **And a disc is a CIRCLE, which is what admits white safely.** A filled
+# circle fills pi/4 = 0.785 of its bounding box, and the two real discs on a
+# measured Spa frame came out at 0.780 and 0.798. The false positives the
+# white branch let in - scenery behind the translucent HUD, and the fuel
+# digits, both bright and unsaturated like a hard-compound disc - measured
+# 0.091, 0.224, 0.456 and 0.639. Nothing else in that band is round.
+DISC_ROUNDNESS = 0.70, 0.90
 COLUMN_SLOP_PX = 4
 
 # A disc is a fraction of the frame height, not a fixed size — the HUD scales.
@@ -153,10 +174,37 @@ class PitRow:
         return (self.disc[1] + self.disc[3]) // 2
 
 
+def disc_mask(frame):
+    """Pixels that could be a compound disc, in any of the five colours.
+
+    Red is the measured one. The rest come from the driver's account of GT7's
+    timing totem and are deliberately looser, because a missed disc costs a
+    whole stop while a false one is caught by the shape and position guards.
+    """
+    red, green, blue = frame[..., 0], frame[..., 1], frame[..., 2]
+    brightest = frame.max(axis=2)
+    spread = brightest - frame.min(axis=2)
+    return (
+        # red (S) - measured at (200, 25, 0)
+        ((red > DISC_MIN) & (red > green * DISC_RATIO)
+         & (red > blue * DISC_RATIO))
+        # yellow (M) - red and green together, little blue
+        | ((red > DISC_MIN) & (green > DISC_MIN)
+           & (red > blue * DISC_RATIO) & (green > blue * DISC_RATIO))
+        # green (I)
+        | ((green > DISC_MIN) & (green > red * DISC_RATIO)
+           & (green > blue * DISC_RATIO))
+        # blue (W)
+        | ((blue > DISC_MIN) & (blue > red * DISC_RATIO)
+           & (blue > green * DISC_RATIO))
+        # white (H) - bright and unsaturated, which is also the plate and the
+        # fuel digits, so this one leans entirely on shape and position.
+        | ((brightest > WHITE_DISC_MIN) & (spread < WHITE_DISC_SPREAD))
+    )
+
+
 def _candidates(frame) -> list[tuple[int, int, int, int]]:
-    red = ((frame[..., 0] > DISC_MIN)
-           & (frame[..., 0] > frame[..., 1] * DISC_RATIO)
-           & (frame[..., 0] > frame[..., 2] * DISC_RATIO))
+    red = disc_mask(frame)
     height = frame.shape[0]
     low, high = DISC_MIN_FRAC * height, DISC_MAX_FRAC * height
     out = []
@@ -172,6 +220,10 @@ def _candidates(frame) -> list[tuple[int, int, int, int]]:
             if not low <= wide <= high:
                 continue
             if not DISC_SQUARENESS[0] <= wide / tall <= DISC_SQUARENESS[1]:
+                continue
+            box = red[run[0]:run[-1] + 1, piece[0]:piece[-1] + 1]
+            fill = float(box.mean()) if box.size else 0.0
+            if not DISC_ROUNDNESS[0] <= fill <= DISC_ROUNDNESS[1]:
                 continue
             out.append((int(piece[0]), int(run[0]),
                         int(piece[-1]), int(run[-1])))
@@ -293,33 +345,40 @@ def _disc_on_row(frame, y: int, left: int, right: int, height: int):
     patch = frame[top:bottom, left:right]
     if patch.size == 0:
         return None
-    red = ((patch[..., 0] > DISC_MIN)
-           & (patch[..., 0] > patch[..., 1] * DISC_RATIO)
-           & (patch[..., 0] > patch[..., 2] * DISC_RATIO))
+    red = disc_mask(patch)
     if not red.any():
         return None
-    # **The longest contiguous run, not the count of red columns.** Those are
-    # different numbers and mixing them passes a shape test the box then fails.
-    # Measured: a 26 px disc with a 4 px speck of red 40 px to its right counts
-    # 30 red columns - square enough - and returns a box spanning 70 px, aspect
-    # 2.7, far outside `DISC_SQUARENESS`. `_fuel_box` then reads that as a
-    # 70-wide disc and searches for the number some 200 px right of where it
-    # is. The disc-first path splits its runs for exactly this reason; this one
-    # did not.
-    rows_on = np.where(red.any(axis=1))[0]
-    cols_on = np.where(red.any(axis=0))[0]
-    if len(rows_on) == 0 or len(cols_on) == 0:
-        return None
-    row_run = max(_runs(rows_on, 3), key=len)
-    col_run = max(_runs(cols_on, 3), key=len)
-    tall, wide = len(row_run), len(col_run)
+    # **Every candidate blob is tested, and the LEFTMOST disc-shaped one wins.**
+    # Taking the longest run was safe while only red was matched; with white in
+    # the set the band also contains the fuel digits and whatever bright
+    # scenery shows through the HUD, and one of those is often the longer run.
+    # On a measured frame that took the disc count from five to two. The disc
+    # precedes the fuel figure, so leftmost breaks any remaining tie.
     low, high = DISC_MIN_FRAC * frame.shape[0], DISC_MAX_FRAC * frame.shape[0]
-    if not (low <= tall <= high and low <= wide <= high):
+    cols_on = np.where(red.any(axis=0))[0]
+    if len(cols_on) == 0:
         return None
-    if not DISC_SQUARENESS[0] <= wide / tall <= DISC_SQUARENESS[1]:
-        return None
-    return (int(left + col_run[0]), int(top + row_run[0]),
-            int(left + col_run[-1]), int(top + row_run[-1]))
+    for col_run in _runs(cols_on, 4):
+        wide = len(col_run)
+        if not low <= wide <= high:
+            continue
+        strip = red[:, col_run[0]:col_run[-1] + 1]
+        rows_here = np.where(strip.any(axis=1))[0]
+        if len(rows_here) == 0:
+            continue
+        for row_run in _runs(rows_here, 3):
+            tall = len(row_run)
+            if not low <= tall <= high:
+                continue
+            if not DISC_SQUARENESS[0] <= wide / tall <= DISC_SQUARENESS[1]:
+                continue
+            box = strip[row_run[0]:row_run[-1] + 1]
+            fill = float(box.mean()) if box.size else 0.0
+            if not DISC_ROUNDNESS[0] <= fill <= DISC_ROUNDNESS[1]:
+                continue
+            return (int(left + col_run[0]), int(top + row_run[0]),
+                    int(left + col_run[-1]), int(top + row_run[-1]))
+    return None
 
 
 def read_rows(frame, board, ladder) -> list[PitRow]:
@@ -354,7 +413,26 @@ def read_rows(frame, board, ladder) -> list[PitRow]:
             disc=disc, fuel_box=box,
             has_pitted=(_pit_flag(frame, disc, board_left)
                         if board_left is not None else False)))
-    return out
+    return _same_column(out)
+
+
+def _same_column(rows: list[PitRow]) -> list[PitRow]:
+    """Keep only the discs that agree on an x.
+
+    **The one guard from the disc-first path that the row-first path still
+    needs.** The rest existed to FIND the board and are redundant now the
+    ladder gives it - but discs sharing a column is a fact about the board
+    itself, and admitting white cost the search its narrowness: on a measured
+    frame two pieces of bright scenery at x 397 came back alongside five real
+    discs at 291. Scenery does not line up with a leaderboard column.
+    """
+    if len(rows) < 2:
+        return rows
+    tally: dict[int, int] = {}
+    for row in rows:
+        tally[row.disc[0]] = tally.get(row.disc[0], 0) + 1
+    best = max(tally.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+    return [row for row in rows if abs(row.disc[0] - best) <= COLUMN_SLOP_PX]
 
 
 def read(frame, board=None) -> list[PitRow]:

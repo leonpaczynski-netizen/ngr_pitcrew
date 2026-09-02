@@ -24,15 +24,29 @@ INK = (238, 242, 244)
 BOARD = (39, 400, 254, 438)          # a plausible own-row box
 
 
+def _circle(size):
+    """A filled disc mask. **A circle, not a square.**
+
+    The reader tests roundness - a filled circle fills pi/4 = 0.785 of its
+    bounding box, and the two real discs on a measured Spa frame came out at
+    0.780 and 0.798 - so a square fixture would be testing a shape GT7 does
+    not draw, and would pass a reader that rejects the real one.
+    """
+    ys, xs = np.mgrid[0:size, 0:size]
+    centre, radius = (size - 1) / 2.0, size / 2.0
+    return (ys - centre) ** 2 + (xs - centre) ** 2 <= radius ** 2
+
+
 def a_frame(*, rows=3, pitch=40, disc_x=291, size=28, top=220,
-            fuel=True, flag=False, decoy=None, skip=()):
+            fuel=True, flag=False, decoy=None, skip=(), colour=DISC):
     frame = np.zeros((H, W, 3), dtype=int)
     frame[:] = DARK
+    disc = _circle(size)
     for i in range(rows):
         if i in skip:
             continue
         y = top + i * pitch
-        frame[y:y + size, disc_x:disc_x + size] = DISC
+        frame[y:y + size, disc_x:disc_x + size][disc] = colour
         if fuel:
             # Scaled with the disc: the reader looks for the number in a window
             # measured in disc widths, so an unscaled box falls outside it at
@@ -46,6 +60,14 @@ def a_frame(*, rows=3, pitch=40, disc_x=291, size=28, top=220,
         for (dx, dy, dw, dh) in decoy:
             frame[dy:dy + dh, dx:dx + dw] = DISC
     return frame
+
+
+# The five compounds, from GT7's timing totem. Only red is measured; the rest
+# come from the driver's account of the colour scheme.
+YELLOW = (210, 190, 40)     # M, medium
+WHITE_DISC = (235, 238, 240)  # H, hard
+BLUE = (40, 90, 210)        # W, heavy wet
+GREEN = (40, 190, 70)       # I, intermediate
 
 
 def test_a_column_of_discs_with_numbers_is_read():
@@ -200,3 +222,38 @@ def test_the_search_band_is_measured_in_row_heights_so_it_scales():
     small = a_frame(rows=3, disc_x=146, size=20, top=110, pitch=28)
     ladder = (128, 141, [120, 148, 176])
     assert len(read_rows(small, BOARD, ladder)) == 3
+
+
+# --- the disc colour is the compound, and there are five ------------------
+
+@pytest.mark.parametrize("colour", [DISC, YELLOW, WHITE_DISC, BLUE, GREEN])
+def test_every_compound_colour_is_found(colour):
+    """Until 3 Sep 2026 this searched for red alone, because every disc in the
+    archive was Racing Soft. The cost was not an unread letter but the whole
+    stop: a disc of another colour was not found, so the car read as never
+    having pitted, and the pit wall could only see rivals on the same tyre."""
+    rows = read_rows(a_frame(rows=3, colour=colour), BOARD, LADDER)
+    assert len(rows) == 3
+
+
+def test_the_fuel_digits_are_not_mistaken_for_a_white_disc():
+    """White is the awkward one: a hard-compound disc has the same signature as
+    the leaderboard plate and the fuel figure. Roundness is what separates
+    them - a circle fills 0.785 of its box, and the false positives admitted
+    when white was let in measured 0.091 to 0.639."""
+    frame = a_frame(rows=3, colour=WHITE_DISC)
+    rows = read_rows(frame, BOARD, LADDER)
+    # Three discs, not three discs plus three blocks of white ink.
+    assert len(rows) == 3
+    assert len({row.disc[0] for row in rows}) == 1
+
+
+def test_scenery_that_is_round_but_off_the_column_is_dropped():
+    """Two pieces of bright scenery at x 397 came back alongside five real
+    discs at 291 once white was admitted."""
+    frame = a_frame(rows=3)
+    stray = _circle(28)
+    for y in (222, 262):
+        frame[y:y + 28, 397:397 + 28][stray] = WHITE_DISC
+    rows = read_rows(frame, BOARD, LADDER)
+    assert {row.disc[0] for row in rows} == {291}

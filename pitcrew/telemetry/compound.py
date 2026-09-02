@@ -17,23 +17,28 @@ the median distance to the average glyph is 0.046 and the 90th percentile
 0.064, against a worst case of 0.494 where a pit crew stood in front of one.
 `MATCH_FLOOR` sits between them.
 
-### Two limits, and the second is the larger one
+### The COLOUR is the compound. The letter corroborates it.
 
-**Only `S` has ever been seen.** The whole field ran Racing Soft, so that is
-the only glyph in the bank. Anything else is refused - `None`, not a guess -
-which is the right failure, but it does mean this cannot yet tell you a rival
-switched to a harder tyre. Add the glyph from the first race that shows one.
+Given by the driver, 3 Sep 2026, from GT7's timing totem:
 
-**And a non-red disc never reaches here at all - which is now a confirmed
-defect rather than a worry.** `pit_columns` finds a disc by red dominance, and
-the driver confirmed on 3 Sep 2026 that **GT7 changes the disc colour with the
-compound**. Every disc in the archive was (200, 25, 0) because the whole field
-ran Racing Soft, so the footage could not have shown it.
+    red (S) soft      yellow (M) medium     white (H) hard
+    blue (W) wet      green (I) intermediate
 
-The consequence is bigger than an unread letter: the disc is not found, the
-pit column is not found, and the car reads as never having pitted at all. Until
-`pit_columns` knows the colour set, **the pit wall can only see rivals who are
-on the same tyre he is.** One frame per compound closes it.
+That is much stronger evidence than the glyph and it is available on every
+frame the disc is: a letter can be half behind a pit crew, but the colour of
+what is left of the circle is still the colour. So the colour decides, and the
+letter is checked against it where the bank has that glyph - a disagreement
+refuses rather than picking a side, because a compound is a fact about a
+rival's whole remaining race.
+
+**Only red is measured.** It came back (200, 25, 0) across 96 discs. The other
+four thresholds are built from the description above and should be tightened
+against real pixels the first time each is seen - `known_measured()` says which
+is which, so nothing here claims more than it has.
+
+**Only the `S` glyph is in the letter bank**, for the same reason: the whole
+field ran Racing Soft. A letter it cannot read is not a refusal of the stop,
+just of the corroboration.
 """
 from __future__ import annotations
 
@@ -42,6 +47,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+
+from pitcrew.telemetry.pit_columns import disc_mask
 
 BANK_PATH = Path(__file__).with_name("compound_letters.json")
 
@@ -71,7 +78,11 @@ MATCH_FLOOR = 0.18
 # here, and that is the right way round: `pit_columns` losing the disc costs the
 # whole stop, so it should be the more forgiving of the two, while a letter read
 # off a washed-out disc is a guess about a rival's whole remaining race.
-RED_MIN, RED_RATIO = 140, 2.0
+RED_MIN = 140
+# How far one channel must lead the others before the disc is that colour.
+CHANNEL_RATIO = 1.35
+# Below this much spread between channels the disc is white - the hard compound.
+WHITE_SPREAD = 55
 LETTER_MAX = 120
 # Fewer red pixels than this is not a disc, and fewer dark ones is not a letter.
 # **A fraction of the disc, not an absolute count.** 120 pixels needs a disc at
@@ -95,9 +106,7 @@ def glyph(patch):
     if patch is None or getattr(patch, "ndim", 0) != 3 or patch.size == 0:
         return None
     cell, _ = _bank()
-    red = ((patch[..., 0] > RED_MIN)
-           & (patch[..., 0] > patch[..., 1] * RED_RATIO)
-           & (patch[..., 0] > patch[..., 2] * RED_RATIO))
+    red = disc_mask(patch)
     # **Fill the circle before looking for ink.** Outside it is the HUD, which
     # is darker than the letter and much larger.
     inside = np.zeros(red.shape, dtype=bool)
@@ -119,14 +128,81 @@ def glyph(patch):
     return np.asarray(scaled) / 255.0
 
 
-def read(patch) -> str | None:
-    """The compound letter in this disc, or `None` if it cannot be read.
+# The five discs, and the compound each one means. Only `S` is measured.
+COMPOUND_COLOURS = ("S", "M", "H", "W", "I")
+MEASURED_COLOURS = ("S",)
 
-    `None` rather than a guess, and that matters more here than in most
-    readers: a compound is a fact about a rival's whole remaining race, and a
-    wrong one is worse than a missing one in exactly the way CLAUDE.md rule 3
-    describes.
+
+def colour_of(patch) -> str | None:
+    """The compound from the disc's colour, or `None` if it is not one.
+
+    Read off the body of the circle rather than a single pixel: the disc is
+    antialiased against whatever is behind a translucent HUD, and the letter
+    inside it is dark, so an average over everything would be dragged towards
+    the letter.
     """
+    if patch is None or getattr(patch, "ndim", 0) != 3 or patch.size == 0:
+        return None
+    body = _body(patch)
+    if body is None:
+        return None
+    red, green, blue = body
+    brightest, darkest = max(body), min(body)
+    if brightest < RED_MIN:
+        return None
+    if brightest - darkest < WHITE_SPREAD:
+        return "H"                       # bright and unsaturated
+    if red > green * CHANNEL_RATIO and red > blue * CHANNEL_RATIO:
+        return "S"
+    if green > red * CHANNEL_RATIO and green > blue * CHANNEL_RATIO:
+        return "I"
+    if blue > red * CHANNEL_RATIO and blue > green * CHANNEL_RATIO:
+        return "W"
+    if red > blue * CHANNEL_RATIO and green > blue * CHANNEL_RATIO:
+        return "M"                       # red and green together
+    return None
+
+
+def _body(patch):
+    """Mean RGB of the disc's coloured body, or `None`.
+
+    **Selected with the same mask that found the disc**, not by luminance over
+    the whole crop. Averaging the brightest half of the patch mixes in the grey
+    HUD outside the circle - which is most of a square crop of a circle - and
+    dragged every colour towards it: only white survived, because white is what
+    a red disc averaged with grey looks like to a ratio test.
+    """
+    mask = disc_mask(patch)
+    if mask.sum() < MIN_LETTER_PIXELS:
+        return None
+    kept = patch[mask]
+    mean = kept.mean(axis=0)
+    return float(mean[0]), float(mean[1]), float(mean[2])
+
+
+def read(patch) -> str | None:
+    """The compound in this disc, or `None` if it cannot be read.
+
+    **The colour decides and the letter corroborates.** Where the bank holds
+    the glyph for the colour's compound and the glyph disagrees, this refuses:
+    a compound is a fact about a rival's whole remaining race, and two readings
+    that disagree are not one reading.
+
+    `None` rather than a guess throughout. CLAUDE.md rule 3.
+    """
+    code = colour_of(patch)
+    if code is None:
+        return None
+    _, templates = _bank()
+    if code not in templates:
+        # No glyph on file for this compound - the colour stands alone, which
+        # is what it did before there was a bank at all.
+        return code
+    return code if letter(patch) == code else None
+
+
+def letter(patch) -> str | None:
+    """The glyph inside the disc, matched against the bank, or `None`."""
     found = glyph(patch)
     if found is None:
         return None
@@ -141,7 +217,21 @@ def read(patch) -> str | None:
     return best
 
 
+def known_measured() -> tuple[str, ...]:
+    """The compounds whose colour has been measured rather than described.
+
+    The rest are built from the driver's account of GT7's timing totem and
+    should be tightened against real pixels the first time each is seen.
+    """
+    return MEASURED_COLOURS
+
+
 def known() -> tuple[str, ...]:
-    """The letters this bank can recognise. Everything else reads as `None`."""
+    """The compounds this module can name, from their disc colour."""
+    return COMPOUND_COLOURS
+
+
+def known_letters() -> tuple[str, ...]:
+    """The glyphs the letter bank holds. Everything else corroborates nothing."""
     _, templates = _bank()
     return tuple(sorted(templates))
