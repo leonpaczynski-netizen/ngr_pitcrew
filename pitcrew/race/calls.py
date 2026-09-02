@@ -206,6 +206,14 @@ REGISTER = {
     LAPS_TO_GO: EVENT,
     POSITION: FACT,
     STATUS: FACT,
+    # **The rival calls, and all three are DECISIONS.** None of them is a
+    # separation in seconds - `_fuel_gap` already says "gap" meaning laps of
+    # fuel in hand, and one word with two units on one voice is rule 13. They
+    # say litres, seconds standing, and the lap a car must stop by, and each
+    # names its own reference inside the call. See `race/rival_calls.py`.
+    "rival-boxed": DECISION,
+    "rival-committed": DECISION,
+    "stay-out-fuel": DECISION,
 }
 
 

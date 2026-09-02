@@ -203,15 +203,32 @@ def test_position_ranks_below_every_ranked_instruction():
             assert URGENCY.index(kind) < URGENCY.index(POSITION), kind
 
 
-def test_the_kinds_outside_the_ranking_are_the_known_three():
-    """`URGENCY` ranks what `_candidates` offers. Three kinds reach the driver
+def test_the_kinds_outside_the_ranking_are_the_known_six():
+    """`URGENCY` ranks what `_candidates` offers. Six kinds reach the driver
     by another road and are classified here anyway, because the register is
     about whether a thing may be said unasked and that question does not care
     which function composed it.
 
     `TYRE` is the retired modelled warning - kept classified so an old record
     can still be read, not because anything emits it.
+
+    **The three rival kinds are unranked on purpose, and this test is the
+    reason the choice got made rather than defaulted.** They are composed in
+    `race/rival_calls.py` and nothing offers them to `_candidates` yet, so a
+    rank here would be an ordering against contention that no test exercises.
+    `next_call` sorts on `URGENCY.index`, so the day one of them IS wired it
+    raises on the race path - loudly, at the point the ordering question is
+    real - which is exactly what `WEAR` did until a test asked for it. The
+    decision itself is written down in `rival_calls.py` so it need not be
+    re-derived: a rival's stop ranks BELOW every call about our own fuel,
+    because a car about to run dry outranks news about somebody else.
     """
     from pitcrew.race.calls import SAVING_RESPONSE, STAY_OUT, TYRE
+    from pitcrew.race.rival_calls import (
+        RIVAL_BOXED, RIVAL_COMMITTED, STAY_OUT_FUEL,
+    )
 
-    assert set(REGISTER) - set(URGENCY) == {STAY_OUT, SAVING_RESPONSE, TYRE}
+    assert set(REGISTER) - set(URGENCY) == {
+        STAY_OUT, SAVING_RESPONSE, TYRE,
+        RIVAL_BOXED, RIVAL_COMMITTED, STAY_OUT_FUEL,
+    }
