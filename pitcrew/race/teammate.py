@@ -17,11 +17,18 @@ not adjacent would have to be integrated from lap times, and this driver's own
 lap-to-lap noise is 0.918 s, so a figure built that way would be worse than
 saying nothing. `separation_s` returns `None` and says why.
 
-**Fuel, compound and pit status: only after he has stopped.** The pit columns
-are drawn for cars that have been to the lane and for nobody else. Before his
-stop there is nothing to read, and "no columns" means "has not pitted" rather
-than "not seen" - that absence is a real fact and the one useful thing
-available early.
+**Fuel, compound and pit status: only while he is actually in the lane.**
+Measured across a whole race, the pit columns mark the car standing in the pit
+box at that moment and are gone again afterwards - a driver who stopped five
+minutes ago looks exactly like one who has not stopped at all. So `pitted` and
+`stop` have to be caught as they happen and carried forward by the caller;
+asking the screen later gets nothing.
+
+**And only if he is in the top eight.** Every clean frame of the measured race
+showed eight rows, positions 1 to 8. A teammate running ninth is not on the
+board, `position` is `None`, and `where_is_he` returns nothing rather than
+guessing - which is the honest answer, but it does mean this goes quiet exactly
+when a teammate is having a bad race.
 
 ### Why there are no team orders in here
 
@@ -45,12 +52,20 @@ NEARBY_PLACES = 3
 
 @dataclass(frozen=True)
 class Teammate:
-    """The teammate as the board currently shows him.
+    """The teammate as the board shows him, plus what the caller has remembered.
 
-    Every field is nullable and means "not seen" when it is `None`. The one
-    exception is `pitted`, where `False` is an assertion rather than a gap: the
-    HUD draws pit columns for every car that has been to the lane, so their
-    absence is evidence that he has not.
+    Every field is nullable and means "not seen" when it is `None`.
+
+    **`pitted` is a latch, not a reading.** It was written believing the pit
+    columns stayed on a car's row once it had stopped; measured over a whole
+    race they do not - they mark the car standing in the box at that instant and
+    vanish afterwards, so a driver who stopped five minutes ago is
+    indistinguishable on screen from one who has never stopped. Whoever fills
+    this in must set it when the columns are seen and keep it set, because
+    reading it fresh off a later frame answers a different question. Left
+    `False` by a caller that has been watching, it means he has not been in the
+    lane; `False` from a caller that has just started watching means nothing at
+    all, and this class cannot tell those apart.
     """
     name: str
     position: int | None = None

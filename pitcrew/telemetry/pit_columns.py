@@ -33,6 +33,30 @@ about nothing.** So a candidate is only accepted as part of a column that
 shares an x and a size with at least one other, which no scatter of scenery
 ever does.
 
+### The columns mean "in the lane NOW", not "has stopped"
+
+**Measured across the whole 48-minute Spa replay, and it corrects the reading
+this module was built on.** The obvious assumption - that a car which has been
+to the pits keeps its columns for the rest of the race - is wrong. Of 94 clean
+frames after CruisingChaos filled from 10 L to 89, exactly one showed pit
+columns, and that one belonged to A.Maidment, who was in the lane at that
+moment showing 2 L. CruisingChaos had none. The earlier evidence that looked
+like persistence - 10, 33, 57, 93 - sits entirely inside a 90-second window,
+which is the duration of his stop.
+
+That makes this a **stop detector** rather than a fuel history, and it is the
+more useful of the two: columns appearing on a rival's row is the event
+`race/rival_calls.py` needs, at the moment it can still be acted on. It also
+means entry fuel must be caught while the car is standing, because it will not
+be there afterwards - so the sampler has to be running, not asked later.
+
+### Only the top eight rows exist
+
+Every clean frame of that race carried eight rows, positions 1 to 8, with the
+driver's own row among them wherever he was running. A rival outside the top
+eight is not on the board at all, so nothing here can see him - which bounds
+what `race/teammate.py` can say about a teammate who is running ninth.
+
 ### What this does not do yet
 
 It does not read the fuel digits. It locates the box they are in. The pit flag
