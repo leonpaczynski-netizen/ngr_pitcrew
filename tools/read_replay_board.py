@@ -67,11 +67,21 @@ NAME_MIN_INK = 40
 # Every name is normalised to this before being compared, so a crop a pixel
 # wider does not read as a different driver.
 NAME_SHAPE = (64, 16)
-# **Two bitmaps closer than this are the same name.** Measured on the Fuji
-# race: at 0.12 the same driver split into two clusters, so it is set wider
-# and the operator sees the merge rather than the split - a split invents a
-# driver, a merge is visible the moment the sheet is looked at.
-SAME_NAME_MAX_DIFF = 0.18
+# **Two bitmaps closer than this are the same name.** Raised twice, both times
+# because the same driver split into two clusters - at 0.12 on the Fuji race,
+# and again at 0.18 on Spa session 112, where PUNISHED came back as cluster 0
+# with 591 sightings and cluster 9 with one.
+#
+# Measured across that roster's ten clusters, the two populations do not
+# overlap and there is room between them:
+#
+#     same driver (PUNISHED to PUNISHED)      0.205
+#     nearest DIFFERENT pair of the other 44  0.289
+#
+# 0.25 sits in that gap with about four hundredths of margin either side. The
+# direction to err is still wide: a split invents a driver and is invisible,
+# a merge shows on the sheet the moment it is looked at.
+SAME_NAME_MAX_DIFF = 0.25
 # **What to write against a cluster nobody can read.** The board reorders
 # between frames and a sample caught mid-reorder has two names rendered over
 # each other. Marking it explicitly leaves those contacts unnamed and lets the
@@ -151,12 +161,29 @@ def cluster(bitmaps: list) -> list[dict]:
     """Group identical names. Exact, because the font never changes."""
     groups: list[dict] = []
     for key, bits in bitmaps:
+        # **Nearest cluster, not the first one under the threshold.** The old
+        # loop took whichever group happened to be created first, so a bitmap
+        # 0.17 from one name and 0.05 from another joined the wrong one purely
+        # by order of appearance. With the threshold now wider that would
+        # matter more, not less.
+        best, closest = None, None
         for group in groups:
-            if (group["bits"] != bits).mean() < SAME_NAME_MAX_DIFF:
-                group["seen"].append(key)
-                break
+            apart = (group["bits"] != bits).mean()
+            if closest is None or apart < closest:
+                best, closest = group, apart
+        if best is not None and closest < SAME_NAME_MAX_DIFF:
+            best["seen"].append(key)
+            # **And the exemplar is the running average, not the first sample
+            # seen.** A cluster founded on an atypical crop - caught mid-
+            # reorder, or partly behind a pit crew - compared everything
+            # against its worst member for the rest of the race. Averaging
+            # makes the exemplar more typical as evidence arrives rather than
+            # less.
+            best["sum"] = best["sum"] + bits
+            best["bits"] = (best["sum"] / len(best["seen"])) > 0.5
         else:
-            groups.append({"bits": bits, "seen": [key]})
+            groups.append({"bits": bits, "sum": bits.astype(float),
+                           "seen": [key]})
     groups.sort(key=lambda group: -len(group["seen"]))
     return groups
 
