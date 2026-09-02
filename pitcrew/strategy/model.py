@@ -244,6 +244,12 @@ PIT_LOSS_DECLARED = "declared-on-the-event-page"
 # does not hang the screen.
 MAX_CANDIDATES = 4096
 
+# Below this, a compound pace gap is smaller than anything a worn soft gives
+# back inside a stint, so the harder tyre is never repaid. Measured against
+# this driver's own stints, which end at 0.44-0.56 worst corner - `pace_loss_s`
+# is flat to 0.50, so the soft costs at most 0.15 s a lap by the flag.
+COMPOUND_GAP_FLOOR_S = 0.20
+
 
 class StrategyImpossible(ValueError):
     """The race cannot be planned from what is known."""
@@ -1751,6 +1757,61 @@ def crossover_lap(faster: CompoundProfile, harder: CompoundProfile,
     return None
 
 
+def compound_choice_is_moot(inputs: "RaceInputs") -> str | None:
+    """Why comparing compounds cannot change this plan, or `None` if it can.
+
+    **The search runs whatever the answer is, and until now it never said when
+    the answer was settled before it started.** Both reasons below are
+    arithmetic on figures already in the plan, and at this driver's 2x wear
+    both hold at once - so `crossover_table`, `_candidate_sequences` and their
+    4096 candidates are searching a decision the fuel load already made, while
+    `_verdict` prints a confident comparison of two options that were never
+    really two.
+
+    **One: fuel binds every stint.** A stop in GT7 is a refuel, so a compound
+    that lasts longer can only delete a stop if the TYRE is what ends the
+    stint. Measured at Spa - 100 L, 8 L a lap, wear about 0.05 a lap - the
+    tank runs out at 11 laps and the tyre at 17. The harder tyre's whole
+    advantage is unreachable, and all that is left of it is being slower.
+
+    **Two: the soft never wears into the gap.** `pace_loss_s` is flat to 0.50
+    and his stints end at 0.44-0.56 worst corner, so the soft gives back at
+    most 0.15 s a lap by the end of a stint. A compound gap smaller than that
+    is inside the noise floor; a realistic one is several times larger and is
+    never repaid.
+
+    Returned as a sentence rather than a flag because it belongs in what the
+    driver is told: "the softest tyre wins by construction here" is a more
+    useful answer than a table of numbers comparing it with something that
+    cannot win.
+    """
+    fuel_laps = fuel_limited_laps_at_load(inputs)
+    reasons = []
+    profiles = [inputs.profile_for(code)
+                for code in inputs.planning_compounds()]
+    rates = [p.wear_per_lap for p in profiles if p and p.wear_per_lap]
+    if fuel_laps and rates:
+        tyre_laps = [tyre_limited_laps(rate) for rate in rates]
+        tyre_laps = [laps for laps in tyre_laps if laps]
+        if tyre_laps and min(tyre_laps) > fuel_laps:
+            reasons.append(
+                f"the tank ends every stint at {fuel_laps} laps and the "
+                f"shortest-lived tyre would last {min(tyre_laps)}, so no "
+                f"compound here can delete a stop")
+    if rates:
+        worst_wear = max(rates) * (fuel_laps or 0)
+        if worst_wear and pace_loss_s(worst_wear) < COMPOUND_GAP_FLOOR_S:
+            reasons.append(
+                f"a stint ends at {worst_wear:.0%} worn, where the softest "
+                f"tyre has given back {pace_loss_s(worst_wear):.2f} s a lap - "
+                f"less than any real compound gap")
+    if not reasons:
+        return None
+    return ("The compound comparison cannot decide this: "
+            + "; and ".join(reasons)
+            + ". The softest tyre available wins by construction.")
+
+
 def crossover_table(inputs: RaceInputs) -> list[dict]:
     """Every ordered pair of planning compounds, and where they cross.
 
@@ -1821,6 +1882,13 @@ def crossover(ordered: list[Plan], inputs: RaceInputs) -> dict | None:
         "restsOnAssumption": assumed,
         "compoundCrossoverLaps": crossover_table(inputs),
         "outsideTyreWindow": window_notes,
+        # **Whether the comparison above could have gone the other way.** At
+        # this driver's wear multiplier it usually could not: fuel ends every
+        # stint before the tyre does, so no compound can delete a stop, and the
+        # soft never wears far enough to give back a real compound gap. The
+        # search still runs - it costs nothing and the totals are still true -
+        # but the sentence the driver reads says which it was.
+        "moot": compound_choice_is_moot(inputs),
         "source": "derived-from-total-race-time",
     }
     result["verdict"] = _verdict(result, assumed, window_notes)
@@ -1841,12 +1909,17 @@ def _verdict(crossover: dict, assumed: bool,
     does not change the arithmetic - it changes how far the arithmetic can be
     trusted, which is a separate claim and reads better as one.
     """
+    moot = crossover.get("moot")
     win = "/".join(c or "?" for c in crossover["winner"]["compounds"])
     alt = "/".join(c or "?" for c in crossover["alternative"]["compounds"])
     gap = crossover["alternative"]["lostBySeconds"]
     saved = crossover["stopsSaved"]
     tail = " " + " ".join(window_notes) if window_notes else ""
 
+    if moot:
+        # Said first and instead: a table comparing two options where one
+        # cannot win is worse than no table, because it reads as a finding.
+        return moot + tail
     if assumed and gap < 0.5:
         return (f"{win} and {alt} come out level, but only because no wear "
                 f"rate has been measured on both - they are being planned on "

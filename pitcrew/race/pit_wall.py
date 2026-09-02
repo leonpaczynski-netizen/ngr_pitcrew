@@ -46,8 +46,10 @@ import time
 from dataclasses import dataclass, field
 
 from pitcrew.diagnostics import log
+from pitcrew.race.gaps import GapTrend, read_gaps
 from pitcrew.race.rivals import Stop
 from pitcrew.telemetry.board import flag_ladder, own_row
+from pitcrew.telemetry.compound import read as read_compound
 from pitcrew.telemetry.hud_digits import read_fuel
 from pitcrew.telemetry.pit_columns import read_rows
 from pitcrew.telemetry.roster import ROW_MATCH_TOL, Roster
@@ -101,6 +103,7 @@ class Visit:
     lap: int | None
     started_s: float
     readings: list[int] = field(default_factory=list)
+    compounds: list[str] = field(default_factory=list)
     last_s: float = 0.0
     # True where the car was already showing columns the first time this
     # watcher managed to read the board - so the fill may have begun unseen.
@@ -114,8 +117,20 @@ class Visit:
     def exit_l(self) -> int | None:
         return max(self.readings) if self.readings else None
 
+    @property
+    def compound(self) -> str | None:
+        """The letter seen most often on this stop, or `None`.
+
+        A vote rather than the last reading: a pit crew walks in front of the
+        disc, and one obscured frame should not decide what tyre he fitted.
+        """
+        if not self.compounds:
+            return None
+        return max(set(self.compounds), key=self.compounds.count)
+
     def as_stop(self) -> Stop:
         return Stop(lap=self.lap,
+                    compound=self.compound,
                     fuel_in_l=(float(self.entry_l)
                                if self.entry_l is not None else None),
                     fuel_out_l=(float(self.exit_l)
@@ -162,6 +177,11 @@ class PitWall:
         self._position: dict[int, int] = {}
         self._pitted: set[int] = set()
         self._stops: list[Seen] = []
+        # The two intervals GT7 publishes either side of us, per lap. Kept as
+        # trends rather than instants because a closing RATE is the cheapest
+        # pace signal on the screen - see `race/gaps.py`.
+        self.ahead = GapTrend()
+        self.behind = GapTrend()
         self._frames = 0
         self._clean = 0
 
@@ -179,6 +199,8 @@ class PitWall:
         self._position.clear()
         self._pitted.clear()
         self._stops = []
+        self.ahead.new_session()
+        self.behind.new_session()
         self._frames = self._clean = 0
 
     @property
@@ -232,6 +254,9 @@ class PitWall:
         if not rows:
             return []
         self._clean += 1
+        ahead, behind = read_gaps(frame, board)
+        self.ahead.note(lap, ahead)
+        self.behind.note(lap, behind)
 
         ids: dict[int, int] = {}
         identified: set[int] = set()
@@ -282,6 +307,10 @@ class PitWall:
             litres = read_fuel(frame[y0:y1 + 1, x0:x1 + 1])
             if litres is not None:
                 visit.readings.append(litres)
+            dx0, dy0, dx1, dy1 = pit.disc
+            code = read_compound(frame[dy0:dy1 + 1, dx0:dx1 + 1])
+            if code:
+                visit.compounds.append(code)
 
         for driver in identified - in_lane:
             self._seen_clean.add(driver)
