@@ -1435,10 +1435,18 @@ class LiveWearSampler:
     """
 
     def __init__(self, source, write, *, on_status=None,
-                 interval_s: float = 0.0) -> None:
+                 interval_s: float = 0.0, on_frame=None) -> None:
         self._source = source
         self._write = write
         self._status = on_status
+        # **Anyone else who needs this frame gets THIS frame.** Measured on
+        # this machine `mss` costs about 16.6 ms for a grab of any size - that
+        # is the vsync, not the copy - and it does not compose: four regions is
+        # four grabs and 15 Hz. A second sampler with its own grab would halve
+        # the gauge's rate to read a leaderboard that changes once a lap. So
+        # the frame is handed on, and every failure in the handler is swallowed
+        # here: nothing riding along may cost the gauge a reading.
+        self._on_frame = on_frame
         self._interval_s = max(0.0, float(interval_s))
         self._queue: queue.Queue = queue.Queue(maxsize=1)
         self._thread: threading.Thread | None = None
@@ -1624,6 +1632,11 @@ class LiveWearSampler:
         frame, why = self._source.grab()
         if frame is None:
             return Reading(None, why), True
+        if self._on_frame is not None:
+            try:
+                self._on_frame(frame)
+            except Exception:
+                _log.exception("hud-wear: frame passenger failed")
         return read_gauge(frame), False
 
     def _coherent(self, wear: dict) -> tuple[bool, bool, str]:

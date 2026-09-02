@@ -45,22 +45,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pitcrew.race.calls import DECISION, HIGH, MEDIUM, Call
+from pitcrew.race.calls import (
+    HIGH,
+    MEDIUM,
+    RIVAL_BOXED,
+    RIVAL_COMMITTED,
+    STAY_OUT_FUEL,
+    Call,
+)
 from pitcrew.race.rivals import Stop, deferring_saves_s, earliest_stop_lap
 
-# Call kinds. Registered in `calls.REGISTER` so `register_of` can classify
-# them - a kind with no register raises, deliberately.
-#
-# **Deliberately absent from `calls.URGENCY`.** Nothing offers these to
-# `_candidates` yet, and `next_call` sorts on `URGENCY.index`, so the day one is
-# wired it raises on the race path rather than taking a rank nobody chose. When
-# that day comes the ordering is already decided: `RIVAL_BOXED` and
-# `RIVAL_COMMITTED` rank BELOW every call about our own fuel, because a car
-# about to run dry outranks news about somebody else's stop; `STAY_OUT_FUEL`
-# belongs beside `BOX_SOON`, being the argument against it.
-RIVAL_BOXED = "rival-boxed"
-RIVAL_COMMITTED = "rival-committed"
-STAY_OUT_FUEL = "stay-out-fuel"
+# The three kinds are defined in `calls.py`, beside the ranking that orders
+# them, and re-exported here because this is the module that composes them.
+# `STAY_OUT_FUEL` sits immediately below `BOX_SOON` - it is the argument
+# against it and the two must be adjacent; the other two rank below every call
+# about our own car, because a car of ours about to run dry outranks news of
+# what somebody else just did.
+__all__ = ["RIVAL_BOXED", "RIVAL_COMMITTED", "STAY_OUT_FUEL", "Rival",
+           "rival_boxed", "stay_out", "must_stop_by"]
 
 # A rival's stop has to be worth this many seconds more than ours before it is
 # worth saying. Below it he is being told about a difference he cannot drive to.

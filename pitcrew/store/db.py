@@ -11,6 +11,8 @@ every write goes through `_write()` which holds a lock for the transaction.
 from __future__ import annotations
 
 import datetime
+
+import numpy as np
 import json
 import sqlite3
 import threading
@@ -1434,6 +1436,123 @@ class Store:
             "COALESCE(observed_top_kph, 0)) WHERE id = "
             "(SELECT event_id FROM sessions WHERE id = ?)",
             (round(top, 1), session_id))
+
+    # ------------------------------------------------------------- the rivals
+
+    # **Why identity is a bitmap and the name is typed by a person.** GT7's
+    # leaderboard font is proportional and mixed-case; reading it would be a
+    # guess, and a guess about whose car this is corrupts every stop filed
+    # against him. So `roster.Roster` clusters the pixels, a person names each
+    # cluster once, and the exemplar is what carries that name into the next
+    # race. See `telemetry/roster.py` for the measured separation - 0.392
+    # within a driver against 0.774 between drivers, as IoU.
+
+    def save_driver(self, name: str, exemplar=None, *,
+                    is_teammate: bool | None = None) -> None:
+        """Remember a driver and the bitmap that recognises him.
+
+        Called once a person has named a cluster. Re-saving updates the
+        exemplar, because a cluster's running average gets more typical as
+        evidence arrives, not less.
+        """
+        blob = rows = cols = None
+        if exemplar is not None:
+            array = np.asarray(exemplar, dtype=bool)
+            rows, cols = int(array.shape[0]), int(array.shape[1])
+            blob = np.packbits(array).tobytes()
+        with self._write() as conn:
+            conn.execute(
+                """INSERT INTO drivers (name, exemplar, rows, cols,
+                                        races_seen, is_teammate, updated_at)
+                   VALUES (?, ?, ?, ?, 0, ?, ?)
+                   ON CONFLICT(name) DO UPDATE SET
+                       exemplar    = COALESCE(excluded.exemplar, drivers.exemplar),
+                       rows        = COALESCE(excluded.rows, drivers.rows),
+                       cols        = COALESCE(excluded.cols, drivers.cols),
+                       is_teammate = COALESCE(?, drivers.is_teammate),
+                       updated_at  = excluded.updated_at""",
+                (name, blob, rows, cols,
+                 1 if is_teammate else 0, _now(),
+                 None if is_teammate is None else (1 if is_teammate else 0)))
+
+    def driver_exemplars(self) -> dict:
+        """Every named driver's bitmap, for seeding the next race's roster.
+
+        Drivers with no exemplar are skipped rather than seeded with nothing: a
+        name with no bitmap cannot recognise anybody, and a cluster seeded from
+        an empty array would swallow the first row it saw.
+        """
+        out = {}
+        for row in self._query(
+                "SELECT name, exemplar, rows, cols FROM drivers "
+                "WHERE exemplar IS NOT NULL AND rows IS NOT NULL"):
+            wanted = int(row["rows"]) * int(row["cols"])
+            bits = np.unpackbits(
+                np.frombuffer(row["exemplar"], dtype=np.uint8))[:wanted]
+            if bits.size != wanted:
+                continue
+            out[row["name"]] = bits.reshape(
+                int(row["rows"]), int(row["cols"])).astype(bool)
+        return out
+
+    def teammate_name(self) -> str | None:
+        rows = self._query(
+            "SELECT name FROM drivers WHERE is_teammate = 1 LIMIT 1")
+        return rows[0]["name"] if rows else None
+
+    def note_races_seen(self, names) -> None:
+        """One more race on file for each of these drivers."""
+        with self._write() as conn:
+            conn.executemany(
+                "UPDATE drivers SET races_seen = races_seen + 1, "
+                "updated_at = ? WHERE name = ?",
+                [(_now(), n) for n in names])
+
+    def record_rival_stop(self, session_id: int | None, driver: str, *,
+                          lap: int | None = None,
+                          laps_total: int | None = None,
+                          fuel_in_l: float | None = None,
+                          fuel_out_l: float | None = None,
+                          compound: str | None = None,
+                          assumed_start_l: float | None = None,
+                          reads: int = 0, watched_s: float | None = None,
+                          partial: bool = False) -> int:
+        """File one observed stop.
+
+        Nullable throughout, deliberately: these come from reading a screen and
+        a reader that writes 0.0 for "could not see it" records a rival's tank
+        as empty. CLAUDE.md rule 3.
+
+        `partial` says the watcher joined after the fill had begun, which makes
+        `fuel_in_l` an upper bound rather than a measurement - and nothing in
+        the numbers themselves would say so.
+        """
+        with self._write() as conn:
+            cur = conn.execute(
+                """INSERT INTO rival_stops
+                       (session_id, driver, lap, laps_total, fuel_in_l,
+                        fuel_out_l, compound, assumed_start_l, reads,
+                        watched_s, partial, recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, driver, lap, laps_total, fuel_in_l, fuel_out_l,
+                 compound, assumed_start_l, int(reads), watched_s,
+                 1 if partial else 0, _now()))
+            return int(cur.lastrowid)
+
+    def rival_stops(self, driver: str | None = None,
+                    *, include_partial: bool = True) -> list[dict]:
+        """Every stop on file, newest last. One row is one observation."""
+        sql = "SELECT * FROM rival_stops"
+        where, params = [], []
+        if driver is not None:
+            where.append("driver = ?")
+            params.append(driver)
+        if not include_partial:
+            where.append("partial = 0")
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id"
+        return [dict(r) for r in self._query(sql, params)]
 
     def list_laps(self, session_id: int) -> list[dict]:
         rows = self._query(

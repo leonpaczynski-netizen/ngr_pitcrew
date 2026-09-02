@@ -59,6 +59,24 @@ Versions, and what upgrading means here:
   `tools/fit_tyre_models.py --apply` restores it in full — so it is dropped and
   recreated rather than copied across.
 
+* **v12** adds `drivers` and `rival_stops`: the rival dataset, so that what a
+  driver did last race is available the next one.  **Two brand-new tables and
+  nothing else** — exactly what `CREATE TABLE IF NOT EXISTS` already expresses,
+  so like v6 there is deliberately no migration function; the version moves only
+  so the guard in `Store._init_schema` still refuses a file this build predates.
+
+  `drivers.exemplar` is a packed name bitmap, not a photograph and not a
+  guess at the text: GT7's leaderboard font is proportional and mixed-case, so
+  identity is matched as a bitmap and the human-readable `name` is something a
+  person types once.  It is the seed for `roster.Roster(seed=...)`, which is the
+  only reason a rival's stops from three races ago attach to the same driver
+  tonight.
+
+  `rival_stops` keeps `reads`, `watched_s` and `partial` beside the litres,
+  because a stop the watcher joined mid-fill reports an entry figure that is an
+  upper bound rather than a measurement, and nothing in the numbers themselves
+  says so.
+
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
 two columns and back-fills four — so `MIGRATIONS` below exists, and anything
@@ -70,7 +88,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -796,6 +814,41 @@ CREATE TABLE IF NOT EXISTS identity_repairs (
 );
 CREATE INDEX IF NOT EXISTS idx_identity_repairs_row
     ON identity_repairs(table_name, row_id);
+
+CREATE TABLE IF NOT EXISTS drivers (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT    NOT NULL UNIQUE,   -- typed by a person, once
+    -- The normalised name bitmap, packed. Identity is matched on this; the
+    -- name above is for talking about him. See `telemetry/roster.py`.
+    exemplar      BLOB,
+    rows          INTEGER,                   -- bitmap shape, so it can be unpacked
+    cols          INTEGER,
+    -- Rule 4 as columns. A driver seen once is not a driver with habits.
+    races_seen    INTEGER NOT NULL DEFAULT 0,
+    is_teammate   INTEGER NOT NULL DEFAULT 0,
+    updated_at    TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rival_stops (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    driver          TEXT    NOT NULL,        -- drivers.name
+    lap             INTEGER,                 -- OUR lap when he stopped
+    laps_total      INTEGER,
+    fuel_in_l       REAL,                    -- NULL = not read, never 0
+    fuel_out_l      REAL,
+    compound        TEXT,
+    assumed_start_l REAL,                    -- the assumption, stored not hidden
+    -- The evidence behind the two figures above.
+    reads           INTEGER NOT NULL DEFAULT 0,
+    watched_s       REAL,
+    -- 1 = the watcher joined after the fill had begun, so `fuel_in_l` is an
+    -- upper bound on what he came in with and the litres taken are a floor.
+    partial         INTEGER NOT NULL DEFAULT 0,
+    recorded_at     TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rival_stops_driver ON rival_stops(driver);
 """
 
 # Columns added to tables that already existed in an earlier version.

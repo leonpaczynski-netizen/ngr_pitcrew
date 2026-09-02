@@ -13,7 +13,6 @@ from pitcrew.telemetry.roster import (
     SAME_NAME_MAX_DIFF,
     Roster,
     _distance,
-    chain,
 )
 
 
@@ -32,36 +31,9 @@ C = bits("############", "#..........#", "############")     # much longer
 NEAR_A = bits("####........", "#..#........", "###.........")
 
 
-# --- the pitch chain -------------------------------------------------------
-
-def test_a_constant_pitch_is_kept_whole():
-    # The first step out is larger: GT7 inserts a gap readout either side of
-    # the driver's own row. Every step after it is the board's true pitch.
-    found = chain([192, 232, 272, 340, 408, 448, 488, 528], own_y=340,
-                  height=43)
-    assert found == [192, 232, 272, 340, 408, 448, 488, 528]
-
-
-def test_scenery_breaks_the_chain_and_everything_past_it_is_dropped():
-    """A leaderboard is a ruler; a pit lane is not."""
-    found = chain([192, 232, 272, 340, 408, 448, 488, 528, 588, 618, 967],
-                  own_y=340, height=43)
-    assert found == [192, 232, 272, 340, 408, 448, 488, 528]
-
-
-def test_a_lone_far_candidate_is_not_a_neighbouring_row():
-    assert chain([340, 900], own_y=340, height=43) == [340]
-
-
-def test_the_pitch_is_measured_not_assumed():
-    # Half the row spacing, as a smaller HUD would give. Nothing is hard-coded
-    # to 40 px, so this survives whole.
-    found = chain([96, 116, 136, 170, 204, 224, 244], own_y=170, height=21)
-    assert found == [96, 116, 136, 170, 204, 224, 244]
-
-
-def test_no_candidates_is_no_rows():
-    assert chain([], own_y=340, height=43) == []
+# The pitch chain moved to `board.flag_ladder` and is tested in
+# `test_board.py`. It was being done twice, by two sets of thresholds, against
+# the same landmark.
 
 
 # --- the distance ----------------------------------------------------------

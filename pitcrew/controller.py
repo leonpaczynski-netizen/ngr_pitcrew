@@ -185,6 +185,11 @@ class TelemetryBridge(QObject):
     # every lap's telemetry - 2.5 s on the active event, 9.4 s on the
     # largest. Emitted queued so the speaking happens on the Qt thread.
     debriefed = pyqtSignal(object)           # analysis.debrief.Debrief
+    # **A rival finished a pit stop**, composed on the HUD sampler's worker
+    # thread and handled on the Qt one. It carries the `pit_wall.Seen` rather
+    # than a formatted line, because what to say about it is a decision the
+    # call layer makes with our own fuel in hand.
+    rival_stopped = pyqtSignal(object)       # race.pit_wall.Seen
     button_probed = pyqtSignal(str)          # probe note - off the hook thread
     # **The car stopped mid-lap.** Emitted on the telemetry thread and
     # handled on the Qt one, like every other cross-thread edge here:
@@ -3553,6 +3558,12 @@ class PitCrewController(QObject):
         self.bridge.race_clock = self.race.clock
         self.race_screen.clear_log()
         self.race_screen.set_armed(True)
+        # **Started here, on the grid, not at the green.** The pit columns are
+        # drawn only while a car is standing in its box, so a watcher that
+        # starts late does not get a late reading - it gets none at all, and
+        # there is no later question that recovers one. Armed is the last
+        # moment that is certainly before anybody stops.
+        self._start_pit_wall()
 
         how = "Rehearsal armed" if rehearsal else "Armed"
         parts = [
@@ -3567,7 +3578,104 @@ class PitCrewController(QObject):
                       " · ".join(parts), warn=not plan)
         return True
 
+    # ---------------------------------------------------------- the pit wall
+
+    def _start_pit_wall(self) -> None:
+        """Watch the leaderboard for the rest of this race.
+
+        **Seeded from the archive, and that is the whole point of the book.**
+        `drivers.exemplar` carries a name bitmap from every race already
+        watched, so tonight's rows attach to the same drivers as last month's
+        rather than founding an anonymous roster that dies at the flag.
+
+        Built fresh per race. CLAUDE.md rule 11: the visits, the positions and
+        the latched pit flags all describe one race, and a race that opens
+        holding the last one's is a race that reports it. The ROSTER is the
+        exception and is deliberately carried, because driver identity is the
+        one thing that should cross a session boundary.
+        """
+        if self.hud is None:
+            return
+        try:
+            from pitcrew.race.pit_wall import PitWall
+            from pitcrew.telemetry.roster import Roster
+
+            seed = self.store.driver_exemplars()
+            self._pit_wall = PitWall(Roster(seed=seed), on_stop=self._on_rival_stop)
+            self.hud.watch_board(self._pit_wall, lap_of=self._our_lap)
+            log("pitcrew").info(
+                "pit-wall: watching, seeded with %d known driver%s",
+                len(seed), "" if len(seed) == 1 else "s")
+        except Exception:
+            # Never the race path. A pit wall that cannot start is a pit wall
+            # the driver races without, exactly as he did before it existed.
+            log("pitcrew").exception("pit-wall: could not start")
+            self._pit_wall = None
+
+    def _our_lap(self) -> int | None:
+        """Our current lap, for attributing a rival's stop. Worker thread.
+
+        **Ours, not his**, and the column it is stored in says so. A rival's
+        own lap count is not on screen; what is knowable is which of our laps
+        we were on when he came in, and on the same lead lap those are within
+        one of each other. `state.lap` is the app's count and can be short of
+        GT7's - see `calls.RaceState.lap` - which is another reason this is a
+        reference rather than a measurement of his race.
+        """
+        race = self.race
+        try:
+            return int(race.state.lap) if race is not None else None
+        except Exception:
+            return None
+
+    def _on_rival_stop(self, seen) -> None:
+        """Worker thread. A rival has finished a stop: file it and say it.
+
+        Filing happens here rather than at the flag because the watcher can
+        only see a stop while it is happening - there is no later question that
+        recovers it - and a race that crashes at lap 18 should still have the
+        stops it watched at lap 11.
+        """
+        try:
+            from pitcrew.race import rival_book
+
+            rival_book.record(self.store, self.session_id, seen,
+                              laps_total=self._planned_laps())
+        except Exception:
+            log("pitcrew").exception("pit-wall: stop not filed")
+        try:
+            self.bridge.rival_stopped.emit(seen)
+        except Exception:
+            pass
+
+    def _planned_laps(self) -> int | None:
+        race = self.race
+        try:
+            return int(race.state.laps_total) if race is not None else None
+        except Exception:
+            return None
+
+    def _stop_pit_wall(self) -> None:
+        """Close the wall, filing any stop still in progress at the flag."""
+        wall = getattr(self, "_pit_wall", None)
+        if wall is None:
+            return
+        try:
+            if self.hud is not None:
+                self.hud.stop_watching_board()
+            for seen in wall.close_all():
+                self._on_rival_stop(seen)
+            named = [name for _, name in wall.named() if name]
+            if named:
+                self.store.note_races_seen(named)
+        except Exception:
+            log("pitcrew").exception("pit-wall: could not close cleanly")
+        finally:
+            self._pit_wall = None
+
     def stop_race(self) -> None:
+        # Before the session id is cleared: the stops are filed against it.
+        self._stop_pit_wall()
         self.stop_haptics()
         self.stop_wind()
         if self.listener is not None:

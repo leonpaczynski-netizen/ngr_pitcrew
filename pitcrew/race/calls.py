@@ -144,7 +144,23 @@ LAPS_TO_GO = "laps-to-go"
 # race path - which is exactly what `WEAR` did until a test asked for it.
 # **`STOPS_OFF` sits with the box calls, above them.** It is the call that
 # cancels one, so it cannot rank below the thing it cancels.
+# The rival kinds. Defined here rather than in `race/rival_calls.py` so that
+# `URGENCY` and `REGISTER` can name them without importing the module that
+# composes them - the ranking is a property of the vocabulary, not of the
+# thing that speaks it.
+RIVAL_BOXED = "rival-boxed"
+RIVAL_COMMITTED = "rival-committed"
+STAY_OUT_FUEL = "stay-out-fuel"
+
 URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
+           # **`STAY_OUT_FUEL` sits immediately below `BOX_SOON`, because it
+           # is the argument against it.** The two answer the same question
+           # and must be adjacent, or the driver hears them in an order that
+           # implies they are about different things. Below rather than above:
+           # a box call that fires has a reason the tank cannot argue with,
+           # and the case for one more lap is worth seconds where being a lap
+           # short of the flag is worth a stop.
+           STAY_OUT_FUEL,
            # **`WEAR` sits below the fuel calls and above temperature.** A car
            # out of fuel stops on the circuit; a car on worn tyres is still
            # moving, so fuel wins. But a measured wear figure beats an
@@ -161,7 +177,18 @@ URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            # `next_call` raises on any kind absent from this tuple, and a kind
            # that only ever arrives by another road is exactly the one that
            # goes unranked until a race finds it.
-           FUEL_LONG, INCIDENT, WEAR, TYRE_TEMP, GREEN, POSITION, STATUS)
+           FUEL_LONG, INCIDENT, WEAR, TYRE_TEMP,
+           # **A rival's stop ranks below every call about our own car**, and
+           # below the incident and the wear note too. It is the only thing
+           # here that is about somebody else: a car of ours about to run dry,
+           # or on a tyre that is going, outranks news of what another driver
+           # just did, however useful that news is. `RIVAL_BOXED` leads
+           # `RIVAL_COMMITTED` because it is the one that can still be acted
+           # on - the columns are drawn only while he is standing, so it is
+           # true now and gone in a minute, where a forced second stop stays
+           # true for the rest of the race.
+           RIVAL_BOXED, RIVAL_COMMITTED,
+           GREEN, POSITION, STATUS)
 
 # --- the two registers -----------------------------------------------------
 #
@@ -211,9 +238,9 @@ REGISTER = {
     # fuel in hand, and one word with two units on one voice is rule 13. They
     # say litres, seconds standing, and the lap a car must stop by, and each
     # names its own reference inside the call. See `race/rival_calls.py`.
-    "rival-boxed": DECISION,
-    "rival-committed": DECISION,
-    "stay-out-fuel": DECISION,
+    RIVAL_BOXED: DECISION,
+    RIVAL_COMMITTED: DECISION,
+    STAY_OUT_FUEL: DECISION,
 }
 
 

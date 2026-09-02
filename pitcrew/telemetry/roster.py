@@ -16,19 +16,12 @@ lap, a habit - accumulates nonsense unless the row is resolved to a driver.
 
 ### The three landmarks, none of them a fixed coordinate
 
-**The country flag column.** Every car has one, pitted or not, and it is a
-saturated rectangle repeated at one x - the same structure `pit_columns` uses
-for the compound disc, and unlike the disc it is there from lap one. It gives a
-candidate y for every row.
-
-**The pitch, chained outward from the driver's own row.** Rows sit at a constant
-pitch, except that GT7 inserts a gap readout immediately above and below the
-driver's own row, so the first step out is larger than the rest. Measured at
-1440p: pitch 40 px, first step 68. Both are read from the frame, never assumed,
-and a candidate that does not continue the pitch is dropped - which is what
-rejects the pit lane showing through the translucent HUD. On one Spa frame that
-discarded six false rows and kept eight true ones, matching a hand count to a
-pixel.
+**The country flag column and the pitch**, both from `board.flag_ladder`. This
+module used to find them itself and no longer does: the same landmark was being
+located twice, by two sets of thresholds, and `board`'s is the better of the two
+- it finds the column by how many rows it yields rather than by how red it is,
+which is what stops it returning the compound disc or the chroma fringe around
+the names. One HUD change should mean one thing to fix.
 
 **The name column, by consensus across rows.** The name starts at the same x on
 every row, so the rows vote and the majority wins. A single row can be wrong:
@@ -51,7 +44,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from pitcrew.telemetry.board import _runs
+from pitcrew.telemetry.board import flag_ladder
 
 # A flag is saturated colour; the HUD's greys and a name's white are not.
 FLAG_SPREAD = 45
@@ -145,114 +138,6 @@ class BoardRow:
     def matches(self, y: int) -> bool:
         """Whether a pit disc at this y belongs to this row."""
         return abs(self.y - y) <= ROW_MATCH_TOL
-
-
-def _flag_mask(band):
-    red, blue = band[..., 0], band[..., 2]
-    saturated = (band.max(axis=2) - band.min(axis=2)) > FLAG_SPREAD
-    coloured = (((blue > red + FLAG_CHANNEL_LEAD) & (blue > FLAG_CHANNEL_MIN))
-                | ((red > blue + FLAG_CHANNEL_LEAD) & (red > FLAG_CHANNEL_MIN)))
-    return saturated & coloured
-
-
-def flag_span(frame, board) -> tuple[int, int] | None:
-    """The x extent of the country flag column, or `None`.
-
-    **The name has to stop where the flag starts, and the board's own right edge
-    will not say where that is.** `own_row` returned 241 on one measured frame
-    and 249 on another with the flag beginning at 242 in both, so on the second
-    the flag's leading seven pixels sat inside the name search. That matters
-    more than it sounds: these are Union Jacks, and the white of the cross
-    passes any test for "bright and not coloured" that a white name passes.
-    Being the rightmost ink on every row, it won the column vote outright and
-    put the name band at 243 on a 249-wide board - a six-pixel crop, and every
-    name on the frame unreadable.
-
-    **The column is chosen by whether it looks like a ruler, not by how red it
-    is.** Two cheaper rules were measured and both failed: the densest run finds
-    the compound disc, which is a solid circle where a flag is half white, and
-    the leftmost run finds the chroma fringing around the names themselves - a
-    seven-pixel smear at x 198 that took the row count from eight to zero. A
-    flag column carries one mark per row at the board's pitch and nothing else
-    on the screen does, so each candidate is scored by how many rows it yields
-    and the best one wins. Ties go to the leftmost, which is the flag rather
-    than the disc.
-    """
-    height = board[3] - board[1] + 1
-    own_y = (board[1] + board[3]) // 2
-    left = max(0, board[2] - height)
-    band = frame[:, left:board[2] + 3 * height]
-    if band.size == 0:
-        return None
-    per_column = _flag_mask(band).sum(axis=0)
-    if not per_column.any():
-        return None
-    runs = [r for r in _runs(np.where(per_column > FLAG_MIN_PIXELS)[0], 3)
-            if len(r) >= 4]
-    best, best_rows = None, 0
-    for run in runs:
-        span = (left + int(run[0]), left + int(run[-1]))
-        found = len(chain(flag_rows(frame, board, span), own_y, height))
-        if found > best_rows:
-            best, best_rows = span, found
-    return best
-
-
-def flag_rows(frame, board, span=None) -> list[int]:
-    """Candidate row centres, from the country flag column.
-
-    Candidates only - scenery behind the translucent HUD is saturated too.
-    `chain` is what separates the board from the pit lane behind it.
-    """
-    if span is None:
-        span = flag_span(frame, board)
-    if span is None:
-        return []
-    band = frame[:, span[0]:span[1] + 1]
-    if band.size == 0:
-        return []
-    per_row = _flag_mask(band).sum(axis=1)
-    return [int((run[0] + run[-1]) / 2)
-            for run in _runs(np.where(per_row > FLAG_MIN_PIXELS)[0], 3)
-            if len(run) >= 6]
-
-
-def chain(candidates: list[int], own_y: int, height: int,
-          tol: int = 5) -> list[int]:
-    """Keep the candidates that continue a constant pitch from the own row.
-
-    **This is the whole guard, and it is the argument `_on_a_pitch` makes in
-    `pit_columns`.** A leaderboard is a ruler; a pit lane is not. Red and blue
-    scenery lands at arbitrary spacings, so it breaks the chain, and everything
-    beyond a break is dropped - deliberately, because a row found past a gap
-    cannot be numbered.
-
-    The first step out is the larger one: GT7 draws a gap readout immediately
-    above and below the driver's own row. Every step after it must match the
-    pitch, and the pitch is taken from the frame rather than from a constant.
-    """
-    if not candidates:
-        return []
-    near = min(candidates, key=lambda y: abs(y - own_y))
-    kept = [near]
-    for side in (sorted([y for y in candidates if y < near - tol],
-                        reverse=True),
-                 sorted([y for y in candidates if y > near + tol])):
-        previous, pitch = near, None
-        for index, y in enumerate(side):
-            step = abs(y - previous)
-            if index == 0:
-                if step > 2.5 * height:
-                    break            # not a neighbouring row at all
-            elif pitch is None:
-                if step > 1.5 * height:
-                    break
-                pitch = step
-            elif abs(step - pitch) > tol:
-                break
-            kept.append(y)
-            previous = y
-    return sorted(kept)
 
 
 def _half(board) -> int:
@@ -350,24 +235,36 @@ def name_bitmap(frame, board, y: int, name_x: int, is_own: bool,
     return canvas
 
 
-def read(frame, board) -> list[BoardRow]:
+def read(frame, board, ladder=None) -> list[BoardRow]:
     """Every leaderboard row this frame, with its name bitmap.
 
     Empty where the board could not be anchored. Ordered top to bottom, which is
     race order - but the ORDER is not the identity, and nothing downstream
     should treat a position as a key.
+
+    `ladder` is `board.flag_ladder(frame)`. Pass it wherever the caller already
+    has it: the grab is vsync-bound at about 16 ms and does not compose, so a
+    live sampler must locate the board ONCE per frame and hand the result to
+    every reader rather than letting each find it again.
     """
     if frame is None or getattr(frame, "ndim", 0) != 3 or board is None:
         return []
     own_y = (board[1] + board[3]) // 2
-    height = board[3] - board[1] + 1
-    span = flag_span(frame, board)
-    if span is None:
+    if ladder is None:
+        ladder = flag_ladder(frame)
+    if not ladder:
         return []
-    ys = chain(flag_rows(frame, board, span), own_y, height)
+    flag_x0, flag_x1, ys = ladder
     if not ys:
         return []
-    right = span[0]
+    # **Back off by the flag's own width before reading names.** `flag_ladder`
+    # reports where the flag's SATURATED colour begins, and these are Union
+    # Jacks: the white of the cross starts about a flag-width further left and
+    # is bright, unsaturated and therefore indistinguishable from a name. Taken
+    # at face value the bound sat inside the cross, the column vote landed on
+    # the flag, and every name on all fourteen measured frames came back
+    # unreadable while the rows themselves were found perfectly.
+    right = max(0, flag_x0 - (flag_x1 - flag_x0 + 1))
     name_x = name_column(frame, board, ys, own_y, right)
     if name_x is None or name_x >= right:
         return []

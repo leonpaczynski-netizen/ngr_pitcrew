@@ -8,6 +8,20 @@ the session around it**: when to build the sampler, when to reset it, what to
 do with a reading on a worker thread, and the OBS recording whose start time
 is the only thing that makes a replay alignable afterwards.
 
+### The pit wall rides the same frame
+
+`race/pit_wall.py` reads the leaderboard, and it does it on the frame this
+sampler has already grabbed rather than grabbing its own. The grab is
+vsync-bound at about 16.6 ms whatever its size and it does not compose, so a
+second sampler would halve the gauge's rate to watch a board that changes once
+a lap. `on_frame` is that seam, and every failure inside it is swallowed:
+nothing riding along may cost the gauge a reading.
+
+It matters that it is live rather than a post-race pass. **The pit columns mark
+the car standing in the box at that instant** - measured over a whole race, a
+driver who stopped five minutes ago is indistinguishable on screen from one who
+never stopped - so entry fuel exists only while the watcher is running.
+
 ### Four things it hands out, and they are the whole interface
 
 The controller consumes exactly four values, from three different places - the
@@ -75,6 +89,12 @@ class HudSession:
         self._wear_now_lap: int | None = None
         self._blind_note: str | None = None
         self._video_started = False
+        # The pit wall, if one has asked to ride along. Read on the sampler's
+        # worker thread and written on the Qt one - a plain attribute, like
+        # everything else crossing that boundary here, because a lock here is
+        # a lock a lap handler could wait on.
+        self._wall = None
+        self._wall_lap = None
 
     @property
     def settings(self):
@@ -142,7 +162,8 @@ class HudSession:
         interval = float(self.settings.hud_sample_interval_s or 0.0)
         sampler = LiveWearSampler(source, self._write_wear,
                                   on_status=self._status,
-                                  interval_s=interval)
+                                  interval_s=interval,
+                                  on_frame=self._pass_frame)
         sampler.start()
         log("pitcrew").info(
             "hud-wear: %s source, %s", self.settings.hud_source,
@@ -150,6 +171,43 @@ class HudSession:
             else "sampling at each crossing only")
         self._sampler = sampler
         return sampler
+
+    # ------------------------------------------------------------- pit wall
+
+    def watch_board(self, wall, *, lap_of=None) -> None:
+        """Have the pit wall read every frame the gauge grabs.
+
+        `lap_of` is called with no arguments and returns our current lap, or
+        None. It is a callable rather than a number because this runs on the
+        sampler's worker thread, at whatever moment the grab returns.
+        """
+        self._wall = wall
+        self._wall_lap = lap_of
+
+    def stop_watching_board(self) -> None:
+        self._wall = None
+        self._wall_lap = None
+
+    def _pass_frame(self, frame) -> None:
+        """Worker thread. Hand the grabbed frame to the pit wall.
+
+        Swallows everything: the gauge is the reason the grab happened and a
+        passenger must never cost it a reading. `PitWall.see` also catches its
+        own failures, so this is a second belt on purpose.
+        """
+        wall = self._wall
+        if wall is None:
+            return
+        lap = None
+        if self._wall_lap is not None:
+            try:
+                lap = self._wall_lap()
+            except Exception:
+                lap = None
+        try:
+            wall.see(frame, lap=lap)
+        except Exception:
+            log("pitcrew").exception("pit-wall: frame not seen")
 
     def _status(self, reading) -> None:
         """Worker thread. What the sampler wants the driver to know.
