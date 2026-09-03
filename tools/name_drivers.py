@@ -59,6 +59,11 @@ def show(store) -> int:
             print("  %-16s %d stop%s%s"
                   % (name, counts[name], "" if counts[name] == 1 else "s",
                      note))
+    me = store.driver_name()
+    print("\nYou are: %s"
+          % (me or "NOT SET - the championship cannot be read without it"))
+    if not me:
+        print('  python -m tools.name_drivers --me "<your hub name>"')
     if mates:
         print("\nTeam mates by series:\n")
         for series, driver in sorted(store.teammates().items()):
@@ -78,10 +83,18 @@ def main(argv=None) -> int:
                         help="name the team mate for a series")
     parser.add_argument("--series", metavar="NAME",
                         help="which league --teammate applies to")
+    parser.add_argument("--me", metavar="NAME",
+                        help="your own name, as the hub and the leaderboard "
+                             "spell it")
     parser.add_argument("--db", help="a different archive")
     args = parser.parse_args(argv)
 
     store = Store(args.db) if args.db else Store()
+
+    if args.me:
+        store.set_driver_name(args.me)
+        print("You are: %s" % args.me)
+        return 0
 
     if args.teammate:
         if not args.series:

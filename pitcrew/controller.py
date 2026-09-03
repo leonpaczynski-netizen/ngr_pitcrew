@@ -2003,6 +2003,13 @@ class PitCrewController(QObject):
             surface_channel=(getattr(self.bridge.last_packet,
                                      "packet_format", None) or "C") != "A",
         ))
+        # **The championship, on the grid, once.** It is the one thing said
+        # here that is not about the car: what has to be finished today and who
+        # in this race can still take it. Appended rather than folded in, so a
+        # race with no league reads exactly as it always did.
+        title = self._league_line()
+        if title:
+            lines = list(lines) + [title]
         for line in lines:
             log("race").info("brief: %s", line)
         if self.race_screen is not None:
@@ -3600,6 +3607,7 @@ class PitCrewController(QObject):
         # tell that the race stopped. One arithmetic call per frame.
         self.bridge.race_clock = self.race.clock
         self.race_screen.clear_log()
+        self._open_the_league(event)
         self.race_screen.set_armed(True)
         # **Started here, on the grid, not at the green.** The pit columns are
         # drawn only while a car is standing in its box, so a watcher that
@@ -3683,6 +3691,123 @@ class PitCrewController(QObject):
             # the driver races without, exactly as he did before it existed.
             log("pitcrew").exception("pit-wall: could not start")
             self._pit_wall = None
+
+    # ---------------------------------------------------------- the league
+
+    def _open_the_league(self, event: dict) -> None:
+        """Work out which championship this race is a round of.
+
+        **Never a guess.** The league is matched from the event's own series
+        name, or from the car when that is unambiguous, and otherwise there is
+        no league - because a race matched to the wrong one would compute a
+        title from somebody else's points, which is worse than computing none.
+
+        Everything here is optional and guarded. The app raced for months with
+        no hub at all and must go on doing so when it is not there.
+        """
+        self._league = None
+        self._league_place: int | None = None
+        try:
+            from pitcrew.hub.link import league_for
+            from pitcrew.hub.read import Hub
+
+            me = self.store.driver_name()
+            if not me:
+                log("race").info(
+                    "league: skipped - no driver name is set, so there is "
+                    "nobody to look up on the hub. "
+                    "python -m tools.name_drivers --me \"<your hub name>\"")
+                return
+            league = league_for(Hub(), event, me)
+            if not league.known:
+                return
+            self._league = league
+            log("race").info(
+                "league: %s, matched by %s, %d rounds left, %s",
+                league.series_name, league.matched_by, league.rounds_left,
+                league.taken_at)
+        except Exception:
+            log("race").exception("the league could not be read")
+            self._league = None
+
+    def _league_line(self) -> str | None:
+        """One sentence for the grid, or `None` when there is no league.
+
+        The hub's age is on it whenever the hub is stale. "P5 secures it" and
+        "P5 secured it as of Tuesday" are different claims, and a championship
+        moves every round - so a copy older than a round is quoted with its
+        date rather than as fact.
+        """
+        league = getattr(self, "_league", None)
+        if league is None or not league.known:
+            return None
+        try:
+            from pitcrew.hub.link import before_the_start
+
+            me = self.store.driver_name()
+            if not me:
+                return None
+            math = before_the_start(league, me, on_the_grid=self._on_the_grid())
+            if math is None:
+                return None
+            said = math.to_say()
+            if math.live_rivals:
+                said += " Watch " + ", ".join(math.live_rivals[:3]) + "."
+            if league.stale:
+                said += f" ({league.taken_at})"
+            return said
+        except Exception:
+            log("race").exception("the league line could not be composed")
+            return None
+
+    def _on_the_grid(self) -> list:
+        """Everyone the leaderboard reader has recognised so far."""
+        wall = getattr(self, "_pit_wall", None)
+        if wall is None:
+            return []
+        try:
+            return [name for _, name in wall.named() if name]
+        except Exception:
+            return []
+
+    def _league_moved(self) -> str | None:
+        """The championship position if the race ended now, when it CHANGES.
+
+        Said on a change and not otherwise. A projection recomputed every lap
+        is a number that moves constantly and means little; the fact worth
+        hearing is that it has moved - "P4 now, he is out" - and only then.
+        """
+        league = getattr(self, "_league", None)
+        if league is None or not league.known:
+            return None
+        try:
+            from pitcrew.hub.link import where_we_would_be
+
+            me = self.store.driver_name()
+            if not me:
+                return None
+            wall = getattr(self, "_pit_wall", None)
+            rivals = wall.positions() if wall is not None else {}
+            ours = rivals.pop(me, None) or self._our_race_position()
+            where = where_we_would_be(league, me, ours, rivals)
+            if where is None or where == getattr(self, "_league_place", None):
+                return None
+            was, self._league_place = getattr(self, "_league_place", None), where
+            if was is None:
+                return None            # the first reading is not a change
+            return (f"Championship {where} if it ends here."
+                    if where < was else
+                    f"Down to championship {where} if it ends here.")
+        except Exception:
+            log("race").exception("the league projection failed")
+            return None
+
+    def _our_race_position(self) -> int | None:
+        race = self.race
+        try:
+            return int(race.state.position) if race is not None else None
+        except Exception:
+            return None
 
     def _circuit_length_m(self) -> float | None:
         """The circuit's own length, for judging whether a lap measured it."""
@@ -4348,6 +4473,12 @@ class PitCrewController(QObject):
     def _on_position_changed(self, call) -> None:
         """Qt thread: he has gained or lost a place. Say so.
 
+        **And where that leaves the championship, when it moves.** A place
+        changed is also a championship position changed, sometimes - and that
+        is the version worth hearing. Said only on a change: a projection
+        recomputed every lap is a number that moves constantly and means
+        little, while "down to championship P4" is a fact he can drive to.
+
         **The one fact the engineer volunteers**, and the reasons are on
         `calls.POSITION`: he races with GT7's race HUD off, so this is not a
         fact he could look up, and a place changed moves what a stop costs.
@@ -4377,6 +4508,16 @@ class PitCrewController(QObject):
                 {"call": call.as_export(), "confidence": call.confidence,
                  "kind": call.kind},
                 accepted=False)
+        # **After the place, and only when the championship actually moved.**
+        # Said second because the place is the thing he can see out of the
+        # window and the championship is the thing he cannot.
+        moved = self._league_moved()
+        if moved:
+            log("race").info("league: %s", moved)
+            if self._engineer_speaks:
+                self.voice.say(moved)
+            if self.race_screen is not None:
+                self.race_screen.set_status(moved)
 
     def _on_incident_seen(self) -> None:
         """Qt thread: the car stopped mid-lap. Decide what it is worth.

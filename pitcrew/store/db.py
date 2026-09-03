@@ -225,6 +225,22 @@ class Store:
         rows = self._query("SELECT value FROM app_state WHERE key = ?", (key,))
         return rows[0]["value"] if rows else None
 
+    # **Who the driver is on the league hub.** Pit Crew had no name for its own
+    # driver at all - it never needed one, because everything it knew was about
+    # a car it was already inside. Reading a championship needs it: the hub is
+    # a table of other people, and "us" is a row in it. Stored rather than
+    # guessed, because a wrong guess computes somebody else's title.
+    DRIVER_NAME_KEY = "driver_name"
+
+    def driver_name(self) -> str | None:
+        """The name the leaderboard and the hub both show for this driver."""
+        name = self.get_state(self.DRIVER_NAME_KEY)
+        return name.strip() if name and name.strip() else None
+
+    def set_driver_name(self, name: str | None) -> None:
+        self.set_state(self.DRIVER_NAME_KEY,
+                       (name or "").strip() or None)
+
     def custom_catalog(self, kind: str) -> list[str]:
         """Names the driver added because the shipped list was missing them."""
         raw = self.get_state(f"custom_{kind}s")
