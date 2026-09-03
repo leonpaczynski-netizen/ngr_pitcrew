@@ -17,6 +17,11 @@ file. There is no copy on the device and no copy anywhere else on the machine
 
 Lose it and the flashed configuration is gone.
 
+**Update 4 Sep 2026:** the headers the `.ino` includes were not
+unrecoverable after all - public copies of SimHub's generated sketch folder
+exist, and the ones the wind layer depends on are in `sketch-src/` beside
+this file, with a README on what each settles.
+
     #define VERSION 'j'
     #define DEVICE_NAME "Redion Wind Sim"
     #define DEVICE_UNIQUE_ID "c3bcb391-760c-4eee-89cb-232246fce7dc"
