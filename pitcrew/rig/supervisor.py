@@ -749,10 +749,14 @@ class RigSupervisor:
             # count cannot be missed by a sampling interval.
             since = ("" if state.last_drop_at is None else
                      f" ({_monotonic() - state.last_drop_at:.0f}s ago)")
+            # `faults` are the driver failures ridden out on the same handle
+            # since 3 Sep 2026; before that every one was a failure and a
+            # drop. If this climbs while drops stay flat, the change worked.
             log("wind").info(
                 "frames %d · resyncs %d · stale %d · timeouts %d · "
-                "failures %d · drops %d%s · level %.2f · connected %s",
+                "faults %d · failures %d · drops %d%s · level %.2f · "
+                "connected %s",
                 state.frames_sent, state.resyncs, state.stale_bytes,
-                state.write_timeouts, state.write_failures,
-                state.disconnects, since,
+                state.write_timeouts, getattr(state, "driver_faults", 0),
+                state.write_failures, state.disconnects, since,
                 self.bridge.wind_curve.level, state.connected)

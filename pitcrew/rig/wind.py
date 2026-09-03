@@ -221,6 +221,28 @@ UNANSWERED_LIMIT = 4
 # once the abandoned close is measured at zero over a week.
 WRITE_TIMEOUT_LIMIT = 20
 
+# **How many driver faults in a row before the link is given up on.**
+#
+# A driver fault is the CH340 driver failing a `WriteFile` or `ReadFile`
+# outright - Windows error 1460, its own timeout, or the code lost by the
+# time it was read. Until 3 Sep 2026 one of these tore the link down: purge,
+# cancel, close, reopen, hello, count query, about half a second with no
+# frame reaching the board, six times in a twenty-minute session. Every one
+# healed inside the deadman, and every one was a hello the board had to
+# answer - a hello that takes a cold board 417 ms and whose side effects on
+# the outputs are not known from source. The driver reports drops that
+# "happen and restore quickly, very noticeable on a straight", and five of
+# those six faults landed at duty 190 or more.
+#
+# The handle is not dead after one of these. The reconnect proved that:
+# the same port reopened and answered within 0.3 s every time. So a fault
+# is now ridden out the way a timeout is - purge, cancel, carry on with the
+# handle - and the next frame goes 50 ms later, twenty times inside the
+# deadman, with no hello. Five in a row is a link that has really gone:
+# a quarter of a second of consecutive refusals from a device that
+# otherwise answers in nine milliseconds.
+DRIVER_FAULT_LIMIT = 5
+
 # **The width of the app's own fan vector, and the count to fall back on.**
 # This device declares four, though only two fans are wired, and every byte
 # goes every time: the firmware reads exactly `motorCount()` of them with no
@@ -292,6 +314,10 @@ class WindState:
     # ones that ended the link - the difference between them is the whole of
     # the 24 Aug fix.
     write_timeouts: int = 0
+    # `WriteFile`/`ReadFile` failures ridden out on the same handle rather
+    # than torn down - see `DRIVER_FAULT_LIMIT`. Until 3 Sep 2026 every one
+    # of these was a `write_failures` and a drop.
+    driver_faults: int = 0
     resyncs: int = 0
     stale_bytes: int = 0
     # **Frames the device acknowledged, and the worst gap between two of
@@ -378,6 +404,30 @@ def find_port() -> str | None:
     return candidates[0][1]
 
 
+def _is_driver_fault(exc: BaseException) -> bool:
+    """A `WriteFile` or `ReadFile` the CH340 driver failed outright.
+
+    pyserial raises plain `SerialException` for these, with the Win32 call
+    in the message, and the same class for a device that has gone. The two
+    are told apart by the message because that is all pyserial gives: a
+    surprise-removed device fails with `ClearCommError` or `PortNotOpen`,
+    and a driver hiccup fails the transfer itself. Measured on this rig:
+    every one of 106 such faults between 30 Aug and 3 Sep 2026 reopened on
+    the same port within 0.3 s, so the handle was never the problem.
+    """
+    try:
+        import serial
+    except ImportError:                                     # pragma: no cover
+        return False
+    if not isinstance(exc, serial.SerialException):
+        return False
+    if isinstance(exc, serial.SerialTimeoutException):
+        return False
+    text = str(exc)
+    return ("WriteFile failed" in text or "ReadFile failed" in text
+            or "GetOverlappedResult failed" in text)
+
+
 def _is_write_timeout(exc: BaseException) -> bool:
     """Is this the write that did not complete, or a link that has gone?
 
@@ -436,6 +486,10 @@ class WindLink:
         # stalls all the way through or met exactly one.
         self.write_timeouts = 0
         self.consecutive_write_timeouts = 0
+        # Driver faults ridden out on this handle, in total and in a row.
+        # See `DRIVER_FAULT_LIMIT`.
+        self.driver_faults = 0
+        self.consecutive_driver_faults = 0
         # **Acknowledgements, which nothing has ever counted.**
         #
         # `frames_sent` measures intent - it counted a write that timed out -
@@ -652,6 +706,28 @@ class WindLink:
         """
         frame = arq.build_frame(arq.BROADCAST_ID, payload, self.crc)
         handle.write(frame)
+
+    def _ride_out_driver_fault(self, exc: BaseException, side: str) -> bool:
+        """Keep the handle through a `WriteFile`/`ReadFile` failure.
+
+        Purge and cancel what is in flight, count it, and let the next frame
+        go 50 ms later - no close, no reopen, no hello. Raises once
+        `DRIVER_FAULT_LIMIT` have failed in a row, which is the link really
+        having gone. Said at INFO with the driver's own words, because six a
+        session is not noise and the text is the only clue to the cause.
+        """
+        self.driver_faults += 1
+        self.consecutive_driver_faults += 1
+        self._abandon_stuck_write()
+        if self.consecutive_driver_faults >= DRIVER_FAULT_LIMIT:
+            raise exc
+        log("wind").info(
+            "%s driver fault on %s (%d in a row, %d this link): %s - purged "
+            "and carrying on with the same handle; the link is kept.",
+            self.port, side, self.consecutive_driver_faults,
+            self.driver_faults, exc)
+        self.last_outcome = "driver-fault"
+        return True
 
     def _abandon_stuck_write(self) -> None:
         """Throw away a frame the driver would not take, and clear the way.
@@ -958,6 +1034,8 @@ class WindLink:
         try:
             self._write(arq.motors_payload(list(self.fit(values))))
         except Exception as exc:                            # noqa: BLE001
+            if _is_driver_fault(exc):
+                return self._ride_out_driver_fault(exc, "write")
             if not _is_write_timeout(exc):
                 raise
             self.write_timeouts += 1
@@ -976,7 +1054,13 @@ class WindLink:
             self.last_outcome = "timeout"
             return True
         self.consecutive_write_timeouts = 0
-        reply = self._read_reply()
+        try:
+            reply = self._read_reply()
+        except Exception as exc:                            # noqa: BLE001
+            if _is_driver_fault(exc):
+                return self._ride_out_driver_fault(exc, "read")
+            raise
+        self.consecutive_driver_faults = 0
         if reply is None:
             # Silence is not yet a failure. The device answers within a
             # millisecond or so, but a busy moment is not a reason to tear
@@ -1038,6 +1122,7 @@ class WindSim:
         self._resyncs_before = 0
         self._stale_before = 0
         self._timeouts_before = 0
+        self._faults_before = 0
 
     # ------------------------------------------------------------- control
 
@@ -1375,10 +1460,11 @@ class WindSim:
         self.state.resyncs = self._resyncs_before + link.resyncs
         self.state.stale_bytes = self._stale_before + link.stale_bytes
         self.state.write_timeouts = self._timeouts_before + link.write_timeouts
+        self.state.driver_faults = self._faults_before + link.driver_faults
         # **A frame that timed out did not go anywhere.** Counting it as sent
         # made `frames_sent` a measure of intent while reading as a measure of
         # delivery - rule 3, in the counter the health report leads with.
-        if link.last_outcome != "timeout":
+        if link.last_outcome not in ("timeout", "driver-fault"):
             self.state.frames_sent += 1
         self.state.frames_accepted = self._acks_before + link.acks
         # **The gap is measured between consecutive acknowledgements, across
@@ -1474,6 +1560,7 @@ class WindSim:
             self._resyncs_before += link.resyncs
             self._stale_before += link.stale_bytes
             self._timeouts_before += link.write_timeouts
+            self._faults_before += link.driver_faults
             if self.state.connected:
                 # Counted so a drop that heals inside one ten-second report
                 # cycle still leaves a mark. Until now a 7-second outage could
