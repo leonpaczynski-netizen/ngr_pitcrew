@@ -1245,15 +1245,23 @@ def find_projector(title_hint: str = ""):
         return None, "pywin32 is not installed"
     hint = (title_hint or "").strip().lower()
     hits = []
+    # **Windows that ARE projectors but are not visible, kept separately.**
+    # `IsWindowVisible` is false for a minimised window, one on another
+    # virtual desktop, and one behind an exclusive-fullscreen app - all three
+    # of which happen in VR. Reporting those as "no projector is open" sent
+    # the driver to reopen a window he already had open: on 3 Sep 2026 he had
+    # it up all night and the log told him to create it.
+    hidden = []
 
     def visit(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd):
-            return
         title = win32gui.GetWindowText(hwnd) or ""
         low = title.lower()
         if PROJECTOR_WORD not in low:
             return
         if hint and hint not in low:
+            return
+        if not win32gui.IsWindowVisible(hwnd):
+            hidden.append((hwnd, title))
             return
         hits.append((hwnd, title))
 
@@ -1261,6 +1269,14 @@ def find_projector(title_hint: str = ""):
         win32gui.EnumWindows(visit, None)
     except Exception as exc:                                 # noqa: BLE001
         return None, f"could not enumerate windows: {type(exc).__name__}"
+    if not hits and hidden:
+        # The window exists. Saying "open one" here is a wrong instruction,
+        # and it is the one that wasted a whole race night.
+        return None, (
+            f"the projector {hidden[0][1]!r} is open but NOT VISIBLE to the "
+            f"screen reader - it is minimised, on another virtual desktop, or "
+            f"behind a fullscreen app (VR does this). Bring it to the front on "
+            f"the monitor the app is on; it does not need focus.")
     if not hits:
         return None, ("no OBS projector window is open - right click the "
                       "preview in OBS and choose Windowed Projector "
@@ -1298,6 +1314,12 @@ def snap_projector(title_hint: str = "") -> tuple[bool, str]:
     """
     found, why = find_projector(title_hint)
     if found is None:
+        # **Logged, not only returned.** This ran from a button all night on
+        # 3 Sep 2026 and left no trace in the log at all, so the morning after
+        # there was no way to tell whether it had been pressed, what it found,
+        # or what size it set. A sizer that reports only to a dialog reports
+        # to nobody an hour later.
+        _log.warning("hud-wear: snap_projector found nothing: %s", why)
         return False, why
     hwnd, title = found
     try:
@@ -1331,7 +1353,11 @@ def snap_projector(title_hint: str = "") -> tuple[bool, str]:
             CANVAS[0] + chrome_w, CANVAS[1] + chrome_h,
             win32con.SWP_NOACTIVATE)
         _, _, now_w, now_h = win32gui.GetClientRect(hwnd)
+        _log.info("hud-wear: snap_projector %r %sx%s -> %sx%s (wanted %sx%s)",
+                  title, was_w, was_h, now_w, now_h, CANVAS[0], CANVAS[1])
     except Exception as exc:                                 # noqa: BLE001
+        _log.warning("hud-wear: snap_projector %r failed: %s: %s",
+                     title, type(exc).__name__, exc)
         return False, f"{title!r}: {type(exc).__name__}: {exc}"
     if (now_w, now_h) != CANVAS:
         # A projector pinned by the window manager - fullscreen, snapped to

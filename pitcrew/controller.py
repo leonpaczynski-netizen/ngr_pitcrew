@@ -4365,8 +4365,19 @@ class PitCrewController(QObject):
         perfect - happens in practice as readily as in a race, and the driver
         cannot be asked to remember which button means which.
         """
-        if self.wind is not None:
-            self.wind.mark("ptt")
+        # **`wind` lives on the BRIDGE, not on the controller**, and reading it
+        # off `self` raised `AttributeError` on every press that got this far -
+        # PitCrewPTT logged it and died, so **no push-to-talk question was
+        # answered on 3 Sep 2026 at all.** Line 247's `self.wind = None` is
+        # `TelemetryBridge.__init__` (class at line 183); this method is on
+        # `PitCrewController` (class at line 709), and the two were read as one
+        # object. The same shape as the `_hud`/`_sampler` rename that caused the
+        # 30 Aug practice crash: an attribute that moved, and one reader left
+        # behind. `getattr` would have hidden it - the mark would simply never
+        # have been made - so it is spelled out and reached through its owner.
+        wind = getattr(self.bridge, "wind", None)
+        if wind is not None:
+            wind.mark("ptt")
         if self.race is None:
             return {}
         snapshot = self._race_snapshot()
