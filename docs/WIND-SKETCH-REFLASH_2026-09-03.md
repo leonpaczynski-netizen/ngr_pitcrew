@@ -21,6 +21,22 @@ This is separate from the serial-link fault fixed on 3 Sep (60 Hz to 20 Hz).
 Nothing on the PC can see a fan, so the only evidence for this fault is what
 you feel. The reflash changes what you feel and nothing in the log.
 
+> **What the photos of 3 Sep 2026 showed, and what it does to this plan.**
+> The box holds a clone Uno R3 under an Adafruit Motor Shield v2.3 ("1.2A
+> per motor, 3A max"). The two fan cables leave the box through their own
+> grommets and each carries **two conductors**, so these are two-wire fans:
+> the 25 kHz PWM-fan reflash in sections 3 and 4 **does not apply as
+> written** - there is no control wire to drive. The supply is a generic
+> wall adaptor, model 1230, **12 V 3 A**, into a panel-mount jack wired to
+> the shield's motor power terminal. Three amps is the shield's own total
+> limit and is marginal for two blowers at full duty; a supply in
+> current-limit "hiccup" mode stops both fans together and lets them restart
+> a moment later, is worst at high duty, and reads as weaker fans. That is
+> every symptom reported. **First hardware move: a 12 V supply rated 5 A or
+> more, same barrel.** Second, if drops persist: section 0's two-wire
+> branch, raising the shield frequency to 1900 Hz in the setup tool. The
+> VIN jumper's position could not be made out in the photos.
+
 ## 0. Two things to check before touching anything
 
 Both decide whether this procedure applies at all.
