@@ -67,16 +67,54 @@ def test_re_saving_updates_the_bitmap_because_an_exemplar_improves(store):
     assert (store.driver_exemplars()["Rocky"] == second).all()
 
 
-def test_the_teammate_is_a_flag_on_a_driver(store):
-    store.save_driver("Rocky", np.ones((16, 64), dtype=bool), is_teammate=True)
-    store.save_driver("PUNISHED", np.zeros((16, 64), dtype=bool))
-    assert rival_book.teammate_of(store) == "Rocky"
+def test_a_teammate_belongs_to_a_series_not_to_a_driver(store):
+    """He races more than one league and the team mate differs in each.
+
+    The boolean this replaces could only hold one at a time, so naming the
+    endurance team mate SILENTLY cleared the GT3 one and George went on
+    calling the wrong person a team mate with no error anywhere.
+    """
+    store.set_teammate("GT3 League", "Rocky")
+    store.set_teammate("Endurance", "K.Graebs")
+    assert rival_book.teammate_of(store, "GT3 League") == "Rocky"
+    assert rival_book.teammate_of(store, "Endurance") == "K.Graebs"
+    assert store.teammates() == {"GT3 League": "Rocky",
+                                 "Endurance": "K.Graebs"}
 
 
-def test_saving_a_driver_again_does_not_clear_the_teammate_flag(store):
-    store.save_driver("Rocky", np.ones((16, 64), dtype=bool), is_teammate=True)
-    store.save_driver("Rocky", np.ones((16, 64), dtype=bool))
-    assert store.teammate_name() == "Rocky"
+def test_a_series_with_no_teammate_named_says_none(store):
+    """Not the same as having no team mate, and it must not name somebody
+    else's."""
+    store.set_teammate("GT3 League", "Rocky")
+    assert rival_book.teammate_of(store, "Rally") is None
+
+
+def test_renaming_a_teammate_replaces_only_that_series(store):
+    store.set_teammate("GT3 League", "Rocky")
+    store.set_teammate("Endurance", "K.Graebs")
+    store.set_teammate("GT3 League", "PUNISHED")
+    assert store.teammate_name("GT3 League") == "PUNISHED"
+    assert store.teammate_name("Endurance") == "K.Graebs"
+
+
+def test_burn_is_scoped_to_the_car_and_habits_are_not(store, races):
+    """Litres a lap is the CAR's number - a Gr.3 burn and a Gr.4 burn are
+    different quantities and their mean describes neither race. When he stops
+    is the DRIVER's, and that is also where the samples are."""
+    from pitcrew.race.profile import Observation, Profile
+
+    profile = Profile("Rocky")
+    profile.add(Observation(driver="Rocky", race="a", lap=11, laps_total=20,
+                            fuel_in_l=12.0, car="992"))
+    profile.add(Observation(driver="Rocky", race="b", lap=10, laps_total=20,
+                            fuel_in_l=60.0, car="GR86"))
+    heavy, n_heavy = profile.burn_per_lap_l("992")
+    light, n_light = profile.burn_per_lap_l("GR86")
+    assert n_heavy == 1 and n_light == 1
+    assert heavy > light
+    # ...but the stop-timing habit pools both races.
+    _, stops = profile.stop_fraction()
+    assert stops == 2
 
 
 # --- filing what was watched ------------------------------------------------

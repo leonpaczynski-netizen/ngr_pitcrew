@@ -106,6 +106,10 @@ class Observation:
     fuel_out_l: float | None = None
     compound: str | None = None
     assumed_start_l: float = FULL_TANK_L
+    # Which league, and which car he was in. Both nullable: every observation
+    # already on file predates them.
+    series: str | None = None
+    car: str | None = None
 
     @property
     def stop(self) -> Stop:
@@ -167,21 +171,37 @@ class Profile:
     def races_seen(self) -> int:
         return len({o.race for o in self.observations})
 
-    def burn_per_lap_l(self) -> tuple[float | None, int]:
+    def burn_per_lap_l(self, car: str | None = None
+                       ) -> tuple[float | None, int]:
         """Mean litres a lap, and the number of stops behind it.
 
-        The count is half the answer and travels with it: one stop is one
+        **Scoped to one car when one is given, and it usually should be.**
+        Litres a lap is a property of the CAR, not of the driver: a Gr.3 burn
+        and a Gr.4 burn are different quantities, and their mean describes
+        neither race. He races several leagues at once, so pooling here would
+        quietly average across them.
+
+        The count is half the answer and travels with it - one stop is one
         stint's worth of evidence about a driver who may have been saving.
         """
-        seen = [o.burn_per_lap_l for o in self.observations]
+        wanted = [o for o in self.observations
+                  if car is None or o.car == car]
+        seen = [o.burn_per_lap_l for o in wanted]
         seen = [b for b in seen if b is not None]
         if not seen:
             return None, 0
         return sum(seen) / len(seen), len(seen)
 
-    def fill_surplus_l(self) -> tuple[float | None, int]:
-        """Mean litres carried beyond the flag, and the stops behind it."""
-        burn, _ = self.burn_per_lap_l()
+    def fill_surplus_l(self, car: str | None = None
+                       ) -> tuple[float | None, int]:
+        """Mean litres carried beyond the flag, and the stops behind it.
+
+        **Pooled across series**, because whether a driver fuels to the flag or
+        carries a spare lap is a habit of his rather than a property of the
+        car. The burn it is measured against is still the car's, so that is
+        scoped even when this is not.
+        """
+        burn, _ = self.burn_per_lap_l(car)
         seen = [o.fill_surplus_l(burn) for o in self.observations]
         seen = [s for s in seen if s is not None]
         if not seen:
@@ -194,6 +214,11 @@ class Profile:
         A fraction rather than a lap so that races of different lengths can be
         pooled at all - a stop on lap 11 means something quite different in a
         20-lap race and a 40-lap one.
+
+        **Pooled across every series he has been watched in.** When a driver
+        stops is a habit of the driver; it is also the figure that most needs
+        the samples, because a stop is one observation a race and three is the
+        floor for calling anything a habit.
         """
         seen = [o.lap / o.laps_total for o in self.observations
                 if o.lap is not None and o.laps_total]
@@ -244,10 +269,14 @@ def field_without(profiles: list[Profile], driver: str) -> float | None:
     return field_stop_fraction([p for p in profiles if p.driver != driver])
 
 
-def burn_against(profile: Profile, ours_l: float | None
-                 ) -> tuple[float | None, int]:
-    """Litres a lap he uses more than us. Negative means he uses less."""
-    theirs, count = profile.burn_per_lap_l()
+def burn_against(profile: Profile, ours_l: float | None,
+                 car: str | None = None) -> tuple[float | None, int]:
+    """Litres a lap he uses more than us. Negative means he uses less.
+
+    Scoped to the car, because ours is the car's number too and comparing two
+    different cars' burn says nothing about either driver.
+    """
+    theirs, count = profile.burn_per_lap_l(car)
     if theirs is None or ours_l is None:
         return None, count
     return theirs - ours_l, count
@@ -255,7 +284,8 @@ def burn_against(profile: Profile, ours_l: float | None
 
 def describe(profile: Profile, *, ours_burn_l: float | None = None,
              field_fraction: float | None = None,
-             refuel_rate_lps: float | None = None) -> list[str]:
+             refuel_rate_lps: float | None = None,
+             car: str | None = None) -> list[str]:
     """What is known about this driver, in plain sentences, or nothing.
 
     Sentences only where the evidence carries them. A profile from a single
@@ -271,16 +301,16 @@ def describe(profile: Profile, *, ours_burn_l: float | None = None,
             % (profile.stops_seen, "" if profile.stops_seen == 1 else "s",
                races, "" if races == 1 else "s"))
 
-    burn, burn_n = profile.burn_per_lap_l()
+    burn, burn_n = profile.burn_per_lap_l(car)
     if burn is not None:
         line = "%s burns about %.1f L a lap (%s)." % (profile.driver, burn, span)
-        difference, _ = burn_against(profile, ours_burn_l)
+        difference, _ = burn_against(profile, ours_burn_l, car)
         if difference is not None and abs(difference) >= BURN_DIFFERENCE_L:
             line += (" That is %.1f L a lap %s than you."
                      % (abs(difference), "more" if difference > 0 else "less"))
         lines.append(line)
 
-    surplus, surplus_n = profile.fill_surplus_l()
+    surplus, surplus_n = profile.fill_surplus_l(car)
     if surplus is not None and surplus_n:
         if surplus > FILL_SLACK_L:
             # **Litres are not seconds until a measured rate says so.** This

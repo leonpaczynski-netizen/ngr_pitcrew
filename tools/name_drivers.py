@@ -16,7 +16,12 @@ the second one the name the first already has.
 
     python -m tools.name_drivers                 # list what needs a name
     python -m tools.name_drivers "Car #3" Rocky  # name one
-    python -m tools.name_drivers --teammate Rocky
+    python -m tools.name_drivers --teammate Rocky --series "GT3 League"
+
+**A team mate belongs to a series, not to a driver.** He races more than one
+league at a time with a different team mate in each, so `--series` is required
+alongside `--teammate`: an unqualified flag could only hold one, and naming the
+second silently cleared the first.
 """
 from __future__ import annotations
 
@@ -46,13 +51,22 @@ def show(store) -> int:
         print("\n  python -m tools.name_drivers \"Car #1\" <their name>")
 
     named = [n for n in sorted(counts) if not n.startswith("Car #")]
+    mates = {driver: series for series, driver in store.teammates().items()}
     if named:
         print("\nAlready named:\n")
         for name in named:
-            mate = " (teammate)" if name == store.teammate_name() else ""
+            note = f"  (team mate, {mates[name]})" if name in mates else ""
             print("  %-16s %d stop%s%s"
                   % (name, counts[name], "" if counts[name] == 1 else "s",
-                     mate))
+                     note))
+    if mates:
+        print("\nTeam mates by series:\n")
+        for series, driver in sorted(store.teammates().items()):
+            print("  %-20s %s" % (series or "(unlabelled)", driver))
+    else:
+        print("\nNo team mate named in any series.")
+        print('  python -m tools.name_drivers --teammate <name> '
+              '--series "<league>"')
     return 0
 
 
@@ -61,15 +75,20 @@ def main(argv=None) -> int:
     parser.add_argument("old", nargs="?", help="the handle to rename")
     parser.add_argument("new", nargs="?", help="the driver's real name")
     parser.add_argument("--teammate", metavar="NAME",
-                        help="flag a driver as the teammate")
+                        help="name the team mate for a series")
+    parser.add_argument("--series", metavar="NAME",
+                        help="which league --teammate applies to")
     parser.add_argument("--db", help="a different archive")
     args = parser.parse_args(argv)
 
     store = Store(args.db) if args.db else Store()
 
     if args.teammate:
-        store.save_driver(args.teammate, is_teammate=True)
-        print("Teammate: %s" % args.teammate)
+        if not args.series:
+            parser.error("--teammate needs --series: you have a different one "
+                         "in each league")
+        store.set_teammate(args.series, args.teammate)
+        print("%s team mate: %s" % (args.series, args.teammate))
         return 0
 
     if args.old and args.new:

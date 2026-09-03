@@ -1503,11 +1503,39 @@ class Store:
                 int(row["rows"]), int(row["cols"])).astype(bool)
         return out
 
-    def teammate_name(self) -> str | None:
+    def set_teammate(self, series: str | None, driver: str) -> None:
+        """Name the team mate for one series.
+
+        **Per series, because he races more than one league and the team mate
+        is different in each.** The flag this replaces was a boolean on the
+        driver, so naming a second team mate silently cleared the first and
+        George went on calling the wrong person one, with no error anywhere.
+        """
+        with self._write() as conn:
+            conn.execute(
+                """INSERT INTO series_teammates (series, driver, updated_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(series) DO UPDATE SET
+                       driver = excluded.driver,
+                       updated_at = excluded.updated_at""",
+                (series or "", driver, _now()))
+
+    def teammate_name(self, series: str | None = None) -> str | None:
+        """The team mate for this series, or `None`.
+
+        `None` for a series nobody has named one in - which is not the same as
+        having no team mate, and a caller should say "not set" rather than
+        naming somebody else's.
+        """
         rows = self._query(
-            "SELECT name FROM drivers WHERE is_teammate = 1 "
-            "ORDER BY updated_at DESC, id DESC LIMIT 1")
-        return rows[0]["name"] if rows else None
+            "SELECT driver FROM series_teammates WHERE series = ?",
+            (series or "",))
+        return rows[0]["driver"] if rows else None
+
+    def teammates(self) -> dict:
+        """Every series and its team mate, for a settings screen."""
+        return {r["series"]: r["driver"] for r in self._query(
+            "SELECT series, driver FROM series_teammates ORDER BY series")}
 
     def note_races_seen(self, names) -> None:
         """One more race on file for each of these drivers."""
@@ -1610,18 +1638,36 @@ class Store:
             "WHERE name LIKE 'Car #%' ORDER BY races_seen DESC, name")]
 
     def rival_stops(self, driver: str | None = None,
-                    *, include_partial: bool = True) -> list[dict]:
-        """Every stop on file, newest last. One row is one observation."""
-        sql = "SELECT * FROM rival_stops"
+                    *, include_partial: bool = True,
+                    series: str | None = None,
+                    car: str | None = None) -> list[dict]:
+        """Every stop on file, newest last. One row is one observation.
+
+        Each row carries the `series` and `car_name` of the race it was watched
+        in, joined through the session. **Which of those a caller filters on is
+        a judgement about the figure it is computing**, not about the storage:
+        litres a lap is a property of the CAR, while whether a driver stops
+        early is a habit of the driver. See `race/rival_book.py`.
+        """
+        sql = ("SELECT r.*, e.series AS series, e.car_name AS car_name "
+               "FROM rival_stops r "
+               "LEFT JOIN sessions s ON s.id = r.session_id "
+               "LEFT JOIN events e ON e.id = s.event_id")
         where, params = [], []
         if driver is not None:
-            where.append("driver = ?")
+            where.append("r.driver = ?")
             params.append(driver)
         if not include_partial:
-            where.append("partial = 0")
+            where.append("r.partial = 0")
+        if series is not None:
+            where.append("e.series IS ?")
+            params.append(series)
+        if car is not None:
+            where.append("e.car_name IS ?")
+            params.append(car)
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY id"
+        sql += " ORDER BY r.id"
         return [dict(r) for r in self._query(sql, params)]
 
     def list_laps(self, session_id: int) -> list[dict]:

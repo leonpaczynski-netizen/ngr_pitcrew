@@ -77,6 +77,20 @@ Versions, and what upgrading means here:
   upper bound rather than a measurement, and nothing in the numbers themselves
   says so.
 
+* **v13** adds `events.series` and the `series_teammates` table.  He races more
+  than one league at once and has a DIFFERENT team mate in each, which the v12
+  design could not express: `drivers.is_teammate` was one global boolean, so
+  naming the endurance team mate **silently cleared** the GT3 one and George
+  went on calling the wrong person a team mate with no error anywhere.  A
+  boolean on the driver was the wrong shape - being somebody's team mate is a
+  fact about a PAIRING, not about a person - so it becomes a row per series.
+  The column stays for now, unread, rather than being dropped: it is one race's
+  worth of data and `ADDED_COLUMNS` cannot remove a column anyway.
+
+  `events.series` is nullable, because every event already on file predates it
+  and an unlabelled event is not a bug - it is an event from before there was
+  more than one league.
+
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
 two columns and back-fills four — so `MIGRATIONS` below exists, and anything
@@ -88,7 +102,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -852,6 +866,16 @@ CREATE TABLE IF NOT EXISTS rival_stops (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rival_stops_driver ON rival_stops(driver);
+
+CREATE TABLE IF NOT EXISTS series_teammates (
+    -- One team mate per series. **A row, not a flag on the driver**: being
+    -- somebody's team mate is a fact about a pairing, and the boolean it
+    -- replaces could only hold one at a time - so naming a second silently
+    -- unnamed the first.
+    series      TEXT PRIMARY KEY,
+    driver      TEXT NOT NULL,          -- drivers.name
+    updated_at  TEXT NOT NULL
+);
 """
 
 # Columns added to tables that already existed in an earlier version.
@@ -964,6 +988,12 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # null on every lap ever recorded. Declared on the event because it is
         # a property of how the round is being driven.
         ("fuel_map", "INTEGER"),
+        # **v13. Which league this round belongs to.** He races more than one
+        # at a time with a different team mate in each, and the events table
+        # had no way to say which was which. Nullable: every event already on
+        # file predates it, and an unlabelled event is not a bug - it is one
+        # from before there was more than one league.
+        ("series", "TEXT"),
     ),
     "laps": (
         # GT7's own completed-lap count at this crossing. The app counts laps

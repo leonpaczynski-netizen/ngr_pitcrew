@@ -13,6 +13,20 @@ count is still attached to it. That ordering is deliberate: a mean burn rate
 written into a column is a number nobody can later discover was built on one
 partial sighting.
 
+### What pools across leagues and what does not
+
+He races more than one series at a time. **Litres a lap is the CAR's number**,
+so a burn rate is scoped to one car and never averaged across them - a Gr.3 and
+a Gr.4 figure are different quantities and their mean describes neither race.
+**When he stops and whether he carries spare fuel are the DRIVER's**, so those
+pool across everything, which is also where the samples are: a stop is one
+observation a race and three is the floor for calling anything a habit.
+
+Identity pools too. The same people race under the same names in his leagues,
+so one `drivers` row is one person and the name bitmap recognises him anywhere.
+The team mate does NOT pool - that is a fact about a pairing, and it lives in
+`series_teammates`.
+
 ### Two things bound what it can ever say
 
 **The board is truncated to the top eight**, and a car drops places while it
@@ -64,10 +78,16 @@ def record(store, session_id, seen, *, laps_total=None,
 
 
 def profile_of(store, driver: str, *,
-               include_partial: bool = COUNT_PARTIAL_IN_RATES) -> Profile:
-    """Everything on file about one driver, as a `Profile`."""
+               include_partial: bool = COUNT_PARTIAL_IN_RATES,
+               series: str | None = None) -> Profile:
+    """Everything on file about one driver, as a `Profile`.
+
+    Every stop he has made, pooled - the scoping happens on the way OUT, where
+    the figure being computed decides. Pass `series` only to answer a question
+    that is genuinely about one league.
+    """
     profile = Profile(driver)
-    for row in store.rival_stops(driver, include_partial=True):
+    for row in store.rival_stops(driver, include_partial=True, series=series):
         if row["partial"] and not include_partial:
             continue
         if row["lap"] is None:
@@ -82,19 +102,26 @@ def profile_of(store, driver: str, *,
             compound=row["compound"],
             assumed_start_l=(row["assumed_start_l"]
                              if row["assumed_start_l"] is not None
-                             else FULL_TANK_L)))
+                             else FULL_TANK_L),
+            series=row.get("series"), car=row.get("car_name")))
     return profile
 
 
-def everyone(store) -> list[Profile]:
-    """A profile per driver who has ever been seen stopping."""
-    names = sorted({row["driver"] for row in store.rival_stops()})
+def everyone(store, *, series: str | None = None) -> list[Profile]:
+    """A profile per driver who has ever been seen stopping.
+
+    `series` narrows to the field of one league; without it this is everybody
+    he has ever raced, which is the right answer for "who is this driver" and
+    the wrong one for "who am I racing tonight".
+    """
+    names = sorted({row["driver"] for row in store.rival_stops(series=series)})
     return [profile_of(store, name) for name in names]
 
 
 def briefing(store, *, ours_burn_l: float | None = None,
              drivers: list[str] | None = None,
-             refuel_rate_lps: float | None = None) -> list[str]:
+             refuel_rate_lps: float | None = None,
+             series: str | None = None, car: str | None = None) -> list[str]:
     """What is known about the field, in plain sentences, before a race.
 
     The pre-race read: who uses more fuel than us, who carries what he does not
@@ -102,7 +129,7 @@ def briefing(store, *, ours_burn_l: float | None = None,
     honest answer for a first race at a new circuit and not a claim that the
     field has no habits.
     """
-    profiles = everyone(store)
+    profiles = everyone(store, series=series)
     if drivers is not None:
         wanted = set(drivers)
         profiles = [p for p in profiles if p.driver in wanted]
@@ -113,12 +140,17 @@ def briefing(store, *, ours_burn_l: float | None = None,
         # The field he is judged against excludes him.
         said = describe(profile, ours_burn_l=ours_burn_l,
                         field_fraction=field_without(profiles, profile.driver),
-                        refuel_rate_lps=refuel_rate_lps)
+                        refuel_rate_lps=refuel_rate_lps, car=car)
         if said:
             lines.extend(said)
     return lines
 
 
-def teammate_of(store) -> str | None:
-    """The driver flagged as the teammate, if one has been."""
-    return store.teammate_name()
+def teammate_of(store, series: str | None = None) -> str | None:
+    """The team mate for this series, if one has been named.
+
+    Per series, because he races several leagues and the team mate differs in
+    each. `None` for a league nobody has named one in, which is not the same
+    as having no team mate.
+    """
+    return store.teammate_name(series)
