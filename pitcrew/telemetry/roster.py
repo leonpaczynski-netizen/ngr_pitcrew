@@ -42,6 +42,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import threading
+
 import numpy as np
 
 from pitcrew.telemetry.board import flag_ladder
@@ -293,6 +295,12 @@ class Roster:
     """
 
     def __init__(self, seed: dict[str, np.ndarray] | None = None):
+        # **One lock, because this roster has two threads.** `see()` runs on
+        # the sampler worker and appends to `_groups` and rewrites `_alias`
+        # during a merge, while `named()`, `name_of()` and `label()` are
+        # called from the Qt thread - `_resolve` walks `_alias` in a `while`
+        # loop, and a walk over a dict being rewritten is a torn read at best.
+        self._lock = threading.RLock()
         self._groups: list[dict] = []
         self._alias: dict[int, int] = {}
         for label, bits in (seed or {}).items():
@@ -301,9 +309,13 @@ class Roster:
                                  "seen": 1, "label": label})
 
     def _resolve(self, index: int) -> int:
-        while index in self._alias:
-            index = self._alias[index]
-        return index
+        # Under the lock: `see()` rewrites `_alias` on the sampler thread
+        # while this walks it on the Qt one, and a chain rewritten mid-walk
+        # does not resolve to anything in particular.
+        with self._lock:
+            while index in self._alias:
+                index = self._alias[index]
+            return index
 
     def _merge_converged(self, index: int) -> int:
         """Fold a cluster into another it has drifted into.
@@ -356,26 +368,27 @@ class Roster:
         if bits is None:
             return None
         bits = np.asarray(bits, dtype=bool)
-        # **Nearest cluster, not the first one under the threshold.** An earlier
-        # version took whichever group was created first, so a bitmap 0.17 from
-        # one name and 0.05 from another joined the wrong one purely by order of
-        # appearance.
-        best, closest = None, None
-        for index, group in enumerate(self._groups):
-            if index in self._alias or group["bits"].shape != bits.shape:
-                continue
-            apart = _distance(group["bits"], bits)
-            if closest is None or apart < closest:
-                best, closest = index, apart
-        if best is not None and closest < SAME_NAME_MAX_DIFF:
-            group = self._groups[best]
-            group["seen"] += 1
-            group["sum"] = group["sum"] + bits
-            group["bits"] = (group["sum"] / group["seen"]) > 0.5
-            return self._merge_converged(best)
-        self._groups.append({"bits": bits, "sum": bits.astype(float),
-                             "seen": 1, "label": None})
-        return len(self._groups) - 1
+        with self._lock:
+            # **Nearest cluster, not the first one under the threshold.** An earlier
+            # version took whichever group was created first, so a bitmap 0.17 from
+            # one name and 0.05 from another joined the wrong one purely by order of
+            # appearance.
+            best, closest = None, None
+            for index, group in enumerate(self._groups):
+                if index in self._alias or group["bits"].shape != bits.shape:
+                    continue
+                apart = _distance(group["bits"], bits)
+                if closest is None or apart < closest:
+                    best, closest = index, apart
+            if best is not None and closest < SAME_NAME_MAX_DIFF:
+                group = self._groups[best]
+                group["seen"] += 1
+                group["sum"] = group["sum"] + bits
+                group["bits"] = (group["sum"] / group["seen"]) > 0.5
+                return self._merge_converged(best)
+            self._groups.append({"bits": bits, "sum": bits.astype(float),
+                                 "seen": 1, "label": None})
+            return len(self._groups) - 1
 
     def label(self, driver_id: int, text: str) -> None:
         """Name a cluster. Silently ignores an id that is not one.

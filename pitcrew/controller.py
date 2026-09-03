@@ -3653,6 +3653,13 @@ class PitCrewController(QObject):
         """
         if self.hud is None:
             return
+        # **Last race's wall is stopped before this one's is built.** Armed
+        # twice without a `stop_race` between - a rehearsal then the race - the
+        # old wall stayed live, so `_on_the_grid()` answered with the PREVIOUS
+        # race's field and every position in it. Rule 11, in the one place
+        # this feature claimed to have closed it.
+        if getattr(self, "_pit_wall", None) is not None:
+            self._stop_pit_wall()
         # **Refused loudly rather than started blind.** The wall sees only the
         # frames the wear sampler grabs. With the gauge off none are grabbed at
         # all; with `hud_sample_interval_s` at 0 one is grabbed per crossing,
@@ -3724,7 +3731,11 @@ class PitCrewController(QObject):
                     "nobody to look up on the hub. "
                     "python -m tools.name_drivers --me \"<your hub name>\"")
                 return
-            league = league_for(Hub(), event, me)
+            hub = Hub()
+            try:
+                league = league_for(hub, event, me)
+            finally:
+                hub.close()
             if not league.known:
                 # **A refusal is a finding and gets said.** A league Pit Crew
                 # declines to score - a multi-class round, an unreadable points
@@ -3764,8 +3775,18 @@ class PitCrewController(QObject):
             if math is None:
                 return None
             said = math.to_say()
-            if math.live_rivals:
-                said += " Watch " + ", ".join(math.live_rivals[:3]) + "."
+            if not said:
+                return None
+            # **Only name rivals we have some reason to think are here.**
+            # Unnarrowed, this was the top three of a 26-name championship,
+            # none of whom need be in tonight's race - and defending a title
+            # against a driver who is not on the circuit costs the race that
+            # is. `rivals_from` is empty when nothing narrowed the list, and
+            # then the clause is simply not said.
+            if math.live_rivals and math.rivals_from:
+                said += " Watch " + ", ".join(math.live_rivals[:3])
+                said += (" - entered, not yet seen."
+                         if math.rivals_from == "the entry list" else ".")
             if league.stale:
                 said += f" ({league.taken_at})"
             return said

@@ -37,6 +37,8 @@ from pitcrew.hub.standings import (
     Standing,
     TitleMath,
     points_for_position,
+    _merge_key,
+    _name_key,
     resolve_scheme,
     standings,
     title_math,
@@ -80,6 +82,21 @@ class LeagueRace:
     pole_points: int = 0
     fastest_lap_points: int = 0
     field_size: int | None = None
+    # The driver's name as the HUB spells it. `driver_by_name` accepts his
+    # PSN name too, so the string the caller passed in is not necessarily the
+    # one the standings table is keyed on.
+    our_name: str | None = None
+    # Who has ENTERED the next round. A declaration, not the field - see
+    # `Hub.signed_in`. Used only when nothing has actually been seen on the
+    # board, which on the grid is always.
+    entered: list = field(default_factory=list)
+    # **The most one round can pay in THIS league.** For a multi-class round
+    # that is an overall finish PLUS a class finish plus both class bonuses -
+    # measured at 47 in the Enduro against the 22 an outright table assumes.
+    # Everything downstream that asks "how much is still on the table" was
+    # wrong by more than half.
+    per_race_max: int = 0
+    multi_class: bool = False
     carry_in: dict = field(default_factory=dict)
     taken_at: str = ""
     stale: bool = False
@@ -166,6 +183,31 @@ def league_for(hub: Hub, event: dict, me: str) -> LeagueRace:
 
     rounds = hub.rounds(found.id)
     done = {row["roundId"] for row in results}
+    try:
+        barred = hub.hidden_drivers()
+    except Exception:
+        barred = set()
+    try:
+        out.entered = [n for n in hub.signed_in(found.id)
+                       if n.strip().lower() not in barred]
+    except Exception:
+        out.entered = []
+    out.our_name = driver.driver_name
+    out.multi_class = found.multi_class
+    head = resolve_scheme(found.points_scheme)
+    if found.multi_class:
+        # **The four components `sumBreakdown` adds, and no others.** A
+        # multi-class result is an overall FINISH score plus a class finish and
+        # the two CLASS bonuses; there is no overall-pole or overall-fastest-lap
+        # column in the breakdown at all, and adding the outright bonuses on
+        # top invents points the league does not pay.
+        klass = resolve_scheme(found.class_points_scheme)
+        out.per_race_max = ((head[0] if head else 0)
+                            + (klass[0] if klass else 0)
+                            + found.class_pole_points + found.class_fl_points)
+    else:
+        out.per_race_max = ((head[0] if head else 0)
+                            + found.pole_points + found.fastest_lap_points)
     out.series_id = found.id
     out.series_name = found.name
     out.matched_by = how
@@ -180,7 +222,8 @@ def league_for(hub: Hub, event: dict, me: str) -> LeagueRace:
                           pole_points=found.pole_points,
                           fastest_lap_points=found.fastest_lap_points,
                           races_per_round=found.race_count,
-                          carry_in=found.carry_in, precomputed=ready)
+                          carry_in=found.carry_in, precomputed=ready,
+                          hidden=barred)
     # **The hub's own age against this league's own rounds.** A flat day count
     # calls a two-day-old copy current; if a round ran last night the table is
     # describing a championship that has already moved.
@@ -197,16 +240,29 @@ def before_the_start(race: LeagueRace, me: str,
     """The championship as it stands on the grid, before a wheel turns."""
     if not race.known:
         return None
-    math = title_math(race.table, ours=me, rounds_left=race.rounds_left,
+    math = title_math(race.table, ours=race.our_name or me,
+                      rounds_left=race.rounds_left,
                       scheme=race.scheme, pole_points=race.pole_points,
                       fastest_lap_points=race.fastest_lap_points,
-                      field_size=race.field_size)
+                      field_size=race.field_size,
+                      per_race_max=race.per_race_max or None)
+    # **The board first, the entry list second, and no third option.** The
+    # leaderboard reader needs twenty frames before it will name anybody, so
+    # on the grid it knows nobody at all and the filter never ran - the driver
+    # was told to watch the top three of a 26-name championship, none of whom
+    # need be in tonight's race. The entry list is the hub's own sign-in sheet
+    # for the next round: a declaration rather than an observation, but a
+    # specific one.
+    #
+    # Once either source has something to say, an empty result stays empty.
+    # `or` restored the full list whenever nobody present was a title rival -
+    # which is exactly the case the filter exists for.
     if on_the_grid:
-        # **No fallback.** `or` restored the full list whenever nobody on the
-        # grid was a title rival, which is exactly the case the filter exists
-        # for: naming a driver who cannot take the title costs the race being
-        # driven. An empty list is the right answer and reads as one.
         math.live_rivals = math.matters_here(on_the_grid)
+        math.rivals_from = "the board"
+    elif race.entered:
+        math.live_rivals = math.matters_here(race.entered)
+        math.rivals_from = "the entry list"
     return math
 
 
@@ -222,10 +278,23 @@ def project(race: LeagueRace, me: str, our_position: int | None,
     """
     if not race.known:
         return []
+    # **A multi-class result cannot be projected from the board.** It is an
+    # overall finish score PLUS a class one, and the leaderboard gives overall
+    # positions only - there is nothing on screen that says which class each
+    # car is in, so the class half is unknowable live. Crediting the outright
+    # half alone promoted this driver from fifth to third in the Enduro and
+    # would have been spoken as "championship 3 if it ends here". No answer is
+    # the correct answer here (rule 3).
+    if race.multi_class:
+        return []
     scheme = resolve_scheme(race.scheme)
-    finishing = dict(rival_positions or {})
+    me = race.our_name or me
+    # Keyed the way the table is keyed. The board's spelling and the hub's are
+    # two vocabularies, and an exact match between them is a coincidence.
+    finishing = {_merge_key(str(who)): where
+                 for who, where in (rival_positions or {}).items()}
     if our_position is not None:
-        finishing[me] = our_position
+        finishing[_merge_key(me)] = our_position
     # **One driver per finishing position.** Our own place comes from
     # telemetry and the rivals' from the leaderboard - two sources with no
     # agreement between them - so two cars could both be given P1 and both
@@ -238,13 +307,20 @@ def project(race: LeagueRace, me: str, our_position: int | None,
                  if seen.get(where, 0) == 1}
     projected = []
     for standing in race.table:
-        gained = points_for_position(finishing.get(standing.driver), scheme)
+        key = _merge_key(standing.driver)
+        gained = points_for_position(finishing.get(key), scheme)
         projected.append(Standing(driver=standing.driver,
                                   points=standing.points + gained,
                                   races=standing.races + (
-                                      1 if standing.driver in finishing else 0),
+                                      1 if key in finishing else 0),
                                   best_finish=standing.best_finish))
-    projected.sort(key=lambda s: (-s.points, s.best_finish or 99))
+    # **The same comparator the table itself uses.** Ordered by best finish
+    # here and by name there, "P4 in the championship" on the grid and
+    # "championship 4 if it ends here" mid-race were two different questions
+    # answered by two different sorts - and under a helmet he cannot ask which
+    # one he just heard (rule 13). `best_finish` was not even what its name
+    # says: a DNF counts as a finish in it.
+    projected.sort(key=lambda s: (-s.points, _name_key(s.driver)))
     return projected
 
 
@@ -252,7 +328,8 @@ def where_we_would_be(race: LeagueRace, me: str, our_position: int | None,
                       rival_positions: dict | None = None) -> int | None:
     """Our championship position if the race ended now, or `None`."""
     projected = project(race, me, our_position, rival_positions)
+    wanted = _merge_key(race.our_name or me)
     for index, standing in enumerate(projected, start=1):
-        if standing.driver == me:
+        if _merge_key(standing.driver) == wanted:
             return index
     return None

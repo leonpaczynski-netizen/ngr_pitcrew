@@ -150,7 +150,8 @@ def took_pole(row) -> bool:
 def standings(results, *, scheme=None, pole_points: int = 0,
               fastest_lap_points: int = 0,
               races_per_round: int = 1,
-              carry_in=None, precomputed=None) -> list[Standing]:
+              carry_in=None, precomputed=None,
+              hidden=None) -> list[Standing]:
     """The championship table, highest first.
 
     `results` is `hub.read.Hub.results()`. Bonuses for pole and fastest lap are
@@ -177,14 +178,21 @@ def standings(results, *, scheme=None, pole_points: int = 0,
     # results recorded as "Beeni" is ONE driver there and would have been two
     # here - each holding half a championship, with nothing on screen saying
     # the total had been split.
+    # Banned drivers are dropped before anything is counted, so they cannot
+    # shift a position or appear as a rival. `hidden` is already normalised.
+    barred = set(hidden or ())
     tally: dict[str, Standing] = {}
     for name, points in (carry_in or {}).items():
+        if _merge_key(name) in barred:
+            continue
         tally[_merge_key(name)] = Standing(driver=name, points=int(points))
     for row in results:
         name = row.get("driverName")
         if not name:
             continue
         key = _merge_key(name)
+        if key in barred:
+            continue
         if key in tally:
             # The result's spelling wins, exactly as it does in the hub: only
             # an unmatched carry-in entry keeps the name written on the blob.
@@ -252,7 +260,11 @@ class TitleMath:
     """
     leader: str | None = None
     ours: str | None = None
-    our_points: int = 0
+    # **`None` means we are not in this table, and `0` means we are and have
+    # scored nothing.** Defaulted to `0`, a driver the lookup could not find
+    # was indistinguishable from a pointless one, and every downstream test
+    # read as if he were racing (rule 3).
+    our_points: int | None = None
     # **Signed, and named for what it is.** Positive means we lead the
     # championship by this much; negative means we trail it. It was called
     # `lead_over_next` and went negative whenever we were not first, which is
@@ -271,6 +283,11 @@ class TitleMath:
     already_secured: bool = False
     out_of_reach: bool = False
     live_rivals: list[str] = field(default_factory=list)
+    # **Where the rival list was narrowed from, or "" for not narrowed at
+    # all.** A list filtered against drivers actually seen on the board and a
+    # list nobody has checked are different claims, and only one of them is
+    # worth a name in the driver's ear (rule 5).
+    rivals_from: str = ""
 
     @property
     def leading(self) -> bool:
@@ -284,6 +301,15 @@ class TitleMath:
         left and seventy-five points available, no single finish secures
         anything, and saying so is the honest call.
         """
+        # **Not finding ourselves is silence, not victory.** The hub matches
+        # a driver case-insensitively AND on his PSN name - "Beeni-187" for
+        # "Beeni" - while the table was searched with a bare `==`. The lookup
+        # missed, `live_rivals` came back empty because nothing had been
+        # compared, and the third branch below announced the championship won
+        # in a league where `already_secured` was False. An empty rival list
+        # has two causes and only one of them is good news (rule 12).
+        if self.our_points is None:
+            return ""
         if self.already_secured:
             return "The championship is already yours."
         if self.out_of_reach:
@@ -307,14 +333,16 @@ class TitleMath:
         against a driver who cannot take the title costs the race being driven
         for one that is not in danger.
         """
-        here = {str(name) for name in (on_the_grid or ())}
-        return [name for name in self.live_rivals if name in here]
+        here = {_merge_key(str(name)) for name in (on_the_grid or ())}
+        return [name for name in self.live_rivals
+                if _merge_key(name) in here]
 
 
 def title_math(table: list[Standing], *, ours: str,
                rounds_left: int, scheme=None,
                pole_points: int = 0, fastest_lap_points: int = 0,
-               field_size: int | None = None) -> TitleMath:
+               field_size: int | None = None,
+               per_race_max: int | None = None) -> TitleMath:
     """What we must finish to secure it, and who can still take it.
 
     The rival set is the honest part. **Only a driver who could still pass us
@@ -323,19 +351,31 @@ def title_math(table: list[Standing], *, ours: str,
     he is actually in.
     """
     points = resolve_scheme(scheme)
-    per_race_max = (points[0] if points else 0) + pole_points \
-        + fastest_lap_points
+    # **The caller may know a bigger ceiling than the finishing table.**
+    # A multi-class round pays an overall finish AND a class finish and
+    # both class bonuses - 47 a round in the Enduro against the 22 this
+    # computes - so "still on the table" was understated by more than
+    # half. Understating it is the unsafe direction: it makes a title look
+    # settled while it is not.
+    if per_race_max is None:
+        per_race_max = ((points[0] if points else 0) + pole_points
+                        + fastest_lap_points)
     available = max(0, rounds_left) * per_race_max
 
-    mine = next((s for s in table if s.driver == ours), None)
-    out = TitleMath(leader=table[0].driver if table else None, ours=ours,
-                    our_points=mine.points if mine else 0,
+    # Matched as the hub matches names everywhere else - case and accent
+    # folded - because `read.driver_by_name` accepts either spelling and the
+    # caller has no way to know which one came back.
+    wanted = _merge_key(ours)
+    mine = next((s for s in table if _merge_key(s.driver) == wanted), None)
+    out = TitleMath(leader=table[0].driver if table else None,
+                    ours=mine.driver if mine else ours,
+                    our_points=mine.points if mine else None,
                     rounds_left=max(0, rounds_left),
                     most_still_available=available)
     if mine is None or not table:
         return out
 
-    others = [s for s in table if s.driver != ours]
+    others = [s for s in table if s is not mine]
     out.margin_to_leader = mine.points - table[0].points
     if mine is table[0] and others:
         out.lead_over_next = mine.points - others[0].points

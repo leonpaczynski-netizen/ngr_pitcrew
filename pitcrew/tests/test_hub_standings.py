@@ -126,7 +126,10 @@ def test_the_bonuses_are_added_at_full_value_every_race():
     assert table[0].points == 22 + 2 + 1
 
 
-def test_the_table_is_ordered_by_points_then_by_best_finish():
+def test_the_table_is_ordered_by_points():
+    """Named for best finish, this only ever exercised the points ordering -
+    18 against 28 is not a tie - and the rule its name claimed is one the
+    code does not have and must not have. See the name tie-break below."""
     table = standings([a_result("A", 2), a_result("B", 3), a_result("B", 4)])
     assert [s.driver for s in table] == ["B", "A"]     # 15+13 beats 18
 
@@ -220,9 +223,56 @@ def test_the_rivals_who_matter_are_the_ones_in_this_race():
     assert set(math.matters_here(["Rocky", "PUNISHED"])) == {"Rocky"}
 
 
-def test_a_driver_not_in_the_table_gets_an_empty_answer():
+def test_a_driver_not_in_the_table_says_nothing_rather_than_claiming_the_title():
+    """**The worst thing this feature could do.** An empty rival list has two
+    causes - nobody can catch us, or we were never found - and `to_say()`
+    read the second as the first, announcing the championship won in a league
+    where `already_secured` was False. `our_points` is `None`, not `0`, so the
+    two cases cannot be confused again (rule 3)."""
     math = title_math(a_table(("Rocky", 90)), ours="Beeni", rounds_left=1)
-    assert math.our_points == 0 and math.live_rivals == []
+    assert math.our_points is None and math.live_rivals == []
+    assert math.to_say() == ""
+    assert not math.already_secured
+
+
+def test_our_own_name_is_matched_the_way_the_hub_matches_it():
+    """`driver_by_name` accepts his PSN name and matches case-insensitively,
+    so the string handed to `title_math` is not necessarily the one the table
+    is keyed on. Compared with `==`, the lookup missed and the engineer
+    declared the title won."""
+    table = a_table(("Beeni", 95), ("Rocky", 68))
+    assert title_math(table, ours="beeni", rounds_left=1).our_points == 95
+    assert title_math(table, ours="BEENI", rounds_left=1).leading
+
+
+def test_a_bigger_per_round_ceiling_is_believed_over_the_finishing_table():
+    """A multi-class round pays an overall finish AND a class one - measured
+    at 47 in the Enduro against the 22 a finishing table assumes. Understated,
+    the title looks settled while it is not."""
+    table = a_table(("Rocky", 95), ("Beeni", 68))
+    assert title_math(table, ours="Beeni", rounds_left=3,
+                      per_race_max=47).most_still_available == 141
+    assert title_math(table, ours="Beeni",
+                      rounds_left=3).most_still_available == 66
+
+
+def test_a_banned_driver_is_not_in_the_table_and_is_not_a_rival():
+    """The hub hides banned drivers from every standings surface. Left in, one
+    sat above this driver shifting every position below him by one, and was
+    named aloud as a title rival he must defend against - a driver who cannot
+    score again."""
+    table = standings([a_row("Beeni", 2), a_row("Pooy01", 1)],
+                      hidden={"pooy01"})
+    assert [s.driver for s in table] == ["Beeni"]
+
+
+def test_the_grid_filter_compares_names_the_same_way_everywhere_else_does():
+    """The board's spelling and the hub's are two vocabularies. Exact equality
+    between them is a coincidence, and the failure is silent: the filter
+    returns nobody, which reads as "no rival is here"."""
+    math = title_math(a_table(("Beeni", 95), ("Rocky", 90)), ours="Beeni",
+                      rounds_left=3)
+    assert math.matters_here(["rocky "]) == ["Rocky"]
 
 
 # --- what the hub actually scores, which is not what was being read --------

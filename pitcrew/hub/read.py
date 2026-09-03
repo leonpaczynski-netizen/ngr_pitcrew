@@ -325,6 +325,68 @@ class Hub:
                 out[name] = out.get(name, 0) + points
         return out
 
+    def signed_in(self, series_id: str, on_or_after=None) -> list[str]:
+        """Who has entered the next scheduled round of this league.
+
+        **The entry list is a DECLARATION, not an observation** - a driver can
+        sign in and not turn up, and four sign-ins on file are already
+        NO_SHOW. It is still far better than the alternative: the only other
+        source of "who is here" is the leaderboard bitmap, which needs twenty
+        board frames before it will name anybody and therefore knows nobody at
+        the moment the grid brief is spoken. Callers must present it as an
+        entry list and never as the field.
+
+        Reserves are included - a reserve who signed in is racing.
+        """
+        when = on_or_after or datetime.datetime.now()
+        rounds = self._query(
+            "SELECT id, scheduledAt FROM Round WHERE seriesId = ? "
+            "AND scheduledAt IS NOT NULL AND status != 'COMPLETED' "
+            "ORDER BY scheduledAt ASC", (series_id,))
+        for row in rounds:
+            try:
+                due = datetime.datetime.fromisoformat(
+                    str(row["scheduledAt"]).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if due.tzinfo is not None:
+                due = due.astimezone().replace(tzinfo=None)
+            if due.date() < when.date():
+                continue
+            names = self._query(
+                "SELECT d.driverName FROM EventSignIn es "
+                "JOIN DivisionEvent de ON de.id = es.divisionEventId "
+                "JOIN Driver d ON d.id = es.driverId "
+                "WHERE de.roundId = ? AND es.status = 'CONFIRMED'",
+                (row["id"],))
+            if names:
+                return [str(r["driverName"]) for r in names
+                        if r["driverName"]]
+        return []
+
+    def hidden_drivers(self) -> set[str]:
+        """Normalised names of drivers the league hides from its standings.
+
+        **A banned driver is not a title rival and never will be again.** The
+        hub filters every league-facing standings surface through
+        `getHiddenDrivers()`; Pit Crew did not, so a banned driver sat in the
+        table shifting every position below him by one and appeared in the
+        spoken "watch" list - telling the driver to defend a championship
+        against somebody who cannot score, which is the exact cost the rival
+        filter exists to avoid.
+
+        Mirrors `ban.ts`: emails compared trimmed and lower-cased, and the
+        owner is never hidden whatever the ban list says.
+        """
+        rows = self._query(
+            "SELECT d.driverName FROM Driver d "
+            "JOIN User u ON u.id = d.userId "
+            "WHERE u.isOwner IS NOT 1 AND u.email IS NOT NULL "
+            "  AND lower(trim(u.email)) IN "
+            "      (SELECT lower(trim(email)) FROM BannedEmail)")
+        return {str(r["driverName"]).strip().lower() for r in rows
+                if r["driverName"]}
+
     def precomputed_points(self, series_id: str) -> dict[str, int]:
         """The hub's own persisted points per result id, where it has them.
 
@@ -377,11 +439,22 @@ class Hub:
 
 
 def _after(raw, when) -> bool:
+    """Whether a stored timestamp falls between `when` and now.
+
+    **Both sides on the local clock.** `scheduledAt` is stored UTC and
+    `taken_at` is a file mtime read as naive LOCAL time; comparing them raw
+    put a 9.5 h skew between the two - wider than the gap between a round
+    finishing and the nightly copy landing, which is the entire window this
+    exists to detect. The league's rounds are stored at 10:30 UTC, 20:30
+    local, squarely inside it.
+    """
     try:
         ran = datetime.datetime.fromisoformat(
-            str(raw).replace("Z", "+00:00")).replace(tzinfo=None)
+            str(raw).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return False
+    if ran.tzinfo is not None:
+        ran = ran.astimezone().replace(tzinfo=None)
     return when < ran < datetime.datetime.now()
 
 

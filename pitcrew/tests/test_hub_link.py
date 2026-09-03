@@ -24,8 +24,13 @@ class FakeHub:
 
     available = True
 
-    def __init__(self, *, same_car=False, no_driver=False):
+    def __init__(self, *, same_car=False, no_driver=False, multi_class=False,
+                 precomputed=None, entered=(), banned=()):
         self._no_driver = no_driver
+        self._multi_class = multi_class
+        self._precomputed = precomputed
+        self._entered = list(entered)
+        self._banned = set(banned)
         second = "Lamborghini Huracan GT3 '15" if same_car \
             else "Ford Shelby GT350R '16"
         self._entries = {
@@ -40,12 +45,40 @@ class FakeHub:
 
     stale = False
 
+    taken_at = None
+
+    def close(self):
+        pass
+
+    def hidden_drivers(self):
+        return self._banned
+
+    def signed_in(self, series_id, on_or_after=None):
+        return list(self._entered)
+
+    def precomputed_points(self, series_id):
+        if self._precomputed is None:
+            raise AssertionError("only a multi-class league asks for these")
+        return dict(self._precomputed)
+
+    def round_run_since(self, series_id, when):
+        return False
+
     def driver_by_name(self, name):
-        return None if self._no_driver else Driver("me", "Beeni", "Beeni-187")
+        """Matches the way the real hub matches - case-folded, and on the PSN
+        name too, which is the whole reason the canonical name must travel."""
+        if self._no_driver:
+            return None
+        if str(name).strip().lower() in ("beeni", "beeni-187"):
+            return Driver("me", "Beeni", "Beeni-187")
+        return None
 
     def my_series(self, driver_id):
-        return [Series("gr3", "NGR GR3 Season 1", "ACTIVE", pole_points=2,
-                       fastest_lap_points=1),
+        fmt = "MULTI_CLASS_MANUFACTURER" if self._multi_class else None
+        return [Series("gr3", "NGR GR3 Season 1", "ACTIVE", format=fmt,
+                       pole_points=2, fastest_lap_points=1,
+                       class_pole_points=2 if self._multi_class else 0,
+                       class_fl_points=1 if self._multi_class else 0),
                 Series("sc", "NGR Supercars Series 1", "ACTIVE")]
 
     def entries(self, series_id):
@@ -62,9 +95,9 @@ class FakeHub:
         for n in range(1, 6):
             for name, place in (("Magical daddy", 1), ("Rocky", 2),
                                 ("Beeni", 4), ("Boxhead", 6)):
-                rows.append({"driverName": name, "position": place,
-                             "status": "FINISHED", "penalties": [],
-                             "roundId": f"r{n}"})
+                rows.append({"id": f"{name}-{n}", "driverName": name,
+                             "position": place, "status": "FINISHED",
+                             "penalties": [], "roundId": f"r{n}"})
         return rows
 
 
@@ -186,3 +219,101 @@ def test_no_position_of_our_own_still_projects_the_rivals():
     rocky = next(s for s in projected if s.driver == "Rocky")
     us = next(s for s in projected if s.driver == "Beeni")
     assert rocky.points == 90 + 22 and us.points == 68
+
+
+# --- the name we were given is not the name the table is keyed on ----------
+
+def test_the_psn_name_finds_the_same_championship_as_the_board_name():
+    """`driver_by_name` accepts either, so the caller cannot know which one it
+    holds. The canonical name travels on the race and everything downstream
+    uses it - compared raw, the lookup missed and the grid brief announced the
+    championship won."""
+    race = league_for(FakeHub(), {"series": "NGR GR3 Season 1"}, "Beeni-187")
+    assert race.our_name == "Beeni"
+    said = before_the_start(race, "Beeni-187").to_say()
+    assert said and "Nobody left can catch you" not in said
+
+
+# --- multi-class ------------------------------------------------------------
+
+def test_a_multi_class_league_is_scored_from_the_hubs_own_totals():
+    """A multi-class result is an overall finish PLUS a class one, which no
+    finishing table expresses. The hub persists the sum and says every
+    aggregation surface should prefer it verbatim."""
+    hub = FakeHub(multi_class=True,
+                  precomputed={f"{name}-{n}": 47
+                               for name in ("Magical daddy", "Rocky", "Beeni",
+                                            "Boxhead")
+                               for n in range(1, 6)})
+    race = league_for(hub, {"series": "NGR GR3 Season 1"}, "Beeni")
+    assert race.known and not race.refused
+    assert all(s.points == 47 * 5 for s in race.table)
+    # 22 outright + 22 class + 2 class pole + 1 class fastest lap.
+    assert race.per_race_max == 47
+
+
+def test_a_multi_class_result_the_hub_has_not_computed_refuses_the_league():
+    """All of them or none: one uncomputed result would fall through to the
+    outright table and put two scales in one championship."""
+    hub = FakeHub(multi_class=True, precomputed={"Beeni-1": 47})
+    race = league_for(hub, {"series": "NGR GR3 Season 1"}, "Beeni")
+    assert not race.known and "computed points" in race.refused
+
+
+def test_a_multi_class_race_is_not_projected_from_the_board():
+    """The board gives overall positions and says nothing about class, so the
+    class half of the score is unknowable live. Crediting the outright half
+    alone promoted this driver two places in the Enduro."""
+    race = LeagueRace(series_id="x", series_name="X", rounds_left=1,
+                      multi_class=True, our_name="Beeni",
+                      table=[Standing("Rocky", 90), Standing("Beeni", 88)])
+    assert project(race, "Beeni", 1) == []
+    assert where_we_would_be(race, "Beeni", 1) is None
+
+
+# --- who is actually here ---------------------------------------------------
+
+def test_the_entry_list_narrows_the_rivals_when_the_board_has_seen_nobody():
+    """On the grid the leaderboard reader has no frames and knows nobody, so
+    the filter never ran and the driver was told to watch the top three of the
+    whole championship."""
+    hub = FakeHub(entered=["Rocky", "Beeni"])
+    race = league_for(hub, {"series": "NGR GR3 Season 1"}, "Beeni")
+    math = before_the_start(race, "Beeni")
+    assert math.live_rivals == ["Rocky"]          # Magical daddy is not here
+    assert math.rivals_from == "the entry list"
+
+
+def test_the_board_outranks_the_entry_list_once_it_has_seen_anybody():
+    hub = FakeHub(entered=["Rocky", "Beeni"])
+    race = league_for(hub, {"series": "NGR GR3 Season 1"}, "Beeni")
+    math = before_the_start(race, "Beeni", on_the_grid=["Magical daddy"])
+    assert math.live_rivals == ["Magical daddy"]
+    assert math.rivals_from == "the board"
+
+
+def test_nothing_narrowing_the_list_is_marked_rather_than_guessed():
+    """No sign-ins and no board is a real state - and an unnarrowed list must
+    be marked as one so the caller does not read it as the field."""
+    math = before_the_start(
+        league_for(FakeHub(), {"series": "NGR GR3 Season 1"}, "Beeni"), "Beeni")
+    assert math.live_rivals and math.rivals_from == ""
+
+
+def test_a_banned_driver_never_reaches_the_table_or_the_entry_list():
+    hub = FakeHub(banned={"rocky"}, entered=["Rocky", "Magical daddy"])
+    race = league_for(hub, {"series": "NGR GR3 Season 1"}, "Beeni")
+    assert not any(s.driver == "Rocky" for s in race.table)
+    assert "Rocky" not in race.entered
+
+
+# --- one ordering -----------------------------------------------------------
+
+def test_the_projection_orders_the_table_the_way_the_table_orders_itself():
+    """"Championship P4" on the grid and "championship 4 if it ends here"
+    mid-race were computed by two different comparators. Under a helmet he
+    cannot ask which one he just heard (rule 13)."""
+    race = LeagueRace(series_id="x", series_name="X", rounds_left=1,
+                      our_name="Beeni",
+                      table=[Standing("Zed", 10), Standing("Alan", 10)])
+    assert [s.driver for s in project(race, "Beeni", None)] == ["Alan", "Zed"]
