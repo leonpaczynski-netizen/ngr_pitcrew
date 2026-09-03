@@ -645,11 +645,18 @@ class EffectDeriver:
         """
         knee = onset + TEXTURE_AT_TARMAC_P90 * (full - onset)
         # **Read once a kerb has actually been touched, not once 400 have.**
-        # `samples` rather than `settled`: the ceiling still has to be MEASURED
-        # rather than assumed - the seed is a prior about kerbs in general and
-        # this is a claim about these ones - but requiring 400 kerb frames put
-        # that four to five minutes into a session on a circuit where kerbs are
-        # 2.2-2.8% of a lap, and a short session never got there at all.
+        # Requiring 400 kerb frames put the ceiling four to five minutes into a
+        # session on a circuit where kerbs are 2.2-2.8% of a lap, and a short
+        # session never reached it at all.
+        #
+        # **`samples` is a gate against an UNTOUCHED prior, not a claim that
+        # one frame measures anything.** At `samples == 1` the value is still
+        # the seed to within one step of 2.25e-3, and the guard below refuses
+        # any ceiling at or under the tarmac top - so a single frame, good or
+        # bad, changes nothing. In practice the ceiling starts to raise the top
+        # after roughly 25 net upward kerb frames. One bad reading cannot pin
+        # it either: the tracker steps rather than jumps, and the raise-only
+        # guard makes a wrong ceiling recoverable rather than permanent.
         ceiling = self._kerb_p90.value if self._kerb_p90.samples else None
         # **The ceiling may only ever RAISE the top, never lower it.** A
         # circuit whose kerbs are gentler than its road - Spa learned 0.107

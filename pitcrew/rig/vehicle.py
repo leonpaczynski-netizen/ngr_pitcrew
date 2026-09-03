@@ -578,31 +578,61 @@ BETA_LIMIT_DEG = 25.0
 # believing itself**, as the Y component of the road-surface normal - so 0.95
 # is 18 degrees.
 #
-# The witness integrates `angvel_y - path_yaw`. Those are in DIFFERENT FRAMES:
-# `angvel_y` is the world-VERTICAL component of the car's rotation, and
-# `path_yaw` is the curvature of its path in the world-HORIZONTAL plane. On
-# level ground the two agree and their difference is sideslip, which is the
-# whole model. Tilt the car and they stop agreeing by construction, and the
-# difference is integrated - so the error does not average out, it accumulates.
+# **What is measured, and what is not.** `angvel_y` and `path_yaw` disagree on
+# banked road, systematically and with a sign, and the witness INTEGRATES their
+# difference - so the error accumulates rather than averaging out. That much is
+# solid:
 #
-# Measured on Daytona: mean `beta_rate` is 0.319 rad/s on the banking against
-# 0.089 on the flat parts, 3.6x, and sustained for the length of the turn. The
-# anchor that would leak it away cannot run, because `straight` requires
-# `abs(yaw) < ANCHOR_YAW` and a banked turn never satisfies that. So beta pins
-# at its ceiling, `rotation_level` pins at 1.0, and `traction_level` - the max
-# of the two witnesses - pins with it: measured through the real derivers, the
-# traction cue sat at FULL SCALE for 88% of the banking against a median of
-# zero everywhere else.
+#   * a closed Daytona lap integrates `path_yaw` to -360.7 deg, which is right,
+#     and `angvel_y` to +222.5 deg. It loses 138 deg a lap, all of it on the
+#     banking. `angvel_y` is therefore NOT the world-vertical turn rate;
+#     `path_yaw` is. It is referenced to the car.
+#   * the ratio `angvel_y / path_yaw` falls with bank, measured over three
+#     Daytona sessions above 150 km/h:
 #
-# The driver found it, and it is his description that identifies the mechanism
-# rather than any of the five channels measured before it: "as soon as the car
-# levels out and I'm still on full throttle the rumble stops." Nothing to do
-# with throttle, engine or speed - everything to do with the car being tilted.
+#         bank  31 deg   ratio 0.500      cos(bank) 0.860   cos(2*bank) 0.479
+#         bank  26 deg   ratio 0.653      cos(bank) 0.900   cos(2*bank) 0.620
+#         bank  18 deg   ratio 0.814      cos(bank) 0.950   cos(2*bank) 0.805
+#         bank   0 deg   ratio 0.987      cos(bank) 1.000   cos(2*bank) 1.000
 #
-# 18 degrees separates the two cases cleanly on every circuit on file: road
-# camber reaches 10.5 degrees at Spa, 10.1 at Road Atlanta and 4.4 at Monza,
-# and 0.0% of frames at any of them fall below this. Daytona's banking is 31.2
-# and 19.9% of its frames do.
+#     It tracks cos(2*bank) across every bin and cos(bank) in none of them.
+#     **Why it is the DOUBLE angle is not established**, and a guess written
+#     here would be the third wrong mechanism in this comment's history. What
+#     is established is the measurement.
+#
+# The consequence, measured with the model's own expression: `beta_rate` on the
+# banking has mean -0.095 rad/s against +0.006 on the flat. The magnitude is
+# barely different - 0.095 against 0.086 in absolute terms - so this is a BIAS
+# and not extra noise, which is what makes it fatal to an integrator. The 4 s
+# washout at ANCHOR_LEAK_S runs unconditionally and removes zero-mean noise; it
+# cannot remove a DC offset, and settles instead at the steady state
+# 0.095 * 4.0 = 0.38 rad = 21.8 deg. Measured pre-fix `beta_deg` on the banking
+# is mean -15.0, p90 22.7, against a BETA_LIMIT_DEG clamp of 25.
+#
+# Through the real derivers the traction cue - the max of this witness and the
+# wheel-speed one - sat at FULL SCALE for 88% of banked frames against a median
+# of zero on the flat parts of the same lap.
+#
+# The driver found it, and his description is what identified the mechanism
+# after five channels had been measured and cleared: "as soon as the car levels
+# out and I'm still on full throttle the rumble stops." Nothing to do with
+# throttle, engine or speed.
+#
+# **A correction was available and is not being used yet.** Dividing the rate
+# by the measured ratio takes the banked residual to 0.0231, below the
+# flat-track floor of 0.0315 - so this cue could be kept on the banking rather
+# than refused. It is not shipped because the ratio is fitted on ONE circuit
+# and has no derivation, and a haptic cue built on an unexplained curve is how
+# the last three explanations in this comment came to be wrong. It needs a
+# second banked circuit.
+#
+# 18 degrees separates the two cases on every circuit in the archive: road
+# camber reaches 10.6 deg at Spa, 10.1 at Road Atlanta and 4.4 at Monza, and
+# 0.00% of frames at any of them fall below the threshold, against 19.99% of
+# Daytona's. **The track library also holds circuits with no laps on file** -
+# Daytona Oval, Blue Moon Bay, Special Stage Route X, Northern Isle, the
+# Karussell, Mount Panorama - and on an oval this silences the rotation cue for
+# the whole lap. There is no track ID in the feed, so the app cannot warn.
 BANKED_PLANE_Y = 0.95
 # Runtime proof that the two channels still mean what they meant on the bench.
 # Correlation is accumulated over a rolling window; below the threshold the
@@ -1507,6 +1537,12 @@ class VehicleModel:
             s.rotation = UNKNOWN
             s.rotation_confidence = NONE
             s.rotation_level = 0.0
+            # **Named, because two refusals are not one refusal.** The
+            # explainer and `_traction` both need to tell "the correlation
+            # check failed" from "the road is banked": the first is a fault to
+            # investigate, the second is geometry, and only the second is
+            # expected for a fifth of every Daytona lap (rule 12).
+            s.reasons["rotation"] = "banked"
             return
         # Signed toward "the rear is going the way the car is already turning".
         # Rotation that opposes the corner is the driver catching it, not the
@@ -1657,6 +1693,22 @@ class VehicleModel:
                                  else s.rotation_confidence)
         s.reasons["traction"] = ("wheel" if wheel_level >= slide_level
                                  else "rotation")
+        # **One of the two witnesses has refused, so this is not GRIPPED at
+        # high confidence - it is one witness reporting.**
+        #
+        # `rotation_level` is 0.0 when the rotation model declines to speak,
+        # which makes `wheel_level >= slide_level` trivially true and stamped
+        # the banking as GRIPPED, reason "wheel", confidence HIGH on 99.6% of
+        # frames. The refusal survived in `s.rotation` and died here, in the
+        # field the effect renders and the explainer logs - and the case the
+        # wheel witness is blind to, a lift-off or bump-induced snap with no
+        # wheelspin, is exactly the one this hands back as "gripped, high".
+        # CLAUDE.md rule 3: not measured is not zero, and rule 12: the reason
+        # has to come from the same expression as the answer.
+        if s.reasons.get("rotation") == "banked" and wheel_level <= 0.0:
+            s.traction = UNKNOWN
+            s.traction_confidence = NONE
+            s.reasons["traction"] = "one witness refused"
 
     # --------------------------------------------------------------- braking
 

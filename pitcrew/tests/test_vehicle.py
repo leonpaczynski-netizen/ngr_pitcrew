@@ -1039,71 +1039,126 @@ def test_the_front_plateau_is_never_taught_by_the_rear_axle():
 
 # --- banked track ----------------------------------------------------------
 
-def _settled(model, *, plane=1.0, frames=900, yaw=0.30):
-    """Run until the heading witness trusts itself, on the given road plane."""
-    heading = 0.0
-    state = None
-    for _ in range(frames):
-        heading += V.HEADING_SIGN * yaw * V.FRAME_S
-        state = model.update(Frame(speed=55.0, yaw=yaw, heading=heading,
-                                   road_plane_y=plane))
-    return state
+class Road:
+    """A stretch of road, driven with a CONTINUOUS heading.
+
+    **The heading has to carry across calls.** An earlier version of this
+    helper reset it to 0.0 every time, which injected a ~270 rad/s path-yaw
+    spike at each boundary - exactly the outlier the module comment above
+    `_HeadingCheck` warns buries a correlation - and left the tests passing
+    because the heading witness had been DISTRUSTED rather than because the
+    banking guard worked.
+    """
+
+    def __init__(self, model):
+        self.model = model
+        self.heading = 0.0
+        self.state = None
+
+    def drive(self, frames, *, plane=1.0, yaw=0.30, slip_rate=0.0):
+        """`slip_rate` is how fast the chassis outruns its own path, rad/s.
+
+        Zero is a car tracking exactly, which is what a straight fixture
+        produces and why a fixture like that cannot test an integrator.
+        """
+        for _ in range(frames):
+            self.heading += V.HEADING_SIGN * (yaw - slip_rate) * V.FRAME_S
+            self.state = self.model.update(
+                Frame(speed=55.0, yaw=yaw, heading=self.heading,
+                      road_plane_y=plane))
+        return self.state
 
 
 def test_the_rotation_witness_refuses_on_a_banked_track():
-    """**The Daytona rumble, and the driver found it.** The witness integrates
-    `angvel_y - path_yaw`, and those are in different frames: one is the
-    world-VERTICAL component of the car's rotation, the other the curvature of
-    its path in the world-HORIZONTAL plane. Level, they agree and the
-    difference is sideslip. Tilt the car and they disagree by construction -
-    and the difference is INTEGRATED, so it accumulates rather than averaging
-    out.
+    """**The Daytona rumble, and the driver found it.** `angvel_y` and
+    `path_yaw` disagree systematically on banked road - measured, a closed
+    Daytona lap integrates the path to -360.7 deg and `angvel_y` to +222.5 -
+    and the witness INTEGRATES their difference, so the error accumulates
+    rather than averaging out.
 
-    Measured on Daytona: mean `beta_rate` 0.319 rad/s on the banking against
-    0.089 on the flat, sustained, with the anchor unable to leak it because
-    `straight` needs `abs(yaw) < ANCHOR_YAW` and a banked turn never gives it.
-    Through the real derivers the traction cue - the max of this witness and
-    the wheel-speed one - sat at FULL SCALE for 88% of the banking.
-
-    His words are what identified it, after five other channels had been
+    Through the real derivers the traction cue sat at FULL SCALE for 88% of
+    banked frames against a median of zero on the flat parts of the same lap.
+    His words are what identified it after five other channels had been
     measured and cleared: "as soon as the car levels out and I'm still on full
     throttle the rumble stops."
     """
-    model = V.VehicleModel()
-    state = _settled(model, plane=0.857)          # Daytona, 31 degrees
+    road = Road(V.VehicleModel())
+    road.drive(900)                                  # earn trust on the level
+    state = road.drive(300, plane=0.857)             # Daytona, 31 degrees
     assert state.rotation == V.UNKNOWN
     assert state.rotation_level == 0.0
     assert state.rotation_confidence == V.NONE
 
 
+def test_a_refused_witness_is_not_reported_as_gripped():
+    """**The refusal used to die one call later.** `rotation_level` is 0.0
+    when the model declines to speak, which makes `wheel_level >= slide_level`
+    trivially true - so the banking was stamped GRIPPED, reason "wheel",
+    confidence HIGH on 99.6% of frames. The case the wheel witness is blind to
+    is a snap with no wheelspin, which is exactly what that hands back as
+    "gripped, high"."""
+    road = Road(V.VehicleModel())
+    road.drive(900)
+    state = road.drive(300, plane=0.857)
+    assert state.traction == V.UNKNOWN
+    assert state.traction_confidence == V.NONE
+    assert state.reasons["traction"] == "one witness refused"
+
+
+def test_a_real_slide_on_the_banking_still_reaches_him_through_the_wheels():
+    """The rotation witness is refused there; the wheel-speed one is not, and
+    it is what keeps a traction cue on the banking at all."""
+    road = Road(V.VehicleModel())
+    road.drive(900)
+    for _ in range(120):
+        road.heading += V.HEADING_SIGN * 0.30 * V.FRAME_S
+        state = road.model.update(Frame(speed=55.0, yaw=0.30, throttle=1.0,
+                                        heading=road.heading, rear_slip=1.30,
+                                        road_plane_y=0.857))
+    assert state.traction_level > 0.0
+    assert state.traction != V.UNKNOWN
+
+
+def test_the_integral_does_not_run_while_banked():
+    """**Suppressing only the OUTPUT is not enough**, and a fixture where the
+    car tracks its path exactly cannot show it: `beta_rate` is then 6e-15 and
+    the guard has nothing to guard. Here the chassis outruns its path by
+    0.25 rad/s for five seconds of banking - a bias, which is what a washout
+    cannot remove - and then the road levels out.
+
+    With the integral left running, beta arrives at the exit near its 25 deg
+    clamp and the cue fires at full scale the instant the witness starts
+    believing itself again: the worst possible moment for a phantom, on the
+    corner exit.
+    """
+    road = Road(V.VehicleModel())
+    road.drive(900)
+    road.drive(300, plane=0.857, slip_rate=0.25)     # 5 s of banked bias
+    assert abs(road.model.state.beta_deg) < 5.0      # nothing accumulated
+    state = road.drive(30)                           # back onto the flat
+    assert state.rotation_level < 0.25
+
+
 def test_ordinary_camber_is_not_banking():
-    """Road camber reaches 10.5 degrees at Spa and 10.1 at Road Atlanta, and
-    0.0% of frames at any road circuit on file fall below the threshold. A cue
-    that went quiet on camber would be silent through most of a lap."""
-    model = V.VehicleModel()
-    state = _settled(model, plane=0.983)          # Spa's worst, 10.5 degrees
+    """Road camber reaches 10.6 degrees at Spa and 10.1 at Road Atlanta, and
+    0.00% of frames at any road circuit on file fall below the threshold. A
+    cue that went quiet on camber would be silent through most of a lap."""
+    road = Road(V.VehicleModel())
+    road.drive(900)
+    state = road.drive(300, plane=0.983)             # Spa's worst, 10.6 deg
     assert state.rotation != V.UNKNOWN
     assert state.rotation_confidence == V.HIGH
 
 
-def test_leaving_the_banking_does_not_fire_a_phantom():
-    """Suppressing only the OUTPUT would leave the bias accumulating unseen,
-    and the cue would fire at full scale on the exit - the moment the car
-    levels out and the witness starts believing itself again, which is the
-    worst possible moment for a phantom."""
-    model = V.VehicleModel()
-    _settled(model, plane=1.0)                    # trusted, on the level
-    _settled(model, plane=0.857, frames=600)      # a long banked turn
-    heading = 0.0
-    for _ in range(30):                           # and back onto the flat
-        heading += V.HEADING_SIGN * 0.30 * V.FRAME_S
-        state = model.update(Frame(speed=55.0, yaw=0.30, heading=heading))
-    assert state.rotation_level < 0.25
-
-
-def test_a_packet_without_a_road_plane_is_treated_as_level():
-    """Formats `A` and `B` carry no road plane. Absent is not banked - the
-    cue behaves exactly as it did before this existed."""
-    model = V.VehicleModel()
-    state = _settled(model, plane=None)
+def test_a_packet_with_no_road_plane_reads_as_level():
+    """**Not because a packet format lacks it** - `road_plane xyz` sits at
+    byte 148 of the 296-byte BASE struct and every format carries it. An
+    earlier version of this test asserted the opposite about GT7 and was
+    simply wrong. The branch is still reachable, from laps recorded before the
+    recorder stored the channel, and absent must read as level rather than as
+    90 degrees of bank.
+    """
+    road = Road(V.VehicleModel())
+    road.drive(900)
+    state = road.drive(300, plane=None)
     assert state.rotation_confidence == V.HIGH
