@@ -365,12 +365,13 @@ class RaceCoordinator:
         one time an unnamed compound must not be read as "unchanged".
         """
         self.state.stint_index = index
-        # **The fill the NEXT stop is planned to take**, which is what prices
-        # a rejoin: he gains every second we stand still, so the litres decide
-        # the place. `None` on the last stint - there is no next stop, and a
-        # rejoin call about one would be about a stop that is not happening.
+        # **What the NEXT stint starts on** - not the fill. The litres through
+        # the hose are this minus whatever is aboard when we arrive, and
+        # `_fill_at_the_stop` does that subtraction. `None` on the last stint:
+        # there is no next stop, and a rejoin call about one would be about a
+        # stop that is not happening.
         following = index + 1
-        self.state.litres_to_take = (
+        self.state.next_stint_load_l = (
             self._stints[following].get("fuel_l")
             if following < len(self._stints) else None)
         if index >= len(self._stints):
@@ -752,13 +753,21 @@ class RaceCoordinator:
         if not getattr(entered, "driver", None):
             log("race").info("rival entry not taken: no driver name")
             return
-        self.state.rival_entered = entered
+        # Appended, not assigned: two cars can be in the lane in one frame,
+        # and a single slot lost one of them before either was spoken.
+        self.state.rivals_entering.append(entered)
         log("race").info("rival entered the lane: %s on %s L, lap %s",
                          entered.driver, entered.fuel_in_l, entered.lap)
 
     def note_gaps(self, ahead=None, behind=None,
                   ahead_name=None, behind_name=None) -> None:
-        """The two gap trends the board reader keeps, and whose they are."""
+        """The two gap trends the board reader keeps, and whose they are.
+
+        Guarded like its two siblings: a gap noted before the green or after
+        the flag describes a race that is not being run.
+        """
+        if not self.running:
+            return
         self.state.gap_ahead = ahead
         self.state.gap_behind = behind
         self.state.gap_ahead_name = ahead_name

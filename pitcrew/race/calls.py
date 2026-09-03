@@ -591,9 +591,12 @@ class RaceState:
     # thread boundary, so the translation happens where the roster is.
     gap_ahead_name: str | None = None
     gap_behind_name: str | None = None
-    # A rival seen entering the lane, live, while he is still standing in it.
-    # Consumed once - "he has boxed" is news for one lap.
-    rival_entered: object = None
+    # **Rivals seen entering the lane, as a queue.** A single slot lost one of
+    # two cars entering in the same frame, and was never cleared - so the same
+    # lap-8 entry was re-spoken five laps later, after our own stop had reset
+    # `said`, with a swing computed against a different tank. Drained by
+    # `_rivals` on the crossing that offers it (rule 11).
+    rivals_entering: list = field(default_factory=list)
     # Litres a second at the pump, from the event. `None` is not a rate.
     refuel_rate_lps: float | None = None
     # Seconds lost driving through the lane, a TRACK constant (CLAUDE.md 5.4).
@@ -602,8 +605,10 @@ class RaceState:
     # Our own last stop, so a rival's standing time has something to be
     # compared against.
     our_stop: object = None
-    # What our next stop is planned to take on.
-    litres_to_take: float | None = None
+    # **The fuel the next stint STARTS on, not the fill.** The litres through
+    # the hose are this minus what is aboard when we arrive, and `stop_costs_s`
+    # prices what goes through the hose. Named for what it holds.
+    next_stint_load_l: float | None = None
     # Stint accounting against the approved plan.
     stint_index: int = 0
     stint_ends_on_lap: int | None = None
@@ -1061,7 +1066,11 @@ def _worth_saying_again(state: RaceState, call: Call) -> bool:
     # over 9 laps" said again on lap 18 of 20, describing a window that is
     # mostly spent. Tagged per driver, so two rivals do not swallow each other
     # either. Below the `said` check it never ran at all.
-    if call.kind in (RIVAL_SHORT, RIVAL_COMMITTED):
+    if call.kind in (RIVAL_SHORT, RIVAL_COMMITTED, RIVAL_BOXED, CLOSING):
+        # `RIVAL_BOXED` and `CLOSING` joined them: untagged, one CLOSING call
+        # swallowed the other for the whole stint - "he is taking 1.5 a lap out
+        # of you" silencing "you are taking 1.4 a lap out of Rocky", which are
+        # opposite news about two different cars.
         return call.tag not in state.said_tags
     if call.kind not in state.said:
         return True

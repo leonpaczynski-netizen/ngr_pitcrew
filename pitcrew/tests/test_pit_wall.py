@@ -12,6 +12,7 @@ import numpy as np
 from pitcrew.race.pit_wall import (
     CLOSE_AFTER_CLEAN_FRAMES,
     MIN_READS,
+    MIN_SIGHTINGS,
     MIN_WATCHED_S,
     PitWall,
     Visit,
@@ -316,3 +317,96 @@ def test_a_fill_that_never_moved_was_not_watched():
         closed += wall.see(a_frame(), now=clock.tick())
     assert closed and closed[0].partial
     assert closed[0].stop.litres == 0.0
+
+
+# --- the entry hook, which is the ONLY road RIVAL_BOXED has ---------------
+
+def a_named_frame(*, in_lane=(), fuel=None):
+    """`a_frame`, but with names the roster can actually tell apart.
+
+    **`a_frame`'s six rows collapse into ONE cluster.** Its names differ only
+    in width and `Roster.name_bitmap` normalises to a fixed shape, so after
+    normalisation they are the same picture and `_merge_converged` folds them -
+    one driver, 144 sightings over 24 frames. Invisible to a test that only
+    asks whether a stop was filed; fatal to any test about WHOSE stop it was,
+    because the car in the lane comes back as the same cluster as our own row.
+
+    Here each row carries a different number of ink blocks, which survives the
+    normalisation. Local rather than shared: several tests above rely on that
+    merge to clear `MIN_SIGHTINGS` at all, so replacing `a_frame` outright is
+    a change to them and not to the fixture.
+    """
+    frame = a_frame(in_lane=in_lane, fuel=fuel, names=False)
+    for index in range(ROWS):
+        y = TOP + index * PITCH + (28 if index == OWN else
+                                   (56 if index > OWN else 0))
+        for block in range(index + 1):
+            left = 96 + block * 22
+            frame[y - 5:y + 5, left:left + 12] = DARK if index == OWN else INK
+    return frame
+
+
+def a_watching_wall(seen):
+    handles = (f"Car #{n}" for n in range(1, 9))
+    return PitWall(on_enter=seen.append,
+                   name_for=lambda taken=(): next(handles))
+
+
+def test_a_car_entering_is_announced_even_though_nobody_has_named_him_yet():
+    """**The defect that made `rival_boxed` unreachable in production.** Names
+    were minted only at `_close`, so a driver the archive has never seen was
+    nameless while he stood in the box - and the coordinator refuses a nameless
+    entry. `drivers` has zero rows, so that is every driver in every race, and
+    the call ranked above every other rival call could not be spoken once.
+
+    Worse, the driver was added to `_announced` BEFORE the name was resolved,
+    so the refusal spent the one announcement and no later frame could recover
+    it: a refusal that becomes its own baseline (rule 10).
+    """
+    seen, clock = [], Clock()
+    wall = a_watching_wall(seen)
+    for _ in range(MIN_SIGHTINGS + 2):
+        wall.see(a_named_frame(in_lane=(4,), fuel={4: 12}), lap=8,
+                 now=clock.tick())
+    assert [(e.driver, e.fuel_in_l) for e in seen] == [("Car #1", 12)]
+
+
+def test_our_own_stop_is_not_announced_as_a_rival_boxing():
+    """`read_rows` is the one path that returns the driver's own row, so
+    without an exclusion the app announces our own stop and compares it against
+    itself."""
+    seen, clock = [], Clock()
+    wall = a_watching_wall(seen)
+    for _ in range(MIN_SIGHTINGS + 2):
+        wall.see(a_named_frame(in_lane=(OWN,), fuel={OWN: 12}), lap=8,
+                 now=clock.tick())
+    assert seen == []
+
+
+def test_a_cluster_too_rarely_seen_to_be_a_driver_is_not_announced():
+    """`_close` refuses one below `MIN_SIGHTINGS` as a misread. Announcing it
+    aloud first and declining to file it afterwards is the weaker bar on the
+    louder channel."""
+    seen, clock = [], Clock()
+    wall = a_watching_wall(seen)
+    for _ in range(3):
+        wall.see(a_named_frame(in_lane=(4,), fuel={4: 12}), lap=8,
+                 now=clock.tick())
+    assert seen == []
+
+
+def test_a_second_stop_by_the_same_car_is_announced_too():
+    """`_announced` was keyed per driver for the whole SESSION, so in a
+    two-stop race every rival's second entry - the one that decides the end of
+    the race - was silent."""
+    seen, clock = [], Clock()
+    wall = a_watching_wall(seen)
+    for _ in range(MIN_SIGHTINGS + 2):
+        wall.see(a_named_frame(in_lane=(4,), fuel={4: 12}), lap=8,
+                 now=clock.tick())
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        wall.see(a_named_frame(), lap=9, now=clock.tick())
+    for _ in range(4):
+        wall.see(a_named_frame(in_lane=(4,), fuel={4: 20}), lap=15,
+                 now=clock.tick())
+    assert [e.fuel_in_l for e in seen] == [12, 20]

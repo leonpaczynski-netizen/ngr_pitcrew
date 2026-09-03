@@ -35,6 +35,7 @@ from pitcrew.race.rival_calls import (
     must_stop_by,
     short_to_the_flag,
 )
+from pitcrew.race.pit_wall import Entered
 from pitcrew.race.rivals import Stop
 
 # Spa, 20 laps, 8 L a lap. A stop on lap 11 leaves nine laps to the flag and
@@ -367,16 +368,63 @@ def test_a_rival_entering_the_lane_is_said_while_he_is_still_in_it():
     emitted. It is fed by its own event, because the finished stop arrives
     when he LEAVES - a minute too late for a call whose whole content is what
     his fill is about to cost him."""
-    from pitcrew.race.pit_wall import Entered
-
     state = a_state()
     state.our_stop = Stop(lap=6, fuel_in_l=20.0, fuel_out_l=70.0)
-    state.rival_entered = Entered(driver="Boxhead", driver_id=1, lap=8,
-                                  fuel_in_l=12, partial=False)
+    state.rivals_entering.append(Entered(driver="Boxhead", driver_id=1, lap=8,
+                                         fuel_in_l=12, partial=False))
     call = next_call(state)
     assert call.kind == "rival-boxed"
     assert "Boxhead has boxed on 12 litres." == call.call
     assert "seconds longer than you did" in call.reason
+    # **Drained.** Left in place, the same lap-8 entry was re-spoken after our
+    # own stop reset `said`, five laps later, with a swing computed against a
+    # tank that had changed underneath it.
+    assert state.rivals_entering == []
+
+
+def test_two_cars_entering_in_one_frame_are_both_offered():
+    """A single slot lost one of them before either was spoken."""
+    state = a_state()
+    state.rivals_entering += [
+        Entered(driver="Boxhead", driver_id=1, lap=8, fuel_in_l=12,
+                partial=False),
+        Entered(driver="Rocky", driver_id=2, lap=8, fuel_in_l=6,
+                partial=False)]
+    boxed = [c for c in candidates(state) if c.kind == "rival-boxed"]
+    assert {c.call.split()[0] for c in boxed} == {"Boxhead", "Rocky"}
+
+
+def test_an_entry_figure_that_is_only_an_upper_bound_prices_nothing():
+    """`partial` means nobody saw him arrive, so the lowest reading is a bound
+    on what he came in with. The mirror of the exit bound."""
+    state = a_state()
+    state.rivals_entering.append(Entered(driver="Boxhead", driver_id=1, lap=8,
+                                         fuel_in_l=12, partial=True))
+    assert [c for c in candidates(state) if c.kind == "rival-boxed"] == []
+
+
+def test_a_rivals_fill_cannot_exceed_the_tank():
+    """A stop taken while the remaining laps cost more than a tank priced his
+    fill at more than the car holds - the whole first half of a long race."""
+    state = a_state(lap=2)
+    state.our_stop = Stop(lap=2, fuel_in_l=5.0, fuel_out_l=100.0)
+    state.rivals_entering.append(Entered(driver="Boxhead", driver_id=1, lap=2,
+                                         fuel_in_l=5, partial=False))
+    boxed = [c for c in candidates(state) if c.kind == "rival-boxed"]
+    # 18 laps to go at 8 L/lap is 144 L; the tank is 100, so his fill is the
+    # same 95 L ours was and there is no swing worth saying.
+    assert boxed == []
+
+
+def test_the_call_says_when_the_burn_behind_it_is_ours():
+    """`_burn_of` can only find a rival's own burn after he has ALREADY
+    completed a stop this race, so on his first stop ours is always what is
+    used - and this call leans on it harder than the one that says so."""
+    state = a_state()
+    state.rivals_entering.append(Entered(driver="Rocky", driver_id=2, lap=8,
+                                         fuel_in_l=6, partial=False))
+    call = next(c for c in candidates(state) if c.kind == "rival-boxed")
+    assert "on our burn" in call.reason
 
 
 def test_a_gap_coming_down_is_said_with_the_name_the_board_gave_him():
@@ -391,12 +439,48 @@ def test_a_gap_coming_down_is_said_with_the_name_the_board_gave_him():
 
 def test_a_stop_now_that_would_drop_us_behind_is_said():
     state = a_state()
+    state.stint_ends_on_lap = 10                 # the stop is in prospect
     state.gap_behind = a_trend("behind", [(8, 9.0)], subject=3)
     state.gap_behind_name = "Chook"
-    state.litres_to_take = 60.0
-    call = next_call(state)
-    assert call.kind == "rejoin"
+    state.next_stint_load_l = 68.0
+    state.fuel_l = 8.0                           # so the FILL is 60 L
+    # Through `candidates`: eight litres aboard is genuinely a fuel emergency
+    # and `FUEL_SHORT` rightly wins the crossing. The point is that the rejoin
+    # is OFFERED, and with the fill priced rather than the stint's load.
+    call = next(c for c in candidates(state) if c.kind == "rejoin")
     assert "Chook comes out in front" in call.call
+    assert "the stop costs 78" in call.reason    # 60 L at 1 L/s + 17.6 lane
+
+
+def test_a_rejoin_is_not_argued_before_the_stop_is_in_prospect():
+    """It answers "if I box now, does he come out ahead?" - only asked when a
+    stop is close. It carries no tag per stint, so said on lap 1 against a
+    nine-second gap it was suppressed for the rest of the stint and silent on
+    the lap it exists for."""
+    state = a_state(lap=1)
+    state.stint_ends_on_lap = 10
+    state.gap_behind = a_trend("behind", [(1, 9.0)], subject=3)
+    state.gap_behind_name = "Chook"
+    state.next_stint_load_l = 68.0
+    state.fuel_l = 8.0
+    assert [c for c in candidates(state) if c.kind == "rejoin"] == []
+
+
+def test_the_rejoin_prices_the_fill_and_not_the_stints_whole_load():
+    """`next_stint_load_l` is what the car STARTS the next stint on; the
+    litres through the hose are that minus what is aboard when we arrive.
+    Priced as a fill it overstated the stop by the fuel already in the car,
+    and `REJOIN_MARGIN_S` is three seconds."""
+    from pitcrew.race.rival_calls import _fill_at_the_stop
+
+    state = a_state()
+    state.next_stint_load_l = 88.0
+    state.fuel_l = 8.0
+    assert _fill_at_the_stop(state) == 80.0
+    state.fuel_l = None                          # nothing aboard is not zero
+    assert _fill_at_the_stop(state) is None
+    state.fuel_l = 95.0                          # arrives with more than needed
+    assert _fill_at_the_stop(state) is None      # not a zero-litre stop
 
 
 def test_the_tank_argument_needs_no_rival_at_all():
@@ -439,12 +523,13 @@ def test_every_kind_that_needs_a_rival_can_be_emitted_at_once():
     tank clamp a lap deferred saves exactly zero seconds, so it is right that
     it says nothing in this state. It has its own test above.
     """
-    from pitcrew.race.pit_wall import Entered
-
     state = a_state()
     state.our_stop = Stop(lap=6, fuel_in_l=20.0, fuel_out_l=70.0)
-    state.rival_entered = Entered(driver="Boxhead", driver_id=1, lap=8,
-                                  fuel_in_l=12, partial=False)
+    state.rivals_entering.append(Entered(driver="Boxhead", driver_id=1, lap=8,
+                                         fuel_in_l=12, partial=False))
+    state.stint_ends_on_lap = 10
+    state.next_stint_load_l = 68.0
+    state.fuel_l = 8.0
     state.rivals["Rocky"] = a_rival(20.0, name="Rocky")
     state.rivals["Chook"] = a_rival(58.0, name="Chook")
     state.gap_ahead = a_trend("ahead", [(4, 8.0), (5, 6.5), (6, 5.0),
@@ -452,7 +537,6 @@ def test_every_kind_that_needs_a_rival_can_be_emitted_at_once():
     state.gap_ahead_name = "Rocky"
     state.gap_behind = a_trend("behind", [(8, 9.0)], subject=3)
     state.gap_behind_name = "Chook"
-    state.litres_to_take = 60.0
     kinds = {call.kind for call in candidates(state)}
     assert kinds == {"rival-boxed", "rival-committed", RIVAL_SHORT,
                      "closing", "rejoin"}

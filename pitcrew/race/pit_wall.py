@@ -217,6 +217,7 @@ class PitWall:
         # saying. Fired once per visit, on the reading that confirms it.
         self._on_enter = on_enter
         self._announced: set[int] = set()
+        self._own: int | None = None
         # **Asked for a name at the moment a stop closes, not at the flag.** A
         # stop closes DURING the race, and whatever files it refuses a stop
         # with no driver on it - so a cluster the archive did not recognise had
@@ -254,19 +255,69 @@ class PitWall:
 
     # --- lifecycle ------------------------------------------------------
 
-    def _announce_entry(self, driver: int, visit, lap) -> None:
-        """Say he is in, once, as soon as the fill figure is credible.
+    def _name_or_mint(self, driver: int) -> str | None:
+        """His name, minting a handle if the roster has none.
 
-        On the SECOND reading, not the first: `MIN_READS` is 2 for filing and
-        the same argument applies here. One reading is a frame that could have
-        caught a marshal walking across the row, and "he has boxed" is a call
-        the driver cannot un-hear.
+        **Extracted so the ENTRY can name a car too.** It was only done at
+        `_close`, so a driver the archive had never seen was nameless while he
+        stood in the box - and the entry call, which refuses a nameless car,
+        was refused for every driver in a field the app has not met. With zero
+        rows in `drivers` that is every driver, in every race, so the call
+        ranked above every other rival call could not be spoken once.
+
+        **A handle already in use is not a handle.** `name_for` reads the
+        archive, so two clusters named before either has been written back both
+        come out as "Car #1" and the whole field collapses onto one driver. Run
+        over a real race that filed thirteen stops against a single name. The
+        roster knows what it has issued, so ask again until the answer is new.
+        """
+        name = self._roster.name_of(driver)
+        if name or self._name_for is None:
+            return name
+        taken = {self._roster.name_of(other)
+                 for other in self._roster.drivers()
+                 if self._roster.name_of(other)}
+        try:
+            candidate = self._name_for(taken)
+        except TypeError:
+            # A namer that does not want the set is still welcome.
+            candidate = self._name_for()
+        except Exception:                   # pragma: no cover - belt
+            _log.exception("pit-wall: could not name a driver")
+            candidate = None
+        if candidate and candidate not in taken:
+            self._roster.label(driver, candidate)
+            return candidate
+        return None
+
+    def _announce_entry(self, driver: int, visit, lap, own: int | None) -> None:
+        """Say he is in, once per VISIT, as soon as the reading is credible.
+
+        Three gates, and each of them was a defect:
+
+        * **On the SECOND reading**, not the first. `MIN_READS` is 2 for filing
+          and the same argument applies here: one frame can catch a marshal
+          walking across the row, and "he has boxed" cannot be un-heard.
+        * **Not our own car.** `read_rows` is the one path that returns the
+          driver's own row, so without this the app announces our own stop and
+          then compares it against itself.
+        * **Not a cluster too rarely seen to be a driver.** `_close` refuses
+          one below `MIN_SIGHTINGS` as a misread; announcing it aloud first and
+          then declining to file it is the weaker bar on the louder channel.
         """
         if (self._on_enter is None or driver in self._announced
-                or len(visit.readings) < MIN_READS):
+                or len(visit.readings) < MIN_READS
+                or (own is not None and driver == own)
+                or self._roster.sightings(driver) < MIN_SIGHTINGS):
+            return
+        name = self._name_or_mint(driver)
+        if not name:
+            # **Refusing must not consume the one chance.** Added to
+            # `_announced` before the name was resolved, a nameless first
+            # attempt spent the announcement and no later frame could recover
+            # it - a refusal that becomes its own baseline (rule 10).
             return
         self._announced.add(driver)
-        name = self._roster.name_of(driver)
         try:
             self._on_enter(Entered(driver=name, driver_id=driver,
                                    lap=visit.lap if visit.lap is not None
@@ -291,6 +342,7 @@ class PitWall:
         # anything cached across a session boundary needs an explicit reset,
         # and this one silences the call for the whole of the second race.
         self._announced.clear()
+        self._own = None
         self._stops = []
         self.ahead.new_session()
         self.behind.new_session()
@@ -375,6 +427,16 @@ class PitWall:
             identified.add(driver)
             self._position[driver] = place
 
+        # **Before the pit rows, because the entry call needs it.** It was
+        # computed only for the gaps, below, which is after every announcement
+        # has already been made.
+        own = self._own_driver(ids, board)
+        # **Kept for the entry call only.** `_close` does NOT use it, and
+        # therefore still files our own stop as a rival's - see the note in
+        # `_close`. Excluding it there needs the shared test fixture to be able
+        # to tell two drivers apart, which today it cannot.
+        if own is not None:
+            self._own = own
         in_lane: set[int] = set()
         for pit in read_rows(frame, board, ladder):
             if not pit.fuel_box:
@@ -414,7 +476,7 @@ class PitWall:
             litres = read_fuel(frame[y0:y1 + 1, x0:x1 + 1])
             if litres is not None:
                 visit.readings.append(litres)
-            self._announce_entry(driver, visit, lap)
+            self._announce_entry(driver, visit, lap, own)
             dx0, dy0, dx1, dy1 = pit.disc
             code = read_compound(frame[dy0:dy1 + 1, dx0:dx1 + 1])
             if code:
@@ -425,7 +487,7 @@ class PitWall:
         # regresses straight through an overtake and reports the new car's
         # distance as our own lost pace.
         ahead_gap, behind_gap = read_gaps(frame, board)
-        own_place = self._position.get(self._own_driver(ids, board))
+        own_place = self._position.get(own)
         at_m = self.where()
         for trend, gap, step in ((self.ahead, ahead_gap, -1),
                                  (self.behind, behind_gap, +1)):
@@ -507,6 +569,22 @@ class PitWall:
                             for d in list(self._visits)) if s is not None]
 
     def _close(self, driver: int, *, stale: bool = False) -> Seen | None:
+        # **KNOWN DEFECT: our own stop is filed here as a rival's.** The entry
+        # call excludes it (`_announce_entry`), and this does not, so
+        # `rival_book` records the driver against himself as an opponent - a
+        # row nothing downstream can distinguish from a real one, in a book
+        # that is permanent and keyed by name.
+        #
+        # It is left because closing it safely needs the test fixture to be
+        # able to tell two drivers apart, and today it cannot: `a_frame` gives
+        # its rows names that differ only in WIDTH, `Roster.name_bitmap`
+        # normalises to a fixed shape, and all six rows fold into one cluster
+        # with 144 sightings. Seven tests depend on that merge to clear
+        # `MIN_SIGHTINGS` at all, so the fixture and those tests have to be
+        # rebuilt together - which is its own change, not a rider on this one.
+        # **Per VISIT.** Keyed per driver for the session, a two-stop rival's
+        # second entry - the one that decides the end of the race - was silent.
+        self._announced.discard(driver)
         visit = self._visits.pop(driver, None)
         self._absent.pop(driver, None)
         if visit is None or len(visit.readings) < MIN_READS:
@@ -529,28 +607,7 @@ class PitWall:
                       "brief to be a stop", self._roster.name_of(driver)
                       or f"driver {driver}", len(visit.readings), watched)
             return None
-        name = self._roster.name_of(driver)
-        if not name and self._name_for is not None:
-            # **A handle already in use is not a handle.** `name_for` reads the
-            # archive, so two clusters named before either has been written
-            # back both come out as "Car #1" and the whole field collapses onto
-            # one driver. Run over a real race that filed thirteen stops
-            # against a single name. The roster knows what it has issued, so
-            # ask again until the answer is new.
-            taken = {self._roster.name_of(other)
-                     for other in self._roster.drivers()
-                     if self._roster.name_of(other)}
-            try:
-                candidate = self._name_for(taken)
-            except TypeError:
-                # A namer that does not want the set is still welcome.
-                candidate = self._name_for()
-            except Exception:               # pragma: no cover - belt
-                _log.exception("pit-wall: could not name a driver")
-                candidate = None
-            if candidate and candidate not in taken:
-                name = candidate
-                self._roster.label(driver, name)
+        name = self._name_or_mint(driver)
         # **A fill that did not move was not watched, whatever else happened.**
         # `partial` means the entry figure is an upper bound rather than a
         # measurement, and a visit whose lowest and highest readings are the

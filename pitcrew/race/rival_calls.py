@@ -52,7 +52,7 @@ a car must stop by, and every figure names its own reference inside the call.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pitcrew.race.calls import (
     CLOSING,
@@ -104,6 +104,9 @@ DEFER_WORTH_SAYING_S = 3.0
 # How many laps before the planned stop the case for one more lap is worth
 # hearing. Before that the driver is not deciding whether to box.
 STAY_OUT_WINDOW = 3
+
+# Beyond this many laps, "on him in about N laps" is not news about this race.
+MAX_LAPS_TO_SAY = 15
 
 # **The tank, because a fill cannot exceed it.** A rival who leaves on a
 # brim-full tank and is still short did not CHOOSE the shortfall - he took
@@ -197,7 +200,9 @@ def _fill_to_the_flag(laps_left: int | None,
 def rival_boxed(rival: Rival, *, lap: int, laps_left: int | None,
                 burn_per_lap_l: float | None,
                 refuel_rate_lps: float | None,
-                ours: Stop | None) -> Call | None:
+                ours: Stop | None,
+                capacity_l: float = TANK_L,
+                entry_is_a_bound: bool = False) -> Call | None:
     """A rival has entered the pits. What it costs him, against what it costs us.
 
     Said once, on the lap he enters, because that is when the driver can still
@@ -207,12 +212,25 @@ def rival_boxed(rival: Rival, *, lap: int, laps_left: int | None,
     """
     if not rival.pitted or rival.stop is None:
         return None
+    if entry_is_a_bound:
+        # He was already standing when the watching began, so the lowest
+        # reading is an UPPER bound on what he arrived with, not a reading of
+        # it. Pricing it overstates the fill and therefore his standing time -
+        # the mirror of the exit bound `fuel_shortfall` refuses.
+        return None
     entered_on = rival.stop.fuel_in_l
     if entered_on is None or not refuel_rate_lps or refuel_rate_lps <= 0:
         return None
     needs = _fill_to_the_flag(laps_left, rival.burn_per_lap_l or burn_per_lap_l)
     if needs is None:
         return None
+    # **A fill cannot exceed the tank.** Without this, any stop taken while the
+    # remaining laps cost more than a tank - the whole first half of a long
+    # race - priced a rival's fill at more than the car can hold: measured, a
+    # lap-2 stop on a 20-lap race quoted him 44 seconds longer than us when the
+    # true swing was zero. `fuel_shortfall` learned this in the commit before
+    # and this call re-introduced it.
+    needs = min(needs, capacity_l)
     # **No clamp, and this module quotes the rule it was breaking.** A rival
     # who comes in with more fuel than the remaining laps cost is not a rival
     # who stands still for zero seconds - he is a rival who is not doing what
@@ -235,7 +253,8 @@ def rival_boxed(rival: Rival, *, lap: int, laps_left: int | None,
         who = rival.name or "He"
         return Call(RIVAL_BOXED, lap,
                     f"{who} has boxed on {entered_on:.0f} litres.",
-                    f"That is about {theirs:.0f} seconds standing.", MEDIUM)
+                    f"That is about {theirs:.0f} seconds standing{_whose(rival)}.",
+                    MEDIUM, tag=f"{RIVAL_BOXED}:{who}")
     swing = theirs - mine
     if abs(swing) < WORTH_SAYING_S:
         return None
@@ -243,10 +262,23 @@ def rival_boxed(rival: Rival, *, lap: int, laps_left: int | None,
     if swing > 0:
         return Call(RIVAL_BOXED, lap,
                     f"{who} has boxed on {entered_on:.0f} litres.",
-                    f"He stands {swing:.0f} seconds longer than you did.", HIGH)
+                    f"He stands {swing:.0f} seconds longer than you did"
+                    f"{_whose(rival)}.", HIGH, tag=f"{RIVAL_BOXED}:{who}")
     return Call(RIVAL_BOXED, lap,
                 f"{who} has boxed on {entered_on:.0f} litres.",
-                f"He stands {-swing:.0f} seconds less than you did.", HIGH)
+                f"He stands {-swing:.0f} seconds less than you did"
+                f"{_whose(rival)}.", HIGH, tag=f"{RIVAL_BOXED}:{who}")
+
+
+def _whose(rival: Rival) -> str:
+    """Says the burn is ours when it is.
+
+    `short_to_the_flag` says this out loud and this call did not, though it
+    leans on the assumption harder: `_burn_of` can only find a rival's own burn
+    after he has ALREADY completed a stop this race, so on his first stop -
+    the common case - ours is always what is used (rules 4 and 5).
+    """
+    return "" if rival.burn_per_lap_l else ", on our burn"
 
 
 def stay_out(*, lap: int, laps_left: int | None,
@@ -527,17 +559,28 @@ def closing_call(trend: GapTrend, *, lap: int, who: str | None = None,
     behind = getattr(trend, "side", "ahead") == "behind"
     them = who or ("the car behind" if behind else "the car ahead")
     closing = rate > 0
+    # **Tagged per driver AND per side.** Untagged, one CLOSING call was said
+    # and the other permanently swallowed for the stint - so "he is taking 1.5
+    # a lap out of you" silenced "you are taking 1.4 a lap out of Rocky", which
+    # are opposite pieces of news about two different cars.
+    tag = f"{CLOSING}:{'behind' if behind else 'ahead'}:{them}"
     if behind:
         if not closing:
             return None          # he is dropping away: nothing to do about it
         return Call(CLOSING, lap,
-                    f"{them} is taking {rate:.1f} a lap out of you.",
-                    f"Over the last {count} laps.", MEDIUM)
+                    f"{them} is taking {rate:.1f} seconds a lap out of you.",
+                    f"Over the last {count} laps.", MEDIUM, tag=tag)
     if not closing:
         return Call(CLOSING, lap,
-                    f"You are losing {-rate:.1f} a lap to {them}.",
-                    f"Over the last {count} laps.", MEDIUM)
+                    f"You are losing {-rate:.1f} seconds a lap to {them}.",
+                    f"Over the last {count} laps.", MEDIUM, tag=tag)
     laps = trend.laps_to_catch(laps_left=laps_left)
+    if laps is not None and laps_left is None and laps > MAX_LAPS_TO_SAY:
+        # `laps_to_catch` clamps only when it knows the race length, and
+        # `laps_total` is None until the coordinator has a distance - so with
+        # no distance it said "on him in about 43 laps", which its own
+        # docstring says is a figure not worth speaking.
+        laps = None
     if laps is None:
         reason = f"Over the last {count} laps."
     elif laps < 1.5:
@@ -546,8 +589,8 @@ def closing_call(trend: GapTrend, *, lap: int, who: str | None = None,
     else:
         reason = f"On him in about {laps:.0f} laps at that rate."
     return Call(CLOSING, lap,
-                f"You are taking {rate:.1f} a lap out of {them}.",
-                reason, MEDIUM)
+                f"You are taking {rate:.1f} seconds a lap out of {them}.",
+                reason, MEDIUM, tag=tag)
 
 
 def candidates(state) -> list:
@@ -578,9 +621,14 @@ def candidates(state) -> list:
             lap=lap, laps_total=state.laps_total))
 
     # **He is in the box NOW**, which is the whole value of the call and the
-    # reason it is fed by its own event rather than by the finished stop.
-    entered = getattr(state, "rival_entered", None)
-    if entered is not None:
+    # reason it is fed by its own event rather than by the finished stop. The
+    # queue is DRAINED here: an entry is news for one crossing, and left in
+    # place it was re-spoken after our own stop reset `said`, five laps later,
+    # with a swing computed against a tank that had changed underneath it.
+    entering = list(getattr(state, "rivals_entering", None) or ())
+    if entering:
+        state.rivals_entering = []
+    for entered in entering:
         out.append(rival_boxed(
             Rival(name=entered.driver, pitted=True,
                   stop=Stop(lap=entered.lap, fuel_in_l=entered.fuel_in_l),
@@ -588,7 +636,9 @@ def candidates(state) -> list:
             lap=lap, laps_left=laps_left,
             burn_per_lap_l=state.fuel_per_lap_l,
             refuel_rate_lps=state.refuel_rate_lps,
-            ours=state.our_stop))
+            ours=state.our_stop,
+            capacity_l=state.fuel_capacity_l or TANK_L,
+            entry_is_a_bound=bool(getattr(entered, "partial", False))))
 
     # **Only while a stop is actually the question.** `URGENCY` puts this
     # immediately below `BOX_SOON` because "the two answer the same question" -
@@ -605,19 +655,26 @@ def candidates(state) -> list:
             laps_total=state.laps_total,
             planned_stop_lap=state.stint_ends_on_lap))
 
-    behind = getattr(state, "gap_behind", None)
+    behind = _snapshot(getattr(state, "gap_behind", None))
     if behind is not None:
-        out.append(rejoin_call(
-            lap=lap, gap_behind_s=behind.latest(),
-            litres_to_take=state.litres_to_take,
-            refuel_rate_lps=state.refuel_rate_lps,
-            pit_loss_s=state.pit_loss_s,
-            pit_loss_source=state.pit_loss_source,
-            who=state.gap_behind_name))
+        # **Gated like `stay_out`, and for the same reason.** It answers "if I
+        # box now, does he come out ahead?", which is only asked when a stop is
+        # in prospect - and it carries no tag, so said once on lap 1 against a
+        # nine-second gap it was suppressed for the rest of the stint and
+        # silent on the lap it exists for. Its own module calls it "the call,
+        # and it dominates everything else here".
+        if _a_stop_is_in_question(state):
+            out.append(rejoin_call(
+                lap=lap, gap_behind_s=behind.latest(),
+                litres_to_take=_fill_at_the_stop(state),
+                refuel_rate_lps=state.refuel_rate_lps,
+                pit_loss_s=state.pit_loss_s,
+                pit_loss_source=state.pit_loss_source,
+                who=state.gap_behind_name))
         out.append(closing_call(behind, lap=lap,
                                 who=state.gap_behind_name,
                                 laps_left=laps_left))
-    ahead = getattr(state, "gap_ahead", None)
+    ahead = _snapshot(getattr(state, "gap_ahead", None))
     if ahead is not None:
         out.append(closing_call(ahead, lap=lap,
                                 who=state.gap_ahead_name,
@@ -630,6 +687,49 @@ def candidates(state) -> list:
     # in - and a kind is said once, so the second is not said at all.
     out.sort(key=lambda c: -(c.severity or 0.0))
     return out
+
+
+def _snapshot(trend):
+    """A private copy of a gap trend, taken before it is read.
+
+    **The live object is written on the sampler thread.** `note()` clears
+    `seen` outright when the subject changes - an overtake, or the car ahead
+    pitting, which is precisely when these calls fire - and
+    `closing_s_per_lap` takes the keys and then re-indexes them, so a clear in
+    between raises `KeyError` inside a Qt slot with nothing catching it.
+    Reproduced. `PitWall.positions()` has a docstring about this exact hazard
+    and snapshots; handing the raw object across was the same defect one layer
+    up.
+    """
+    if trend is None:
+        return None
+    try:
+        return replace(trend, seen=dict(trend.seen))
+    except Exception:                        # pragma: no cover - belt
+        return None
+
+
+def _fill_at_the_stop(state) -> float | None:
+    """The litres that actually go through the hose, or `None`.
+
+    **`next_stint_load_l` is what the car STARTS the next stint on**, not what
+    it takes on: the fill is that minus whatever is aboard when we arrive.
+    Priced as a fill it overstated the stop - measured, 88 L quoted a 108 s
+    stop against a true 100 s - and `REJOIN_MARGIN_S` is three seconds, so an
+    eight-second error flips the verdict for any car in that window. That is
+    the very error `stop_costs_s`'s docstring was written about.
+
+    `None` rather than a guess where either half is missing, and `None` rather
+    than a clamp where the arithmetic comes out negative: a car that arrives
+    with more than the next stint needs is not one that takes zero litres, it
+    is one this arithmetic does not describe (rule 9).
+    """
+    load = getattr(state, "next_stint_load_l", None)
+    aboard = getattr(state, "fuel_l", None)
+    if load is None or aboard is None:
+        return None
+    fill = load - aboard
+    return fill if fill >= 0 else None
 
 
 def _a_stop_is_in_question(state) -> bool:
