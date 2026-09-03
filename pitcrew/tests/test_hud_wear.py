@@ -700,7 +700,10 @@ def test_no_projector_says_how_to_open_one(monkeypatch):
     found, why = hud.find_projector()
     assert found is None
     assert "Windowed Projector" in why
-    assert f"{hud.CANVAS[0]}x{hud.CANVAS[1]}" in why
+    # **The size named is the one the sizer would set** - the console's own
+    # 1080p, not the calibrated canvas. Telling him to make a 1720x916 window
+    # is telling him to make the one that read nothing all night.
+    assert f"{hud.SNAP_CANVAS[0]}x{hud.SNAP_CANVAS[1]}" in why
 
 
 def test_snap_sizes_the_client_area_and_leaves_it_where_it_was(monkeypatch):
@@ -711,15 +714,16 @@ def test_snap_sizes_the_client_area_and_leaves_it_where_it_was(monkeypatch):
     ok, said = hud.snap_projector()
     assert ok, said
     # Outer size asked for = canvas + the chrome this window actually has.
-    assert fake.calls == [(2668, 51, hud.CANVAS[0] + 16, hud.CANVAS[1] + 39)]
-    assert fake.GetClientRect(1)[2:] == hud.CANVAS
+    assert fake.calls == [(2668, 51, hud.SNAP_CANVAS[0] + 16,
+                           hud.SNAP_CANVAS[1] + 39)]
+    assert fake.GetClientRect(1)[2:] == hud.SNAP_CANVAS
     assert "1184x661" in said and "left where it was" in said
 
 
 def test_snap_is_idempotent_and_says_so(monkeypatch):
     """Pressing it twice must not read as having done something twice."""
     fake = FakeWin32({1: ("Projector - Preview", True,
-                          hud.CANVAS[0], hud.CANVAS[1], 0, 0)})
+                          hud.SNAP_CANVAS[0], hud.SNAP_CANVAS[1], 0, 0)})
     _install(monkeypatch, fake)
     ok, said = hud.snap_projector()
     assert ok

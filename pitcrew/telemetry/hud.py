@@ -89,6 +89,27 @@ LAYOUT_1720x916 = {
 }
 CANVAS = (1720, 916)
 
+# **What `snap_projector` sizes the projector TO, and it is deliberately not
+# `CANVAS`.** `CANVAS` is the geometry `LAYOUT_1720x916` was calibrated for and
+# it is still the fast path in `read_gauge`. It is the wrong thing to SIZE a
+# projector to, for two reasons measured on this driver's own captures:
+#
+# * **The PS5 outputs 1080p.** He asked in August why the capture had to be
+#   1720x916 when the console outputs 1080p and `55aa96e` agreed with him -
+#   *"he is right that it should not"* - so the reader gained the locator and
+#   has read 1920x1080 ever since. Snapping the projector to 1720x916 forces
+#   OBS to scale a 1920x1080 canvas down into it, and a scaled canvas moves
+#   every calibrated pixel: the fast path is then wrong AND the locator is
+#   working on a downscaled image.
+# * **1920x1080 is the BETTER instrument, not a fallback.** The bars there are
+#   36 px against 30 on the calibrated flat HUD, so one pixel is 2.8% of tyre
+#   life rather than 3.3%.
+#
+# On 3 Sep 2026 the driver had the projector open all night and sized it from
+# the app; the race read nothing and the offline pass over the same capture
+# read 64 of 64. Sizing it to the calibrated canvas was the difference.
+SNAP_CANVAS = (1920, 1080)
+
 # A bar reads red where the channel separation is unmistakable and white where
 # every channel is high. Anything else - the dark HUD backing, bloom from
 # scenery behind a translucent panel - is neither.
@@ -1280,7 +1301,8 @@ def find_projector(title_hint: str = ""):
     if not hits:
         return None, ("no OBS projector window is open - right click the "
                       "preview in OBS and choose Windowed Projector "
-                      f"(Program), then size it to {CANVAS[0]}x{CANVAS[1]}")
+                      f"(Program), then size it to "
+                      f"{SNAP_CANVAS[0]}x{SNAP_CANVAS[1]}")
     # **The first, and it is said when there are others.** Two projectors
     # showing different scenes would otherwise be chosen between silently.
     # The program feed first where both are open: it is the real output,
@@ -1299,9 +1321,12 @@ def snap_projector(title_hint: str = "") -> tuple[bool, str]:
     Returns `(ok, what happened)`, both fit to be shown to the driver.
 
     **Because the size has to be exact and a mouse cannot do exact.**
-    `ScreenSource` refuses a projector that is not `CANVAS` to the pixel -
-    correctly, since a scaled canvas moves every calibrated pixel and would
-    return a plausible wrong wear number rather than an error. That leaves
+    `ScreenSource` takes the calibrated crop only when the projector IS
+    `CANVAS` to the pixel and hands the whole frame to the locator otherwise -
+    correctly, since a scaled canvas moves every calibrated pixel and a crop
+    from one would be a plausible wrong wear number rather than an error.
+    **The size wanted is `SNAP_CANVAS`, the console's own 1080p**, not the
+    calibrated canvas: see its comment. That leaves
     the driver dragging a window edge against a figure he cannot see, before
     every session, because a projector does not survive a restart. This does
     the arithmetic instead: the chrome is whatever the window rect has over
@@ -1327,14 +1352,15 @@ def snap_projector(title_hint: str = "") -> tuple[bool, str]:
         import win32gui
 
         _, _, was_w, was_h = win32gui.GetClientRect(hwnd)
-        if (was_w, was_h) == CANVAS:
+        if (was_w, was_h) == SNAP_CANVAS:
             # **Still raised, because being the right size is not the whole
             # job.** The stint that went dark had a correctly sized projector
             # the entire time; it was simply underneath something.
             win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
                                   win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
                                   | win32con.SWP_NOACTIVATE)
-            return True, (f"{title!r} is already {CANVAS[0]}x{CANVAS[1]}, and "
+            return True, (f"{title!r} is already "
+                          f"{SNAP_CANVAS[0]}x{SNAP_CANVAS[1]}, and "
                           f"is now kept in front so nothing can cover the "
                           f"gauge.")
         left, top, right, bottom = win32gui.GetWindowRect(hwnd)
@@ -1350,24 +1376,27 @@ def snap_projector(title_hint: str = "") -> tuple[bool, str]:
         # not opening it, so the two are done together.
         win32gui.SetWindowPos(
             hwnd, win32con.HWND_TOPMOST, left, top,
-            CANVAS[0] + chrome_w, CANVAS[1] + chrome_h,
+            SNAP_CANVAS[0] + chrome_w, SNAP_CANVAS[1] + chrome_h,
             win32con.SWP_NOACTIVATE)
         _, _, now_w, now_h = win32gui.GetClientRect(hwnd)
         _log.info("hud-wear: snap_projector %r %sx%s -> %sx%s (wanted %sx%s)",
-                  title, was_w, was_h, now_w, now_h, CANVAS[0], CANVAS[1])
+                  title, was_w, was_h, now_w, now_h,
+                  SNAP_CANVAS[0], SNAP_CANVAS[1])
     except Exception as exc:                                 # noqa: BLE001
         _log.warning("hud-wear: snap_projector %r failed: %s: %s",
                      title, type(exc).__name__, exc)
         return False, f"{title!r}: {type(exc).__name__}: {exc}"
-    if (now_w, now_h) != CANVAS:
+    if (now_w, now_h) != SNAP_CANVAS:
         # A projector pinned by the window manager - fullscreen, snapped to
         # half a monitor, or on a display too small to hold the canvas.
         return False, (f"{title!r} would not resize: asked for "
-                       f"{CANVAS[0]}x{CANVAS[1]}, got {now_w}x{now_h}. If it "
+                       f"{SNAP_CANVAS[0]}x{SNAP_CANVAS[1]}, got "
+                       f"{now_w}x{now_h}. If it "
                        f"is a fullscreen projector, close it and open a "
                        f"Windowed Projector (Program) instead.")
     return True, (f"{title!r} resized from {was_w}x{was_h} to "
-                  f"{CANVAS[0]}x{CANVAS[1]}, left where it was, and kept in "
+                  f"{SNAP_CANVAS[0]}x{SNAP_CANVAS[1]}, left where it "
+                  f"was, and kept in "
                   f"front so nothing can cover the gauge.")
 
 
