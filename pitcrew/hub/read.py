@@ -325,7 +325,8 @@ class Hub:
                 out[name] = out.get(name, 0) + points
         return out
 
-    def signed_in(self, series_id: str, on_or_after=None) -> list[str]:
+    def signed_in(self, series_id: str, on_or_after=None,
+                  already_run=()) -> list[str]:
         """Who has entered the next scheduled round of this league.
 
         **The entry list is a DECLARATION, not an observation** - a driver can
@@ -337,13 +338,29 @@ class Hub:
         entry list and never as the field.
 
         Reserves are included - a reserve who signed in is racing.
+
+        **`already_run` is the only guard that works.** `Round.status` is
+        `SCHEDULED` on all 57 rows in the hub, raced ones included - the column
+        is never advanced - and the date test alone still matches a round that
+        ran earlier the same evening. Arming after a race then narrowed the
+        rival list against the field that had just finished. The caller knows
+        which rounds have results; `league_for` computes exactly that set one
+        line above, for `rounds_left`, and the two must agree about which round
+        is next.
+
+        Ordered by `position` first, like `rounds()`, so two rounds sharing a
+        date - the Enduro ran twice on 25 July - are taken in the league's own
+        order rather than an arbitrary one.
         """
         when = on_or_after or datetime.datetime.now()
+        done = set(already_run or ())
         rounds = self._query(
             "SELECT id, scheduledAt FROM Round WHERE seriesId = ? "
             "AND scheduledAt IS NOT NULL AND status != 'COMPLETED' "
-            "ORDER BY scheduledAt ASC", (series_id,))
+            "ORDER BY position ASC, scheduledAt ASC", (series_id,))
         for row in rounds:
+            if row["id"] in done:
+                continue
             try:
                 due = datetime.datetime.fromisoformat(
                     str(row["scheduledAt"]).replace("Z", "+00:00"))

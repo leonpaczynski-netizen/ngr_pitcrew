@@ -15,6 +15,8 @@ from pitcrew.hub.link import (
     project,
     where_we_would_be,
 )
+from dataclasses import replace
+
 from pitcrew.hub.read import Driver, Entry, Series
 from pitcrew.hub.standings import Standing
 
@@ -53,7 +55,7 @@ class FakeHub:
     def hidden_drivers(self):
         return self._banned
 
-    def signed_in(self, series_id, on_or_after=None):
+    def signed_in(self, series_id, on_or_after=None, already_run=()):
         return list(self._entered)
 
     def precomputed_points(self, series_id):
@@ -317,3 +319,78 @@ def test_the_projection_orders_the_table_the_way_the_table_orders_itself():
                       our_name="Beeni",
                       table=[Standing("Zed", 10), Standing("Alan", 10)])
     assert [s.driver for s in project(race, "Beeni", None)] == ["Alan", "Zed"]
+
+
+# --- narrowing to nobody is not winning -------------------------------------
+
+def test_narrowing_the_rivals_to_nobody_is_not_the_championship_won():
+    """**The worst sentence this feature can say, by its second route.** The
+    lookup failure was closed and this one was not: `to_say()` read ANY empty
+    rival list as victory, and `before_the_start` overwrites the list with the
+    narrowed set before it is called. A sign-in sheet that is still filling up,
+    or a board of clusters nobody has labelled yet, told a driver forty-six
+    points down that the championship was his."""
+    hub = FakeHub(entered=["Beeni"])          # nobody else has signed in yet
+    race = league_for(hub, {"series": "NGR GR3 Season 1"}, "Beeni")
+    math = before_the_start(race, "Beeni")
+    assert math.live_rivals == []             # narrowed away
+    assert math.title_rivals                  # but they still exist
+    assert not math.already_secured
+    said = math.to_say()
+    assert "Nobody left can catch you" not in said
+    assert "No title rival is here." in said
+
+
+def test_an_unlabelled_board_does_not_win_the_championship_either():
+    """`_on_the_grid` passes provisional handles - "Car #1" - which match no
+    hub name. That is the normal state of a cluster until it is named."""
+    race = league_for(FakeHub(), {"series": "NGR GR3 Season 1"}, "Beeni")
+    math = before_the_start(race, "Beeni",
+                            on_the_grid=["Car #1", "Car #2", "Car #3"])
+    assert math.live_rivals == [] and not math.already_secured
+    assert "Nobody left can catch you" not in math.to_say()
+
+
+def test_the_championship_really_being_won_still_says_so():
+    """The good branch must survive the fix - it is decided by the UNNARROWED
+    set, so who entered tonight cannot win or lose a title."""
+    race = LeagueRace(series_id="x", series_name="X", rounds_left=0,
+                      our_name="Beeni",
+                      table=[Standing("Beeni", 95), Standing("Rocky", 20)])
+    math = before_the_start(race, "Beeni", on_the_grid=["Nobody"])
+    assert math.already_secured
+    assert math.to_say() == "The championship is already yours."
+
+
+def test_a_league_whose_class_table_will_not_parse_is_refused():
+    """The overall scheme refuses loudly a few lines away; resolving a default
+    for an unreadable CLASS table would quietly pay 22 for a class win in a
+    league that may pay something else (rule 3)."""
+    # Fully computed, so the league is refused for the SCHEME and not for
+    # missing totals - the ceiling it sets decides who counts as a rival.
+    hub = FakeHub(multi_class=True,
+                  precomputed={f"{name}-{n}": 47
+                               for name in ("Magical daddy", "Rocky", "Beeni",
+                                            "Boxhead")
+                               for n in range(1, 6)})
+    race = league_for(_ClassSchemeUnreadable(hub),
+                      {"series": "NGR GR3 Season 1"}, "Beeni")
+    assert not race.known and "class points scheme" in race.refused
+
+
+class _ClassSchemeUnreadable:
+    """The hub, with one league's class table corrupted."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def my_series(self, driver_id):
+        out = []
+        for series in self._inner.my_series(driver_id):
+            if series.id == "gr3":
+                series = replace(series, class_points_scheme=None)
+            out.append(series)
+        return out

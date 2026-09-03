@@ -3776,6 +3776,15 @@ class PitCrewController(QObject):
                 return None
             said = math.to_say()
             if not said:
+                # **Said, because it is a finding and not an absence.** This is
+                # the state that used to announce a false championship: the
+                # league matched and the driver was not in its table. Silent,
+                # it is indistinguishable from having no league at all, and the
+                # two want opposite responses from whoever reads the log.
+                log("race").info(
+                    "league: %s matched, but %r is not in its standings - "
+                    "no championship line. Check the name against the hub.",
+                    league.series_name, me)
                 return None
             # **Only name rivals we have some reason to think are here.**
             # Unnarrowed, this was the top three of a 26-name championship,

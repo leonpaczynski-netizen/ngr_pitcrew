@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pitcrew.diagnostics import log
 from pitcrew.hub.read import Hub
 from pitcrew.hub.standings import (
     Standing,
@@ -154,6 +155,15 @@ def league_for(hub: Hub, event: dict, me: str) -> LeagueRace:
     # persisted totals are used instead, verbatim, as `points.ts` says every
     # aggregation surface should. Where they are absent the league is refused
     # rather than approximated.
+    # **Before anything reads it.** Assigned after its first use, the
+    # NameError was caught by the entry list's own `except` and read as "nobody
+    # has signed in".
+    try:
+        barred = hub.hidden_drivers()
+    except Exception:
+        log("pitcrew").exception("the ban list could not be read")
+        barred = set()
+
     results = hub.results(found.id)
     ready: dict = {}
     if found.multi_class:
@@ -183,18 +193,30 @@ def league_for(hub: Hub, event: dict, me: str) -> LeagueRace:
 
     rounds = hub.rounds(found.id)
     done = {row["roundId"] for row in results}
+    # The same set that decides `rounds_left`, so the entry list and the
+    # round count cannot disagree about which round is next.
     try:
-        barred = hub.hidden_drivers()
-    except Exception:
-        barred = set()
-    try:
-        out.entered = [n for n in hub.signed_in(found.id)
+        out.entered = [n for n in hub.signed_in(found.id, already_run=done)
                        if n.strip().lower() not in barred]
     except Exception:
+        # Logged, not swallowed. A bare `except` here already cost one silent
+        # regression: `barred` was read a few lines before it was assigned, and
+        # the NameError turned into an empty entry list that looked exactly
+        # like a round nobody had signed into.
+        log("pitcrew").exception("the entry list could not be read")
         out.entered = []
     out.our_name = driver.driver_name
     out.multi_class = found.multi_class
     head = resolve_scheme(found.points_scheme)
+    if found.multi_class and found.class_points_scheme is None:
+        # The same rule as the overall scheme three lines below, which refuses
+        # loudly: a blob that would not parse is not a table, and resolving a
+        # default for it would quietly pay 22 a class win in a league that may
+        # pay something else entirely (rule 3).
+        out.series_name = found.name
+        out.matched_by = how
+        out.refused = f"{found.name}'s class points scheme could not be read"
+        return out
     if found.multi_class:
         # **The four components `sumBreakdown` adds, and no others.** A
         # multi-class result is an overall FINISH score plus a class finish and
@@ -211,7 +233,10 @@ def league_for(hub: Hub, event: dict, me: str) -> LeagueRace:
     out.series_id = found.id
     out.series_name = found.name
     out.matched_by = how
-    out.teammates = hub.teammates(found.id, driver.id)
+    # Banned drivers are hidden from the league's own surfaces; naming one as
+    # a team-mate to work with would be worse than merely listing him.
+    out.teammates = [n for n in hub.teammates(found.id, driver.id)
+                     if str(n).strip().lower() not in barred]
     out.scheme = found.points_scheme
     out.pole_points = found.pole_points
     out.fastest_lap_points = found.fastest_lap_points
@@ -257,6 +282,9 @@ def before_the_start(race: LeagueRace, me: str,
     # Once either source has something to say, an empty result stays empty.
     # `or` restored the full list whenever nobody present was a title rival -
     # which is exactly the case the filter exists for.
+    # **Narrowing replaces `live_rivals` and never `title_rivals`.** Whether
+    # the championship is already won is a question about the season and must
+    # not be answered from tonight's entry sheet.
     if on_the_grid:
         math.live_rivals = math.matters_here(on_the_grid)
         math.rivals_from = "the board"

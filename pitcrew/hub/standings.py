@@ -282,7 +282,12 @@ class TitleMath:
     secures_position: int | None = None
     already_secured: bool = False
     out_of_reach: bool = False
+    # **The rivals who are here** - narrowed to the field when we know it.
     live_rivals: list[str] = field(default_factory=list)
+    # **The rivals who exist**, never narrowed. `already_secured` is decided
+    # from this and only this: narrowing is about tonight's race, and a driver
+    # who did not enter tonight has not lost the championship.
+    title_rivals: list[str] = field(default_factory=list)
     # **Where the rival list was narrowed from, or "" for not narrowed at
     # all.** A list filtered against drivers actually seen on the board and a
     # list nobody has checked are different claims, and only one of them is
@@ -314,8 +319,16 @@ class TitleMath:
             return "The championship is already yours."
         if self.out_of_reach:
             return "The championship is gone; this is for the placing."
-        if not self.live_rivals:
-            return "Nobody left can catch you."
+        # **An empty rival list is no longer read as victory.** It had three
+        # causes and only one was good news: we could not be found (now
+        # `our_points is None`), nobody who could catch us entered tonight, or
+        # nobody can catch us at all - and only the last is the championship
+        # won. It is `already_secured` above that says so, computed from the
+        # UNNARROWED set. Narrowing to nobody said "Nobody left can catch you"
+        # to a driver forty-six points down with seventy-five still on the
+        # table, on nothing more than a sign-in sheet that was still filling up
+        # (rule 12: the decision and the reason came from different
+        # expressions).
         if self.secures_position:
             return (f"P{self.secures_position} today secures it, whatever "
                     f"they do.")
@@ -323,8 +336,14 @@ class TitleMath:
                  if self.leading and self.lead_over_next is not None
                  else "leading" if self.leading
                  else "%d behind" % -self.margin_to_leader)
-        return (f"Nothing settles it today - {where}, "
+        said = (f"Nothing settles it today - {where}, "
                 f"{self.most_still_available} still on the table.")
+        if self.rivals_from and not self.live_rivals and self.title_rivals:
+            # A real and useful thing to know, and a different claim from
+            # having won it: the people who could take the title are elsewhere
+            # tonight, so this race is for the placing.
+            said += " No title rival is here."
+        return said
 
     def matters_here(self, on_the_grid) -> list[str]:
         """The title rivals who are actually in THIS race.
@@ -357,10 +376,19 @@ def title_math(table: list[Standing], *, ours: str,
     # computes - so "still on the table" was understated by more than
     # half. Understating it is the unsafe direction: it makes a title look
     # settled while it is not.
+    outright_max = ((points[0] if points else 0) + pole_points
+                    + fastest_lap_points)
     if per_race_max is None:
-        per_race_max = ((points[0] if points else 0) + pole_points
-                        + fastest_lap_points)
+        per_race_max = outright_max
     available = max(0, rounds_left) * per_race_max
+    # **Whether a finishing position can be priced at all.** `secures_position`
+    # asks what OUR finish is worth and prices it from the finishing table,
+    # while the rivals' ceiling comes from `per_race_max`. Where the two
+    # disagree - a multi-class round pays 47 and the table describes 22 - that
+    # inequality has two scales in it. It errs pessimistic, so it never
+    # over-claims, but a "P4 secures it" computed from the wrong half is not a
+    # sentence worth saying at all.
+    can_price_a_finish = (per_race_max == outright_max)
 
     # Matched as the hub matches names everywhere else - case and accent
     # folded - because `read.driver_by_name` accepts either spelling and the
@@ -384,8 +412,9 @@ def title_math(table: list[Standing], *, ours: str,
     # beaten - and `>` declared the title won with one still able to draw.
     out.live_rivals = [s.driver for s in others
                        if s.points + available >= mine.points]
+    out.title_rivals = list(out.live_rivals)
 
-    if not out.live_rivals:
+    if not out.title_rivals:
         out.already_secured = mine is table[0]
     # Could we still be caught even winning out?
     out.out_of_reach = bool(others) and (
@@ -394,6 +423,8 @@ def title_math(table: list[Standing], *, ours: str,
     if out.already_secured or out.out_of_reach or not out.live_rivals:
         return out
 
+    if not can_price_a_finish:
+        return out
     # The pessimistic case: every live rival takes the maximum from here.
     worst_rival = max(s.points for s in others) + available
     need = worst_rival - mine.points

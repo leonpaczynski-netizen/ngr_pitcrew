@@ -396,19 +396,22 @@ class Roster:
         Bounds-checked like `name_of`, because a caller holding an id from
         before a merge is the ordinary case rather than a programming error.
         """
-        if driver_id is None or not 0 <= driver_id < len(self._groups):
-            return
-        self._groups[self._resolve(driver_id)]["label"] = text
+        with self._lock:
+            if driver_id is None or not 0 <= driver_id < len(self._groups):
+                return
+            self._groups[self._resolve(driver_id)]["label"] = text
 
     def name_of(self, driver_id: int | None) -> str | None:
-        if driver_id is None or not 0 <= driver_id < len(self._groups):
-            return None
-        return self._groups[self._resolve(driver_id)]["label"]
+        with self._lock:
+            if driver_id is None or not 0 <= driver_id < len(self._groups):
+                return None
+            return self._groups[self._resolve(driver_id)]["label"]
 
     def sightings(self, driver_id: int) -> int:
-        if driver_id is None or not 0 <= driver_id < len(self._groups):
-            return 0
-        return self._groups[self._resolve(driver_id)]["seen"]
+        with self._lock:
+            if driver_id is None or not 0 <= driver_id < len(self._groups):
+                return 0
+            return self._groups[self._resolve(driver_id)]["seen"]
 
     def drivers(self, min_sightings: int = 1) -> list[int]:
         """The ids that are actually drivers, commonest first.
@@ -423,22 +426,26 @@ class Roster:
         same run-length argument the board locator makes about bright pixels,
         and it is the only thing that separates the two populations.
         """
-        live = [i for i in range(len(self._groups)) if i not in self._alias]
-        return sorted((i for i in live
-                       if self._groups[i]["seen"] >= min_sightings),
-                      key=lambda i: -self._groups[i]["seen"])
+        with self._lock:
+            live = [i for i in range(len(self._groups)) if i not in self._alias]
+            return sorted((i for i in live
+                           if self._groups[i]["seen"] >= min_sightings),
+                          key=lambda i: -self._groups[i]["seen"])
 
     def exemplar_of(self, driver_id: int):
         """One cluster's bitmap, named or not. `None` for an unknown id."""
-        if driver_id is None or not 0 <= driver_id < len(self._groups):
-            return None
-        return self._groups[self._resolve(driver_id)]["bits"]
+        with self._lock:
+            if driver_id is None or not 0 <= driver_id < len(self._groups):
+                return None
+            return self._groups[self._resolve(driver_id)]["bits"]
 
     def exemplars(self) -> dict[str, np.ndarray]:
         """Labelled clusters, for seeding the next race's roster."""
-        return {self._groups[i]["label"]: self._groups[i]["bits"]
-                for i in self.drivers() if self._groups[i]["label"]}
+        with self._lock:
+            return {self._groups[i]["label"]: self._groups[i]["bits"]
+                    for i in self.drivers() if self._groups[i]["label"]}
 
     def __len__(self) -> int:
-        return len([i for i in range(len(self._groups))
-                    if i not in self._alias])
+        with self._lock:
+            return len([i for i in range(len(self._groups))
+                        if i not in self._alias])
