@@ -186,8 +186,31 @@ def motors_count_payload() -> bytes:
 
 
 def hello_payload() -> bytes:
-    """Ask for the firmware version letter. This rig answered 'j'."""
-    return bytes([MESSAGE_HEADER]) + CMD_HELLO
+    """Ask for the firmware version letter. This rig answered 'j'.
+
+    **Three bytes, not two, and the third is the fix for a fault that ran
+    for weeks.** The firmware's handler, from the recovered source
+    (`reference/simhub-baseline/sketch-src/SHCommands.h`):
+
+        void Command_Hello() {
+            FlowSerialTimedRead();      // reads ONE MORE byte
+            delay(10);
+            FlowSerialPrint(VERSION);   // 0x08 'j'
+            FlowSerialFlush();
+        }
+
+    `FlowSerialTimedRead` pops from a buffer that every accepted packet's
+    payload is appended to, and waits up to 400 ms for a byte to arrive.
+    Sent as two bytes, the hello made the firmware sit in that wait - the
+    417 ms version-packet latency measured on 3 Sep 2026 - and if anything
+    else was sent inside the window, its FIRST PAYLOAD BYTE was eaten as
+    the hello's third byte and the rest of that packet was discarded as
+    stray headers. That is what swallowed the count query's reply, and
+    what made the first motors frame after every reconnect read as
+    "replied 0x08, which is not an acknowledgement". The padding byte is
+    discarded by the firmware; its value does not matter.
+    """
+    return bytes([MESSAGE_HEADER]) + CMD_HELLO + b"\x00"
 
 
 def split_packets(raw: bytes) -> list[tuple[int, bytes]]:
