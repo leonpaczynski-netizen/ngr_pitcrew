@@ -190,50 +190,76 @@ def hello_payload() -> bytes:
     return bytes([MESSAGE_HEADER]) + CMD_HELLO
 
 
-def parse_motors_count(raw: bytes) -> int | None:
-    """The bytes that follow the acknowledgement of a `'V' 'C'` query, read
-    as a channel count. None where they cannot be, never a guess.
+def split_packets(raw: bytes) -> list[tuple[int, bytes]]:
+    """The device's outgoing stream, cut into the packets it is made of.
 
-    **The format is not known from source.** `Command_Motors` lives in a
-    header SimHub deleted, and the reply's shape could not be recovered.
-    What is known is what SimHub logged from the same query on this board -
-    `"MotorsCount": 4, "MotorsBoard": "Adafruit Motor Shield V2"` - so a
-    count and a board name come back, count first. This accepts the two
-    encodings a count at the head of that reply could plausibly take, a raw
-    byte or an ASCII digit, and bounds it at `MAX_CHANNELS`. Anything else is
-    None, and the caller logs the raw bytes so the format is measured the
-    first time a board answers rather than assumed here.
+    **Measured on the board, 3 Sep 2026, byte by byte with timestamps** -
+    `Command_Motors` lives in a header SimHub deleted, so this was read off
+    the wire rather than the source. Three kinds appear:
 
-    **A count is never trusted on its own.** Whoever calls this must confirm
-    it against the board - `WindLink.confirm_channels` - because a wrong
-    width does not fail loudly: a frame one byte too long leaves a byte over
-    that corrupts the next, and one too short leaves the firmware waiting
-    mid-command. Both end with the deadman zeroing the fans.
+        03 <id>            ACK          06 <len> <bytes>   STRING
+        04 <id> <reason>   NACK         08 <value>         VALUE
+
+    A byte that is none of those is returned alone as kind -1 and skipped -
+    the count reply carries a bare 0x20 between its string and its last
+    value packet. The reply to a count query on this board was, after the
+    acknowledgement:
+
+        08 ff  08 04  06 19 "Adafruit Motor Shield V2;"  20  08 0a
+
+    and the reply to a hello is `08 6a` - a value packet carrying the version
+    letter - arriving up to 417 ms after the acknowledgement.
     """
-    if not raw:
-        return None
-    head = raw[0]
-    if head == REPLY_VALUE:
-        # A value packet: the marker, then the value. **Measured 3 Sep 2026
-        # on this board: the two bytes after a count query were `08 6a`, and
-        # the first version of this read the marker as a count of eight.**
-        # The board then acknowledged 26,875 eight-wide frames, so nothing
-        # downstream could tell. A marker is never a count.
-        if len(raw) < 2:
-            return None
-        count = raw[1]
-    elif head in (REPLY_ACK, REPLY_NACK, REPLY_STRING):
-        # A reply marker at the head is a reply, not a number that happens
-        # to be small. A bare 0x04 is indistinguishable from a NACK, so a
-        # bare count in that range is refused rather than guessed.
-        return None
-    elif 0x30 <= head <= 0x39:          # an ASCII digit
-        count = head - 0x30
-    else:
-        count = head
-    if count > MAX_CHANNELS:
-        return None
-    return count
+    packets: list[tuple[int, bytes]] = []
+    i = 0
+    while i < len(raw):
+        kind = raw[i]
+        if kind == REPLY_ACK and i + 1 < len(raw):
+            packets.append((kind, raw[i + 1:i + 2])); i += 2
+        elif kind == REPLY_NACK and i + 2 < len(raw):
+            packets.append((kind, raw[i + 1:i + 3])); i += 3
+        elif kind == REPLY_VALUE and i + 1 < len(raw):
+            packets.append((kind, raw[i + 1:i + 2])); i += 2
+        elif kind == REPLY_STRING and i + 1 < len(raw):
+            length = raw[i + 1]
+            packets.append((kind, raw[i + 2:i + 2 + length])); i += 2 + length
+        else:
+            packets.append((-1, raw[i:i + 1])); i += 1
+    return packets
+
+
+def parse_motors_count(raw: bytes) -> int | None:
+    """The channel count in a count reply: the first value packet whose
+    value is a plausible count. None where there is none, never a guess.
+
+    **The first version of this read the marker byte as the count.** The two
+    bytes it saw were `08 6a` - the hello's late version packet, not the
+    count reply at all - and it read 0x08 as eight. The board then
+    acknowledged 26,875 eight-wide frames, so nothing downstream could tell.
+    Now the stream is cut into packets first, and a marker is never a
+    number. `08 ff` (255) and `08 0a` (10) are skipped as implausible; `08 04`
+    is the count.
+
+    **A count is never trusted into a narrower frame.** Also measured: a
+    frame two bytes short of the board's width is acknowledged at once and
+    so is the frame after it, so an acknowledgement proves nothing about
+    width in either direction. `WindLink.discover_channels` treats the count
+    on file as a floor.
+    """
+    for kind, body in split_packets(raw):
+        if kind == REPLY_VALUE and body and 1 <= body[0] <= MAX_CHANNELS:
+            return body[0]
+    return None
+
+
+def parse_motors_board(raw: bytes) -> str | None:
+    """The board name in a count reply: the first string packet, trimmed of
+    the trailing separator the firmware prints after it."""
+    for kind, body in split_packets(raw):
+        if kind == REPLY_STRING and body:
+            name = body.decode("ascii", "replace").strip().rstrip(";").strip()
+            return name or None
+    return None
 
 
 @dataclass(frozen=True)

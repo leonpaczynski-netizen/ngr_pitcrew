@@ -121,6 +121,8 @@ def cmd_handshake(args) -> int:
         declared, raw = link.query_channels()
         print(f"  count      {'?' if declared is None else declared}"
               f"   <- raw reply {raw.hex(' ') if raw else 'nothing'}")
+        print(f"  board      {arq.parse_motors_board(raw) or '?'}   <- the "
+              f"reflash changes this name")
         accepted = [n for n in range(1, arq.MAX_CHANNELS + 1)
                     if link.accepts_width(n)]
         print(f"  accepts    {accepted or 'none'}   <- widths acknowledged; "

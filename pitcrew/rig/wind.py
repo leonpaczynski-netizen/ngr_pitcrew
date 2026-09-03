@@ -124,6 +124,17 @@ READ_TIMEOUT_S = 0.15
 # one - there is no startup blast to design around, and no reason to fear the
 # app being started with a headset already on.
 RESET_SETTLE_S = 1.6
+# **How long to wait for the hello's version packet.** `Command_Hello`
+# acknowledges at once and sends `0x08 <letter>` afterwards - measured on
+# 3 Sep 2026 at 417 ms after the acknowledgement on a board that had been
+# idle, and about 20 ms on one mid-run. A fixed drain never caught it, a
+# 150 ms read caught it sometimes, and whatever read came next got it the
+# rest of the time: the first motors frame for weeks, then the channel-count
+# query, whose own 36-byte reply was lost because the board was still inside
+# the hello when the query arrived. Waiting here, up to this long, is what
+# makes every later exchange clean. Returns as soon as the packet lands, so
+# a warm board costs 20 ms and only a cold one pays the full wait.
+VERSION_WAIT_S = 0.6
 # How often to retry a dead link, backing off to the cap so a device that is
 # unplugged is not polled at a steady rate all session. Discovery runs again
 # each time rather than reusing the old port - Windows can hand back a
@@ -270,6 +281,7 @@ class WindState:
     last_drop_at: float | None = None
     port: str | None = None
     firmware: str | None = None
+    board: str | None = None
     crc_name: str | None = None
     channels: int = CHANNELS
     last_values: tuple[int, ...] = field(default_factory=tuple)
@@ -318,6 +330,8 @@ class WindState:
         where = f"on {self.port}"
         if self.firmware:
             where += f", firmware {self.firmware}"
+        if self.board:
+            where += f", {self.board}"
         # Resyncs are surfaced rather than hidden: a link that works only
         # because it keeps resynchronising is not a healthy link, and the
         # driver has no other way to know it is happening.
@@ -405,6 +419,9 @@ class WindLink:
         self._packet_id = arq.BROADCAST_ID
         self.crc = arq.DEFAULT_CRC
         self.firmware: str | None = None
+        # The board the firmware says it drives, from the count reply. The
+        # reflash changes this string, so it is the line that confirms one.
+        self.board: str | None = None
         # Frames the device did not answer, in a row, and rejections it has
         # resynchronised from. Both are reported: a link that works only
         # because it keeps resynchronising is not a healthy link.
@@ -677,12 +694,34 @@ class WindLink:
         """
         if self._serial is None:
             return None
-        head = self._serial.read(1)
-        if not head:
-            return None
-        wanted = {arq.REPLY_ACK: 1, arq.REPLY_NACK: 2}.get(head[0], 0)
-        rest = self._serial.read(wanted) if wanted else b""
-        return arq.parse_reply(head + rest)
+        # **Value and string packets are read to their length and skipped.**
+        # The board sends them for its own reasons - the hello's late
+        # version packet is the one that lands mid-stream - and they are not
+        # answers to a motors frame. Skipping them to their measured length
+        # is what stops one late byte shifting every reply after it. Bounded,
+        # so a board streaming junk cannot hold the sender for ever: each
+        # read is already bounded by `READ_TIMEOUT_S`, and bytes arrive in
+        # bursts, so this rarely waits more than once.
+        for _ in range(16):
+            head = self._serial.read(1)
+            if not head:
+                return None
+            kind = head[0]
+            if kind in (arq.REPLY_ACK, arq.REPLY_NACK):
+                wanted = 1 if kind == arq.REPLY_ACK else 2
+                return arq.parse_reply(head + self._serial.read(wanted))
+            if kind == arq.REPLY_VALUE:
+                skipped = head + self._serial.read(1)
+            elif kind == arq.REPLY_STRING:
+                length = self._serial.read(1)
+                skipped = head + length + (
+                    self._serial.read(length[0]) if length else b"")
+            else:
+                skipped = head
+            self.stale_bytes += len(skipped)
+            log("wind").debug("%s sent %s mid-stream - skipped",
+                              self.port, skipped.hex(" "))
+        return None
 
     def _drain(self) -> int:
         """Throw away anything unread. Returns how much there was.
@@ -758,45 +797,58 @@ class WindLink:
         return False
 
     def _read_version(self) -> None:
-        """The value packet after a hello's acknowledgement, if it comes.
+        """Wait for the value packet after a hello's acknowledgement.
 
-        Bounded by the read timeout. Sets `firmware` from a printable
-        letter; anything else that arrives is logged as bytes and dropped,
-        because a board whose hello tail is not understood must not have it
-        read as the answer to the next question.
+        Up to `VERSION_WAIT_S`, returning the moment it lands. Sets
+        `firmware` from a printable letter. Anything else that arrives in the
+        window is logged as bytes and dropped, because a board whose hello
+        tail is not understood must not have it read as the answer to the
+        next question - which is exactly what happened to the count query.
         """
         if self._serial is None:
             return
-        tail = self._serial.read(2)
-        if len(tail) == 2 and tail[0] == arq.REPLY_VALUE:
-            letter = tail[1]
-            self.firmware = (chr(letter) if 0x20 <= letter < 0x7F
-                             else f"0x{letter:02x}")
-            return
-        if tail:
+        deadline = time.monotonic() + VERSION_WAIT_S
+        while time.monotonic() < deadline:
+            head = self._serial.read(1)
+            if not head:
+                continue
+            if head[0] == arq.REPLY_VALUE:
+                value = self._serial.read(1)
+                if value:
+                    letter = value[0]
+                    self.firmware = (chr(letter) if 0x20 <= letter < 0x7F
+                                     else f"0x{letter:02x}")
+                return
             log("wind").info(
-                "%s followed its hello with %s, which is not a version "
-                "packet - dropped.", self.port, tail.hex(" "))
-            self._drain()
+                "%s followed its hello with 0x%02x, which is not a version "
+                "packet - dropped.", self.port, head[0])
+        log("wind").info(
+            "%s sent no version packet within %.1fs of its hello.",
+            self.port, VERSION_WAIT_S)
 
     # ------------------------------------------------------- channel count
 
     def query_channels(self) -> tuple[int | None, bytes]:
         """Ask the board how many channels it drives.
 
-        Returns what it parsed and the raw bytes it parsed it from, because
-        the reply format is not known from source - see
-        `arq.parse_motors_count` - and the raw bytes are the measurement.
-        Raises on a dead link, like every other write here.
+        Returns what it parsed and the raw bytes it parsed it from - the raw
+        bytes are the measurement, and they go in the log. Measured 3 Sep
+        2026: 36 bytes, arriving 21 ms after the query, naming the count and
+        the board - see `arq.split_packets`. Raises on a dead link, like
+        every other write here.
+
+        **Only after the hello's tail has landed.** Sent while the board was
+        still inside its slow hello, this query was acknowledged and its
+        reply never came; `_read_version` waiting first is what fixed that.
         """
         self._drain()
         self._write(arq.motors_count_payload())
         reply = self._read_reply()
         if reply is None or not reply.acknowledged:
             return None, b""
-        # Whatever follows the acknowledgement is the answer: a count and a
-        # board name, bounded by the read timeout. Sixty-four bytes is more
-        # than any board name SimHub ships.
+        # The reply is several packets in one burst; the string packet is the
+        # long one. Sixty-four bytes is more than any board name SimHub
+        # ships, and the read returns at the timeout with what came.
         raw = self._serial.read(64) if self._serial is not None else b""
         return arq.parse_motors_count(raw), raw
 
@@ -845,6 +897,8 @@ class WindLink:
         """
         declared, raw = self.query_channels()
         shown = raw.hex(" ") if raw else "nothing"
+        self.board = arq.parse_motors_board(raw)
+        on = f" on '{self.board}'" if self.board else ""
         if declared is None:
             width = default
             log("wind").info(
@@ -855,20 +909,20 @@ class WindLink:
         elif declared > default:
             width = declared
             log("wind").warning(
-                "%s declares %d channels (reply: %s), more than the %d on "
+                "%s declares %d channels%s (reply: %s), more than the %d on "
                 "file - frames widened to %d. Channels beyond %d are not "
-                "mapped to a fan.", self.port, declared, shown, default,
+                "mapped to a fan.", self.port, declared, on, shown, default,
                 width, default)
         elif declared < default:
             width = default
             log("wind").info(
-                "%s declares %d channels (reply: %s); sending %d as on "
+                "%s declares %d channels%s (reply: %s); sending %d as on "
                 "file - the firmware discards the surplus (measured 3 Sep "
-                "2026).", self.port, declared, shown, default)
+                "2026).", self.port, declared, on, shown, default)
         else:
             width = default
-            log("wind").info("%s declares %d channels (reply: %s), as on "
-                             "file.", self.port, declared, shown)
+            log("wind").info("%s declares %d channels%s, as on file.",
+                             self.port, declared, on)
         self.channels = width
         return width
 
@@ -1269,6 +1323,7 @@ class WindSim:
         # Read off the hello's value packet - never assigned before 3 Sep
         # 2026, so `describe()` had a firmware clause that never printed.
         self.state.firmware = link.firmware
+        self.state.board = link.board
         self.state.port = port
         self.state.crc_name = link.crc.name
         self.state.error = None

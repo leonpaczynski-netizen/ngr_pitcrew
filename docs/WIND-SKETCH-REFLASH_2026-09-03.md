@@ -155,10 +155,12 @@ Still run this once against the new sketch, with Pit Crew closed:
 python tools/wind_bench.py handshake
 ```
 
-  It prints the firmware letter from the hello, the raw bytes the board
-  returns to a count query (nothing, on the old sketch), and which frame
-  widths it acknowledges. If the count line shows bytes, send them to me;
-  that is the measurement the parser has been waiting for.
+  On the old sketch it prints `firmware j`, `count 4`, `board Adafruit
+  Motor Shield V2`, and `accepts [1..8]` (every width is acknowledged; that
+  line is a measurement, not a count). After the reflash the board line is
+  the confirmation: it should name SimHub's PWM fans module instead, and
+  the count should read 2. In the app log the same appears as
+  `COM5 declares 2 channels on '<new board name>'; sending 4 as on file`.
 
 - Then re-measure the three things the old path measured, in this order,
   with Pit Crew closed:
