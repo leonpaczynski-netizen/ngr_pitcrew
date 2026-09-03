@@ -338,3 +338,121 @@ def test_positions_refresh_onto_a_rival_already_filed():
     assert next_call(race.state) is None       # eight places away
     race.state.position = 5
     assert next_call(race.state).kind == RIVAL_SHORT
+
+
+# --- the four that were ranked, registered, tested and unemittable ---------
+
+def a_state(lap=8):
+    """A race with the pit-lane figures the calls price a stop with."""
+    state = RaceState(lap=lap, laps_total=LAPS, fuel_per_lap_l=BURN)
+    state.refuel_rate_lps = 1.0            # measured
+    state.pit_loss_s = 17.6                # measured, Monza
+    state.pit_loss_source = "measured"
+    state.fuel_capacity_l = TANK_L
+    return state
+
+
+def a_trend(side, readings, subject=7):
+    from pitcrew.race.gaps import GapTrend
+
+    trend = GapTrend(side=side)
+    for lap, gap in readings:
+        trend.note(lap, gap, subject=subject)
+    return trend
+
+
+def test_a_rival_entering_the_lane_is_said_while_he_is_still_in_it():
+    """**`rival_boxed` ranks ABOVE both wired calls** on the stated argument
+    that it is "the one that can still be acted on", and it could not be
+    emitted. It is fed by its own event, because the finished stop arrives
+    when he LEAVES - a minute too late for a call whose whole content is what
+    his fill is about to cost him."""
+    from pitcrew.race.pit_wall import Entered
+
+    state = a_state()
+    state.our_stop = Stop(lap=6, fuel_in_l=20.0, fuel_out_l=70.0)
+    state.rival_entered = Entered(driver="Boxhead", driver_id=1, lap=8,
+                                  fuel_in_l=12, partial=False)
+    call = next_call(state)
+    assert call.kind == "rival-boxed"
+    assert "Boxhead has boxed on 12 litres." == call.call
+    assert "seconds longer than you did" in call.reason
+
+
+def test_a_gap_coming_down_is_said_with_the_name_the_board_gave_him():
+    state = a_state()
+    state.gap_ahead = a_trend("ahead", [(4, 8.0), (5, 6.5), (6, 5.0),
+                                        (7, 3.5), (8, 2.0)])
+    state.gap_ahead_name = "Rocky"
+    call = next_call(state)
+    assert call.kind == "closing"
+    assert "out of Rocky" in call.call
+
+
+def test_a_stop_now_that_would_drop_us_behind_is_said():
+    state = a_state()
+    state.gap_behind = a_trend("behind", [(8, 9.0)], subject=3)
+    state.gap_behind_name = "Chook"
+    state.litres_to_take = 60.0
+    call = next_call(state)
+    assert call.kind == "rejoin"
+    assert "Chook comes out in front" in call.call
+
+
+def test_the_tank_argument_needs_no_rival_at_all():
+    """`stay_out` is about OUR fuel and survives every way reading a rival can
+    fail - which is why a short-circuit on `state.rivals` being empty was the
+    worst place to put one."""
+    # Lap 7 of a 20-lap race on a 100 L tank: the earliest a fill can usefully
+    # happen is lap 8, so there is still too much aboard to take a full one.
+    state = a_state(lap=7)
+    state.stint_ends_on_lap = 10        # the stop is three laps away
+    assert not state.rivals
+    # Through `candidates` rather than `next_call`: `BOX_SOON` ranks above it
+    # and rightly wins this crossing. The point here is that it is OFFERED
+    # with no rival on file at all.
+    offered = [c for c in candidates(state) if c.kind == "stay-out-fuel"]
+    assert offered and "Too much fuel aboard to fill" in offered[0].reason
+
+
+def test_the_tank_argument_is_silent_until_a_stop_is_in_prospect():
+    """It ranks immediately below `BOX_SOON` because the two answer the same
+    question - so where nothing is asking it, answering outranks real calls.
+    Offered from lap 1 it displaced the cold-tyre warning that opens the race."""
+    state = a_state(lap=1)
+    state.stint_ends_on_lap = 10
+    assert next_call(state) is None
+
+
+def test_no_inputs_means_no_calls_rather_than_an_exception():
+    """A race with no board reader, no plan and no measured pump."""
+    assert candidates(RaceState(lap=8, laps_total=LAPS)) == []
+
+
+def test_every_kind_that_needs_a_rival_can_be_emitted_at_once():
+    """**The test the last two commits both needed and neither had.** Four of
+    these were ranked in `URGENCY`, classified in `REGISTER`, covered by unit
+    tests and reachable from no production caller - and a guard added with the
+    first two made three of them unreachable a second time.
+
+    `stay-out-fuel` is the sixth and is deliberately absent here: above the
+    tank clamp a lap deferred saves exactly zero seconds, so it is right that
+    it says nothing in this state. It has its own test above.
+    """
+    from pitcrew.race.pit_wall import Entered
+
+    state = a_state()
+    state.our_stop = Stop(lap=6, fuel_in_l=20.0, fuel_out_l=70.0)
+    state.rival_entered = Entered(driver="Boxhead", driver_id=1, lap=8,
+                                  fuel_in_l=12, partial=False)
+    state.rivals["Rocky"] = a_rival(20.0, name="Rocky")
+    state.rivals["Chook"] = a_rival(58.0, name="Chook")
+    state.gap_ahead = a_trend("ahead", [(4, 8.0), (5, 6.5), (6, 5.0),
+                                        (7, 3.5), (8, 2.0)])
+    state.gap_ahead_name = "Rocky"
+    state.gap_behind = a_trend("behind", [(8, 9.0)], subject=3)
+    state.gap_behind_name = "Chook"
+    state.litres_to_take = 60.0
+    kinds = {call.kind for call in candidates(state)}
+    assert kinds == {"rival-boxed", "rival-committed", RIVAL_SHORT,
+                     "closing", "rejoin"}

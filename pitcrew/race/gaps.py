@@ -242,6 +242,17 @@ class GapTrend:
             self.subject = subject
         self.seen[int(lap)] = float(gap_s)
 
+    def latest(self) -> float | None:
+        """The most recent gap, or `None` where nothing has been read.
+
+        The newest LAP rather than the newest insertion: `seen` is keyed by lap
+        and a frame arriving out of order would otherwise make an older reading
+        the current one.
+        """
+        if not self.seen:
+            return None
+        return self.seen[max(self.seen)]
+
     def new_session(self) -> None:
         """CLAUDE.md rule 11. A gap history is about one race."""
         self.seen = {}

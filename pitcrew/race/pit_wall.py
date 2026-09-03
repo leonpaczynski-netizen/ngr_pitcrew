@@ -158,6 +158,21 @@ class Visit:
 
 
 @dataclass(frozen=True)
+class Entered:
+    """A car seen standing in its box, while it is still standing there.
+
+    `fuel_in_l` is what it arrived with - the LOWEST reading so far, because a
+    fill only goes up. `None` where no digit could be transcribed, which is a
+    refusal and not an empty tank.
+    """
+    driver: str | None
+    driver_id: int
+    lap: int | None
+    fuel_in_l: int | None
+    partial: bool
+
+
+@dataclass(frozen=True)
 class Seen:
     """A finished stop, with the evidence behind it. CLAUDE.md rule 4."""
     driver: str | None
@@ -191,9 +206,17 @@ class PitWall:
     """
 
     def __init__(self, roster: Roster | None = None, *, on_stop=None,
+                 on_enter=None,
                  name_for=None, where_on_lap=None) -> None:
         self._roster = roster if roster is not None else Roster()
         self._on_stop = on_stop
+        # **Entering is a different event from having stopped, and it is the
+        # one the driver can still act on.** `on_stop` fires when the car
+        # LEAVES, which for `rival_boxed` - "he has boxed on 12 litres, that is
+        # about forty seconds standing" - is a minute too late to be worth
+        # saying. Fired once per visit, on the reading that confirms it.
+        self._on_enter = on_enter
+        self._announced: set[int] = set()
         # **Asked for a name at the moment a stop closes, not at the flag.** A
         # stop closes DURING the race, and whatever files it refuses a stop
         # with no driver on it - so a cluster the archive did not recognise had
@@ -231,6 +254,28 @@ class PitWall:
 
     # --- lifecycle ------------------------------------------------------
 
+    def _announce_entry(self, driver: int, visit, lap) -> None:
+        """Say he is in, once, as soon as the fill figure is credible.
+
+        On the SECOND reading, not the first: `MIN_READS` is 2 for filing and
+        the same argument applies here. One reading is a frame that could have
+        caught a marshal walking across the row, and "he has boxed" is a call
+        the driver cannot un-hear.
+        """
+        if (self._on_enter is None or driver in self._announced
+                or len(visit.readings) < MIN_READS):
+            return
+        self._announced.add(driver)
+        name = self._roster.name_of(driver)
+        try:
+            self._on_enter(Entered(driver=name, driver_id=driver,
+                                   lap=visit.lap if visit.lap is not None
+                                   else lap,
+                                   fuel_in_l=visit.entry_l,
+                                   partial=visit.partial))
+        except Exception:                                    # pragma: no cover
+            _log.exception("pit-wall: the entry hook raised")
+
     def new_session(self) -> None:
         """Forget the last race. Everything here is about one of them.
 
@@ -242,6 +287,10 @@ class PitWall:
         self._seen_clean.clear()
         self._position.clear()
         self._pitted.clear()
+        # **Or every driver's entry is announced once per APP RUN.** Rule 11:
+        # anything cached across a session boundary needs an explicit reset,
+        # and this one silences the call for the whole of the second race.
+        self._announced.clear()
         self._stops = []
         self.ahead.new_session()
         self.behind.new_session()
@@ -365,6 +414,7 @@ class PitWall:
             litres = read_fuel(frame[y0:y1 + 1, x0:x1 + 1])
             if litres is not None:
                 visit.readings.append(litres)
+            self._announce_entry(driver, visit, lap)
             dx0, dy0, dx1, dy1 = pit.disc
             code = read_compound(frame[dy0:dy1 + 1, dx0:dx1 + 1])
             if code:

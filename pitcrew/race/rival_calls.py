@@ -101,6 +101,10 @@ WORTH_SAYING_S = 8.0
 # the flag, which is the one place a lap deferred genuinely shortens the stop.
 DEFER_WORTH_SAYING_S = 3.0
 
+# How many laps before the planned stop the case for one more lap is worth
+# hearing. Before that the driver is not deciding whether to box.
+STAY_OUT_WINDOW = 3
+
 # **The tank, because a fill cannot exceed it.** A rival who leaves on a
 # brim-full tank and is still short did not CHOOSE the shortfall - he took
 # everything the game allows - so nothing about his fill says what he intends
@@ -534,8 +538,13 @@ def closing_call(trend: GapTrend, *, lap: int, who: str | None = None,
                     f"You are losing {-rate:.1f} a lap to {them}.",
                     f"Over the last {count} laps.", MEDIUM)
     laps = trend.laps_to_catch(laps_left=laps_left)
-    reason = (f"Over the last {count} laps." if laps is None
-              else f"On him in about {laps:.0f} laps at that rate.")
+    if laps is None:
+        reason = f"Over the last {count} laps."
+    elif laps < 1.5:
+        # "In about 1 laps" is what it said, and this is spoken aloud.
+        reason = "On him next lap at that rate."
+    else:
+        reason = f"On him in about {laps:.0f} laps at that rate."
     return Call(CLOSING, lap,
                 f"You are taking {rate:.1f} a lap out of {them}.",
                 reason, MEDIUM)
@@ -544,33 +553,104 @@ def closing_call(trend: GapTrend, *, lap: int, who: str | None = None,
 def candidates(state) -> list:
     """Every rival call true this lap, for `calls.next_call` to rank.
 
-    **The road in, which did not exist.** `rival_boxed` and `must_stop_by` were
-    written, documented and tested, and reachable from nothing: the controller
-    emitted `rival_stopped` into a signal with no connection, and no candidate
-    in `calls._candidates` had ever heard of a rival. Everything below the
-    reader was correct and silent - the same "exists, documented, never called"
-    shape as `LiveWearSampler.new_session()` and the handover context.
+    **All six, where four were reachable from nothing.** `rival_boxed`,
+    `rejoin_call`, `closing_call` and `stay_out` were written, documented,
+    ranked, registered and tested, and no production caller existed for any of
+    them - `RIVAL_BOXED` in particular ranks ABOVE the two that were wired, on
+    the stated argument that it is "the one that can still be acted on".
 
-    Each rival is asked separately and the ranking picks between them, because
-    a race has several and only one thing gets said a lap.
+    Each asks for its own inputs and refuses without them, so a race with no
+    board reader still gets `stay_out`, which needs no rival at all.
     """
     out = []
+    lap = state.lap
+    laps_left = (state.laps_total - lap) if state.laps_total else None
+
     for rival in (state.rivals or {}).values():
         if not isinstance(rival, Rival):
             continue
         out.append(short_to_the_flag(
             rival, state.fuel_per_lap_l,
-            lap=state.lap, laps_total=state.laps_total,
+            lap=lap, laps_total=state.laps_total,
             our_position=state.position))
         out.append(must_stop_by(
             rival, state.fuel_per_lap_l,
-            lap=state.lap, laps_total=state.laps_total))
+            lap=lap, laps_total=state.laps_total))
+
+    # **He is in the box NOW**, which is the whole value of the call and the
+    # reason it is fed by its own event rather than by the finished stop.
+    entered = getattr(state, "rival_entered", None)
+    if entered is not None:
+        out.append(rival_boxed(
+            Rival(name=entered.driver, pitted=True,
+                  stop=Stop(lap=entered.lap, fuel_in_l=entered.fuel_in_l),
+                  burn_per_lap_l=_burn_of(state, entered.driver)),
+            lap=lap, laps_left=laps_left,
+            burn_per_lap_l=state.fuel_per_lap_l,
+            refuel_rate_lps=state.refuel_rate_lps,
+            ours=state.our_stop))
+
+    # **Only while a stop is actually the question.** `URGENCY` puts this
+    # immediately below `BOX_SOON` because "the two answer the same question" -
+    # so where nothing is asking it, answering is noise that outranks real
+    # calls. Offered from lap 1 it said "Stay out. Too much fuel aboard to
+    # fill." on the opening lap of every race, which is true, useless, and
+    # displaced the cold-tyre warning that opens the race.
+    if _a_stop_is_in_question(state):
+        out.append(stay_out(
+            lap=lap, laps_left=laps_left,
+            burn_per_lap_l=state.fuel_per_lap_l,
+            refuel_rate_lps=state.refuel_rate_lps,
+            capacity_l=state.fuel_capacity_l,
+            laps_total=state.laps_total,
+            planned_stop_lap=state.stint_ends_on_lap))
+
+    behind = getattr(state, "gap_behind", None)
+    if behind is not None:
+        out.append(rejoin_call(
+            lap=lap, gap_behind_s=behind.latest(),
+            litres_to_take=state.litres_to_take,
+            refuel_rate_lps=state.refuel_rate_lps,
+            pit_loss_s=state.pit_loss_s,
+            pit_loss_source=state.pit_loss_source,
+            who=state.gap_behind_name))
+        out.append(closing_call(behind, lap=lap,
+                                who=state.gap_behind_name,
+                                laps_left=laps_left))
+    ahead = getattr(state, "gap_ahead", None)
+    if ahead is not None:
+        out.append(closing_call(ahead, lap=lap,
+                                who=state.gap_ahead_name,
+                                laps_left=laps_left))
+
     out = [call for call in out if call is not None]
     # **The biggest opportunity first, because only one of them gets said.**
     # `next_call` sorts by kind and Python's sort is stable, so two rivals
-    # saving would have been separated by the order they happened to stop in -
-    # and a call kind is said once a stint, so the second is not said at all.
-    # Ordering by severity here makes the one that survives the one worth
-    # driving to.
+    # would otherwise have been separated by the order they happened to stop
+    # in - and a kind is said once, so the second is not said at all.
     out.sort(key=lambda c: -(c.severity or 0.0))
     return out
+
+
+def _a_stop_is_in_question(state) -> bool:
+    """Whether boxing is close enough to be worth arguing about.
+
+    **Not `stop_pending`, which is true for the whole race.** It means "stops
+    remain", not "a stop is imminent" - `_pending_stops() > 0` holds from the
+    green - so gating on it gated on nothing, and "Stay out. Too much fuel
+    aboard to fill." was said on lap 1 in place of the cold-tyre call that
+    opens the race.
+
+    The planned stop within a few laps, and nothing else. With no plan there
+    is no stop in prospect for this to argue against.
+    """
+    planned = getattr(state, "stint_ends_on_lap", None)
+    return planned is not None and state.lap >= planned - STAY_OUT_WINDOW
+
+
+def _burn_of(state, driver: str | None) -> float | None:
+    """His own burn where the book has it, from the rival already on file."""
+    if not driver:
+        return None
+    known = (state.rivals or {}).get(driver)
+    return getattr(known, "burn_per_lap_l", None)

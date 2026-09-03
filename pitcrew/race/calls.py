@@ -580,6 +580,30 @@ class RaceState:
     # because a stop's position is read while the car is STANDING - the one
     # moment it does not describe where he is racing.
     rival_positions: dict = field(default_factory=dict)
+    # **The two gap trends the board reader keeps**, refreshed each lap. Held
+    # as objects rather than numbers because `closing_call` needs the run
+    # length behind the rate: a trend is only worth saying after
+    # `MIN_LAPS_FOR_TREND` CONSECUTIVE laps.
+    gap_ahead: object = None
+    gap_behind: object = None
+    # **Names, because `GapTrend.subject` is a cluster id.** The roster that
+    # can turn one into a name lives on the pit wall, on the other side of the
+    # thread boundary, so the translation happens where the roster is.
+    gap_ahead_name: str | None = None
+    gap_behind_name: str | None = None
+    # A rival seen entering the lane, live, while he is still standing in it.
+    # Consumed once - "he has boxed" is news for one lap.
+    rival_entered: object = None
+    # Litres a second at the pump, from the event. `None` is not a rate.
+    refuel_rate_lps: float | None = None
+    # Seconds lost driving through the lane, a TRACK constant (CLAUDE.md 5.4).
+    pit_loss_s: float | None = None
+    pit_loss_source: str | None = None
+    # Our own last stop, so a rival's standing time has something to be
+    # compared against.
+    our_stop: object = None
+    # What our next stop is planned to take on.
+    litres_to_take: float | None = None
     # Stint accounting against the approved plan.
     stint_index: int = 0
     stint_ends_on_lap: int | None = None
@@ -1104,8 +1128,12 @@ def _rivals(state: RaceState) -> list:
     this module for the vocabulary - the ranking is a property of the
     vocabulary and lives here, the composition lives there.
     """
-    if not getattr(state, "rivals", None):
-        return []
+    # **No short-circuit on `state.rivals`.** There was one, from when a
+    # watched stop was the only input this had - and it silenced `stay_out`,
+    # which is about OUR tank and needs no rival at all, along with both gap
+    # calls. The guard survived the wiring of the other four and made three of
+    # them unreachable a second time. `candidates` refuses cheaply and the
+    # import is cached after the first crossing.
     from pitcrew.race import rival_calls
 
     return rival_calls.candidates(state)

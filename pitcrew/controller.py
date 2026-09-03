@@ -197,6 +197,7 @@ class TelemetryBridge(QObject):
     # than a formatted line, because what to say about it is a decision the
     # call layer makes with our own fuel in hand.
     rival_stopped = pyqtSignal(object)       # race.pit_wall.Seen
+    rival_entered = pyqtSignal(object)       # race.pit_wall.Entered
     button_probed = pyqtSignal(str)          # probe note - off the hook thread
     # **The car stopped mid-lap.** Emitted on the telemetry thread and
     # handled on the Qt one, like every other cross-thread edge here:
@@ -855,6 +856,7 @@ class PitCrewController(QObject):
         # rival call in `race/rival_calls.py` was unreachable - written,
         # documented, tested, and silent for the whole of every race.
         self.bridge.rival_stopped.connect(self._rival_stop_filed)
+        self.bridge.rival_entered.connect(self._rival_entry_seen)
 
         self.event_screen.saved.connect(self._on_event_saved)
         self.event_screen.discarded.connect(self.discard_event_edits)
@@ -2468,8 +2470,15 @@ class PitCrewController(QObject):
         if self.race is not None and wall is not None:
             try:
                 self.race.note_rival_positions(wall.positions())
+                # **The trends hold a cluster id; the roster turns it into a
+                # name, and the roster is here.** Without it every gap call
+                # says "the car ahead" about a driver the app can name.
+                self.race.note_gaps(
+                    ahead=wall.ahead, behind=wall.behind,
+                    ahead_name=wall.roster.name_of(wall.ahead.subject),
+                    behind_name=wall.roster.name_of(wall.behind.subject))
             except Exception:
-                log("race").exception("rival positions could not be read")
+                log("race").exception("the gap trends could not be read")
         frames = self.bridge.recorder.encode(rows)
 
         # **A lap has to have been driven for as long as it says it was.**
@@ -3451,6 +3460,10 @@ class PitCrewController(QObject):
             # whether anyone ever measured a stop here.
             pit_loss_measured=(event.get("pit_loss_source")
                                == "measured"),
+            # **Litres a second at the pump.** Every pit-lane call prices a
+            # stop with it, and without it `rival_boxed` and `rejoin_call`
+            # refuse rather than assume a rate.
+            refuel_rate_lps=event.get("refuel_rate_lps"),
             # **The regulations, which never reached here.** `_note_mandatory_
             # stops`' own docstring says a rule that cannot fire is the thing
             # this codebase keeps building by accident - and the only caller
@@ -3708,6 +3721,7 @@ class PitCrewController(QObject):
             self._last_session_id = self.session_id
             self._pit_wall = PitWall(Roster(seed=seed),
                                      on_stop=self._on_rival_stop,
+                                     on_enter=self._on_rival_enter,
                                      name_for=self.store.provisional_driver_name,
                                      where_on_lap=self._where_on_lap)
             self.hud.watch_board(self._pit_wall, lap_of=self._our_lap)
@@ -3952,6 +3966,28 @@ class PitCrewController(QObject):
             self.bridge.rival_stopped.emit(seen)
         except Exception:
             pass
+
+    def _on_rival_enter(self, entered) -> None:  # noqa: D401
+        """Worker thread. A rival is standing in his box; say so while he is.
+
+        Nothing is filed here - an entry is not a stop, and the book records
+        stops. It exists only to be spoken, and it is only worth speaking
+        while he is still in there.
+        """
+        try:
+            self.bridge.rival_entered.emit(entered)
+        except Exception:
+            pass
+
+    def _rival_entry_seen(self, entered) -> None:
+        """Qt thread: hand the entry to the coordinator."""
+        race = self.race
+        if race is None or entered is None:
+            return
+        try:
+            race.note_rival_entered(entered)
+        except Exception:
+            log("race").exception("a rival's entry could not be noted")
 
     def _rival_stop_filed(self, seen) -> None:
         """Qt thread. Hand a watched stop to the coordinator so it can speak.

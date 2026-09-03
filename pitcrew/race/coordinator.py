@@ -15,6 +15,7 @@ import enum
 from dataclasses import dataclass, replace
 
 from pitcrew.diagnostics import log
+from pitcrew.race.rivals import Stop
 from pitcrew.race.calls import (
     STATUS,
     stop_still_needed,
@@ -140,6 +141,8 @@ class RaceCoordinator:
                  # (CLAUDE.md 5.4), off `events.pit_loss_secs`. Only the fuel
                  # path reads it. None leaves every figure exactly as it was.
                  pit_loss_s: float | None = None,
+                 # Litres a second at the pump, off `events.refuel_rate_lps`.
+                 refuel_rate_lps: float | None = None,
                  mandatory_stops: int = 0,
                  pit_loss_measured: bool = False,
                  # **Ludo's briefing for this circuit**, or None where nobody
@@ -214,6 +217,14 @@ class RaceCoordinator:
         # for the Fuji race this is on file from.
         self.state.plan_binding_constraint = self.plan.get("binding_constraint")
         self.pit_loss_measured = bool(pit_loss_measured)
+        # **The two figures the pit-lane calls price a stop with**, put on the
+        # state because that is what `calls.next_call` reads. `pit_loss_s` is a
+        # TRACK constant (CLAUDE.md 5.4); the refuel rate comes off the event
+        # and is `None` until somebody measures it, which is not a rate.
+        self.state.pit_loss_s = pit_loss_s
+        self.state.pit_loss_source = ("measured" if pit_loss_measured
+                                      else None)
+        self.state.refuel_rate_lps = refuel_rate_lps
         self._mandatory_stops = int(mandatory_stops or 0)
         self._note_mandatory_stops()
         # **The app's own race clock**, built at arming and started at the
@@ -354,6 +365,14 @@ class RaceCoordinator:
         one time an unnamed compound must not be read as "unchanged".
         """
         self.state.stint_index = index
+        # **The fill the NEXT stop is planned to take**, which is what prices
+        # a rejoin: he gains every second we stand still, so the litres decide
+        # the place. `None` on the last stint - there is no next stop, and a
+        # rejoin call about one would be about a stop that is not happening.
+        following = index + 1
+        self.state.litres_to_take = (
+            self._stints[following].get("fuel_l")
+            if following < len(self._stints) else None)
         if index >= len(self._stints):
             self.state.stint_ends_on_lap = None
             self.state.next_compound = None
@@ -436,9 +455,22 @@ class RaceCoordinator:
             return self._on_lap(event, packet)
         if event.kind is EventKind.PIT_ENTRY:
             self.state.in_pit = True
+            # **What we arrived with, so a rival's fill has ours to beat.**
+            # `rival_boxed` says "he stands N seconds longer than you did", and
+            # without our own stop it can only say his standing time in
+            # isolation - which is the number the driver cannot act on, since
+            # what matters is the swing.
+            self._our_entry_fuel_l = self.state.fuel_l
             return None
         if event.kind is EventKind.PIT_EXIT:
             self.state.in_pit = False
+            entry = getattr(self, "_our_entry_fuel_l", None)
+            if entry is not None and self.state.fuel_l is not None:
+                self.state.our_stop = Stop(
+                    lap=self.state.lap, fuel_in_l=entry,
+                    fuel_out_l=self.state.fuel_l,
+                    tyres_changed=event.data.get("tyres_changed"))
+            self._our_entry_fuel_l = None
             # The stop carries whether the tyres came off. Discarding it made
             # every fuel-only stop a fresh set and silenced the end-of-window
             # call for the stint after it.
@@ -707,6 +739,30 @@ class RaceCoordinator:
             burn_stops, "" if burn_stops == 1 else "s",
             " (exit figure is a lower bound)"
             if getattr(seen, "exit_is_a_bound", False) else "")
+
+    def note_rival_entered(self, entered) -> None:
+        """A car is standing in its box right now.
+
+        **Its own event, because "he has boxed" is news for one lap.** The
+        finished stop arrives when he LEAVES, which for a call whose whole
+        content is what his fill is about to cost him is a minute too late.
+        """
+        if not self.running or entered is None:
+            return
+        if not getattr(entered, "driver", None):
+            log("race").info("rival entry not taken: no driver name")
+            return
+        self.state.rival_entered = entered
+        log("race").info("rival entered the lane: %s on %s L, lap %s",
+                         entered.driver, entered.fuel_in_l, entered.lap)
+
+    def note_gaps(self, ahead=None, behind=None,
+                  ahead_name=None, behind_name=None) -> None:
+        """The two gap trends the board reader keeps, and whose they are."""
+        self.state.gap_ahead = ahead
+        self.state.gap_behind = behind
+        self.state.gap_ahead_name = ahead_name
+        self.state.gap_behind_name = behind_name
 
     def note_rival_positions(self, positions: dict) -> None:
         """Where the other cars are, refreshed each lap from the board.
