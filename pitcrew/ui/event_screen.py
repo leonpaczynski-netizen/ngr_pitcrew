@@ -12,10 +12,11 @@ Practice screen's stencil white mean something when you get there.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QStringListModel, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
+    QCompleter,
     QDoubleSpinBox,
     QGridLayout,
     QHBoxLayout,
@@ -194,6 +195,22 @@ class EventScreen(QWidget):
                                 catalogs.cars_by_category_and_maker().items()))
         self._build()
 
+    def _known_series(self) -> list[str]:
+        """League names already on an event.
+
+        Taken from what the screen has loaded rather than from a store of its
+        own - this widget is given its catalogues and does not open the
+        archive, and the leagues are already in the events it was handed.
+        """
+        return sorted({(event.get("series") or "").strip()
+                       for event in self._events} - {""})
+
+    def _refresh_series_completer(self) -> None:
+        completer = getattr(self, "_series_completer", None)
+        if completer is None:
+            return
+        completer.setModel(QStringListModel(self._known_series()))
+
     def set_catalogs(self, tracks, car_groups) -> None:  # noqa: N802 - Qt naming
         self._tracks = list(tracks)
         self._car_groups = list(car_groups)
@@ -286,6 +303,8 @@ class EventScreen(QWidget):
     def set_events(self, events, active_id=None) -> None:
         """Fill the picker from the store. Never emits `switched`."""
         self._events = [dict(event) for event in events]
+        # A league typed on one event completes on the next.
+        self._refresh_series_completer()
         picker = self.event_picker
         picker.blockSignals(True)
         picker.clear()
@@ -406,6 +425,18 @@ class EventScreen(QWidget):
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Round 4 - Fuji")
 
+        # **Which league this round belongs to.** He races more than one at a
+        # time with a different team mate in each, and rival evidence is scoped
+        # by it - a burn rate from one league's car says nothing about
+        # another's. A free line with a completer rather than a picker: a new
+        # league has to be typeable the first time it exists, and after that it
+        # completes.
+        self.series_edit = QLineEdit()
+        self.series_edit.setPlaceholderText("GT3 League")
+        self._series_completer = QCompleter(self._known_series())
+        self._series_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.series_edit.setCompleter(self._series_completer)
+
         self.track_edit = Picker(self._tracks, placeholder="Pick a track")
         self.track_edit.changed.connect(self._on_track_changed)
         self.layout_edit = Picker(placeholder="—")
@@ -429,7 +460,9 @@ class EventScreen(QWidget):
         self.game_version = QLineEdit()
         self.game_version.setVisible(False)
 
-        grid.addWidget(Field("Name", self.name_edit), 0, 0, 1, 2)
+        grid.addWidget(Field("Name", self.name_edit), 0, 0)
+        grid.addWidget(Field("Series", self.series_edit,
+                             hint="Which league"), 0, 1)
         grid.addWidget(Field("Track", self.track_edit), 1, 0)
         grid.addWidget(Field("Layout", self.layout_edit,
                              hint="Set by the track"), 1, 1)
@@ -1052,6 +1085,7 @@ class EventScreen(QWidget):
         self._event_id = event.get("id") if event else None
         if event:
             self.name_edit.setText(event.get("name") or "")
+            self.series_edit.setText(event.get("series") or "")
             self.track_edit.setCurrentText(event.get("track") or "")
             self._on_track_changed(event.get("track") or "")
             self.layout_edit.setCurrentText(event.get("layout") or "")
@@ -1154,6 +1188,10 @@ class EventScreen(QWidget):
             # what a null id means; the screen only reports what it loaded.
             "id": self._event_id,
             "name": self.name_edit.text().strip(),
+            # Null rather than "", so an unlabelled event reads as one from
+            # before there was more than one league rather than as a league
+            # called nothing.
+            "series": self.series_edit.text().strip() or None,
             "track": self.track_edit.currentText().strip(),
             "layout": self.layout_edit.currentText() or None,
             "car_name": self.car_edit.currentText().strip(),

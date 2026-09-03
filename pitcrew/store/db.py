@@ -1503,6 +1503,33 @@ class Store:
                 int(row["rows"]), int(row["cols"])).astype(bool)
         return out
 
+    def known_series(self) -> list[str]:
+        """Every league name already on an event, for a completer.
+
+        Offered rather than enforced: a new league is typed once and then
+        completes ever after, and nothing here refuses a name it has not seen.
+        """
+        rows = self._query(
+            "SELECT DISTINCT series FROM events "
+            "WHERE series IS NOT NULL AND series <> '' ORDER BY series")
+        return [r["series"] for r in rows]
+
+    def events_without_a_series(self) -> list[dict]:
+        """Events with no league on them, oldest first.
+
+        They are not broken - every event on file predates the column - but
+        until they are labelled they pool into one unnamed league, and a rival
+        profile scoped to a series will not find them.
+        """
+        return [dict(r) for r in self._query(
+            "SELECT id, name, track, car_name FROM events "
+            "WHERE series IS NULL OR series = '' ORDER BY id")]
+
+    def set_event_series(self, event_id: int, series: str | None) -> None:
+        with self._write() as conn:
+            conn.execute("UPDATE events SET series = ? WHERE id = ?",
+                         (series or None, int(event_id)))
+
     def set_teammate(self, series: str | None, driver: str) -> None:
         """Name the team mate for one series.
 
