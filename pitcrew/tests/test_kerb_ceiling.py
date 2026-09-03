@@ -78,7 +78,27 @@ def test_a_gentler_kerb_than_the_road_can_only_be_ignored():
             fx._ramp(speed, ONSET, FULL), abs=1e-9)
 
 
-def test_an_unsettled_ceiling_is_not_used():
+def test_the_ceiling_engages_on_the_first_kerb_and_not_the_four_hundredth():
+    """**The gate made the fix arrive after the complaint.** Kerb frames are
+    2.2-2.8% of a Daytona lap, so 400 of them is four to five MINUTES of
+    driving - three or four laps of a five-lap session - and one session on
+    file reached 323 over its whole length and never settled at all. For all of
+    that time the bed ran on the unraised line, which is the saturation this
+    exists to remove.
+
+    One measured kerb frame is the bar now: the ceiling must be measured
+    rather than assumed, which is what the old gate was really protecting, and
+    400 was never what that needed.
+    """
+    dv = fx.EffectDeriver()
+    dv._kerb_p90 = _Quantile(0.90, fx.KERB_LEARN_STEP, initial=0.2418)
+    assert dv._shape(0.20, ONSET, FULL) == pytest.approx(
+        fx._ramp(0.20, ONSET, FULL))          # nothing measured yet
+    dv._kerb_p90.update(0.24)                 # one kerb frame
+    assert dv._shape(0.20, ONSET, FULL) < fx._ramp(0.20, ONSET, FULL)
+
+
+def test_an_unmeasured_ceiling_is_not_used():
     """Before it has learned anything the shape is exactly what it was."""
     dv = a_deriver(ceiling=0.2418, settled=False)
     assert dv._shape(0.20, ONSET, FULL) == pytest.approx(

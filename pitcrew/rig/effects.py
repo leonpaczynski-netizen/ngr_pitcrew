@@ -143,8 +143,11 @@ TEXTURE_LEARN_STEP = 2.0e-4
 # race too low and pins anyway. A ceiling is not a measurement and a little
 # jitter in it costs nothing; arriving late costs the whole effect.
 KERB_LEARN_STEP = 2.5e-3
-# Kerb frames are a few percent of a lap, so this settles in about a lap and a
-# half of kerb contact rather than in a lap of driving.
+# **Measured, not estimated, and the estimate was wrong.** Kerb frames are
+# 2.2-2.8% of a Daytona lap, so 400 of them is four to five minutes of driving,
+# not "a lap and a half of kerb contact" - and a short session never reaches
+# them at all (113: 323 frames over the whole session). The gate is gone; this
+# is kept only because `_kerb_p90` is still bounded by `_shape`.
 KERB_SETTLE_FRAMES = 400
 # **And there is no settle gate, because the seeding below removes the need
 # for one.** Both trackers start exactly where the pair above puts them, so
@@ -496,9 +499,21 @@ class EffectDeriver:
         # exactly what it was.** A kerb ceiling below the tarmac knee would
         # inverted the ramp, so `_shape` refuses one; seeding here means it is
         # refused by arithmetic rather than by a special case.
+        # **No settle gate.** It is seeded at `TEXTURE_FULL_MS`, so it starts
+        # exactly where the unraised ceiling sits and walks from there, and
+        # `_shape` refuses any ceiling at or below the tarmac top - so there is
+        # no discontinuity for a gate to hide. `_shape` waits for one kerb
+        # frame, which is the honest bar: the ceiling should be measured, not
+        # assumed.
+        #
+        # The gate did real harm. Kerb frames are 2.2-2.8% of a Daytona lap, so
+        # 400 of them arrive four to five MINUTES in - three or four laps of a
+        # five-lap session - and one session on file reached only 323 and never
+        # settled at all. For all of that time the bed ran on the unraised
+        # line, which is the saturation this was written to fix, and the
+        # complaint that prompted it was about the first lap.
         self._kerb_p90 = vehicle._Quantile(
-            0.90, KERB_LEARN_STEP, initial=TEXTURE_FULL_MS,
-            settle_frames=KERB_SETTLE_FRAMES)
+            0.90, KERB_LEARN_STEP, initial=TEXTURE_FULL_MS)
         self.state = vehicle.VehicleState()
 
     def set_abs(self, setting: str | None) -> None:
@@ -629,7 +644,13 @@ class EffectDeriver:
         flat maximum and becomes a range again, which is the complaint.
         """
         knee = onset + TEXTURE_AT_TARMAC_P90 * (full - onset)
-        ceiling = self._kerb_p90.value if self._kerb_p90.settled else None
+        # **Read once a kerb has actually been touched, not once 400 have.**
+        # `samples` rather than `settled`: the ceiling still has to be MEASURED
+        # rather than assumed - the seed is a prior about kerbs in general and
+        # this is a claim about these ones - but requiring 400 kerb frames put
+        # that four to five minutes into a session on a circuit where kerbs are
+        # 2.2-2.8% of a lap, and a short session never got there at all.
+        ceiling = self._kerb_p90.value if self._kerb_p90.samples else None
         # **The ceiling may only ever RAISE the top, never lower it.** A
         # circuit whose kerbs are gentler than its road - Spa learned 0.107
         # against a tarmac-derived top of 0.127 - would otherwise get a
