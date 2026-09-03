@@ -79,11 +79,19 @@ def a_frame(*, in_lane=(), fuel=None, names=True):
         frame[y - 16:y + 16, 40:FLAG_X - 8] = (WHITE if index == OWN
                                                else PLATE)
         if names:
-            # A different name width per row, which is what identity is: a
-            # short name and a long one are not the same driver.
-            wide = 30 + index * 14
-            frame[y - 5:y + 5, 96:96 + wide] = (
-                DARK if index == OWN else INK)
+            # **A different PATTERN per row, not a different width.**
+            # `Roster.name_bitmap` normalises to a fixed shape, so names that
+            # differ only in width are the SAME picture afterwards and
+            # `_merge_converged` folded them: six rows came back as one driver
+            # with 144 sightings over 24 frames. That is invisible to a test
+            # asking only whether a stop was filed, and fatal to any test about
+            # WHOSE stop it was - the car in the lane resolved to the same
+            # cluster as our own row, so nothing here could tell that the wall
+            # was filing the driver's own stop as a rival's.
+            for block in range(index + 1):
+                left = 96 + block * 22
+                frame[y - 5:y + 5, left:left + 12] = (
+                    DARK if index == OWN else INK)
         if index in in_lane:
             # **A circle, not a square.** The reader tests roundness - a filled
             # circle fills pi/4 of its box, and the real discs measured 0.780
@@ -100,6 +108,36 @@ def a_frame(*, in_lane=(), fuel=None, names=True):
             frame[top:top + number.shape[0],
                   left:left + number.shape[1]][number] = INK
     return frame
+
+
+# What a test needs a cluster seen before it counts as a driver. Two rather
+# than the production twenty: reaching twenty means twenty full board reads per
+# case, which cost three minutes across this file, and nothing here is about
+# where the threshold sits - `test_a_cluster_too_rarely_seen...` sets its own.
+FEW = 2
+
+
+def a_wall(**kw):
+    """A wall that treats a couple of sightings as a driver."""
+    kw.setdefault("min_sightings", FEW)
+    return PitWall(**kw)
+
+
+def warm(wall, clock, *, in_lane=(), frames=FEW + 1):
+    """Show the board until its rows are established drivers.
+
+    **`_close` refuses a cluster below its sighting floor as a misread**, and
+    with the rows finally distinct each frame is one sighting per driver rather
+    than six. In a real race the board is read for laps before anyone pits, so
+    this is what these tests always meant; it only used to be free because
+    every row counted as the same car.
+
+    `in_lane` keeps a driver OUT of `_seen_clean`, which is what `partial`
+    turns on - a car nobody ever saw on the board without its columns.
+    """
+    for _ in range(frames):
+        wall.see(a_frame(in_lane=in_lane, fuel={row: 40 for row in in_lane}),
+                 now=clock.tick())
 
 
 class Clock:
@@ -152,7 +190,8 @@ def test_a_frame_that_cannot_be_read_is_silence_and_not_absence():
 
 def test_a_stop_closes_once_the_columns_are_gone_from_clean_frames():
     clock = Clock()
-    wall = PitWall()
+    wall = a_wall()
+    warm(wall, clock)
     for litres in (19, 40, 83):
         wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     closed = []
@@ -177,7 +216,8 @@ def test_something_briefer_than_the_dead_time_was_not_a_stop():
     entry and exit fuel because it had caught the same number twice - against
     real stops watched for 87 to 117 s."""
     clock = Clock(step=3.0)
-    wall = PitWall()
+    wall = a_wall()
+    warm(wall, clock)
     for litres in (19, 40):
         wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     closed = []
@@ -206,8 +246,10 @@ def test_a_visit_with_no_readings_has_no_fuel_rather_than_zero():
 def test_joining_after_the_fill_has_begun_is_marked_partial():
     """A late first reading is a floor, and nothing in the number says so."""
     clock = Clock()
-    wall = PitWall()
-    wall.see(a_frame(in_lane=(1,), fuel={1: 40}), now=clock.tick())   # first clean frame, in
+    wall = a_wall()
+    # Warmed with him ALREADY in the lane, so he is never seen clean - which
+    # is exactly what makes the entry figure a floor.
+    warm(wall, clock, in_lane=(1,))
     for litres in (60, 83):
         wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     closed = []
@@ -218,8 +260,8 @@ def test_joining_after_the_fill_has_begun_is_marked_partial():
 
 def test_a_car_seen_out_of_the_lane_first_is_not_partial():
     clock = Clock()
-    wall = PitWall()
-    wall.see(a_frame(), now=clock.tick())                      # clean frame, nobody in the lane
+    wall = a_wall()
+    warm(wall, clock)                       # clean frames, nobody in the lane
     for litres in (19, 40, 83):
         wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     closed = []
@@ -231,8 +273,8 @@ def test_a_car_seen_out_of_the_lane_first_is_not_partial():
 def test_every_stop_carries_the_evidence_behind_it():
     """CLAUDE.md rule 4."""
     clock = Clock()
-    wall = PitWall()
-    wall.see(a_frame(), now=clock.tick())
+    wall = a_wall()
+    warm(wall, clock)
     for litres in (19, 30, 55, 83):
         wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     closed = []
@@ -254,7 +296,8 @@ def test_a_new_session_forgets_the_last_race_but_keeps_the_drivers():
     opens holding the last one's pit flags is a race that reports them.
     """
     clock = Clock()
-    wall = PitWall()
+    wall = a_wall()
+    warm(wall, clock)
     for litres in (19, 40, 83):
         wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
@@ -272,8 +315,8 @@ def test_a_new_session_forgets_the_last_race_but_keeps_the_drivers():
 def test_closing_the_session_files_a_stop_still_in_progress():
     """At the flag a car may still be standing. That is still a stop."""
     clock = Clock()
-    wall = PitWall()
-    wall.see(a_frame(), now=clock.tick())
+    wall = a_wall()
+    warm(wall, clock)
     for litres in (19, 40, 83):
         wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
     assert wall.stops() == []
@@ -308,8 +351,8 @@ def test_a_fill_that_never_moved_was_not_watched():
     that. On the Spa race one driver came back 19 L in and 19 L out on two
     readings - a fragment of a stop that really ran to 83."""
     clock = Clock()
-    wall = PitWall()
-    wall.see(a_frame(), now=clock.tick())
+    wall = a_wall()
+    warm(wall, clock)
     for _ in range(3):
         wall.see(a_frame(in_lane=(1,), fuel={1: 19}), now=clock.tick())
     closed = []
@@ -321,35 +364,10 @@ def test_a_fill_that_never_moved_was_not_watched():
 
 # --- the entry hook, which is the ONLY road RIVAL_BOXED has ---------------
 
-def a_named_frame(*, in_lane=(), fuel=None):
-    """`a_frame`, but with names the roster can actually tell apart.
-
-    **`a_frame`'s six rows collapse into ONE cluster.** Its names differ only
-    in width and `Roster.name_bitmap` normalises to a fixed shape, so after
-    normalisation they are the same picture and `_merge_converged` folds them -
-    one driver, 144 sightings over 24 frames. Invisible to a test that only
-    asks whether a stop was filed; fatal to any test about WHOSE stop it was,
-    because the car in the lane comes back as the same cluster as our own row.
-
-    Here each row carries a different number of ink blocks, which survives the
-    normalisation. Local rather than shared: several tests above rely on that
-    merge to clear `MIN_SIGHTINGS` at all, so replacing `a_frame` outright is
-    a change to them and not to the fixture.
-    """
-    frame = a_frame(in_lane=in_lane, fuel=fuel, names=False)
-    for index in range(ROWS):
-        y = TOP + index * PITCH + (28 if index == OWN else
-                                   (56 if index > OWN else 0))
-        for block in range(index + 1):
-            left = 96 + block * 22
-            frame[y - 5:y + 5, left:left + 12] = DARK if index == OWN else INK
-    return frame
-
-
-def a_watching_wall(seen):
+def a_watching_wall(seen, **kw):
     handles = (f"Car #{n}" for n in range(1, 9))
-    return PitWall(on_enter=seen.append,
-                   name_for=lambda taken=(): next(handles))
+    return a_wall(on_enter=seen.append,
+                  name_for=lambda taken=(): next(handles), **kw)
 
 
 def test_a_car_entering_is_announced_even_though_nobody_has_named_him_yet():
@@ -365,8 +383,8 @@ def test_a_car_entering_is_announced_even_though_nobody_has_named_him_yet():
     """
     seen, clock = [], Clock()
     wall = a_watching_wall(seen)
-    for _ in range(MIN_SIGHTINGS + 2):
-        wall.see(a_named_frame(in_lane=(4,), fuel={4: 12}), lap=8,
+    for _ in range(FEW + 1):
+        wall.see(a_frame(in_lane=(4,), fuel={4: 12}), lap=8,
                  now=clock.tick())
     assert [(e.driver, e.fuel_in_l) for e in seen] == [("Car #1", 12)]
 
@@ -377,8 +395,8 @@ def test_our_own_stop_is_not_announced_as_a_rival_boxing():
     itself."""
     seen, clock = [], Clock()
     wall = a_watching_wall(seen)
-    for _ in range(MIN_SIGHTINGS + 2):
-        wall.see(a_named_frame(in_lane=(OWN,), fuel={OWN: 12}), lap=8,
+    for _ in range(FEW + 1):
+        wall.see(a_frame(in_lane=(OWN,), fuel={OWN: 12}), lap=8,
                  now=clock.tick())
     assert seen == []
 
@@ -388,9 +406,10 @@ def test_a_cluster_too_rarely_seen_to_be_a_driver_is_not_announced():
     aloud first and declining to file it afterwards is the weaker bar on the
     louder channel."""
     seen, clock = [], Clock()
-    wall = a_watching_wall(seen)
+    # The PRODUCTION floor here, because this test is about where it sits.
+    wall = a_watching_wall(seen, min_sightings=MIN_SIGHTINGS)
     for _ in range(3):
-        wall.see(a_named_frame(in_lane=(4,), fuel={4: 12}), lap=8,
+        wall.see(a_frame(in_lane=(4,), fuel={4: 12}), lap=8,
                  now=clock.tick())
     assert seen == []
 
@@ -401,12 +420,60 @@ def test_a_second_stop_by_the_same_car_is_announced_too():
     the race - was silent."""
     seen, clock = [], Clock()
     wall = a_watching_wall(seen)
-    for _ in range(MIN_SIGHTINGS + 2):
-        wall.see(a_named_frame(in_lane=(4,), fuel={4: 12}), lap=8,
+    for _ in range(FEW + 1):
+        wall.see(a_frame(in_lane=(4,), fuel={4: 12}), lap=8,
                  now=clock.tick())
     for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
-        wall.see(a_named_frame(), lap=9, now=clock.tick())
+        wall.see(a_frame(), lap=9, now=clock.tick())
     for _ in range(4):
-        wall.see(a_named_frame(in_lane=(4,), fuel={4: 20}), lap=15,
+        wall.see(a_frame(in_lane=(4,), fuel={4: 20}), lap=15,
                  now=clock.tick())
     assert [e.fuel_in_l for e in seen] == [12, 20]
+
+
+def test_our_own_stop_is_never_filed_as_a_rivals():
+    """**The book is permanent and keyed by name.** `read_rows` returns the
+    driver's own row like any other, so the wall handed his own stop to
+    `rival_book`, which recorded it against his own name as an opponent -
+    and every figure drawn from it afterwards, his burn, his fill discipline,
+    when he stops, would be his own habits fed back to him as a rival's.
+
+    It went unseen because the fixture could not tell two drivers apart: the
+    rows differed only in name WIDTH and all six folded into one cluster, so
+    the car "in the lane" WAS the own row in every test in this file.
+    """
+    clock = Clock()
+    wall = a_wall()
+    warm(wall, clock)
+    for litres in (19, 40, 83):
+        wall.see(a_frame(in_lane=(OWN,), fuel={OWN: litres}),
+                 now=clock.tick())
+    closed = []
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        closed += wall.see(a_frame(), now=clock.tick())
+    assert closed == [] and wall.stops() == []
+
+
+def test_a_rival_in_the_same_race_is_still_filed():
+    """The exclusion has to be about identity and not about pit stops."""
+    clock = Clock()
+    wall = a_wall()
+    warm(wall, clock)
+    for litres in (19, 40, 83):
+        wall.see(a_frame(in_lane=(1,), fuel={1: litres}), now=clock.tick())
+    closed = []
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        closed += wall.see(a_frame(), now=clock.tick())
+    assert len(closed) == 1 and closed[0].stop.fuel_out_l == 83.0
+
+
+def test_our_own_stop_open_at_the_flag_is_not_filed_either():
+    """`close_all` runs where no board is readable, so the own row cannot be
+    identified from the frame - which is why it is remembered."""
+    clock = Clock()
+    wall = a_wall()
+    warm(wall, clock)
+    for litres in (19, 40, 83):
+        wall.see(a_frame(in_lane=(OWN,), fuel={OWN: litres}),
+                 now=clock.tick())
+    assert wall.close_all() == []

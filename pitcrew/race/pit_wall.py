@@ -206,7 +206,7 @@ class PitWall:
     """
 
     def __init__(self, roster: Roster | None = None, *, on_stop=None,
-                 on_enter=None,
+                 on_enter=None, min_sightings: int = MIN_SIGHTINGS,
                  name_for=None, where_on_lap=None) -> None:
         self._roster = roster if roster is not None else Roster()
         self._on_stop = on_stop
@@ -218,6 +218,10 @@ class PitWall:
         self._on_enter = on_enter
         self._announced: set[int] = set()
         self._own: int | None = None
+        # **How many sightings make a cluster a driver**, injectable so a test
+        # can reach it without feeding twenty full frames per case. Twenty
+        # board reads a test cost three minutes across this file.
+        self._min_sightings = min_sightings
         # **Asked for a name at the moment a stop closes, not at the flag.** A
         # stop closes DURING the race, and whatever files it refuses a stop
         # with no driver on it - so a cluster the archive did not recognise had
@@ -308,7 +312,7 @@ class PitWall:
         if (self._on_enter is None or driver in self._announced
                 or len(visit.readings) < MIN_READS
                 or (own is not None and driver == own)
-                or self._roster.sightings(driver) < MIN_SIGHTINGS):
+                or self._roster.sightings(driver) < self._min_sightings):
             return
         name = self._name_or_mint(driver)
         if not name:
@@ -431,10 +435,9 @@ class PitWall:
         # computed only for the gaps, below, which is after every announcement
         # has already been made.
         own = self._own_driver(ids, board)
-        # **Kept for the entry call only.** `_close` does NOT use it, and
-        # therefore still files our own stop as a rival's - see the note in
-        # `_close`. Excluding it there needs the shared test fixture to be able
-        # to tell two drivers apart, which today it cannot.
+        # **Remembered, because `_close` runs on frames where our own row is
+        # not identifiable** - a visit closed by the stale timer, or by
+        # `close_all` at the flag, has no board to read it off.
         if own is not None:
             self._own = own
         in_lane: set[int] = set()
@@ -569,23 +572,29 @@ class PitWall:
                             for d in list(self._visits)) if s is not None]
 
     def _close(self, driver: int, *, stale: bool = False) -> Seen | None:
-        # **KNOWN DEFECT: our own stop is filed here as a rival's.** The entry
-        # call excludes it (`_announce_entry`), and this does not, so
-        # `rival_book` records the driver against himself as an opponent - a
-        # row nothing downstream can distinguish from a real one, in a book
-        # that is permanent and keyed by name.
-        #
-        # It is left because closing it safely needs the test fixture to be
-        # able to tell two drivers apart, and today it cannot: `a_frame` gives
-        # its rows names that differ only in WIDTH, `Roster.name_bitmap`
-        # normalises to a fixed shape, and all six rows fold into one cluster
-        # with 144 sightings. Seven tests depend on that merge to clear
-        # `MIN_SIGHTINGS` at all, so the fixture and those tests have to be
-        # rebuilt together - which is its own change, not a rider on this one.
         # **Per VISIT.** Keyed per driver for the session, a two-stop rival's
         # second entry - the one that decides the end of the race - was silent.
         self._announced.discard(driver)
         visit = self._visits.pop(driver, None)
+        if driver == self._own:
+            # **Our own stop is not a rival's.** `read_rows` returns the
+            # driver's own row like any other, so without this the wall handed
+            # his stop to `rival_book`, which records it against his own name
+            # as an opponent - permanently, keyed by name, in a book whose
+            # whole purpose is that tonight's stop joins up with the same
+            # driver's last one. Nothing downstream could tell such a row from
+            # a real one, and every figure drawn from it - his burn, his fill
+            # discipline, when he stops - would be this driver's own habits
+            # fed back to him as a rival's.
+            #
+            # It went unseen because `a_frame` could not tell two drivers
+            # apart: its rows differed only in name WIDTH, `name_bitmap`
+            # normalises to a fixed shape, and all six folded into one cluster
+            # - so the car "in the lane" WAS the own row in every test here.
+            self._absent.pop(driver, None)
+            _log.info("pit-wall: own stop on lap %s not filed as a rival's",
+                      visit.lap if visit is not None else None)
+            return None
         self._absent.pop(driver, None)
         if visit is None or len(visit.readings) < MIN_READS:
             return None
@@ -596,7 +605,7 @@ class PitWall:
         # four being two-reading fragments that had founded clusters of their
         # own - and each took a driver handle with it, so the book would have
         # carried four people who never existed into the next race.
-        if self._roster.sightings(driver) < MIN_SIGHTINGS:
+        if self._roster.sightings(driver) < self._min_sightings:
             _log.info("pit-wall: a stop from a cluster seen only %d times is "
                       "not filed - that is a misread, not a driver",
                       self._roster.sightings(driver))
@@ -637,12 +646,14 @@ class PitWall:
 
     # --- naming ---------------------------------------------------------
 
-    def named(self, min_sightings: int = MIN_SIGHTINGS) -> list[tuple[int, str]]:
+    def named(self, min_sightings: int | None = None) -> list[tuple[int, str]]:
         """Driver ids that are worth a name, commonest first.
 
         The ones with no name yet are the ones a person has to label once. A
         proportional mixed-case font is not something this app guesses at.
         """
+        if min_sightings is None:
+            min_sightings = self._min_sightings
         return [(d, self._roster.name_of(d) or "")
                 for d in list(self._roster.drivers(
                     min_sightings=min_sightings))]
