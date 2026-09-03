@@ -77,6 +77,11 @@ NACK_BAD_CRC = 4
 # this, which is `NACK` reason 2.
 MAX_PAYLOAD = 32
 
+# The most channels a count reply is allowed to claim. Nothing on this rig or
+# any SimHub fan board approaches it; a parse that produces more than this
+# has read the wrong byte, and the caller must not act on it.
+MAX_CHANNELS = 8
+
 # 255 is a broadcast id the firmware accepts whatever it was expecting next.
 # It is the resync escape hatch, and it is what the handshake opens with -
 # there is no way to know where the sequence stands on a device that has been
@@ -183,6 +188,38 @@ def motors_count_payload() -> bytes:
 def hello_payload() -> bytes:
     """Ask for the firmware version letter. This rig answered 'j'."""
     return bytes([MESSAGE_HEADER]) + CMD_HELLO
+
+
+def parse_motors_count(raw: bytes) -> int | None:
+    """The bytes that follow the acknowledgement of a `'V' 'C'` query, read
+    as a channel count. None where they cannot be, never a guess.
+
+    **The format is not known from source.** `Command_Motors` lives in a
+    header SimHub deleted, and the reply's shape could not be recovered.
+    What is known is what SimHub logged from the same query on this board -
+    `"MotorsCount": 4, "MotorsBoard": "Adafruit Motor Shield V2"` - so a
+    count and a board name come back, count first. This accepts the two
+    encodings a count at the head of that reply could plausibly take, a raw
+    byte or an ASCII digit, and bounds it at `MAX_CHANNELS`. Anything else is
+    None, and the caller logs the raw bytes so the format is measured the
+    first time a board answers rather than assumed here.
+
+    **A count is never trusted on its own.** Whoever calls this must confirm
+    it against the board - `WindLink.confirm_channels` - because a wrong
+    width does not fail loudly: a frame one byte too long leaves a byte over
+    that corrupts the next, and one too short leaves the firmware waiting
+    mid-command. Both end with the deadman zeroing the fans.
+    """
+    if not raw:
+        return None
+    head = raw[0]
+    if 0x30 <= head <= 0x39:            # an ASCII digit
+        count = head - 0x30
+    else:
+        count = head
+    if count > MAX_CHANNELS:
+        return None
+    return count
 
 
 @dataclass(frozen=True)

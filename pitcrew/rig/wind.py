@@ -210,9 +210,19 @@ UNANSWERED_LIMIT = 4
 # once the abandoned close is measured at zero over a week.
 WRITE_TIMEOUT_LIMIT = 20
 
-# This device declares four, though only two fans are wired. All four bytes go
-# every time: the firmware reads exactly `motorCount()` of them with no
-# framing, so a short write leaves it waiting mid-command.
+# **The width of the app's own fan vector, and the count to fall back on.**
+# This device declares four, though only two fans are wired, and every byte
+# goes every time: the firmware reads exactly `motorCount()` of them with no
+# framing, so a short write leaves it waiting mid-command and a long one
+# leaves bytes over that corrupt the frame after.
+#
+# The link no longer assumes this number. `WindLink.discover_channels` asks
+# the board on every connect and confirms the answer by sending frames of
+# that width and requiring acknowledgements; `WindLink.send` then fits any
+# vector to the confirmed width. The reflash planned in
+# `docs/WIND-SKETCH-REFLASH_2026-09-03.md` makes the board declare two, and
+# this is what lets that happen without a code change on the day. Callers
+# keep building vectors of this width; the link trims or pads.
 CHANNELS = 4
 
 # Measured on the rig, 15 Aug 2026, by driving one channel at a time and
@@ -738,6 +748,100 @@ class WindLink:
             self.port)
         return False
 
+    # ------------------------------------------------------- channel count
+
+    def query_channels(self) -> tuple[int | None, bytes]:
+        """Ask the board how many channels it drives.
+
+        Returns what it parsed and the raw bytes it parsed it from, because
+        the reply format is not known from source - see
+        `arq.parse_motors_count` - and the raw bytes are the measurement.
+        Raises on a dead link, like every other write here.
+        """
+        self._drain()
+        self._write(arq.motors_count_payload())
+        reply = self._read_reply()
+        if reply is None or not reply.acknowledged:
+            return None, b""
+        # Whatever follows the acknowledgement is the answer: a count and a
+        # board name, bounded by the read timeout. Sixty-four bytes is more
+        # than any board name SimHub ships.
+        raw = self._serial.read(64) if self._serial is not None else b""
+        return arq.parse_motors_count(raw), raw
+
+    def confirm_channels(self, count: int, frames: int = 3) -> bool:
+        """Prove a width by using it: every zero frame must be acknowledged.
+
+        Three, not one. A frame one byte too long is acknowledged - the
+        firmware reads the bytes it wanted and the spare one is left to
+        corrupt the NEXT frame - so a single acknowledgement proves nothing
+        about width. A frame too short leaves the firmware waiting for the
+        rest, which the following frame then supplies as garbage. Either
+        fault shows by the second or third frame; none of them show on the
+        first.
+
+        Zero frames, because the link does not know what the fans should be
+        doing and a wrong width with a real duty in it is worse than 30 ms
+        of commanded zero on fans with inertia.
+        """
+        if not 1 <= count <= arq.MAX_CHANNELS:
+            return False
+        for _ in range(frames):
+            self._drain()
+            self._write(arq.motors_payload([0] * count))
+            reply = self._read_reply()
+            if reply is None or not reply.acknowledged:
+                return False
+        return True
+
+    def discover_channels(self, default: int) -> int:
+        """Settle `self.channels` against the board, and say how.
+
+        The declared count is tried first, then `default` if it differs; the
+        first width the board acknowledges three times wins. If neither is
+        confirmed the default is kept and said to be assumed - the send path
+        will then report every rejection, which is the right outcome for a
+        board this cannot understand.
+        """
+        declared, raw = self.query_channels()
+        shown = raw.hex(" ") if raw else "nothing"
+        if declared is None:
+            log("wind").info(
+                "%s did not give a channel count this app can read "
+                "(reply: %s) - trying %d, the count on file.",
+                self.port, shown, default)
+        else:
+            log("wind").info("%s declares %d channels (reply: %s).",
+                             self.port, declared, shown)
+        candidates = []
+        if declared is not None and declared >= 1:
+            candidates.append(declared)
+        if default not in candidates:
+            candidates.append(default)
+        for count in candidates:
+            if self.confirm_channels(count):
+                if count != default:
+                    log("wind").warning(
+                        "%s drives %d channels, not the %d on file - every "
+                        "frame is being fitted to %d. The channel map "
+                        "(which fan is which) needs re-measuring.",
+                        self.port, count, default, count)
+                self.channels = count
+                return count
+            log("wind").info(
+                "%s did not acknowledge three zero frames of width %d.",
+                self.port, count)
+        log("wind").warning(
+            "%s confirmed no channel width at all - sending %d as assumed. "
+            "Expect rejections.", self.port, default)
+        self.channels = default
+        return default
+
+    def fit(self, values: tuple[int, ...] | list[int]) -> tuple[int, ...]:
+        """A vector of exactly the board's width: trimmed, or padded with 0."""
+        kept = tuple(values[:self.channels])
+        return kept + tuple([0] * (self.channels - len(kept)))
+
     def send(self, values: tuple[int, ...]) -> bool:
         """Set every channel, and check the device accepted it.
 
@@ -763,7 +867,7 @@ class WindLink:
         if stale:
             self.stale_bytes += stale
         try:
-            self._write(arq.motors_payload(list(values)))
+            self._write(arq.motors_payload(list(self.fit(values))))
         except Exception as exc:                            # noqa: BLE001
             if not _is_write_timeout(exc):
                 raise
@@ -1100,8 +1204,20 @@ class WindSim:
                 f"simulator.")
             link.close(graceful=False)
             return False
+        try:
+            link.discover_channels(self._channels)
+        except Exception as exc:                            # noqa: BLE001
+            # It answered a hello and then died under the next write: a
+            # link that failed, not one to keep.
+            message = f"{port} failed while being asked its channel count: {exc}"
+            if self.state.error != message:
+                log("wind").warning(message)
+            self.state.error = message
+            link.close(graceful=False)
+            return False
         self._link = link
         self.state.connected = True
+        self.state.channels = link.channels
         self.state.port = port
         self.state.crc_name = link.crc.name
         self.state.error = None
@@ -1194,8 +1310,11 @@ class WindSim:
                         "%.2fs ago. Last outcome %s.",
                         link.port, gap, DEADMAN_S, gap - DEADMAN_S,
                         link.last_outcome)
-        self.state.last_values = values
-        self._log_frame(values, link.last_outcome)
+        # What the board was actually sent, at its own width - not the
+        # app's vector, which may be wider or narrower than the board.
+        sent = link.fit(values)
+        self.state.last_values = sent
+        self._log_frame(sent, link.last_outcome)
         return True
 
     def _decayed_locked(self) -> tuple[int, ...]:

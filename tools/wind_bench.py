@@ -113,6 +113,17 @@ def cmd_handshake(args) -> int:
             return 1
         print(f"\n  checksum   {link.crc.name}   <- MEASURED, not assumed")
         print(f"  port       {link.port}")
+        # The reply format for the count is not known from source, so the
+        # raw bytes are printed beside the parse: this is where it gets
+        # measured. Sends three zero frames per candidate width.
+        declared, raw = link.query_channels()
+        print(f"  count      {'?' if declared is None else declared}"
+              f"   <- raw reply {raw.hex(' ') if raw else 'nothing'}")
+        confirmed = [n for n in range(1, arq.MAX_CHANNELS + 1)
+                     if link.confirm_channels(n)]
+        print(f"  confirmed  {confirmed or 'none'}   <- widths the board "
+              f"acknowledged three zero frames at")
+        print(f"  on file    {wind.CHANNELS}")
         print("\nThe framing works. Fan commands will be accepted.")
         return 0
     finally:

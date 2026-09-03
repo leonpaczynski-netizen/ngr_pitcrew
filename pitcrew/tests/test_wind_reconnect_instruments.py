@@ -103,6 +103,10 @@ def _stub_discovery(monkeypatch):
     monkeypatch.setattr(wind, "find_port", lambda: "COM-TEST")
     monkeypatch.setattr(wind.WindLink, "open", lambda self, settle=True: None)
     monkeypatch.setattr(wind.WindLink, "handshake", lambda self: True)
+    # The count query is a real exchange with the board and has its own
+    # tests; here there is no port for it.
+    monkeypatch.setattr(wind.WindLink, "discover_channels",
+                        lambda self, default: default)
 
 
 def _reconnect(monkeypatch, sim, down_s):

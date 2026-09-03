@@ -139,17 +139,25 @@ their own supply.
    out to be audible and unwanted, the relay pin option in section 3 exists
    for it.
 
-## 5. Tell Pit Crew the board has changed
+## 5. Let Pit Crew find out the board has changed
 
-Pit Crew sends **four** channel bytes per frame because the old sketch
-declared four motors. The new one declares two, and the firmware reads
-exactly as many bytes as it declared with no framing, so two bytes a frame
-would be left over and every frame after the first would be rejected.
+The old sketch declared four motors and the new one declares two. The
+firmware reads exactly as many bytes as it declared with no framing, so a
+four-byte frame to a two-motor board leaves two bytes over and breaks the
+frame after it. Since 3 Sep Pit Crew asks the board its count on every
+connect and proves the answer with three acknowledged zero frames before
+using it, so no code change is needed on the day. Check it did, though:
 
-- In `pitcrew/rig/wind.py`, `CHANNELS = 4` becomes `CHANNELS = 2` before
-  the app is started against the new sketch. Or ask me to make the
-  handshake read the count from the board, which is the right fix and a
-  small one; the protocol already has the query.
+```bash
+python tools/wind_bench.py handshake
+```
+
+  should print `count 2`, the raw reply bytes beside it, and `confirmed
+  [2]`. The reply format for the count was never recoverable from source,
+  so this run is where it gets measured: if `count` reads `?`, send me the
+  raw bytes. In the app log the line to look for is
+  `COM5 drives 2 channels, not the 4 on file`.
+
 - Then re-measure the three things the old path measured, in this order,
   with Pit Crew closed:
 
@@ -198,7 +206,8 @@ Either of these puts the old behaviour back.
 
 - **Through the setup tool**: shield count back to 1, PWM fans back to 0,
   shield frequency 1200, upload, and put the fans back on M1 and M2.
-- Pit Crew's `CHANNELS` goes back to 4 in either case.
+- Pit Crew needs nothing in either case: it asks the board its count on
+  every connect.
 
 ## Reference: the old sketch's values
 
