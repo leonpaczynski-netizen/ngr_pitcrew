@@ -74,35 +74,43 @@ BOOT_BAUD = 19200
 # module measures is measured against it.
 DEADMAN_S = 1.0
 
-# **60 Hz, which is the rate the duty is computed at.**
+# **20 Hz. It was 60, and 60 broke the link.**
 #
-# This was 0.25 s, and that number came only from the deadman above - far
-# enough inside 1000 ms to survive a missed frame. Nothing about it was
-# derived from the fans, and it quantised every change the curve computed to
-# 250 ms before the board ever heard it. `WindCurve.update` runs on every
-# telemetry frame at 60 Hz; fourteen of every fifteen values it produced were
-# thrown away.
+# The history, because each step was measured and each measurement was too
+# short. This was 0.25 s, a number that came only from the deadman above and
+# quantised every change the curve computed to 250 ms. On 30 Aug 2026 it went
+# to 1/60 s on the strength of a 9.17 ms median round trip and a 60 s live
+# check that acknowledged 100% of frames. The driver, who asked for the
+# change, reported Monza T1 as "much smoother and more realistic".
 #
-# **Measured on this link before changing it:** send-plus-acknowledgement
-# round trip over 200 frames at 19200 baud is 9.17 ms median, 9.44 ms p95,
-# 10.65 ms worst. A 16.7 ms budget clears the p95 by 7 ms, so the rate is
-# reachable with room, and the driver - who asked the question - reports the
-# difference through Monza T1 as "much smoother and more realistic".
+# **Then the whole of the log was read, 12 Aug to 3 Sep.** In 10.3 running
+# hours before that commit the CH340 hard-failed a `WriteFile`/`ReadFile`
+# once. In 4.2 running hours after it, 106 times - Windows error 1460, the
+# driver's own timeout, roughly one every 2.4 minutes - and 203 quarter-second
+# write stalls against 21. Not load-related: 15 of the 106 came at a
+# standstill with the fans idle, and the fan level at a failure matched the
+# session baseline. It is the wch.cn 3.5.2019.1 driver under back-to-back
+# overlapped I/O, and it followed the board from a chained hub (COM9, ~29/h)
+# to a root port (COM5, ~10/h). The 60 s verification could not have seen a
+# fault that arrives every two to six minutes.
 #
-# Two consequences worth stating rather than discovering later:
+# 103 of the 106 reconnected in 0.13 s, inside the deadman, so they did not
+# stop the fans - but three did, one of them for seven minutes, and every one
+# of them is a purge, a cancel and a handshake the link should not need.
 #
-# * The link is no longer nearly idle. Seven bytes out and an acknowledgement
-#   back, sixty times a second, occupies the sender thread about 55% of the
-#   time. It is blocked on I/O rather than burning CPU, but it is not the 1%
-#   the baud-rate note above was written against.
-# * **`UNANSWERED_LIMIT` and `WRITE_TIMEOUT_LIMIT` are counts, and this
-#   changes what they mean in seconds.** Both get shorter, which is the safe
-#   direction: see their own comments, which now carry both figures.
+# Twenty is the compromise: five times the old rate, a 50 ms period the
+# 60 Hz curve is decimated onto without visible steps, and a third of the
+# I/O the driver was failing under. **It is a hypothesis with a prediction:**
+# hard losses per running hour should fall from 25 back towards 1. The
+# `wind simulator back on` line and the ack-gap warning below are what will
+# say whether it did. If they do not, the rate is not the variable and the
+# driver is.
 #
-# It degrades gracefully. If the machine is too busy to keep up the loop
-# simply runs slower, and the deadman is 1000 ms away - sixty times this
-# interval - so falling behind costs responsiveness and never the fans.
-SEND_INTERVAL_S = 1.0 / 60.0
+# `UNANSWERED_LIMIT` and `WRITE_TIMEOUT_LIMIT` are counts, so the rate
+# changes what they mean in seconds: their comments carry the figure that
+# applies. Falling behind still costs responsiveness and never the fans -
+# the deadman is twenty intervals away.
+SEND_INTERVAL_S = 1.0 / 20.0
 # A write that has not completed in this long is a link that is not working.
 WRITE_TIMEOUT_S = 0.25
 READ_TIMEOUT_S = 0.15
@@ -154,11 +162,11 @@ CLOSE_TIMEOUT_S = 1.0
 # Four: 1.6 seconds, which is what "about two seconds" was always meant to
 # be, and still comfortably longer than a single late reply.
 #
-# **At 60 Hz that is 0.67 s**, because the interval term collapses from
-# 250 ms to 17 ms and only `READ_TIMEOUT_S` remains. Shorter is the safe
-# direction - the device answers in about a millisecond, so four unanswered
-# frames is still far more than a busy moment - but the number in the
-# paragraph above is the 4 Hz one and this is the one that now applies.
+# **At 20 Hz that is 0.8 s** - four times `READ_TIMEOUT_S` plus a 50 ms
+# interval. Shorter than the 1.6 s above is the safe direction: the device
+# answers in about a millisecond, so four unanswered frames is still far more
+# than a busy moment. The paragraph above is the 4 Hz figure; this is the one
+# that applies.
 UNANSWERED_LIMIT = 4
 
 # **How many write timeouts in a row before the link is given up on.**
@@ -189,8 +197,8 @@ UNANSWERED_LIMIT = 4
 # actually reports: the fans drop, they come back on their own, and the log
 # says the link was healthy the whole time.
 #
-# **At 60 Hz that is 5.3 s, not 10.2**, because each timeout costs
-# `WRITE_TIMEOUT_S` plus a 17 ms interval rather than a 250 ms one. Half the
+# **At 20 Hz that is 6.0 s, not 10.2**, because each timeout costs
+# `WRITE_TIMEOUT_S` plus a 50 ms interval rather than a 250 ms one. A shorter
 # dead-fan window for the same count, which is the safe direction and needs
 # no adjustment.
 #
@@ -827,6 +835,16 @@ class WindSim:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._link: WindLink | None = None
+        # **What every link before this one counted.** The counters live on
+        # the link, and a link is replaced at every reconnect - so for four
+        # days the health line read `resyncs 1 · stale 3 · timeouts 0`
+        # through 106 teardowns, because each new link started from zero and
+        # the report copied it verbatim. These are added in `_drop_link` so
+        # the state reports the session, not the most recent link.
+        self._acks_before = 0
+        self._resyncs_before = 0
+        self._stale_before = 0
+        self._timeouts_before = 0
 
     # ------------------------------------------------------------- control
 
@@ -878,7 +896,10 @@ class WindSim:
         `laps.recorded_at` at one-second truncation - and that slop was large
         enough to swing the finding from below chance to nothing.
 
-        Twelve bytes a frame at 4 Hz is about 40 kB an hour. `speed_kmh` is
+        About 115 bytes a frame at 20 Hz is some 8 MB an hour, which is why
+        the frame log has its own rotation size - see `diagnostics`. At the
+        old 2 MB it rolled every five minutes and had lost tonight's drops
+        before anyone looked. `speed_kmh` is
         None rather than 0.0 where the caller did not say, because a stopped
         car and an unknown one need opposite readings.
         """
@@ -1084,7 +1105,27 @@ class WindSim:
         self.state.port = port
         self.state.crc_name = link.crc.name
         self.state.error = None
-        log("wind").info("wind simulator ready on %s", port)
+        if self.state.last_drop_at is not None:
+            # **How long the link was down, said on the line that ends it.**
+            # For four days every drop logged only "Lost" and "ready", and
+            # whether the fans had stopped in between - which is the only
+            # thing the driver cares about - had to be recovered afterwards
+            # by subtracting timestamps across 106 pairs of lines. Against
+            # the deadman, because that is the number that decides it; the
+            # ack-gap warning in `_send_once` carries the exact figure.
+            down = time.monotonic() - self.state.last_drop_at
+            if down < DEADMAN_S:
+                log("wind").info(
+                    "wind simulator back on %s after %.2fs - inside the "
+                    "firmware's %.1fs deadman.", port, down, DEADMAN_S)
+            else:
+                log("wind").warning(
+                    "wind simulator back on %s after %.2fs - past the "
+                    "firmware's %.1fs deadman, so the fans were zeroed for "
+                    "at least %.2fs.", port, down, DEADMAN_S,
+                    down - DEADMAN_S)
+        else:
+            log("wind").info("wind simulator ready on %s", port)
         return True
 
     def _send_once(self) -> bool:
@@ -1109,28 +1150,50 @@ class WindSim:
                 f"{self.state.frames_sent} frames. Reconnecting.")
             log("wind").warning(self.state.error)
             return False
-        self.state.resyncs = link.resyncs
-        self.state.stale_bytes = link.stale_bytes
-        self.state.write_timeouts = link.write_timeouts
+        self.state.resyncs = self._resyncs_before + link.resyncs
+        self.state.stale_bytes = self._stale_before + link.stale_bytes
+        self.state.write_timeouts = self._timeouts_before + link.write_timeouts
         # **A frame that timed out did not go anywhere.** Counting it as sent
         # made `frames_sent` a measure of intent while reading as a measure of
         # delivery - rule 3, in the counter the health report leads with.
         if link.last_outcome != "timeout":
             self.state.frames_sent += 1
-        self.state.frames_accepted = link.acks
-        self.state.last_ack_at = link.last_ack_at
-        gap = self.state.deadman_gap_s()
+        self.state.frames_accepted = self._acks_before + link.acks
+        # **The gap is measured between consecutive acknowledgements, across
+        # links.** It used to be copied from the link and then measured, so
+        # an acknowledged frame always read as a gap of nothing, and a new
+        # link brought a `None` that erased the last acknowledgement of the
+        # old one. The reconnect - 106 of them in four days, three of them
+        # long enough to zero the fans - was the one interval this could not
+        # see. Now the previous acknowledgement is kept until this link
+        # produces one, and the interval that closes is the figure reported.
+        previous = self.state.last_ack_at
+        if link.last_ack_at is not None:
+            self.state.last_ack_at = link.last_ack_at
+        if previous is None:
+            gap = None
+        elif link.last_outcome == "acked":
+            gap = self.state.last_ack_at - previous
+        else:
+            gap = time.monotonic() - previous
         if gap is not None and gap > self.state.max_ack_gap_s:
             self.state.max_ack_gap_s = gap
             # Said once, when it crosses, because this is the line that has
             # been missing from every fan report the driver has ever made.
             if gap > DEADMAN_S:
-                log("wind").warning(
-                    "%s has not acknowledged a frame for %.2fs - the "
-                    "firmware's %.1fs deadman will have zeroed the fans "
-                    "%.2fs ago. Last outcome %s.",
-                    link.port, gap, DEADMAN_S, gap - DEADMAN_S,
-                    link.last_outcome)
+                if link.last_outcome == "acked":
+                    log("wind").warning(
+                        "%s went %.2fs between acknowledgements - the "
+                        "firmware's %.1fs deadman will have zeroed the fans "
+                        "for %.2fs of that.",
+                        link.port, gap, DEADMAN_S, gap - DEADMAN_S)
+                else:
+                    log("wind").warning(
+                        "%s has not acknowledged a frame for %.2fs - the "
+                        "firmware's %.1fs deadman will have zeroed the fans "
+                        "%.2fs ago. Last outcome %s.",
+                        link.port, gap, DEADMAN_S, gap - DEADMAN_S,
+                        link.last_outcome)
         self.state.last_values = values
         self._log_frame(values, link.last_outcome)
         return True
@@ -1180,6 +1243,12 @@ class WindSim:
         """
         link, self._link = self._link, None
         if link is not None:
+            # Bank what this link counted before it goes, so the next one
+            # adds to the session rather than restarting it.
+            self._acks_before += link.acks
+            self._resyncs_before += link.resyncs
+            self._stale_before += link.stale_bytes
+            self._timeouts_before += link.write_timeouts
             if self.state.connected:
                 # Counted so a drop that heals inside one ten-second report
                 # cycle still leaves a mark. Until now a 7-second outage could

@@ -40,12 +40,21 @@ LOG_FILE = LOG_DIR / "pitcrew.log"
 # Native faults are written raw by faulthandler, which cannot use the logging
 # module - it runs inside a signal handler.
 FAULT_FILE = LOG_DIR / "pitcrew-fault.log"
-# The 4 Hz wind frame log, kept apart from the main record - see
+# The 20 Hz wind frame log, kept apart from the main record - see
 # `_install_frame_log` for why that separation is not a tidiness preference.
 FRAME_FILE = LOG_DIR / "pitcrew-wind-frames.log"
 
 MAX_BYTES = 2_000_000
 BACKUPS = 3
+# **The frame log has to hold a whole session, and at the main log's size it
+# held twenty minutes.** A frame line is about 115 bytes; at 60 Hz that
+# rolled a 2 MB file every five minutes, and the three drops of 3 Sep 2026
+# had been rotated out of existence before the log was opened. At 20 Hz it
+# is ~8 MB an hour, so ten megabytes six deep is a little over seven hours -
+# longer than any day on the rig. The instrument built to catch a felt drop
+# is worthless if it cannot remember the session the drop was felt in.
+FRAME_MAX_BYTES = 10_000_000
+FRAME_BACKUPS = 6
 LOGGER_NAME = "pitcrew"
 
 _installed = False
@@ -98,10 +107,10 @@ def install(*, level: int = logging.INFO, log_dir: Path | None = None) -> Path:
 
 
 def _install_frame_log(directory: Path) -> None:
-    """A file of its own for the 4 Hz wind frame log.
+    """A file of its own for the 20 Hz wind frame log.
 
-    **It must not share `pitcrew.log`.** Four lines a second is ~14,000 an
-    hour, which would roll the main log past its two backups in an evening -
+    **It must not share `pitcrew.log`.** Twenty lines a second is ~72,000 an
+    hour, which would roll the main log past its backups in minutes -
     and the main log's history is the only reason the fan dropouts could be
     investigated at all. Diagnosing one fault must not destroy the record of
     the next.
@@ -110,8 +119,8 @@ def _install_frame_log(directory: Path) -> None:
     """
     frames = logging.getLogger(f"{LOGGER_NAME}.wind.frames")
     handler = logging.handlers.RotatingFileHandler(
-        directory / FRAME_FILE.name, maxBytes=MAX_BYTES,
-        backupCount=BACKUPS, encoding="utf-8")
+        directory / FRAME_FILE.name, maxBytes=FRAME_MAX_BYTES,
+        backupCount=FRAME_BACKUPS, encoding="utf-8")
     # No level or thread name: every line is INFO from the wind thread, and
     # the row is the data.
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
