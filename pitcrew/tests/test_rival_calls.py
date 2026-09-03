@@ -125,9 +125,18 @@ def test_a_limit_beyond_the_flag_binds_nothing_so_is_not_said():
                         laps_total=20) is None
 
 
-def test_without_a_race_length_it_reports_the_reach_anyway():
-    # Nothing to compare against is not a reason to withhold the fact.
-    assert must_stop_by(_rival(left_on=41.0), SPA_BURN, lap=11) is not None
+def test_without_a_race_length_it_asserts_nothing():
+    """**It used to report the reach anyway**, on the argument that nothing to
+    compare against is not a reason to withhold a fact. But the sentence it
+    speaks is not the reach - it is "so he has to stop again", and with no race
+    length there is no way to tell a forced stop from a car that lifts to the
+    flag. That is exactly the over-claim `short_to_the_flag` was written to
+    correct, left live on the branch where least is known.
+
+    It is not a rare branch: `laps_total` is None until the coordinator has a
+    distance, and the pit wall is deliberately started at arm, before the
+    green, because the columns are only drawn while a car is standing."""
+    assert must_stop_by(_rival(left_on=41.0), SPA_BURN, lap=11) is None
 
 
 def test_an_unread_exit_figure_refuses():

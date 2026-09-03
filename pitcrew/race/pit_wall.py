@@ -171,6 +171,15 @@ class Seen:
     compound_reads: int
     watched_s: float
     partial: bool
+    # **The car left the board before anyone saw it leave the box.** `exit_l`
+    # is `max(readings)`, so a visit closed by the stale timer rather than by
+    # seeing the car back on track has an exit figure that is a LOWER BOUND -
+    # a reading from the middle of the fill. Measured example: a driver
+    # filling 10 -> 89 L who drops below the visible top eight at 40 s files
+    # as ~50 L, and 50 L looks exactly like a car that chose to underfill.
+    # `partial` does not cover this: it means the entry figure is an upper
+    # bound, which is the opposite end of the same stop.
+    exit_is_a_bound: bool = False
 
 
 class PitWall:
@@ -391,7 +400,10 @@ class PitWall:
                 continue
             self._absent[driver] = self._absent.get(driver, 0) + 1
             if self._absent[driver] >= CLOSE_AFTER_CLEAN_FRAMES:
-                done = self._close(driver)
+                # **Closed on the clock, not on seeing him leave.** The exit
+                # figure is therefore the highest reading anyone got, which is
+                # a lower bound on the fill rather than the fill.
+                done = self._close(driver, stale=True)
                 if done is not None:
                     closed.append(done)
         return closed + self._close_stale(now)
@@ -426,17 +438,25 @@ class PitWall:
         for driver, visit in list(self._visits.items()):
             last = visit.last_s or visit.started_s
             if now - last >= CLOSE_AFTER_SILENT_S:
-                done = self._close(driver)
+                # **Closed on the clock, not on seeing him leave.** The exit
+                # figure is therefore the highest reading anyone got, which is
+                # a lower bound on the fill rather than the fill.
+                done = self._close(driver, stale=True)
                 if done is not None:
                     closed.append(done)
         return closed
 
     def close_all(self) -> list[Seen]:
-        """End every open visit, for the end of a session."""
-        return [s for s in (self._close(d) for d in list(self._visits))
-                if s is not None]
+        """End every open visit, for the end of a session.
 
-    def _close(self, driver: int) -> Seen | None:
+        Stale by definition: a visit still open at the flag is one nobody saw
+        end, so its exit figure is the highest reading taken rather than the
+        fill.
+        """
+        return [s for s in (self._close(d, stale=True)
+                            for d in list(self._visits)) if s is not None]
+
+    def _close(self, driver: int, *, stale: bool = False) -> Seen | None:
         visit = self._visits.pop(driver, None)
         self._absent.pop(driver, None)
         if visit is None or len(visit.readings) < MIN_READS:
@@ -494,7 +514,8 @@ class PitWall:
         seen = Seen(driver=name, driver_id=driver,
                     stop=stop, reads=len(visit.readings),
                     compound_reads=len(visit.compounds),
-                    watched_s=watched, partial=visit.partial or no_fill)
+                    watched_s=watched, partial=visit.partial or no_fill,
+                    exit_is_a_bound=bool(stale))
         self._stops.append(seen)
         _log.info("pit-wall: %s stopped - in %s L, out %s L, %d reads over "
                   "%.0f s%s", seen.driver or f"driver {driver}",

@@ -664,7 +664,8 @@ class RaceCoordinator:
             return folded
         return self._emit()
 
-    def note_rival_stop(self, seen, burn_per_lap_l=None) -> None:
+    def note_rival_stop(self, seen, burn_per_lap_l=None,
+                        burn_stops: int = 0) -> None:
         """File a rival's finished stop so the calls can reason about it.
 
         **Qt thread only.** The pit wall sees a stop on the sampler's worker
@@ -675,17 +676,52 @@ class RaceCoordinator:
         A partial stop is kept: the exit fuel is what every call downstream
         needs, and a stop whose ENTRY figure was never read still carries it.
         """
-        if not self.running or seen is None:
-            return
-        name = getattr(seen, "driver", None)
-        stop = getattr(seen, "stop", None)
-        if not name or stop is None:
+        # **Every gate says which one it was.** This method had five silent
+        # returns and no log line at all - and the history of this feature is a
+        # whole race of unexplained silence. CLAUDE.md rule 10: log the
+        # accepts, not only the refusals.
+        why = None
+        if seen is None:
+            why = "nothing was sent"
+        elif not self.running:
+            why = f"the race is {self.phase.name.lower()}, not running"
+        elif not getattr(seen, "driver", None):
+            why = "the stop carries no driver name"
+        elif getattr(seen, "stop", None) is None:
+            why = "the stop carries no fuel record"
+        if why is not None:
+            log("race").info("rival stop not filed: %s", why)
             return
         from pitcrew.race.rival_calls import Rival
 
+        name = seen.driver
         self.state.rivals[name] = Rival(
-            name=name, stop=stop, pitted=True,
-            burn_per_lap_l=burn_per_lap_l)
+            name=name, stop=seen.stop, pitted=True,
+            burn_per_lap_l=burn_per_lap_l, burn_stops=burn_stops,
+            exit_is_a_bound=getattr(seen, "exit_is_a_bound", False),
+            position=self.state.rival_positions.get(name))
+        log("race").info(
+            "rival stop filed: %s out on %s L on lap %s, burn %s L/lap from "
+            "%d stop%s%s", name, seen.stop.fuel_out_l, seen.stop.lap,
+            f"{burn_per_lap_l:.2f}" if burn_per_lap_l else "ours",
+            burn_stops, "" if burn_stops == 1 else "s",
+            " (exit figure is a lower bound)"
+            if getattr(seen, "exit_is_a_bound", False) else "")
+
+    def note_rival_positions(self, positions: dict) -> None:
+        """Where the other cars are, refreshed each lap from the board.
+
+        Kept beside the rivals rather than on them because a stop's position
+        is read while the car is STANDING, which is the one moment it does not
+        describe where he is racing.
+        """
+        if not positions:
+            return
+        self.state.rival_positions.update(positions)
+        for name, rival in self.state.rivals.items():
+            where = positions.get(name)
+            if where is not None and where != rival.position:
+                self.state.rivals[name] = replace(rival, position=where)
 
     def note_incident(self, *, reported: bool = False) -> None:
         """The car stopped mid-lap, or the driver said it did.

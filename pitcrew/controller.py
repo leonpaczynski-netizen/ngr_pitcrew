@@ -2460,6 +2460,16 @@ class PitCrewController(QObject):
         # worst, which is the same instant the driver was told.
         if self.race is not None and self.race.clock is not None:
             self.race.stamp_clock(lap)
+        # **Where the other cars are, refreshed on the crossing.** A rival's
+        # position is filed at his STOP, which is the one moment it does not
+        # describe where he is racing - so a call that asks "is he near enough
+        # to attack" would be reading a place he held while standing still.
+        wall = getattr(self, "_pit_wall", None)
+        if self.race is not None and wall is not None:
+            try:
+                self.race.note_rival_positions(wall.positions())
+            except Exception:
+                log("race").exception("rival positions could not be read")
         frames = self.bridge.recorder.encode(rows)
 
         # **A lap has to have been driven for as long as it says it was.**
@@ -3957,8 +3967,11 @@ class PitCrewController(QObject):
         """
         race = self.race
         if race is None or seen is None:
+            log("race").info(
+                "rival stop not filed: %s",
+                "no race is armed" if seen is not None else "nothing was sent")
             return
-        burn = None
+        burn, stops = None, 0
         try:
             from pitcrew.race import rival_book
 
@@ -3977,7 +3990,8 @@ class PitCrewController(QObject):
             # The calls fall back to ours and say that they have.
             burn = None
         try:
-            race.note_rival_stop(seen, burn_per_lap_l=burn)
+            race.note_rival_stop(seen, burn_per_lap_l=burn,
+                                 burn_stops=stops or 0)
         except Exception:
             log("race").exception("a rival's stop could not be filed")
 

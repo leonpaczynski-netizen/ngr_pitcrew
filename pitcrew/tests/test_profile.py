@@ -53,13 +53,36 @@ def test_a_start_on_less_than_a_full_tank_is_carried_with_the_observation():
 
 
 def test_the_sample_count_travels_with_the_mean():
-    """CLAUDE.md rule 4."""
+    """CLAUDE.md rule 4.
+
+    **Two RACES, not two stops.** The fixture used one race twice, which is
+    now one sample - see the test below: a driver's second stop of a race
+    cannot be read this way at all.
+    """
     profile = Profile("Rocky")
     assert profile.burn_per_lap_l() == (None, 0)
     profile.add(spa("Rocky", lap=10, fuel_in=20.0))
-    profile.add(spa("Rocky", lap=10, fuel_in=30.0))
+    profile.add(spa("Rocky", lap=10, fuel_in=30.0, race="spa-r6"))
     burn, count = profile.burn_per_lap_l()
     assert count == 2 and abs(burn - 7.5) < 1e-9
+
+
+def test_only_a_drivers_first_stop_of_a_race_can_price_his_burn():
+    """`Observation.burn_per_lap_l` is `(assumed_start - fuel_in) / lap`, which
+    assumes he has not refuelled since the start. That is true of his first
+    stop and false of every one after it.
+
+    A rival burning a true 8 L/lap who pits on lap 10 showing 20 L, refills,
+    and pits again on lap 19 showing 28 L: the second stop reads 3.79 L/lap,
+    and the mean of the two is 5.89 - twenty-six per cent low. Handed to a
+    live call, that understates what he needs and reports a car that cannot
+    reach the flag as one that can.
+    """
+    profile = Profile("Rocky")
+    profile.add(spa("Rocky", lap=10, fuel_in=20.0))
+    profile.add(spa("Rocky", lap=19, fuel_in=28.0))
+    burn, count = profile.burn_per_lap_l()
+    assert count == 1 and abs(burn - 8.0) < 1e-9
 
 
 def test_burn_against_ours_is_signed_and_negative_means_he_uses_less():

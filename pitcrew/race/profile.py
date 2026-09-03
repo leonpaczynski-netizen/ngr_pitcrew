@@ -186,7 +186,20 @@ class Profile:
         """
         wanted = [o for o in self.observations
                   if car is None or o.car == car]
-        seen = [o.burn_per_lap_l for o in wanted]
+        # **Only the FIRST stop of each race.** `Observation.burn_per_lap_l` is
+        # `(assumed_start - fuel_in) / lap`, which assumes he has not refuelled
+        # since the start - true of his first stop and false of every one
+        # after it. Measured on a rival burning a true 8.00 L/lap who pits on
+        # lap 10 and again on lap 19: the second stop yields 3.79, and the mean
+        # of the two is 5.89 - twenty-six per cent low, which understates what
+        # a rival needs and reports a car that cannot reach the flag as one
+        # that can.
+        first: dict[str, Observation] = {}
+        for observation in wanted:
+            best = first.get(observation.race)
+            if best is None or observation.lap < best.lap:
+                first[observation.race] = observation
+        seen = [o.burn_per_lap_l for o in first.values()]
         seen = [b for b in seen if b is not None]
         if not seen:
             return None, 0

@@ -152,7 +152,7 @@ REJOIN = "rejoin"
 CLOSING = "closing"
 RIVAL_BOXED = "rival-boxed"
 RIVAL_COMMITTED = "rival-committed"
-RIVAL_SAVING = "rival-saving"
+RIVAL_SHORT = "rival-short"
 STAY_OUT_FUEL = "stay-out-fuel"
 
 URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
@@ -196,14 +196,15 @@ URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            # on - the columns are drawn only while he is standing, so it is
            # true now and gone in a minute, where a forced second stop stays
            # true for the rest of the race.
-           # **`RIVAL_SAVING` sits immediately below `RIVAL_COMMITTED`,
+           # **`RIVAL_SHORT` sits immediately below `RIVAL_COMMITTED`,
            # because the two are the two answers to one question.** A rival
-           # short of fuel either stops again or drives it out, and hearing
-           # both in one race about one car is fine - hearing them in the
-           # wrong order is not, because the second silently corrects the
-           # first. `RIVAL_COMMITTED` leads: a forced stop is worth a pit
-           # loss and a lift is worth tenths.
-           RIVAL_BOXED, RIVAL_COMMITTED, RIVAL_SAVING,
+           # short of fuel either stops again or drives it out.
+           # **Named for what is observed, not for what is inferred.** It was
+           # `RIVAL_SAVING`, which asserted an intent the app cannot see - and
+           # collided with `SAVING_RESPONSE` and the short-shift instructions,
+           # which are about the DRIVER saving. One voice, one word, two
+           # subjects, at racing speed (rule 13).
+           RIVAL_BOXED, RIVAL_COMMITTED, RIVAL_SHORT,
            # **`CLOSING` is a fact about pace and ranks with the other facts.**
            # It is worth hearing and it is never an instruction: what to do
            # about catching somebody is the driver's, and a closing rate that
@@ -263,7 +264,7 @@ REGISTER = {
     CLOSING: FACT,
     RIVAL_BOXED: DECISION,
     RIVAL_COMMITTED: DECISION,
-    RIVAL_SAVING: DECISION,
+    RIVAL_SHORT: DECISION,
     STAY_OUT_FUEL: DECISION,
 }
 
@@ -575,6 +576,10 @@ class RaceState:
     # own tests, and the controller emitted `rival_stopped` into a signal with
     # no connection. This field is the road in.
     rivals: dict = field(default_factory=dict)
+    # Board positions per driver, refreshed each lap. Kept apart from `rivals`
+    # because a stop's position is read while the car is STANDING - the one
+    # moment it does not describe where he is racing.
+    rival_positions: dict = field(default_factory=dict)
     # Stint accounting against the approved plan.
     stint_index: int = 0
     stint_ends_on_lap: int | None = None
@@ -1026,6 +1031,14 @@ def _worth_saying_again(state: RaceState, call: Call) -> bool:
     doubles is worse - the driver reads silence as "nothing has changed",
     which is exactly what `_status` promises it means.
     """
+    # **Checked before `said`, because these outlive a stint.** `clear_stint`
+    # drops `said` and deliberately keeps `said_tags`, so a shortfall frozen at
+    # a rival's stop lap was re-announced after our own stop - "14 litres light
+    # over 9 laps" said again on lap 18 of 20, describing a window that is
+    # mostly spent. Tagged per driver, so two rivals do not swallow each other
+    # either. Below the `said` check it never ran at all.
+    if call.kind in (RIVAL_SHORT, RIVAL_COMMITTED):
+        return call.tag not in state.said_tags
     if call.kind not in state.said:
         return True
     if call.kind == STATUS:
