@@ -850,6 +850,11 @@ class PitCrewController(QObject):
         self.bridge.incident_seen.connect(self._on_incident_seen)
         self.bridge.straight_reached.connect(self._on_straight_reached)
         self.bridge.position_changed.connect(self._on_position_changed)
+        # **The connection this signal never had.** `_on_rival_stop` emitted
+        # into it from the worker thread and nothing was listening, so every
+        # rival call in `race/rival_calls.py` was unreachable - written,
+        # documented, tested, and silent for the whole of every race.
+        self.bridge.rival_stopped.connect(self._rival_stop_filed)
 
         self.event_screen.saved.connect(self._on_event_saved)
         self.event_screen.discarded.connect(self.discard_event_edits)
@@ -3937,6 +3942,44 @@ class PitCrewController(QObject):
             self.bridge.rival_stopped.emit(seen)
         except Exception:
             pass
+
+    def _rival_stop_filed(self, seen) -> None:
+        """Qt thread. Hand a watched stop to the coordinator so it can speak.
+
+        Queued from `_on_rival_stop`, which runs on the sampler's worker
+        thread: `RaceState.rivals` is read on every crossing, and a dict
+        written from two threads is the defect the roster had.
+
+        **His own burn where the book has watched him**, ours only as a stated
+        fallback inside the calls. `profile.py` puts 0.4 L/lap outside reading
+        error, which over a dozen remaining laps is five litres - enough on its
+        own to invent a shortfall that is not there.
+        """
+        race = self.race
+        if race is None or seen is None:
+            return
+        burn = None
+        try:
+            from pitcrew.race import rival_book
+
+            # **Scoped to the car, because litres a lap is a property of the
+            # CAR.** He races several leagues at once and a Gr.3 burn averaged
+            # with a Gr.4 one describes neither. `burn_per_lap_l` returns the
+            # figure with the stops behind it - rule 4 - and `None, 0` where
+            # there is nothing on file for this car.
+            burn, stops = rival_book.profile_of(
+                self.store, seen.driver).burn_per_lap_l(
+                    getattr(self.bridge, "_car_name", None))
+            if not stops:
+                burn = None
+        except Exception:
+            # A rival with no burn on file is not a rival who burns nothing.
+            # The calls fall back to ours and say that they have.
+            burn = None
+        try:
+            race.note_rival_stop(seen, burn_per_lap_l=burn)
+        except Exception:
+            log("race").exception("a rival's stop could not be filed")
 
     def _planned_laps(self) -> int | None:
         race = self.race

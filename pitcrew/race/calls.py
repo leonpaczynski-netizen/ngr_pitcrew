@@ -152,6 +152,7 @@ REJOIN = "rejoin"
 CLOSING = "closing"
 RIVAL_BOXED = "rival-boxed"
 RIVAL_COMMITTED = "rival-committed"
+RIVAL_SAVING = "rival-saving"
 STAY_OUT_FUEL = "stay-out-fuel"
 
 URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
@@ -195,7 +196,14 @@ URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            # on - the columns are drawn only while he is standing, so it is
            # true now and gone in a minute, where a forced second stop stays
            # true for the rest of the race.
-           RIVAL_BOXED, RIVAL_COMMITTED,
+           # **`RIVAL_SAVING` sits immediately below `RIVAL_COMMITTED`,
+           # because the two are the two answers to one question.** A rival
+           # short of fuel either stops again or drives it out, and hearing
+           # both in one race about one car is fine - hearing them in the
+           # wrong order is not, because the second silently corrects the
+           # first. `RIVAL_COMMITTED` leads: a forced stop is worth a pit
+           # loss and a lift is worth tenths.
+           RIVAL_BOXED, RIVAL_COMMITTED, RIVAL_SAVING,
            # **`CLOSING` is a fact about pace and ranks with the other facts.**
            # It is worth hearing and it is never an instruction: what to do
            # about catching somebody is the driver's, and a closing rate that
@@ -255,6 +263,7 @@ REGISTER = {
     CLOSING: FACT,
     RIVAL_BOXED: DECISION,
     RIVAL_COMMITTED: DECISION,
+    RIVAL_SAVING: DECISION,
     STAY_OUT_FUEL: DECISION,
 }
 
@@ -560,6 +569,12 @@ class RaceState:
     position_pending_value: int | None = None
     in_pit: bool = False
     finished: bool = False
+    # **What the pit wall has seen of the other cars, keyed by name.** Every
+    # rival call in `race/rival_calls.py` was written, tested and reachable
+    # from nothing: `must_stop_by` and `rival_boxed` were called only by their
+    # own tests, and the controller emitted `rival_stopped` into a signal with
+    # no connection. This field is the road in.
+    rivals: dict = field(default_factory=dict)
     # Stint accounting against the approved plan.
     stint_index: int = 0
     stint_ends_on_lap: int | None = None
@@ -1064,8 +1079,23 @@ def _candidates(state: RaceState) -> list[Call | None]:
         _incident(state),
         _wear(state),
         _tyre_temp(state),
+        *_rivals(state),
         _status(state),
     ]
+
+
+def _rivals(state: RaceState) -> list:
+    """What the pit wall has to say about the other cars.
+
+    Imported here rather than at the top because `race/rival_calls.py` imports
+    this module for the vocabulary - the ranking is a property of the
+    vocabulary and lives here, the composition lives there.
+    """
+    if not getattr(state, "rivals", None):
+        return []
+    from pitcrew.race import rival_calls
+
+    return rival_calls.candidates(state)
 
 
 def _crossing_the_line(state: RaceState) -> bool:

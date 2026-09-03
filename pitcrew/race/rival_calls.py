@@ -61,6 +61,7 @@ from pitcrew.race.calls import (
     REJOIN,
     RIVAL_BOXED,
     RIVAL_COMMITTED,
+    RIVAL_SAVING,
     STAY_OUT_FUEL,
     Call,
 )
@@ -85,8 +86,9 @@ from pitcrew.race.rivals import (
 # about our own car, because a car of ours about to run dry outranks news of
 # what somebody else just did.
 __all__ = ["CLOSING", "REJOIN", "RIVAL_BOXED", "RIVAL_COMMITTED",
-           "STAY_OUT_FUEL", "Rival", "closing_call", "must_stop_by",
-           "rejoin_call", "rival_boxed", "stay_out"]
+           "RIVAL_SAVING", "STAY_OUT_FUEL", "Rival", "candidates",
+           "closing_call", "fuel_shortfall", "must_stop_by", "rejoin_call",
+           "rival_boxed", "saving_to_the_flag", "stay_out"]
 
 # A rival's stop has to be worth this many seconds more than ours before it is
 # worth saying. Below it he is being told about a difference he cannot drive to.
@@ -98,6 +100,22 @@ WORTH_SAYING_S = 8.0
 # in the narrow band where the fill is still capped by the tank rather than by
 # the flag, which is the one place a lap deferred genuinely shortens the stop.
 DEFER_WORTH_SAYING_S = 3.0
+
+# **What a driver can take out of his own fuel consumption by driving for it.**
+# Measured on this driver's own car at Monza: short-shifting alone gave -24.9%
+# fuel for +0.5 s/lap. Lift-and-coast is additive but is not on file, so this
+# is the conservative half of what is available. A shortfall inside this is one
+# a rival drives out; beyond it he has to stop.
+SAVEABLE_FRACTION = 0.249
+# What that saving costs him, per lap, at the full 24.9%. Interpolated linearly
+# below it - which is an ASSUMPTION about the shape and stated as one wherever
+# the number is spoken.
+SAVING_COSTS_S_PER_LAP = 0.5
+
+# A shortfall has to cost him this many seconds across the remaining laps
+# before it is worth a call. Below it he is being told about a car he cannot
+# catch any faster than he already was.
+SAVING_WORTH_SAYING_S = 1.5
 
 
 @dataclass(frozen=True)
@@ -230,6 +248,92 @@ def stay_out(*, lap: int, laps_left: int | None,
                 f"About {-cost:.0f} seconds less standing, each lap.", MEDIUM)
 
 
+@dataclass(frozen=True)
+class Shortfall:
+    """How far a rival is from reaching the flag on what he left the pits on.
+
+    `litres` is what he is missing - positive means short. `fraction` is that
+    against what the run needs, which is the figure that decides whether he
+    drives it out or stops again, because saving is a percentage of
+    consumption and not a number of litres.
+    """
+    litres: float
+    fraction: float
+    laps_to_flag: int
+    needs: float
+    saveable: bool
+    # **Whether it is bigger than we can read.** A rival's burn comes from
+    # entry-to-exit readings one stint apart, so it is one number for a whole
+    # stint and the fill is known to about four litres. A two-litre shortfall
+    # against that is not a finding.
+    certain: bool
+
+
+def fuel_shortfall(rival: Rival, burn_per_lap_l: float | None, *,
+                   laps_total: int | None,
+                   reading_error_l: float = 4.0) -> Shortfall | None:
+    """What he is short by, or `None` where it cannot be computed.
+
+    **His own burn where the book has it, ours where it does not** - and never
+    a default tank. An unread exit figure is not a full one.
+    """
+    if rival.stop is None or rival.stop.lap is None or laps_total is None:
+        return None
+    out = rival.stop.fuel_out_l
+    burn = rival.burn_per_lap_l or burn_per_lap_l
+    if out is None or not burn or burn <= 0:
+        return None
+    laps_to_flag = laps_total - rival.stop.lap
+    if laps_to_flag <= 0:
+        return None
+    needs = laps_to_flag * burn
+    short = needs - out
+    return Shortfall(litres=short, fraction=short / needs,
+                     laps_to_flag=laps_to_flag, needs=needs,
+                     saveable=short <= needs * SAVEABLE_FRACTION,
+                     certain=abs(short) > reading_error_l)
+
+
+def saving_to_the_flag(rival: Rival, burn_per_lap_l: float | None, *,
+                       lap: int, laps_total: int | None = None,
+                       reading_error_l: float = 4.0) -> Call | None:
+    """A rival who reaches the flag only by saving, and what it costs him.
+
+    **The third case, and the one that was silent.** `must_stop_by` split the
+    race into "he has to stop again" and nothing at all - so a car that makes
+    the flag comfortably and a car that makes it only by short-shifting from
+    here sounded identical, and they are opposite races. This is the second of
+    those: he is committed to the pace he can afford, and that is the moment to
+    attack.
+
+    Everything about it is honest about being derived. The shortfall is read
+    off two screen figures and a burn rate estimated from one stint; the
+    conversion into seconds uses OUR car's measured exchange rate, because his
+    is not knowable, and the call says so.
+    """
+    short = fuel_shortfall(rival, burn_per_lap_l, laps_total=laps_total,
+                           reading_error_l=reading_error_l)
+    if short is None or short.litres <= 0:
+        return None            # he has enough; nothing to say
+    if not short.saveable:
+        return None            # `must_stop_by` has this one
+    if not short.certain:
+        # Inside what two fuel readings and a one-stint burn can resolve.
+        # Saying it anyway would be reporting the noise as a finding.
+        return None
+    costs = (short.fraction / SAVEABLE_FRACTION) * SAVING_COSTS_S_PER_LAP
+    over_the_run = costs * short.laps_to_flag
+    if over_the_run < SAVING_WORTH_SAYING_S:
+        return None
+    who = rival.name or "He"
+    return Call(RIVAL_SAVING, lap,
+                f"{who} is saving to the flag. Attack.",
+                f"{short.litres:.0f} litres light over {short.laps_to_flag} "
+                f"laps - about {costs:.1f} seconds a lap if he short-shifts "
+                f"for it.",
+                MEDIUM, severity=over_the_run)
+
+
 def must_stop_by(rival: Rival, burn_per_lap_l: float | None,
                  *, lap: int, laps_total: int | None = None) -> Call | None:
     """The last lap a rival can reach on the fuel he left the pits with.
@@ -253,6 +357,17 @@ def must_stop_by(rival: Rival, burn_per_lap_l: float | None,
     # replay, this suppressed two of three calls and left the one that mattered
     # - Boxhead, out on 41 litres, reaching lap 16 of 20.
     if laps_total is not None and last >= laps_total:
+        return None
+    # **Short of the flag is not the same as forced to stop.** A stop costs him
+    # a pit loss; a lift costs him tenths, so a driver who is a few per cent
+    # light drives it out and does not come in. Told "he has to stop again",
+    # the driver waits for a stop that never comes and does not attack the car
+    # that is right there being slow. Measured: our own short-shift exchange is
+    # -24.9% fuel for +0.5 s/lap, so anything inside a quarter of the run is
+    # drivable. `saving_to_the_flag` says that case, and this one now refuses
+    # it rather than asserting the wrong half.
+    short = fuel_shortfall(rival, burn_per_lap_l, laps_total=laps_total)
+    if short is not None and short.saveable:
         return None
     who = rival.name or "He"
     return Call(RIVAL_COMMITTED, lap,
@@ -335,3 +450,37 @@ def closing_call(trend: GapTrend, *, lap: int, who: str | None = None,
     return Call(CLOSING, lap,
                 f"You are taking {rate:.1f} a lap out of {them}.",
                 reason, MEDIUM)
+
+
+def candidates(state) -> list:
+    """Every rival call true this lap, for `calls.next_call` to rank.
+
+    **The road in, which did not exist.** `rival_boxed` and `must_stop_by` were
+    written, documented and tested, and reachable from nothing: the controller
+    emitted `rival_stopped` into a signal with no connection, and no candidate
+    in `calls._candidates` had ever heard of a rival. Everything below the
+    reader was correct and silent - the same "exists, documented, never called"
+    shape as `LiveWearSampler.new_session()` and the handover context.
+
+    Each rival is asked separately and the ranking picks between them, because
+    a race has several and only one thing gets said a lap.
+    """
+    out = []
+    for rival in (state.rivals or {}).values():
+        if not isinstance(rival, Rival):
+            continue
+        out.append(saving_to_the_flag(
+            rival, state.fuel_per_lap_l,
+            lap=state.lap, laps_total=state.laps_total))
+        out.append(must_stop_by(
+            rival, state.fuel_per_lap_l,
+            lap=state.lap, laps_total=state.laps_total))
+    out = [call for call in out if call is not None]
+    # **The biggest opportunity first, because only one of them gets said.**
+    # `next_call` sorts by kind and Python's sort is stable, so two rivals
+    # saving would have been separated by the order they happened to stop in -
+    # and a call kind is said once a stint, so the second is not said at all.
+    # Ordering by severity here makes the one that survives the one worth
+    # driving to.
+    out.sort(key=lambda c: -(c.severity or 0.0))
+    return out

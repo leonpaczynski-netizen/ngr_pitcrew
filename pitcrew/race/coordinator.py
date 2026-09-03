@@ -664,6 +664,29 @@ class RaceCoordinator:
             return folded
         return self._emit()
 
+    def note_rival_stop(self, seen, burn_per_lap_l=None) -> None:
+        """File a rival's finished stop so the calls can reason about it.
+
+        **Qt thread only.** The pit wall sees a stop on the sampler's worker
+        thread; the controller hands it here through a queued signal, because
+        `RaceState` is read on the crossing and a dict written from two threads
+        is the same defect the roster had.
+
+        A partial stop is kept: the exit fuel is what every call downstream
+        needs, and a stop whose ENTRY figure was never read still carries it.
+        """
+        if not self.running or seen is None:
+            return
+        name = getattr(seen, "driver", None)
+        stop = getattr(seen, "stop", None)
+        if not name or stop is None:
+            return
+        from pitcrew.race.rival_calls import Rival
+
+        self.state.rivals[name] = Rival(
+            name=name, stop=stop, pitted=True,
+            burn_per_lap_l=burn_per_lap_l)
+
     def note_incident(self, *, reported: bool = False) -> None:
         """The car stopped mid-lap, or the driver said it did.
 
