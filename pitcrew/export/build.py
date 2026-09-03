@@ -666,7 +666,15 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
             changes = []
             for one in session.get("session_ids") or [session["id"]]:
                 changes.extend(store.list_setup_changes(one))
-            driver_changes = [c.as_export() for c in changes] or None
+            # **The ledger is wider than the contract, so it is filtered
+            # here.** `setup_changes` now records performance and gearing
+            # moves too (restrictor, ECU, ballast, `gear1`..`gearN`), which are
+            # real changes and belong in the record - but `EXPORT-CONTRACT.md`
+            # §3 keys `driverChanges` on the 23 sliders, and a key the tune
+            # builder does not know is silently dropped at the far end rather
+            # than refused. Filtered, not dropped from the ledger.
+            driver_changes = [c.as_export() for c in changes
+                              if c.exportable] or None
 
     gearing = gearing_export(counted, sheet_gears,
                              sheet_final_gear=sheet_final_gear)

@@ -124,29 +124,96 @@ def sheet_vs_gearbox(store, car_name: str, circuit_key: str) -> list[str]:
 
     The one setup value with an independent witness. Everything else on a sheet
     is taken on trust, which is why this one is worth checking every time.
+
+    ⚠️ **AGREED and NOT COMPARED are different answers and this used to print
+    the same words for both.** The old query joined `setup_sheets` and then
+    filtered on `sh.circuit_key = ?`, which drops every session whose
+    `setup_sheet_id` is NULL - so a car with no sheet at all examined nothing,
+    found no mismatch, and reported "every session ran the sheet it is tagged
+    with". All four Huracán sessions at Daytona passed that way on 3 Sep 2026,
+    and the reassurance was read as a clean bill.
+
+    A check that cannot fail is not a check. This one now says how many
+    sessions it actually compared, and names the ones it could not.
     """
     from pitcrew.analysis.gearing import matches_sheet
 
-    out: list[str] = []
+    bad: list[str] = []
+    compared = 0
+    untagged: list[int] = []
+    no_gears: list[int] = []
+    # **LEFT JOIN with the circuit filter in the join, not the WHERE.** Keeping
+    # it in the WHERE clause is what made NULL-sheet sessions invisible.
+    #
+    # ⚠️ **An untagged session has no sheet, so it has no circuit either** -
+    # which means it cannot be placed by the join and would otherwise be
+    # reported under every circuit the car has ever visited. It is placed by
+    # its EVENT instead, which is where a session's circuit actually lives.
     sessions = _rows(
         store,
-        "SELECT s.id, s.kind, s.setup_sheet_id, sh.sheet_name "
+        "SELECT s.id, s.kind, s.setup_sheet_id, sh.sheet_name, "
+        "       e.track, e.layout "
         "FROM sessions s JOIN events e ON e.id = s.event_id "
-        "LEFT JOIN setup_sheets sh ON sh.id = s.setup_sheet_id "
-        "WHERE e.car_name = ? AND sh.circuit_key = ? ORDER BY s.id",
-        (car_name, circuit_key))
+        "LEFT JOIN setup_sheets sh "
+        "  ON sh.id = s.setup_sheet_id AND sh.circuit_key = ? "
+        "WHERE e.car_name = ? AND (sh.id IS NOT NULL "
+        "  OR s.setup_sheet_id IS NULL) ORDER BY s.id",
+        (circuit_key, car_name))
     for row in sessions:
-        sheet = (store.get_setup_sheet(row["setup_sheet_id"])
-                 if row["setup_sheet_id"] else None)
-        if sheet is None or not sheet.gears:
+        if not row["setup_sheet_id"]:
+            if _event_circuit(row) == circuit_key:
+                untagged.append(row["id"])
             continue
-        laps = store.list_laps(row["id"])
-        verdict = matches_sheet(laps, sheet.gears)
-        if verdict is False:
-            out.append(f"  ** session {row['id']} ({row['kind']}) is tagged "
+        sheet = store.get_setup_sheet(row["setup_sheet_id"])
+        if sheet is None or not sheet.gears:
+            no_gears.append(row["id"])
+            continue
+        if matches_sheet(store.list_laps(row["id"]), sheet.gears) is False:
+            bad.append(f"  ** session {row['id']} ({row['kind']}) is tagged "
                        f"{row['sheet_name']!r} but ran a different gearbox")
-    return out or ["  gearbox        every session ran the sheet it is tagged "
-                   "with"]
+        else:
+            compared += 1
+
+    out = list(bad)
+    if compared:
+        out.append(f"  gearbox        {compared} session(s) verified against "
+                   f"the sheet they are tagged with")
+    if untagged:
+        out.append(f"  ** gearbox        NOT COMPARED - {len(untagged)} "
+                   f"session(s) carry no sheet at all "
+                   f"({_ids(untagged)}), so nothing here can be checked "
+                   f"against the car. This is not a pass")
+    if no_gears:
+        out.append(f"  ** gearbox        NOT COMPARED - {len(no_gears)} "
+                   f"session(s) are tagged with a sheet that records no "
+                   f"gearbox ({_ids(no_gears)})")
+    return out or ["  gearbox        no sessions on file here - nothing to "
+                   "compare"]
+
+
+def _event_circuit(row) -> str | None:
+    """The circuit a session's EVENT is at, in the store's vocabulary.
+
+    Duplicated shape rather than imported from `controller.circuit_key_for`,
+    which takes an event row: this one reads the track and layout already
+    joined onto the session row, so the check needs no second query per
+    session.
+    """
+    from pitcrew.analysis.resolve import circuit_key as _key
+    track = _row(row, "track")
+    return _key(track, _row(row, "layout")) if track else None
+
+
+def _row(row, column: str):
+    try:
+        return row[column]
+    except (IndexError, KeyError):
+        return None
+
+
+def _ids(ids: list[int], limit: int = 6) -> str:
+    shown = ", ".join(str(i) for i in ids[:limit])
+    return shown if len(ids) <= limit else f"{shown}, +{len(ids) - limit} more"
 
 
 def tyre_verdicts(store, car_key: str, circuit_key: str) -> list[str]:

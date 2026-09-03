@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from pitcrew.setup.vocabulary import (
+    CHANGE_KEY_NAMES,
+    CHANGE_SOURCES,
     MAX_GEARS,
     RANGE_KEY_NAMES,
     SETUP_KEY_NAMES,
@@ -155,20 +157,64 @@ class SetupSheet:
 
 @dataclass
 class SetupChange:
-    """One mid-session change, as `setup.driverChanges`."""
+    """One change to the car, as `setup.driverChanges`.
+
+    **`reason` is why it was made, and it is the half that makes the ledger
+    worth keeping.** A row saying `dc_r 30 -> 26` records that something moved;
+    it cannot say whether the intent was exit traction or braking stability,
+    and those two want opposite verdicts from the same outcome. Without it a
+    change cannot be scored against what it was FOR, which is the difference
+    between a log and a learning loop.
+
+    **`source` is how the value was learned**, and it exists because a request
+    and a reading were indistinguishable here until 3 Sep 2026 - see
+    `vocabulary.CHANGE_SOURCES`. Both are optional: a row that does not know
+    why is still worth more than no row, and **missing is null, never a
+    fabricated reason.**
+    """
     from_lap: int
     key: str
     from_value: float | None
     to_value: float | None
+    # Optional, and last, so every existing positional construction still works.
+    reason: str | None = None
+    source: str | None = None
 
     def validate(self) -> None:
-        if self.key not in SETUP_KEY_NAMES:
+        # **The ledger's vocabulary, not the export's.** Wider on purpose:
+        # performance and gearing changes were unrecordable before 3 Sep 2026
+        # because this check used the 23 contract sliders. See
+        # `vocabulary.CHANGE_KEY_NAMES`.
+        if self.key not in CHANGE_KEY_NAMES:
             raise SetupError(f"{self.key} is not in the shared setup vocabulary")
         if self.from_lap < 1:
             raise SetupError("a change applies from lap 1 at the earliest")
+        if self.source is not None and self.source not in CHANGE_SOURCES:
+            raise SetupError(
+                f"{self.source!r} is not a known source - one of "
+                + ", ".join(CHANGE_SOURCES))
+
+    @property
+    def exportable(self) -> bool:
+        """Is this key one the tune builder knows?
+
+        Performance and gearing rows are real changes and belong in the ledger,
+        but `EXPORT-CONTRACT.md` §3 keys the payload on the 23 sliders, so
+        sending one of the wider keys is a silent mismatch at the far end.
+        `export/build.py` filters on this rather than dropping the row here.
+        """
+        return self.key in SETUP_KEY_NAMES
 
     def as_export(self) -> dict:
         self.validate()
+        if not self.exportable:
+            raise SetupError(
+                f"{self.key} is a ledger key, not a contract key - filter on "
+                f"`exportable` before exporting")
+        # **Deliberately unchanged shape.** `reason` and `source` stay out of
+        # the payload: the contract's `driverChanges` entry is fromLap/key/
+        # from/to, and adding a field the schema does not declare is how a
+        # payload starts being silently misread.
         return {
             "fromLap": self.from_lap,
             "key": self.key,

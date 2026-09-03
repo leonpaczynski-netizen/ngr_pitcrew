@@ -40,6 +40,19 @@ WEAR_DRIVER = "driver"
 WEAR_HUD_VIDEO = "hud-video"
 
 
+def _row_value(row, column: str):
+    """A column that may predate its migration, as None rather than a crash.
+
+    `sqlite3.Row` raises `IndexError` for a name it does not carry, so a store
+    opened against an archive that has not been migrated yet would fail on read
+    rather than degrade. Missing is null, never a crash.
+    """
+    try:
+        return row[column]
+    except (IndexError, KeyError):
+        return None
+
+
 def _now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
 
@@ -797,10 +810,38 @@ class Store:
         with self._write() as conn:
             cur = conn.execute(
                 "INSERT INTO setup_changes (session_id, from_lap, key, from_value, "
-                "to_value, created_at) VALUES (?,?,?,?,?,?)",
+                "to_value, reason, source, created_at) VALUES (?,?,?,?,?,?,?,?)",
                 (session_id, change.from_lap, change.key, change.from_value,
-                 change.to_value, _now()))
+                 change.to_value, change.reason, change.source, _now()))
             return int(cur.lastrowid)
+
+    def set_setup_change_reason(self, change_id: int, reason: str | None,
+                                source: str | None = None) -> bool:
+        """Attach the why to a row that already exists.
+
+        The ledger is written at session open, before anyone has said what the
+        change was for; the reason usually arrives in the debrief. Without this
+        the only way to record intent was to have had it at insert time, which
+        is why 202 rows carry none.
+
+        `reason=None` clears it rather than being ignored - a reason recorded
+        against the wrong row has to be removable. `source` is left alone when
+        not given, so correcting a reason cannot silently unset it.
+        """
+        from pitcrew.setup.sheet import SetupChange
+        if source is not None:
+            SetupChange(from_lap=1, key="rh_f", from_value=None,
+                        to_value=None, source=source).validate()
+        with self._write() as conn:
+            if source is None:
+                cur = conn.execute(
+                    "UPDATE setup_changes SET reason = ? WHERE id = ?",
+                    (reason, change_id))
+            else:
+                cur = conn.execute(
+                    "UPDATE setup_changes SET reason = ?, source = ? "
+                    "WHERE id = ?", (reason, source, change_id))
+            return cur.rowcount > 0
 
     def note_sheet_change(self, session_id: int) -> int:
         """Record what changed on the car since the last session like this one.
@@ -865,9 +906,31 @@ class Store:
         if before is None:
             return 0
 
+        # **All three parts of the sheet, not just the sliders.** This loop
+        # read `sheet.values` alone until 3 Sep 2026, so a build could move its
+        # restrictor, its ECU, its ballast or its whole gearbox and the ledger
+        # would stay empty and look healthy. The Huracán's restrictor went
+        # 99 -> 93 and its ECU 94 -> 100 across that blind spot with no row
+        # anywhere recording it.
+        pairs: dict[str, tuple] = {}
+        for key in set(current.values) | set(before.values):
+            pairs[key] = (before.values.get(key), current.values.get(key))
+        for key in set(current.performance) | set(before.performance):
+            pairs[key] = (before.performance.get(key),
+                          current.performance.get(key))
+        # Gears are a list, so they are compared by position and named
+        # `gear1`..`gearN`. A gearbox that gained or lost a ratio shows as a
+        # change from or to None, which is what happened, rather than a
+        # silently shorter loop.
+        for index in range(max(len(current.gears), len(before.gears))):
+            name = f"gear{index + 1}"
+            pairs[name] = (
+                before.gears[index] if index < len(before.gears) else None,
+                current.gears[index] if index < len(current.gears) else None)
+
         written = 0
-        for key in sorted(set(current.values) | set(before.values)):
-            was, now = before.values.get(key), current.values.get(key)
+        for key in sorted(pairs):
+            was, now = pairs[key]
             if was is None and now is None:
                 continue
             if was is not None and now is not None and abs(was - now) <= 1e-9:
@@ -875,8 +938,13 @@ class Store:
             try:
                 self.add_setup_change(
                     session_id,
-                    SetupChange(from_lap=1, key=key,
-                                from_value=was, to_value=now))
+                    # **`source="sheet-diff"`, and no reason.** This is derived
+                    # by comparing two sheets, not read off the car and not
+                    # explained by anybody. Inventing a reason here would be
+                    # exactly the fabrication the column exists to prevent -
+                    # `set_setup_change_reason` is how the why arrives later.
+                    SetupChange(from_lap=1, key=key, from_value=was,
+                                to_value=now, source="sheet-diff"))
             except Exception:                          # noqa: BLE001
                 # A key outside the shared vocabulary is a sheet problem, not a
                 # reason to lose the rest of the ledger. `SetupChange.validate`
@@ -895,7 +963,9 @@ class Store:
             "SELECT * FROM setup_changes WHERE session_id = ? ORDER BY from_lap, id",
             (session_id,))
         return [SetupChange(from_lap=r["from_lap"], key=r["key"],
-                            from_value=r["from_value"], to_value=r["to_value"])
+                            from_value=r["from_value"], to_value=r["to_value"],
+                            reason=_row_value(r, "reason"),
+                            source=_row_value(r, "source"))
                 for r in rows]
 
     def log_radio(self, session_id: int | None, *, heard: str, said: str,

@@ -69,6 +69,47 @@ SETUP_KEYS: tuple[SetupKey, ...] = (
 )
 
 SETUP_KEY_NAMES: tuple[str, ...] = tuple(k.key for k in SETUP_KEYS)
+
+# ---------------------------------------------------------------------------
+# The change ledger's vocabulary, which is DELIBERATELY WIDER than the export's.
+#
+# `SETUP_KEYS` above is EXPORT-CONTRACT.md §3 and may not grow: the consuming
+# tune builder keys its per-car range library on exactly those strings, so a
+# new one is a silent mismatch at the far end. But the 23 sliders are not the
+# whole car, and the ledger's job is to record what MOVED.
+#
+# **This is not hypothetical.** The Huracán's build drifted from restrictor 99
+# / ECU 94 to 93 / 100 somewhere between 24 Aug and 1 Sep 2026 and no row
+# anywhere recorded it, because `setup_changes` could not hold the key at all -
+# `SetupChange.validate` refused anything outside the slider vocabulary, and
+# `note_sheet_change` only ever iterated `sheet.values`. A sheet's
+# `performance` and `gears` were invisible to the ledger by construction.
+#
+# So the ledger takes a superset, and `export/build.py` filters back down to
+# the contract keys on the way out. The ledger is allowed to know more than the
+# payload does; that is the whole point of keeping one.
+PERFORMANCE_KEY_NAMES: tuple[str, ...] = (
+    "powerRestrictor", "ecuOutput", "ballastKg", "ballastPosition",
+)
+
+# `gear1`..`gearN`, matching `SetupSheet.gears` by position. The final drive is
+# already `fg` in the slider vocabulary above and is not repeated here.
+GEAR_KEY_NAMES: tuple[str, ...] = tuple(
+    f"gear{n}" for n in range(1, 10))
+
+CHANGE_KEY_NAMES: tuple[str, ...] = (
+    SETUP_KEY_NAMES + PERFORMANCE_KEY_NAMES + GEAR_KEY_NAMES)
+
+# Where a change was learned. A request is not a reading, and the two were
+# indistinguishable in this ledger until 3 Sep 2026 - which is how a value Ludo
+# had *proposed* came to be read back as a discrepancy against the car.
+CHANGE_SOURCES: tuple[str, ...] = (
+    "screen",      # read off GT7's own settings screen - ground truth
+    "feed",        # verified from telemetry. Only the gearbox can be.
+    "issued",      # what the engineer asked for. A request, not a reading.
+    "sheet-diff",  # derived by comparing this session's sheet with the last
+    "driver",      # the driver said so
+)
 _BY_KEY = {k.key: k for k in SETUP_KEYS}
 
 # Keys the range record covers.  `awd` is absent because GT7 does not expose a

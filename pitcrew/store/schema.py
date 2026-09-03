@@ -102,7 +102,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -216,6 +216,13 @@ CREATE TABLE IF NOT EXISTS setup_changes (
     key        TEXT    NOT NULL,
     from_value REAL,
     to_value   REAL,
+    -- **Why the change was made.** A row without it records that something
+    -- moved but not what it was FOR, and a change cannot be scored against an
+    -- intent it never stated.  NULL means not recorded, never "no reason".
+    reason     TEXT,
+    -- How the value was learned: screen / feed / issued / sheet-diff / driver.
+    -- A request and a reading were indistinguishable here until 3 Sep 2026.
+    source     TEXT,
     created_at TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_changes_session ON setup_changes(session_id);
@@ -1633,6 +1640,25 @@ def _migrate_v9_tyre_model_version(conn) -> None:
                  "ON tyre_models(car_key, circuit_key, model_kind)")
 
 
+def _migrate_v14_change_reasons(conn: sqlite3.Connection) -> None:
+    """Give the change ledger a `reason` and a `source`.
+
+    **Added, not rebuilt.** Unlike v9's tyre models these rows are the only
+    copy - 202 of them across 88 sessions - and nothing can regenerate a
+    ledger, so `ALTER TABLE ADD COLUMN` is the whole migration and the existing
+    rows keep their history with both new columns NULL.
+
+    **NULL is the honest value for every pre-existing row.** They were written
+    by `note_sheet_change`, which had no reason to record and no way to record
+    one; back-filling them with "sheet diff" would be inventing intent that was
+    never stated. A row that does not know why it exists must say so.
+    """
+    have = {r[1] for r in conn.execute("PRAGMA table_info(setup_changes)")}
+    for column in ("reason", "source"):
+        if column not in have:
+            conn.execute(f"ALTER TABLE setup_changes ADD COLUMN {column} TEXT")
+
+
 MIGRATIONS: dict[int, tuple[str, object]] = {
     3: ("per-corner tyre wear", _migrate_v3_wear_per_corner),
     4: ("the game clock onto the lap, and the readings taken through a keyhole",
@@ -1643,4 +1669,6 @@ MIGRATIONS: dict[int, tuple[str, object]] = {
         _migrate_v8_sheet_purpose),
     9: ("a pre-patch fit and a post-patch fit are two models",
         _migrate_v9_tyre_model_version),
+    14: ("why a change was made, and how it was learned",
+         _migrate_v14_change_reasons),
 }
