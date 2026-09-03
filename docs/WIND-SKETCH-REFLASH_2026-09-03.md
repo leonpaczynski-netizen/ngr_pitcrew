@@ -139,24 +139,26 @@ their own supply.
    out to be audible and unwanted, the relay pin option in section 3 exists
    for it.
 
-## 5. Let Pit Crew find out the board has changed
+## 5. Pit Crew needs no change for the narrower board
 
-The old sketch declared four motors and the new one declares two. The
-firmware reads exactly as many bytes as it declared with no framing, so a
-four-byte frame to a two-motor board leaves two bytes over and breaks the
-frame after it. Since 3 Sep Pit Crew asks the board its count on every
-connect and proves the answer with three acknowledged zero frames before
-using it, so no code change is needed on the day. Check it did, though:
+The old sketch declared four motors and the new one declares two. That
+turned out not to matter, and it was measured rather than assumed: on 3 Sep
+2026 the four-motor board acknowledged 26,875 eight-wide frames in a row
+with the fans running normally. The firmware's packet layer buffers a frame
+to its declared length, checks it, acknowledges it, and discards whatever
+the command did not read. A frame wider than the board is harmless. Pit
+Crew keeps sending four bytes, and the two-motor sketch reads the first two.
+
+Still run this once against the new sketch, with Pit Crew closed:
 
 ```bash
 python tools/wind_bench.py handshake
 ```
 
-  should print `count 2`, the raw reply bytes beside it, and `confirmed
-  [2]`. The reply format for the count was never recoverable from source,
-  so this run is where it gets measured: if `count` reads `?`, send me the
-  raw bytes. In the app log the line to look for is
-  `COM5 drives 2 channels, not the 4 on file`.
+  It prints the firmware letter from the hello, the raw bytes the board
+  returns to a count query (nothing, on the old sketch), and which frame
+  widths it acknowledges. If the count line shows bytes, send them to me;
+  that is the measurement the parser has been waiting for.
 
 - Then re-measure the three things the old path measured, in this order,
   with Pit Crew closed:

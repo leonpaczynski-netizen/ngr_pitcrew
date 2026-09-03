@@ -216,13 +216,15 @@ WRITE_TIMEOUT_LIMIT = 20
 # framing, so a short write leaves it waiting mid-command and a long one
 # leaves bytes over that corrupt the frame after.
 #
-# The link no longer assumes this number. `WindLink.discover_channels` asks
-# the board on every connect and confirms the answer by sending frames of
-# that width and requiring acknowledgements; `WindLink.send` then fits any
-# vector to the confirmed width. The reflash planned in
+# **A frame wider than the board is harmless; narrower is not.** Measured
+# 3 Sep 2026: a four-motor board acknowledged 26,875 eight-wide frames and
+# the fans ran, because the firmware's packet layer discards the bytes a
+# command does not read. So this is a floor: `WindLink.discover_channels`
+# asks the board on every connect, widens the frame if the board declares
+# more, and never narrows it. The reflash planned in
 # `docs/WIND-SKETCH-REFLASH_2026-09-03.md` makes the board declare two, and
-# this is what lets that happen without a code change on the day. Callers
-# keep building vectors of this width; the link trims or pads.
+# four-wide frames reach it correctly. Callers keep building vectors of this
+# width; `WindLink.send` pads them if the board wants more.
 CHANNELS = 4
 
 # Measured on the rig, 15 Aug 2026, by driving one channel at a time and
@@ -729,10 +731,17 @@ class WindLink:
                     self.port)
                 return False
             if reply.acknowledged:
-                # `Command_Hello` answers with the firmware's version letter
-                # after its acknowledgement. Leaving it unread is what shifted
-                # every later reply by a byte and eventually stopped the fans.
-                self._drain()
+                # **`Command_Hello` answers with a value packet after its
+                # acknowledgement: `0x08` then the version letter.** Measured
+                # 3 Sep 2026 as `08 6a`, 'j'. It arrives a few milliseconds
+                # after the acknowledgement, which is why the drain that used
+                # to sit here never caught it: whatever read came next found
+                # it instead - for weeks the first motors frame ("replied
+                # 0x08, which is not an acknowledgement" after every
+                # reconnect), then the channel-count query, which read the
+                # marker as a count of eight. Reading it here, to its own
+                # length, is what makes every later read clean.
+                self._read_version()
                 log("wind").info(
                     "%s speaks the %s checksum - measured, not assumed.",
                     self.port, variant.name)
@@ -747,6 +756,28 @@ class WindLink:
             "what the firmware expects, and no fan command will be accepted.",
             self.port)
         return False
+
+    def _read_version(self) -> None:
+        """The value packet after a hello's acknowledgement, if it comes.
+
+        Bounded by the read timeout. Sets `firmware` from a printable
+        letter; anything else that arrives is logged as bytes and dropped,
+        because a board whose hello tail is not understood must not have it
+        read as the answer to the next question.
+        """
+        if self._serial is None:
+            return
+        tail = self._serial.read(2)
+        if len(tail) == 2 and tail[0] == arq.REPLY_VALUE:
+            letter = tail[1]
+            self.firmware = (chr(letter) if 0x20 <= letter < 0x7F
+                             else f"0x{letter:02x}")
+            return
+        if tail:
+            log("wind").info(
+                "%s followed its hello with %s, which is not a version "
+                "packet - dropped.", self.port, tail.hex(" "))
+            self._drain()
 
     # ------------------------------------------------------- channel count
 
@@ -769,20 +800,21 @@ class WindLink:
         raw = self._serial.read(64) if self._serial is not None else b""
         return arq.parse_motors_count(raw), raw
 
-    def confirm_channels(self, count: int, frames: int = 3) -> bool:
-        """Prove a width by using it: every zero frame must be acknowledged.
+    def accepts_width(self, count: int, frames: int = 3) -> bool:
+        """Does the board acknowledge zero frames of this width? A
+        measurement for the bench, and **not a proof of anything**.
 
-        Three, not one. A frame one byte too long is acknowledged - the
-        firmware reads the bytes it wanted and the spare one is left to
-        corrupt the NEXT frame - so a single acknowledgement proves nothing
-        about width. A frame too short leaves the firmware waiting for the
-        rest, which the following frame then supplies as garbage. Either
-        fault shows by the second or third frame; none of them show on the
-        first.
-
-        Zero frames, because the link does not know what the fans should be
-        doing and a wrong width with a real duty in it is worse than 30 ms
-        of commanded zero on fans with inertia.
+        It was written as a proof and it is not one. **Measured 3 Sep 2026:
+        a four-motor board acknowledged 26,875 eight-wide frames in a row
+        and the fans ran normally throughout.** The firmware's packet layer
+        buffers a frame to its declared length, checks the checksum,
+        acknowledges, and hands the payload to the command; the bytes the
+        command does not read are discarded with the frame. So an
+        acknowledgement says the frame was accepted, and says nothing about
+        whether its width matched the board. Over-width is harmless on this
+        firmware; under-width is what would hurt, and this cannot detect
+        that either. Kept for `wind_bench handshake`, which prints which
+        widths are accepted so the next board can be measured the same way.
         """
         if not 1 <= count <= arq.MAX_CHANNELS:
             return False
@@ -797,45 +829,48 @@ class WindLink:
     def discover_channels(self, default: int) -> int:
         """Settle `self.channels` against the board, and say how.
 
-        The declared count is tried first, then `default` if it differs; the
-        first width the board acknowledges three times wins. If neither is
-        confirmed the default is kept and said to be assumed - the send path
-        will then report every rejection, which is the right outcome for a
-        board this cannot understand.
+        **Never narrower than `default`.** Two facts decide the policy, both
+        measured on this board on 3 Sep 2026: the firmware discards the
+        bytes of a frame its command does not read, so a frame wider than
+        the board is harmless; and an acknowledgement cannot tell a matching
+        width from a wider one, so nothing here can PROVE a narrower count
+        is safe to send. A declared count wider than the default widens the
+        frames; a narrower or unreadable one leaves them at the default, and
+        the log says which. The reflash to a two-motor board therefore needs
+        no change here: four-wide frames reach it and the surplus is
+        dropped.
+
+        The reply format is not known from source. Whatever comes back is
+        logged as bytes, and that line is the measurement.
         """
         declared, raw = self.query_channels()
         shown = raw.hex(" ") if raw else "nothing"
         if declared is None:
+            width = default
             log("wind").info(
                 "%s did not give a channel count this app can read "
-                "(reply: %s) - trying %d, the count on file.",
-                self.port, shown, default)
-        else:
-            log("wind").info("%s declares %d channels (reply: %s).",
-                             self.port, declared, shown)
-        candidates = []
-        if declared is not None and declared >= 1:
-            candidates.append(declared)
-        if default not in candidates:
-            candidates.append(default)
-        for count in candidates:
-            if self.confirm_channels(count):
-                if count != default:
-                    log("wind").warning(
-                        "%s drives %d channels, not the %d on file - every "
-                        "frame is being fitted to %d. The channel map "
-                        "(which fan is which) needs re-measuring.",
-                        self.port, count, default, count)
-                self.channels = count
-                return count
+                "(reply: %s) - sending %d, the count on file. Wider than "
+                "the board is safe, narrower is not, so an unreadable count "
+                "never narrows the frame.", self.port, shown, default)
+        elif declared > default:
+            width = declared
+            log("wind").warning(
+                "%s declares %d channels (reply: %s), more than the %d on "
+                "file - frames widened to %d. Channels beyond %d are not "
+                "mapped to a fan.", self.port, declared, shown, default,
+                width, default)
+        elif declared < default:
+            width = default
             log("wind").info(
-                "%s did not acknowledge three zero frames of width %d.",
-                self.port, count)
-        log("wind").warning(
-            "%s confirmed no channel width at all - sending %d as assumed. "
-            "Expect rejections.", self.port, default)
-        self.channels = default
-        return default
+                "%s declares %d channels (reply: %s); sending %d as on "
+                "file - the firmware discards the surplus (measured 3 Sep "
+                "2026).", self.port, declared, shown, default)
+        else:
+            width = default
+            log("wind").info("%s declares %d channels (reply: %s), as on "
+                             "file.", self.port, declared, shown)
+        self.channels = width
+        return width
 
     def fit(self, values: tuple[int, ...] | list[int]) -> tuple[int, ...]:
         """A vector of exactly the board's width: trimmed, or padded with 0."""
@@ -1091,6 +1126,7 @@ class WindSim:
                     backoff = min(backoff * 2, RECONNECT_MAX_S)
                 quick = False
                 continue
+            began = time.monotonic()
             if not self._send_once():
                 # Not graceful: `_send_once` returning False means the link
                 # already failed, so there is nothing to say to it.
@@ -1098,15 +1134,25 @@ class WindSim:
                 self._stop.wait(FIRST_RETRY_S)
                 backoff = RECONNECT_S
                 quick = True
+                # A turn measured across a reconnect is the outage, not the
+                # loop: the reconnect line already reports that figure.
+                last_turn = None
                 continue
             backoff = RECONNECT_S
             quick = False
-            # **How long a turn of this loop actually took.** The send is a
-            # fixed 250 ms timer against a 1000 ms deadman, so a turn that
-            # overran is a PC-side cause of dead fans - and it would otherwise
-            # be completely invisible, because every counter here would look
-            # perfect either side of it.
+            # **How long a turn of this loop actually took, and where.** A
+            # turn that overran the deadman is a PC-side cause of dead fans
+            # and would otherwise be invisible - every counter looks perfect
+            # either side of it. The split says which side of this process
+            # to look at: time inside the serial exchange is the CH340
+            # driver blocking past its own timeouts; time outside it is this
+            # thread not being scheduled - every one of the six overruns on
+            # file to 3 Sep 2026 coincided with an audio stream being opened
+            # (a voice-pack miss synthesised aloud, or the transducer
+            # starting), and this is the number that says whether that is a
+            # starved thread or a stalled driver.
             now = time.monotonic()
+            inside = now - began
             if last_turn is not None:
                 took = now - last_turn
                 if took > self.state.max_loop_s:
@@ -1115,7 +1161,9 @@ class WindSim:
                         log("wind").warning(
                             "the wind send loop took %.2fs for one turn "
                             "against a %.1fs deadman - the fans were off and "
-                            "this side is the reason.", took, DEADMAN_S)
+                            "this side is the reason. %.2fs of it was inside "
+                            "the serial exchange, %.2fs waiting to run.",
+                            took, DEADMAN_S, inside, took - inside)
             last_turn = now
             # **Wait the remainder of the period, not the whole of it.** The
             # send blocks for the round trip - 9.2 ms measured - and sleeping
@@ -1218,6 +1266,9 @@ class WindSim:
         self._link = link
         self.state.connected = True
         self.state.channels = link.channels
+        # Read off the hello's value packet - never assigned before 3 Sep
+        # 2026, so `describe()` had a firmware clause that never printed.
+        self.state.firmware = link.firmware
         self.state.port = port
         self.state.crc_name = link.crc.name
         self.state.error = None

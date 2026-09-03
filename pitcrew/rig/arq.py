@@ -213,7 +213,21 @@ def parse_motors_count(raw: bytes) -> int | None:
     if not raw:
         return None
     head = raw[0]
-    if 0x30 <= head <= 0x39:            # an ASCII digit
+    if head == REPLY_VALUE:
+        # A value packet: the marker, then the value. **Measured 3 Sep 2026
+        # on this board: the two bytes after a count query were `08 6a`, and
+        # the first version of this read the marker as a count of eight.**
+        # The board then acknowledged 26,875 eight-wide frames, so nothing
+        # downstream could tell. A marker is never a count.
+        if len(raw) < 2:
+            return None
+        count = raw[1]
+    elif head in (REPLY_ACK, REPLY_NACK, REPLY_STRING):
+        # A reply marker at the head is a reply, not a number that happens
+        # to be small. A bare 0x04 is indistinguishable from a NACK, so a
+        # bare count in that range is refused rather than guessed.
+        return None
+    elif 0x30 <= head <= 0x39:          # an ASCII digit
         count = head - 0x30
     else:
         count = head

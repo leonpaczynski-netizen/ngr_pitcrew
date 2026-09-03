@@ -1,17 +1,22 @@
-"""The channel count comes from the board, is confirmed before it is used,
-and never becomes a guess.
+"""The channel count comes from the board, is never trusted into a narrower
+frame, and a reply marker is never read as a number.
 
-The reflash in `docs/WIND-SKETCH-REFLASH_2026-09-03.md` makes the board
-declare two motors instead of four. The firmware reads exactly as many bytes
-as it declared with no framing: a frame one byte too long leaves a byte over
-that corrupts the next, one too short leaves the firmware waiting
-mid-command, and both end with the deadman zeroing the fans - silently,
-because the first frame of the wrong width is acknowledged. So the count is
-asked for, parsed without trusting the parse, proved by three acknowledged
-zero frames, and every vector sent is fitted to the width that was proved.
+Measured on the rig on 3 Sep 2026, and both facts changed this module:
 
-The reply format for the count query is not known from source. These pin the
-parser's tolerance and, more importantly, that nothing acts on it unproved.
+- The two bytes after a count query were `08 6a`. The first version read
+  the `0x08` value marker as a count of eight, and the board then
+  acknowledged 26,875 eight-wide frames in a row with the fans running
+  normally. So an acknowledgement proves a frame was accepted and nothing
+  about its width: the firmware's packet layer discards the bytes a command
+  does not read.
+- Those bytes are `Command_Hello`'s reply - a value packet carrying the
+  version letter 'j' - arriving a few milliseconds after its
+  acknowledgement, which is why the old drain never caught it and the next
+  read always did.
+
+So: the hello's tail is read to its own length; a marker at the head of a
+reply is a marker; and the frame is never narrower than the count on file,
+because wider is harmless and narrower cannot be proved safe.
 """
 from __future__ import annotations
 
@@ -27,9 +32,21 @@ pytest.importorskip("serial")
 
 # ------------------------------------------------------------------ parsing
 
-def test_a_raw_byte_count_is_read():
-    assert arq.parse_motors_count(b"\x04Adafruit Motor Shield V2\n") == 4
-    assert arq.parse_motors_count(b"\x02PWM fans") == 2
+def test_a_value_packet_carries_the_count():
+    assert arq.parse_motors_count(bytes([arq.REPLY_VALUE, 4])) == 4
+    assert arq.parse_motors_count(bytes([arq.REPLY_VALUE, 2]) + b"PWM") == 2
+
+
+def test_the_bytes_the_board_actually_sent_are_not_a_count():
+    """`08 6a` read as eight is the defect this file exists for."""
+    assert arq.parse_motors_count(b"\x08\x6a") is None
+
+
+def test_a_bare_marker_is_never_a_count():
+    assert arq.parse_motors_count(bytes([arq.REPLY_VALUE])) is None
+    assert arq.parse_motors_count(bytes([arq.REPLY_ACK, 4])) is None
+    assert arq.parse_motors_count(bytes([arq.REPLY_NACK, 4, 5])) is None
+    assert arq.parse_motors_count(bytes([arq.REPLY_STRING]) + b"x") is None
 
 
 def test_an_ascii_digit_count_is_read():
@@ -42,51 +59,35 @@ def test_nothing_is_none_not_zero():
 
 
 def test_an_implausible_count_is_refused():
-    """A byte over `MAX_CHANNELS` is the wrong byte, not a big rig."""
     assert arq.parse_motors_count(b"A") is None          # 0x41 = 65
-    assert arq.parse_motors_count(bytes([arq.MAX_CHANNELS + 1])) is None
-    assert arq.parse_motors_count(bytes([arq.MAX_CHANNELS])) == arq.MAX_CHANNELS
+    assert arq.parse_motors_count(bytes([arq.REPLY_VALUE, arq.MAX_CHANNELS + 1])) is None
+    assert arq.parse_motors_count(bytes([arq.REPLY_VALUE, arq.MAX_CHANNELS])) == arq.MAX_CHANNELS
 
 
 # ------------------------------------------------------------- a fake board
 
-class CountingBoard(FakeSerial):
-    """A board with a fixed motor count that behaves like the firmware:
-    it acknowledges any well-formed frame, answers the count query with a
-    raw byte and a name, and - the important part - reads exactly `motors`
-    bytes from a set command, so a frame of the wrong width breaks the
-    frame after it rather than itself."""
+class MeasuredBoard(FakeSerial):
+    """The board as measured on 3 Sep 2026.
 
-    def __init__(self, motors: int, *, answers_count: bool = True,
-                 count_bytes: bytes | None = None) -> None:
+    Acknowledges any well-formed frame whatever its width. Answers a hello
+    with an acknowledgement and then the value packet `08 6a`. Answers a
+    count query with an acknowledgement and then `count_bytes`, which on the
+    real board is nothing at all.
+    """
+
+    def __init__(self, *, count_bytes: bytes = b"",
+                 hello_tail: bytes = b"\x08\x6a") -> None:
         super().__init__(speaks=arq.DEFAULT_CRC)
-        self.motors = motors
-        self.answers_count = answers_count
         self.count_bytes = count_bytes
-        self._leftover = 0          # bytes a too-long frame left behind
-        self._starved = 0           # bytes a too-short frame still owes
+        self.hello_tail = hello_tail
 
     def write(self, data: bytes) -> int:
-        # A previous frame of the wrong width poisons this one.
-        if self._leftover or self._starved:
-            self._leftover = self._starved = 0
-            self.written.append(data)
-            self._pending = bytes([arq.REPLY_NACK, data[2], 5])
-            return len(data)
         result = super().write(data)
         payload = data[4:-1]
-        if payload[:2] == bytes([arq.MESSAGE_HEADER]) + arq.CMD_MOTORS[0:1]:
-            if payload[2:3] == arq.MOTORS_COUNT:
-                if self.answers_count:
-                    self._pending += (self.count_bytes
-                                      if self.count_bytes is not None
-                                      else bytes([self.motors]) + b"Fake board\n")
-            elif payload[2:3] == arq.MOTORS_SET:
-                sent = len(payload) - 3
-                if sent > self.motors:
-                    self._leftover = sent - self.motors
-                elif sent < self.motors:
-                    self._starved = self.motors - sent
+        if payload == arq.hello_payload():
+            self._pending += self.hello_tail
+        elif payload == arq.motors_count_payload():
+            self._pending += self.count_bytes
         return result
 
     def set_frames(self) -> list[bytes]:
@@ -94,88 +95,116 @@ class CountingBoard(FakeSerial):
                 if f[4:7] == bytes([arq.MESSAGE_HEADER]) + b"VS"]
 
 
-# ----------------------------------------------------------- discovery
+# --------------------------------------------------------------- the hello
 
-def test_a_two_channel_board_is_discovered_and_sent_two_bytes(caplog):
-    board = CountingBoard(2)
+def test_the_hello_tail_is_read_as_the_version_and_not_left_for_the_next_read():
+    board = MeasuredBoard()
+    link = link_onto(board)
+    assert link.handshake() is True
+    assert link.firmware == "j"
+    # Nothing left over: the next read sees only its own reply.
+    assert board.read(64) == b""
+
+
+def test_a_hello_tail_that_is_not_a_version_packet_is_dropped(caplog):
+    board = MeasuredBoard(hello_tail=b"zz")
     link = link_onto(board)
     with caplog.at_level(logging.INFO, logger="pitcrew.wind"):
-        assert link.discover_channels(wind.CHANNELS) == 2
-    assert link.channels == 2
-    said = " ".join(r.getMessage() for r in caplog.records)
-    assert "declares 2 channels" in said
-    assert "not the 4 on file" in said
-    # The app's four-wide vector is fitted, and the board acknowledges it.
-    assert link.send((120, 130, 0, 0)) is True
-    assert link.last_outcome == "acked"
-    assert board.set_frames()[-1][7:9] == bytes([120, 130])
-    assert len(board.set_frames()[-1]) == 4 + 3 + 2 + 1
+        assert link.handshake() is True
+    assert link.firmware is None
+    assert "not a version packet" in " ".join(r.getMessage() for r in caplog.records)
 
 
-def test_the_four_channel_board_on_the_rig_still_gets_four():
-    board = CountingBoard(4)
+# ----------------------------------------------------------- discovery
+
+def test_the_board_as_measured_keeps_the_count_on_file(caplog):
+    """No readable count came back; the frame stays four wide and the log
+    says so, with the raw bytes."""
+    board = MeasuredBoard()
     link = link_onto(board)
-    assert link.discover_channels(wind.CHANNELS) == 4
+    assert link.handshake() is True
+    with caplog.at_level(logging.INFO, logger="pitcrew.wind"):
+        assert link.discover_channels(wind.CHANNELS) == 4
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert "did not give a channel count this app can read" in said
+    assert "(reply: nothing)" in said
+    assert link.channels == 4
     assert link.send((120, 130, 0, 0)) is True
     assert len(board.set_frames()[-1]) == 4 + 3 + 4 + 1
 
 
-def test_a_declared_count_is_not_believed_until_proved(caplog):
-    """The board says 3 and drives 2. Three zero frames at width 3 poison
-    each other, the declared count fails, and the default is tried."""
-    board = CountingBoard(2, count_bytes=b"\x03Liar\n")
-    board.motors = 2
-    link = link_onto(board)
-    with caplog.at_level(logging.INFO, logger="pitcrew.wind"):
-        # Default 2 here so the fallback is the truth.
-        assert link.discover_channels(2) == 2
-    said = " ".join(r.getMessage() for r in caplog.records)
-    assert "did not acknowledge three zero frames of width 3" in said
-
-
-def test_an_unreadable_reply_falls_back_to_the_count_on_file(caplog):
-    board = CountingBoard(4, count_bytes=b"Adafruit Motor Shield V2\n")
+def test_a_narrower_declared_count_never_narrows_the_frame(caplog):
+    """The reflashed two-motor board. Four-wide frames reach it and the
+    surplus is discarded; nothing here may send fewer."""
+    board = MeasuredBoard(count_bytes=bytes([arq.REPLY_VALUE, 2]))
     link = link_onto(board)
     with caplog.at_level(logging.INFO, logger="pitcrew.wind"):
         assert link.discover_channels(4) == 4
     said = " ".join(r.getMessage() for r in caplog.records)
-    assert "did not give a channel count this app can read" in said
-    # The raw bytes are in the log: that is the measurement.
-    assert "41 64 61" in said
+    assert "declares 2 channels" in said
+    assert "sending 4 as on file" in said
+    assert link.channels == 4
 
 
-def test_a_board_that_confirms_nothing_is_said_to_be_assumed(caplog):
-    """Not silently four. The word is in the log, and the send path will
-    report every rejection from here."""
-    board = CountingBoard(3, answers_count=False)
+def test_a_wider_declared_count_widens_the_frame(caplog):
+    board = MeasuredBoard(count_bytes=bytes([arq.REPLY_VALUE, 6]))
     link = link_onto(board)
     with caplog.at_level(logging.WARNING, logger="pitcrew.wind"):
-        assert link.discover_channels(4) == 4
+        assert link.discover_channels(4) == 6
     said = " ".join(r.getMessage() for r in caplog.records)
-    assert "assumed" in said
+    assert "more than the 4 on file" in said
+    assert link.send((120, 130, 0, 0)) is True
+    assert len(board.set_frames()[-1]) == 4 + 3 + 6 + 1
+
+
+def test_the_stale_marker_can_no_longer_widen_the_frame(caplog):
+    """The exact failure of 3 Sep: hello tail left unread, count query
+    reads `08 6a`. Even with the hello tail deliberately left in the
+    stream, the marker parses as nothing and the width stays four."""
+    board = MeasuredBoard()
+    link = link_onto(board)
+    board.write(arq.build_frame(arq.BROADCAST_ID, arq.hello_payload(),
+                                arq.DEFAULT_CRC))
+    board.read(2)                       # the ACK; the tail `08 6a` remains
+    board._pending = b""                # a drain would clear it...
+    board.count_bytes = b"\x08\x6a"     # ...but let it arrive after the query
+    with caplog.at_level(logging.INFO, logger="pitcrew.wind"):
+        assert link.discover_channels(4) == 4
+    assert "(reply: 08 6a)" in " ".join(r.getMessage() for r in caplog.records)
+
+
+def test_an_acknowledged_width_is_reported_as_accepted_not_proved():
+    """The bench helper measures; it does not prove. On the measured board
+    every width is accepted."""
+    board = MeasuredBoard()
+    link = link_onto(board)
+    assert all(link.accepts_width(n) for n in range(1, arq.MAX_CHANNELS + 1))
 
 
 def test_fit_trims_and_pads():
     link = wind.WindLink("COM-TEST")
     link.channels = 2
     assert link.fit((1, 2, 3, 4)) == (1, 2)
-    link.channels = 4
-    assert link.fit((1, 2)) == (1, 2, 0, 0)
+    link.channels = 6
+    assert link.fit((1, 2, 3, 4)) == (1, 2, 3, 4, 0, 0)
 
 
 # ----------------------------------------------------- through the sim
 
-def test_the_sim_logs_what_the_board_was_sent(monkeypatch, caplog):
-    board = CountingBoard(2)
+def test_the_sim_connects_to_the_measured_board_and_reports_the_firmware(
+        monkeypatch, caplog):
+    board = MeasuredBoard()
     monkeypatch.setattr(wind, "find_port", lambda: "COM-TEST")
     monkeypatch.setattr(wind.WindLink, "open",
                         lambda self, settle=True: setattr(self, "_serial", board))
     sim = wind.WindSim()
     assert sim._connect(settle=False) is True
-    assert sim.state.channels == 2
+    assert sim.state.channels == 4
+    assert sim.state.firmware == "j"
     sim.set_output((200, 210, 0, 0))
     with caplog.at_level(logging.INFO, logger="pitcrew.wind.frames"):
         assert sim._send_once() is True
-    assert sim.state.last_values == (200, 210)
+    assert sim.state.last_values == (200, 210, 0, 0)
     frames = [r.getMessage() for r in caplog.records if "duty=" in r.getMessage()]
-    assert frames and "duty=200,210 " in frames[-1]
+    assert frames and "duty=200,210,0,0 " in frames[-1]
+    assert "firmware j" in sim.state.describe()
