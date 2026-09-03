@@ -574,6 +574,36 @@ ANCHOR_LEAK_S = 4.0           # and how quickly it washes out when it is not
 # than a transducer, and the only thing an unbounded number can do from here
 # is get stuck. Reproduced at +136 deg with the car parked.
 BETA_LIMIT_DEG = 25.0
+# **How far the road may be banked before the rotation witness stops
+# believing itself**, as the Y component of the road-surface normal - so 0.95
+# is 18 degrees.
+#
+# The witness integrates `angvel_y - path_yaw`. Those are in DIFFERENT FRAMES:
+# `angvel_y` is the world-VERTICAL component of the car's rotation, and
+# `path_yaw` is the curvature of its path in the world-HORIZONTAL plane. On
+# level ground the two agree and their difference is sideslip, which is the
+# whole model. Tilt the car and they stop agreeing by construction, and the
+# difference is integrated - so the error does not average out, it accumulates.
+#
+# Measured on Daytona: mean `beta_rate` is 0.319 rad/s on the banking against
+# 0.089 on the flat parts, 3.6x, and sustained for the length of the turn. The
+# anchor that would leak it away cannot run, because `straight` requires
+# `abs(yaw) < ANCHOR_YAW` and a banked turn never satisfies that. So beta pins
+# at its ceiling, `rotation_level` pins at 1.0, and `traction_level` - the max
+# of the two witnesses - pins with it: measured through the real derivers, the
+# traction cue sat at FULL SCALE for 88% of the banking against a median of
+# zero everywhere else.
+#
+# The driver found it, and it is his description that identifies the mechanism
+# rather than any of the five channels measured before it: "as soon as the car
+# levels out and I'm still on full throttle the rumble stops." Nothing to do
+# with throttle, engine or speed - everything to do with the car being tilted.
+#
+# 18 degrees separates the two cases cleanly on every circuit on file: road
+# camber reaches 10.5 degrees at Spa, 10.1 at Road Atlanta and 4.4 at Monza,
+# and 0.0% of frames at any of them fall below this. Daytona's banking is 31.2
+# and 19.9% of its frames do.
+BANKED_PLANE_Y = 0.95
 # Runtime proof that the two channels still mean what they meant on the bench.
 # Correlation is accumulated over a rolling window; below the threshold the
 # rotation state reports UNKNOWN and the cue is silent rather than wrong.
@@ -1429,7 +1459,15 @@ class VehicleModel:
         # path it is on is the rear leaving, and it is visible before the angle
         # has grown.
         beta_rate = yaw - path_yaw
-        self._beta_raw += beta_rate * dt
+        # **Not integrated while banked.** Suppressing only the OUTPUT would
+        # leave the bias accumulating unseen, and the cue would then fire at
+        # full scale on the exit - the moment the car levels out and the
+        # witness starts believing itself again, which is the worst possible
+        # moment for a phantom.
+        plane_y = getattr(p, "road_plane_y", None)
+        banked = plane_y is not None and abs(plane_y) < BANKED_PLANE_Y
+        if not banked:
+            self._beta_raw += beta_rate * dt
 
         straight = (p.speed_ms > ANCHOR_SPEED_MS and abs(yaw) < ANCHOR_YAW
                     and abs(p.steering_norm or 0.0) < ANCHOR_STEER)
@@ -1450,6 +1488,22 @@ class VehicleModel:
         s.beta_deg = math.degrees(beta)
         s.beta_rate = beta_rate
         if not self._heading.trusted:
+            s.rotation = UNKNOWN
+            s.rotation_confidence = NONE
+            s.rotation_level = 0.0
+            return
+        if banked:
+            # **Banked: the two witnesses are in different frames, so this one
+            # says nothing.** See BANKED_PLANE_Y. It is not that the estimate
+            # is noisy here - it is that its inputs stop meaning the same thing
+            # when the car is tilted, and the error INTEGRATES. Reporting it
+            # anyway is reporting the geometry of the circuit as the rear
+            # stepping out, at full scale, for a fifth of every lap.
+            #
+            # UNKNOWN rather than GRIPPED, because this is a refusal and not a
+            # measurement of grip (rule 3). The wheel-speed witness beside it
+            # is unaffected and still carries wheelspin, so the driver keeps a
+            # traction cue on the banking - just not this one.
             s.rotation = UNKNOWN
             s.rotation_confidence = NONE
             s.rotation_level = 0.0

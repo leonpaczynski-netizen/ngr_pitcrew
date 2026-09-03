@@ -23,8 +23,12 @@ class Frame:
     def __init__(self, *, speed=50.0, throttle=0.0, brake=0.0, yaw=0.0,
                  heading=0.0, front_slip=1.0, rear_slip=1.0, gear=4,
                  suspension=(0.280, 0.280, 0.295, 0.295), surfaces="TTTT",
-                 limiter=False, radius=0.355, steering=0.0):
+                 limiter=False, radius=0.355, steering=0.0,
+                 road_plane_y=1.0):
         self.speed_ms = speed
+        # The Y component of the road-surface normal: 1.0 is level, 0.857 is
+        # Daytona's 31 degrees of banking.
+        self.road_plane_y = road_plane_y
         self.throttle = throttle
         self.brake = brake
         self.angvel_y = yaw
@@ -1031,3 +1035,75 @@ def test_the_front_plateau_is_never_taught_by_the_rear_axle():
         state = model.update(Frame(brake=1.0, front_slip=0.99, rear_slip=0.72))
     assert state.lock_threshold <= before + 1e-9, (
         "the rear axle moved a threshold that describes the front regulator")
+
+
+# --- banked track ----------------------------------------------------------
+
+def _settled(model, *, plane=1.0, frames=900, yaw=0.30):
+    """Run until the heading witness trusts itself, on the given road plane."""
+    heading = 0.0
+    state = None
+    for _ in range(frames):
+        heading += V.HEADING_SIGN * yaw * V.FRAME_S
+        state = model.update(Frame(speed=55.0, yaw=yaw, heading=heading,
+                                   road_plane_y=plane))
+    return state
+
+
+def test_the_rotation_witness_refuses_on_a_banked_track():
+    """**The Daytona rumble, and the driver found it.** The witness integrates
+    `angvel_y - path_yaw`, and those are in different frames: one is the
+    world-VERTICAL component of the car's rotation, the other the curvature of
+    its path in the world-HORIZONTAL plane. Level, they agree and the
+    difference is sideslip. Tilt the car and they disagree by construction -
+    and the difference is INTEGRATED, so it accumulates rather than averaging
+    out.
+
+    Measured on Daytona: mean `beta_rate` 0.319 rad/s on the banking against
+    0.089 on the flat, sustained, with the anchor unable to leak it because
+    `straight` needs `abs(yaw) < ANCHOR_YAW` and a banked turn never gives it.
+    Through the real derivers the traction cue - the max of this witness and
+    the wheel-speed one - sat at FULL SCALE for 88% of the banking.
+
+    His words are what identified it, after five other channels had been
+    measured and cleared: "as soon as the car levels out and I'm still on full
+    throttle the rumble stops."
+    """
+    model = V.VehicleModel()
+    state = _settled(model, plane=0.857)          # Daytona, 31 degrees
+    assert state.rotation == V.UNKNOWN
+    assert state.rotation_level == 0.0
+    assert state.rotation_confidence == V.NONE
+
+
+def test_ordinary_camber_is_not_banking():
+    """Road camber reaches 10.5 degrees at Spa and 10.1 at Road Atlanta, and
+    0.0% of frames at any road circuit on file fall below the threshold. A cue
+    that went quiet on camber would be silent through most of a lap."""
+    model = V.VehicleModel()
+    state = _settled(model, plane=0.983)          # Spa's worst, 10.5 degrees
+    assert state.rotation != V.UNKNOWN
+    assert state.rotation_confidence == V.HIGH
+
+
+def test_leaving_the_banking_does_not_fire_a_phantom():
+    """Suppressing only the OUTPUT would leave the bias accumulating unseen,
+    and the cue would fire at full scale on the exit - the moment the car
+    levels out and the witness starts believing itself again, which is the
+    worst possible moment for a phantom."""
+    model = V.VehicleModel()
+    _settled(model, plane=1.0)                    # trusted, on the level
+    _settled(model, plane=0.857, frames=600)      # a long banked turn
+    heading = 0.0
+    for _ in range(30):                           # and back onto the flat
+        heading += V.HEADING_SIGN * 0.30 * V.FRAME_S
+        state = model.update(Frame(speed=55.0, yaw=0.30, heading=heading))
+    assert state.rotation_level < 0.25
+
+
+def test_a_packet_without_a_road_plane_is_treated_as_level():
+    """Formats `A` and `B` carry no road plane. Absent is not banked - the
+    cue behaves exactly as it did before this existed."""
+    model = V.VehicleModel()
+    state = _settled(model, plane=None)
+    assert state.rotation_confidence == V.HIGH

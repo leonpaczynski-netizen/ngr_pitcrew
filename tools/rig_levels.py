@@ -88,6 +88,7 @@ class _Frame:
                  "steering_norm", "car_on_track", "paused",
                  "wheel_rps_fl", "wheel_rps_fr", "wheel_rps_rl",
                  "wheel_rps_rr", "tyre_radius_fl", "tyre_radius_fr",
+                 "road_plane_y",
                  "tyre_radius_rl", "tyre_radius_rr", "suspension_fl",
                  "suspension_fr", "suspension_rl", "suspension_rr")
 
@@ -194,6 +195,10 @@ def _frames(rows: list[dict]) -> list[_Frame]:
         frame.surface_types = tuple((row.get(f"surf_{w}") or "T")
                                     for w in WHEELS)
         frame.steering_norm = _number(row, "steering_norm")
+        # **The road plane, so the rotation witness can refuse on banking.**
+        # Without it every replayed lap looks level and the tool measures a
+        # system the car never runs.
+        frame.road_plane_y = row.get("road_plane_y")
         frame.car_on_track = True
         frame.paused = False
         out.append(frame)
