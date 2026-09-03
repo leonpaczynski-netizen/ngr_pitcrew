@@ -247,9 +247,17 @@ class PitWall:
         return list(self._stops)
 
     def positions(self) -> dict[str, int]:
-        """Board position per named driver, best effort."""
+        """Board position per named driver, best effort.
+
+        **Snapshotted before it is walked.** `_position` is written on the
+        sampler's worker thread and read on the Qt one, so iterating it live
+        raises `RuntimeError: dictionary changed size during iteration` if a
+        driver is added mid-walk. The caller's blanket `except` would swallow
+        that into a championship call that intermittently and silently does not
+        happen - the worst kind of failure, because nothing says it failed.
+        """
         out = {}
-        for driver, place in self._position.items():
+        for driver, place in list(self._position.items()):
             name = self._roster.name_of(driver)
             if name:
                 out[name] = place
@@ -508,4 +516,5 @@ class PitWall:
         proportional mixed-case font is not something this app guesses at.
         """
         return [(d, self._roster.name_of(d) or "")
-                for d in self._roster.drivers(min_sightings=min_sightings)]
+                for d in list(self._roster.drivers(
+                    min_sightings=min_sightings))]

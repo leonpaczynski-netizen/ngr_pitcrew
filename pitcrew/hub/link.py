@@ -71,6 +71,8 @@ class LeagueRace:
     series_id: str | None = None
     series_name: str | None = None
     matched_by: str = "nothing"
+    # Why there is no championship here, when there is a league but no table.
+    refused: str = ""
     teammates: list[str] = field(default_factory=list)
     table: list[Standing] = field(default_factory=list)
     rounds_left: int = 0
@@ -78,6 +80,7 @@ class LeagueRace:
     pole_points: int = 0
     fastest_lap_points: int = 0
     field_size: int | None = None
+    carry_in: dict = field(default_factory=dict)
     taken_at: str = ""
     stale: bool = False
 
@@ -126,7 +129,41 @@ def league_for(hub: Hub, event: dict, me: str) -> LeagueRace:
     if found is None:
         return out
 
+    # **A multi-class league is not scored outright.** The Enduro is
+    # MULTI_CLASS_MANUFACTURER: a result is an overall finish score PLUS a
+    # class one, which no single finishing table can express. Scoring it
+    # outright was measured 15-30% light on every driver and in a different
+    # order - Farter999 is sixth on 43 and read as 25 - so the hub's own
+    # persisted totals are used instead, verbatim, as `points.ts` says every
+    # aggregation surface should. Where they are absent the league is refused
+    # rather than approximated.
     results = hub.results(found.id)
+    ready: dict = {}
+    if found.multi_class:
+        try:
+            ready = hub.precomputed_points(found.id)
+        except Exception:
+            ready = {}
+        # **All of them or none.** A result the hub has not computed yet would
+        # fall through to the outright table, putting two different scales in
+        # one championship - a driver on 43 and a driver on 25 for the same
+        # drive, with the total looking perfectly well-formed either way.
+        missing = [r for r in results if r.get("id") not in ready]
+        if missing:
+            out.series_name = found.name
+            out.matched_by = how
+            out.refused = (
+                f"{found.name} is scored per class and the hub copy has no "
+                f"computed points for {len(missing)} of {len(results)} results")
+            return out
+    # A scheme that would not parse is not a scheme. CLAUDE.md rule 3: an
+    # unreadable 44-point-a-win table must not quietly score 22.
+    if found.points_scheme is None:
+        out.series_name = found.name
+        out.matched_by = how
+        out.refused = f"{found.name}'s points scheme could not be read"
+        return out
+
     rounds = hub.rounds(found.id)
     done = {row["roundId"] for row in results}
     out.series_id = found.id
@@ -138,9 +175,20 @@ def league_for(hub: Hub, event: dict, me: str) -> LeagueRace:
     out.fastest_lap_points = found.fastest_lap_points
     out.rounds_left = len([r for r in rounds if r["id"] not in done])
     out.field_size = len(hub.entries(found.id)) or None
+    out.carry_in = found.carry_in or {}
     out.table = standings(results, scheme=found.points_scheme,
                           pole_points=found.pole_points,
-                          fastest_lap_points=found.fastest_lap_points)
+                          fastest_lap_points=found.fastest_lap_points,
+                          races_per_round=found.race_count,
+                          carry_in=found.carry_in, precomputed=ready)
+    # **The hub's own age against this league's own rounds.** A flat day count
+    # calls a two-day-old copy current; if a round ran last night the table is
+    # describing a championship that has already moved.
+    try:
+        if hub.round_run_since(found.id, hub.taken_at):
+            out.stale = True
+    except Exception:
+        pass
     return out
 
 
@@ -154,7 +202,11 @@ def before_the_start(race: LeagueRace, me: str,
                       fastest_lap_points=race.fastest_lap_points,
                       field_size=race.field_size)
     if on_the_grid:
-        math.live_rivals = math.matters_here(on_the_grid) or math.live_rivals
+        # **No fallback.** `or` restored the full list whenever nobody on the
+        # grid was a title rival, which is exactly the case the filter exists
+        # for: naming a driver who cannot take the title costs the race being
+        # driven. An empty list is the right answer and reads as one.
+        math.live_rivals = math.matters_here(on_the_grid)
     return math
 
 
@@ -174,6 +226,16 @@ def project(race: LeagueRace, me: str, our_position: int | None,
     finishing = dict(rival_positions or {})
     if our_position is not None:
         finishing[me] = our_position
+    # **One driver per finishing position.** Our own place comes from
+    # telemetry and the rivals' from the leaderboard - two sources with no
+    # agreement between them - so two cars could both be given P1 and both
+    # paid for winning. Where that happens nobody is paid for the disputed
+    # place: an invented result is worse than a missing one.
+    seen: dict[int, int] = {}
+    for where in finishing.values():
+        seen[where] = seen.get(where, 0) + 1
+    finishing = {who: where for who, where in finishing.items()
+                 if seen.get(where, 0) == 1}
     projected = []
     for standing in race.table:
         gained = points_for_position(finishing.get(standing.driver), scheme)

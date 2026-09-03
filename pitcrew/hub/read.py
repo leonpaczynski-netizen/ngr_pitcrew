@@ -55,13 +55,32 @@ class Driver:
 
 @dataclass(frozen=True)
 class Series:
+    """One league, with everything its championship actually depends on.
+
+    **`carry_in` and `race_count` were both missing and both change results.**
+    The Porsche Cup carries 17 drivers' points forward - 97 of them this
+    driver's own - so without it he read as fourth on 31 points when the league
+    has him leading on 128. And `raceCount` lives in the `raceConfig` JSON
+    rather than in a column, so a two-race round was scoring each race at the
+    full table: double the league.
+    """
     id: str
     name: str
     status: str
     format: str | None = None
-    points_scheme: tuple[int, ...] = ()
+    points_scheme: tuple[int, ...] | None = ()
     pole_points: int = 0
     fastest_lap_points: int = 0
+    class_points_scheme: tuple[int, ...] | None = ()
+    class_pole_points: int = 0
+    class_fl_points: int = 0
+    carry_in: dict[str, int] = None
+    race_count: int = 1
+
+    @property
+    def multi_class(self) -> bool:
+        """Whether this league is scored per class rather than outright."""
+        return bool(self.format and "MULTI_CLASS" in self.format)
 
 
 @dataclass(frozen=True)
@@ -177,7 +196,8 @@ class Hub:
 
     def series(self, active_only: bool = True) -> list[Series]:
         sql = ("SELECT id, name, status, format, pointsScheme, polePoints, "
-               "fastestLapPoints FROM Series")
+               "fastestLapPoints, classPointsScheme, classPolePoints, "
+               "classFlPoints, driverCarryIn, raceConfig FROM Series")
         if active_only:
             sql += " WHERE status = 'ACTIVE'"
         sql += " ORDER BY name"
@@ -188,7 +208,12 @@ class Hub:
                 format=row["format"],
                 points_scheme=_as_ints(row["pointsScheme"]),
                 pole_points=int(row["polePoints"] or 0),
-                fastest_lap_points=int(row["fastestLapPoints"] or 0)))
+                fastest_lap_points=int(row["fastestLapPoints"] or 0),
+                class_points_scheme=_as_ints(row["classPointsScheme"]),
+                class_pole_points=int(row["classPolePoints"] or 0),
+                class_fl_points=int(row["classFlPoints"] or 0),
+                carry_in=self._named_carry_in(row["driverCarryIn"]),
+                race_count=_race_count(row["raceConfig"])))
         return out
 
     def my_series(self, driver_id: str) -> list[Series]:
@@ -253,6 +278,7 @@ class Hub:
         rows = self._query(
             """SELECT rr.id, rr.position, rr.status, rr.raceNumber,
                       rr.pole, rr.fastestLap, rr.raceClass,
+                      rr.qualifyingPosition, rr.classQualifyingPosition,
                       d.id AS driverId, d.driverName,
                       ro.id AS roundId, ro.name AS roundName
                FROM RoundResult rr
@@ -277,9 +303,97 @@ class Hub:
             out.append(item)
         return out
 
+    def _named_carry_in(self, raw) -> dict[str, int]:
+        """Carry-in points keyed by the driver's CURRENT name.
 
-def _as_ints(raw) -> tuple[int, ...]:
-    """A Prisma JSONB integer array, however sqlite hands it over."""
+        **Bound entries are resolved through the `Driver` table, not read off
+        the blob.** The hub matches carry-in by `driverId` first and falls back
+        to the name only for unbound legacy entries, precisely so that a driver
+        who has changed his displayed name keeps his points. Trusting the name
+        stored in the blob would give a renamed driver two rows, each with half
+        a championship, and the split is silent.
+        """
+        out: dict[str, int] = {}
+        for driver_id, name, points in _carry_in(raw):
+            if driver_id:
+                rows = self._query(
+                    "SELECT driverName FROM Driver WHERE id = ? LIMIT 1",
+                    (driver_id,))
+                if rows and rows[0]["driverName"]:
+                    name = rows[0]["driverName"]
+            if name:
+                out[name] = out.get(name, 0) + points
+        return out
+
+    def precomputed_points(self, series_id: str) -> dict[str, int]:
+        """The hub's own persisted points per result id, where it has them.
+
+        `sumBreakdown` in `points.ts` adds all FOUR components - the overall
+        finish score and the three class ones - and the file says every
+        aggregation surface should prefer that total verbatim rather than
+        re-deriving it. Present only for MULTI_CLASS_MANUFACTURER results.
+
+        A row missing any component is skipped rather than part-summed:
+        CLAUDE.md rule 3, since a partial total is indistinguishable from a
+        low one.
+        """
+        parts = ("overallFinishPoints", "classFinishPoints",
+                 "classPolePoints", "classFlPoints")
+        out: dict[str, int] = {}
+        for row in self.class_breakdowns(series_id).values():
+            if any(row.get(name) is None for name in parts):
+                continue
+            try:
+                out[row["roundResultId"]] = sum(int(row[n]) for n in parts)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def class_breakdowns(self, series_id: str) -> dict:
+        """The hub's own pre-computed breakdown rows for a multi-class round.
+
+        Keyed by result id. `precomputed_points` is what callers want.
+        """
+        return {r["roundResultId"]: dict(r) for r in self._query(
+            """SELECT b.* FROM MultiClassResultBreakdown b
+               JOIN RoundResult rr ON rr.id = b.roundResultId
+               JOIN EventSignIn es ON es.id = rr.eventSignInId
+               JOIN DivisionEvent de ON de.id = es.divisionEventId
+               JOIN Round ro ON ro.id = de.roundId
+               WHERE ro.seriesId = ?""", (series_id,))}
+
+    def round_run_since(self, series_id: str, when) -> bool:
+        """Whether a round has been run since `when`.
+
+        **The staleness test that matters.** A flat day count calls a two-day
+        old copy current; if a round ran last night it is describing a
+        championship that has already moved, and nothing in the data says so.
+        """
+        if when is None:
+            return True
+        return any(_after(row["scheduledAt"], when) for row in self._query(
+            "SELECT scheduledAt FROM Round WHERE seriesId = ? "
+            "AND scheduledAt IS NOT NULL", (series_id,)))
+
+
+def _after(raw, when) -> bool:
+    try:
+        ran = datetime.datetime.fromisoformat(
+            str(raw).replace("Z", "+00:00")).replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return False
+    return when < ran < datetime.datetime.now()
+
+
+def _as_ints(raw) -> tuple[int, ...] | None:
+    """A Prisma JSONB integer array, or `None` if it could not be read.
+
+    **`None` and `()` are different answers and must not collapse.** An empty
+    array means "this league uses the default table"; a blob that would not
+    parse means "I do not know what this league uses", and returning `()` for
+    both made an unreadable 44-point-a-win scheme silently score 22.
+    CLAUDE.md rule 3.
+    """
     import json
 
     if raw is None:
@@ -290,13 +404,75 @@ def _as_ints(raw) -> tuple[int, ...]:
         try:
             raw = json.loads(raw)
         except ValueError:
-            return ()
+            return None
     if not isinstance(raw, list):
-        return ()
+        return None
     out = []
     for value in raw:
         try:
             out.append(int(value))
         except (TypeError, ValueError):
-            return ()
+            return None
     return tuple(out)
+
+
+def _carry_in(raw) -> list[tuple[str | None, str, int]]:
+    """Points carried into a league, as (driver id, name, points).
+
+    The Porsche Cup carries seventeen drivers forward and this driver's own
+    entry is 97 points - most of his total. Reading the table without it put
+    him fourth on 31 where the league has him leading on 128.
+
+    The id is kept because the hub matches on it first; `Hub._named_carry_in`
+    resolves it to the driver's current name.
+    """
+    import json
+
+    if raw is None:
+        return []
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", "ignore")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    out: list[tuple[str | None, str, int]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("driverName")
+        try:
+            points = int(item.get("points") or 0)
+        except (TypeError, ValueError):
+            continue
+        if name:
+            out.append((item.get("driverId") or None, str(name), points))
+    return out
+
+
+def _race_count(raw) -> int:
+    """Races per round, from the `raceConfig` JSON rather than a column.
+
+    Defaults to one. A two-race round divides the finishing scheme, and
+    scoring each race at the full table doubles the league.
+    """
+    import json
+
+    if raw is None:
+        return 1
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", "ignore")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return 1
+    if not isinstance(raw, dict):
+        return 1
+    try:
+        return max(1, int(raw.get("raceCount") or 1))
+    except (TypeError, ValueError):
+        return 1

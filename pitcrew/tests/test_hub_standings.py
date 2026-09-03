@@ -196,7 +196,13 @@ def test_the_margin_is_signed_and_named_for_what_it_is():
     ahead = title_math(a_table(("Beeni", 95), ("Rocky", 68)), ours="Beeni",
                        rounds_left=3)
     assert behind.margin_to_leader == -27 and not behind.leading
+    assert behind.lead_over_next is None
+    # Leading: the gap to the LEADER is zero because we are him, and the
+    # figure worth hearing is the one over the man behind. Two fields,
+    # because one signed number meant both and neither said which.
     assert ahead.margin_to_leader == 0 and ahead.leading
+    assert ahead.lead_over_next == 27
+    assert "leading by 27" in ahead.to_say()
 
 
 def test_only_drivers_who_can_still_win_are_title_rivals():
@@ -217,3 +223,105 @@ def test_the_rivals_who_matter_are_the_ones_in_this_race():
 def test_a_driver_not_in_the_table_gets_an_empty_answer():
     math = title_math(a_table(("Rocky", 90)), ours="Beeni", rounds_left=1)
     assert math.our_points == 0 and math.live_rivals == []
+
+
+# --- what the hub actually scores, which is not what was being read --------
+
+def a_row(name, place, **kw):
+    row = {"driverName": name, "position": place, "status": "FINISHED",
+           "penalties": []}
+    row.update(kw)
+    return row
+
+
+def test_points_carried_into_the_league_are_the_start_of_the_table():
+    """The Porsche Cup carries seventeen drivers forward, ninety-seven of them
+    his. Without them Pit Crew had him fourth on 31 where the league has him
+    leading on 128 - not a rounding error, a different championship."""
+    table = standings([a_row("Beeni", 1), a_row("Rocky", 2)],
+                      carry_in={"Beeni": 97, "Rocky": 88})
+    assert [(s.driver, s.points) for s in table] == [
+        ("Beeni", 97 + 22), ("Rocky", 88 + 18)]
+
+
+def test_a_driver_who_only_has_carry_in_is_still_in_the_table():
+    """He led the league before tonight and has no result in it yet. Dropping
+    him would hand the title to somebody who is second."""
+    table = standings([a_row("Rocky", 1)], carry_in={"Absent": 200})
+    assert table[0].driver == "Absent" and table[0].points == 200
+
+
+def test_pole_is_derived_from_the_qualifying_position():
+    """Measured on the live hub: the stored `pole` flag is 0 on all 202 rows,
+    while 189 carry a qualifying position and 20 of those are P1. Reading the
+    flag made pole points dead, and dead pole points inverted third and fourth
+    in the GR3 table."""
+    table = standings([a_row("Beeni", 2, qualifyingPosition=1),
+                       a_row("Rocky", 1, qualifyingPosition=3)],
+                      pole_points=2)
+    assert dict((s.driver, s.points) for s in table) == {
+        "Beeni": 18 + 2, "Rocky": 22}
+
+
+def test_the_legacy_flag_is_still_honoured_where_there_is_no_qualifying():
+    table = standings([a_row("Beeni", 2, pole=1)], pole_points=2)
+    assert table[0].points == 20
+
+
+def test_a_non_starter_collects_no_bonus_either():
+    """The hub zeroes all four components for DNS and DSQ. Adding the bonus
+    unconditionally paid a disqualified pole-sitter for the pole."""
+    table = standings([a_row("Beeni", 1, status="DSQ", qualifyingPosition=1,
+                             fastestLap=1)],
+                      pole_points=2, fastest_lap_points=1)
+    assert table[0].points == 0
+
+
+def test_level_drivers_are_ordered_by_name_as_the_hub_orders_them():
+    """Ordering the tie on best finish instead put two level drivers in a
+    different order from the league's own site - and the position quoted to
+    the driver comes from this sort."""
+    table = standings([a_row("Zoe", 1), a_row("Adam", 1)])
+    assert [s.driver for s in table] == ["Adam", "Zoe"]
+
+
+def test_a_two_race_round_rounds_the_way_javascript_rounds():
+    """Half away from zero, not Python's half-to-even. They disagree on four
+    of sixteen places: P4 is seven in the league and would be six here."""
+    halved = normalise_for_races(POINTS_TABLE, 2)
+    assert halved[3] == 7 and halved[15] == 1
+    assert normalise_for_races(POINTS_TABLE, 1) == POINTS_TABLE
+
+
+def test_a_rival_who_can_draw_level_is_still_a_rival():
+    """There is no countback anywhere in the league's code, so level is not
+    beaten - and `>` declared the title won with one still able to draw."""
+    table = a_table(("Beeni", 40), ("Rocky", 18))
+    assert title_math(table, ours="Beeni", rounds_left=1).live_rivals ==         ["Rocky"]
+
+
+def test_a_carry_in_spelled_differently_is_the_same_driver():
+    """The hub matches carry-in on `trim().toLowerCase()`. Keyed on the raw
+    name, a carry-in written "beeni " against results recorded as "Beeni"
+    made two drivers with half a championship each, and nothing said so."""
+    table = standings([a_row("Beeni", 1)], carry_in={"beeni ": 97})
+    assert len(table) == 1
+    assert table[0].driver == "Beeni" and table[0].points == 97 + 22
+
+
+def test_a_precomputed_total_is_used_verbatim_and_not_added_to():
+    """A multi-class result is an overall finish score PLUS a class one, and
+    the hub persists the sum. Re-deriving it from the finishing position was
+    measured 15-30% light and in a different order."""
+    rows = [dict(a_row("Beeni", 6, qualifyingPosition=1, fastestLap=1),
+                 id="r1")]
+    table = standings(rows, pole_points=2, fastest_lap_points=1,
+                      precomputed={"r1": 44})
+    assert table[0].points == 44        # not 44+2+1, and not 11
+
+
+def test_a_result_the_hub_has_not_computed_still_scores_the_normal_way():
+    """Only multi-class rounds carry a breakdown; everything else must go on
+    scoring from the finishing table as before."""
+    rows = [dict(a_row("Beeni", 1), id="r1")]
+    assert standings(rows, precomputed={"other": 44})[0].points == 22

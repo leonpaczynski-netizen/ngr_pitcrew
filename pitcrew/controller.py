@@ -3484,6 +3484,13 @@ class PitCrewController(QObject):
         # app's most-used output and it has never meant one thing - no plan,
         # no wear evidence, no resolvable lap count and nothing to report all
         # sound identical. Nothing competes for the channel here.
+        # **The league is opened BEFORE the brief, because the brief reads
+        # it.** Opened after, `_league_line()` found last race's league still
+        # loaded - so the first race of a session got no championship line at
+        # all, and every race after it was told where it stood in the league it
+        # had raced PREVIOUSLY. Wrong is worse than absent here: he would act
+        # on a title margin belonging to another championship.
+        self._open_the_league(event)
         self._say_brief(event, plan, speaks=speaks)
 
         self.bridge.reset(race=True)
@@ -3607,7 +3614,6 @@ class PitCrewController(QObject):
         # tell that the race stopped. One arithmetic call per frame.
         self.bridge.race_clock = self.race.clock
         self.race_screen.clear_log()
-        self._open_the_league(event)
         self.race_screen.set_armed(True)
         # **Started here, on the grid, not at the green.** The pit columns are
         # drawn only while a car is standing in its box, so a watcher that
@@ -3720,6 +3726,13 @@ class PitCrewController(QObject):
                 return
             league = league_for(Hub(), event, me)
             if not league.known:
+                # **A refusal is a finding and gets said.** A league Pit Crew
+                # declines to score - a multi-class round, an unreadable points
+                # table - is indistinguishable in the log from no league at
+                # all, and the two want opposite responses from whoever reads
+                # it afterwards.
+                if getattr(league, "refused", ""):
+                    log("race").info("league: %s", league.refused)
                 return
             self._league = league
             log("race").info(

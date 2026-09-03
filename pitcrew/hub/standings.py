@@ -31,6 +31,8 @@ this, and who in this race can still take it from me.**
 """
 from __future__ import annotations
 
+import math
+import unicodedata
 from dataclasses import dataclass, field
 
 # Transcribed from `src/lib/points.ts`. Positions 1-16 score; P17 and beyond
@@ -68,7 +70,11 @@ def normalise_for_races(scheme, race_count: int):
     """
     if race_count <= 1 or not scheme:
         return scheme
-    return tuple(round(value / race_count) for value in scheme)
+    # **Half away from zero, like JavaScript's `Math.round`, not Python's
+    # banker's rounding.** They disagree on four of sixteen positions at a
+    # two-race round - Python gives P4 six where the hub gives seven, and P16
+    # nothing where the hub gives one.
+    return tuple(math.floor(value / race_count + 0.5) for value in scheme)
 
 
 def effective_position(status: str | None, position: int | None,
@@ -125,32 +131,114 @@ class Standing:
             self.best_finish = position
 
 
+def took_pole(row) -> bool:
+    """Whether this result was pole, DERIVED as the hub derives it.
+
+    **The stored `pole` boolean is legacy and is `0` on every row.** Measured
+    on the live hub: 0 of 202 results carry the flag, while 189 carry a
+    `qualifyingPosition` and 20 of those are P1. The hub therefore computes
+    pole at every call site as `qualifyingPosition == 1` where that is present
+    and falls back to the flag otherwise, and reading the flag alone made pole
+    points dead - which inverted third and fourth in the GR3 championship.
+    """
+    where = row.get("qualifyingPosition")
+    if where is not None:
+        return int(where) == 1
+    return bool(row.get("pole"))
+
+
 def standings(results, *, scheme=None, pole_points: int = 0,
               fastest_lap_points: int = 0,
-              races_per_round: int = 1) -> list[Standing]:
+              races_per_round: int = 1,
+              carry_in=None, precomputed=None) -> list[Standing]:
     """The championship table, highest first.
 
     `results` is `hub.read.Hub.results()`. Bonuses for pole and fastest lap are
     added at FULL value every race and are deliberately not divided by the race
     count - the hub does the same, and its comment says so.
+
+    **`precomputed` wins outright where it exists.** `points.ts` says a
+    persisted `MultiClassResultBreakdown` total is what every aggregation
+    surface should prefer verbatim rather than re-deriving from position and
+    class - and for the Enduro it is the only correct answer, because a
+    multi-class result is an overall finish score PLUS a class score and no
+    single finishing table can express that. Scoring it outright instead was
+    measured 15-30% light on every driver AND in a different order: Farter999
+    is sixth in the league on 43 and would have been read as 25.
+
+    **`carry_in` is not optional in practice.** The Porsche Cup carries
+    seventeen drivers' points forward, ninety-seven of them this driver's, and
+    a table computed without them had him fourth on 31 where the league has him
+    leading on 128.
     """
     table = normalise_for_races(resolve_scheme(scheme), races_per_round)
+    # **Keyed on the normalised name, as the hub keys it.** `carry-in.ts`
+    # matches on `trim().toLowerCase()`, so a carry-in written "beeni" against
+    # results recorded as "Beeni" is ONE driver there and would have been two
+    # here - each holding half a championship, with nothing on screen saying
+    # the total had been split.
     tally: dict[str, Standing] = {}
+    for name, points in (carry_in or {}).items():
+        tally[_merge_key(name)] = Standing(driver=name, points=int(points))
     for row in results:
         name = row.get("driverName")
         if not name:
             continue
-        got = points_for_result(row.get("status"), row.get("position"),
-                                row.get("penalties"), table)
-        if row.get("pole"):
-            got += pole_points
-        if row.get("fastestLap"):
-            got += fastest_lap_points
-        tally.setdefault(name, Standing(driver=name)).note(
-            got, row.get("position"))
+        key = _merge_key(name)
+        if key in tally:
+            # The result's spelling wins, exactly as it does in the hub: only
+            # an unmatched carry-in entry keeps the name written on the blob.
+            tally[key].driver = name
+        status = row.get("status")
+        ready = (precomputed or {}).get(row.get("id"))
+        if ready is not None:
+            # Verbatim, bonuses included - they are already inside the total,
+            # and adding them again would pay pole twice.
+            got = int(ready)
+        else:
+            got = points_for_result(status, row.get("position"),
+                                    row.get("penalties"), table)
+            # **A non-starter collects no bonus either.** The hub returns all
+            # four components as zero for DNS and DSQ, bonuses included;
+            # adding them unconditionally paid a disqualified pole-sitter
+            # three points.
+            if status not in NO_SCORE:
+                if took_pole(row):
+                    got += pole_points
+                if row.get("fastestLap"):
+                    got += fastest_lap_points
+        tally.setdefault(key, Standing(driver=name)).note(
+            got, effective_position(status, row.get("position"),
+                                    row.get("penalties")))
+    # **Ties break on the name, as the hub breaks them.** Ordering by best
+    # finish instead put two level drivers in a different order from the
+    # league's own site, and the championship position quoted to the driver
+    # came from this sort.
     ranked = sorted(tally.values(),
-                    key=lambda s: (-s.points, s.best_finish or 99))
+                    key=lambda s: (-s.points, _name_key(s.driver)))
     return ranked
+
+
+def _merge_key(name: str) -> str:
+    """Two spellings of one driver, reduced to one key.
+
+    `normalizeCarryInName` in the hub is `trim().toLowerCase()`; this must
+    agree with it or the two applications disagree about how many drivers are
+    in the championship.
+    """
+    return (name or "").strip().lower()
+
+
+def _name_key(name: str) -> str:
+    """A name compared as the hub compares it.
+
+    `localeCompare(..., {sensitivity: "base"})` ignores case AND accent, so
+    stripping the case alone would still order an accented name differently
+    from the league's own site.
+    """
+    stripped = unicodedata.normalize("NFKD", name or "")
+    return "".join(c for c in stripped
+                   if not unicodedata.combining(c)).casefold()
 
 
 @dataclass
@@ -170,7 +258,13 @@ class TitleMath:
     # `lead_over_next` and went negative whenever we were not first, which is
     # a field whose name contradicts its value four times out of four on this
     # driver's own leagues.
-    margin_to_leader: int = 0
+    # **Two references, two names.** One signed field meant "gap to the
+    # leader" when behind and "lead over the next man" when ahead - the same
+    # word for figures that demand opposite driving, which is CLAUDE.md rule
+    # 13. Measured against the leader alone it was identically zero every time
+    # we led, and the driver heard "leading by 0".
+    margin_to_leader: int = 0          # <= 0 always; 0 exactly when leading
+    lead_over_next: int | None = None  # only when leading, else None
     rounds_left: int = 0
     most_still_available: int = 0
     secures_position: int | None = None
@@ -199,7 +293,9 @@ class TitleMath:
         if self.secures_position:
             return (f"P{self.secures_position} today secures it, whatever "
                     f"they do.")
-        where = ("leading by %d" % self.margin_to_leader if self.leading
+        where = ("leading by %d" % self.lead_over_next
+                 if self.leading and self.lead_over_next is not None
+                 else "leading" if self.leading
                  else "%d behind" % -self.margin_to_leader)
         return (f"Nothing settles it today - {where}, "
                 f"{self.most_still_available} still on the table.")
@@ -241,10 +337,15 @@ def title_math(table: list[Standing], *, ours: str,
 
     others = [s for s in table if s.driver != ours]
     out.margin_to_leader = mine.points - table[0].points
+    if mine is table[0] and others:
+        out.lead_over_next = mine.points - others[0].points
+    # **Level is not beaten.** There is no countback anywhere in the league's
+    # own code, so a rival who can finish exactly level is not a rival we have
+    # beaten - and `>` declared the title won with one still able to draw.
     out.live_rivals = [s.driver for s in others
-                       if s.points + available > mine.points]
+                       if s.points + available >= mine.points]
 
-    if not out.live_rivals and available >= 0:
+    if not out.live_rivals:
         out.already_secured = mine is table[0]
     # Could we still be caught even winning out?
     out.out_of_reach = bool(others) and (
@@ -257,7 +358,6 @@ def title_math(table: list[Standing], *, ours: str,
     worst_rival = max(s.points for s in others) + available
     need = worst_rival - mine.points
     if need < 0:
-        out.secures_position = 1 if not points else None
         out.already_secured = True
         return out
     # **The WORST finish that still does it, not the best.** Points fall as
