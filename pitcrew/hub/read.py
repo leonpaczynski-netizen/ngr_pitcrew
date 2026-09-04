@@ -432,6 +432,68 @@ class Hub:
                  _blob(chosen["lobbySettingsOverrides"])],
                 f"{chosen['name']}, {how}")
 
+    def multi_class_car(self, series_id: str, driver_id: str,
+                        round_id: str) -> tuple:
+        """The car a multi-class round puts this driver in, and its class.
+
+        **In a manufacturer series he does not register a car, he registers a
+        marque.** `SeriesRegistration.carName` is NULL for every driver in the
+        Enduro, which reads as "no car on the hub" and is not: the car is a
+        round-by-round consequence of two other rows.
+
+        - `MultiClassDriverRegistration` holds his `manufacturerId` - Porsche -
+          and, optionally, a per-class car of his own choosing.
+        - `DriverRoundClassAssignment` holds the class he is assigned **for
+          this round**, and it moves: Gr.1 at Fuji, Gr.4 at Mount Panorama,
+          Gr.3 at Le Mans.
+
+        The car is then his own choice for that class if he made one, and
+        otherwise his manufacturer's entry for it in `ManufacturerRoster`.
+        Corroborated against the archive: Enduro Rd3 was Gr.3, the roster's
+        Porsche Gr.3 is the 911 GT3 R (992) '22, and the event the driver
+        recorded for that round names exactly that car.
+
+        Returns `(car, class, why)`. `car` is `None` where any link is missing,
+        and `why` says which one - a car guessed here would be a different
+        category of car, not a near miss.
+        """
+        rows = self._query(
+            "SELECT id, manufacturerId, gr1CarChoice, gr3CarChoice, "
+            "       gr4CarChoice "
+            "FROM MultiClassDriverRegistration "
+            "WHERE seriesId = ? AND driverId = ? LIMIT 1",
+            (series_id, driver_id))
+        if not rows:
+            return None, None, "you have no multi-class registration here"
+        registration = rows[0]
+
+        assigned = self._query(
+            "SELECT assignedClass FROM DriverRoundClassAssignment "
+            "WHERE mcRegistrationId = ? AND roundId = ? LIMIT 1",
+            (registration["id"], round_id))
+        if not assigned:
+            return (None, None,
+                    "the hub has not assigned you a class for this round yet")
+        race_class = assigned[0]["assignedClass"]
+
+        # "Gr.1" -> "gr1", which is how both tables spell their columns.
+        key = race_class.replace(".", "").replace(" ", "").lower()
+        if key not in ("gr1", "gr3", "gr4"):
+            return None, race_class, f"class {race_class!r} has no car column"
+
+        chosen = registration[f"{key}CarChoice"]
+        if chosen:
+            return chosen, race_class, "your own car choice for this class"
+
+        roster = self._query(
+            f"SELECT manufacturer, {key}Car AS car FROM ManufacturerRoster "
+            f"WHERE id = ?", (registration["manufacturerId"],))
+        if not roster or not roster[0]["car"]:
+            return (None, race_class,
+                    f"your manufacturer has no {race_class} car on the roster")
+        return (roster[0]["car"], race_class,
+                f"{roster[0]['manufacturer']}'s {race_class} car")
+
     def car_overrides(self, round_id: str) -> dict[str, dict]:
         """Per-car BHP and weight for one round, keyed by the hub's car name.
 

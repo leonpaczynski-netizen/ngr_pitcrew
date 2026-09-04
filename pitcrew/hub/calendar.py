@@ -465,6 +465,10 @@ class Proposal:
     # Where this round sits in the season, for naming an event whose round has
     # no name of its own.
     position: int | None = None
+    # The class this round puts him in, where the series races more than one.
+    # **It changes between rounds and it changes the car**, which is why it is
+    # carried rather than derived once per series.
+    race_class: str | None = None
     unknowns: tuple[str, ...] = ()
     # The stored event this round is already recorded as, if there is one.
     event_id: int | None = None
@@ -631,6 +635,15 @@ def upcoming(hub, *, me: str | None = None,
                           *divisions[:1], rnd.overrides, *divisions[1:])
         match = resolve_track(rnd.track)
         car = entries.get(rnd.series_id)
+        race_class, car_said = None, ""
+        if car is None and driver is not None and getattr(
+                series, "multi_class", False):
+            # **A manufacturer series names a marque, not a car.** Read from
+            # the series registration alone this looks like a driver with no
+            # entry; the car is a consequence of the class he is assigned for
+            # this particular round.
+            car, race_class, car_said = hub.multi_class_car(
+                rnd.series_id, driver.id, rnd.id)
         bhp = weight = None
         if car:
             override = hub.car_overrides(rnd.id).get(car)
@@ -642,7 +655,9 @@ def upcoming(hub, *, me: str | None = None,
         if division_said.startswith("which of"):
             unknowns.append(division_said)
         if not car:
-            unknowns.append("no car - the hub has no entry naming yours here")
+            unknowns.append(
+                f"no car - {car_said}" if car_said
+                else "no car - the hub has no entry naming yours here")
 
         event_id, adopted = known_rounds.get(rnd.id), False
         if event_id is None:
@@ -660,7 +675,8 @@ def upcoming(hub, *, me: str | None = None,
             scheduled_at=rnd.scheduled_at,
             track=match.track, layout=match.layout, car_name=car,
             regs=regulations(settings), bhp=bhp, weight_kg=weight,
-            position=rnd.position, unknowns=tuple(unknowns),
+            position=rnd.position, race_class=race_class,
+            unknowns=tuple(unknowns),
             event_id=event_id, adopted=adopted))
     return out
 

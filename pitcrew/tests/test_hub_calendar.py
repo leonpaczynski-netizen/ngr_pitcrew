@@ -45,6 +45,15 @@ CREATE TABLE DivisionEvent (id TEXT PRIMARY KEY, roundId TEXT,
     divisionId TEXT, lobbySettingsOverrides TEXT);
 CREATE TABLE EventSignIn (id TEXT PRIMARY KEY, divisionEventId TEXT,
     driverId TEXT, status TEXT);
+CREATE TABLE MultiClassDriverRegistration (id TEXT PRIMARY KEY,
+    seriesRegistrationId TEXT, seriesId TEXT, driverId TEXT,
+    manufacturerId TEXT, mcRegStatus TEXT, gr1CarChoice TEXT,
+    gr3CarChoice TEXT, gr4CarChoice TEXT);
+CREATE TABLE DriverRoundClassAssignment (id TEXT PRIMARY KEY,
+    mcRegistrationId TEXT, roundId TEXT, assignedClass TEXT);
+CREATE TABLE ManufacturerRoster (id TEXT PRIMARY KEY, seriesId TEXT,
+    manufacturer TEXT, gr1Car TEXT, gr3Car TEXT, gr4Car TEXT,
+    isAvailable INT);
 """
 
 # A circuit the app knows at a layout it does not - the hub's Nurburgring
@@ -74,20 +83,55 @@ GR3 = {
 EM_DASH = "—"
 
 
-def a_hub(tmp_path, *, rounds=(), lobby=GR3, registered=True, cars=()):
+def a_manufacturer_hub(tmp_path, *, rounds=(), assignments=(), choice=None,
+                       roster=("Porsche 963 '24", "Porsche 911 GT3 R (992) '22",
+                               "Porsche Cayman GT4 Clubsport '16")):
+    """A multi-class series where the driver registers a marque, not a car.
+
+    This is the Enduro's shape: `SeriesRegistration.carName` is NULL for every
+    driver in it, and the car is a consequence of the manufacturer he
+    registered and the class he is assigned for the round.
+    """
+    # **Registered, with a NULL car.** That is the real shape: every driver in
+    # the Enduro has a `SeriesRegistration` row and none of them names a car.
+    # Skipping the row entirely would have made him unregistered, which is a
+    # different thing and takes a different branch.
+    hub = a_hub(tmp_path, rounds=rounds, reg_car=None,
+                series_format="MULTI_CLASS_MANUFACTURER")
+    db = sqlite3.connect(hub.path)
+    db.execute("INSERT INTO ManufacturerRoster VALUES "
+               "('m1', 's1', 'Porsche', ?, ?, ?, 1)", roster)
+    db.execute("INSERT INTO MultiClassDriverRegistration VALUES "
+               "('mc1', NULL, 's1', 'd1', 'm1', 'CONFIRMED', ?, ?, ?)",
+               (choice or None, None, None))
+    for n, (round_id, race_class) in enumerate(assignments):
+        db.execute("INSERT INTO DriverRoundClassAssignment VALUES "
+                   "(?, 'mc1', ?, ?)", (f"a{n}", round_id, race_class))
+    db.commit()
+    db.close()
+    return hub
+
+
+_MARQUE = object()          # "registered, but the hub names no car"
+
+
+def a_hub(tmp_path, *, rounds=(), lobby=GR3, registered=True, cars=(),
+          series_format=None, reg_car=_MARQUE):
     path = tmp_path / "dev.db"
     db = sqlite3.connect(path)
     db.executescript(SCHEMA)
     for series in ("s1", "s2"):
         db.execute(
-            "INSERT INTO Series (id, name, status, defaultLobbySettings) "
-            "VALUES (?, ?, 'ACTIVE', ?)",
-            (series, f"League {series}", json.dumps(lobby) if lobby else None))
+            "INSERT INTO Series (id, name, status, format, "
+            "defaultLobbySettings) VALUES (?, ?, 'ACTIVE', ?, ?)",
+            (series, f"League {series}", series_format,
+             json.dumps(lobby) if lobby else None))
     db.execute("INSERT INTO Driver VALUES ('d1', 'u1', 'Beeni', 'Beeni-187')")
     if registered:
         db.execute("INSERT INTO SeriesRegistration "
-                   "VALUES ('sr1', 's1', 'd1', 'Lamborghini Huracan GT3', "
-                   "'CONFIRMED')")
+                   "VALUES ('sr1', 's1', 'd1', ?, 'CONFIRMED')",
+                   ("Lamborghini Huracan GT3" if reg_car is _MARQUE
+                    else reg_car,))
     for rid, series, when, track in rounds:
         db.execute("INSERT INTO Round VALUES "
                    "(?, ?, ?, ?, 'SCHEDULED', 1, ?, 'null')",
@@ -494,3 +538,75 @@ def test_a_mandated_drivetrain_is_a_reading_and_an_unrestricted_one_is_not():
     assert "drivetrain" not in regulations({"carRegulations": {}})
     assert "drivetrain" not in regulations(
         {"carRegulations": {"drivetrainLimit": "ANYTHING"}})
+
+
+# --- a manufacturer series names a marque, not a car ------------------------
+
+def test_the_car_comes_from_the_marque_and_the_class_he_is_assigned(tmp_path):
+    """**`SeriesRegistration.carName` is NULL for every driver in the Enduro**,
+    which reads as "no car on the hub" and is not. He registers Porsche; the
+    class he is assigned for the round decides which Porsche.
+
+    Corroborated against the archive: Enduro Rd3 was Gr.3, the roster's Porsche
+    Gr.3 is the 911 GT3 R (992) '22, and the event recorded for that round
+    names exactly that car."""
+    hub = a_manufacturer_hub(
+        tmp_path,
+        rounds=(("r1", "s1", SOON, "Suzuka Circuit"),),
+        assignments=(("r1", "Gr.1"),))
+    got = upcoming(hub, me="Beeni", now=NOW)[0]
+    assert got.car_name == "Porsche 963 '24"
+    assert got.race_class == "Gr.1"
+    hub.close()
+
+
+def test_the_class_moves_between_rounds_and_the_car_moves_with_it(tmp_path):
+    """Which class he races when is part of the strategy, so the car is a
+    per-round fact and cannot be cached against the series."""
+    hub = a_manufacturer_hub(
+        tmp_path,
+        rounds=(("r1", "s1", SOON, "Suzuka Circuit"),
+                ("r2", "s1", LATER, "Mount Panorama Circuit")),
+        assignments=(("r1", "Gr.1"), ("r2", "Gr.4")))
+    got = upcoming(hub, me="Beeni", now=NOW)
+    assert [p.car_name for p in got] == [
+        "Porsche 963 '24", "Porsche Cayman GT4 Clubsport '16"]
+    assert [p.race_class for p in got] == ["Gr.1", "Gr.4"]
+    hub.close()
+
+
+def test_his_own_car_choice_beats_the_manufacturers_roster(tmp_path):
+    """`gr1CarChoice` is unused across all ten registrations today, but it is
+    the schema's way of letting a driver name his own car for a class - so it
+    is read first rather than assumed absent."""
+    hub = a_manufacturer_hub(
+        tmp_path,
+        rounds=(("r1", "s1", SOON, "Suzuka Circuit"),),
+        assignments=(("r1", "Gr.1"),), choice="Porsche 919 Hybrid '16")
+    assert upcoming(hub, me="Beeni",
+                    now=NOW)[0].car_name == "Porsche 919 Hybrid '16"
+    hub.close()
+
+
+def test_a_round_with_no_class_assigned_yet_has_no_car_and_says_which_link(
+        tmp_path):
+    """A car guessed here would be a different *category* of car, not a near
+    miss - a Gr.1 prototype where a Gr.4 hatch belongs."""
+    hub = a_manufacturer_hub(
+        tmp_path, rounds=(("r1", "s1", SOON, "Suzuka Circuit"),),
+        assignments=())
+    got = upcoming(hub, me="Beeni", now=NOW)[0]
+    assert got.car_name is None
+    assert not got.known
+    assert any("not assigned you a class" in u for u in got.unknowns)
+    hub.close()
+
+
+def test_a_class_whose_car_the_roster_does_not_carry_is_refused(tmp_path):
+    hub = a_manufacturer_hub(
+        tmp_path, rounds=(("r1", "s1", SOON, "Suzuka Circuit"),),
+        assignments=(("r1", "Gr.3"),), roster=("Porsche 963 '24", None, None))
+    got = upcoming(hub, me="Beeni", now=NOW)[0]
+    assert got.car_name is None
+    assert any("no Gr.3 car on the roster" in u for u in got.unknowns)
+    hub.close()
