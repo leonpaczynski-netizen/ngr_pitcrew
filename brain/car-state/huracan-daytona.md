@@ -114,38 +114,59 @@ lsd 6/14/28 · top 300 · ECU 96 · restrictor 99 · ballast 45 @ −29 · RS/RS
 | 8 | 123 | 12:04 | **cam 1.0/1.0** (df 410/635) | 752.54 · −0.46 / −0.43 | 6 · 6 · 1 |
 | 9 | 124 | 12:17 | **cam 4.0/4.0** (df 410/635) | 752.54 · −0.46 / −0.43 | 6 · 6 · 0 |
 
-**What the runs can and cannot say (re-derived 4 Sep from `laps` + `lap_frames`, read-only; countable =
-`excluded 0`, lap > 1, off-track < 1 s, no spin — 24 countable full laps, 20 incident-free):**
+**What the runs say — final, re-derived 4 Sep from `laps` + `lap_frames` (read-only). Countable = `excluded 0`,
+lap > 1, off-track < 1 s, no spin: 24 laps, 20 incident-free. Straight-line and banking figures additionally exclude
+the six laps carrying the banking-brake event (F6) and the lap after each.**
 
-⚠️ **First version of this note said "two clean laps in five sessions". Wrong — the driver caught it.** The filter
-excluded any lap with 0.05 s of kerb time. ⚠️ **App defect found on the way: lap 1 of every session here is a PARTIAL
-lap (91.6 / 91.8 s) or an out-lap with 7–9 s of grass, and `is_out_lap` is 0 on all of them** — a "best lap" query on
-this event returns 93.100 s, which is not a lap. Real prior best: **104.338** (s119, 3 Sep).
+⚠️ First version of this note said "two clean laps in five sessions" — wrong, the driver caught it: the filter excluded
+any lap with 0.05 s of kerb time. ⚠️ Lap 1 of every session is the out-lap (pit limiter 79.5 km/h visible at 150–350 m;
+partial 91.6 s or 7–9 s on the grass) and `is_out_lap` is 0 on all of them — fix in progress.
 
-| run | change | incident-free laps | best | median | sd | RR temp | exit rear slip >1.05 | terminal |
-|---|---|---|---|---|---|---|---|---|
-| 5 (s120) | df 420/600 | 4 | 104.618 | 105.397 | 0.71 | 73.9 | 25.6 % | 285.9 |
-| 6 (s121) | df 420/650 | 4 | 104.086 | 105.724 | 1.26 | 74.9 | 31.3 % | 283.9 |
-| 7 (s122) | baseline 410/635, cam 2.0/1.2 | 3 | **103.853 PB** | 104.483 | 0.91 | 74.6 | 32.3 % | 284.8 |
-| 8 (s123) | cam 1.0/1.0 | 5 | **103.486 PB** | 104.448 | **0.55** | 74.4 | 28.0 % | 285.2 |
-| 9 (s124) | cam 4.0/4.0 | 4 | 103.594 | 105.005 | 1.11 | **76.7** | **43.7 %** | 285.1 |
+| run | change | laps (clean-banking) | best | median | S2 sector | T4 exit spin | RR temp | bank susp F / R | body min (bank) |
+|---|---|---|---|---|---|---|---|---|---|
+| 5 (s120) | df 420/600 | 4 (4) | 104.618 | 105.40 | 39.97 | 14.3 % | 73.9 | 277.8 / 288.0 | 26.5 |
+| 6 (s121) | df 420/650 | 4 (1) | 104.086 | 105.72 | 39.69 | 15.0 % | 74.8 | 277.3 / 288.7 | 28.9 |
+| 7 (s122) | base 410/635, cam 2.0/1.2 | 3 (2) | **103.853 PB** | 104.48 | 39.42 | 22.3 % | 74.6 | 277.2 / 288.6 | 27.2 |
+| 8 (s123) | cam 1.0/1.0 | 5 (3) | **103.486 PB** | 104.45 | 39.58 | 21.1 % | 74.5 | **274.6** / 288.2 | 30.0 |
+| 9 (s124) | cam 4.0/4.0 | 4 (1) | 103.594 | 105.01 | **39.34** | **31.3 %** | **76.9** | **283.1 / 296.6** | **15.5** |
+| ref s119 (3 Sep) | df 380/600 | 7 | 104.169 | 106.41 | 39.88 | 17.3 % | 73.5 | 276.7 / 288.2 | 26.9 |
 
-- **Two PBs, in runs 7 and 8.** Runs 7–9 are ~1 s quicker than 5–6 on best and median — but they ran later in the
-  morning, and 3 Sep's runs improved 105.5 → 105.2 on an unchanged car, so ordering is a live confound. Lap time
-  cannot separate the sheets; it can say the camber sweep did not hurt at 1.0 and the fastest, tightest run was cam
-  1.0/1.0 (sd 0.55 s).
-- **Wear rate identical across all five at the gauge's resolution** (`hud-video`, 1 px ≈ 2.8 %): RR 0.0556/lap every
-  run, FL 0.0347–0.0370; replicates the race stint's 0.0570. Neither ±25 rear wing nor camber 1.0↔4.0 moved wear
-  over 4–5 laps; a difference would need to exceed ~12 % of the rate to show.
-- **Front camber 1.0 → 4.0 does not move front surface temperature** (65.3 / 65.4 / 65.5 °C median across the sweep;
-  floor 0.9–1.4 °C). **Rear camber 1.2 → 4.0 warms the rears** +1.4 / +2.1 °C (RL/RR) — at the edge of the floor.
-- **Cam 4.0/4.0 has the highest exit rear slip of the morning (43.7 %)**; the other four sit in 25–32 %, the same band
-  three unchanged-rear runs spanned on 3 Sep (18.7–34.4 %). One run, directionally against 4.0, not a finding.
-- **Terminal:** 50 clicks of rear wing = 2.0 km/h, inside the 0.56–2.77 km/h floor. Nothing on drag.
-- **Front-lock percentage is unusable** (8.5–9.6 pp floor); front L/R split is flat 0.066–0.078 across all five
-  (whole-lap window — not comparable to the 3 Sep Bus-Stop figure of 0.0241).
-- **GT7's "Measure" readout IS responsive to aero** (high-speed stability −0.45 → −0.36 across 420/600 → 420/650)
-  **and inert to camber** (−0.43 at 1.0/1.0 and 4.0/4.0). Refines entry S: inert to suspension and geometry, not to
-  everything.
-- **Not established:** `bb` in the car; whether run 9's 13.95 mm minimum body height on the banking (others 22–28) is
-  the camber or a single frame.
+**F1 — Camber is a ride-height lever in GT7: ~2.8 mm per degree, measured.** Suspension height on the banking at full
+throttle: front **274.6 → 277.2 → 283.1 mm** at camber 1.0 / 2.0 / 4.0; rear **288.5 → 296.6** at 1.2 / 4.0. Body height
+on the banking at 4.0/4.0: median **43.3 → 36.2 mm**, minimum **27 → 15.5 mm**. s119 (same camber as the baseline, other
+day) reads 276.7 / 288.2 — the channel is the setup, not the day. ⇒ **every camber change is also a platform change**, the
+55/62 ride-height stage must be costed with the camber in force, and the 3 Sep *"2.4 → 2.0 braked better and turned in
+better — backwards from textbook"* now has a candidate mechanism: the front rose ~1.1 mm. `[MEASURED]`, one instrument.
+
+**F2 — Rear camber 4.0 costs exit traction at every traction zone.** Rear slip > 1.05 on exit: T2 **23.6 %** (baseline
+13.6), T3 **30.3** (22.1), T4 **31.3** (22.3), T5 **25.3** (15.4); rears +1.3 / +2.3 °C. Direction consistent in four
+zones on one run of four laps; the 3 Sep unchanged-rear band for the whole-lap figure was 18.7–34.4 %, so this is
+`[DERIVED]`, suggestive, not proven. Lap time does not show it — S2 was R5's fastest sector because T3 / T4 v-min were the
+highest of the morning (88.3 / 91.2): more speed carried, less exit drive.
+
+**F3 — Front camber 1.0 ↔ 4.0: nothing measurable on the front.** Front surface temperature 65.1–65.5 °C across the
+sweep (floor 0.9–1.4); front L/R slip split and lock inside their floors. GT7 gives one surface temperature per wheel,
+so camber's effect on the contact patch is invisible here — the front camber the data can justify is whatever the driver
+reports, and he set the PB on 1.0/1.0.
+
+**F4 — The downforce slider moves very little load.** Rear 600 → 650: +0.65 mm rear compression, −0.5 front at 270 km/h;
+380/600 → 410/635: +0.5 / +0.3 mm. J3 measured the whole aero load at ~10 mm from 125 → 250 km/h, so **±25–50 clicks is
+3–6 % of the aero load** — invisible on lap time, wear (RR 0.0556/lap in every run), terminal (back straight 275.0–275.5,
+front stretch 283.7–284.6, floor 0.56–2.77) and rear temperature (+1 °C). *"More aero to look after the rears"* (3 Sep)
+cannot work at this magnitude; entry X3 stands and is now measured rather than argued. GT7's Measure readout does see
+it — high-speed stability −0.45 / −0.42 / −0.36 tracks total downforce 1,020 / 1,045 / 1,070.
+
+**F5 — Learning was the largest effect in the morning.** Run bests 104.62 → 104.09 → 103.85 → 103.49 → 103.59; S2
+sector 39.97 → 39.69 → 39.42 → 39.58 → 39.34; the fastest lap came in the last third of every run. ~0.3 s per run on a
+car that changed by 3–6 % of aero load or by camber — the same size as any setup effect. **Lap time cannot rank these
+five sheets**; camber 4.0/4.0 is the one run that did not improve on its predecessor.
+
+**F6 — A brake event on the banking that no flag records, and it is not setup.** On six of 24 laps (s121 L3, L6;
+s122 L5; s123 L4; s124 L2, L6; also s119 L10) the brake goes to **100 % at exactly 5,200 m**, speed 267 → 110–190
+km/h, then full throttle again without pitting. It costs that lap ~1–2 s and the **next** lap's front stretch (254
+instead of 284 km/h). **Asked, not assumed** — traffic, gap-building, a track-limit reset or a pit-entry feint all fit.
+
+**F7 — Wear.** Identical at the gauge's resolution in all five runs: RR 0.0556/lap, RL 0.037–0.042, FR 0.037–0.042,
+FL 0.035–0.037. Replicates the race stint's 0.0570. Neither wing nor camber moved it over 4–5 laps.
+
+**Not established:** `bb` in the car for any of the five; whether the 5,200 m event is his or the game's.
