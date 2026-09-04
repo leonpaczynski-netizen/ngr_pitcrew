@@ -823,6 +823,13 @@ class PitCrewController(QObject):
         self._plans: list = []
         self._inputs = None
         self._plans_event_id: int | None = None
+        # **Two things `open_on_next_round` has to say and cannot say yet.** It
+        # runs before the first `load_active_event`, so the screen it wants to
+        # write on has not been filled in. Held here and spent by that load;
+        # `None` once said, because a message repeated on every later refresh
+        # would go on announcing a move that happened at launch.
+        self._opened_on_round: str | None = None
+        self._next_round_pending: str | None = None
         # What the open session is, so handlers that write "to the open
         # session" can tell a practice run from a race.
         self.session_kind: str | None = None
@@ -959,6 +966,8 @@ class PitCrewController(QObject):
         if self._first_paint_done:
             return
         self._first_paint_done = True
+        # Before the load, not after: this decides which event the load shows.
+        self.open_on_next_round()
         self.load_active_event()
         self._close_orphaned_sessions()
 
@@ -1058,6 +1067,130 @@ class PitCrewController(QObject):
         if self.car_screen is not None:
             self.car_screen.set_car_groups(groups)
 
+    # -------------------------------------------------------- the calendar
+
+    def hub_proposals(self) -> list:
+        """The league calendar, as rounds this app could open on.
+
+        **Guarded end to end and empty on any failure.** The hub is a file
+        belonging to another application, on a path that may not exist on a
+        machine that is not his; the app raced for months without it and every
+        screen behind this one has to go on working when it is not there.
+
+        Not cached. It is a handful of indexed reads against a local SQLite
+        file, and a cache here would be state that outlives a session - the
+        exact class of defect that had a race judging its fresh tyres against
+        practice's worn ones.
+        """
+        try:
+            from pitcrew.hub.calendar import upcoming
+            from pitcrew.hub.read import Hub
+
+            hub = Hub()
+            try:
+                if not hub.available:
+                    return []
+                return upcoming(hub, me=self.store.driver_name(),
+                                stored_events=self.store.list_events())
+            finally:
+                hub.close()
+        except Exception:
+            log("pitcrew").exception("the league calendar could not be read")
+            return []
+
+    def _proposal(self, round_id):
+        """One proposal by its hub round id, or `None`."""
+        for proposal in self.hub_proposals():
+            if proposal.round_id == round_id:
+                return proposal
+        return None
+
+    def open_on_next_round(self) -> None:
+        """Start the app on the next race, not on whatever was last open.
+
+        The driver opens Pit Crew to work on the round that is coming, and the
+        app opened on whichever event happened to be active - which after a
+        debrief is the one just finished. So the calendar decides.
+
+        Three cases, and the difference between them is how much is written:
+
+        - **The round already has an event row.** Switch to it. Nothing is
+          created and nothing is lost.
+        - **It does not, and the hub answered every question.** Create it, with
+          `hub_round_id` on it so this is the last time. This is the row he
+          would have typed, with the regulations the league published rather
+          than the ones he remembered.
+        - **It does not, and something is missing** - almost always the layout,
+          which the hub names for only 23 of its 33 circuits. Nothing is
+          created: an event keyed on a track with no layout would file its laps
+          under a corner model belonging to a different lap length. The round
+          waits in the picker and the driver completes it.
+        """
+        try:
+            from pitcrew.hub.calendar import next_round
+
+            proposals = self.hub_proposals()
+            nxt = next_round(proposals)
+            if nxt is None:
+                return
+
+            # **A choice among the coming rounds is left alone.** He asked the
+            # app to open on the next race, not to overrule him: an event that
+            # is itself one of the rounds still to come was picked on purpose,
+            # and moving off it every launch is a choice he cannot make stick.
+            # An event that is not on the calendar at all is last week's, and
+            # that is the one this exists to move him off.
+            #
+            # **Left alone, but still linked.** An early return before the link
+            # left the event he is actually working on with no round id, so
+            # `_regulation_differences` had nothing to compare and the one
+            # thing this feature exists to say - `mandatory_stops` disagreeing
+            # with the league - went unsaid on the launch he was most likely to
+            # see it.
+            # **`active is not None` first.** Without it, a fresh install with
+            # no active event matched the first proposal that also had no event
+            # - `None == None` - and the app decided he had already chosen the
+            # round it was about to create, so it created nothing, ever.
+            active = self.store.active_event_id()
+            his = (None if active is None else
+                   next((p for p in proposals if p.event_id == active), None))
+            if his is not None:
+                self._link_round(his)
+                return
+
+            if nxt.event_id is not None:
+                # **Linked here and nowhere else.** The match is inferred from
+                # circuit and car, and writing every inference at launch made a
+                # guess permanent without anyone seeing it. Written only for
+                # the round being opened, where the driver is about to be
+                # looking straight at it.
+                self._link_round(nxt)
+                self._open_event(int(nxt.event_id), nxt)
+                return
+
+            if not nxt.known:
+                # **Not created, and not silently skipped either.** The hub
+                # names a layout for 23 of its 33 circuits, so this is the
+                # ordinary case rather than the exception, and the round is
+                # already sitting in the picker - what was missing was anybody
+                # saying so.
+                log("pitcrew").info(
+                    "calendar: %s is next but is not complete - %s",
+                    nxt.name, self._gaps(nxt))
+                self._next_round_pending = (
+                    f"{nxt.name} is next, {self._when(nxt)}. "
+                    f"{self._gaps(nxt)}. "
+                    f"Pick it from the list above to set it up.")
+                return
+
+            event_id = self._create_from_proposal(nxt)
+            if event_id is not None:
+                self._open_event(event_id, nxt)
+        except Exception:
+            # Never the way in. An app that cannot read the calendar opens on
+            # the event it opened on before, which is what it did for months.
+            log("pitcrew").exception("could not open on the next round")
+
     # ----------------------------------------------------------------- event
 
     def active_event(self) -> dict | None:
@@ -1122,8 +1255,7 @@ class PitCrewController(QObject):
             self._forget_plans()
         # The picker is refreshed either way: with no active event it is the
         # only route back to one that does exist.
-        self.event_screen.set_events(self.store.list_events(),
-                                     event["id"] if event else None)
+        self._refresh_event_picker(event["id"] if event else None)
         if event is None:
             self.practice.set_status(
                 "No event yet. Create one on the Event screen first.",
@@ -1135,6 +1267,7 @@ class PitCrewController(QObject):
             # never been explained.
             self.refresh_engineer()
             self._refresh_race_options(None)
+            self._say_calendar_news(None)
             return
 
         # The race sheet, by purpose - not whichever row sorted first.
@@ -1160,6 +1293,10 @@ class PitCrewController(QObject):
         if self.car_screen is not None and event["car_name"]:
             self.load_car(event["car_name"])
         self.refresh_engineer()
+        # Last, because it writes the footer note and `event_screen.load`
+        # above does not - anything said earlier would be on the screen the
+        # load then replaced.
+        self._say_calendar_news(event)
 
     def switch_event(self, event_id) -> None:
         """Make another saved event the one the whole app is working on.
@@ -1170,6 +1307,12 @@ class PitCrewController(QObject):
         strategies and race runs of both events stay exactly where they are,
         filed against their own event id.
         """
+        # A hub round id rather than an event id: the driver picked something
+        # off the calendar that has never been written down.
+        if isinstance(event_id, str):
+            self._switch_to_round(event_id)
+            return
+
         if event_id is None:
             # Composing an event that does not exist yet. The previous one has
             # to stop being active: a practice session started from this state
@@ -1178,7 +1321,7 @@ class PitCrewController(QObject):
             # prevent.
             self.store.set_state("active_event_id", None)
             self._forget_plans()
-            self.event_screen.set_events(self.store.list_events(), None)
+            self._refresh_event_picker(None)
             self.event_screen.clear()
             self.practice.set_laps([])
             self.practice.set_status(
@@ -1192,8 +1335,7 @@ class PitCrewController(QObject):
 
         event = self.store.get_event(int(event_id))
         if event is None:
-            self.event_screen.set_events(self.store.list_events(),
-                                         self.store.active_event_id())
+            self._refresh_event_picker(self.store.active_event_id())
             self.event_screen.note(
                 "That event is no longer in the store.", warn=True)
             return
@@ -1203,7 +1345,225 @@ class PitCrewController(QObject):
         laps = len(self.store.list_event_laps(event["id"]))
         recorded = (f"{laps} practice lap{'' if laps == 1 else 's'} recorded."
                     if laps else "No practice laps recorded yet.")
-        self.event_screen.note(f"Working on {event['name']}. {recorded}")
+        # **Where this event and the league disagree, said on the way in.**
+        # Not corrected: the row is his and he may have fixed something the hub
+        # has wrong. But `mandatory_stops = 0` on a round the league publishes
+        # as a mandatory one-stop is an input to the strategy engine, and it
+        # has been sitting there unnoticed because nothing could compare them.
+        # `load_active_event` above has already put any disagreement with the
+        # hub on the footer; this replaces it with the switch's own line plus
+        # the same comparison, so the two paths cannot say different things.
+        differences = self._regulation_differences(event)
+        note = f"Working on {event['name']}. {recorded}"
+        if differences:
+            note += " Against the hub: " + "; ".join(differences) + "."
+        self.event_screen.note(note, warn=bool(differences))
+
+    def _regulation_differences(self, event: dict) -> list[str]:
+        """How this event's regulations differ from the league's published ones.
+
+        Empty for an event with no round on the hub, which is every event
+        created by hand and every round the calendar could not resolve.
+        """
+        round_id = event.get("hub_round_id")
+        if not round_id:
+            return []
+        try:
+            from pitcrew.hub.calendar import disagreements
+
+            proposal = self._proposal(round_id)
+            return disagreements(proposal, event) if proposal else []
+        except Exception:
+            log("pitcrew").exception("the regulations could not be compared")
+            return []
+
+    def _say_calendar_news(self, event: dict | None) -> None:
+        """Put what the calendar did, and what it found, on the screen.
+
+        **The launch path had neither.** `open_on_next_round` moved the active
+        event with only a log line to show for it, and the regulation
+        comparison was wired to the manual switch alone - so the one case the
+        feature was built for, opening straight onto the round with
+        `mandatory_stops` disagreeing with the league, said nothing at all.
+
+        The two calendar messages are one-shot and the comparison is not: a
+        disagreement is still true on the tenth refresh, while "opened on this
+        because it is next" is only true once.
+        """
+        said = []
+        for attribute in ("_opened_on_round", "_next_round_pending"):
+            message = getattr(self, attribute, None)
+            if message:
+                said.append(message)
+                setattr(self, attribute, None)
+        differences = self._regulation_differences(event) if event else []
+        if differences:
+            said.append("Against the hub: " + "; ".join(differences) + ".")
+        if said:
+            self.event_screen.note(" ".join(said), warn=bool(differences))
+
+    def _refresh_event_picker(self, active_id) -> None:
+        """Fill the picker: the stored events, then the rounds still to come.
+
+        **The only way it is ever filled.** Four call sites used to build it,
+        three of them with the two-argument call that predates the calendar -
+        so whether the coming rounds were listed depended on which path had
+        last refreshed the screen, and they vanished on a route as ordinary as
+        starting a new event.
+
+        **Rounds already recorded are not offered twice.** A proposal whose
+        `event_id` is set is the same round as one of the stored events above
+        it, and listing both is how a round forks into two events with half
+        the laps each.
+        """
+        self.event_screen.set_events(
+            self.store.list_events(), active_id,
+            upcoming=[p for p in self.hub_proposals() if p.event_id is None])
+
+    @staticmethod
+    def _gaps(proposal) -> str:
+        """Everything the driver has to supply before this round can be saved.
+
+        `unknowns` is what the hub could not be read for; `missing` is what it
+        was read for and did not say. Both are his to fill in and both are
+        invisible until named, so they are said in one breath.
+        """
+        gaps = list(proposal.unknowns) + list(proposal.missing)
+        return "; ".join(gaps) if gaps else "it is not complete"
+
+    @staticmethod
+    def _when(proposal) -> str:
+        return (f"{proposal.scheduled_at:%a %d %b}"
+                if proposal.scheduled_at else "date unknown")
+
+    def _create_from_proposal(self, proposal):
+        """Write a hub round into the events table, or say why it could not be.
+
+        **`events.name` is UNIQUE, and this path had no guard for it.**
+        `_on_event_saved` has had one since the day a rename orphaned a
+        session, but both calendar paths called `create_event` raw - and
+        `switch_event` is a Qt slot, where an unhandled exception ends the
+        process rather than the operation. A round whose derived name collides
+        with an event already on file is a question for the driver, not a
+        crash.
+        """
+        clash = next((event for event in self.store.list_events()
+                      if event["name"] == proposal.name), None)
+        if clash is not None:
+            self.event_screen.note(
+                f"There is already an event called {proposal.name}. If that is "
+                f"this round, switch to it; if it is not, rename it and pick "
+                f"the round again.", warn=True)
+            log("pitcrew").info(
+                "calendar: %s not created - event %s already has that name",
+                proposal.name, clash["id"])
+            return None
+        try:
+            return int(self.store.create_event(**proposal.event_fields()))
+        except Exception:
+            # Reported rather than raised: this runs from a Qt slot and from
+            # first paint, and neither may end the app over a round.
+            log("pitcrew").exception("the round could not be created")
+            self.event_screen.note(
+                f"{proposal.name} could not be created - see the log.",
+                warn=True)
+            return None
+
+    def _open_event(self, event_id: int, proposal) -> None:
+        """Make a calendar round's event the active one, and say that it moved.
+
+        **Said, because nothing else says it.** Every other route that changes
+        the active event writes a footer note; this one changes it without
+        being asked, at launch, and used to write only a log line - so the
+        screen simply came up showing a different event, with the practice rack
+        and the engineer keyed to it and nothing accounting for the change.
+        """
+        self.store.set_state("active_event_id", int(event_id))
+        log("pitcrew").info("calendar: opening on %s, %s",
+                            proposal.name, self._when(proposal))
+        self._opened_on_round = (
+            f"Opened on {proposal.name}, {self._when(proposal)} - "
+            f"the next race on the hub.")
+
+    def _link_round(self, proposal) -> None:
+        """Write the round's id onto the event it was matched to.
+
+        **Only for an adopted match, and only once.** Every event on file
+        predates the calendar and carries no round id, so the first match has
+        to be inferred from circuit and car; writing the id back means it is
+        inferred once and read thereafter. Without this the inference runs
+        again every launch, and it is the kind that stops being right the day
+        a second event exists at the same circuit in the same car.
+        """
+        if not getattr(proposal, "adopted", False) or proposal.event_id is None:
+            return
+        try:
+            self.store.link_event_to_round(int(proposal.event_id),
+                                           proposal.round_id)
+            log("pitcrew").info(
+                "calendar: %s is event %s - linked by circuit and car",
+                proposal.name, proposal.event_id)
+        except Exception:
+            # A link that could not be written is re-inferred next launch,
+            # which is the state we were already in.
+            log("pitcrew").exception("the round could not be linked")
+
+    def _switch_to_round(self, round_id: str) -> None:
+        """Open a round off the league calendar.
+
+        Complete rounds are created and switched to in one step - there is
+        nothing to ask, the hub has answered every question the row needs.
+
+        An incomplete one fills the form and stores nothing, and **the active
+        event is cleared while it sits there**, for the same reason composing a
+        brand-new event clears it: a practice session started against a form
+        the driver has not saved would file its laps under whichever event was
+        active before, and that is the one mistake this picker exists to
+        prevent.
+        """
+        proposal = self._proposal(round_id)
+        if proposal is None:
+            self.load_active_event()
+            self.event_screen.note(
+                "That round is no longer on the hub's calendar.", warn=True)
+            return
+
+        if proposal.event_id is not None:
+            self._link_round(proposal)
+            self.switch_event(proposal.event_id)
+            if proposal.adopted:
+                self.event_screen.note(
+                    f"{proposal.name} is the event you already had here, so "
+                    f"it is that one you are working on - not a second copy.")
+            return
+
+        if proposal.known:
+            event_id = self._create_from_proposal(proposal)
+            if event_id is None:
+                return                    # `_create_from_proposal` has said why
+            self.store.set_state("active_event_id", event_id)
+            self.load_active_event()
+            self.event_screen.note(
+                f"Created {proposal.name} from the hub. "
+                f"Check it against the lobby before you race it.")
+            return
+
+        self.store.set_state("active_event_id", None)
+        self._forget_plans()
+        self.load_active_event()
+        self.event_screen.load_proposal(proposal)
+        self.practice.set_laps([])
+        self.practice.set_status(
+            f"{proposal.name} is not saved yet. Finish it on the Event screen.",
+            warn=True)
+        self.refresh_nav_state()
+        self.refresh_engineer()
+        # **The gap is named, not left to be discovered.** The driver finding a
+        # blank layout after saving is the same information arriving too late
+        # to be free.
+        self.event_screen.note(
+            f"{proposal.name}, from the hub. {self._gaps(proposal)}. "
+            f"Nothing is stored until you save it.", warn=True)
 
     def _idle_status(self, event: dict) -> str:
         circuit = event["track"] or "unknown"
@@ -1251,10 +1611,19 @@ class PitCrewController(QObject):
         }
         # Declared event facts the race-engineering prompts carry. Optional in
         # the payload so an older caller - or a test - still saves an event.
+        # **`series` is in this list because leaving it out dropped it.** The
+        # Event screen has had a Series box since it was built, the column has
+        # existed since schema v13, and every event on file still reads NULL -
+        # the form sent the value and this method never copied it into the
+        # write. Two things went wrong for it: the league could only be matched
+        # to a hub series by guessing from the car, and `_known_series` fed its
+        # completer from a column that was always empty, so the box could never
+        # learn a name it had already been told.
         for key in ("countersteer", "pp_cap", "start_type", "time_of_day",
                     "priority", "notes", "game_version", "extra_time_s",
                     "start_hour", "time_multiplier", "weather_rule",
-                    "rain_possible"):
+                    "rain_possible", "series", "hub_round_id",
+                    "required_compounds"):
             if key in data:
                 fields[key] = data[key]
         if existing:
@@ -2439,7 +2808,7 @@ class PitCrewController(QObject):
             return ""
         # The form is reloaded so the figure appears where he went looking
         # for it, rather than only inside the next export.
-        self.event_screen.set_events(self.store.list_events(), event["id"])
+        self._refresh_event_picker(event["id"])
         return (f" Game clock measured: x{reading.multiplier:g} from "
                 f"{clock(reading.start_hour)}.")
 
@@ -2524,6 +2893,17 @@ class PitCrewController(QObject):
                     behind_name=wall.roster.name_of(wall.behind.subject))
             except Exception:
                 log("race").exception("the gap trends could not be read")
+            # **Said out loud once a lap, whether or not it found anything.**
+            # The wall watched all twenty laps of the 4 Sep race in complete
+            # silence, because it only ever logged a stop it had FOUND - so
+            # afterwards nothing distinguished "read the board, nobody pitted"
+            # from "never found the board". `health()` names the first stage
+            # returning zero. CLAUDE.md rule 10, and the reporter itself was
+            # written once already and left with no caller.
+            try:
+                log("pitcrew").info("%s", wall.health())
+            except Exception:
+                log("pitcrew").exception("pit-wall: health could not be read")
         frames = self.bridge.recorder.encode(rows)
 
         # **A lap has to have been driven for as long as it says it was.**
@@ -4234,6 +4614,10 @@ class PitCrewController(QObject):
             named = [name for _, name in wall.named() if name]
             if named:
                 self.store.note_races_seen(named)
+            # The closing tally, so a race that saw nothing says so on the way
+            # out instead of leaving an empty `rival_stops` to be found days
+            # later.
+            log("pitcrew").info("%s", wall.health())
         except Exception:
             log("pitcrew").exception("pit-wall: could not close cleanly")
         finally:

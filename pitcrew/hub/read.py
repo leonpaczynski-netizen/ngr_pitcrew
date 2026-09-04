@@ -22,6 +22,7 @@ championship that has moved on, and nothing in the data itself would say so.
 from __future__ import annotations
 
 import datetime
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,6 +77,12 @@ class Series:
     class_fl_points: int = 0
     carry_in: dict[str, int] = None
     race_count: int = 1
+    # **The regulations, as the league actually publishes them.** The event row
+    # is hand-typed and has been wrong about this repeatedly - `mandatory_stops
+    # = 0` on a round the hub declares as a mandatory one-stop. Carried as the
+    # parsed blob rather than as fields because this dataclass is the hub's
+    # vocabulary, not the app's; `hub/calendar.py` owns the translation.
+    lobby_settings: dict | None = None
 
     @property
     def multi_class(self) -> bool:
@@ -92,6 +99,34 @@ class Entry:
     car_name: str | None = None
     team: str | None = None
     status: str | None = None
+
+
+@dataclass(frozen=True)
+class Round:
+    """One scheduled race on the league calendar.
+
+    **`status` is not a signal.** Every one of the 57 rounds on file reads
+    `SCHEDULED`, including the ones already raced, so "which round is next" is
+    answered from `scheduled_at` and never from the status column. A round
+    picked by status would have been round one of the season, for ever.
+
+    `track` is the hub's own string - `"Daytona International Speedway - Road
+    Course"` with an em dash. Translating it into the app's track and layout is
+    `hub/calendar.py`'s job, not this module's.
+    """
+    id: str
+    series_id: str
+    series_name: str
+    name: str | None
+    track: str | None
+    scheduled_at: datetime.datetime | None
+    position: int | None = None
+    # **Per-round replacement of the series defaults, and it is in use.** Four
+    # rounds carry one today, including the 20 September Supercars round this
+    # driver races, which overrides the series duration to 60 minutes. An
+    # earlier draft of this comment said all 57 rounds override nothing; one
+    # query refutes it, and the merge is load-bearing rather than speculative.
+    overrides: dict | None = None
 
 
 class Hub:
@@ -201,6 +236,7 @@ class Hub:
         if active_only:
             sql += " WHERE status = 'ACTIVE'"
         sql += " ORDER BY name"
+        lobbies = self._lobby_settings()
         out = []
         for row in self._query(sql):
             out.append(Series(
@@ -213,8 +249,28 @@ class Hub:
                 class_pole_points=int(row["classPolePoints"] or 0),
                 class_fl_points=int(row["classFlPoints"] or 0),
                 carry_in=self._named_carry_in(row["driverCarryIn"]),
-                race_count=_race_count(row["raceConfig"])))
+                race_count=_race_count(row["raceConfig"]),
+                lobby_settings=lobbies.get(row["id"])))
         return out
+
+    def _lobby_settings(self) -> dict[str, dict]:
+        """Every series' published regulations, read on its own.
+
+        **A separate query on purpose.** `_query` turns any `sqlite3.Error`
+        into an empty list, deliberately, because the hub is another
+        application under active development - so a column added to the shared
+        `Series` SELECT means that the day the hub renames it, the standings,
+        the championship line and the pit wall's roster all go silently empty
+        along with the calendar. Read here, a schema change costs the feature
+        that needs the column and nothing else.
+        """
+        try:
+            return {row["id"]: _blob(row["defaultLobbySettings"])
+                    for row in self._query(
+                        "SELECT id, defaultLobbySettings FROM Series")}
+        except Exception:                                    # noqa: BLE001
+            _log.exception("hub: the lobby settings could not be read")
+            return {}
 
     def my_series(self, driver_id: str) -> list[Series]:
         """The leagues this driver is registered in."""
@@ -267,6 +323,132 @@ class Hub:
             "SELECT id, name, track, scheduledAt, status, position "
             "FROM Round WHERE seriesId = ? ORDER BY position, scheduledAt",
             (series_id,))]
+
+    def upcoming_rounds(self, *, series_ids=None,
+                        now: datetime.datetime | None = None,
+                        include_today: bool = True) -> list[Round]:
+        """The calendar from here on, soonest first.
+
+        **Ordered and filtered by `scheduled_at`, because `status` cannot do
+        it.** See `Round` - every row on file says `SCHEDULED`.
+
+        `include_today` keeps a round scheduled earlier today in the list: the
+        app is most often opened *on* race night, an hour before the lobby, and
+        a calendar that drops tonight's race at one minute past its start time
+        would hide the one event the driver actually wants.
+        """
+        now = now or datetime.datetime.now()
+        floor = (now.replace(hour=0, minute=0, second=0, microsecond=0)
+                 if include_today else now)
+        out = []
+        for row in self._query(
+                "SELECT r.id, r.seriesId, r.name, r.track, r.scheduledAt, "
+                "       r.position, r.lobbySettingsOverrides, "
+                "       s.name AS seriesName "
+                "FROM Round r JOIN Series s ON s.id = r.seriesId "
+                "ORDER BY r.scheduledAt"):
+            if series_ids is not None and row["seriesId"] not in series_ids:
+                continue
+            when = _when(row["scheduledAt"])
+            # **A round with no date cannot be placed, so it is not offered.**
+            # Defaulting it to now would put an undated round at the top of the
+            # calendar and make it tonight's race.
+            if when is None or when < floor:
+                continue
+            out.append(Round(
+                id=row["id"], series_id=row["seriesId"],
+                series_name=row["seriesName"], name=row["name"],
+                track=row["track"], scheduled_at=when,
+                position=row["position"],
+                overrides=_blob(row["lobbySettingsOverrides"])))
+        return out
+
+    def division_layers(self, round_id: str,
+                        driver_id: str | None = None) -> tuple[list, str]:
+        """The division-level regulation overrides for one round, in merge order.
+
+        **The hub lays its regulations down in four layers, not two.** The
+        series publishes a default, a division may override it, the round may
+        override that, and the division's own entry for the round may override
+        again. Reading only the series and the round means a driver in a
+        division that changes a setting is planned against a race nobody is
+        running - and the Porsche Cup has exactly that shape today, with Div 2
+        overriding the damage and shortcut rules.
+
+        Returns the two division-level blobs (either may be `None`) and one
+        clause saying how the division was decided, because a guess here is a
+        guess about which race he is in.
+
+        Which division is worked out in this order, and it stops at the first
+        that answers:
+
+        1. **His own sign-in for this round.** Definite.
+        2. **The division he was last in for this series.** A driver is not
+           usually moved between divisions mid-season, and a future round he
+           has not signed into yet has no other evidence.
+        3. **The only division there is.** Not an inference at all.
+
+        None of those and it returns nothing rather than picking one: two
+        divisions with different regulations is a coin toss about which race is
+        being planned.
+        """
+        rows = self._query(
+            "SELECT de.id, de.divisionId, de.lobbySettingsOverrides, "
+            "       d.lobbySettingsOverrides AS divisionOverrides, "
+            "       d.isDefault, d.name "
+            "FROM DivisionEvent de "
+            "JOIN Division d ON d.id = de.divisionId "
+            "WHERE de.roundId = ?", (round_id,))
+        if not rows:
+            return [], "the round has no division entry"
+
+        chosen, how = None, ""
+        if driver_id:
+            mine = {r["divisionEventId"] for r in self._query(
+                "SELECT divisionEventId FROM EventSignIn WHERE driverId = ?",
+                (driver_id,))}
+            chosen = next((r for r in rows if r["id"] in mine), None)
+            how = "you are signed in to it" if chosen is not None else ""
+        if chosen is None and driver_id:
+            seen = [r["divisionId"] for r in self._query(
+                """SELECT de.divisionId FROM EventSignIn es
+                   JOIN DivisionEvent de ON de.id = es.divisionEventId
+                   JOIN Round r ON r.id = de.roundId
+                   WHERE es.driverId = ? AND r.seriesId = (
+                       SELECT seriesId FROM Round WHERE id = ?)
+                   ORDER BY r.scheduledAt DESC""", (driver_id, round_id))]
+            for division_id in seen:
+                chosen = next((r for r in rows
+                               if r["divisionId"] == division_id), None)
+                if chosen is not None:
+                    how = "the division you were in last round"
+                    break
+        if chosen is None and len(rows) == 1:
+            chosen, how = rows[0], "it is the only division"
+        if chosen is None:
+            return [], (f"which of {len(rows)} divisions is yours is not on "
+                        f"the hub - series defaults used")
+        return ([_blob(chosen["divisionOverrides"]),
+                 _blob(chosen["lobbySettingsOverrides"])],
+                f"{chosen['name']}, {how}")
+
+    def car_overrides(self, round_id: str) -> dict[str, dict]:
+        """Per-car BHP and weight for one round, keyed by the hub's car name.
+
+        This is the league's BoP for the round - 550 BHP / 1,275 kg on the
+        Huracan for Daytona - and it is a round-level fact that no series
+        default carries.
+        """
+        out: dict[str, dict] = {}
+        for row in self._query(
+                "SELECT carName, pp, bhp, weightKg FROM RoundCarOverride "
+                "WHERE roundId = ?", (round_id,)):
+            name = (row["carName"] or "").strip()
+            if not name:
+                continue
+            out[name] = {"pp": row["pp"], "bhp": row["bhp"],
+                         "weight_kg": row["weightKg"]}
+        return out
 
     def results(self, series_id: str) -> list[dict]:
         """Every classified result in the league, with its penalties attached.
@@ -473,6 +655,51 @@ def _after(raw, when) -> bool:
     if ran.tzinfo is not None:
         ran = ran.astimezone().replace(tzinfo=None)
     return when < ran < datetime.datetime.now()
+
+
+def _blob(raw) -> dict | None:
+    """A JSON column as a dict, or `None` where it is not one.
+
+    **`None` and not `{}`.** Most rounds store the literal string `"null"` in
+    `lobbySettingsOverrides`; an empty dict would read as "this round overrides
+    nothing", which is the same answer in effect but not the same claim, and
+    the merge distinguishes them.
+    """
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _when(raw) -> datetime.datetime | None:
+    """A hub timestamp as a naive local-ish datetime, or `None`.
+
+    **Converted to local time, not stripped of its offset.** `_after` above
+    already learned this the hard way - its docstring records a 9.5 h skew on
+    these exact rows, because the league stores its rounds at 10:30 UTC and
+    races them at 20:30 local. Dropping the offset here rather than converting
+    it put every calendar row ten hours early: survivable while that stays on
+    the same date, and wrong by a whole day for any round after about 22:00
+    local, which then also vanishes from the calendar on the morning of its
+    own race.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, datetime.datetime):
+        return (raw.astimezone().replace(tzinfo=None)
+                if raw.tzinfo is not None else raw)
+    try:
+        parsed = datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone()
+    return parsed.replace(tzinfo=None)
 
 
 def _as_ints(raw) -> tuple[int, ...] | None:

@@ -1013,6 +1013,14 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # file predates it, and an unlabelled event is not a bug - it is one
         # from before there was more than one league.
         ("series", "TEXT"),
+        # **v14. Which hub round this event IS.** The link has to be an id and
+        # not the name, the track or the date: all three are things the driver
+        # edits, and matching a stored event to its round on any of them means
+        # a rename silently forks the round into two events - which is the
+        # exact defect `_on_event_saved` already carries a docstring about.
+        # Nullable, because an event created by hand belongs to no hub round
+        # and that is not a fault.
+        ("hub_round_id", "TEXT"),
     ),
     "laps": (
         # GT7's own completed-lap count at this crossing. The app counts laps

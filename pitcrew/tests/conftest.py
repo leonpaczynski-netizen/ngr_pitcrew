@@ -99,7 +99,33 @@ def _no_real_audio(request, monkeypatch):
     monkeypatch.setattr(voice_module, "_best_engine", lambda *a, **k: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_hub(request, monkeypatch, tmp_path):
+    """No test reads the league hub of whoever is running it.
+
+    `hub/read.DEFAULT_PATH` is a sibling project on one particular machine.
+    Left alone, every controller test that refreshes the event picker opened
+    it - so the suite's results depended on the state of a database this
+    project does not own, on a path that does not exist on anyone else's
+    computer, and a league fixture added tonight would change what a test
+    asserted tomorrow.
+
+    Pointed at a path inside the test's own `tmp_path`, `Hub.available` is
+    False and every hub-backed feature takes the branch it takes on a machine
+    with no hub - which is the one the app was written to survive. A test that
+    genuinely wants a hub builds one and passes its path in, as the `hub_*`
+    tests already do.
+    """
+    if request.node.get_closest_marker("real_hub"):
+        return
+    from pitcrew.hub import read as hub_read
+    monkeypatch.setattr(hub_read, "DEFAULT_PATH", tmp_path / "no-hub.db")
+
+
 def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "real_hub: this test reads the machine's actual league hub database")
     config.addinivalue_line(
         "markers",
         "real_audio: this test opens a real audio device and will be heard")

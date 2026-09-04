@@ -23,26 +23,34 @@ SCHEMA = """
 CREATE TABLE Series (id TEXT PRIMARY KEY, name TEXT, status TEXT, format TEXT,
     pointsScheme TEXT, polePoints INT, fastestLapPoints INT,
     classPointsScheme TEXT, classPolePoints INT, classFlPoints INT,
-    driverCarryIn TEXT, raceConfig TEXT);
+    driverCarryIn TEXT, raceConfig TEXT, defaultLobbySettings TEXT);
 CREATE TABLE Driver (id TEXT PRIMARY KEY, userId TEXT, driverName TEXT,
     psnName TEXT);
 CREATE TABLE User (id TEXT PRIMARY KEY, email TEXT, isOwner INT);
 CREATE TABLE BannedEmail (id TEXT PRIMARY KEY, email TEXT);
 CREATE TABLE Round (id TEXT PRIMARY KEY, seriesId TEXT, name TEXT,
-    scheduledAt TEXT, status TEXT, position INT);
+    scheduledAt TEXT, status TEXT, position INT, track TEXT,
+    lobbySettingsOverrides TEXT);
+CREATE TABLE RoundCarOverride (id TEXT PRIMARY KEY, roundId TEXT,
+    carName TEXT, pp INT, bhp INT, weightKg INT);
 CREATE TABLE DivisionEvent (id TEXT PRIMARY KEY, roundId TEXT);
 CREATE TABLE EventSignIn (id TEXT PRIMARY KEY, divisionEventId TEXT,
     driverId TEXT, status TEXT);
 """
 
 
-def a_hub(tmp_path, *, rounds=(), signins=(), banned=(), carry_in=None):
+def a_hub(tmp_path, *, rounds=(), signins=(), banned=(), carry_in=None,
+          track=None, overrides=None, lobby=None, cars=()):
     """A hub file with just enough in it to answer one question."""
     path = tmp_path / "dev.db"
     db = sqlite3.connect(path)
     db.executescript(SCHEMA)
-    db.execute("INSERT INTO Series (id, name, status, driverCarryIn) "
-               "VALUES ('s1', 'A League', 'ACTIVE', ?)", (carry_in,))
+    db.execute("INSERT INTO Series (id, name, status, driverCarryIn, "
+               "defaultLobbySettings) VALUES ('s1', 'A League', 'ACTIVE', ?, ?)",
+               (carry_in, lobby))
+    for n, (rid, car, bhp, kg) in enumerate(cars):
+        db.execute("INSERT INTO RoundCarOverride VALUES (?, ?, ?, NULL, ?, ?)",
+                   (f"co{n}", rid, car, bhp, kg))
     for who, email, owner in (("Beeni", "b@x.com", 0), ("Rocky", "r@x.com", 0),
                               ("Boss", "boss@x.com", 1),
                               ("Pooy01", "p@x.com", 0)):
@@ -52,8 +60,9 @@ def a_hub(tmp_path, *, rounds=(), signins=(), banned=(), carry_in=None):
     for email in banned:
         db.execute("INSERT INTO BannedEmail VALUES (?, ?)", (email, email))
     for rid, when, position in rounds:
-        db.execute("INSERT INTO Round VALUES (?, 's1', ?, ?, 'SCHEDULED', ?)",
-                   (rid, rid, when, position))
+        db.execute("INSERT INTO Round VALUES "
+                   "(?, 's1', ?, ?, 'SCHEDULED', ?, ?, ?)",
+                   (rid, rid, when, position, track, overrides))
         db.execute("INSERT INTO DivisionEvent VALUES (?, ?)",
                    (f"de-{rid}", rid))
     for n, (rid, who, status) in enumerate(signins):

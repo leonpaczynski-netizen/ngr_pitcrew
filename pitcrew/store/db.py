@@ -375,6 +375,19 @@ class Store:
         rows = self._query("SELECT * FROM events ORDER BY updated_at DESC, id DESC")
         return [_event_row(r) for r in rows]
 
+    def link_event_to_round(self, event_id: int, round_id: str) -> None:
+        """Record which hub round an event is, and touch nothing else.
+
+        **Deliberately not `update_event`.** That stamps `updated_at`, and
+        `list_events` orders by it - so linking an old event at launch would
+        jump it to the top of the picker as though the driver had just been
+        working on it. A link is a fact about identity, not an edit.
+        """
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE events SET hub_round_id = ? WHERE id = ?",
+                (round_id, int(event_id)))
+
     def delete_event(self, event_id: int) -> None:
         with self._write() as conn:
             conn.execute("DELETE FROM events WHERE id = ?", (event_id,))

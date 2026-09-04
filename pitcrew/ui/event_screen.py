@@ -53,6 +53,15 @@ from pitcrew.ui.widgets import (
 # button beside a picker is how you end up editing one event while believing
 # you are creating the next.
 NEW_EVENT = "+  New event"
+# Divider row for the hub's calendar. Not selectable - a separator that could
+# be chosen is a switch to nothing, and the picker's `itemData` is the whole
+# vocabulary of what a selection means.
+HUB_HEADING = "—  Coming up, from the hub  —"
+# Fields the hub declares, the form does not edit, and a save must not lose.
+# Loaded onto the screen and echoed back out of `values()` untouched: without
+# this, opening a hub-sourced event and pressing Save silently dropped the
+# round it belongs to and the compounds the league requires.
+CARRIED = ("hub_round_id", "required_compounds")
 # Sentinel for "no switch is pending". `None` cannot do this job: it is the
 # picker's value for New event, and a real target.
 _UNSET = object()
@@ -185,6 +194,14 @@ class EventScreen(QWidget):
         # an event orphaned every session recorded under the old name.
         self._event_id: int | None = None
         self._events: list[dict] = []
+        # Hub rounds with no event row yet, offered under the stored ones.
+        self._upcoming: list = []
+        self._carried: dict = {}
+        # Which calendar round the form is composing, when it is composing one.
+        # `_event_id` cannot answer this - a proposal has no event id until it
+        # is saved - and without it `_restore_picker` dropped the selection
+        # back onto New event the moment the form was filled.
+        self._on_round: str | None = None
         # What was loaded, to compare against for unsaved edits.
         self._clean: dict | None = None
         self._pending_switch = _UNSET
@@ -300,9 +317,20 @@ class EventScreen(QWidget):
 
     # ------------------------------------------------------------- switching
 
-    def set_events(self, events, active_id=None) -> None:
-        """Fill the picker from the store. Never emits `switched`."""
+    def set_events(self, events, active_id=None, upcoming=()) -> None:
+        """Fill the picker from the store, and from the league calendar.
+
+        `upcoming` is `hub.calendar.Proposal` objects for rounds that have no
+        event row yet. They are offered **below** the stored events and under a
+        heading, because the two are different kinds of thing: one is a round
+        with sessions and laps filed against it, the other is an offer that has
+        never been written down. Selecting one fills the form and saves
+        nothing until the driver does.
+
+        Never emits `switched`.
+        """
         self._events = [dict(event) for event in events]
+        self._upcoming = list(upcoming or ())
         # A league typed on one event completes on the next.
         self._refresh_series_completer()
         picker = self.event_picker
@@ -310,12 +338,37 @@ class EventScreen(QWidget):
         picker.clear()
         for event in self._events:
             picker.addItem(self._event_label(event), event["id"])
+        if self._upcoming:
+            # `""` and not `None`: `None` is New event's data and a real
+            # target. Empty string can be neither an event id (an int) nor a
+            # round id (a cuid), so it can only ever mean the heading.
+            picker.addItem(HUB_HEADING, "")
+            model = picker.model()
+            row = (model.item(picker.count() - 1)
+                   if hasattr(model, "item") else None)
+            if row is not None:
+                row.setEnabled(False)
+            for proposal in self._upcoming:
+                picker.addItem(self._round_label(proposal), proposal.round_id)
         picker.addItem(NEW_EVENT, None)
         index = -1 if active_id is None else picker.findData(active_id)
         # Last row is New event, and it is where an unsaved event belongs.
         picker.setCurrentIndex(index if index >= 0 else picker.count() - 1)
         picker.blockSignals(False)
         self._pending_switch = _UNSET
+
+    @staticmethod
+    def _round_label(proposal) -> str:
+        """A calendar row: when it is, then what it is.
+
+        The date leads because this list is ordered by it and the driver is
+        reading it to find tonight - a name-first label makes him scan the
+        second column to answer the first question he has.
+        """
+        when = (f"{proposal.scheduled_at:%a %d %b}"
+                if proposal.scheduled_at else "date unknown")
+        track = (proposal.track or "circuit unmatched").strip()
+        return f"{when}  —  {proposal.name}  —  {track}"
 
     @staticmethod
     def _event_label(event: dict) -> str:
@@ -346,14 +399,26 @@ class EventScreen(QWidget):
 
     def _restore_picker(self) -> None:
         picker = self.event_picker
-        index = (-1 if self._event_id is None
-                 else picker.findData(self._event_id))
+        if self._event_id is None and self._on_round:
+            index = picker.findData(self._on_round)
+        else:
+            index = (-1 if self._event_id is None
+                     else picker.findData(self._event_id))
         picker.blockSignals(True)
         picker.setCurrentIndex(index if index >= 0 else picker.count() - 1)
         picker.blockSignals(False)
 
     def _on_picker_activated(self, index: int) -> None:
         target = self.event_picker.itemData(index)
+        if target == "":
+            # The calendar heading. Disabled in the list, but keyboard
+            # navigation reaches disabled rows under some styles, and a switch
+            # to nothing would blank the screen.
+            self._restore_picker()
+            return
+        if target is not None and target == self._on_round:
+            self._pending_switch = _UNSET
+            return
         if target is not None and target == self._event_id:
             self._pending_switch = _UNSET
             return
@@ -1076,6 +1141,22 @@ class EventScreen(QWidget):
         """Blank the form for an event that does not exist yet."""
         self._reset()
         self._event_id = None
+        self._on_round = None
+        self._carried = {}
+        self._restore_picker()
+        self._mark_clean()
+
+    def load_proposal(self, proposal) -> None:
+        """Compose an event from a hub round, without storing anything.
+
+        A proposal is shaped like an event row precisely so that this can go
+        through `load()` rather than through a second, parallel filler that
+        would drift from it. `_event_id` stays `None`, so the first Save is a
+        create - the hub has proposed and nothing is written until the driver
+        accepts.
+        """
+        self.load(proposal.event_fields())
+        self._on_round = proposal.round_id
         self._restore_picker()
         self._mark_clean()
 
@@ -1083,6 +1164,12 @@ class EventScreen(QWidget):
         """Populate from a stored event and its fitted sheet."""
         self._reset()
         self._event_id = event.get("id") if event else None
+        # A stored event is not a calendar proposal. `load_proposal` sets this
+        # again immediately after calling us; every other caller means it to be
+        # cleared, or the picker would stay parked on the round.
+        self._on_round = None
+        self._carried = {key: event.get(key) for key in CARRIED
+                         if event and event.get(key) is not None}
         if event:
             self.name_edit.setText(event.get("name") or "")
             self.series_edit.setText(event.get("series") or "")
@@ -1184,6 +1271,10 @@ class EventScreen(QWidget):
             (build if section == "build" else performance)[key] = editor.value()
 
         return {
+            # **What the hub declared and this form cannot edit.** First, so
+            # that a field the screen genuinely owns always wins over a stale
+            # carried copy of the same name.
+            **self._carried,
             # Null for an event that has never been saved. The store decides
             # what a null id means; the screen only reports what it loaded.
             "id": self._event_id,
