@@ -5,8 +5,11 @@ on a live capture during the 2 Sep session.
 """
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 import pytest
+from PIL import Image
 
 from pitcrew.telemetry.board import (
     ASPECT,
@@ -282,3 +285,118 @@ def test_scenery_below_the_board_is_not_returned_as_the_board():
     box = own_row(frame)
     assert box is not None
     assert box[1] < 700          # the palings are at y 700+
+
+
+# --- real frames -----------------------------------------------------------
+#
+# **Everything above this line is synthetic, and that is why all twenty of
+# those tests were green while the locator found a board on 5 frames of 73 in
+# the race it was built for.** The fixtures draw a flag as a solid block of two
+# colours at one width. GT7 draws Japan as a red disc on white, Germany in
+# three bands and Mexico in three, and it right-aligns a white-on-black gap
+# readout into the same column - none of which the synthetic board has ever
+# contained.
+#
+# These two are crops of the 4 Sep 2026 Daytona race capture
+# (`2026-09-04 22-12-04.mp4`, 1920x1080) at t=600 s and t=1805 s, cut to
+# 420x700 about the board. The full height was not kept, but the flags still
+# sit inside the height band the locator works in, which is the only thing the
+# crop could have changed. They cover two layouts that behave differently:
+#
+#   p13  he is 13th, mid-board, a gap readout above and below his row
+#   p2   he is 2nd, so the FIRST step of the ladder is a wide one - the case
+#        that set the pitch to 68 and threw away every row above him
+#
+# The expected values were read off the frames, not off the code.
+
+REAL = pathlib.Path(__file__).parent / "fixtures"
+# Where the flag column and the driver's own plate actually are in both crops.
+REAL_FLAG_X = 244
+REAL_PLATE_X0, REAL_PLATE_X1 = 39, 243
+# The board is drawn at a 40 px row pitch, with a 68 px step either side of the
+# driver's own row where GT7 inserts a gap readout.
+REAL_PITCH, REAL_WIDE_STEP = 40, 68
+# How far a rung may sit from the true row centre: a flag that is only partly
+# saturated hands back an ink run that is not centred on its row. Measured at
+# +-3 px on these two frames.
+REAL_CENTRE_SLOP = 4
+REAL_ROWS = 8
+REAL_FRAMES = [("daytona-race-board-p13.png", 360),
+               ("daytona-race-board-p2.png", 200)]
+
+
+def a_real_frame(name):
+    with Image.open(REAL / name) as image:
+        return np.asarray(image.convert("RGB"))
+
+
+@pytest.mark.parametrize("name,own_y", REAL_FRAMES)
+def test_the_ladder_is_found_on_a_real_race_frame(name, own_y):
+    found = flag_ladder(a_real_frame(name))
+    assert found is not None, "the board is plainly on this frame"
+    x0, x1, rungs = found
+    assert abs(x0 - REAL_FLAG_X) <= 3, f"the flag column is at {REAL_FLAG_X}"
+    assert x1 > x0, "and it has a width"
+    assert len(rungs) == REAL_ROWS
+    assert own_y in rungs, "his own row is one of the rungs"
+
+
+@pytest.mark.parametrize("name,_own_y", REAL_FRAMES)
+def test_the_real_pitch_is_forty_with_two_equal_wide_steps(name, _own_y):
+    """Not 20, and not 40/64/69 on one column at once. The version this
+    replaces knitted GT7's multi-coloured flags into blobs and read those three
+    pitches off a column whose true pitch is a constant 40.
+
+    To within `REAL_CENTRE_SLOP`, because a rung is the centre of the ink run
+    and a flag that is only partly saturated - Japan's disc is 8 px of an 18 px
+    flag - hands back a run that is not centred on its row. The ladder carries
+    the same tolerance for the same reason.
+    """
+    _, _, rungs = flag_ladder(a_real_frame(name))
+    steps = [b - a for a, b in zip(rungs, rungs[1:])]
+    normal = [s for s in steps if abs(s - REAL_PITCH) <= REAL_CENTRE_SLOP]
+    wide = [s for s in steps if abs(s - REAL_WIDE_STEP) <= REAL_CENTRE_SLOP]
+    assert len(normal) + len(wide) == len(steps), steps
+    assert len(wide) == 2, "one gap readout above his row and one below"
+    assert abs(wide[0] - wide[1]) <= REAL_CENTRE_SLOP, "the same readout twice"
+
+
+@pytest.mark.parametrize("name,own_y", REAL_FRAMES)
+def test_the_own_row_is_found_on_a_real_race_frame(name, own_y):
+    frame = a_real_frame(name)
+    box = own_row(frame, flag_ladder(frame))
+    assert box is not None
+    assert abs((box[1] + box[3]) // 2 - own_y) <= 4
+    # The plate, and not the plate plus whatever is bright beside the board.
+    assert abs(box[0] - REAL_PLATE_X0) <= 3
+    assert abs(box[2] - REAL_PLATE_X1) <= 3
+
+
+@pytest.mark.parametrize("name,_own_y", REAL_FRAMES)
+def test_all_three_gaps_are_framed_on_a_real_race_frame(name, _own_y):
+    """He is neither leading nor last on either frame, so all three are drawn.
+
+    Framing them is not reading them: `hud_digits` scores these 12 px glyphs at
+    0.60-0.70 against its 0.80 floor and refuses every one, so `read_gaps`
+    still returns None on both. The box has to be right first.
+    """
+    board = find(a_real_frame(name))
+    assert board is not None
+    assert board.ahead is not None and board.behind is not None
+    assert board.leader is not None
+    assert board.ahead[3] < board.row[1], "ahead sits above his row"
+    assert board.behind[1] > board.row[3], "behind sits below it"
+    assert board.leader[0] > board.row[2], "the red box sits after the plate"
+
+
+@pytest.mark.parametrize("name,_own_y", REAL_FRAMES)
+def test_the_gap_readout_is_not_cut_off_by_the_plate_s_width(name, _own_y):
+    """It is right-aligned to the FLAG column, which ends 26 px past the plate.
+
+    A band bounded by the row's own width lost the last two glyphs, and
+    `hud_time` refuses a box whose ink touches an edge - so a cut box is not a
+    shorter reading, it is no reading at all, ever.
+    """
+    board = find(a_real_frame(name))
+    for box in (board.ahead, board.behind):
+        assert box[2] > board.row[2], "the readout runs past the plate"
