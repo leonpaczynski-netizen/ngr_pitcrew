@@ -72,7 +72,7 @@ from pitcrew.store import catalogs
 from pitcrew.store.db import DEFAULT_SHEET_PURPOSE, Store
 from pitcrew.store.identity import IDENTITY_OK
 from pitcrew.race.calls import (STATUS, STATUS_EVERY_LAPS, STAY_OUT,
-                               fuel_target_l, fuel_to_flag_l)
+                               fuel_in_hand, fuel_target_l, fuel_to_flag_l)
 from pitcrew.race.coordinator import (PlanContext, RaceCoordinator,
                                       context_from_stored)
 from pitcrew.race.expectations import PRACTICE
@@ -3318,17 +3318,25 @@ class PitCrewController(QObject):
             coach.set_speak(self.voice.say if speaks else None)
 
     @staticmethod
-    def _laps_of_fuel_in_hand(state) -> float | None:
-        """Laps the fuel aboard covers beyond what is left to run.
+    def _laps_of_fuel_in_hand(state) -> tuple[float | None, str]:
+        """Laps of fuel in hand, and the distance they are in hand TO.
 
-        None where either half is unknown - a surplus computed against a burn
-        nobody measured is a number he would plan around.
+        **Both, or neither.** This used to return the number alone, computed
+        against the flag whatever the plan said, and the colour line then
+        supplied the words "to the flag" from a string literal of its own.
+        Session 127 (Daytona, 4 Sep 2026) spoke the result three times before
+        the stop - *"-7.1 laps of fuel in hand to the flag"* on lap 2 with
+        84.0 L aboard - and `_fuel_standing` said *"1.9 spare to the stop"*
+        twenty-six seconds earlier on the same lap. One number and its name
+        now come out of one expression, `calls.fuel_in_hand`, so a caller
+        cannot pick up the figure and invent the reference: CLAUDE.md rules 12
+        and 13.
+
+        The `None` half is unchanged and is still `None`, never zero - a
+        surplus computed against a burn nobody measured is a number he would
+        plan around.
         """
-        aboard = state.laps_of_fuel()
-        needed = state.laps_remaining()
-        if aboard is None or needed is None:
-            return None
-        return round(aboard - needed, 1)
+        return fuel_in_hand(state)
 
     @staticmethod
     def _worst_wear(lap) -> float | None:
@@ -3406,6 +3414,10 @@ class PitCrewController(QObject):
             return
         state = race.state
         sigma_ms = race.expect.sigma_ms()
+        # One call, two names, unpacked together - a second call could see a
+        # different state and hand the colour line a figure from one journey
+        # under the name of the other, which is the defect being fixed.
+        fuel_laps, fuel_ref = self._laps_of_fuel_in_hand(state)
         call = self._colour.consider(
             lap=state.lap,
             lap_time_ms=lap.lap_time_ms,
@@ -3436,7 +3448,8 @@ class PitCrewController(QObject):
             # gauge. Nothing modelled goes in here, because a number said in a
             # relaxed register every lap is exactly the kind that stops
             # sounding like an estimate.
-            fuel_laps_in_hand=self._laps_of_fuel_in_hand(state),
+            fuel_laps_in_hand=fuel_laps,
+            fuel_reference=fuel_ref,
             wear_worst=self._worst_wear(lap),
             wear_corner=self._worst_wear_corner(lap),
             # **The straight speaks it now.** Ranked here it displaced a
@@ -5575,9 +5588,11 @@ class PitCrewController(QObject):
         if (state.last_said_lap == state.lap
                 and not state.only_the_heartbeat_this_lap()):
             return
+        fuel_laps, fuel_ref = self._laps_of_fuel_in_hand(state)
         call = self._colour.data_line(
             lap=state.lap,
-            fuel_laps_in_hand=self._laps_of_fuel_in_hand(state),
+            fuel_laps_in_hand=fuel_laps,
+            fuel_reference=fuel_ref,
             # **The live gauge, not a lap row.** There is no lap to read here
             # - this is mid-lap - and `_worst_wear(None)` would return None
             # for every corner, so the straight would never once carry a wear

@@ -578,6 +578,25 @@ class RaceCoordinator:
         if (self._gt7_offset is None and counted is not None
                 and counted >= 0 and lap.lap_num > 0):
             self._gt7_offset = counted - lap.lap_num
+        # **The same field, now also spoken.** GT7 increments at the crossing,
+        # so at this instant `counted` IS the lap he is about to drive and the
+        # number his HUD has just changed to. `state.lap` remains the count
+        # behind him and remains what every piece of arithmetic here uses;
+        # `screen_lap` is the one that may be said as "Lap N". They were one
+        # apart on all 20 rows of session 127 and the engineer said the wrong
+        # one every lap of it - see `RaceState.lap_on_screen`.
+        #
+        # Set every crossing rather than derived once from `_gt7_offset`,
+        # because the offset is not constant: a crossing GT7 counts and the
+        # app misses widens it mid-race, and a cached offset would then speak
+        # a lap number that drifts further from the screen with every drop.
+        if counted is not None and counted > 0:
+            self.state.screen_lap = counted
+        elif self.state.screen_lap is not None:
+            # GT7 stopped answering. Keep counting rather than freezing on the
+            # last number it gave - a stale lap number is worse than an
+            # arithmetic one, because it does not move at all.
+            self.state.screen_lap = None
         # A crossing resets the pending discrepancy: whatever it was, the app
         # has just counted a lap and the two are being compared afresh.
         self._gt7_pending = 0
@@ -1740,6 +1759,14 @@ class RaceCoordinator:
             # is out" while driving 13, he would correct a mistake the app had
             # not made and the right lap would stay in.
             "lapInProgress": self.state.lap + 1,
+            # **What GT7 is showing him**, which is the same lap counted by
+            # the other party. Beside `lapInProgress` rather than replacing
+            # it, because the two disagree exactly when a crossing has gone
+            # missing and that disagreement is a finding, not a nuisance:
+            # `lapInProgress` is the app's arithmetic, this is the game's own
+            # answer, and only this one may be spoken. See
+            # `RaceState.lap_on_screen`.
+            "screenLap": self.state.lap_on_screen(),
             "lapsTotal": self.state.laps_total,
             # Set for a timed race, where `lapsTotal` is the plan's expected
             # distance rather than a regulation, so nothing downstream reads

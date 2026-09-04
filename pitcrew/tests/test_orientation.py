@@ -13,6 +13,15 @@ want time and laps remaining."*
 The arithmetic he describes is `clock.laps_left` and was already there. What
 was missing was that nothing said it, and that two things had to be right
 first: the lap count, and the clock.
+
+**Every "Lap N" here moved up by one on 5 Sep 2026, and the old numbers were
+the defect.** `state.lap` counts the crossings BEHIND him; GT7's HUD names the
+lap he is DRIVING. Session 127 (Daytona, 4 Sep 2026) has
+`laps.laps_completed` = `laps.lap_num` + 1 on all 20 rows, so *"Lap 2. 18 laps
+to go."* went out on the radio while his screen read lap 3 - for the whole
+race, and he reported it unprompted. The laps-to-go clause was right all along
+and is unchanged in every assertion below; only the lap NUMBER moved. See
+`RaceState.lap_on_screen`.
 """
 from __future__ import annotations
 
@@ -63,12 +72,13 @@ def test_a_corrected_crossing_is_said_flat_not_as_a_pair():
     state.laps_dropped_seen = 2
     assert state.lap_now() == 15
     said = orientation(state)
-    assert said.startswith("Lap 15."), said
+    # 15 laps are behind him, so he is DRIVING 16 and GT7's HUD says 16.
+    assert said.startswith("Lap 16."), said
     assert " or " not in said.split(".")[0]
 
 
 def test_a_clean_count_says_one_number():
-    assert orientation(timed(lap=13)).startswith("Lap 13")
+    assert orientation(timed(lap=13)).startswith("Lap 14")
 
 
 # ------------------------------------------------------------------ the clock
@@ -115,7 +125,7 @@ def test_from_halfway_it_is_both():
     state = timed(lap=13, laps_total=22)
     state.race_remaining_s = 660.0
     state.laps_estimate_firm = True
-    assert orientation(state) == "Lap 13. 11 minutes left. 9 laps to go."
+    assert orientation(state) == "Lap 14. 11 minutes left. 9 laps to go."
 
 
 def test_an_unresolved_count_names_both_candidates():
@@ -132,7 +142,7 @@ def test_an_unresolved_count_names_both_candidates():
     state = timed(lap=13, laps_total=22)
     state.race_remaining_s = 660.0
     state.laps_count_hedged = True
-    assert orientation(state) == "Lap 13. 11 minutes left. 8 or 9 laps to go."
+    assert orientation(state) == "Lap 14. 11 minutes left. 8 or 9 laps to go."
 
 
 # -------------------------------------------------------------- the lap race
@@ -144,12 +154,12 @@ def test_a_lap_race_says_the_lap_and_what_is_left_of_it():
     crossing at the cadence he asked for. Two sentences cost one clip each and
     say more: the count he is on and the count still to run."""
     state = RaceState(lap=7, laps_total=24, position=4)
-    assert orientation(state) == "Lap 7. 17 laps to go."
+    assert orientation(state) == "Lap 8. 17 laps to go."
 
 
 def test_a_lap_race_with_no_distance_still_says_the_lap():
     state = RaceState(lap=7, position=4)
-    assert orientation(state) == "Lap 7."
+    assert orientation(state) == "Lap 8."
 
 
 def test_nothing_is_said_before_the_first_crossing():
@@ -223,7 +233,7 @@ def test_a_pending_stop_prices_the_stop_rather_than_hedging_it():
     state.stop_pending = True
     state.stop_costs_laps = 1
     said = orientation(state)
-    assert said == "Lap 13. 11 minutes left. 9 laps to go, one less if you stop."
+    assert said == "Lap 14. 11 minutes left. 9 laps to go, one less if you stop."
     assert " or " not in said
 
 
@@ -234,7 +244,7 @@ def test_the_priced_stop_stands_down_on_the_last_lap():
     state.race_remaining_s = 95.0
     state.stop_pending = True
     state.stop_costs_laps = 1
-    assert orientation(state) == "Lap 21. 95 seconds left. 1 lap to go."
+    assert orientation(state) == "Lap 22. 95 seconds left. 1 lap to go."
 
 
 # --------------------------------------- the last crossings, on the real thing

@@ -40,6 +40,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from pitcrew.engineer import say
+# **The reference words come from `calls`, not from a literal here.** This
+# module used to end its fuel line with the string "to the flag" whatever the
+# plan said, while `calls._fuel_standing` took the same reference from
+# `calls.fuel_frame` - so on any lap with a stop still to come the two lines
+# named different journeys in the same words. See `_data`.
+from pitcrew.race.calls import TO_THE_FLAG
 
 # Off, and it means off - not "less often".
 QUIET = "quiet"
@@ -133,6 +139,7 @@ class ColourCalls:
                  position: int | None = None,
                  laps_firm: bool = True,
                  fuel_laps_in_hand: float | None = None,
+                 fuel_reference: str = TO_THE_FLAG,
                  wear_worst: float | None = None,
                  wear_corner: str | None = None,
                  include_data: bool = True) -> ColourCall | None:
@@ -175,7 +182,8 @@ class ColourCalls:
         if gapped:
             # **`include_data=False` means the caller speaks it elsewhere.**
             # The straight carries it now; see `data_line`.
-            data = (self._data(fuel_laps_in_hand, wear_worst, wear_corner,
+            data = (self._data(fuel_laps_in_hand, fuel_reference,
+                               wear_worst, wear_corner,
                                lap_time_ms, stint_ends_on_lap, lap)
                     if include_data else None)
             self._record_only(lap_time_ms)
@@ -192,7 +200,8 @@ class ColourCalls:
                 or self._countdown(lap, stint_ends_on_lap)
                 or self._gauge(wear_reading_age)
                 or self._consistency(sigma_s)
-                or (self._data(fuel_laps_in_hand, wear_worst, wear_corner,
+                or (self._data(fuel_laps_in_hand, fuel_reference,
+                               wear_worst, wear_corner,
                                 lap_time_ms, stint_ends_on_lap, lap)
                     if include_data else None))
         self._record_only(lap_time_ms)
@@ -204,7 +213,8 @@ class ColourCalls:
 
     # ---------------------------------------------------------------- kinds
 
-    def data_line(self, *, lap: int, fuel_laps_in_hand=None, wear_worst=None,
+    def data_line(self, *, lap: int, fuel_laps_in_hand=None,
+                  fuel_reference: str = TO_THE_FLAG, wear_worst=None,
                   wear_corner=None, lap_time_ms=None,
                   stint_ends_on_lap=None) -> ColourCall | None:
         """The instrument read out, for somewhere the driver can listen.
@@ -229,7 +239,8 @@ class ColourCalls:
             return None
         if self._data_lap == lap:
             return None
-        call = self._data(fuel_laps_in_hand, wear_worst, wear_corner,
+        call = self._data(fuel_laps_in_hand, fuel_reference,
+                          wear_worst, wear_corner,
                           lap_time_ms, stint_ends_on_lap, lap)
         if call is not None:
             self._data_lap = lap
@@ -244,7 +255,7 @@ class ColourCalls:
             if self._best_ms is None or lap_time_ms < self._best_ms:
                 self._best_ms = lap_time_ms
 
-    def _data(self, fuel_laps_in_hand, wear_worst, wear_corner,
+    def _data(self, fuel_laps_in_hand, fuel_reference, wear_worst, wear_corner,
               lap_time_ms, stint_ends_on_lap, lap) -> ColourCall | None:
         """One measured number, rotating, so no lap in chatty mode is empty.
 
@@ -264,16 +275,21 @@ class ColourCalls:
         """
         options: list[tuple[str, str]] = []
         if fuel_laps_in_hand is not None:
-            # "to the flag" names which of the two fuel margins this is - see
-            # the same note in `calls.py::_fuel_long`. This one counts to the
-            # end of the race; that one counts to the next stop.
-            # Worded to reuse the fuel answer's own number words, so the pack
-            # covers it with one added tail clip instead of synthesising the
-            # whole line live. Every colour line in the Fuji race logged a
-            # pack miss; this is the most repeated of them.
+            # **The reference is passed in, not written here.** It names which
+            # of the two fuel margins this is, and it used to be the constant
+            # "to the flag" - so on lap 2 of session 127, nine laps before a
+            # planned stop, this line said *"-7.1 laps of fuel in hand to the
+            # flag"* with 84.0 L aboard, twenty-six seconds after the engineer
+            # had said *"1.9 spare to the stop"* about the same tank. Two
+            # journeys, one form of words, half a minute apart: CLAUDE.md
+            # rule 13, which exists because of exactly this.
+            #
+            # Both wordings are voice-pack clips already - `phrase_manifest`
+            # carries `COLOUR_FUEL_TAIL` and `STOP_FUEL_TAIL` - so neither
+            # falls through to live synthesis, which is a pause on the radio.
             options.append(
-                (f"{fuel_laps_in_hand:.1f} laps of fuel in hand to the flag.",
-                 ""))
+                (f"{fuel_laps_in_hand:.1f} laps of fuel in hand "
+                 f"{fuel_reference}.", ""))
         if wear_worst is not None:
             where = f"{wear_corner.upper()} " if wear_corner else "Worst tyre "
             options.append((f"{where}{wear_worst * 100:.0f}.", ""))

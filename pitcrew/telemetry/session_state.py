@@ -17,7 +17,11 @@ to get right:
 * **Race start** requires `(the car was seen below 30 km/h) AND speed > 80`,
   or the lap counter increasing.  The low-speed gate stops a formation lap, or
   the app being started mid-session, from faking lights-out.  The lap-counter
-  branch is deliberately left ungated so rolling starts still fire.
+  branch is deliberately left ungated so rolling starts still fire.  **The
+  counter it compares against retires itself on a drop** - a `laps_completed`
+  lower than the baseline cannot be this session's, and one carried over from
+  the last session put the green 111.2 s late at Daytona and 112 s late at
+  Monza.  See `_retire_a_foreign_lap_count`.
 * **Race length** is taken from the maximum `laps_in_race` seen before the
   start, not from the packet at the moment of starting.  On circuits where the
   grid sits behind the start/finish line GT7 has already decremented the count
@@ -490,6 +494,8 @@ class SessionState:
         if p.speed_kmh < GRID_LOW_SPEED_KMH:
             self._grid_low_speed_seen = True
 
+        self._retire_a_foreign_lap_count(p)
+
         crossed_line = (
             self._prev_laps_completed >= 0
             and p.laps_completed > self._prev_laps_completed
@@ -510,6 +516,58 @@ class SessionState:
             "laps_in_race": self._laps_in_race,
             "remaining_time_ms": p.remaining_time_ms,
         })]
+
+    def _retire_a_foreign_lap_count(self, p: GT7Packet) -> None:
+        """Drop a `laps_completed` baseline that belongs to another session.
+
+        **This is the whole of the Monza green-flag defect, and it cost the
+        driver an entire opening lap twice.** `_update_phase` seeds
+        `_prev_laps_completed` from the first packet it sees on track, and the
+        first packet it sees on track can still be carrying the LAST session's
+        payload. Measured, frame by frame, off session 127 (Daytona, 4 Sep
+        2026, 20 laps, 7,034 frames in lap one):
+
+        * frames 0-1 - `gt7_laps_completed` **5**, speed 278.7 km/h,
+          `last_lap_ms` 103,795. That is the previous session's final lap, two
+          frames of it, 33 ms;
+        * frame 2 onward - `gt7_laps_completed` **0**, speed 80.0 km/h,
+          `last_lap_ms` absent. This race, from the line;
+        * frame 352 (t = 5.87 s) - **0 -> 1**, GT7 saying lap one is under way;
+        * frame 7,033 (t = 117.2 s) - **1 -> 2**, the lap-one crossing.
+
+        The baseline was seeded at **5** off frame 0, so `crossed_line` asked
+        for a count above 5 and the lap-one crossing at 2 did not clear it.
+        `_check_lap` then re-seeded the baseline to GT7's real 2 when it filed
+        lap one, and the lap-TWO crossing at 3 finally cleared it: green at
+        22:16:25, **4 min 21 s after the session opened and 111.2 s of racing
+        late**, with lap one receiving no calls at all. The launch branch could
+        not save it either - `_grid_low_speed_seen` was seeded False off the
+        same 278.7 km/h frame and Daytona's minimum speed over the rest of the
+        lap is 58.9 km/h, so nothing below 30 was ever seen again.
+
+        **CLAUDE.md rule 10: a rule that refuses a reading must be able to
+        refuse its own baseline.** A count that DROPS cannot be this session's
+        history - GT7's counter only ever rises within a session - so the drop
+        is the falsifier, and it retires the reference rather than being
+        refused against it. Rule 11 is the other half: this is state that
+        outlived a session and was read as if it belonged to this one.
+
+        **And the accepts are logged, not only the refusals.** The ratchet was
+        invisible for a whole race precisely because the number setting the bar
+        never appeared in the log.
+        """
+        if p.laps_completed is None or p.laps_completed < 0:
+            # GT7 sends -1 before any lap is complete. Not a drop - an absence.
+            return
+        if p.laps_completed >= self._prev_laps_completed:
+            return
+        log("session").info(
+            "GT7's lap counter dropped %d -> %d, which cannot happen inside "
+            "one session - the baseline came from the previous one. Retiring "
+            "it: the green is now judged against %d, not %d.",
+            self._prev_laps_completed, p.laps_completed,
+            p.laps_completed, self._prev_laps_completed)
+        self._prev_laps_completed = p.laps_completed
 
     def _refuelling(self, p: GT7Packet, now: float) -> bool:
         """Is the tank going up, at a rate a fuel rig can actually deliver?
