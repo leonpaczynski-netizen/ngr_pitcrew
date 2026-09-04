@@ -27,6 +27,28 @@ attractive, and `02` §9.6 calls fuel map "the primary endurance-strategy lever"
 **short-shift → lift-and-coast → slipstream.**
 *All three events on file now declare map 1, and all 333 recorded laps carry it.*
 
+**Raising ride height is a LAST resort, never a first.**
+*Source: driver, 31 Aug 2026 - "don't ever recommend high ride height again in
+GR3 it must be solved differently with suspension" - and 1 Sep 2026,
+"increasing ride height should be a last option not a first."*
+If the platform sinks into the ground under load the order is **spring rate,
+then compression damping, then ride height.** On the Huracan at Spa I raised
+the car 68/77 -> 73/82 to stop Raidillon bottoming and **never once touched
+`nf_f`/`nf_r` in the whole programme**; a reference car in the same race ran
+**55/62 on springs of 3.90/4.10 against our 3.55/3.70.** Being soft is why ours
+had to be high, and being high is what cost every sustained high-speed corner.
+**Dampers control how fast the platform moves; springs control how far it
+sinks. They are not substitutes.**
+⚠️ **This does not suspend the bottoming check** - it changes the response to
+it. Guard at Spa: minimum body height at 1,000-1,150 m and full throttle
+through 1,000-1,250 m.
+
+**And he does not want anyone's sheet copied wholesale.**
+*Source: driver, 1 Sep 2026 - "I don't want to ditch our setup completely I
+want you to learn from what he did and apply it to my driving style."*
+A reference car is evidence about **principles and directions**, not a sheet to
+paste. Take the platform logic; keep what his own style needs.
+
 **Never move brake balance forward.**
 *Source: session memory, standing.*
 Front bias is wrong for his style specifically — **it locks the fronts and
@@ -171,7 +193,22 @@ Sensitivity 9 is load-bearing for it: never lower it. Max Torque yields instead.
 
 ## Open questions for him
 
-1. **Job 7a from the 1.71 protocol, and it is now urgent.** 1.71 adjusted
+1. ~~**Job 7a from the 1.71 protocol.**~~ **✅ ANSWERED 1 Sep 2026, after eleven
+   days open. Driver: "Fanatec auto setup is not on in GT7, I am running FFB 5
+   and sensitivity 10."** Auto Setup being OFF is the decisive half: 1.71's
+   *"Fanatec Auto Setup parameters optimised"* pushes values to the base only
+   when it is enabled, so **it cannot have changed his wheel without him.** The
+   two in-game sliders are user settings and are now recorded, so the next
+   patch is diagnosable. ⚠️ **What this does NOT close: 1.71 also adjusted
+   "understeer vibration", which is game behaviour rather than a user setting
+   and cannot be ruled out from the settings screen.** But it was already
+   demoted by the team mate running the same car flat through Blanchimont -
+   a wheel setting cannot make a rival's car faster. **The car is genuinely
+   going wide; that is measured. Treat FFB as closed unless new evidence
+   reopens it.**
+
+   *Superseded text, kept per the reconciliation rule:*
+   **Job 7a from the 1.71 protocol, and it was urgent.** 1.71 adjusted
    force feedback, understeer vibration **and Fanatec Auto Setup parameters**.
    `08` and `07` both warn that **on an 18 Nm base an FFB change reads exactly
    like a grip change** — and the first 1.71 session came in 2.5 s off the
