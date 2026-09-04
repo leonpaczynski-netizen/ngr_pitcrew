@@ -161,12 +161,17 @@ sector 39.97 → 39.69 → 39.42 → 39.58 → 39.34; the fastest lap came in th
 car that changed by 3–6 % of aero load or by camber — the same size as any setup effect. **Lap time cannot rank these
 five sheets**; camber 4.0/4.0 is the one run that did not improve on its predecessor.
 
-**F6 — A brake event on the banking that no flag records, and it is not setup.** On six of 24 laps (s121 L3, L6;
-s122 L5; s123 L4; s124 L2, L6; also s119 L10) the brake goes to **100 % at exactly 5,200 m**, speed 267 → 110–190
-km/h, then full throttle again without pitting. It costs that lap ~1–2 s and the **next** lap's front stretch (254
-instead of 284 km/h). **Asked, not assumed** — traffic, gap-building, a track-limit reset or a pit-entry feint all fit.
+**F6 — The 5,200 m brake is a track-limits time penalty, served on the banking. ANSWERED by the driver, 4 Sep.**
+On six of 24 laps (s121 L3, L6; s122 L5; s123 L4; s124 L2, L6; also s119 L10) the brake goes to 100 % at exactly
+5,200 m, 267 → 110–190 km/h, then full throttle without pitting: GT7 making him serve a penalty for exceeding track
+limits earlier in the lap. Not setup. It costs that lap ~1–2 s and the **next** lap's front stretch (254 instead of
+284 km/h). ⇒ **Penalty laps have a signature the app can detect** — full brake above 250 km/h at near-zero lateral g,
+no pit entry — and should be flagged like an incident so they and the following lap's straight drop out of
+comparisons automatically. Until then, banking and straight-line figures here exclude them by hand. **Also:** six
+penalties in 24 laps says the kerb time in `off_track_s` (0.2–0.5 s on most laps) is not cosmetic — it is what earned
+them. `[DRIVER REPORT]` for the cause, `[MEASURED]` for the cost.
 
 **F7 — Wear.** Identical at the gauge's resolution in all five runs: RR 0.0556/lap, RL 0.037–0.042, FR 0.037–0.042,
 FL 0.035–0.037. Replicates the race stint's 0.0570. Neither wing nor camber moved it over 4–5 laps.
 
-**Not established:** `bb` in the car for any of the five; whether the 5,200 m event is his or the game's.
+**Not established:** `bb` in the car for any of the five.
