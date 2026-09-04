@@ -107,6 +107,7 @@ from pitcrew.telemetry.listener import (
     probe_port,
 )
 from pitcrew.telemetry.capture import CaptureWriter
+from pitcrew.analysis.lap_sectors import read_rows as sector_rows
 from pitcrew.telemetry.recorder import FRAME_FIELDS, SAMPLE_HZ
 from pitcrew.telemetry.packet import packet_format_for, parse_packet
 from pitcrew.telemetry.recorder import LapRecorder
@@ -2538,6 +2539,21 @@ class PitCrewController(QObject):
             frames = replace(frames, crawl_s=seen.crawl_s,
                              off_track_s=seen.off_track_s,
                              spin_s=seen.spin_s)
+            # And the three sectors, off the same rows, for the same reason.
+            cut = sector_rows(rows, FRAME_FIELDS, lap.lap_time_ms,
+                              self._sector_model())
+            if cut.measured:
+                frames = replace(frames, sector1_ms=cut.times_ms[0],
+                                 sector2_ms=cut.times_ms[1],
+                                 sector3_ms=cut.times_ms[2],
+                                 sector_model=cut.stamp)
+            elif cut.refused:
+                # **The refusals are logged, not only the accepts.** Rule 10 -
+                # the tyre-gauge ratchet was invisible for a whole race
+                # because the number setting the bar never appeared in the
+                # log, and this gate refuses roughly one lap in six.
+                log("session").info("lap %s has no sector times: %s",
+                                    lap.lap_num, cut.refused)
         # **The session's opening lap is judged here, before it is written,
         # by the rule the rack rebuilds with.** The session state flags an
         # out-lap on a PIT EXIT, and a pit exit needs a pit ENTRY first -
@@ -2652,6 +2668,14 @@ class PitCrewController(QObject):
             # read the same session two ways.
             standing_start_ms=(frames.standing_start_ms
                                if frames is not None else None),
+            # **Live too, or the rack shows sectors on a stored lap and an em
+            # dash on the one he has just driven.** Both paths take them from
+            # the same `LapFrames` the row was written from, so a lap looks
+            # the same on the rack before and after a rebuild.
+            sector1_ms=(frames.sector1_ms if frames is not None else None),
+            sector2_ms=(frames.sector2_ms if frames is not None else None),
+            sector3_ms=(frames.sector3_ms if frames is not None else None),
+            sector_source=(frames.sector_model if frames is not None else None),
         ))
 
     def plan_qualifying(self) -> bool:
@@ -3049,6 +3073,36 @@ class PitCrewController(QObject):
         self.store.exclude_lap(
             lap_id, "struck by hand" if row.excluded else None)
 
+    def _sector_model(self):
+        """Where this circuit's sector lines are, for the session in hand.
+
+        **Cached against the session id, not against the app.** CLAUDE.md rule
+        11: state that outlives a session gets read as if it belongs to this
+        one, and a sector model built at one circuit and reused at the next
+        would cut every lap in the wrong place while looking entirely normal.
+        Keying the cache on the session id means the reset has no caller to
+        forget - a new session cannot see the old model.
+        """
+        if self.session_id is None:
+            return None
+        cached = getattr(self, "_sector_model_cache", None)
+        if cached is not None and cached[0] == self.session_id:
+            return cached[1]
+        event = self.active_event()
+        key = circuit_key_for(event)
+        model = self.store.sector_model(key) if key else None
+        if model is None:
+            log("session").info(
+                "no sector model for %s - laps in this session get no sector "
+                "times", key or "an event with no circuit")
+        else:
+            log("session").info("sectors cut at %s (%s)",
+                                " / ".join(f"{line:.0f} m"
+                                           for line in model.lines_m),
+                                model.source)
+        self._sector_model_cache = (self.session_id, model)
+        return model
+
     @staticmethod
     def _column(row, name: str):
         return row[name] if name in row.keys() else None
@@ -3093,6 +3147,13 @@ class PitCrewController(QObject):
                 spin_s=self._column(row, "spin_s"),
                 tod_start_ms=self._column(row, "tod_start_ms"),
                 tod_end_ms=self._column(row, "tod_end_ms"),
+                sector1_ms=self._column(row, "sector1_ms"),
+                sector2_ms=self._column(row, "sector2_ms"),
+                sector3_ms=self._column(row, "sector3_ms"),
+                # The stamp carries the circuit, the provenance and the lines
+                # themselves; the rack only needs to know which laps are
+                # comparable with which, so it holds the whole string.
+                sector_source=self._column(row, "sector_model"),
             )
             for index, row in enumerate(stored, 1)
         ]

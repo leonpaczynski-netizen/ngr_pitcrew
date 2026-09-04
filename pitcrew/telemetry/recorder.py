@@ -244,6 +244,19 @@ class LapFrames:
     # done the same thing in the other direction. The same answer off the
     # rows in hand is 0.369 ms.
     top_kph: float | None = None
+    # **The lap cut in three, and the lines it was cut against.** Set by the
+    # caller from `analysis.lap_sectors.read_rows` while the rows are still
+    # uncompressed - not computed here, for the same reason the incident
+    # evidence above is not: the recorder is the bottom of the stack and the
+    # analysis layer sits above it.
+    #
+    # All four stay None where the lap was refused. A refusal must not be
+    # stored as a settled answer, because the commonest reason for one is a
+    # circuit whose sector lines have not been established yet.
+    sector1_ms: int | None = None
+    sector2_ms: int | None = None
+    sector3_ms: int | None = None
+    sector_model: str | None = None
 
     @property
     def size_bytes(self) -> int:

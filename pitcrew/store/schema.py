@@ -91,6 +91,18 @@ Versions, and what upgrading means here:
   and an unlabelled event is not a bug - it is an event from before there was
   more than one league.
 
+* **v15** puts the three sector times and the model they were measured against
+  on the lap.  The four columns are pure `ADDED_COLUMNS`; the **back-fill** is
+  what needs a function, because it decodes every stored lap once against the
+  circuit's own sector lines - the same one-off cost v4 and v5 paid for the
+  game clock and the incident evidence, and for the same reason: the lap rack
+  asks this of every row on every redraw and cannot answer it from a 400 KB
+  compressed buffer.
+
+  A lap whose sectors are refused is left null and **its `sector_model` is left
+  null too**, so a later run tries it again rather than recording a refusal as
+  a settled answer.  `laps` is not rebuilt - `lap_frames` cascades off it.
+
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
 two columns and back-fills four — so `MIGRATIONS` below exists, and anything
@@ -102,7 +114,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -1078,6 +1090,25 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # apart cannot explain why one stint has eighty readings and another
         # has one.
         ("wear_source", "TEXT"),
+        # **The lap cut in three, ms per sector.** Taken at the crossing off
+        # the uncompressed rows, for the reason `crawl_s` above is: the rack
+        # draws these on every row on every redraw, and a 400 KB decode per
+        # row is not a thing a screen can do.
+        #
+        # Null is a lap whose sectors were refused, and the refusals matter -
+        # an out-lap's frames start in the pit box while GT7's lap time starts
+        # at the line, so a sector taken across the two is a well-formed wrong
+        # answer. See `analysis/lap_sectors`.
+        ("sector1_ms", "INTEGER"),
+        ("sector2_ms", "INTEGER"),
+        ("sector3_ms", "INTEGER"),
+        # **Which lines these were measured against.** GT7 sends no sectors,
+        # so the boundary is the app's own claim and a lap measured against
+        # boundaries that have since moved is stale in a way nothing else can
+        # see. Storing the stamp is what lets a changed catalogue entry
+        # re-derive the laps it affects instead of silently mixing two
+        # definitions of `S2` in one rack.
+        ("sector_model", "TEXT"),
     ),
     "setup_sheets": (
         # **The upshift rpm per gear, measured on this gearbox.** It was a
@@ -1659,6 +1690,91 @@ def _migrate_v14_change_reasons(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE setup_changes ADD COLUMN {column} TEXT")
 
 
+def sector_model_for(conn: sqlite3.Connection, circuit_key: str):
+    """The sector model for one circuit, built from what the database holds.
+
+    Shared by the back-fill and by the live path, because a lap measured at
+    the crossing and a lap measured months later have to be cut in the same
+    place or the rack is showing two definitions of `S2` in one column.
+    """
+    from pitcrew.analysis.lap_sectors import model_for
+
+    row = conn.execute("SELECT length_m FROM track_layouts WHERE slug = ?",
+                       (circuit_key,)).fetchone()
+    if row is None or not row[0]:
+        return None
+    stored = conn.execute(
+        "SELECT corners_json FROM corner_models WHERE circuit_key = ?",
+        (circuit_key,)).fetchone()
+    corners = None
+    if stored is not None:
+        import json as _json
+
+        from pitcrew.analysis.corner_model import CornerModel
+
+        corners = CornerModel.from_dict(_json.loads(stored[0]))
+    return model_for(circuit_key, float(row[0]), corners)
+
+
+def _migrate_v15_sector_times(conn: sqlite3.Connection) -> None:
+    """Cut every stored lap into three, once.
+
+    Same shape as v4 and v5, and the same justification: the lap rack asks
+    this of every row it draws, so the answer has to be a column and not a
+    decode. The cost is one pass over every blob on disk, paid once.
+
+    **A refusal is not recorded.** A lap the model would not cut leaves all
+    four columns null, so the next run asks again - which matters because the
+    commonest reason to refuse is a circuit that has no sector lines yet, and
+    adding two numbers to `SECTOR_LINES` must be enough to make those laps
+    appear. Writing a stamp beside three nulls would latch the refusal, which
+    is the ratchet CLAUDE.md rule 10 is about.
+    """
+    columns = _columns(conn, "laps")
+    if "sector_model" not in columns:
+        return                              # ADDED_COLUMNS has not run yet
+
+    pending = conn.execute(
+        "SELECT l.id, l.lap_time_ms, e.track, e.layout "
+        "FROM laps l "
+        "JOIN lap_frames f ON f.lap_id = l.id "
+        "JOIN sessions s ON s.id = l.session_id "
+        "JOIN events e ON e.id = s.event_id "
+        "WHERE l.sector_model IS NULL AND l.lap_time_ms > 0").fetchall()
+    if not pending:
+        return
+
+    from pitcrew.analysis.lap_sectors import read
+    from pitcrew.analysis.resolve import circuit_key
+    from pitcrew.telemetry.recorder import decode_frames
+
+    models: dict[str, object] = {}
+    for lap_id, lap_time_ms, track, layout in pending:
+        if not track:
+            continue
+        key = circuit_key(track, layout)
+        if key not in models:
+            models[key] = sector_model_for(conn, key)
+        model = models[key]
+        if model is None:
+            continue
+        row = conn.execute(
+            "SELECT blob FROM lap_frames WHERE lap_id = ?", (lap_id,)).fetchone()
+        if row is None:
+            continue
+        try:
+            frames = decode_frames(row[0])
+        except Exception:               # noqa: BLE001 - a bad blob is not fatal
+            continue
+        found = read(frames, lap_time_ms, model)
+        if not found.measured:
+            continue
+        conn.execute(
+            "UPDATE laps SET sector1_ms = ?, sector2_ms = ?, sector3_ms = ?, "
+            "sector_model = ? WHERE id = ?",
+            (*found.times_ms, found.stamp, lap_id))
+
+
 MIGRATIONS: dict[int, tuple[str, object]] = {
     3: ("per-corner tyre wear", _migrate_v3_wear_per_corner),
     4: ("the game clock onto the lap, and the readings taken through a keyhole",
@@ -1671,4 +1787,5 @@ MIGRATIONS: dict[int, tuple[str, object]] = {
         _migrate_v9_tyre_model_version),
     14: ("why a change was made, and how it was learned",
          _migrate_v14_change_reasons),
+    15: ("every stored lap cut into three sectors", _migrate_v15_sector_times),
 }

@@ -1432,9 +1432,10 @@ class Store:
                 " fuel_used, position, compound, is_pit_lap, is_out_lap, gear_ratios, "
                 " tyres_changed, fuel_added_l, tod_start_ms, tod_end_ms, "
                 " standing_start_ms, crawl_s, off_track_s, spin_s, "
+                " sector1_ms, sector2_ms, sector3_ms, sector_model, "
                 " short_shift_rpm, laps_completed, race_elapsed_s, "
                 " race_remaining_s, laps_dropped, recorded_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (session_id, lap.lap_num, lap.lap_time_ms, lap.delta_ms,
                  lap.fuel_start, lap.fuel_end, lap.fuel_used, lap.position,
                  lap.compound, int(lap.is_pit_lap), int(lap.is_out_lap),
@@ -1450,6 +1451,14 @@ class Store:
                  getattr(frames, "crawl_s", None) if frames is not None else None,
                  getattr(frames, "off_track_s", None) if frames is not None else None,
                  getattr(frames, "spin_s", None) if frames is not None else None,
+                 # **All four together or none of them.** A sector time
+                 # without the model it was measured against cannot be told
+                 # from a stale one later, and three sectors with no stamp is
+                 # exactly that.
+                 getattr(frames, "sector1_ms", None) if frames is not None else None,
+                 getattr(frames, "sector2_ms", None) if frames is not None else None,
+                 getattr(frames, "sector3_ms", None) if frames is not None else None,
+                 getattr(frames, "sector_model", None) if frames is not None else None,
                  # None stays None: a lap recorded before this existed makes
                  # no claim about how it was driven, and 0.0 would be the
                  # claim that it was driven on the normal threshold.
@@ -2045,6 +2054,18 @@ class Store:
         if not rows:
             return None
         return CornerModel.from_dict(json.loads(rows[0]["corners_json"]))
+
+    def sector_model(self, circuit_key: str):
+        """Where this circuit's sector lines fall, and where they came from.
+
+        The one implementation lives in `store.schema` because the v15
+        back-fill needs it against a bare connection, and a lap cut at the
+        crossing has to be cut in the same place as one cut months later by
+        the migration - two implementations of that is two definitions of
+        `S2` in one column.
+        """
+        from pitcrew.store.schema import sector_model_for
+        return sector_model_for(self._conn, circuit_key)
 
     def list_corner_models(self) -> list[str]:
         rows = self._query("SELECT circuit_key FROM corner_models ORDER BY circuit_key")

@@ -46,6 +46,7 @@ from pitcrew.ui.widgets import (
     mark_unset,
     CompoundBand,
     Declared,
+    Derived,
     Field,
     MarkButton,
     Measured,
@@ -69,7 +70,11 @@ UNTAGGED = "—"
 W_LAP = 34
 W_TIME = 132
 W_DELTA = 78
+# Wide enough for "38.533" plus the space a bold best takes over a normal one.
+W_SECTOR = 68
 W_FUEL = 76
+# "100.0 L" - the full tank, which is what almost every car in the league runs.
+W_TANK = 84
 W_MARKER = 84
 W_COMPOUND = 104
 # Wide enough for "Carried over" without clipping - a picker that silently
@@ -157,6 +162,21 @@ class LapRow:
     # only channel that says whether a stint was run in daylight.
     tod_start_ms: int | None = None
     tod_end_ms: int | None = None
+    # **The lap cut in three.** Null on a lap the sector model refused, which
+    # is about one in six - an out-lap whose frames start in the pit box, a
+    # lap whose path teleported, a circuit with no lines yet. Null is the
+    # refusal; it is never a zero. See `analysis/lap_sectors`.
+    sector1_ms: int | None = None
+    sector2_ms: int | None = None
+    sector3_ms: int | None = None
+    # Where this lap's boundaries came from - `timing-line`, `landmark` or
+    # `thirds`. On the row rather than on the screen because a rack can hold
+    # laps from two circuits, and the three are not the same claim.
+    sector_source: str | None = None
+
+    @property
+    def sectors_ms(self) -> tuple:
+        return (self.sector1_ms, self.sector2_ms, self.sector3_ms)
 
     @property
     def counted(self) -> bool:
@@ -284,6 +304,17 @@ def format_delta(ms: int) -> str:
     return f"{'+' if ms > 0 else '−'}{abs(ms) / 1000:.3f}"
 
 
+def format_sector(ms: int | None) -> str:
+    """Seconds to three places, or the em dash that means it was refused.
+
+    No minutes: three sectors of a 90-140 s lap are 25-65 s each, and a
+    `0:38.533` beside a `1:48.732` lap time reads as another lap time.
+    """
+    if not ms or ms <= 0:
+        return "—"
+    return f"{ms / 1000:.3f}"
+
+
 class StintHeader(QWidget):
     """What one stint did, above the laps that did it.
 
@@ -370,7 +401,7 @@ class RackRow(QWidget):
     restructured = pyqtSignal(int)
 
     def __init__(self, row: LapRow, best_ms: int, *, stint_end: bool = False,
-                 run_start: bool = False,
+                 run_start: bool = False, best_sectors: tuple = (None,) * 3,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.row = row
@@ -409,10 +440,53 @@ class RackRow(QWidget):
         self.delta_label.setFixedWidth(W_DELTA)
         line.addWidget(self.delta_label)
 
+        # **Derived, not measured, and the ink has to say so.** GT7 sends no
+        # sector times and no sector lines; these are the app's own boundary
+        # laid on a distance channel that is itself integrated from speed. A
+        # stencil-white sector time would be a computed figure wearing the ink
+        # that means "off the telemetry stream" - CLAUDE.md rule 5, and the
+        # exact substitution the three-ink register exists to prevent.
+        #
+        # So the session best is NOT marked in purple the way a timing screen
+        # would mark it: purple is already spoken for here. It is the same
+        # purple, set bold.
+        self.sector_labels = []
+        for index, value in enumerate(row.sectors_ms):
+            best = best_sectors[index]
+            is_best = (value is not None and best is not None
+                       and value == best and row.counted)
+            label = (Derived(format_sector(value), bold=True) if is_best
+                     else Derived(format_sector(value)) if value is not None
+                     else Measured("—", colour=theme.STENCIL_DIM))
+            label.setFixedWidth(W_SECTOR)
+            if value is None:
+                label.setToolTip(
+                    "No sector times for this lap. GT7 broadcasts no sectors, "
+                    "so they are cut from the lap-distance channel - and this "
+                    "lap's is not trustworthy enough to cut. An out-lap, a "
+                    "lap whose path jumped, or a circuit with no lines yet.")
+            self.sector_labels.append(label)
+            line.addWidget(label)
+
+        # **"Used" and "on board", never both called fuel.** They are 2 L and
+        # 87 L on the same row and CLAUDE.md rule 13 is about exactly this:
+        # two figures under one word, ten laps apart in what they mean.
         self.fuel_label = Measured(f"{row.fuel_used:.2f} L",
                                    colour=theme.STENCIL_DIM)
         self.fuel_label.setFixedWidth(W_FUEL)
+        self.fuel_label.setToolTip("What this lap burned")
         line.addWidget(self.fuel_label)
+
+        # The tank as the lap started, which is what the car weighed. A full
+        # 100 L tank is about 73 kg, so the first lap of a stint and the last
+        # are not the same car - and reading a lap time without it is reading
+        # a stopwatch against an unknown mass.
+        self.tank_label = Measured(f"{row.fuel_start:.1f} L")
+        self.tank_label.setFixedWidth(W_TANK)
+        self.tank_label.setToolTip(
+            "Fuel on board as this lap started - the weight the lap was "
+            "driven at. About 0.73 kg a litre.")
+        line.addWidget(self.tank_label)
 
         marker = self.row.structural_reason()
         self.marker_label = StencilLabel(marker or "", size=11,
@@ -1007,7 +1081,12 @@ class PracticeScreen(QWidget):
         row.addWidget(cap("LAP", W_LAP))
         row.addWidget(cap("TIME", W_TIME))
         row.addWidget(cap("DELTA", W_DELTA))
-        row.addWidget(cap("FUEL", W_FUEL))
+        row.addWidget(cap("S1", W_SECTOR))
+        row.addWidget(cap("S2", W_SECTOR))
+        row.addWidget(cap("S3", W_SECTOR))
+        # Not two columns both called "FUEL". See the row's own note.
+        row.addWidget(cap("USED", W_FUEL))
+        row.addWidget(cap("ON BOARD", W_TANK))
         row.addWidget(cap("", W_MARKER))
         row.addStretch(1)
         row.addWidget(cap("COMPOUND", W_COMPOUND))
@@ -1181,9 +1260,21 @@ class PracticeScreen(QWidget):
         self.rack_empty.setVisible(False)
         self.refresh()
 
-    def _make_row(self, row: LapRow, best: int, ends: set, starts: set) -> "RackRow":
+    def _make_row(self, row: LapRow, best: int, ends: set, starts: set,
+                  best_sectors: tuple | None = None) -> "RackRow":
+        """The one place a `RackRow` is built.
+
+        **`_rebuild_rack` used to construct one itself**, so anything added to
+        this signature reached the appended rows and not the rebuilt ones -
+        which is every row on screen for a stored event. The best-sector
+        emphasis was invisible for exactly that reason: it was passed here and
+        the rebuild path did not go through here.
+        """
         widget = RackRow(row, best, stint_end=row.lap_id in ends,
-                         run_start=row.lap_id in starts)
+                         run_start=row.lap_id in starts,
+                         best_sectors=(self._best_sectors()
+                                       if best_sectors is None
+                                       else best_sectors))
         widget.changed.connect(self._on_row_changed)
         widget.restructured.connect(self._on_row_restructured)
         return widget
@@ -1235,6 +1326,8 @@ class PracticeScreen(QWidget):
         self._row_widgets.clear()
 
         best = self._best_ms()
+        # Once for the rack, not once per row: it is a scan of every lap.
+        best_sectors = self._best_sectors()
         ends = stint_end_ids(self._rows)
         starts = run_start_ids(self._rows)
         self._rendered_ends = ends
@@ -1262,10 +1355,7 @@ class PracticeScreen(QWidget):
                     # stints in one evening do not repeat the same timestamp.
                     started_at=row.session_started if new_session else None))
 
-            widget = RackRow(row, best, stint_end=row.lap_id in ends,
-                             run_start=row.lap_id in starts)
-            widget.changed.connect(self._on_row_changed)
-            widget.restructured.connect(self._on_row_restructured)
+            widget = self._make_row(row, best, ends, starts, best_sectors)
             self.rack_layout.addWidget(widget)
             self._row_widgets.append(widget)
         self.rack_layout.addStretch(1)
@@ -1313,6 +1403,64 @@ class PracticeScreen(QWidget):
         times = [r.lap_time_ms for r in self._rows if r.counted and r.lap_time_ms > 0]
         return min(times) if times else 0
 
+    def _best_sectors(self) -> tuple:
+        """The quickest each sector has been on this rack, counted laps only.
+
+        Counted only, for the same reason the best lap is: an out-lap or a lap
+        with a spin in it is not a sector this car set. The three need not come
+        from one lap - that is the point of them, and the sum of the three is
+        deliberately not shown anywhere, because a theoretical best is not a
+        lap anybody drove.
+
+        **Sectors from a different set of lines are not comparable**, so a
+        rack holding two sector models has no best. That happens when the
+        catalogue gains a circuit between one session and the next: half the
+        rack is cut at 1,780 m and half at 2,097, and picking a minimum across
+        the two would mark a lap best in a sector that is a different piece of
+        road.
+        """
+        counted = [r for r in self._rows if r.counted]
+        sources = {r.sector_source for r in counted
+                   if r.sector_source and any(v is not None
+                                              for v in r.sectors_ms)}
+        if len(sources) > 1:
+            return (None,) * 3
+        return tuple(
+            min(found) if (found := [r.sectors_ms[index] for r in counted
+                                     if r.sectors_ms[index] is not None])
+            else None
+            for index in range(3))
+
+    # How each provenance reads on the spec line. The words matter: "thirds"
+    # has to say plainly that nobody measured this boundary, or a driver reads
+    # a sector split as if it were the one on a timing sheet.
+    _CUT_WORDS = {
+        "timing-line": "at the circuit's timing lines",
+        "landmark": "at the circuit's landmarks",
+        "thirds": "thirds of the lap - not GT7's",
+    }
+
+    def _sector_provenance(self) -> str | None:
+        """One phrase saying how this rack's laps were cut, or None.
+
+        None where no lap on the rack has sectors at all, because a label
+        describing a cut that produced nothing is noise. Where the rack holds
+        two models it says so rather than picking one - that is the same rack
+        the best-sector emphasis refuses to work on, and the driver should be
+        told why the column has gone plain.
+        """
+        stamps = {row.sector_source for row in self._rows
+                  if row.sector_source and any(v is not None
+                                               for v in row.sectors_ms)}
+        if not stamps:
+            return None
+        if len(stamps) > 1:
+            return "two different sets of lines on this rack"
+        # `<circuit>:<source>:<line>/<line>` - see `lap_sectors.SectorModel`.
+        parts = stamps.pop().split(":")
+        source = parts[1] if len(parts) > 2 else ""
+        return self._CUT_WORDS.get(source, source or None)
+
     def refresh(self) -> None:
         counted = [r for r in self._rows if r.counted]
         times = sorted(r.lap_time_ms for r in counted if r.lap_time_ms > 0)
@@ -1345,6 +1493,14 @@ class PracticeScreen(QWidget):
         untagged = [r for r in counted if not r.compound]
         if untagged:
             self.spec.add("Untagged", str(len(untagged)), derived=True)
+        # **Where the sector lines came from, on the screen and not in a
+        # tooltip.** GT7 sends no sectors, so `S2` is the app's own claim, and
+        # a boundary placed at a real circuit's timing line and one placed a
+        # third of the way round are not the same claim at all. Derived ink,
+        # because the provenance is as computed as the numbers under it.
+        cut = self._sector_provenance()
+        if cut:
+            self.spec.add("Sectors", cut, derived=True)
         self.spec.finish()
 
         # The subtitle belongs to the controller: it carries connection and
