@@ -160,10 +160,22 @@ class DriverState:
     # nothing was ever approved - and those are different answers, which is
     # rule 13. Without this the board said "no plan" while a plan was running.
     has_plan: bool = False
+    # Past the last stint the plan names - an unplanned stop. Distinct from
+    # `has_plan` being False, and from a planned stint whose length is not
+    # stated; all three used to share one caption.
+    past_the_plan: bool = False
     # The stop is due or overdue. `laps_to_box` clamps at zero, so without
     # this a driver three laps past his box lap reads "0 laps to box" every
     # lap with nothing saying he is late.
-    past_box_lap: bool = False
+    # How many laps past the planned stop he is. 0 is "the box lap is this
+    # one", which is due rather than late - the two read differently and the
+    # first version captioned both "you are past the box lap". None where the
+    # stop is still ahead.
+    laps_past_box: int | None = None
+    # The flag is out. The running panel needs it because `laps_to_box` is
+    # None once the race is over, which it also is when no plan exists - and
+    # "no plan" is the wrong thing to tell a man who has just finished.
+    finished: bool = False
 
 
 def onset_for(compound: str | None) -> float | None:
@@ -322,6 +334,12 @@ class DriverWindow(QWidget):
         page.addWidget(self.view)
         self.resize(1280, 480)
         self._drag_from = None
+        # Called when the window goes away by any route, so whoever is
+        # pushing state into it can stop. Without it the controller went on
+        # ticking four times a second into a hidden widget for the rest of
+        # the race. A plain callable rather than a signal: this widget is
+        # built by the controller and handed nothing else.
+        self.on_closed = None
 
     def update_state(self, state: "DriverState") -> None:
         self.view.update_state(state)
@@ -338,6 +356,15 @@ class DriverWindow(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:    # noqa: N802 - Qt naming
         self._drag_from = None
+
+    def closeEvent(self, event) -> None:            # noqa: N802 - Qt naming
+        """Tell the feeder, however it was closed."""
+        if callable(self.on_closed):
+            try:
+                self.on_closed()
+            except Exception:                       # noqa: BLE001
+                log("ui").warning("the driver board's close handler raised")
+        super().closeEvent(event)
 
     def keyPressEvent(self, event) -> None:        # noqa: N802 - Qt naming
         """Escape closes it.
@@ -520,11 +547,16 @@ class _BoxPanel(QWidget):
         elif state.next_stint_laps is not None:
             self.next_stat.show_value(f"{state.next_stint_laps}",
                                       "laps, then box again")
-        elif state.has_plan:
+        elif state.past_the_plan:
             # Out past the end of the stint list - an unplanned stop. NOT the
             # same as having no plan, and emphatically not "runs to the flag":
             # nothing has checked the fuel aboard against what is left.
             self.next_stat.show_value("--", "past the end of the plan")
+        elif state.has_plan:
+            # Inside the plan, on a stint whose length it does not state.
+            # Sharing the caption above would have said he was past the end of
+            # a plan he is squarely in the middle of.
+            self.next_stat.show_value("--", "the plan states no length")
         else:
             self.next_stat.show_value("--", "no plan")
 
@@ -602,15 +634,20 @@ class DriverView(QWidget):
             "TYRE SURFACE °C" if not state.compound
             else f"TYRE SURFACE °C · {state.compound.upper()}")
 
-        if state.laps_to_box is None:
+        if state.finished:
+            self.box_stat.show_value("FLAG", "race over")
+        elif state.laps_to_box is None:
             self.box_stat.show_value("--", "no plan")
-        elif state.past_box_lap:
+        elif state.laps_past_box is not None:
             # **`laps_to_stop()` clamps at zero**, so a driver three laps past
             # his box lap read "0 laps to box, box on lap 15" - the current
             # lap, every lap, with nothing saying he was late. `past_box_lap`
             # carries the sign the clamp discards.
-            self.box_stat.show_value("NOW", "you are past the box lap",
-                                     urgent=True)
+            self.box_stat.show_value(
+                "NOW",
+                "box this lap" if state.laps_past_box <= 0 else
+                f"{state.laps_past_box} past the box lap",
+                urgent=True)
         else:
             self.box_stat.show_value(
                 f"{state.laps_to_box:.0f}",

@@ -343,12 +343,22 @@ def test_positions_refresh_onto_a_rival_already_filed():
 
 # --- the four that were ranked, registered, tested and unemittable ---------
 
+from pitcrew.strategy.model import PIT_LOSS_MEASURED  # noqa: E402
+
+
 def a_state(lap=8):
     """A race with the pit-lane figures the calls price a stop with."""
     state = RaceState(lap=lap, laps_total=LAPS, fuel_per_lap_l=BURN)
     state.refuel_rate_lps = 1.0            # measured
     state.pit_loss_s = 17.6                # measured, Monza
-    state.pit_loss_source = "measured"
+    # **The canonical constant, not the bare word.** `stop_costs_s` compares
+    # against `strategy.model.PIT_LOSS_MEASURED` ("measured-this-track"), and
+    # `coordinator` used to write the literal "measured" - so the comparison
+    # never matched, `PIT_DEAD_TIME_S` was never added by any pit-lane call,
+    # and this file called itself measured while exercising the declared
+    # branch. Fixing the coordinator without fixing this would have left the
+    # suite green over a stop priced 7.5 s cheap.
+    state.pit_loss_source = PIT_LOSS_MEASURED
     state.fuel_capacity_l = TANK_L
     return state
 
@@ -449,7 +459,11 @@ def test_a_stop_now_that_would_drop_us_behind_is_said():
     # is OFFERED, and with the fill priced rather than the stint's load.
     call = next(c for c in candidates(state) if c.kind == "rejoin")
     assert "Chook comes out in front" in call.call
-    assert "the stop costs 78" in call.reason    # 60 L at 1 L/s + 17.6 lane
+    # 60 L at 1 L/s + a 17.6 s lane + the 7.5 s dead time, because the source
+    # says this loss was measured here. `strategy/model.stop_overhead_s`
+    # carries the evidence: Watkins 15.7 measured + 7.5 = 23.2 against a
+    # frame-measured 23.07 total.
+    assert "the stop costs 85" in call.reason
 
 
 def test_a_rejoin_is_not_argued_before_the_stop_is_in_prospect():

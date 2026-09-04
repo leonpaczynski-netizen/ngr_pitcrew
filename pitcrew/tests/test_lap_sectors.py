@@ -259,3 +259,37 @@ def test_an_accepted_lap_carries_the_ratio_that_admitted_it():
 
 def test_a_refused_lap_carries_no_ratio_to_be_mistaken_for_a_reading():
     assert read(_frames(jump_at=100), LAP_MS, _model()).span_ratio is None
+
+
+# --------------------------------------------------- the gate's own edges
+
+@pytest.mark.parametrize("ratio,admitted", [
+    (1.000, True),
+    (0.995, True),
+    (0.991, True),
+    (0.985, False),      # the band the old 0.95 bound let through
+    (0.966, False),      # the worst of the seven laps it admitted
+    (1.005, True),
+    (1.020, False),
+])
+def test_the_span_gate_is_pinned_at_its_own_edges(ratio, admitted):
+    """**The bound itself, not just laps far outside it.**
+
+    Every refusal test above sits at 1.33 or 0.5 - refused by the old 0.95
+    bound and the new 0.99 alike - so tightening the constant, the change with
+    the largest data footprint in this work, was pinned by nothing. Reverting
+    it left the whole suite green.
+    """
+    # A lap whose frames span `ratio` of the time GT7 claims for it.
+    found = read(_frames(lap_ms=int(LAP_MS * ratio)), LAP_MS, _model())
+    assert found.measured is admitted
+
+
+def test_a_short_span_is_refused_because_the_deficit_lands_inside_S1():
+    """`marks` starts at 0, so it assumes the first captured frame IS the
+    crossing. Frames missing from the START of a lap make every crossing read
+    early and put the whole offset inside S1 - while S3 absorbs it back, so
+    the three still sum to the lap time and nothing looks wrong."""
+    found = read(_frames(lap_ms=int(LAP_MS * 0.97)), LAP_MS, _model())
+    assert not found.measured
+    assert "do not start in the same place" in found.refused

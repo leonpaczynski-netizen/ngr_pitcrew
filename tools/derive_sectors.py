@@ -19,8 +19,12 @@ published figure the catalogue note says it is still missing. Without it a lap
 already carrying a stamp is left alone.
 
 It decodes one 400 KB blob per lap it re-cuts, so a whole-archive restamp is
-about 40 ms a lap. Laps whose stamp already matches the current model are
-skipped without decoding.
+about 40 ms a lap. Without `--restamp` a lap whose stamp already matches the
+current model is skipped without decoding; **with it every lap is decoded**,
+because the stamp records the LINES and not the gate - tightening
+`lap_sectors.SPAN_RATIO` leaves every stamp identical while changing which
+laps are admissible. Only laps whose stored times actually change are counted
+as written.
 """
 from __future__ import annotations
 

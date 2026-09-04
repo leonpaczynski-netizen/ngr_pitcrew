@@ -66,10 +66,15 @@ class _State:
     stint_index: int = 0
     gap_behind: object = None
     gap_behind_name: str | None = None
-    pit_loss_source: str | None = "declared"
+    pit_loss_source: str | None = None
     pit_loss_s: float | None = 19.0
-    refuel_rate_lps: float | None = None    # declared on the event page
+    # **The coordinator merges the briefing into this**, so by the time the
+    # board reads it there is one rate for the screen and the voice. The stub
+    # models the merged state, not the pre-merge event value - a fake that
+    # kept them apart would be testing a shape production does not have.
+    refuel_rate_lps: float | None = 1.002
     past_box_lap: bool = False
+    stint_ends_on_lap: int | None = None
     finished: bool = False
     _to_stop: int | None = 3
 
@@ -121,15 +126,29 @@ class _Stub:
     _next_stint_shape = PitCrewController._next_stint_shape
     _race_knowledge = PitCrewController._race_knowledge
 
-    def __init__(self, *, race=None, bridge=None, target=74.0):
+    _someone_set = PitCrewController._someone_set
+
+    def __init__(self, *, race=None, bridge=None, target=74.0, event=None):
         self.race = race if race is not None else _Race()
         self.bridge = bridge if bridge is not None else _Bridge()
         self._target = target
+        # Both sources set: somebody entered both figures. Tests that care
+        # about the unset case pass their own.
+        self._event = {"pit_loss_source": "declared",
+                       "refuel_rate_source": "declared"} if event is None \
+            else event
 
     def _refuel_context(self):
         if self._target is None:
             return None
         return (self._target, self.race.state.fuel_per_lap_l, None)
+
+    def active_event(self):
+        """The event row, whose source columns say whether anybody typed the
+        figures beside them. `pit_loss_secs` is `NOT NULL DEFAULT 20.0` and
+        `refuel_rate_lps` `NOT NULL DEFAULT 2.5`, so the value alone never
+        can."""
+        return self._event
 
 
 def _state_for(stub):
@@ -202,11 +221,20 @@ def test_the_countdown_is_the_shortfall_over_the_measured_rate():
     assert got.release_in_s == pytest.approx(43.0 / 1.002, abs=0.05)
 
 
-def test_the_countdown_is_refused_where_no_fill_rate_has_been_measured_here():
-    """A dash, not a figure off another circuit's pump."""
+def test_the_countdown_is_refused_where_there_is_no_rate_at_all():
+    """A dash, not a figure off another circuit's pump.
+
+    Clearing the briefing alone is no longer enough to reach this: the
+    coordinator merges the briefing into `state.refuel_rate_lps`, so the state
+    is the single rate and it has to be empty. See
+    `test_a_fill_rate_nobody_entered_gives_no_countdown` for the more
+    dangerous case - a rate that is present but is only the column default.
+    """
     stub = _Stub(bridge=_Bridge(filling=True))
     stub.race.knowledge = _Knowledge(refuel_l_per_s=None)
+    stub.race.state.refuel_rate_lps = None
     assert _state_for(stub).release_in_s is None
+    assert _state_for(stub).fill_rate_note is None
 
 
 def test_a_tank_already_past_target_carries_the_sign_and_reads_GO():
@@ -294,7 +322,7 @@ def test_the_dead_time_is_added_to_a_measured_pit_loss():
     stub.race.state.gap_behind = _behind(65.0)
     assert _state_for(stub).out_position == 7        # loses it, with the 7.5 s
 
-    stub.race.state.pit_loss_source = "declared"
+    stub.race.state.pit_loss_source = None
     assert _state_for(stub).out_position == 6        # holds it, without
 
 
@@ -316,7 +344,7 @@ def test_a_gap_too_close_to_call_is_not_reported_as_a_place():
     assert _state_for(stub).out_position is None
 
 
-def test_the_declared_pit_loss_is_used_where_none_was_measured_here():
+def test_a_declared_pit_loss_is_used_where_the_briefing_names_none():
     """**The board read `Knowledge.pit_loss_s` alone**, which is None at any
     circuit whose briefing names no stop - so it showed "no gap read" while
     the voice, reading `state.pit_loss_s`, happily made a rejoin call from the
@@ -327,19 +355,33 @@ def test_the_declared_pit_loss_is_used_where_none_was_measured_here():
     assert _state_for(stub).out_position == 7
 
 
-def test_no_pit_loss_from_either_source_means_no_rejoin_verdict():
-    """`stop_costs_s` returns None if either half is unknown - a stop cost
-    built from one of them is not a stop cost."""
-    stub = _Stub(bridge=_Bridge(filling=True))
+def test_a_pit_loss_nobody_entered_is_refused_not_priced():
+    """**`events.pit_loss_secs` is `REAL NOT NULL DEFAULT 20.0`**, so a value
+    with no source beside it is the schema's, not the driver's. Pricing a stop
+    from it puts `P7 / behind Rocky` on the board with no provenance at all -
+    rules 3 and 5 - and event 10, the current one, is exactly this case."""
+    stub = _Stub(bridge=_Bridge(filling=True),
+                 event={"pit_loss_source": None,
+                        "refuel_rate_source": "declared"})
     stub.race.knowledge = _Knowledge(pit_loss_s=None)
-    stub.race.state.pit_loss_s = None
     stub.race.state.gap_behind = _behind(5.0)
     assert _state_for(stub).out_position is None
 
 
-def test_the_declared_fill_rate_stands_in_where_none_was_measured():
-    """And the board says which it used, because a rate measured at this pump
-    and one typed on the event page are not the same claim."""
+def test_a_fill_rate_nobody_entered_gives_no_countdown():
+    """`refuel_rate_lps` is `NOT NULL DEFAULT 2.5`. A countdown priced from
+    that on a pump running at 1.0 is two and a half times short, on the one
+    number he is holding the trigger against."""
+    stub = _Stub(bridge=_Bridge(filling=True),
+                 event={"pit_loss_source": "declared",
+                        "refuel_rate_source": None})
+    stub.race.knowledge = _Knowledge(refuel_l_per_s=None)
+    got = _state_for(stub)
+    assert got.release_in_s is None
+    assert got.fill_rate_note is None
+
+
+def test_a_declared_rate_is_used_and_labelled_where_nothing_was_briefed():
     stub = _Stub(bridge=_Bridge(filling=True))
     stub.race.knowledge = _Knowledge(refuel_l_per_s=None)
     stub.race.state.refuel_rate_lps = 1.0
@@ -348,9 +390,14 @@ def test_the_declared_fill_rate_stands_in_where_none_was_measured():
     assert got.fill_rate_note == "declared rate"
 
 
-def test_a_measured_rate_is_preferred_and_labelled():
+def test_a_briefed_rate_is_never_labelled_measured():
+    """`race/knowledge.py` says of itself "none of them measured here" and
+    exports as "race-engineer, declared". The first version of this label read
+    "measured here", which puts a desk figure in the measured register on the
+    screen whose whole ink system exists to keep those apart."""
     got = _state_for(_Stub(bridge=_Bridge(filling=True)))
-    assert got.fill_rate_note == "measured here"
+    assert got.fill_rate_note == "briefing"
+    assert "measur" not in (got.fill_rate_note or "")
 
 
 # ------------------------------------------------------------- the next stint
@@ -380,6 +427,7 @@ def test_a_stop_the_plan_never_planned_does_not_claim_to_reach_the_flag():
     got = _state_for(stub)
     assert got.runs_to_flag is False
     assert got.next_stint_laps is None
+    assert got.past_the_plan is True
 
 
 def test_a_stint_with_another_stop_after_it_carries_its_length():

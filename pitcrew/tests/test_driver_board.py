@@ -227,9 +227,19 @@ def test_a_plan_that_names_no_compound_is_not_no_plan_at_all(app):
 
 def test_running_off_the_end_of_the_plan_is_not_no_plan_and_not_the_flag(app):
     view = DriverView()
-    view.update_state(DriverState(in_box=True, has_plan=True))
+    view.update_state(DriverState(in_box=True, has_plan=True,
+                                  past_the_plan=True))
     assert view.box.next_stat.value.text() == "--"
     assert "past the end of the plan" in view.box.next_stat.sub.text()
+
+
+def test_a_planned_stint_with_no_stated_length_is_not_past_the_plan(app):
+    """Three outcomes, not two: no plan, a plan that does not reach this
+    stint, and a plan that reaches it but states no length. They shared one
+    caption, so a stint squarely inside the plan read as being past its end."""
+    view = DriverView()
+    view.update_state(DriverState(in_box=True, has_plan=True))
+    assert "states no length" in view.box.next_stat.sub.text()
 
 
 def test_the_rejoin_caption_does_not_read_as_a_duration(app):
@@ -247,9 +257,30 @@ def test_being_past_the_box_lap_says_so_instead_of_counting_zero(app):
     was overdue."""
     view = DriverView()
     view.update_state(DriverState(laps_to_box=0.0, box_on_lap=15,
-                                  past_box_lap=True))
+                                  laps_past_box=3))
     assert view.box_stat.value.text() == "NOW"
-    assert "past the box lap" in view.box_stat.sub.text()
+    assert "3 past the box lap" in view.box_stat.sub.text()
+
+
+def test_the_box_lap_itself_is_due_rather_than_late(app):
+    """`past_box_lap` is true from `lap >= stint_ends_on_lap`, so it fires on
+    the box lap itself - where the stop is due, not missed. `NOW` is right
+    either way; the reason underneath it is not."""
+    view = DriverView()
+    view.update_state(DriverState(laps_to_box=0.0, box_on_lap=15,
+                                  laps_past_box=0))
+    assert view.box_stat.value.text() == "NOW"
+    assert view.box_stat.sub.text() == "box this lap"
+
+
+def test_after_the_flag_it_does_not_say_there_is_no_plan(app):
+    """`laps_to_box` is None once the race is over, which it also is when no
+    plan exists - and "no plan" is the wrong thing to tell a man who has just
+    finished."""
+    view = DriverView()
+    view.update_state(DriverState(finished=True))
+    assert view.box_stat.value.text() == "FLAG"
+    assert "over" in view.box_stat.sub.text()
 
 
 def test_a_stop_still_ahead_counts_down_normally(app):

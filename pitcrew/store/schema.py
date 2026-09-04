@@ -1746,7 +1746,8 @@ def derive_sectors(conn: sqlite3.Connection, *, restamp: bool = False) -> int:
     where = ("l.lap_time_ms > 0" if restamp
              else "l.sector_model IS NULL AND l.lap_time_ms > 0")
     pending = conn.execute(
-        "SELECT l.id, l.lap_time_ms, l.sector_model, e.track, e.layout "
+        "SELECT l.id, l.lap_time_ms, l.sector_model, "
+        "       l.sector1_ms, l.sector2_ms, l.sector3_ms, e.track, e.layout "
         "FROM laps l "
         "JOIN lap_frames f ON f.lap_id = l.id "
         "JOIN sessions s ON s.id = l.session_id "
@@ -1761,7 +1762,8 @@ def derive_sectors(conn: sqlite3.Connection, *, restamp: bool = False) -> int:
 
     models: dict[str, object] = {}
     written = 0
-    for lap_id, lap_time_ms, stamp, track, layout in pending:
+    for lap_id, lap_time_ms, stamp, s1, s2, s3, track, layout in pending:
+        current = (s1, s2, s3)
         if not track:
             continue
         key = circuit_key(track, layout)
@@ -1789,6 +1791,16 @@ def derive_sectors(conn: sqlite3.Connection, *, restamp: bool = False) -> int:
         except Exception:               # noqa: BLE001 - a bad blob is not fatal
             continue
         found = read(frames, lap_time_ms, model)
+        already = (stamp == model.stamp
+                   and found.measured
+                   and tuple(found.times_ms) == tuple(current))
+        if already:
+            # Re-cut to exactly what is already stored. **Not counted**: with
+            # `restamp` the skip above is disabled, so every admissible lap
+            # reaches here and counting them reported "would write 548 laps"
+            # on an archive where nothing would change. A count that is really
+            # a row count is not a change count.
+            continue
         if not found.measured:
             # **A restamp retires an accept the model no longer makes.** Rule
             # 10: a rule that refuses a reading has to be able to refuse its

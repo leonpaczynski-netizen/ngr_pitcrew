@@ -1516,7 +1516,13 @@ class PracticeScreen(QWidget):
                               derived=True)
             if counted:
                 best_lap = min(counted, key=lambda row: row.lap_time_ms)
-                self.spec.add("On", f"{best_lap.fuel_start:.1f} L")
+                # The same refusal the rack's own tank column makes: a
+                # `fuel_start` of 0.0 is the `NOT NULL DEFAULT` of a lap
+                # nobody stamped, and reporting it as the weight the best lap
+                # was set at is rule 3 wearing rule 5's clothes. This call
+                # site was missed when the column was fixed.
+                if best_lap.fuel_start > 0:
+                    self.spec.add("On", f"{best_lap.fuel_start:.1f} L")
         else:
             if times:
                 self.spec.add("Median",

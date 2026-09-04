@@ -1429,6 +1429,19 @@ class PitCrewController(QObject):
 
     def save_settings(self, new: settings.Settings) -> None:
         """Apply the button and the beep, and remember them."""
+        # **The board's position is not the screen's to carry.** `values()`
+        # rebuilds the settings with `replace(self._loaded, ...)`, and
+        # `_loaded` is set once when the screen is attached - so it is a
+        # different object from `self.settings` from the first Save onward.
+        # The board writes its geometry straight to `self.settings` when it
+        # closes; without this line the next unrelated Save carries the stale
+        # copy back over it and he re-drags the board.
+        #
+        # It is the first field that is mutated at runtime AND has no control
+        # on the settings screen, which is why `speech_backend` and the rest
+        # never needed this.
+        new = replace(new,
+                      driver_board_geometry=self.settings.driver_board_geometry)
         try:
             settings.save(self.store, new)
         except ValueError as exc:
@@ -4231,12 +4244,16 @@ class PitCrewController(QObject):
         # is the one piece of state here the driver set by hand, and every
         # line below it can raise.
         #
-        # `shutdown` calls this too, and so does `_close_out_finished_race` -
-        # the same three-caller shape `_stop_pit_wall` has. The first version
-        # was reachable from `stop_race` alone, so the ordinary evening (take
-        # the flag, watch the replay, close the app) never wrote the geometry
-        # and the board opened on the primary monitor again next race, which
-        # is the exact failure the setting exists to prevent.
+        # `shutdown` calls this too. **`_close_out_finished_race` does NOT**,
+        # deliberately - the flag is not a teardown, the slow-down lap is
+        # still being recorded, and the board stays up showing a blank state
+        # instead. An earlier version of this comment claimed three callers;
+        # there are two, and the third would have been wrong.
+        #
+        # The first version was reachable from `stop_race` alone, so the
+        # ordinary evening (take the flag, watch the replay, close the app)
+        # never wrote the geometry and the board opened on the primary
+        # monitor again next race - the exact failure the setting prevents.
         self._close_driver_board()
         # Before the session id is cleared: the stops are filed against it.
         self._stop_pit_wall()
@@ -4528,6 +4545,10 @@ class PitCrewController(QObject):
             self.driver_board = DriverWindow()
             self.driver_board.restore_geometry(
                 self.settings.driver_board_geometry)
+        # Escape, or anything else that closes it, has to stop the feed -
+        # otherwise the timer goes on pushing into a hidden widget for the
+        # rest of the race.
+        self.driver_board.on_closed = self._board_was_closed
         self.driver_board.show()
         self.driver_board.raise_()
         self._push_driver_board()
@@ -4537,6 +4558,19 @@ class PitCrewController(QObject):
         # freeze at whatever it read when he came in, on the one number he is
         # sitting there watching.
         self._board_timer.start(250)
+
+    def _board_was_closed(self) -> None:
+        """He pressed Escape, or Windows closed it. Stop feeding it.
+
+        The geometry is taken here rather than in `_close_driver_board`,
+        because a window closed this way is still the position he chose - and
+        `_open_driver_board` can put it back on the same spot if a later race
+        arms.
+        """
+        self._board_timer.stop()
+        if self.driver_board is not None:
+            self.settings.driver_board_geometry = \
+                self.driver_board.geometry_text()
 
     def _close_driver_board(self) -> None:
         """Take it away, remembering where he had it."""
@@ -4579,11 +4613,25 @@ class PitCrewController(QObject):
                 "race: %s: %s", type(exc).__name__, exc, exc_info=True)
             self._board_timer.stop()
             board, self.driver_board = self.driver_board, None
+            # **Closed first, in a try of its own.** We are here because the
+            # board is in a broken state, so `geometry_text()` is exactly the
+            # sort of call that could raise - and sharing one `try` meant a
+            # throw there skipped the `close()`, leaving the frozen panel on
+            # screen, which is the failure this path exists to prevent.
             try:
-                self.settings.driver_board_geometry = board.geometry_text()
                 board.close()
             except Exception:                               # noqa: BLE001
                 log("ui").warning("the driver board would not close either")
+            try:
+                self.settings.driver_board_geometry = board.geometry_text()
+                settings.save(self.store, self.settings)
+            except Exception:                               # noqa: BLE001
+                # **Saved here, not left to `_close_driver_board`.** That
+                # returns early on a null board, and this path has just
+                # nulled it - so the position was set on the settings object
+                # and never written, on the one path where the driver is most
+                # likely to reopen the app.
+                log("ui").warning("could not remember where the board was")
 
     def _driver_board_state(self):
         """Everything the board draws, in one object.
@@ -4604,7 +4652,7 @@ class PitCrewController(QObject):
         # that is over, ticking four times a second, until he presses Stop.
         # Blank is the honest state: there is no next stop.
         if getattr(state, "finished", False):
-            return DriverState(temps_c=self._board_temps())
+            return DriverState(temps_c=self._board_temps(), finished=True)
         packet = getattr(self.bridge, "last_packet", None)
         # **Live, not per-lap.** `state.fuel_l` is written at a crossing, and
         # in the box there are no crossings - so the countdown and the figure
@@ -4631,8 +4679,14 @@ class PitCrewController(QObject):
             fuel_l=fuel_l,
             burn_l=state.fuel_per_lap_l,
             has_plan=has_plan,
-            # The sign `laps_to_stop()` throws away when it clamps at zero.
-            past_box_lap=bool(getattr(state, "past_box_lap", False)),
+            # The sign `laps_to_stop()` throws away when it clamps at zero,
+            # and how far past he is - "box this lap" and "two laps late" are
+            # not the same news.
+            laps_past_box=(
+                state.lap - state.stint_ends_on_lap
+                if getattr(state, "past_box_lap", False)
+                and getattr(state, "stint_ends_on_lap", None) is not None
+                else None),
         )
         if not in_box:
             return base
@@ -4644,13 +4698,13 @@ class PitCrewController(QObject):
             release_s = self._release_seconds(target_l, fuel_l)
         _, rate_note = self._fill_rate()
         out_position, out_behind = self._rejoin_seat(target_l, fuel_l)
-        next_laps, to_flag = self._next_stint_shape()
+        next_laps, to_flag, past_plan = self._next_stint_shape()
         return replace(
             base, in_box=True, fuel_target_l=target_l,
             release_in_s=release_s, fill_rate_note=rate_note,
             out_position=out_position,
             out_behind=out_behind, next_stint_laps=next_laps,
-            runs_to_flag=to_flag)
+            runs_to_flag=to_flag, past_the_plan=past_plan)
 
     def _board_temps(self, packet=None):
         """The four corners off ONE packet, or None.
@@ -4667,25 +4721,50 @@ class PitCrewController(QObject):
         return {"fl": packet.tyre_temp_fl, "fr": packet.tyre_temp_fr,
                 "rl": packet.tyre_temp_rl, "rr": packet.tyre_temp_rr}
 
-    def _fill_rate(self):
-        """`(litres per second, where it came from)` for the stop in hand.
+    def _someone_set(self, field: str) -> bool:
+        """Did anybody actually enter this event figure, or is it the default?
 
-        **One expression, because the board had two.** The countdown used
-        `Knowledge.refuel_l_per_s` and every other pit-lane consumer uses
-        `state.refuel_rate_lps`, so the seconds on the screen and the litres
-        in his ear were priced from different numbers and neither said which -
-        CLAUDE.md rules 12 and 13. They are also not interchangeable: the
-        first is what a stop here has actually been seen to do (1.002 L/s at
-        Monza, 1.001 at Watkins); the second is a figure typed on the event
-        page. Measured wins where it exists, the declared one is used and
-        labelled where it does not, and the board prints the label.
+        **`events.pit_loss_secs` is `REAL NOT NULL DEFAULT 20.0` and
+        `refuel_rate_lps` is `NOT NULL DEFAULT 2.5`**, so the value alone can
+        never say whether a human typed it. Each has a source column beside it
+        that can, and `controller.start_race` already reads the pit-loss one
+        for exactly this reason.
+
+        This matters more here than anywhere: the board had `Knowledge` (None
+        where nothing was briefed) and fell back to the state, which is never
+        falsy - so a stop was priced from the schema's own 20.0 and printed as
+        `P7 / behind Rocky`, the only figure on that panel with no provenance
+        at all. Rules 3 and 5, introduced by the fix for a different defect.
         """
-        measured = getattr(self._race_knowledge(), "refuel_l_per_s", None)
-        if measured and measured > 0:
-            return measured, "measured here"
-        declared = getattr(self.race.state, "refuel_rate_lps", None)
-        if declared and declared > 0:
-            return declared, "declared rate"
+        event = self.active_event()
+        return bool(event is not None and event.get(field))
+
+    def _fill_rate(self):
+        """`(litres per second, how it is known)` for the stop in hand.
+
+        Read off the state, which `RaceCoordinator` now merges the briefing
+        into - so the board and `rival_calls.rejoin_call` price a stop with
+        one number rather than two (rule 12).
+
+        **Never labelled "measured".** The first version of this preferred
+        `Knowledge.refuel_l_per_s` and called it "measured here", and
+        `race/knowledge.py` says of itself: *"Every circuit's briefing. Every
+        field optional; none of them measured here"*, exporting as
+        `"race-engineer, declared"`. Putting a desk figure in the measured
+        register is rule 5, on the screen whose whole ink system exists to
+        keep those apart.
+        """
+        rate = getattr(self.race.state, "refuel_rate_lps", None)
+        if not rate or rate <= 0:
+            return None, None
+        briefed = getattr(self._race_knowledge(), "refuel_l_per_s", None)
+        if briefed and briefed > 0:
+            return rate, "briefing"
+        if self._someone_set("refuel_rate_source"):
+            return rate, "declared rate"
+        # Nothing but the column default. A countdown priced from 2.5 L/s on a
+        # pump that runs at 1.0 is two and a half times short, on the one
+        # number he is holding the trigger against.
         return None, None
 
     def _release_seconds(self, target_l, fuel_l):
@@ -4748,16 +4827,16 @@ class PitCrewController(QObject):
         litres = (None if (target_l is None or fuel_l is None)
                   else target_l - fuel_l)
         rate, _ = self._fill_rate()
-        cost = stop_costs_s(litres, rate,
-                            # **The state's, not `Knowledge`'s.** `Knowledge`
-                            # holds `pit_loss_s` only where a stop here has
-                            # been measured, while `state.pit_loss_s` is never
-                            # falsy - so reading it off `Knowledge` made the
-                            # board show "no gap read" at every circuit whose
-                            # briefing names no stop, while the voice happily
-                            # made a rejoin call from the same race.
-                            getattr(state, "pit_loss_s", None)
-                            or getattr(knowledge, "pit_loss_s", None),
+        # **The state's, which the coordinator has already merged the briefing
+        # into - but only where somebody set it.** `Knowledge.pit_loss_s`
+        # alone made the board refuse at circuits where the voice happily
+        # priced a stop; the state alone prices it from `NOT NULL DEFAULT
+        # 20.0`. Neither is a stop cost, and only the source tells them apart.
+        loss = getattr(state, "pit_loss_s", None)
+        if not (getattr(knowledge, "pit_loss_s", None)
+                or self._someone_set("pit_loss_source")):
+            loss = None
+        cost = stop_costs_s(litres, rate, loss,
                             # **`Knowledge` carries no `pit_loss_source`.**
                             # Reading one off it always returned None, so the
                             # 7.5 s dead time was never added and every
@@ -4774,7 +4853,11 @@ class PitCrewController(QObject):
         return seat, getattr(state, "gap_behind_name", None)
 
     def _next_stint_shape(self):
-        """`(laps, runs_to_flag)` for the stint this stop starts.
+        """`(laps, runs_to_flag, past_the_plan)` for the stint this stop starts.
+
+        Three outcomes rather than two, because "the plan does not reach this
+        stint" and "the plan reaches it but states no length" are different
+        facts and the board used to give them one caption.
 
         **`laps_to_stop() is None` means two different things** - the last
         stint of a real plan, and a race armed with no plan at all - and the
@@ -4790,7 +4873,7 @@ class PitCrewController(QObject):
         stints = list(getattr(race, "_stints", None) or [])
         index = race.state.stint_index + 1
         if not stints:
-            return None, False
+            return None, False, False
         # `stint_index` has not advanced yet: `_apply_stint` fires on PIT EXIT,
         # so during the stop this names the stint the stop is starting.
         if index >= len(stints):
@@ -4802,10 +4885,11 @@ class PitCrewController(QObject):
             # checked against the remaining distance. Two different facts
             # under one word is rule 13, and this is the dangerous one of
             # the pair.
-            return None, False
+            return None, False, True
         following = stints[index]
         laps = following.get("laps") if isinstance(following, dict) else None
-        return (int(laps) if laps else None), index == len(stints) - 1
+        return ((int(laps) if laps else None),
+                index == len(stints) - 1, False)
 
     def _race_knowledge(self):
         """What has been measured at this circuit."""

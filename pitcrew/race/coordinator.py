@@ -186,6 +186,15 @@ class RaceCoordinator:
         # desk is declared however carefully it was arrived at.
         if knowledge is not None and knowledge.pit_loss_s:
             pit_loss_s = knowledge.pit_loss_s
+        # **And the rate, for the same reason and with the same caveat.** The
+        # briefing beat the event page on the pit loss and not on the pump,
+        # so the driver board (which reads the briefing) and `rejoin_call`
+        # (which reads the state) priced the same stop from different numbers
+        # with neither saying which - rule 12. One figure now, merged here
+        # where the pit loss is already merged, so every consumer downstream
+        # sees the same one. Still declared, however carefully arrived at.
+        if knowledge is not None and knowledge.refuel_l_per_s:
+            refuel_rate_lps = knowledge.refuel_l_per_s
         self.pit_loss_s = pit_loss_s
         self._burns: list[float] = []
         # **Laps completed after arming but before the green was detected.**
