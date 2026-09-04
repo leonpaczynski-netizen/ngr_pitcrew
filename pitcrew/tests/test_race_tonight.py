@@ -618,7 +618,11 @@ def test_the_status_call_still_reports_when_it_has_the_lap_free():
     call = next_call(state)
     assert call.kind == STATUS
     assert "P4" in call.call
-    assert "Lap 10" in call.call
+    # **`Lap 11`, not `Lap 10`.** `state.lap` is the count behind him and
+    # GT7's HUD names the lap he is driving; the engineer spoke the count
+    # for a whole race at Daytona on 4 Sep 2026 and he reported it. The
+    # laps-to-go clause is untouched. See `RaceState.lap_on_screen`.
+    assert "Lap 11" in call.call
     assert "9 minutes left" in call.call
     assert "5 laps to go" in call.call
 
@@ -1885,7 +1889,14 @@ def test_a_green_detected_late_still_counts_elapsed_from_lap_one():
     assert clock.laps_before_clock == 1
     # No standing start is measurable on a green this late, and the app timer
     # must not be left carrying one it did not observe.
-    assert clock.as_snapshot()["greenToFirstCrossingS"] == pytest.approx(0.0)
+    #
+    # **`None`, and it used to be `0.0`.** The zero came out of a
+    # `max(0.0, ...)` and said the wrong thing in the loudest possible way:
+    # the log line it feeds exists to report how late the launch detector
+    # fired, and session 127 printed `0.00 s` off a green 111.2 s late.
+    # Not measurable is not zero - CLAUDE.md rule 9. The lights-out case
+    # below still measures its 6.0 s, so the refusal is not a blanket one.
+    assert clock.as_snapshot()["greenToFirstCrossingS"] is None
 
 
 def test_the_two_measures_agree_for_the_rest_of_a_late_started_race():

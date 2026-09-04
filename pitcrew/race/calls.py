@@ -519,6 +519,19 @@ class Call:
 class RaceState:
     """What is true right now, as far as the app can tell."""
     lap: int = 0                       # laps completed
+    # **The number on the driver's screen, which is NOT `lap`.** GT7's own
+    # counter names the lap in PROGRESS; `lap` counts the ones behind him, so
+    # at every crossing they differ by one and in session 127 (Daytona, 4 Sep
+    # 2026) they differed by one on all 20 rows. The engineer spoke `lap`, so
+    # *"Lap 2. 18 laps to go."* was said while GT7's HUD displayed lap 3, all
+    # race, and the driver reported it unprompted.
+    #
+    # **Two names because they are two quantities** - CLAUDE.md rule 13. Every
+    # piece of arithmetic in this module counts laps BEHIND him and keeps
+    # using `lap`; the only thing that may be spoken as "Lap N" is this one,
+    # because it is the only one he can check against anything. `None` until a
+    # crossing has carried GT7's count - see `lap_on_screen`.
+    screen_lap: int | None = None
     laps_total: int | None = None
     # Set when the race runs to the clock rather than to a distance. The lap
     # count is then a **derived** figure - the distance the approved plan
@@ -894,6 +907,35 @@ class RaceState:
         the one figure he cannot check against anything.
         """
         return self.lap + self.laps_missed()
+
+    def lap_on_screen(self) -> int:
+        """The lap number GT7 is showing him, which is the one to say out loud.
+
+        **`lap_now()` counts what is behind him; this counts the one he is
+        driving.** They are one apart at every crossing, and the engineer said
+        the wrong one for a whole race: session 127 (Daytona, 4 Sep 2026),
+        `laps.laps_completed` = `laps.lap_num` + 1 on **all 20 rows**, so
+        *"Lap 2. 18 laps to go."* went out while the HUD read lap 3. The
+        arithmetic was right - 18 really did remain - but **the number he
+        hears has to match the number he can see, and under a helmet the
+        screen wins.**
+
+        `laps.laps_completed` recorded that offset from the start and was read
+        by nothing; that sentence has now been written three times in this
+        project (Fuji 26 Aug, and twice since). This is where it gets read.
+
+        **GT7's own count first, arithmetic second.** `screen_lap` is set at
+        each crossing from `Lap.laps_completed`, which is the authority - the
+        offset is not always one, because a crossing GT7 counted and the app
+        missed widens it (Road Atlanta: +1 on lap 1, +2 by lap 20). The
+        fallback `lap_now() + 1` is not a measurement and does not pretend to
+        be one: it is the definition of "the lap in progress" applied to the
+        drop-corrected count, and it is only reached before GT7's counter has
+        travelled on a crossing.
+        """
+        if self.screen_lap is not None and self.screen_lap > 0:
+            return self.screen_lap
+        return self.lap_now() + 1
 
     def only_the_heartbeat_this_lap(self) -> bool:
         """Whether this lap has had nothing but the heartbeat.
@@ -2421,6 +2463,46 @@ def fuel_reference(state: RaceState) -> str:
     return fuel_frame(state)[1]
 
 
+def fuel_in_hand(state: RaceState) -> tuple[float | None, str]:
+    """The fuel margin AND the distance it is a margin to, from one expression.
+
+    **The colour line computed its own and got a different answer.** Session
+    127 (Daytona, 4 Sep 2026), lap 2, 22:16:52: *"-7.1 laps of fuel in hand to
+    the flag."* - a negative, spoken aloud, with **84.0 L aboard on a plan
+    whose stop was nine laps away.** Twenty-six seconds earlier on the same
+    lap, `_fuel_standing` had said *"1.9 spare to the stop."* Two numbers,
+    both introduced as spare/in hand, 9.0 laps apart, inside half a minute -
+    CLAUDE.md rule 13 verbatim, and rule 13 exists because this exact
+    confusion happened before.
+
+    The model was never wrong. Reproduced against the stored laps of that
+    race, the old expression - tank divided by burn, minus laps to the FLAG,
+    with no term for the litres the planned stop would add - returns the
+    spoken figure to the tenth on all five laps it was said on: **-7.2, -7.2,
+    -7.1 before the stop (spoken -7.1, -7.2, -7.1) and +0.2, +0.2 after it
+    (spoken 0.2, 0.2)**. It is right after the stop precisely because there is
+    no stop left to account for; he took the flag with 1.444 L = 0.185 laps,
+    against a call of 0.2.
+
+    So the fix is not arithmetic on the fill. It is that **the supply and the
+    distance have to be the same journey** - CLAUDE.md rule 12, the reported
+    reason must come from the same expression that produced the decision.
+    `fuel_frame` already picks that journey for `_fuel_standing`: the stop
+    while a stop is still to come, the flag once it is not. This returns its
+    gap and its name together so no caller can take one without the other,
+    and the tank-only supply is then correct by construction - it is only ever
+    asked to reach the next place fuel is added.
+
+    Returns `(None, reference)` where the burn or the distance is unknown. A
+    surplus computed against a burn nobody measured is a number he would plan
+    around, and the reference is still named so a caller can say what it could
+    not tell him about.
+    """
+    gap = _fuel_gap(state)
+    reference = fuel_reference(state)
+    return (None if gap is None else round(gap, 1)), reference
+
+
 # Past this fraction of a timed race, he wants the laps as well as the clock.
 # **His call, and it matches the measurement.** The estimate is
 # `ceil(time left / lap)`, which is unresolvable early - on a real 30-minute
@@ -2504,9 +2586,14 @@ def orientation(state: RaceState) -> str:
     clause goes last because it is the one that escalates into next lap's
     instruction, and the last clause is the one retained under a helmet.
     """
-    lap = state.lap_now()
-    if lap < 1:
+    # **The count decides whether there is anything to say; the SCREEN number
+    # is what gets said.** They are one apart - see `RaceState.lap_on_screen`
+    # - and saying the count made every heartbeat of session 127 name a lap
+    # the driver had already finished.
+    done = state.lap_now()
+    if done < 1:
         return ""
+    lap = state.lap_on_screen()
     # **The corrected number, flat.** This said "Lap 20 or 22" at Road
     # Atlanta's measured drop of two - a pair that excludes the truth - and
     # the same breath then said "9 laps to go", which comes from

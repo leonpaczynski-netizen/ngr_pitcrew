@@ -395,7 +395,9 @@ def test_an_unresolvable_lap_count_is_named_as_two_rather_than_dropped():
     assert call.kind == STATUS
     assert "18 or 19 laps to go" in call.call, call.call
     assert "20 minutes" in call.call
-    assert "Lap 5" in call.call
+    # `Lap 6`: five behind him, driving the sixth, which is what GT7
+    # shows. See `RaceState.lap_on_screen`.
+    assert "Lap 6" in call.call
 
 
 def test_a_clock_it_does_not_have_is_said_out_loud():
@@ -416,7 +418,7 @@ def test_with_no_position_there_is_still_the_lap_and_the_clock():
     state.race_remaining_s = 1200.0
     state.last_said_lap = 0
     call = next_call(state)
-    assert call is not None and "Lap 5" in call.call
+    assert call is not None and "Lap 6" in call.call
 
 
 def test_a_timed_race_with_no_plan_counts_down_nothing():

@@ -136,6 +136,13 @@ class RaceClock:
         self._laps_ms = 0
         self._laps_counted = 0
         self._offset_s: float | None = None
+        # **The green-to-first-crossing lag, as a MEASUREMENT, and `None`
+        # where there is not one.** Kept apart from `_offset_s`, which is the
+        # drift baseline and merely has to be a number: this one is reported,
+        # compared against `laps.standing_start_ms` and used to decide whether
+        # the countdown is long. See where it is set for why the two parted
+        # company - CLAUDE.md rule 9.
+        self._green_lag_s: float | None = None
         self._drift_s = 0.0
         self._corroborated: bool | None = None
         self._app_at_last_lap: float | None = None
@@ -415,7 +422,25 @@ class RaceClock:
                         "late.", behind)
             # The first crossing. Everything between the green and here is
             # the offset, and it is a measurement, not an error.
-            self._offset_s = max(0.0, app - self.elapsed_laps_s)
+            #
+            # **Unclamped, and `max(0.0, ...)` is why.** CLAUDE.md rule 9: a
+            # quantity that came out negative is not a quantity of zero, it is
+            # a reading whose reference is wrong. Here the reference is the
+            # green itself, and when the green was detected after racing began
+            # the square-up just above moved `_started_at` so that `app` and
+            # the lap sum agree - which makes this difference approximately
+            # zero BY CONSTRUCTION and about nothing at all. Session 127
+            # (Daytona, 4 Sep 2026) logged `0.00 s` off a green 111.2 s late,
+            # against a log line whose entire stated purpose is to report that
+            # lag. A confident, well-formed, wrong answer no reader could tell
+            # from a real one.
+            #
+            # So the drift baseline keeps the honest difference, sign and all,
+            # and the REPORTED lag refuses itself where the zero point was
+            # reconstructed rather than observed.
+            self._offset_s = app - self.elapsed_laps_s
+            self._green_lag_s = (None if self.laps_before_clock
+                                 else self._offset_s)
             # **Logged every race, because the zero point is not the flag.**
             # `RACE_STARTED` fires when the car is seen under 30 km/h and then
             # over 80, which is some seconds AFTER lights out, while the
@@ -431,11 +456,22 @@ class RaceClock:
             # race is enough to measure it and correct the zero point next
             # session; until then the countdown runs long by an unmeasured
             # amount and no call may imply otherwise.
-            log("race").info(
-                "app clock: %.2f s from green to the first crossing. Compare "
-                "against this lap's standing_start_ms - the difference is how "
-                "late the launch detector fired, and the countdown is long by "
-                "exactly that much.", self._offset_s)
+            if self._green_lag_s is None:
+                log("race").warning(
+                    "app clock: the green-to-first-crossing lag is NOT "
+                    "measurable this race - %d lap(s) had already run when "
+                    "the clock started, so its zero point was reconstructed "
+                    "from the lap sum and the gap to this crossing is an "
+                    "artefact of that reconstruction, not the grid period. "
+                    "The countdown runs long by an unknown amount and no "
+                    "call may imply otherwise.", self.laps_before_clock)
+            else:
+                log("race").info(
+                    "app clock: %.2f s from green to the first crossing. "
+                    "Compare against this lap's standing_start_ms - the "
+                    "difference is how late the launch detector fired, and "
+                    "the countdown is long by exactly that much.",
+                    self._green_lag_s)
             return Reconciliation(app, self.elapsed_laps_s, 0.0, None)
 
         if self.duration_s is None:
@@ -607,9 +643,13 @@ class RaceClock:
             "lapsBeforeClock": self.laps_before_clock,
             "startEstimated": self.start_estimated,
             # How late the launch detector fired relative to the first
-            # crossing. None before that crossing. It is not the flag drop,
-            # and the countdown is long by the part of it that is detection
-            # lag rather than standing start - see `note_lap`.
-            "greenToFirstCrossingS": (round(self._offset_s, 1)
-                                      if self._offset_s is not None else None),
+            # crossing. None before that crossing, and **None where the green
+            # came after racing began** - there the clock's zero point was
+            # reconstructed and the gap is an artefact of the reconstruction,
+            # not the grid period. Never clamped to zero: a clamp here reads
+            # as "the detector fired at lights out", which is the one thing it
+            # cannot say. See `note_lap` and CLAUDE.md rule 9.
+            "greenToFirstCrossingS": (round(self._green_lag_s, 1)
+                                      if self._green_lag_s is not None
+                                      else None),
         }
