@@ -59,12 +59,26 @@ tolerance - so every length check passes and `lap_time_ms - t(S2)` returns a
 confidently wrong S3. It read 5.58 s on a 95 s lap.
 
 So the span is checked against the stated time before anything is cut, and the
-gate is placed in **measured gaps rather than between populations**. Over 636
-clean laps the ratio is 0.990-1.005 for 555 of them and then nothing at all
-until 1.050; below, nothing between 0.196 and 0.966. `SPAN_RATIO` sits in both
-gaps. It refuses 87 of 91 out-laps, and the four it admits are ones whose
-clocks genuinely do agree - which is the point, because the gate is about the
-clocks and not about the flag.
+gate is placed in **measured gaps rather than between populations**. Over the
+733 stored laps the clean cluster is 0.990-1.005 - 563 of them - and above it
+there is nothing at all until 1.050. Below it the laps thin out rather than
+stop: 0.9895, 0.9838, 0.9793, 0.9655, then a real gap down to 0.5593.
+
+**The two bounds are not equally well placed, and the lower one is the weak
+half.** `SPAN_RATIO[1]` sits in an empty band and is doing exactly what it was
+designed for. `SPAN_RATIO[0]` sits in a genuine gap too, but a long way below
+the cluster, so it admits laps missing up to 5% of their frames - and because
+`marks` starts at 0, **a deficit at the START of a lap lands entirely inside
+S1**: every crossing is read early and S1 is understated by the whole offset
+while S3 absorbs it. Seven stored laps sit in that band; two of them differ by
+1.9 s in S1 while agreeing to 60 ms in S2, which is the signature. None
+currently holds a session best, and `_best_sectors` does not screen on the
+ratio - so this is a known hazard rather than a known defect, and the accept
+log carries the ratio precisely so it cannot go unnoticed again.
+
+It refuses 87 of 91 out-laps, and the four it admits are ones whose clocks
+genuinely do agree - which is the point, because the gate is about the clocks
+and not about the flag.
 """
 from __future__ import annotations
 
@@ -287,6 +301,11 @@ class Sectors:
     times_ms: tuple = (None,) * SECTORS
     stamp: str | None = None
     refused: str | None = None
+    # **The number that admitted this lap**, so the accept can log it. Rule 10
+    # is explicit that logging only the refusals is what made the tyre-gauge
+    # ratchet invisible for a whole race: the bar has to appear in the log on
+    # the laps it lets through, not only on the ones it turns away.
+    span_ratio: float | None = None
 
     @property
     def measured(self) -> bool:
@@ -354,7 +373,7 @@ def read(frames, lap_time_ms: int, model: SectorModel | None) -> Sectors:
         # disagreeing. Rule 9: that is a reading whose reference is wrong, not
         # a sector that took no time.
         return _refused("the lap clock and the distance axis disagree")
-    return Sectors(times_ms=times_ms, stamp=model.stamp)
+    return Sectors(times_ms=times_ms, stamp=model.stamp, span_ratio=ratio)
 
 
 def read_rows(rows, field_names, lap_time_ms: int,

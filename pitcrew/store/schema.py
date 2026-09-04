@@ -1716,40 +1716,52 @@ def sector_model_for(conn: sqlite3.Connection, circuit_key: str):
     return model_for(circuit_key, float(row[0]), corners)
 
 
-def _migrate_v15_sector_times(conn: sqlite3.Connection) -> None:
-    """Cut every stored lap into three, once.
+def derive_sectors(conn: sqlite3.Connection, *, restamp: bool = False) -> int:
+    """Cut stored laps into three. Returns how many were written.
 
-    Same shape as v4 and v5, and the same justification: the lap rack asks
-    this of every row it draws, so the answer has to be a column and not a
-    decode. The cost is one pass over every blob on disk, paid once.
+    **This is not only a migration, and that was a real defect.** The v15
+    docstring used to claim that a refused lap keeps a null stamp "so the next
+    run asks again - which matters because the commonest reason to refuse is a
+    circuit that has no sector lines yet, and adding two numbers to
+    `SECTOR_LINES` must be enough to make those laps appear." It was false:
+    `Store._upgrade` skips any migration at or below the file's
+    `user_version`, so once v15 had run it could never run again. Adding Fuji
+    to the catalogue would have back-filled nothing, and the rack would have
+    held two stamps for that event permanently with no path back - which
+    silences the best-sector emphasis for good.
 
-    **A refusal is not recorded.** A lap the model would not cut leaves all
-    four columns null, so the next run asks again - which matters because the
-    commonest reason to refuse is a circuit that has no sector lines yet, and
-    adding two numbers to `SECTOR_LINES` must be enough to make those laps
-    appear. Writing a stamp beside three nulls would latch the refusal, which
-    is the ratchet CLAUDE.md rule 10 is about.
+    So the body lives here, callable, and `tools/derive_sectors.py` is the
+    caller. `restamp` also re-cuts laps whose stored stamp no longer matches
+    the model, which is what makes *improving* an existing entry possible -
+    the Spa note anticipates Paul Frere getting a published figure one day.
+
+    A lap the model refuses is still left wholly null. That part was right:
+    writing a stamp beside three nulls would latch the refusal, which is the
+    ratchet CLAUDE.md rule 10 is about.
     """
     columns = _columns(conn, "laps")
     if "sector_model" not in columns:
-        return                              # ADDED_COLUMNS has not run yet
+        return 0                            # ADDED_COLUMNS has not run yet
 
+    where = ("l.lap_time_ms > 0" if restamp
+             else "l.sector_model IS NULL AND l.lap_time_ms > 0")
     pending = conn.execute(
-        "SELECT l.id, l.lap_time_ms, e.track, e.layout "
+        "SELECT l.id, l.lap_time_ms, l.sector_model, e.track, e.layout "
         "FROM laps l "
         "JOIN lap_frames f ON f.lap_id = l.id "
         "JOIN sessions s ON s.id = l.session_id "
         "JOIN events e ON e.id = s.event_id "
-        "WHERE l.sector_model IS NULL AND l.lap_time_ms > 0").fetchall()
+        f"WHERE {where}").fetchall()
     if not pending:
-        return
+        return 0
 
     from pitcrew.analysis.lap_sectors import read
     from pitcrew.analysis.resolve import circuit_key
     from pitcrew.telemetry.recorder import decode_frames
 
     models: dict[str, object] = {}
-    for lap_id, lap_time_ms, track, layout in pending:
+    written = 0
+    for lap_id, lap_time_ms, stamp, track, layout in pending:
         if not track:
             continue
         key = circuit_key(track, layout)
@@ -1757,6 +1769,11 @@ def _migrate_v15_sector_times(conn: sqlite3.Connection) -> None:
             models[key] = sector_model_for(conn, key)
         model = models[key]
         if model is None:
+            continue
+        # Already cut against exactly these lines. Re-decoding a 400 KB blob
+        # to arrive at the number already in the column is the whole cost of
+        # this pass, so it is skipped rather than repeated.
+        if stamp == model.stamp:
             continue
         row = conn.execute(
             "SELECT blob FROM lap_frames WHERE lap_id = ?", (lap_id,)).fetchone()
@@ -1773,6 +1790,24 @@ def _migrate_v15_sector_times(conn: sqlite3.Connection) -> None:
             "UPDATE laps SET sector1_ms = ?, sector2_ms = ?, sector3_ms = ?, "
             "sector_model = ? WHERE id = ?",
             (*found.times_ms, found.stamp, lap_id))
+        written += 1
+    return written
+
+
+def _migrate_v15_sector_times(conn: sqlite3.Connection) -> None:
+    """Cut every stored lap into three, once.
+
+    Same shape as v4 and v5, and the same justification: the lap rack asks
+    this of every row it draws, so the answer has to be a column and not a
+    decode. The cost is one pass over every blob on disk - about 40 ms a lap,
+    so roughly half a minute on a 733-lap archive - paid once, on the main
+    thread, before the first window appears. Worth knowing before the next
+    migration of this shape is written.
+
+    The work itself is `derive_sectors`, which is callable afterwards; see its
+    docstring for why that matters.
+    """
+    derive_sectors(conn)
 
 
 MIGRATIONS: dict[int, tuple[str, object]] = {

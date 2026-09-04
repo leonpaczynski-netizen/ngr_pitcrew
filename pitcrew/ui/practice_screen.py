@@ -481,11 +481,31 @@ class RackRow(QWidget):
         # 100 L tank is about 73 kg, so the first lap of a stint and the last
         # are not the same car - and reading a lap time without it is reading
         # a stopwatch against an unknown mass.
-        self.tank_label = Measured(f"{row.fuel_start:.1f} L")
+        # **A zero here is not a measurement, and it took a review to see it.**
+        # `laps.fuel_start` is `NOT NULL DEFAULT 0.0` and
+        # `SessionState._fuel_lap_start` starts at 0.0, so a lap whose tank was
+        # never stamped carries 0.0 - and the first version of this drew that
+        # in `Measured` stencil white under a caption saying it was the weight
+        # the lap was driven at. A zero meaning "not measured" wearing the ink
+        # that means "off the telemetry stream" is rule 3 and rule 5 in one
+        # widget, in the row whose sector column two inches to the left has a
+        # carefully written refusal path and an em dash.
+        #
+        # 0.0 L is a real reading on an electric car (CLAUDE.md 3.4) and
+        # nothing here can tell the two apart - which is the argument for the
+        # dash, not against it: a tank that reads empty on a lap that was
+        # driven is the one case where refusing costs nothing and believing
+        # costs a wrong weight on every lap of the run.
+        self.tank_label = (
+            Measured(f"{row.fuel_start:.1f} L") if row.fuel_start > 0
+            else Measured("—", colour=theme.STENCIL_DIM))
         self.tank_label.setFixedWidth(W_TANK)
         self.tank_label.setToolTip(
             "Fuel on board as this lap started - the weight the lap was "
-            "driven at. About 0.73 kg a litre.")
+            "driven at. About 0.73 kg a litre."
+            if row.fuel_start > 0 else
+            "The tank was never stamped for this lap, so the weight it was "
+            "driven at is not known. Not the same as an empty tank.")
         line.addWidget(self.tank_label)
 
         marker = self.row.structural_reason()

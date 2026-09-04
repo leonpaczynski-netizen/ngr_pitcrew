@@ -2571,11 +2571,21 @@ class PitCrewController(QObject):
                                  sector2_ms=cut.times_ms[1],
                                  sector3_ms=cut.times_ms[2],
                                  sector_model=cut.stamp)
+                # **The ACCEPT carries the number that set the bar**, which is
+                # CLAUDE.md rule 10 the right way round - the first version of
+                # this comment quoted it backwards and logged only refusals.
+                # The span ratio is exactly the ratchet the rule is about: a
+                # lap admitted at 0.966 while the population sits at 0.9987
+                # has its whole frame deficit inside S1, and nothing
+                # downstream can tell that from driving. Invisible unless it
+                # is written down here.
+                log("session").info(
+                    "lap %s cut into %.3f / %.3f / %.3f (span %.4f of the "
+                    "lap clock, %s)", lap.lap_num,
+                    *(value / 1000 for value in cut.times_ms),
+                    cut.span_ratio if cut.span_ratio is not None else float("nan"),
+                    cut.stamp)
             elif cut.refused:
-                # **The refusals are logged, not only the accepts.** Rule 10 -
-                # the tyre-gauge ratchet was invisible for a whole race
-                # because the number setting the bar never appeared in the
-                # log, and this gate refuses roughly one lap in six.
                 log("session").info("lap %s has no sector times: %s",
                                     lap.lap_num, cut.refused)
         # **The session's opening lap is judged here, before it is written,
@@ -4214,6 +4224,13 @@ class PitCrewController(QObject):
         # **First, so the position survives whatever else teardown does.** It
         # is the one piece of state here the driver set by hand, and every
         # line below it can raise.
+        #
+        # `shutdown` calls this too, and so does `_close_out_finished_race` -
+        # the same three-caller shape `_stop_pit_wall` has. The first version
+        # was reachable from `stop_race` alone, so the ordinary evening (take
+        # the flag, watch the replay, close the app) never wrote the geometry
+        # and the board opened on the primary monitor again next race, which
+        # is the exact failure the setting exists to prevent.
         self._close_driver_board()
         # Before the session id is cleared: the stops are filed against it.
         self._stop_pit_wall()
@@ -4542,11 +4559,25 @@ class PitCrewController(QObject):
             # output, and CLAUDE.md is clear the app observes and advises: a
             # display fault cannot be allowed to cost him the session it is
             # describing. Stopped rather than retried four times a second.
+            #
+            # **And taken off the screen, which the first version did not do.**
+            # Stopping the timer and dropping the reference left a frameless
+            # always-on-top panel covering the monitor above the game, frozen
+            # on the last values it managed to draw - "release in 12", "P6" -
+            # for the rest of the race, with no way to close it and a second
+            # one built on top of it if he re-armed. A number he cannot
+            # explain and cannot dismiss is worse than no board at all, and
+            # this one would sit there looking live.
             log("ui").error(
-                "the driver board raised and has been stopped for this race: "
-                "%s: %s", type(exc).__name__, exc, exc_info=True)
+                "the driver board raised and has been taken down for this "
+                "race: %s: %s", type(exc).__name__, exc, exc_info=True)
             self._board_timer.stop()
-            self.driver_board = None
+            board, self.driver_board = self.driver_board, None
+            try:
+                self.settings.driver_board_geometry = board.geometry_text()
+                board.close()
+            except Exception:                               # noqa: BLE001
+                log("ui").warning("the driver board would not close either")
 
     def _driver_board_state(self):
         """Everything the board draws, in one object.
@@ -4560,15 +4591,20 @@ class PitCrewController(QObject):
         if self.race is None or not self.race.running:
             return DriverState()
         state = self.race.state
+        # **The flag is not a teardown, and this is why that matters here.**
+        # `_close_out_finished_race` deliberately leaves the race running -
+        # the slow-down lap is still being recorded - so without this the
+        # board goes on showing a laps-to-box and a box-on-lap for a race
+        # that is over, ticking four times a second, until he presses Stop.
+        # Blank is the honest state: there is no next stop.
+        if getattr(state, "finished", False):
+            return DriverState(temps_c=self._board_temps())
         packet = getattr(self.bridge, "last_packet", None)
         # **Live, not per-lap.** `state.fuel_l` is written at a crossing, and
         # in the box there are no crossings - so the countdown and the figure
         # aboard both come off the packet in hand.
         fuel_l = getattr(packet, "fuel_level", None) if packet else state.fuel_l
-        temps = None
-        if packet is not None:
-            temps = {"fl": packet.tyre_temp_fl, "fr": packet.tyre_temp_fr,
-                     "rl": packet.tyre_temp_rl, "rr": packet.tyre_temp_rr}
+        temps = self._board_temps(packet)
 
         refuel = getattr(self.bridge, "refuel", None)
         filling = bool(refuel is not None and refuel.filling)
@@ -4604,6 +4640,21 @@ class PitCrewController(QObject):
             out_behind=out_behind, next_stint_laps=next_laps,
             runs_to_flag=to_flag)
 
+    def _board_temps(self, packet=None):
+        """The four corners off ONE packet, or None.
+
+        Taken as a single local first: `last_packet` is replaced wholesale on
+        the telemetry thread and never mutated in place, so reading the
+        reference once and the fields off that is what keeps the four
+        temperatures from straddling two frames.
+        """
+        if packet is None:
+            packet = getattr(self.bridge, "last_packet", None)
+        if packet is None:
+            return None
+        return {"fl": packet.tyre_temp_fl, "fr": packet.tyre_temp_fr,
+                "rl": packet.tyre_temp_rl, "rr": packet.tyre_temp_rr}
+
     def _release_seconds(self, target_l, fuel_l):
         """How long until the tank reaches the target, at THIS circuit rate.
 
@@ -4627,22 +4678,46 @@ class PitCrewController(QObject):
         behind and no further. A second car also inside the stop cost is
         invisible, which makes the position here a BEST case - so the board
         names the car rather than letting the number stand on its own.
+
+        **`state.gap_behind` is a `GapTrend`, not a number.** The first
+        version of this read it with `getattr(gap, "seconds", gap)`, which
+        has no such attribute, so it handed the whole object to
+        `rejoin_against` and raised `TypeError` on the first comparison - at
+        the first stop of the first race, taking the board down with it for
+        the rest of the night. It is read the way `rival_calls` reads it,
+        through a snapshot: the live object is written on the sampler thread
+        and `note()` clears `seen` outright on a change of subject, which is
+        precisely when a car pitting makes this call interesting.
         """
         from pitcrew.race.gaps import rejoin_against, stop_costs_s
+        from pitcrew.race.rival_calls import _snapshot
 
         state = self.race.state
         if not state.position:
             return None, None
         knowledge = self._race_knowledge()
-        litres = None if (target_l is None or fuel_l is None) else max(
-            0.0, target_l - fuel_l)
+        # **Not `max(0, ...)`.** A car arriving with more aboard than the next
+        # stint needs is not one that takes zero litres, it is one this
+        # arithmetic does not describe - CLAUDE.md rule 9, and the argument is
+        # already written out in `rival_calls._fill_at_the_stop`, which
+        # computes this same figure. Clamping it also made `stop_costs_s`'s
+        # own `litres < 0` refusal unreachable, so two expressions for one
+        # number disagreed (rule 12). Left negative, the refusal fires.
+        litres = (None if (target_l is None or fuel_l is None)
+                  else target_l - fuel_l)
         cost = stop_costs_s(litres,
                             getattr(knowledge, "refuel_l_per_s", None),
                             getattr(knowledge, "pit_loss_s", None),
-                            getattr(knowledge, "pit_loss_source", None))
-        gap = getattr(state, "gap_behind", None)
-        seconds = getattr(gap, "seconds", gap)
-        verdict = rejoin_against(seconds, cost)
+                            # **`Knowledge` carries no `pit_loss_source`.**
+                            # Reading one off it always returned None, so the
+                            # 7.5 s dead time was never added and every
+                            # rejoin verdict understated the stop by more
+                            # than twice `REJOIN_MARGIN_S`. The race state is
+                            # where the source lives.
+                            getattr(state, "pit_loss_source", None))
+        behind = _snapshot(getattr(state, "gap_behind", None))
+        verdict = rejoin_against(
+            behind.latest() if behind is not None else None, cost)
         if verdict is None or verdict.too_close:
             return None, None
         seat = state.position if verdict.ahead else state.position + 1
@@ -4659,9 +4734,19 @@ class PitCrewController(QObject):
         stints = list(getattr(self.race, "_stints", None) or [])
         if not stints:
             return None, False
+        # `stint_index` has not advanced yet: `_apply_stint` fires on PIT EXIT,
+        # so during the stop this names the stint the stop is starting.
         index = self.race.state.stint_index + 1
         if index >= len(stints):
-            return None, True
+            # **Out of plan is not "runs to the flag".** The first version
+            # returned True here, so an unplanned second stop - damage, an
+            # opportunistic neutralisation, a replan that has not landed -
+            # put "FLAG, this stint runs to the end" on the screen for a
+            # stint the plan never planned and whose fuel nothing has
+            # checked against the remaining distance. Two different facts
+            # under one word is rule 13, and this is the dangerous one of
+            # the pair.
+            return None, False
         following = stints[index]
         laps = following.get("laps") if isinstance(following, dict) else None
         return (int(laps) if laps else None), index == len(stints) - 1
@@ -5423,6 +5508,13 @@ class PitCrewController(QObject):
         # The one place the link is really let go: the app is closing. A
         # session boundary only parks the fans - see `start_wind`.
         self.shutdown_wind()
+        # **Here as well as in `stop_race`.** The ordinary evening is: take
+        # the flag, watch the replay, close the window - and `stop_race` is a
+        # button nobody presses on that path. Reachable from one caller, the
+        # geometry was never written and the board opened on the primary
+        # monitor again next race, which is the whole failure the setting was
+        # added to prevent. Same three-caller shape as `_stop_pit_wall` below.
+        self._close_driver_board()
         self._stop_pit_wall()
         self._stop_hud_sampler()
         if self.listener is not None:

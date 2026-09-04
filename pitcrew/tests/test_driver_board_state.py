@@ -18,13 +18,40 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from pitcrew.controller import PitCrewController  # noqa: E402
+from pitcrew.race.gaps import GapTrend  # noqa: E402
 
 
 @dataclass
 class _Knowledge:
+    """What has been measured at this circuit.
+
+    **No `pit_loss_source`** - and that is the point. `race/knowledge.py`
+    defines `pit_loss_s` and `refuel_l_per_s` and nothing else, so the first
+    version of `_rejoin_seat` read a source off this object, always got
+    `None`, and could never add the 7.5 s dead time. `REJOIN_MARGIN_S` is 3 s,
+    so that understated every stop by more than twice the margin that decides
+    the verdict. The source lives on the race state; this class not having it
+    is what keeps the test honest.
+    """
     refuel_l_per_s: float | None = 1.002      # measured at Monza
     pit_loss_s: float | None = 19.0
-    pit_loss_source: str | None = "declared"
+
+
+def _behind(seconds):
+    """A real `GapTrend`, because a float is not what production puts there.
+
+    **The first version of these tests set `gap_behind` to a bare float.** The
+    controller read it with `getattr(gap, "seconds", gap)`, `GapTrend` has no
+    such attribute, and the fallback handed the whole object to
+    `rejoin_against` - `TypeError` at the first stop of the first race, board
+    dead for the night. Every rejoin test passed. A fake of the wrong type
+    tests the fake.
+    """
+    if seconds is None:
+        return None
+    trend = GapTrend(side="behind")
+    trend.note(12, seconds, subject="rocky")
+    return trend
 
 
 @dataclass
@@ -39,6 +66,8 @@ class _State:
     stint_index: int = 0
     gap_behind: object = None
     gap_behind_name: str | None = None
+    pit_loss_source: str | None = "declared"
+    finished: bool = False
     _to_stop: int | None = 3
 
     def laps_to_stop(self):
@@ -82,6 +111,7 @@ class _Stub:
     """
 
     _driver_board_state = PitCrewController._driver_board_state
+    _board_temps = PitCrewController._board_temps
     _release_seconds = PitCrewController._release_seconds
     _rejoin_seat = PitCrewController._rejoin_seat
     _next_stint_shape = PitCrewController._next_stint_shape
@@ -198,10 +228,19 @@ def test_the_tank_comes_off_the_packet_not_the_lap():
 
 # ----------------------------------------------------------------- the rejoin
 
+def test_the_gap_is_read_through_the_trend_not_as_a_number():
+    """The regression. A `GapTrend` reaching `rejoin_against` raises
+    `TypeError` on its first comparison, and the board is gone for the race."""
+    stub = _Stub(bridge=_Bridge(filling=True))
+    stub.race.state.gap_behind = _behind(200.0)
+    got = _state_for(stub)                       # must not raise
+    assert got.out_position is not None
+
+
 def test_a_gap_bigger_than_the_stop_keeps_the_place():
     """He was 200 s back; the stop costs about 62. We stay ahead."""
     stub = _Stub(bridge=_Bridge(filling=True))
-    stub.race.state.gap_behind = 200.0
+    stub.race.state.gap_behind = _behind(200.0)
     stub.race.state.gap_behind_name = "Rocky"
     got = _state_for(stub)
     assert got.out_position == 6
@@ -210,7 +249,7 @@ def test_a_gap_bigger_than_the_stop_keeps_the_place():
 
 def test_a_gap_smaller_than_the_stop_loses_one():
     stub = _Stub(bridge=_Bridge(filling=True))
-    stub.race.state.gap_behind = 5.0
+    stub.race.state.gap_behind = _behind(5.0)
     got = _state_for(stub)
     assert got.out_position == 7
 
@@ -223,11 +262,45 @@ def test_an_unread_gap_gives_no_position_at_all():
     assert _state_for(stub).out_position is None
 
 
+def test_a_trend_that_has_read_nothing_yet_gives_no_position():
+    """A `GapTrend` exists from the first crossing whether or not the reader
+    ever got a number out of the screen, so an empty one is the common case."""
+    stub = _Stub(bridge=_Bridge(filling=True))
+    stub.race.state.gap_behind = GapTrend(side="behind")
+    assert _state_for(stub).out_position is None
+
+
+def test_the_dead_time_is_added_to_a_measured_pit_loss():
+    """`stop_costs_s` adds `PIT_DEAD_TIME_S` only when the source says the
+    loss was measured here, and the source lives on the state - reading it
+    off `Knowledge`, which has no such field, silently never added it."""
+    from pitcrew.race.gaps import PIT_LOSS_MEASURED
+
+    stub = _Stub(bridge=_Bridge(filling=True))
+    stub.race.state.pit_loss_source = PIT_LOSS_MEASURED
+    # 43 L at 1.002 plus a 19 s lane is 61.9; the dead time makes it 69.4.
+    stub.race.state.gap_behind = _behind(65.0)
+    assert _state_for(stub).out_position == 7        # loses it, with the 7.5 s
+
+    stub.race.state.pit_loss_source = "declared"
+    assert _state_for(stub).out_position == 6        # holds it, without
+
+
+def test_a_car_arriving_with_more_than_it_needs_is_refused_not_clamped():
+    """CLAUDE.md rule 9. `max(0, target - fuel)` turned "this arithmetic does
+    not describe the stop" into a confident lane-only cost, and made
+    `stop_costs_s`'s own `litres < 0` refusal unreachable."""
+    stub = _Stub(bridge=_Bridge(filling=True,
+                                packet=_Packet(fuel_level=90.0)), target=55.0)
+    stub.race.state.gap_behind = _behind(30.0)
+    assert _state_for(stub).out_position is None
+
+
 def test_a_gap_too_close_to_call_is_not_reported_as_a_place():
     """`Rejoin.too_close` is a real answer rather than a missing one, and
     rounding it into a position would invent certainty."""
     stub = _Stub(bridge=_Bridge(filling=True))
-    stub.race.state.gap_behind = 43.0 / 1.002 + 19.0    # the stop cost exactly
+    stub.race.state.gap_behind = _behind(43.0 / 1.002 + 19.0)
     assert _state_for(stub).out_position is None
 
 
@@ -236,18 +309,37 @@ def test_no_measured_pit_loss_means_no_rejoin_verdict():
     built from one of them is not a stop cost."""
     stub = _Stub(bridge=_Bridge(filling=True))
     stub.race.knowledge = _Knowledge(pit_loss_s=None)
-    stub.race.state.gap_behind = 5.0
+    stub.race.state.gap_behind = _behind(5.0)
     assert _state_for(stub).out_position is None
 
 
 # ------------------------------------------------------------- the next stint
 
 def test_the_last_stint_of_a_plan_runs_to_the_flag():
+    """The ordinary 1-stop: two stints, he is in the box after the first.
+
+    **This is the branch a real race takes**, and the first version of this
+    test did not exercise it - it set `stint_index` to 1 on a two-stint plan,
+    which is the plan-exhausted branch below wearing this test's name.
+    """
     stub = _Stub(bridge=_Bridge(filling=True))
     stub.race._stints = [{"laps": 12}, {"laps": 14}]
-    stub.race.state.stint_index = 1
+    stub.race.state.stint_index = 0
     got = _state_for(stub)
-    assert got.runs_to_flag is True and got.next_stint_laps is None
+    assert got.runs_to_flag is True
+
+
+def test_a_stop_the_plan_never_planned_does_not_claim_to_reach_the_flag():
+    """An unplanned second stop - damage, a neutralisation, a replan that has
+    not landed - runs off the end of the stint list. Saying "FLAG, this stint
+    runs to the end" there is a claim about fuel nothing has checked against
+    the remaining distance, and it is the dangerous half of rule 13."""
+    stub = _Stub(bridge=_Bridge(filling=True))
+    stub.race._stints = [{"laps": 12}, {"laps": 14}]
+    stub.race.state.stint_index = 1              # already on the last stint
+    got = _state_for(stub)
+    assert got.runs_to_flag is False
+    assert got.next_stint_laps is None
 
 
 def test_a_stint_with_another_stop_after_it_carries_its_length():
@@ -266,3 +358,18 @@ def test_no_plan_at_all_is_not_reported_as_running_to_the_flag():
     stub.race._stints = []
     got = _state_for(stub)
     assert got.runs_to_flag is False and got.next_stint_laps is None
+
+
+def test_a_finished_race_stops_showing_a_next_stop():
+    """**The flag is not a teardown.** `_close_out_finished_race` deliberately
+    leaves the race running - the slow-down lap is still being recorded - so
+    without a guard the board goes on ticking a laps-to-box and a box-on-lap
+    for a race that is over, four times a second, until he presses Stop."""
+    stub = _Stub()
+    stub.race.state.finished = True
+    got = _state_for(stub)
+    assert got.laps_to_box is None
+    assert got.box_on_lap is None
+    assert got.in_box is False
+    # The temperatures are still worth having on the slow-down lap.
+    assert got.temps_c is not None

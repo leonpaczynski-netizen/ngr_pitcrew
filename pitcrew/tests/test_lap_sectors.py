@@ -245,3 +245,17 @@ def test_every_catalogue_entry_is_ordered_and_inside_a_plausible_lap():
         assert 0 < lines[0] < lines[1], key
         assert entry["source"] in {"timing-line", "landmark", "thirds"}, key
         assert entry.get("note"), key
+
+
+def test_an_accepted_lap_carries_the_ratio_that_admitted_it():
+    """CLAUDE.md rule 10, the right way round: **log the accepts**, not only
+    the refusals. The span ratio is the bar, and a lap admitted at 0.966 while
+    the population sits at 0.9987 has its whole frame deficit inside S1 -
+    invisible from the logs unless the accept carries the number."""
+    found = read(_frames(), LAP_MS, _model())
+    assert found.measured
+    assert found.span_ratio == pytest.approx(1.0, abs=0.001)
+
+
+def test_a_refused_lap_carries_no_ratio_to_be_mistaken_for_a_reading():
+    assert read(_frames(jump_at=100), LAP_MS, _model()).span_ratio is None
