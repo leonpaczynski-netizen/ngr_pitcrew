@@ -58,10 +58,8 @@ Four things had to be measured rather than assumed, and each was a bug first:
   and those two steps are 68. Modelling them as 2x40 threw away every row past
   the driver.
 * **A column run is not a flag column.** At Spa the flags merge with saturated
-  scenery into a run 281 px wide, and on one frame into the whole 1920. Flags
-  are found as marks that share an x, share a width and land on a pitch - the
-  same three-way agreement `pit_columns` uses for the compound disc.
-* **Rows cannot be closer together than a flag is wide.** Fence palings and tree
+  scenery into a run 281 px wide, and on one frame into the whole 1920.
+* **Rows cannot be closer together than a flag is tall.** Fence palings and tree
   trunks make a perfectly regular ladder at a 7 px pitch; one at x 1684 in the
   trees beat the real board outright.
 * **Gaps inside a flag are expected.** These are Union Jacks and the white of
@@ -69,14 +67,63 @@ Four things had to be measured rather than assumed, and each was a bug first:
   contiguous rows lost the real board on seven of fourteen frames; what
   separates a flag from a paling is its span, not whether every row is filled.
 
+### 5 Sep 2026 — none of the above had ever been run on a race frame
+
+The counts in this docstring are honest and they are not the whole truth: they
+were taken on frames from a REPLAY, and the twenty tests underneath were taken
+on frames this module's own fixture drew. Fed 73 frames of the 4 Sep Daytona
+race (`2026-09-04 22-12-04.mp4`, 1920x1080), the version described above found
+a board on **5**, put the driver's own row on one of its rungs on **5**, framed
+a gap on 65 of 146 and found a pit column on **0**. That is the live pit wall's
+whole-race silence, reproduced on the bench. `tools/board_bench.py` is that
+bench, and it imports these functions rather than reimplementing them, because
+a second implementation - `tools/read_replay_board.py`, which reads the same
+video perfectly - is exactly what hid this for a fortnight.
+
+The same 73 frames now give **73 ladders, 72 on the board, 72 own rows anchored
+to one of their own rungs, 130 gap boxes framed and 8 frames of pit columns**,
+and on a fresh 120-frame sample of the same race that nothing here was tuned
+against, **119 / 119 / 118 / 226 of 240 / 18** against the old version's
+**4 / 3 / 3 / 102 / 0**. It is also 24x faster - 83 ms a frame against 1,991 -
+which matters because the pit wall runs it on the worker thread that owes the
+wear gauge its readings.
+
+Four things changed, and the four things the old version believed were each
+false on the real frames:
+
+* **A flag is not red or blue.** It is saturated colour of any hue - or white,
+  because Japan is a disc on a white field. Red-or-blue scored Germany, Belgium
+  and Mexico as scenery, which is most of the field.
+* **A flag is not a run of one width.** It is a FRACTION of a narrow band. The
+  eight flags at x=244 on the t=600 s frame knitted into six blobs of 5, 10,
+  10, 12, 12 and 18 px against a height bound that wanted 11.2, so three
+  survived, and the column that had been located correctly was thrown away.
+* **A candidate column is a run's START, not its width.** Where the panel is
+  drawn over grass the flag's run merges rightwards into the grass and comes
+  out 200+ px wide; the left edge is a hard boundary and does not move.
+* **Rung count alone loses to the scene.** Catch fencing at x=1814 makes an
+  eleven-rung ladder at a 21 px pitch. What it does not have is a dark name
+  band with one bright plate in it: measured, 0.63-0.92 bright on every rung
+  against the board's 0.04-0.08 on seven and 0.50 on the driver's own.
+
 ### What is deliberately not here yet
 
-**Reading the digits.** The glyphs are about 12 px tall at a 1080-row
-projector, which is marginal for a template match in isolation — so the plan is
-temporal rather than optical: a gap moves by less than half a second between
-frames, so a reading that jumps is refused rather than averaged, and one that
-survives consecutive frames is believed. Same discipline as `hud.coherent`.
-Locating comes first because nothing can be read until it is found.
+**Reading the digits, and this is now MEASURED rather than expected.** The
+glyphs are about 12 px tall at a 1080-row projector. Put through
+`hud_digits._match`, the four pieces of a real `+ 2.344` scored 0.690, 0.698,
+0.666 and 0.605 against a floor of 0.80, and two of them were a `4` and a `4`
+run together into one 16 px piece by the segmentation. So the gap boxes are
+framed correctly on 130 of 146 and `read_gaps` returns `None` for every one of
+them — which is the right failure, and it is a fault in the digit bank's scale
+rather than in the board. The bank was built from pit-lane fuel figures, which
+are larger; extending it to this size is the next piece of work and it needs a
+labelling pass, not a threshold.
+
+The plan beyond that is temporal rather than optical: a gap moves by less than
+half a second between frames, so a reading that jumps is refused rather than
+averaged, and one that survives consecutive frames is believed. Same discipline
+as `hud.coherent`. Locating comes first because nothing can be read until it is
+found.
 """
 from __future__ import annotations
 
@@ -93,19 +140,70 @@ PLATE_SPREAD = 40
 # driver is not leading, and the name length varies.
 ASPECT = (4.0, 12.0)
 
-# A flag is saturated colour; sky, plate and name are not.
+# A flag is saturated colour; sky, plate and name are not. **Of ANY hue.** The
+# first version demanded red or blue because the two flags it was written
+# against were a Union Jack and an Australian ensign; on the 4 Sep race that
+# same test scored Germany, Belgium and Mexico as scenery.
 FLAG_SPREAD = 45
-FLAG_LEAD, FLAG_CHANNEL_MIN = 25, 70
-# A flag is a fraction of the frame height, like every other HUD element.
-MARK_MIN_FRAC, MARK_MAX_FRAC = 0.012, 0.060
-# How far two marks may differ in x, or in width, and still be one column.
-MARK_SLOP = 4
+FLAG_CHANNEL_MIN = 70
+# ...or a flag is white. Japan is a red disc on a white field and reads 8 px of
+# saturated colour inside an 18 px flag - below any height a flag can have. INK
+# is colour OR white; the translucent panel it is drawn on is neither, and
+# measured down the flag column between rows it sits at 55-73 luminance.
+FLAG_INK_LUM = 150
+# How much of the probe band a row must fill to be inside a flag. Measured on
+# the 4 Sep capture, a flag's own rows fill 0.85-1.00 of it.
+FLAG_FILL = 0.30
+# ...and this much of that run must be COLOUR rather than merely white. **This
+# is what separates a flag from a gap readout**, which is white digits on a
+# black bar and lands in the same column: measured over three frames, every gap
+# row scored exactly 0.00 against 0.20-0.99 for every flag. Without it the two
+# 68 px steps either side of the driver read as rows and the ladder stopped
+# there, six rungs short.
+FLAG_COLOUR_FILL = 0.10
+# A flag is a fraction of the frame height, like every other HUD element. The
+# floor is low because a flag arrives partly - Japan's disc is 8 px of an 18 px
+# flag at 1080 rows - and the ladder, not the height, is what refuses noise.
+FLAG_MIN_FRAC, FLAG_MAX_FRAC = 0.006, 0.030
+# The band a candidate column is MEASURED in, as a fraction of frame width. It
+# is deliberately narrower than a flag: the measure is a fraction, so the band
+# only has to sit inside the flag, and a band wider than the flag dilutes it
+# with whatever the panel is drawn over.
+PROBE_FRAC = 0.008
+# How far two column starts may differ and still be the same column.
+COLUMN_SLOP = 2
 # Fewer rows than this on a ladder is not a leaderboard.
 MIN_LADDER_ROWS = 5
-# A flag is at least this fraction of its own width tall. A fence paling is not.
-FLAG_SQUAT = 0.40
+# Rows cannot be closer together than this many flag heights - they would
+# overlap. Measured: an 18 px flag on a 40 px pitch is 2.2, and every board on
+# file is at least 1.8. Below it the row separators inside the panel alias into
+# a ladder at half the true pitch, which is how a real board came back with
+# every second rung invented.
+PITCH_OVER_FLAG = 1.8
+# How many candidate columns are evaluated, most-seen first. The board's column
+# ranked 1st-10th on every frame of the 4 Sep capture.
+MAX_COLUMNS = 60
+# The name band left of the flags, in probe widths, and what counts as bright
+# in it.
+PANEL_WIDTHS = 6
+PANEL_BRIGHT = 180
+# **The panel is dark on every row but his, and that is the test that beats the
+# scene.** Measured at t=600 s: the real board's name band is 0.04-0.08 bright
+# on seven rows and 0.50 on the driver's own; the catch fencing at x 1814 that
+# outscored it on rung count is 0.63-0.92 on all eleven. A column with no dark
+# panel to its left is not a leaderboard however regular it is.
+PANEL_DARK_MAX = 0.35
+# What fraction of the ladder's rows must carry ink at an x for that x to be
+# inside the flag. Used only to report the flag's true extent once the column
+# is chosen; the decision was already made on the probe band.
+FLAG_EDGE_FILL = 0.6
 # The own row's plate must fill at least this much of the band left of the flag.
 PLATE_FILL = 0.25
+# How far past the driver's own plate the gap readout reaches, as a fraction of
+# the plate's width. Measured on the 4 Sep capture: the plate spans x 40-243
+# and the readout ends at 269, which is 0.13 of it; 0.25 leaves margin and the
+# longest-run trim in `gap_lines` keeps the extra band from reaching scenery.
+GAP_REACH = 0.25
 
 # Rows of the plate are broken by the driver's name, which is black ON the
 # white plate, so runs are merged across a gap of this many rows.
@@ -157,48 +255,137 @@ def _longest_run(bits) -> np.ndarray:
     return best
 
 
+def _masks(frame):
+    """`(colour, ink)` for a whole frame, off one pass over the pixels.
+
+    Both in one function because both need the same per-pixel maximum and
+    minimum, and on a 1920x1080 frame those two reductions are the whole cost
+    of locating the board: computing them twice took `flag_ladder` from 60 ms
+    to 758 ms, on the worker thread that also owes the wear gauge its readings.
+    Integer sums rather than a mean for the same reason — a mean promotes two
+    million pixels to float64.
+    """
+    array = np.asarray(frame)
+    red, green, blue = array[..., 0], array[..., 1], array[..., 2]
+    top = np.maximum(np.maximum(red, green), blue)
+    bottom = np.minimum(np.minimum(red, green), blue)
+    colour = ((top.astype(np.int32) - bottom) > FLAG_SPREAD) & (
+        top > FLAG_CHANNEL_MIN)
+    lit = (red.astype(np.int32) + green + blue) > 3 * FLAG_INK_LUM
+    return colour, colour | lit
+
+
 def _flag_mask(frame):
-    """Pixels that are saturated red or blue: flag colour, and nothing else."""
-    red, blue = frame[..., 0], frame[..., 2]
-    saturated = (frame.max(axis=2) - frame.min(axis=2)) > FLAG_SPREAD
-    coloured = (((blue > red + FLAG_LEAD) & (blue > FLAG_CHANNEL_MIN))
-                | ((red > blue + FLAG_LEAD) & (red > FLAG_CHANNEL_MIN)))
-    return saturated & coloured
+    """Pixels that are saturated colour of any hue: flag, and nothing dark.
+
+    **Not red-or-blue.** That test was written against the only two flags on
+    the frames it was tuned on and it scored the German, Belgian and Mexican
+    flags as scenery on the 4 Sep race, which is most of the field.
+    """
+    return _masks(frame)[0]
 
 
-def _marks(mask, low: int, high: int):
-    """Horizontal runs of flag colour of plausible flag width, as (y, x, w)."""
+def _ink_mask(frame):
+    """Flag colour, or white. What a flag is made of; the panel is neither."""
+    return _masks(frame)[1]
+
+
+def _column_starts(mask, limit: int = MAX_COLUMNS):
+    """Where saturated runs BEGIN, most-repeated first: candidate flag columns.
+
+    **A run's start survives what its width does not.** Grouping marks by
+    (x, width) was the proposal step and it is the one that lost the board on
+    the frames where the panel is drawn over grass: grass is saturated too, so
+    the flag's run merges rightwards into it and comes out 200+ px wide, which
+    no flag-width bound admits. The flag's LEFT edge is a hard boundary between
+    panel and flag and it does not move - measured at x=244 with 51-55 starts
+    on all three frames tried, including both merged ones.
+    """
     padded = np.zeros((mask.shape[0], mask.shape[1] + 2), dtype=bool)
     padded[:, 1:-1] = mask
-    edges = np.diff(padded.astype(np.int8), axis=1)
-    rows, starts = np.where(edges == 1)
-    _, ends = np.where(edges == -1)
-    out = []
-    for y, x0, x1 in zip(rows, starts, ends):
-        width = int(x1 - x0)
-        if low <= width <= high:
-            out.append((int(y), int(x0), width))
+    xs = np.where(np.diff(padded.astype(np.int8), axis=1) == 1)[1]
+    if len(xs) == 0:
+        return []
+    seen, counts = np.unique(xs, return_counts=True)
+    order = np.argsort(-counts)
+    out: list[int] = []
+    for index in order:
+        if counts[index] < MIN_LADDER_ROWS:
+            break
+        x = int(seen[index])
+        if all(abs(x - kept) > COLUMN_SLOP for kept in out):
+            out.append(x)
+        if len(out) >= limit:
+            break
     return out
 
 
-def _ladder(ys, min_pitch: int, tol: int = 5):
+def _flag_rows(colour, ink, x0: int, width: int, low: int, high: int):
+    """`(centre, height)` for every flag-shaped run in one column band.
+
+    A FRACTION of the band, not a run of one width across it. Real GT7 flags
+    are multi-coloured — measured heights of 5, 10, 10, 12, 12 and 18 px for
+    one column of eight flags — so a search for horizontal runs of a consistent
+    width found three of them and a search for the fraction of the band that is
+    flag-coloured finds all eight.
+    """
+    band = ink[:, x0:x0 + width]
+    if band.shape[1] == 0:
+        return []
+    hot = band.mean(axis=1) > FLAG_FILL
+    padded = np.concatenate(([False], hot, [False]))
+    edges = np.diff(padded.astype(np.int8))
+    starts = np.where(edges == 1)[0]
+    ends = np.where(edges == -1)[0]
+    colour_band = colour[:, x0:x0 + width]
+    out = []
+    for start, end in zip(starts, ends):
+        height = int(end - start)
+        if not low <= height <= high:
+            continue
+        if colour_band[start:end].mean() < FLAG_COLOUR_FILL:
+            continue
+        out.append(((int(start) + int(end) - 1) // 2, height))
+    return out
+
+
+def _ladder(ys, min_pitch: int, tol: int = 5, min_rows: int = 2):
     """The longest run of rows at one pitch, allowing two equal wider steps.
 
     The two wider steps are the gap readouts GT7 draws above and below the
     driver's own row. They are the pitch PLUS a constant - measured at 40 and 68
     - and are equal to each other, because it is the same readout drawn twice.
+
+    Two things here were wrong against real frames and both cost whole boards:
+
+    * **The pitch cannot come from the first two rows.** It was read off the
+      pair the run starts on, so a board where the driver sits second - his row
+      is preceded by a gap readout, which makes the FIRST step a wide one - had
+      its pitch set to 68 and lost every row above him. Five frames of the
+      4 Sep race are drawn that way. The pitch is now tried independently of
+      where the run starts.
+    * **A row that does not fit must be skipped, not fatal.** The walk broke at
+      the first non-conforming y, so one spurious detection anywhere inside the
+      board truncated it there. Anything closer together than the pitch cannot
+      be a rung of this ladder and is stepped over.
     """
-    best = []
-    for start in range(len(ys)):
-        for nxt in range(start + 1, len(ys)):
-            pitch = ys[nxt] - ys[start]
-            if pitch < min_pitch:
-                continue
-            run, wide = [ys[start], ys[nxt]], []
-            for y in ys[nxt + 1:]:
+    if len(ys) < 2:
+        return []
+    span = ys[-1] - ys[0]
+    ceiling = span / max(1, min_rows - 1)
+    pitches = sorted({b - a for index, a in enumerate(ys)
+                     for b in ys[index + 1:]
+                     if min_pitch <= b - a <= ceiling})
+    best: list[int] = []
+    for pitch in pitches:
+        for start in range(len(ys) - len(best)):
+            run, wide = [ys[start]], []
+            for y in ys[start + 1:]:
                 step = y - run[-1]
                 if abs(step - pitch) <= tol:
                     run.append(y)
+                elif step < pitch - tol:
+                    continue
                 elif (pitch < step <= 2.2 * pitch and len(wide) < 2
                       and (not wide or abs(step - wide[0]) <= tol)):
                     run.append(y)
@@ -210,47 +397,114 @@ def _ladder(ys, min_pitch: int, tol: int = 5):
     return best
 
 
+def _panel_shares(frame, x0: int, width: int, ys, half: int):
+    """How bright the name band is at each rung, or None where there is none.
+
+    The band is left of the flags and is where the driver's own plate is. On a
+    leaderboard it is dark on every row but his; on scenery it is whatever the
+    scenery is, which is how catch fencing and sky win a rung count.
+    """
+    left = max(0, x0 - PANEL_WIDTHS * width)
+    if x0 - left < 2 * width:
+        return None
+    lum = np.asarray(frame)[:, left:x0].mean(axis=2)
+    return [float((lum[max(0, y - half):y + half] > PANEL_BRIGHT).mean())
+            for y in ys]
+
+
+def _flag_extent(ink, x0: int, probe: int, ys, height: int):
+    """The flag's true left and right edge, once its column is chosen.
+
+    The decision is made on a probe band narrower than a flag, so the band is
+    not the answer: `pit_columns` starts its disc search at the flag's right
+    edge and `roster` backs off a whole flag width from its left, and both are
+    wrong by the difference if the probe is reported as the flag.
+    """
+    half = max(2, height // 2)
+    low = max(0, x0 - 3 * probe)
+    high = min(ink.shape[1], x0 + 5 * probe)
+    filled = np.zeros(high - low)
+    for y in ys:
+        filled += ink[max(0, y - half):y + half + 1, low:high].mean(axis=0)
+    filled /= max(1, len(ys))
+    # **The seed is the fullest column in the probe band, not its left edge.**
+    # A candidate column start is where a SATURATED run begins, and the run
+    # that starts there need not be the flag: on the synthetic board the winner
+    # started four pixels early, its left edge carried no ink at all, and the
+    # extent fell back to reporting the probe band as the flag.
+    inside = filled[x0 - low:min(len(filled), x0 - low + probe)]
+    if len(inside) == 0 or inside.max() < FLAG_EDGE_FILL:
+        return x0, x0 + probe
+    left = right = x0 - low + int(np.argmax(inside))
+    while left > 0 and filled[left - 1] >= FLAG_EDGE_FILL:
+        left -= 1
+    while right + 1 < len(filled) and filled[right + 1] >= FLAG_EDGE_FILL:
+        right += 1
+    return low + left, low + right
+
+
 def flag_ladder(frame):
     """`(x0, x1, [row centres])` for the country flag column, or None.
 
     The board's own ruler. Every car has a flag from lap one, so this works
     before anybody has pitted and regardless of what is behind the HUD.
+
+    ### Measured against the race, not against the fixture
+
+    Fed 73 frames of the 4 Sep race capture, the version this replaces found a
+    board on 5. It located the flag column correctly - x0=244, width 28 - and
+    then threw it away, because it scored a column by knitting single-width
+    horizontal runs into blobs and demanding each blob be 0.40 of the flag's
+    width tall. Real flags are not one colour: at t=600 s the eight flags in
+    that column knitted into six blobs of 5, 10, 10, 12, 12 and 18 px, three
+    passed, and two rungs is not a ladder. **The whole design assumed a shape
+    GT7 does not draw, and the test suite it passed drew that shape for it.**
+
+    Four things replace it, and each is measured:
+
+    * a **fraction** of a probe band per row, not a run of one width across it;
+    * **any hue**, plus white, because Japan is a disc on a white field;
+    * a **colour floor inside the run**, which is what tells a flag from the
+      white-on-black gap readout drawn in the same column;
+    * a **dark name band to the left**, which is what tells a leaderboard from
+      catch fencing and sky - the two things that beat it on rung count alone.
     """
     if frame is None or getattr(frame, "ndim", 0) != 3:
         return None
-    height = frame.shape[0]
-    low, high = int(MARK_MIN_FRAC * height), int(MARK_MAX_FRAC * height)
-    if low < 1:
+    height, width = frame.shape[0], frame.shape[1]
+    low, high = max(3, int(FLAG_MIN_FRAC * height)), int(FLAG_MAX_FRAC * height)
+    probe = max(6, int(PROBE_FRAC * width))
+    if high < low or width <= probe:
         return None
-    found = _marks(_flag_mask(frame), low, high)
-    if len(found) < MIN_LADDER_ROWS:
-        return None
-    best = None
-    for _, x0, width in found:
-        group = sorted({m[0] for m in found
-                        if abs(m[1] - x0) <= MARK_SLOP
-                        and abs(m[2] - width) <= MARK_SLOP})
-        if len(group) < MIN_LADDER_ROWS:
+    colour, ink = _masks(frame)
+    best, best_score = None, None
+    for x0 in _column_starts(colour):
+        if x0 + probe > width:
             continue
-        knit = max(3, width // 2)
-        blobs, run = [], [group[0]]
-        for y in group[1:]:
-            if y - run[-1] <= knit:
-                run.append(y)
-            else:
-                blobs.append(run)
-                run = [y]
-        blobs.append(run)
-        centres = [int((b[0] + b[-1]) / 2) for b in blobs
-                   if (b[-1] - b[0] + 1) >= FLAG_SQUAT * width]
-        if len(centres) < MIN_LADDER_ROWS:
+        rows = _flag_rows(colour, ink, x0, probe, low, high)
+        if len(rows) < MIN_LADDER_ROWS:
             continue
-        rungs = _ladder(centres, min_pitch=max(6, int(0.9 * width)))
+        ys = [row[0] for row in rows]
+        heights = sorted(row[1] for row in rows)
+        flag_h = heights[len(heights) // 2]
+        rungs = _ladder(ys, min_pitch=max(6, int(PITCH_OVER_FLAG * flag_h)),
+                        min_rows=MIN_LADDER_ROWS)
         if len(rungs) < MIN_LADDER_ROWS:
             continue
-        if best is None or len(rungs) > len(best[2]):
-            best = (int(x0), int(x0 + width), rungs)
-    return best
+        shares = _panel_shares(frame, x0, probe, rungs, max(3, flag_h // 2))
+        if shares is None or float(np.median(shares)) > PANEL_DARK_MAX:
+            continue
+        # Rung count first, and the driver's own plate as the tie-break: two
+        # columns that both look like ladders are separated by which one has a
+        # single bright row on an otherwise dark band.
+        score = (len(rungs), max(shares) - float(np.median(shares)))
+        if best_score is None or score > best_score:
+            best, best_score = (x0, probe, rungs, flag_h), score
+    if best is None:
+        return None
+    x0, probe, rungs, flag_h = best
+    left, right = _flag_extent(ink, x0, probe, rungs, flag_h)
+    return int(left), int(right), rungs
 
 
 def _own_from_ladder(frame, found) -> tuple[int, int, int, int] | None:
@@ -258,6 +512,13 @@ def _own_from_ladder(frame, found) -> tuple[int, int, int, int] | None:
 
     One row's height at a time, in the band left of the flag. Sky is the thing
     that breaks a whole-frame plate search and it is simply not in this picture.
+
+    **The longest run of bright columns, not the first to the last.** That is
+    the same guard `_own_row_by_plate` already carries and this path was
+    written without it: on the real frames a single bright column at x=0 -
+    scenery beside the board, one pixel of it - stretched a plate that starts
+    at 39 all the way to the frame edge, and `pit_columns` takes the board's
+    left edge as the bound its pit flag is looked for in.
     """
     if found is None:
         return None
@@ -266,11 +527,15 @@ def _own_from_ladder(frame, found) -> tuple[int, int, int, int] | None:
         return None
     pitch = min(ys[i + 1] - ys[i] for i in range(len(ys) - 1))
     half = max(3, int(pitch * 0.45))
-    bright = ((frame.min(axis=2) > PLATE_MIN)
-              & (np.ptp(frame, axis=2) < PLATE_SPREAD))
+    # Only the band left of the flag is ever looked at, so only that band is
+    # computed: the whole-frame version of these two reductions was 181 ms of
+    # the 271 ms this function cost, for pixels it then sliced away.
+    band = np.asarray(frame)[:, :flag_x0]
+    bright = ((band.min(axis=2) > PLATE_MIN)
+              & (np.ptp(band, axis=2) < PLATE_SPREAD))
     best, score = None, 0.0
     for y in ys:
-        strip = bright[max(0, y - half):y + half, :flag_x0]
+        strip = bright[max(0, y - half):y + half]
         if strip.size:
             filled = float(strip.mean())
             if filled > score:
@@ -278,9 +543,13 @@ def _own_from_ladder(frame, found) -> tuple[int, int, int, int] | None:
     if best is None or score < PLATE_FILL:
         return None
     top, bottom = max(0, best - half), best + half
-    strip = bright[top:bottom, :flag_x0]
-    rows = np.where(strip.mean(axis=1) > 0.4)[0]
-    cols = np.where(strip.mean(axis=0) > 0.4)[0]
+    strip = bright[top:bottom]
+    lit_rows = np.where(strip.mean(axis=1) > 0.4)[0]
+    lit_cols = np.where(strip.mean(axis=0) > 0.4)[0]
+    if len(lit_rows) < 3 or len(lit_cols) < 10:
+        return None
+    rows = max(_runs(lit_rows, ROW_MERGE), key=len)
+    cols = max(_runs(lit_cols, COL_MERGE), key=len)
     if len(rows) < 3 or len(cols) < 10:
         return None
     return (int(cols[0]), int(top + rows[0]),
@@ -383,13 +652,23 @@ def gap_lines(frame, row):
     past — sky, grandstand, flags. Thresholding for white across the whole
     strip lights up the sky and returned one "glyph" the width of the row on 52
     of 64 frames.
+
+    **The readout is right-aligned to the FLAG column, not to the plate.**
+    Measured on the 4 Sep capture: the driver's plate ends at x 243 and
+    `+ 2.344` runs from 216 to 269, so a band bounded by the row's own width
+    cut the last two glyphs off. That is not a smaller reading, it is an
+    unreadable one — `hud_time` refuses a box whose ink touches an edge — so
+    the band reaches `GAP_REACH` of the row's width past it, and the ink is
+    then taken as its longest column run rather than first-to-last, because
+    a band that reaches past the board can reach into the scenery.
     """
     x0, y0, x1, y1 = row
     height = y1 - y0 + 1
+    right = min(frame.shape[1] - 1, int(x1 + GAP_REACH * (x1 - x0)))
     out = []
     for top in (y0 - int(height * 0.95), y1 + int(height * 0.10)):
         top = max(0, top)
-        strip = frame[top:top + height, x0:x1 + 1]
+        strip = frame[top:top + height, x0:right + 1]
         if strip.shape[0] < 6 or strip.size == 0:
             out.append(None)
             continue
@@ -400,8 +679,12 @@ def gap_lines(frame, row):
             continue
         inside = strip[plate[0]:plate[-1] + 1]
         ink = inside.min(axis=2) > PLATE_MIN
-        cols = np.where(ink.any(axis=0))[0]
-        rows = np.where(ink.any(axis=1))[0]
+        used = np.where(ink.any(axis=0))[0]
+        if len(used) < 8:
+            out.append(None)
+            continue
+        cols = max(_runs(used, max(COL_MERGE, height // 3)), key=len)
+        rows = np.where(ink[:, cols[0]:cols[-1] + 1].any(axis=1))[0]
         if len(cols) < 8 or len(rows) < 5:
             out.append(None)
             continue
