@@ -114,22 +114,38 @@ lsd 6/14/28 · top 300 · ECU 96 · restrictor 99 · ballast 45 @ −29 · RS/RS
 | 8 | 123 | 12:04 | **cam 1.0/1.0** (df 410/635) | 752.54 · −0.46 / −0.43 | 6 · 6 · 1 |
 | 9 | 124 | 12:17 | **cam 4.0/4.0** (df 410/635) | 752.54 · −0.46 / −0.43 | 6 · 6 · 0 |
 
-**What the runs can and cannot say (re-derived 4 Sep from `laps` + `lap_frames`, read-only):**
+**What the runs can and cannot say (re-derived 4 Sep from `laps` + `lap_frames`, read-only; countable =
+`excluded 0`, lap > 1, off-track < 1 s, no spin — 24 countable full laps, 20 incident-free):**
 
-- **Two clean laps in five sessions.** Every per-run channel except wear and temperature is
-  contaminated by off-track laps and is NOT comparable run to run. Lap time judges nothing
-  (countable medians 104.3–106.1 s, sd 1.8–5.3 s).
-- **Wear rate is identical across all five setups at the gauge's resolution** (`hud-video`,
-  1 px ≈ 2.8 %): RR **0.0556/lap** in every run, FL 0.0347–0.0370. Replicates the race-stint
-  **0.0570** (3 Sep). ⇒ neither ±25 of rear wing nor camber 1.0↔4.0 moved rear wear over 4–5
-  laps; a difference would have to exceed ~12 % of the rate to show at this resolution.
-- **Front camber 1.0 → 4.0 does not move front surface temperature** (65.1/65.0 vs 65.8/65.0 °C
-  median; floor 0.9–1.4 °C). Cam 4.0/4.0 rears read **74.2/75.6** vs baseline 72.3/73.5 — +2 °C,
-  at the floor's edge, on countable laps with offs. Not a finding.
-- **Terminal:** 285.9 (420/600) · 283.9 (420/650) · 284.8 (410/635) · 285.1 · 285.4. The
-  50-click rear-wing spread is **2.0 km/h, inside the 0.56–2.77 km/h terminal floor.** Nothing
-  to say about drag from these runs.
-- **The GT7 "Measure" readout IS responsive to aero** (high-speed stability −0.45 → −0.36 across
-  420/600 → 420/650) **and inert to camber** (−0.43 at both 1.0/1.0 and 4.0/4.0). Refines entry S:
-  it is inert to suspension and geometry, not to everything.
-- **Not established:** what `bb` was in the car; whether any spin/off was setup-related.
+⚠️ **First version of this note said "two clean laps in five sessions". Wrong — the driver caught it.** The filter
+excluded any lap with 0.05 s of kerb time. ⚠️ **App defect found on the way: lap 1 of every session here is a PARTIAL
+lap (91.6 / 91.8 s) or an out-lap with 7–9 s of grass, and `is_out_lap` is 0 on all of them** — a "best lap" query on
+this event returns 93.100 s, which is not a lap. Real prior best: **104.338** (s119, 3 Sep).
+
+| run | change | incident-free laps | best | median | sd | RR temp | exit rear slip >1.05 | terminal |
+|---|---|---|---|---|---|---|---|---|
+| 5 (s120) | df 420/600 | 4 | 104.618 | 105.397 | 0.71 | 73.9 | 25.6 % | 285.9 |
+| 6 (s121) | df 420/650 | 4 | 104.086 | 105.724 | 1.26 | 74.9 | 31.3 % | 283.9 |
+| 7 (s122) | baseline 410/635, cam 2.0/1.2 | 3 | **103.853 PB** | 104.483 | 0.91 | 74.6 | 32.3 % | 284.8 |
+| 8 (s123) | cam 1.0/1.0 | 5 | **103.486 PB** | 104.448 | **0.55** | 74.4 | 28.0 % | 285.2 |
+| 9 (s124) | cam 4.0/4.0 | 4 | 103.594 | 105.005 | 1.11 | **76.7** | **43.7 %** | 285.1 |
+
+- **Two PBs, in runs 7 and 8.** Runs 7–9 are ~1 s quicker than 5–6 on best and median — but they ran later in the
+  morning, and 3 Sep's runs improved 105.5 → 105.2 on an unchanged car, so ordering is a live confound. Lap time
+  cannot separate the sheets; it can say the camber sweep did not hurt at 1.0 and the fastest, tightest run was cam
+  1.0/1.0 (sd 0.55 s).
+- **Wear rate identical across all five at the gauge's resolution** (`hud-video`, 1 px ≈ 2.8 %): RR 0.0556/lap every
+  run, FL 0.0347–0.0370; replicates the race stint's 0.0570. Neither ±25 rear wing nor camber 1.0↔4.0 moved wear
+  over 4–5 laps; a difference would need to exceed ~12 % of the rate to show.
+- **Front camber 1.0 → 4.0 does not move front surface temperature** (65.3 / 65.4 / 65.5 °C median across the sweep;
+  floor 0.9–1.4 °C). **Rear camber 1.2 → 4.0 warms the rears** +1.4 / +2.1 °C (RL/RR) — at the edge of the floor.
+- **Cam 4.0/4.0 has the highest exit rear slip of the morning (43.7 %)**; the other four sit in 25–32 %, the same band
+  three unchanged-rear runs spanned on 3 Sep (18.7–34.4 %). One run, directionally against 4.0, not a finding.
+- **Terminal:** 50 clicks of rear wing = 2.0 km/h, inside the 0.56–2.77 km/h floor. Nothing on drag.
+- **Front-lock percentage is unusable** (8.5–9.6 pp floor); front L/R split is flat 0.066–0.078 across all five
+  (whole-lap window — not comparable to the 3 Sep Bus-Stop figure of 0.0241).
+- **GT7's "Measure" readout IS responsive to aero** (high-speed stability −0.45 → −0.36 across 420/600 → 420/650)
+  **and inert to camber** (−0.43 at 1.0/1.0 and 4.0/4.0). Refines entry S: inert to suspension and geometry, not to
+  everything.
+- **Not established:** `bb` in the car; whether run 9's 13.95 mm minimum body height on the banking (others 22–28) is
+  the camber or a single frame.

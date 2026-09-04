@@ -18,7 +18,7 @@ Files: `.claude/skills/ludo/` · `brain/_inbox/` · `brain/RECONCILIATION.md` §
 2. **The record is wrong about the car and the app cannot see it.** Eight consecutive sessions with a wrong setup record;
    12 Daytona sessions with no sheet bound; the change ledger writes the same seven rows five times; two people change
    the car (driver in the garage, Ludo on paper) and one of them records. This morning's five A/B runs reproduced it:
-   five screenshots in Downloads, zero rows in the database.
+   five screenshots in Downloads, zero rows in the database — and lap 1 of each is an unflagged partial lap.
 3. **The regulations the driver keeps having to recite are already in the hub** (`Series.defaultLobbySettings`,
    `RoundCarOverride`: 550 BHP / 1,275 kg for Daytona, mandatory stops 1, multipliers, ABS) and nothing in `pitcrew/`
    reads them. The hand-entered event row is the stale one (`mandatory_stops = 0` on event 10). ⟂
@@ -75,11 +75,15 @@ its own 13 Aug turbo document, falsifier arithmetic). Half were **genuinely miss
 camber moved after the screenshot, the regulations, the turbo, the gauge not sampled live.
 
 ### This morning's five A/B runs (sessions 120–124) — recorded today in `brain/car-state/huracan-daytona.md`
-Wing 420/600 · 420/650 · 410/635 baseline · camber 1.0/1.0 · camber 4.0/4.0. **Two clean laps in five sessions.**
-Wear rate identical at the gauge's resolution in all five (RR 0.0556/lap, replicating the race stint's 0.0570);
-front camber 1.0 → 4.0 does not move front surface temperature; the 50-click rear-wing spread is 2.0 km/h of terminal,
-inside the floor. GT7's Measure readout responds to aero (high-speed stability −0.45 → −0.36) and is inert to camber.
-Nothing else is comparable across the runs. Five screenshots, zero database rows.
+Wing 420/600 · 420/650 · 410/635 baseline · camber 1.0/1.0 · camber 4.0/4.0. 24 countable full laps, 20 without an
+incident. ⟂ My first read said "two clean laps" — the driver corrected it; the filter had excluded any lap with 0.05 s of
+kerb time. **Two PBs** (103.853 baseline, 103.486 at camber 1.0/1.0, against 104.338 before), confounded with the morning's
+ordering. Wear rate identical across all five at the gauge's resolution (RR 0.0556/lap, replicating the race stint's 0.0570);
+front camber 1.0 → 4.0 does not move front surface temperature; rear camber 4.0 warms the rears ~2 °C and carried the
+morning's highest exit rear slip (43.7 % against 25–32 %); the 50-click wing spread is 2.0 km/h of terminal, inside the
+floor. GT7's Measure readout responds to aero and is inert to camber. Five screenshots, zero database rows.
+**New app defect:** lap 1 of each session is a partial lap (91.6 s) or a grass-strewn out-lap, and `is_out_lap` is 0 on
+all of them — a best-lap query on this event returns a 93.1 s non-lap.
 
 ## 3. What is not working, ranked by cost
 
