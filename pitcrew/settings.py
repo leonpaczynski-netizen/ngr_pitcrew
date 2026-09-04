@@ -141,6 +141,17 @@ class Settings:
     # payload with no version, which is a failure somebody notices.
     game_version: str = ""
 
+    # **The glance-up board on the screen above the game.** He came out of VR
+    # on 2 Sep 2026 and put an ultrawide directly above the PS5's monitor;
+    # `ui/driver_view.py` is what goes on it. Opened when a race arms, because
+    # that is the session it was asked for.
+    driver_board_enabled: bool = True
+    # `x,y,w,h`, so it reopens where he dragged it. This rig has three
+    # monitors and the one he can see is not the one Windows calls first, so
+    # without this it is re-dragged every race. Checked against the screens
+    # that actually exist on restore - see `DriverWindow.restore_geometry`.
+    driver_board_geometry: str = ""
+
     # --- push to talk
     ptt_enabled: bool = True
     ptt_key: str = "f8"

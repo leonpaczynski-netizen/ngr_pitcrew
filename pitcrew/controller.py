@@ -155,6 +155,22 @@ _LAP_MIN_EVIDENCE_S = 10.0
 _FRAME_S = 1.0 / SAMPLE_HZ
 
 
+class _NothingMeasured:
+    """Stands in for a circuit whose stop has never been measured.
+
+    Every field reads `None`, which is what the board and the rejoin
+    arithmetic already treat as "cannot say". A bare `object()` would do the
+    same by accident; this says so, and it cannot grow a truthy attribute by
+    someone adding one to `RaceKnowledge`.
+    """
+
+    def __getattr__(self, name):
+        return None
+
+
+_NOTHING_MEASURED = _NothingMeasured()
+
+
 def circuit_key_for(event) -> str | None:
     """Which circuit an event is at, in the store's own vocabulary.
 
@@ -898,6 +914,14 @@ class PitCrewController(QObject):
         self.store.seed_range_records(catalogs.range_seed_records())
         self.bridge.apply_settings(self.settings)
         self.voice.tune(**self.settings.voice_tuning())
+
+        # **The glance-up board above the game, and the tick that keeps its
+        # countdown honest.** Everything else on it moves on a lap crossing;
+        # the release countdown moves at one litre a second and there are no
+        # crossings during a stop, so it needs a clock of its own.
+        self.driver_board = None
+        self._board_timer = QTimer(self)
+        self._board_timer.timeout.connect(self._push_driver_board)
 
         self._health = QTimer(self)
         self._health.setInterval(1000)
@@ -3754,6 +3778,11 @@ class PitCrewController(QObject):
             f"{how}: {', '.join(parts)}. Waiting for you to cross the line.")
         self.announce("Rehearsal" if rehearsal else "Race",
                       " · ".join(parts), warn=not plan)
+        # **On the grid, not at the green.** He is looking at the screen above
+        # the game while the lights come on, and a board that appears once he
+        # is already racing is one he has to find something out about at
+        # exactly the wrong moment.
+        self._open_driver_board()
         return True
 
     # ---------------------------------------------------------- the pit wall
@@ -4182,6 +4211,10 @@ class PitCrewController(QObject):
             self._pit_wall = None
 
     def stop_race(self) -> None:
+        # **First, so the position survives whatever else teardown does.** It
+        # is the one piece of state here the driver set by hand, and every
+        # line below it can raise.
+        self._close_driver_board()
         # Before the session id is cleared: the stops are filed against it.
         self._stop_pit_wall()
         self.stop_haptics()
@@ -4336,6 +4369,10 @@ class PitCrewController(QObject):
         self._close_out_finished_race()
         if self.race_screen is not None:
             self.race_screen.show_snapshot(self._race_snapshot())
+        # The board is fed from the same place, so the screen he reads at
+        # racing speed and the screen he reads at the desk cannot disagree
+        # about the lap they are describing.
+        self._push_driver_board()
         if replan is not None:
             self._voice_replan(replan)
         if call is None:
@@ -4448,6 +4485,190 @@ class PitCrewController(QObject):
         return {**self.race.snapshot(),
                 "replanning": self._replan_max_stops > 0,
                 "replanOverBudget": self._replan_over_budget}
+
+    # ---------------------------------------------------- the driver board
+
+    def _open_driver_board(self) -> None:
+        """Put the glance-up board on the screen above the game.
+
+        **Built here and shown here**, which is the whole point: `DriverView`
+        was written on 2 Sep 2026, tested, and referenced by nothing but its
+        own test file, so the instrument he asked for had never once appeared.
+        The same shape as `LiveWearSampler.new_session` and
+        `strategy/handover` - written, documented, and called only from tests.
+        """
+        if not self.settings.driver_board_enabled:
+            return
+        if self.driver_board is None:
+            from pitcrew.ui.driver_view import DriverWindow
+
+            self.driver_board = DriverWindow()
+            self.driver_board.restore_geometry(
+                self.settings.driver_board_geometry)
+        self.driver_board.show()
+        self.driver_board.raise_()
+        self._push_driver_board()
+        # **Ticks on its own while the tank is filling.** Everything else on
+        # this board is refreshed by a lap crossing, and during a stop there
+        # are no crossings - so a countdown fed only by race events would
+        # freeze at whatever it read when he came in, on the one number he is
+        # sitting there watching.
+        self._board_timer.start(250)
+
+    def _close_driver_board(self) -> None:
+        """Take it away, remembering where he had it."""
+        self._board_timer.stop()
+        if self.driver_board is None:
+            return
+        # **Written straight to the store, not through `save_settings`.**
+        # That method re-applies the button, the beep, the audio devices and
+        # the feed, and this is called on race teardown - rebinding the PTT
+        # hook because a window moved is a side effect nobody asked for.
+        self.settings.driver_board_geometry = self.driver_board.geometry_text()
+        try:
+            settings.save(self.store, self.settings)
+        except Exception as exc:                            # noqa: BLE001
+            log("ui").warning(
+                "could not remember where the driver board was: %s", exc)
+        self.driver_board.hide()
+
+    def _push_driver_board(self) -> None:
+        if self.driver_board is None:
+            return
+        try:
+            self.driver_board.update_state(self._driver_board_state())
+        except Exception as exc:                            # noqa: BLE001
+            # **A board that raises must not take the race with it.** It is an
+            # output, and CLAUDE.md is clear the app observes and advises: a
+            # display fault cannot be allowed to cost him the session it is
+            # describing. Stopped rather than retried four times a second.
+            log("ui").error(
+                "the driver board raised and has been stopped for this race: "
+                "%s: %s", type(exc).__name__, exc, exc_info=True)
+            self._board_timer.stop()
+            self.driver_board = None
+
+    def _driver_board_state(self):
+        """Everything the board draws, in one object.
+
+        Built here rather than added to `_race_snapshot` because the board is
+        its only consumer and half of it - the live tank, the countdown -
+        comes off the packet in hand rather than off the race per-lap state.
+        """
+        from pitcrew.ui.driver_view import DriverState
+
+        if self.race is None or not self.race.running:
+            return DriverState()
+        state = self.race.state
+        packet = getattr(self.bridge, "last_packet", None)
+        # **Live, not per-lap.** `state.fuel_l` is written at a crossing, and
+        # in the box there are no crossings - so the countdown and the figure
+        # aboard both come off the packet in hand.
+        fuel_l = getattr(packet, "fuel_level", None) if packet else state.fuel_l
+        temps = None
+        if packet is not None:
+            temps = {"fl": packet.tyre_temp_fl, "fr": packet.tyre_temp_fr,
+                     "rl": packet.tyre_temp_rl, "rr": packet.tyre_temp_rr}
+
+        refuel = getattr(self.bridge, "refuel", None)
+        filling = bool(refuel is not None and refuel.filling)
+        in_box = bool(state.in_pit or filling)
+
+        to_stop = state.laps_to_stop()
+        base = DriverState(
+            temps_c=temps,
+            # On track this is the set he is ON; in the box it is the set
+            # going on. Two different claims, and the box panel captions its
+            # own as the plan decision it is.
+            compound=(state.next_compound if in_box
+                      else getattr(state, "tyre_compound", None)),
+            laps_to_box=None if to_stop is None else float(max(0, to_stop)),
+            box_on_lap=None if to_stop is None else state.lap + max(0, to_stop),
+            laps_of_fuel=state.laps_of_fuel(),
+            fuel_l=fuel_l,
+            burn_l=state.fuel_per_lap_l,
+        )
+        if not in_box:
+            return base
+
+        target_l = release_s = None
+        found = self._refuel_context()
+        if found is not None:
+            target_l = found[0]
+            release_s = self._release_seconds(target_l, fuel_l)
+        out_position, out_behind = self._rejoin_seat(target_l, fuel_l)
+        next_laps, to_flag = self._next_stint_shape()
+        return replace(
+            base, in_box=True, fuel_target_l=target_l,
+            release_in_s=release_s, out_position=out_position,
+            out_behind=out_behind, next_stint_laps=next_laps,
+            runs_to_flag=to_flag)
+
+    def _release_seconds(self, target_l, fuel_l):
+        """How long until the tank reaches the target, at THIS circuit rate.
+
+        **Measured, not assumed.** The rate comes from `race/knowledge`, which
+        holds what a stop here has actually been seen to do - 1.002 L/s at
+        Monza, 1.001 at Watkins. Where the circuit has no measured rate the
+        countdown is `None` and the board shows a dash: he is holding the
+        trigger on this number, and one the app invented is worse than none.
+        """
+        if target_l is None or fuel_l is None:
+            return None
+        rate = getattr(self._race_knowledge(), "refuel_l_per_s", None)
+        if not rate or rate <= 0:
+            return None
+        return max(0.0, (target_l - fuel_l) / rate)
+
+    def _rejoin_seat(self, target_l, fuel_l):
+        """Where a release now puts him, and behind whom.
+
+        **GT7 publishes ONE gap behind**, so this sees the car immediately
+        behind and no further. A second car also inside the stop cost is
+        invisible, which makes the position here a BEST case - so the board
+        names the car rather than letting the number stand on its own.
+        """
+        from pitcrew.race.gaps import rejoin_against, stop_costs_s
+
+        state = self.race.state
+        if not state.position:
+            return None, None
+        knowledge = self._race_knowledge()
+        litres = None if (target_l is None or fuel_l is None) else max(
+            0.0, target_l - fuel_l)
+        cost = stop_costs_s(litres,
+                            getattr(knowledge, "refuel_l_per_s", None),
+                            getattr(knowledge, "pit_loss_s", None),
+                            getattr(knowledge, "pit_loss_source", None))
+        gap = getattr(state, "gap_behind", None)
+        seconds = getattr(gap, "seconds", gap)
+        verdict = rejoin_against(seconds, cost)
+        if verdict is None or verdict.too_close:
+            return None, None
+        seat = state.position if verdict.ahead else state.position + 1
+        return seat, getattr(state, "gap_behind_name", None)
+
+    def _next_stint_shape(self):
+        """`(laps, runs_to_flag)` for the stint this stop starts.
+
+        **`laps_to_stop() is None` means two different things** - the last
+        stint of a real plan, and a race armed with no plan at all - and the
+        board must not say "runs to the flag" for the second. `hasPlan` is on
+        the snapshot for exactly this reason; here it is the stint list.
+        """
+        stints = list(getattr(self.race, "_stints", None) or [])
+        if not stints:
+            return None, False
+        index = self.race.state.stint_index + 1
+        if index >= len(stints):
+            return None, True
+        following = stints[index]
+        laps = following.get("laps") if isinstance(following, dict) else None
+        return (int(laps) if laps else None), index == len(stints) - 1
+
+    def _race_knowledge(self):
+        """What has been measured at this circuit."""
+        return getattr(self.race, "knowledge", None) or _NOTHING_MEASURED
 
     def _ptt_snapshot(self) -> dict:
         """What the engineer is allowed to answer from.
