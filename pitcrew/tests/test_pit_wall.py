@@ -477,3 +477,42 @@ def test_our_own_stop_open_at_the_flag_is_not_filed_either():
         wall.see(a_frame(in_lane=(OWN,), fuel={OWN: litres}),
                  now=clock.tick())
     assert wall.close_all() == []
+
+
+def test_health_has_a_caller_in_the_app():
+    """`health()` is reported by the controller, not only by tests.
+
+    **This codebase has built both ends and skipped the caller six times** -
+    `LiveWearSampler.new_session`, `DriverView`, `handover.py`,
+    `context_from_stored`, `laps.laps_completed`, and `health()` itself, which
+    was written to end the pit wall's silence and then left with no call site
+    at all while its own docstring claimed it was being logged.
+
+    A source-level check is a weak test and is deliberate: the defect it
+    guards is a MISSING CALL, which no behavioural test of `PitWall` can
+    catch, because `PitWall` is perfectly correct when nobody asks it
+    anything. It fails the moment the call is deleted again.
+    """
+    from pathlib import Path
+
+    import pitcrew.controller as controller_module
+
+    source = Path(controller_module.__file__).read_text(encoding="utf-8")
+    assert source.count("wall.health()") >= 2, (
+        "the pit wall's health line has lost its caller again - it belongs on "
+        "the lap-completed path and in _stop_pit_wall")
+
+
+def test_health_counts_frames_at_every_stage():
+    """Each counter is frames, so the line reads as one funnel.
+
+    A first version counted `named` once per driver per frame and `pit_cols`
+    once per pit row per frame, so a healthy race printed a middle stage an
+    order of magnitude larger than the frames it came from.
+    """
+    wall = PitWall(Roster())
+    line = wall.health()
+    assert "0 frames" in line
+    for stage in ("ladder", "own row", "any named", "our row", "gaps",
+                  "pit columns", "fuel read"):
+        assert stage in line

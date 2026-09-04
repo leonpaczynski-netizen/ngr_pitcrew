@@ -31,7 +31,7 @@ recorded per run:
 | toe | 0.00 / 0.12 | **−0.08** / 0.12 | ? | **0.00** / 0.12 ✅ |
 | diff `lsd` i/a/b | 6 / 14 / 28 | 6 / 14 / 28 | ? | **6 / 14 / 28** |
 | downforce `df` | 380 / 600 | 380 / 600 | ? | **380 / 600** |
-| 6th gear | **0.980** (instrument) | **1.030** | **1.030** `FEED` | **1.030** `FEED` (K6 36.004) — **1.010 proposed for the race** |
+| 6th gear | **0.980** (instrument) | **1.030** | **1.030** `FEED` | **1.030** `FEED` (K6 36.004). ⛔ **The 1.010 proposal is WITHDRAWN, 4 Sep** — the rev limiter fires in gears 1–5 and never once in 6th across 79,090 frames; 6th is already long enough (`RECONCILIATION.md` §Z1) |
 | top speed slider | 300 | 300 | ? | **300** |
 | ECU / restrictor | 96 / 99 | 96 / 99 | ? | **96 / 99** |
 | ballast / position | 45 / −29 | 45 / −29 | ? | **45 / −29** |
@@ -98,7 +98,7 @@ all** — that is data entry, and this file is standing in for it until there is
 
 **Source: `SCREEN` for every value below** — screenshots `20260904_1.png` … `_5.png` in
 `C:\Users\leons\Downloads` (11:20, 11:39, 11:52, 12:03, 12:16; the file number is the run order).
-`bb` is not on that page and was not asked: **`?`**. Gearbox not on that page: `FEED` says 6th
+`bb` is not on that page; **asked and answered 4 Sep — `0` all day, `driver`**, unchanged since run 4 on 3 Sep. Gearbox not on that page: `FEED` says 6th
 still **1.030** (K6 unchanged, see run 4). ⚠️ **None of the five sessions has a `setup_sheets` row,
 a `sessions.setup_sheet_id`, or a `setup_changes` row** — the defect this file exists to work
 around, reproduced five times in one morning while the audit was being written.
@@ -174,4 +174,52 @@ them. `[DRIVER REPORT]` for the cause, `[MEASURED]` for the cost.
 **F7 — Wear.** Identical at the gauge's resolution in all five runs: RR 0.0556/lap, RL 0.037–0.042, FR 0.037–0.042,
 FL 0.035–0.037. Replicates the race stint's 0.0570. Neither wing nor camber moved it over 4–5 laps.
 
-**Not established:** `bb` in the car for any of the five.
+**`bb` = 0 for all five** (`driver`, asked 4 Sep) — and therefore identical to the 3 Sep race stint s118 and to
+s119, so front-lock and wear comparisons across 3–4 Sep are clean on that axis. ⚠️ **0 is two clicks FORWARD of
+the +2 he ran before 3 Sep**, and the RR 0.0570/lap wear map was measured there. **The toe fix is holding at
+it:** front L/R slip split under braking (>60 %, >80 km/h) is −0.0035 to −0.0073 in every run and −0.0035 in the
+race stint, against a measured floor of 0.003–0.006 — **inside the floor, i.e. no resolvable front asymmetry**,
+an order of magnitude below the 0.0428 that the toe change removed on 3 Sep. cam 4.0/4.0 flips the sign
+(+0.0029) on three laps; that too is inside the floor and is not a claim.
+
+**Not established:** nothing on this sheet is now unsourced.
+
+## 4 Sep 2026 evening — session 125, the 13-lap race stint
+
+**Source: `SCREEN`** (settings shot, 4 Sep evening) — **identical to the 4 Sep baseline**: df 410/635 ·
+cam 2.0/1.2 · rh 58/70 · arb 5/4 · dc 28/26 · de 46/44 · nf 3.90/4.10 · toe 0.00/0.12 · lsd 6/14/28 ·
+top 300 · ECU 96 · restrictor 99 · ballast 45 @ −29 · RS/RS · PP 752.54. **`bb` 0** (`driver`, 4 Sep).
+6th still 1.030 `FEED`.
+
+13 laps, 8 clean. **Wear captured (`hud-video`) — the OBS projector fix held.**
+Verdicts in `RECONCILIATION.md` §AA.
+
+| measured | value | note |
+|---|---|---|
+| fuel | **7.680 L/lap** (n=11) | ⇒ tank stint **13.02 laps** |
+| wear RR / RL / FR / FL | **0.0540 / 0.0407 / 0.0407 / 0.0309** per lap (n=8) | replicates 3 Sep; RR worst at **1.75× FL**; ⇒ tyre stint 15.7 laps ⇒ **fuel still binds** |
+| clean lap median / best / sd | 105.858 / **105.084** / 0.818 s | first 3 vs last 3: **−0.136 s** |
+| first corner v-min | **62.1–98.4 km/h** | **r = −0.947 with the brake RELEASE point**; brake ON point uncorrelated (r = −0.051) |
+| first corner rear slip min | **0.894** on lap 8 | first sub-0.90 rear reading on file here; 3 Sep archive was 0.00 % below 0.90 in 20 laps |
+| Bus Stop v-min | 145.8–158.3, sd 4.91 | **inside the same-setup floor (1.57–5.08) — no claim** |
+
+⛔ **Lap 8's `wear_*` row is 0.0 on all four corners** — a failed gauge frame stored as zero, not NULL. Rule 3.
+
+**`lsd_b` 28 → 40 — RUN, session 126, 4 Sep 21:34, source `driver`** (no settings shot). Verdicts in §AB.
+Sub-0.90 rear frames at the first corner **12 → 0**; rotation-under-brakes **unchanged at the first corner
+(0.0121, floor 0.0033)** but **down at z3 (0.0148 → 0.0125, floor 0.0014) and z4 (0.0116 → 0.0103, floor
+0.0011)** — the driver's *"more rotation on other corners under brakes"* is measured. Fuel 7.693 L/lap (n=8).
+
+**⇒ NEXT CHANGE, ISSUED (not yet run): `dc` 28/26 → 20/20** — compression damping to the bottom of its
+verified [20, 40] range. One axis, both ends. Bought by §AB3: **the car leaves the ground over the Bus Stop
+kerb on every lap of all five sessions** (body 40 → 73–78 mm, lateral g to 0.02–0.11 g, 0.08–0.19 s with no
+grip at 160 km/h; kerb contact on 100 % of laps; 3 of 19 evening laps ended on the grass there).
+⚠️ **`dc_r` 18 is OUT OF RANGE — the floor is 20.**
+
+**⇒ THEN: `lsd_b` 40 → 35**, the driver's own ask, already justified by §AB2 and only sequenced behind the
+damper by the one-change rule.
+
+**(superseded) `lsd_b` 28 → 40 was issued as:** (range 0–100, `verified` v1.71, measured 24 Aug).
+One change. Bought by the driver's report corroborated in phase (§AA2), **not** by telemetry (§AA4 — the
+rear-lock instrument's floor disagrees with itself 5×). ⚠️ **It will cost rotation on release, which he
+does by design** — that is the trade, and it is the falsifier.

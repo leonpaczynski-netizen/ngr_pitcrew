@@ -433,11 +433,27 @@ def test_a_stop_that_straddles_the_line_keeps_its_fill():
     feed(state, packets)
 
     assert len(state.laps) == 2
-    out_lap = state.laps[1]
+    entry_lap, out_lap = state.laps
     # It ended fuller than it started, and that is a fill, not an un-burn.
     assert out_lap.fuel_start < out_lap.fuel_end
     assert out_lap.fuel_added_l is not None and out_lap.fuel_added_l > 0
-    # start - end + added, and emphatically not 0.0.
     assert out_lap.fuel_used > 0.0
-    assert out_lap.fuel_used == pytest.approx(
-        out_lap.fuel_start - out_lap.fuel_end + out_lap.fuel_added_l, abs=0.2)
+
+    # **The load-bearing assertion, and it is a CONSERVATION check, not the
+    # formula restated.** An earlier version asserted `used == start - end +
+    # added`, which is `_burn`'s own arithmetic checked against itself: it
+    # passes for any value of `added`, including one that counts the whole
+    # fill twice. 10 L aboard, 30 L put in across the two laps, 33 L left ⇒
+    # 7 L burned, wherever the line fell.
+    assert entry_lap.fuel_used + out_lap.fuel_used == pytest.approx(7.0, abs=0.3)
+
+    # **Each half of the fill is charged to the lap it happened on.** Five
+    # litres went in before the crossing and twenty-five after; giving the
+    # out-lap all thirty overstates its burn by exactly the pre-crossing five.
+    assert entry_lap.fuel_added_l == pytest.approx(5.0, abs=0.5)
+    assert out_lap.fuel_added_l == pytest.approx(25.0, abs=0.5)
+
+    # **The swap is read at PIT_ENTRY, before it has happened**, so the entry
+    # lap must say "not asked" rather than a definite False. Session 127 lap 12
+    # filed `tyres_changed = 0` against a set that was changed.
+    assert entry_lap.tyres_changed is None

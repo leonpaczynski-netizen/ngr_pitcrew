@@ -316,6 +316,14 @@ class SessionState:
         # 6.81 -> 62.96 L in the box and ~7 L burned finishing the lap, filed
         # as zero with `fuel_added_l` NULL. CLAUDE.md rule 9.
         self._stop_straddled = False
+        # **And it may survive exactly one crossing.** A stop that spans two
+        # whole laps is not a stop, it is a stuck flag - a missed PIT_EXIT
+        # from packet loss, a retirement in the box, a stop that ends at the
+        # flag. Left unbounded it filed `fuel_added_l = 0.0` and a definite
+        # `tyres_changed = False` on ordinary green laps that were never near
+        # the pit lane. CLAUDE.md rule 10: a guard that refuses a reading must
+        # be able to retire its own reference.
+        self._straddle_laps = 0
         # Per-lap axle temperature accumulators, reset at each lap boundary.
         # Sums rather than lists: at 60 Hz a lap is several thousand frames
         # and the only question ever asked is the mean.
@@ -748,6 +756,23 @@ class SessionState:
         # fuel and tyre readings, not a reason to pretend the lap did not
         # happen; the flag travels on the row so the doubt travels with it.
 
+        # **A stop that is still running when the line goes by is split here,
+        # and each half is charged to the lap it happened on.**
+        # `_fuel_at_pit_entry` is stamped when the car stops, so one
+        # `fuel_added` would span the WHOLE fill; crediting all of it to the
+        # out-lap overstates that lap's burn by exactly the litres that went in
+        # before the crossing. So: the entry lap takes what has gone in so far,
+        # and the baseline moves to the line so the exit measures only the
+        # rest. Small at Daytona - the tank was at 6.81 L as the line went by -
+        # and proportional to the pre-crossing fill anywhere the box sits
+        # further back.
+        if (self._phase is Phase.IN_PIT
+                and self._fuel_at_pit_entry is not None
+                and p.fuel_level is not None):
+            self._fuel_added_in_stop = round(
+                max(0.0, p.fuel_level - self._fuel_at_pit_entry), 2)
+            self._fuel_at_pit_entry = p.fuel_level
+
         lap_time_ms = p.last_lap_ms
         best_ms = p.best_lap_ms
         temp_front = temp_rear = None
@@ -772,8 +797,15 @@ class SessionState:
             is_pit_lap=self._pit_lap,
             is_out_lap=self._out_lap_pending,
             gear_ratios=list(self._gear_ratios) if self._gear_ratios else None,
+            # **`None` until the stop has actually closed.** The swap is read
+            # at PIT_ENTRY, before it has happened, so a `False` filed on the
+            # entry lap of a straddled stop is not "no tyres" - it is "not yet
+            # asked", and s127 L12 filed exactly that against a set that WAS
+            # changed. Rule 3. Resolved only once `_fuel_added_in_stop` exists,
+            # which is the same instant the car is released.
             tyres_changed=(self._tyres_changed_in_stop
-                           if (self._pit_lap or self._stop_straddled)
+                           if ((self._pit_lap or self._stop_straddled)
+                               and self._pit_exit_at is not None)
                            else None),
             fuel_added_l=(self._fuel_added_in_stop
                           if (self._pit_lap or self._stop_straddled)
@@ -796,12 +828,29 @@ class SessionState:
         self._out_lap_pending = False
         # **Cleared only when the stop is actually over.** Still IN_PIT at the
         # crossing means the car is standing in the box and the fill has not
-        # been measured yet, so the entry fuel, the tyre swap and the fill all
-        # belong to the lap that has not started yet.
-        if self._phase is Phase.IN_PIT:
+        # finished, so what is left of it belongs to the lap that has not
+        # started yet.
+        #
+        # ⚠️ **And the baseline moves to the line, or the out-lap is paid
+        # twice.** `_fuel_at_pit_entry` is stamped when the car stops, so a
+        # single `fuel_added` spans the WHOLE fill. Crediting all of it to the
+        # out-lap overstates that lap's burn by exactly the litres that went in
+        # before the crossing - small at Daytona, where the tank was at 6.81 L
+        # when the line went by, and proportional to the pre-crossing fill
+        # anywhere the box sits further before it. Each half of the stop is
+        # charged to the lap it happened on.
+        if self._phase is Phase.IN_PIT and self._straddle_laps < 1:
             self._stop_straddled = True
+            self._straddle_laps += 1
         else:
+            if self._stop_straddled and self._phase is Phase.IN_PIT:
+                log("race").warning(
+                    "a pit stop has now spanned two laps without the car "
+                    "leaving the box - the exit was missed, so the fill and "
+                    "the tyre swap are recorded as unknown rather than as "
+                    "zero. Laps from here are ordinary laps.")
             self._stop_straddled = False
+            self._straddle_laps = 0
             self._tyres_changed_in_stop = None
             self._fuel_added_in_stop = None
         self._temp_sum_front = 0.0

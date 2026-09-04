@@ -263,8 +263,12 @@ class PitWall:
         # board was never found" were the same silence. Counting separates
         # them, and the counters must be REPORTED: see `health()`.
         # CLAUDE.md rule 10 - log the accepts, not only the refusals.
+        # **Every counter is FRAMES, so the line reads as one funnel.** A
+        # first version counted `named` once per driver per frame and
+        # `pit_cols` once per pit row per frame, so a healthy race printed
+        # 843 -> 800 -> 790 -> 790 -> 5800 -> 700 -> 40 and read as a bug.
         self._stage = {"ladder": 0, "own_row": 0, "rows": 0, "named": 0,
-                       "gaps": 0, "pit_cols": 0}
+                       "gaps": 0, "pit_cols": 0, "own_driver": 0, "fuel_read": 0}
 
     # --- lifecycle ------------------------------------------------------
 
@@ -420,10 +424,11 @@ class PitWall:
         """
         s = self._stage
         return ("pit-wall: %d frames -> ladder %d -> own row %d -> rows %d "
-                "-> drivers named %d -> gaps %d -> pit columns %d "
-                "| %d driver%s placed, %d stop%s filed" % (
+                "-> any named %d -> our row %d -> gaps %d -> pit columns %d "
+                "-> fuel read %d | %d driver%s placed, %d stop%s filed" % (
                     self._frames, s["ladder"], s["own_row"], s["rows"],
-                    s["named"], s["gaps"], s["pit_cols"],
+                    s["named"], s["own_driver"], s["gaps"], s["pit_cols"],
+                    s["fuel_read"],
                     len(self._position), "" if len(self._position) == 1 else "s",
                     len(self._stops), "" if len(self._stops) == 1 else "s"))
 
@@ -462,25 +467,27 @@ class PitWall:
             if driver is None:
                 continue
             ids[row.y] = driver
-            if driver not in identified:
-                self._stage["named"] += 1
             identified.add(driver)
             self._position[driver] = place
 
         # **Before the pit rows, because the entry call needs it.** It was
         # computed only for the gaps, below, which is after every announcement
         # has already been made.
+        if identified:
+            self._stage["named"] += 1
         own = self._own_driver(ids, board)
+        if own is not None:
+            self._stage["own_driver"] += 1
         # **Remembered, because `_close` runs on frames where our own row is
         # not identifiable** - a visit closed by the stale timer, or by
         # `close_all` at the flag, has no board to read it off.
         if own is not None:
             self._own = own
         in_lane: set[int] = set()
+        saw_pit_columns = False
         for pit in read_rows(frame, board, ladder):
             if not pit.fuel_box:
                 continue
-            self._stage["pit_cols"] += 1
             # The NEAREST row, not the first within tolerance: dict order is
             # insertion order, which is board order, so "first" quietly means
             # "highest up the screen".
@@ -489,6 +496,7 @@ class PitWall:
             if near is None:
                 continue
             driver = ids[near]
+            saw_pit_columns = True
             in_lane.add(driver)
             # **The columns being drawn is the fact; the digits are a reading
             # of it.** These are two different questions and an earlier version
@@ -515,6 +523,7 @@ class PitWall:
             x0, y0, x1, y1 = pit.fuel_box
             litres = read_fuel(frame[y0:y1 + 1, x0:x1 + 1])
             if litres is not None:
+                self._stage["fuel_read"] += 1
                 visit.readings.append(litres)
             self._announce_entry(driver, visit, lap, own)
             dx0, dy0, dx1, dy1 = pit.disc
@@ -526,6 +535,8 @@ class PitWall:
         # knows whose gap it is holding. A trend that does not know that
         # regresses straight through an overtake and reports the new car's
         # distance as our own lost pace.
+        if saw_pit_columns:
+            self._stage["pit_cols"] += 1
         ahead_gap, behind_gap = read_gaps(frame, board)
         if ahead_gap is not None or behind_gap is not None:
             self._stage["gaps"] += 1
