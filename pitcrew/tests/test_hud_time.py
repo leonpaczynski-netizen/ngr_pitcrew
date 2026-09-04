@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from pitcrew.telemetry.hud_digits import _bank
-from pitcrew.telemetry.hud_time import read_seconds, tokens
+from pitcrew.telemetry.hud_time import read_gap, read_seconds, tokens
 
 INK = (240, 244, 246)
 DARK = (18, 14, 26)
@@ -156,3 +156,48 @@ def test_a_plate_is_not_text():
     patch[:] = DARK
     patch[8:22, 10:190] = INK
     assert read_seconds(patch) is None
+
+
+# --- the small font, on real crops -----------------------------------------
+#
+# The gap readouts are the same typeface at half the size, and the bank above
+# scores them 0.526-0.744 against its 0.80 floor. `smallfont` reads them; what
+# is tested here is the SEAM - that the guards in this module still run first,
+# and that the small font arriving does not change anything the fuel bank was
+# already reading. Per-glyph accuracy is `test_smallfont.py`.
+
+def a_real_gap(name):
+    import pathlib
+    from PIL import Image
+    where = pathlib.Path(__file__).parent / "fixtures" / name
+    with Image.open(where) as image:
+        return np.asarray(image.convert("RGB"))
+
+
+def test_the_clipped_box_guard_runs_before_the_small_font_too():
+    """It is in `tokens`, ahead of the choice of bank, and that is the whole
+    reason the choice is here rather than in `race/gaps`. Trim a column off a
+    real gap box and its ink touches the edge; the reading must not become a
+    shorter, well-formed, wrong one."""
+    full = a_real_gap("gap-plus-27.712.png")
+    assert read_seconds(full) == pytest.approx(27.712)
+    for cut in (7, 9, 11, 13):
+        assert read_seconds(full[:, cut:]) is None, cut
+
+
+def test_the_sign_comes_back_as_a_sign_and_not_as_punctuation():
+    """The `+` is shorter than a digit, so `DIGIT_MIN_HEIGHT` classified it as
+    a `:` or a `.` and corrupted the token stream before parsing began."""
+    assert tokens(a_real_gap("gap-minus-10.839.png"))[0] == "-"
+    assert read_seconds(a_real_gap("gap-minus-10.839.png")) == pytest.approx(
+        10.839), "the magnitude, because a gap is a distance"
+
+
+def test_a_gap_needs_its_sign_and_a_lap_time_does_not():
+    """`read_gap` requires one because a gap field is right-aligned and losing
+    the sign means possibly losing a leading digit with it. `read_seconds` does
+    not, because the fastest-lap banner has never carried one."""
+    assert read_gap(a_real_gap("gap-plus-0.435.png")) == ("+",
+                                                          pytest.approx(0.435))
+    assert read_gap(a_time("2:13.484")) is None
+    assert read_seconds(a_time("2:13.484")) == pytest.approx(133.484)

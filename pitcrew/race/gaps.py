@@ -41,20 +41,31 @@ Traffic does not cancel either: two cars 5-40 s apart meet the same backmarker
 on different laps. One lapped car costing him 1.5 s and the rival 0.2 s puts a
 1.3 s step into a five-lap window, which is 0.26 s/lap of slope on its own.
 
-### What is NOT validated here, and it matters
+### 5 Sep 2026 - a live gap now reads, and here is what it is worth
 
-**The gap boxes were empty in every frame of footage available.** Measured over
-a whole 48-minute Spa replay, every gap readout on every frame showed
-`--:--.---`, because a replay does not draw them. So `hud_time.read_seconds` is
-validated against the fastest-lap banner - white on purple, known value,
-133.484 read exactly - and the gap FIELD is validated only in that it correctly
-refuses a box of dashes.
+**For a fortnight the gap boxes were empty in every frame of footage
+available.** Measured over a whole 48-minute Spa replay, every gap readout on
+every frame showed `--:--.---`, because a replay does not draw them. So nothing
+in this file had ever been given a real number, `read_gaps` returned `(None,
+None)` on every frame ever tried, and the note that stood here said so.
 
-Reading a live gap has never been exercised. The failure direction is safe:
-`read_seconds` refuses anything it cannot read rather than guessing, so an
-unread gap is `None` and every function here returns `None` in turn. But
-nothing below should be believed on a race weekend until one frame of real
-bumper-cam footage with the gaps drawn has been through it.
+The 4 Sep Daytona race capture does draw them. Three faults were in the way and
+all three are fixed - `board.gap_lines` framed the box on the ink's own edge so
+the clipped-box guard refused it before any reading began, `hud_time` read the
+sign as punctuation, and the digit bank was built from pit-lane fuel figures at
+twice the scale. `telemetry/smallfont.py` carries the new bank and the counts.
+
+**What that is worth, honestly.** On 100 frames the reader had never seen, it
+returns a value on 109 of 116 cleanly framed boxes and refuses the rest; two
+readings differ from a hand transcription by one millisecond digit; no box
+carrying no value read as a value. Sampled every five seconds across a race it
+tracks a gap closing from 8.7 s to 0.2 s in tenths, and the only steps larger
+than a second are overtakes - where both readouts flip on the same frame.
+
+So the arithmetic below can now be fed. It still should not be believed further
+than the reading: an unread gap is `None`, `GapTrend` needs five CONSECUTIVE
+laps before it will quote a slope, and about a third of frames give no reading
+at all because the box is framed with scenery in it.
 """
 from __future__ import annotations
 
@@ -62,7 +73,7 @@ from dataclasses import dataclass, field
 
 from pitcrew.strategy.model import PIT_DEAD_TIME_S, PIT_LOSS_MEASURED
 from pitcrew.telemetry.board import gap_lines
-from pitcrew.telemetry.hud_time import read_seconds
+from pitcrew.telemetry.hud_time import read_gap
 
 # Below this many seconds of difference, "you come out ahead of him" is a claim
 # the arithmetic cannot support: the pit loss itself is only known to about a
@@ -115,8 +126,26 @@ def read_gaps(frame, board) -> tuple[float | None, float | None]:
     both needed: one stops the band being wrong, the other stops a wrong band
     being believed.
 
-    `None` for either where the box carries no value - which on all footage
-    available is BOTH, always, because a replay draws `--:--.---`.
+    ### 5 Sep 2026 - it reads now, and the sign is what makes it safe
+
+    Everything above described a function that had never returned a number.
+    Three faults, all measured on the 4 Sep race capture and all now fixed
+    elsewhere: `gap_lines` framed the box on the ink's own bounding edge so the
+    clipped-box guard refused it before any reading began; the leading `+` fell
+    through `hud_time`'s height test and came out as a `:`; and the digit bank
+    was built from pit-lane fuel figures at twice the scale.
+
+    **What is enforced HERE is that the sign matches the side.** The box above
+    the driver's row is the car ahead and GT7 draws it `+`; the box below is
+    the car behind and it draws it `-`. Measured on 169 boxes the two agree on
+    every one that carries a sign. A disagreement means the box is not the box
+    this function thinks it is - a mis-anchored row, a board found in the
+    scenery - and that is a reading whose value would be confidently attached
+    to the wrong car, which `GapTrend` is built entirely around not doing.
+
+    `None` for either where the box carries no value: at the start of a race,
+    for a car with nobody ahead of it, and on every frame of a replay, because
+    a replay draws `--:--.---`.
     """
     if frame is None or getattr(frame, "ndim", 0) != 3 or board is None:
         return None, None
@@ -126,13 +155,14 @@ def read_gaps(frame, board) -> tuple[float | None, float | None]:
     except Exception:
         return None, None
     out = []
-    for box in (ahead_box, behind_box):
+    for box, wanted in ((ahead_box, "+"), (behind_box, "-")):
         if box is None:
             out.append(None)
             continue
         x0, y0, x1, y1 = box
         patch = frame[y0:y1 + 1, x0:x1 + 1]
-        out.append(read_seconds(patch) if patch.size else None)
+        got = read_gap(patch) if patch.size else None
+        out.append(got[1] if got and got[0] == wanted else None)
     return out[0], out[1]
 
 

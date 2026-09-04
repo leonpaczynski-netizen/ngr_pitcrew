@@ -83,3 +83,11 @@ _to_delete/
 # Pasted SimHub forum threads, kept while the wind and shaker work was live.
 # Research notes, not repo content.
 allissues.txt
+
+# Decoded frames and contact sheets for the gap-font labelling pass. Hundreds
+# of 1920x1080 PNGs cut out of a 2.5 GB capture: reproducible from the video
+# with `tools/gap_bank.py frames`, and not source. The LABELS the pass produced
+# live in that tool, and the bank it builds is committed.
+_gapbank/
+_glyphwork/
+_bench/

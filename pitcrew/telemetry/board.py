@@ -205,6 +205,20 @@ PLATE_FILL = 0.25
 # longest-run trim in `gap_lines` keeps the extra band from reaching scenery.
 GAP_REACH = 0.25
 
+# Blank columns left on each side of the framed gap box, so its ink does not
+# touch its own edges.
+#
+# **Without these the box was refused before it was ever read.** `hud_time`
+# refuses a box whose ink touches either edge, and correctly - a clipped time
+# parses cleanly as a shorter one, and an eleven-offset sweep across a
+# `1:23.456` returned a well-formed wrong 3.456. But the box below is the ink's
+# own bounding box, so its left edge sits exactly on the `+` sign and its right
+# on the last millisecond digit: the guard fired on every gap box of every
+# frame, and `read_gaps` had never returned a number in its life. Measured on
+# six boxes across the 4 Sep race, 6 px left and 8 px right clears the guard on
+# all six with plate to spare. The guard stays; the box now has room inside it.
+GAP_MARGIN_L, GAP_MARGIN_R = 6, 8
+
 # Rows of the plate are broken by the driver's name, which is black ON the
 # white plate, so runs are merged across a gap of this many rows.
 ROW_MERGE = 12
@@ -688,8 +702,14 @@ def gap_lines(frame, row):
         if len(cols) < 8 or len(rows) < 5:
             out.append(None)
             continue
-        out.append((int(x0 + cols[0]), int(top + plate[0] + rows[0]),
-                    int(x0 + cols[-1]), int(top + plate[0] + rows[-1])))
+        # Horizontally only. The two boxes sit one row above and one below the
+        # driver's own, with about ten pixels between them and it, so vertical
+        # margin would reach into the neighbouring row's ink - and the band
+        # reader crops to the text's own rows anyway.
+        left = max(0, int(x0 + cols[0]) - GAP_MARGIN_L)
+        right = min(frame.shape[1] - 1, int(x0 + cols[-1]) + GAP_MARGIN_R)
+        out.append((left, int(top + plate[0] + rows[0]),
+                    right, int(top + plate[0] + rows[-1])))
     return out[0], out[1]
 
 
