@@ -64,6 +64,8 @@ class _State:
     fuel_l: float = 31.0
     fuel_per_lap_l: float | None = 3.4
     stint_index: int = 0
+    gap_ahead: object = None
+    gap_ahead_name: str | None = None
     gap_behind: object = None
     gap_behind_name: str | None = None
     pit_loss_source: str | None = None
@@ -120,6 +122,7 @@ class _Stub:
 
     _driver_board_state = PitCrewController._driver_board_state
     _board_temps = PitCrewController._board_temps
+    _gap_view = PitCrewController._gap_view
     _fill_rate = PitCrewController._fill_rate
     _release_seconds = PitCrewController._release_seconds
     _rejoin_seat = PitCrewController._rejoin_seat
@@ -461,3 +464,98 @@ def test_a_finished_race_stops_showing_a_next_stop():
     assert got.in_box is False
     # The temperatures are still worth having on the slow-down lap.
     assert got.temps_c is not None
+
+
+# ------------------------------------------- the neighbours, and their words
+
+def _trend(side, readings, subject=7):
+    from pitcrew.race.gaps import GapTrend
+    trend = GapTrend(side=side)
+    for lap, gap in readings:
+        trend.note(lap, gap, subject=subject)
+    return trend
+
+
+def _closing(side):
+    """Five consecutive laps of a gap shrinking by a second a lap."""
+    return _trend(side, [(4, 9.0), (5, 8.0), (6, 7.0), (7, 6.0), (8, 5.0)])
+
+
+def _opening(side):
+    return _trend(side, [(4, 5.0), (5, 6.0), (6, 7.0), (7, 8.0), (8, 9.0)])
+
+
+def _gap(stub, side):
+    return stub._gap_view(side)
+
+
+def test_catching_the_car_ahead_is_good_news_and_not_urgent():
+    stub = _Stub()
+    stub.race.state.gap_ahead = _closing("ahead")
+    stub.race.state.gap_ahead_name = "Rocky"
+    got = _gap(stub, "ahead")
+    assert got.seconds == 5.0
+    assert "catching" in got.note and "Rocky" in got.note
+    assert got.urgent is False
+
+
+def test_the_same_closing_gap_behind_is_bad_news_and_is_urgent():
+    """**The rule-13 trap.** One signed rate, opposite meanings: `GapTrend`
+    says "the gap is closing" on both sides, and on the car behind that is him
+    catching us. The two sentences must not be interchangeable."""
+    stub = _Stub()
+    stub.race.state.gap_behind = _closing("behind")
+    got = _gap(stub, "behind")
+    assert "he is catching" in got.note
+    assert got.urgent is True
+
+
+def test_losing_ground_to_the_car_ahead_is_the_urgent_one():
+    stub = _Stub()
+    stub.race.state.gap_ahead = _opening("ahead")
+    got = _gap(stub, "ahead")
+    assert "losing" in got.note and got.urgent is True
+
+
+def test_pulling_away_from_the_car_behind_is_not(): 
+    stub = _Stub()
+    stub.race.state.gap_behind = _opening("behind")
+    got = _gap(stub, "behind")
+    assert "pulling away" in got.note and got.urgent is False
+
+
+def test_a_trend_inside_the_noise_reads_steady_and_quotes_no_rate():
+    """`TREND_WORTH_SAYING_S` is set from the measured scatter of a gap
+    series, which is a random walk - a slope over five samples has a standard
+    deviation near 0.5 s a lap. Reporting noise is how a driver learns to
+    distrust the tool."""
+    stub = _Stub()
+    stub.race.state.gap_ahead = _trend(
+        "ahead", [(4, 9.0), (5, 8.9), (6, 9.1), (7, 8.95), (8, 9.05)])
+    got = _gap(stub, "ahead")
+    assert got.note.startswith("steady")
+    assert "s a lap" not in got.note
+
+
+def test_too_few_consecutive_laps_is_steady_rather_than_a_slope():
+    """A slope through three points is not a trend - rule 4, and the count
+    travels with the rate for exactly this."""
+    stub = _Stub()
+    stub.race.state.gap_ahead = _trend("ahead", [(7, 9.0), (8, 5.0)])
+    assert _gap(stub, "ahead").note.startswith("steady")
+
+
+def test_a_gap_that_was_never_read_gives_no_view_at_all():
+    stub = _Stub()
+    assert _gap(stub, "ahead") is None
+    stub.race.state.gap_behind = _trend("behind", [])
+    assert _gap(stub, "behind") is None
+
+
+def test_both_neighbours_reach_the_board_while_running():
+    stub = _Stub()
+    stub.race.state.gap_ahead = _closing("ahead")
+    stub.race.state.gap_behind = _opening("behind")
+    got = _state_for(stub)
+    assert got.ahead is not None and got.behind is not None
+    assert got.ahead.note != got.behind.note

@@ -256,6 +256,15 @@ class PitWall:
         self.samples: list[GapSample] = []
         self._frames = 0
         self._clean = 0
+        # **Every stage that can silently return nothing gets a counter.**
+        # The wall watched a whole race on 4 Sep 2026, took 843 frames and
+        # logged not one line - no board, no driver, no gap, no stop, and no
+        # error either - so "the board was read and nobody pitted" and "the
+        # board was never found" were the same silence. Counting separates
+        # them, and the counters must be REPORTED: see `health()`.
+        # CLAUDE.md rule 10 - log the accepts, not only the refusals.
+        self._stage = {"ladder": 0, "own_row": 0, "rows": 0, "named": 0,
+                       "gaps": 0, "pit_cols": 0}
 
     # --- lifecycle ------------------------------------------------------
 
@@ -352,6 +361,8 @@ class PitWall:
         self.behind.new_session()
         self.samples = []
         self._frames = self._clean = 0
+        for key in self._stage:
+            self._stage[key] = 0
 
     @property
     def roster(self) -> Roster:
@@ -396,6 +407,26 @@ class PitWall:
         except Exception:               # pragma: no cover - belt
             return None
 
+    def health(self) -> str:
+        """One line saying how far up the pipeline each frame got.
+
+        **The wall's silence used to be indistinguishable from its absence.**
+        On 4 Sep 2026 it watched a whole 20-lap race, was handed 843 frames,
+        and wrote nothing to the log at all - because it only ever logs when it
+        FINDS a stop. Afterwards there was no way to tell whether the board had
+        been read and nobody had pitted, or whether the board had never been
+        found. Each stage below can return nothing without raising, so each is
+        counted, and the first one reading 0 is the one to fix.
+        """
+        s = self._stage
+        return ("pit-wall: %d frames -> ladder %d -> own row %d -> rows %d "
+                "-> drivers named %d -> gaps %d -> pit columns %d "
+                "| %d driver%s placed, %d stop%s filed" % (
+                    self._frames, s["ladder"], s["own_row"], s["rows"],
+                    s["named"], s["gaps"], s["pit_cols"],
+                    len(self._position), "" if len(self._position) == 1 else "s",
+                    len(self._stops), "" if len(self._stops) == 1 else "s"))
+
     def see(self, frame, *, lap: int | None = None, now: float | None = None):
         """Take one frame. Never raises; returns the stops it just closed."""
         try:
@@ -410,6 +441,7 @@ class PitWall:
         ladder = flag_ladder(frame)
         if not ladder:
             return self._close_stale(now)      # silence, not absence
+        self._stage["ladder"] += 1
         # **The ladder we already have, not a second search.** `own_row` finds
         # one itself when it is not given one, and this runs on the sampler's
         # worker thread where a duplicated O(n^2) scan over every saturated run
@@ -417,9 +449,11 @@ class PitWall:
         board = own_row(frame, ladder=ladder)
         if board is None:
             return self._close_stale(now)
+        self._stage["own_row"] += 1
         rows = read_rows_of_board(frame, board, ladder)
         if not rows:
             return []
+        self._stage["rows"] += 1
         self._clean += 1
         ids: dict[int, int] = {}
         identified: set[int] = set()
@@ -428,6 +462,8 @@ class PitWall:
             if driver is None:
                 continue
             ids[row.y] = driver
+            if driver not in identified:
+                self._stage["named"] += 1
             identified.add(driver)
             self._position[driver] = place
 
@@ -444,6 +480,7 @@ class PitWall:
         for pit in read_rows(frame, board, ladder):
             if not pit.fuel_box:
                 continue
+            self._stage["pit_cols"] += 1
             # The NEAREST row, not the first within tolerance: dict order is
             # insertion order, which is board order, so "first" quietly means
             # "highest up the screen".
@@ -490,6 +527,8 @@ class PitWall:
         # regresses straight through an overtake and reports the new car's
         # distance as our own lost pace.
         ahead_gap, behind_gap = read_gaps(frame, board)
+        if ahead_gap is not None or behind_gap is not None:
+            self._stage["gaps"] += 1
         own_place = self._position.get(own)
         at_m = self.where()
         for trend, gap, step in ((self.ahead, ahead_gap, -1),

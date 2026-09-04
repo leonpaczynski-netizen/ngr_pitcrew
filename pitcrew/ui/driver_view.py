@@ -115,6 +115,24 @@ CORNERS = ("fl", "fr", "rl", "rr")
 
 
 @dataclass(frozen=True)
+class GapView:
+    """One neighbour, and what the gap to him is doing.
+
+    **`note` is written per side and never shared.** `GapTrend` reports "the
+    gap is closing" and that is deliberately one number meaning two things -
+    on the car ahead it means we are catching him, on the car behind it means
+    he is catching us, and those demand opposite driving. `race/gaps.py` calls
+    that out as rule 13 in as many words. So nothing here shows a signed rate:
+    each side gets a sentence that is only true of that side.
+    """
+    seconds: float | None = None
+    note: str = ""
+    # Bad news for us: he is catching, or we are being dropped. Drawn in the
+    # warning ink so a glance separates "push" from "hold".
+    urgent: bool = False
+
+
+@dataclass(frozen=True)
 class DriverState:
     """Everything the instrument shows. `None` is missing and shows as a dash.
 
@@ -172,6 +190,10 @@ class DriverState:
     # first version captioned both "you are past the box lap". None where the
     # stop is still ahead.
     laps_past_box: int | None = None
+    # The two neighbours. `None` where nothing has been read - which, until
+    # the HUD gap reader is proven on a live race, is most of the time.
+    ahead: "GapView | None" = None
+    behind: "GapView | None" = None
     # The flag is out. The running panel needs it because `laps_to_box` is
     # None once the race is over, which it also is when no plan exists - and
     # "no plan" is the wrong thing to tell a man who has just finished.
@@ -578,6 +600,13 @@ class DriverView(QWidget):
 
         self.box_stat = _Stat("laps to box")
         self.fuel_stat = _Stat("laps of fuel")
+        # **At the ends, and in the order the cars are in.** Ahead on the
+        # left, behind on the right, so which block is which needs no reading -
+        # it is where the car is. That is what keeps this from being the
+        # fourth and fifth items the docstring above warns about: they are one
+        # paired mnemonic rather than two more things in a list.
+        self.ahead_stat = _Stat("ahead")
+        self.behind_stat = _Stat("behind")
 
         tyres = QWidget()
         grid = QGridLayout(tyres)
@@ -597,11 +626,15 @@ class DriverView(QWidget):
         grid.addWidget(self.tyre_caption, 2, 0, 1, 2)
 
         row.addStretch(1)
+        row.addWidget(self.ahead_stat)
+        row.addStretch(1)
         row.addWidget(self.box_stat)
         row.addStretch(1)
         row.addWidget(tyres)
         row.addStretch(1)
         row.addWidget(self.fuel_stat)
+        row.addStretch(1)
+        row.addWidget(self.behind_stat)
         row.addStretch(1)
 
         # **The two states are two widgets, swapped, not one relabelled.**
@@ -621,6 +654,24 @@ class DriverView(QWidget):
         outer.addLayout(self.states)
 
         self.update_state(DriverState())
+
+    @staticmethod
+    def _show_gap(stat: "_Stat", gap: "GapView | None") -> None:
+        """One neighbour block: the gap large, what it is doing underneath.
+
+        **The seconds are the big number and the trend is the caption**, not
+        the other way round. The gap is what he can act on immediately - a car
+        1.2 s up is in DRS-ish range and one 12 s up is not - and the trend
+        tells him whether acting is worth it. Both at a glance, in that order.
+        """
+        if gap is None or gap.seconds is None:
+            # **A dash is the expected state, not a fault.** The gap boxes
+            # these come from have never once returned a number in a real
+            # race - see `race/gaps.py` - so this says why rather than
+            # sitting blank and making him wonder what broke.
+            stat.show_value("--", "no gap read")
+            return
+        stat.show_value(f"{gap.seconds:.1f}", gap.note, urgent=gap.urgent)
 
     def update_state(self, state: DriverState) -> None:
         self.states.setCurrentWidget(self.box if state.in_box else self.running)
@@ -655,6 +706,9 @@ class DriverView(QWidget):
                 # **Urgent inside two laps**, which is where the number stops
                 # being background and starts being a thing to act on.
                 urgent=state.laps_to_box <= 2)
+
+        self._show_gap(self.ahead_stat, state.ahead)
+        self._show_gap(self.behind_stat, state.behind)
 
         if state.laps_of_fuel is None:
             self.fuel_stat.show_value("--", "not measured")

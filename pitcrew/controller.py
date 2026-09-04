@@ -4679,6 +4679,11 @@ class PitCrewController(QObject):
             fuel_l=fuel_l,
             burn_l=state.fuel_per_lap_l,
             has_plan=has_plan,
+            # **Both neighbours, on the running panel only.** In the box the
+            # gap to a car still circulating is not a thing he can act on, and
+            # the box panel has five items already.
+            ahead=self._gap_view("ahead"),
+            behind=self._gap_view("behind"),
             # The sign `laps_to_stop()` throws away when it clamps at zero,
             # and how far past he is - "box this lap" and "two laps late" are
             # not the same news.
@@ -4705,6 +4710,57 @@ class PitCrewController(QObject):
             out_position=out_position,
             out_behind=out_behind, next_stint_laps=next_laps,
             runs_to_flag=to_flag, past_the_plan=past_plan)
+
+    def _gap_view(self, side: str):
+        """One neighbour, as the board draws him.
+
+        **The words are written per side and never shared.** `GapTrend`
+        reports one signed rate - the gap is closing at N seconds a lap - and
+        that single number means opposite things on the two sides: on the car
+        ahead it is us catching him, on the car behind it is him catching us,
+        and those demand opposite driving. `race/gaps.py` names it as rule 13.
+        So each side gets a sentence only true of that side, and no signed
+        number reaches the screen.
+
+        **Nothing is said inside the noise.** `TREND_WORTH_SAYING_S` is set
+        from the measured scatter of a gap series, which is a random walk - a
+        slope over five samples has a standard deviation near 0.5 s a lap. Any
+        rate under the floor, or fitted over too few consecutive laps, reads
+        "steady". Reporting noise is how a driver learns to distrust the tool,
+        which costs more than the finding was worth.
+        """
+        from pitcrew.race.gaps import (MIN_LAPS_FOR_TREND,
+                                       TREND_WORTH_SAYING_S)
+        from pitcrew.race.rival_calls import _snapshot
+        from pitcrew.ui.driver_view import GapView
+
+        trend = _snapshot(getattr(self.race.state, f"gap_{side}", None))
+        if trend is None:
+            return None
+        seconds = trend.latest()
+        if seconds is None:
+            return None
+        rate, laps = trend.closing_s_per_lap()
+        name = getattr(self.race.state, f"gap_{side}_name", None) or ""
+        if rate is None or laps < MIN_LAPS_FOR_TREND \
+                or abs(rate) < TREND_WORTH_SAYING_S:
+            return GapView(seconds=seconds,
+                           note=f"steady{' - ' + name if name else ''}")
+        closing = rate > 0
+        pace = f"{abs(rate):.1f} s a lap"
+        if side == "ahead":
+            # Closing on the car ahead is the good news, and the one worth
+            # spending tyre on.
+            note = f"catching {pace}" if closing else f"losing {pace}"
+            urgent = not closing
+        else:
+            # Behind, a closing gap is HIM catching US. Same number, opposite
+            # instruction - which is the whole reason these are two sentences.
+            note = f"he is catching {pace}" if closing else f"pulling away {pace}"
+            urgent = closing
+        if name:
+            note = f"{note} - {name}"
+        return GapView(seconds=seconds, note=note, urgent=urgent)
 
     def _board_temps(self, packet=None):
         """The four corners off ONE packet, or None.

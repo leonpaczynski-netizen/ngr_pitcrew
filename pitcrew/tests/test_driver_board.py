@@ -304,3 +304,41 @@ def test_escape_closes_the_board_without_stopping_the_race(app):
         QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape,
                   Qt.KeyboardModifier.NoModifier))
     assert not window.isVisible()
+
+
+# ------------------------------------------------- the two neighbours
+
+def test_the_gap_is_the_big_number_and_the_trend_is_the_caption(app):
+    """The gap is what he can act on now - a car 1.2 s up is reachable and one
+    12 s up is not - and the trend says whether acting is worth it."""
+    from pitcrew.ui.driver_view import GapView
+
+    view = DriverView()
+    view.update_state(DriverState(
+        ahead=GapView(1.8, "catching 0.4 s a lap - Rocky")))
+    assert view.ahead_stat.value.text() == "1.8"
+    assert "catching" in view.ahead_stat.sub.text()
+
+
+def test_an_unread_gap_says_why_rather_than_sitting_blank(app):
+    """The expected state: these come off the game's own gap boxes, which have
+    never once returned a number in a real race."""
+    view = DriverView()
+    view.update_state(DriverState())
+    assert view.ahead_stat.value.text() == "--"
+    assert "no gap read" in view.ahead_stat.sub.text()
+    assert view.behind_stat.value.text() == "--"
+
+
+def test_the_two_sides_are_never_given_the_same_words(app):
+    """**The rule-13 trap `race/gaps.py` names.** One signed rate means
+    opposite things on the two sides - ahead it is us catching him, behind it
+    is him catching us - and they demand opposite driving. No signed number
+    reaches this screen; each side gets a sentence only true of that side."""
+    from pitcrew.ui.driver_view import GapView
+
+    view = DriverView()
+    view.update_state(DriverState(
+        ahead=GapView(1.8, "catching 0.4 s a lap"),
+        behind=GapView(1.8, "he is catching 0.4 s a lap", urgent=True)))
+    assert view.ahead_stat.sub.text() != view.behind_stat.sub.text()

@@ -305,6 +305,17 @@ class SessionState:
         self._fuel_window: deque[tuple[float, float]] = deque()
         self._tyres_changed_in_stop: bool | None = None
         self._fuel_added_in_stop: float | None = None
+        # **A stop that straddles the start/finish line is still one stop.**
+        # GT7 puts the line INSIDE the pit lane at Daytona, Fuji and Monza, so
+        # the crossing fires while the car is standing in the box: the ENTRY
+        # lands on one lap and the FILL on the next. The close below used to
+        # clear `_fuel_added_in_stop` and `_pit_lap` at every crossing, so the
+        # fill - measured correctly, seconds later - was thrown away, the
+        # out-lap's `start - end` went negative, and `_burn` clamped it to a
+        # fabricated `fuel_used = 0.0`. Measured on session 127 lap 13:
+        # 6.81 -> 62.96 L in the box and ~7 L burned finishing the lap, filed
+        # as zero with `fuel_added_l` NULL. CLAUDE.md rule 9.
+        self._stop_straddled = False
         # Per-lap axle temperature accumulators, reset at each lap boundary.
         # Sums rather than lists: at 60 Hz a lap is several thousand frames
         # and the only question ever asked is the mean.
@@ -754,14 +765,19 @@ class SessionState:
             # up on it - see `_burn`. On a pit lap this is what turns a
             # negative difference into the real burn.
             fuel_used=_burn(self._fuel_lap_start, p.fuel_level,
-                            self._fuel_added_in_stop if self._pit_lap
+                            self._fuel_added_in_stop
+                            if (self._pit_lap or self._stop_straddled)
                             else None),
             position=p.current_position,
             is_pit_lap=self._pit_lap,
             is_out_lap=self._out_lap_pending,
             gear_ratios=list(self._gear_ratios) if self._gear_ratios else None,
-            tyres_changed=self._tyres_changed_in_stop if self._pit_lap else None,
-            fuel_added_l=self._fuel_added_in_stop if self._pit_lap else None,
+            tyres_changed=(self._tyres_changed_in_stop
+                           if (self._pit_lap or self._stop_straddled)
+                           else None),
+            fuel_added_l=(self._fuel_added_in_stop
+                          if (self._pit_lap or self._stop_straddled)
+                          else None),
             pit_racing_ms=self._pit_racing_ms(now),
             tyre_temp_front_c=temp_front,
             tyre_temp_rear_c=temp_rear,
@@ -778,8 +794,16 @@ class SessionState:
         self._pit_exit_at = None
         self._pit_lap = False
         self._out_lap_pending = False
-        self._tyres_changed_in_stop = None
-        self._fuel_added_in_stop = None
+        # **Cleared only when the stop is actually over.** Still IN_PIT at the
+        # crossing means the car is standing in the box and the fill has not
+        # been measured yet, so the entry fuel, the tyre swap and the fill all
+        # belong to the lap that has not started yet.
+        if self._phase is Phase.IN_PIT:
+            self._stop_straddled = True
+        else:
+            self._stop_straddled = False
+            self._tyres_changed_in_stop = None
+            self._fuel_added_in_stop = None
         self._temp_sum_front = 0.0
         self._temp_sum_rear = 0.0
         self._temp_frames = 0
