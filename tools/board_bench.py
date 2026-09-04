@@ -29,12 +29,23 @@ ladder, against 4 / 3 / 3 before.
 * **anchored** - `board.own_row` landed on one of that ladder's own rungs
   rather than on a bright patch of sky somewhere else.
 * **gap_boxes** - `board.gap_lines` framed the two gap readouts. Framing them
-  is not reading them: at a 1080-row capture the glyphs are 12 px and
-  `hud_digits` scores them 0.60-0.70 against its 0.80 floor, so **gaps_read is
-  expected to be 0 until the digit bank is extended to this size** and a
-  non-zero count there would be the surprise.
+  is not reading them, and for a fortnight it was all this could do.
+* **gaps read** - `race/gaps.read_gaps` returned a number, **out of the boxes
+  that were framed** rather than out of two per frame, because a box that was
+  never framed is not a reading the digit bank failed to make. It was 0 of
+  every box ever tried until the small-font bank of 5 Sep 2026; see
+  `telemetry/smallfont.py`.
 * **pit_rows** - `pit_columns.read_rows`, which is empty until somebody pits
   and is not a failure before that.
+
+### `--series` is the physics check, and it is the one that matters
+
+Counting successful reads says nothing about whether they are RIGHT. A gap to
+one car is a physical quantity that moves at a bounded rate, so sampling it
+every few seconds and watching it evolve tests the readings against something
+outside the reader. `--series` samples at a fixed step and reports the
+frame-to-frame change; a bank that is guessing produces steps of whole seconds
+in four, and a bank that is reading produces tenths.
 
 Frames are decoded one `-ss` seek at a time, the same way
 `tools/read_replay_board.py` does it, and cached as PNGs so a second run is
@@ -93,6 +104,12 @@ def main() -> int:
     ap.add_argument("--cache", default=None,
                     help="where decoded frames are kept (default: ./_bench)")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--series", action="store_true",
+                    help="print the gap to each side over time, and its "
+                         "frame-to-frame step - the physics check")
+    ap.add_argument("--jump", type=float, default=1.0,
+                    help="seconds of step, above which a sample is called a "
+                         "jump rather than an evolution")
     args = ap.parse_args()
 
     video = Path(args.video)
@@ -105,6 +122,7 @@ def main() -> int:
 
     step = (args.end - args.start) / (args.frames - 1)
     seen = ladders = on_board = anchored = boxes = read = pits = 0
+    series = []
     for index in range(args.frames):
         at = args.start + index * step
         shot = cache / f"f{at:08.2f}.png"
@@ -129,6 +147,7 @@ def main() -> int:
         boxes += sum(box is not None for box in framed)
         read += sum(value is not None for value in gaps)
         pits += bool(rows)
+        series.append((at, gaps[0], gaps[1]))
         if args.verbose:
             where = (f"x{ladder[0]}-{ladder[1]} n={len(ladder[2])}"
                      if ladder else "-")
@@ -143,9 +162,40 @@ def main() -> int:
           f"\n  on the board    {on_board:>4}"
           f"\n  own row         {anchored:>4}  (anchored to one of its rungs)"
           f"\n  gap boxes       {boxes:>4}  of {2 * seen}"
-          f"\n  gaps read       {read:>4}  of {2 * seen}"
+          f"\n  gaps read       {read:>4}  of {boxes} framed"
           f"\n  frames with pit columns {pits:>4}")
+    if args.series:
+        _series(series, args.jump)
     return 0
+
+
+def _series(rows, jump):
+    """The gap to each side over time, and how far it moves between samples."""
+    print("\n     t s     ahead     step |    behind     step")
+    steps = {"ahead": [], "behind": []}
+    last = {"ahead": None, "behind": None}
+    for at, ahead, behind in rows:
+        cells = []
+        for side, value in (("ahead", ahead), ("behind", behind)):
+            was = last[side]
+            if value is None:
+                cells.append(f"{'-':>9} {'':>8}")
+                continue
+            step = None if was is None else value - was
+            if step is not None:
+                steps[side].append(abs(step))
+            last[side] = value
+            moved = "" if step is None else f"{step:+8.3f}"
+            cells.append(f"{value:9.3f} {moved}")
+        print(f"  {at:6.1f}  " + " | ".join(cells))
+    for side, seen in steps.items():
+        if not seen:
+            continue
+        big = [s for s in seen if s > jump]
+        print(f"  {side:6}: {len(seen)} consecutive pairs, "
+              f"median step {sorted(seen)[len(seen) // 2]:.3f} s, "
+              f"max {max(seen):.3f} s, "
+              f"{len(big)} above {jump:.1f} s")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from PIL import Image
 
 from pitcrew.telemetry.board import (
     ASPECT,
+    PLATE_MIN,
     Board,
     _ladder,
     _own_row_by_plate,
@@ -400,3 +401,26 @@ def test_the_gap_readout_is_not_cut_off_by_the_plate_s_width(name, _own_y):
     board = find(a_real_frame(name))
     for box in (board.ahead, board.behind):
         assert box[2] > board.row[2], "the readout runs past the plate"
+
+
+@pytest.mark.parametrize("name,_own_y", REAL_FRAMES)
+def test_the_gap_box_has_blank_plate_inside_its_own_edges(name, _own_y):
+    """**Without a margin the box was refused before it was ever read.**
+
+    `hud_time` refuses a box whose ink touches either edge, correctly - a
+    clipped time parses cleanly as a shorter one. But the box used to be the
+    ink's own bounding box, so its left edge sat exactly on the `+` sign: the
+    guard fired on every gap box of every frame and `read_gaps` had never
+    returned a number in its life. `GAP_MARGIN_L/R` is 6 and 8 px, measured to
+    clear the guard on all six boxes it was tried on.
+
+    Asserted on the ink itself rather than on the constants, because what the
+    guard downstream actually tests is whether the outermost column carries
+    ink - and a margin that the search then trims away is no margin at all.
+    """
+    frame = a_real_frame(name)
+    for box in (find(frame).ahead, find(frame).behind):
+        x0, y0, x1, y1 = box
+        ink = frame[y0:y1 + 1, x0:x1 + 1].min(axis=2) > PLATE_MIN
+        assert not ink[:, 0].any(), "ink on the left edge - a cut box"
+        assert not ink[:, -1].any(), "ink on the right edge - a cut box"

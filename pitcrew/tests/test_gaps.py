@@ -1,17 +1,25 @@
 """The three gap readouts: where a stop puts you, and how fast you are closing.
 
-**Every gap box in every frame of available footage read `--:--.---`**, so a
-live gap has never been through this. The arithmetic below is exercised on
-figures; the reading is exercised on the fastest-lap banner, whose value is
-known, and on the dash box it must refuse. That division is the honest state of
-this module and the docstring says so too.
+**Every gap box in every frame of available footage read `--:--.---`**, so for
+a fortnight a live gap had never been through this: the arithmetic below was
+exercised on figures and the reading only on the fastest-lap banner and on the
+dash box it must refuse.
+
+**That is no longer the honest state of it.** The 4 Sep race capture draws real
+gaps, and `test_both_gaps_read_off_a_real_race_frame` runs a whole frame from
+it through the locator, the box and the digit bank to two known values. The
+per-glyph work is in `test_smallfont.py`, which carries the hold-out counts.
 """
 from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
 
 import pytest
 
+import pitcrew.race.gaps as gaps
+from pitcrew.telemetry.board import find
 from pitcrew.race.gaps import (
     MIN_LAPS_FOR_TREND,
     REJOIN_MARGIN_S,
@@ -231,3 +239,43 @@ def test_an_empty_box_is_read_as_no_value():
     not come back as a gap of any size."""
     frame = np.zeros((400, 600, 3), dtype=int)
     assert read_gaps(frame, (40, 200, 250, 232)) == (None, None)
+
+
+def a_real_board():
+    from PIL import Image
+    name = Path(__file__).parent / "fixtures" / "daytona-race-board-p2.png"
+    with Image.open(name) as image:
+        return np.asarray(image.convert("RGB"))
+
+
+def test_both_gaps_read_off_a_real_race_frame():
+    """**The measurement this module was written for and never had.**
+
+    `daytona-race-board-p2.png` is a whole board cut from the 4 Sep race, and
+    the two readouts either side of his own row carry `+ 1.062` and `- 0.761`.
+    Everything above this line is exercised on figures; this is the one test
+    that runs a frame, the locator, the box and the digit bank end to end, and
+    it returned `(None, None)` on every frame ever tried until 5 Sep 2026.
+    """
+    frame = a_real_board()
+    assert read_gaps(frame, find(frame)) == (pytest.approx(1.062),
+                                             pytest.approx(0.761))
+
+
+def test_a_sign_that_disagrees_with_the_side_is_refused(monkeypatch):
+    """GT7 draws `+` on the row above his own and `-` on the row below, and it
+    agreed with the side on all 165 boxes measured that carried one. A box
+    whose sign disagrees is not the box this function thinks it is - a
+    mis-anchored row, or a board found in the scenery - and a value taken from
+    it would be attached with confidence to the wrong car.
+
+    So: hand the `behind` box back as the `ahead` one. Its digits read
+    perfectly well. Its sign says it belongs to the other side.
+    """
+    frame = a_real_board()
+    found = find(frame)
+    monkeypatch.setattr(gaps, "gap_lines",
+                        lambda frame, row: (found.behind, found.behind))
+    ahead, behind = read_gaps(frame, found.row)
+    assert ahead is None, "a `-` in the ahead box is not the car ahead"
+    assert behind == pytest.approx(0.761)
