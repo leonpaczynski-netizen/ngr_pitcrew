@@ -239,6 +239,21 @@ class SettingsScreen(QWidget):
             "never takes focus, so it cannot steal a keypress from the game.")
         plate.body.addWidget(self.banner_enabled)
 
+        # **A way to turn the board off.** It opens itself when a race arms,
+        # frameless and always on top, and the setting that governs it had no
+        # control anywhere in the app - so the only way to be rid of it was to
+        # stop the race. Escape closes one that is already open; this stops it
+        # opening at all.
+        self.driver_board_enabled = QCheckBox(
+            "Open the driver board when a race arms")
+        self.driver_board_enabled.setToolTip(
+            "The glance-up board for the screen above the game: tyre "
+            "temperatures and laps to box while running, and the fuel, "
+            "tyres, rejoin and release countdown while you are stopped.\n\n"
+            "Drag it onto the monitor you want it on and it reopens there. "
+            "Escape closes it without stopping the race.")
+        plate.body.addWidget(self.driver_board_enabled)
+
         self.test_feed_button = MarkButton("Test the feed", compact=True)
         self.test_feed_button.setToolTip(
             "Opens the socket for real, asks the console if asking is "
@@ -792,6 +807,7 @@ class SettingsScreen(QWidget):
         self.feed_source.setCurrentIndex(max(0, index))
         self.ps5_ip.setText(settings.ps5_ip)
         self.banner_enabled.setChecked(settings.banner_enabled)
+        self.driver_board_enabled.setChecked(settings.driver_board_enabled)
         self._sync_feed_source()
         self.game_version.setText(settings.game_version)
         for combo, chosen in ((self.audio_output, settings.audio_output_device),
@@ -838,6 +854,10 @@ class SettingsScreen(QWidget):
             feed_source=self.feed_source.currentData(),
             ps5_ip=self.ps5_ip.text().strip(),
             banner_enabled=self.banner_enabled.isChecked(),
+            driver_board_enabled=self.driver_board_enabled.isChecked(),
+            # `driver_board_geometry` deliberately has no line here: it has no
+            # control on this screen, and the `replace` above is exactly what
+            # carries such a field through untouched.
             # **No fallback.** Coercing an empty box to "1.70" was the same
             # hard-coded default wearing a different hat, and it outlived the
             # patch that made it wrong.

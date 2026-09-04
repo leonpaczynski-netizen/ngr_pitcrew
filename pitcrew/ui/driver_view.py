@@ -150,6 +150,20 @@ class DriverState:
     # laps-to-the-stop and laps-to-the-flag, ten laps apart.
     next_stint_laps: int | None = None
     runs_to_flag: bool = False
+    # Where the fill rate came from - "measured here" or "declared rate".
+    # On the screen because the countdown is only as good as its rate, and a
+    # figure typed on the event page and one measured at this pump are not
+    # the same claim.
+    fill_rate_note: str | None = None
+    # **Whether a plan exists at all.** `compound` and `next_stint_laps` are
+    # both None after a mid-race replan that names neither, and also when
+    # nothing was ever approved - and those are different answers, which is
+    # rule 13. Without this the board said "no plan" while a plan was running.
+    has_plan: bool = False
+    # The stop is due or overdue. `laps_to_box` clamps at zero, so without
+    # this a driver three laps past his box lap reads "0 laps to box" every
+    # lap with nothing saying he is late.
+    past_box_lap: bool = False
 
 
 def onset_for(compound: str | None) -> float | None:
@@ -325,6 +339,20 @@ class DriverWindow(QWidget):
     def mouseReleaseEvent(self, event) -> None:    # noqa: N802 - Qt naming
         self._drag_from = None
 
+    def keyPressEvent(self, event) -> None:        # noqa: N802 - Qt naming
+        """Escape closes it.
+
+        A frameless always-on-top window with no title bar has no close
+        button, and the only other way off the screen was to stop the race -
+        which is not something to do because a display is in the way. It does
+        not take focus, so this only fires when he has deliberately clicked
+        on it.
+        """
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            return
+        super().keyPressEvent(event)
+
     # -- geometry, remembered across races -----------------------------------
 
     def geometry_text(self) -> str:
@@ -380,9 +408,19 @@ def format_release(seconds: float | None) -> str:
 class _BoxPanel(QWidget):
     """What the screen says while the car is stopped.
 
-    Five items, and the order is the order he needs them: the number he is
-    watching the gauge for, the seconds until it arrives, what is going on the
-    car, where it puts him, and what the stint after this one is.
+    Five items, in the order he needs them: the seconds he is counting down,
+    the number those seconds are counting towards, what is going on the car,
+    where it puts him, and what the stint after this one is.
+
+    **The countdown leads.** The earlier docstring described the litres first
+    and the code laid out the seconds first, which is the sort of disagreement
+    that gets resolved by whoever reads it last. The seconds are what he acts
+    on - the litres are the reason, and CLAUDE.md 5.5 puts the instruction
+    first and the reason second.
+
+    Every dash on this panel carries the reason it is a dash. An empty box he
+    cannot explain is one he would stop trusting the rest of the screen over,
+    and on this panel four of the five can legitimately be empty.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -397,7 +435,11 @@ class _BoxPanel(QWidget):
         self.release_stat = _Stat("release in")
         self.fuel_stat = _Stat("fuel to")
         self.tyre_stat = _Stat("tyres")
-        self.out_stat = _Stat("out in")
+        # **"Rejoin", not "out in".** The value is `P7`, and "out in" reads as
+        # a duration everywhere else on this rig - directly above it, "release
+        # in" IS one. A caption that names a unit the value does not have is
+        # the collision rule 13 is about.
+        self.out_stat = _Stat("rejoin")
         self.next_stat = _Stat("then")
         row.addStretch(1)
         for stat in (self.release_stat, self.fuel_stat, self.tyre_stat,
@@ -411,11 +453,18 @@ class _BoxPanel(QWidget):
         # only at zero. He has to move his hand to the trigger, and a release
         # that turns red at the moment it is due is a release he is late for.
         seconds = state.release_in_s
-        self.release_stat.show_value(
-            format_release(seconds),
-            "seconds" if seconds and seconds > 0 else
-            "" if seconds is None else "release",
-            urgent=seconds is not None and seconds <= 10)
+        if seconds is None:
+            # **The dash says why.** This is the one figure the driver is
+            # holding the trigger on, and it was the only one on the panel
+            # showing a bare dash with an empty caption under it.
+            reason = ("no fill rate measured here" if state.fuel_target_l
+                      else "nothing sized this stop")
+            self.release_stat.show_value("--", reason)
+        else:
+            self.release_stat.show_value(
+                format_release(seconds),
+                "seconds" if seconds > 0 else "release now",
+                urgent=seconds <= 10)
 
         if state.fuel_target_l is None:
             # Nothing sized the stop. Silence rather than a number the app
@@ -423,15 +472,32 @@ class _BoxPanel(QWidget):
             # the same reason: he is holding the trigger on this figure.
             self.fuel_stat.show_value("--", "nothing sized this stop")
         else:
-            aboard = (f"{state.fuel_l:.0f} aboard" if state.fuel_l is not None
-                      else "")
-            self.fuel_stat.show_value(f"{state.fuel_target_l:.0f}", aboard)
+            parts = []
+            if state.fuel_l is not None:
+                parts.append(f"{state.fuel_l:.0f} aboard")
+            # Which rate the seconds beside it were priced at. A rate measured
+            # at this pump and one typed on the event page are not the same
+            # claim, and the countdown is only as good as whichever it used.
+            if state.fill_rate_note:
+                parts.append(state.fill_rate_note)
+            self.fuel_stat.show_value(f"{state.fuel_target_l:.0f}",
+                                      " \u00b7 ".join(parts))
 
         # The plan's decision, not a reading off the car. Nothing here knows
         # how worn the set coming off is, because no packet format carries
         # wear at all.
-        self.tyre_stat.show_value(state.compound or "--",
-                                  "plan" if state.compound else "no plan")
+        #
+        # **"No plan" used to cover two different facts.** `next_compound` is
+        # also None when a plan IS running and simply does not name a compound
+        # for the next stint - which is the honest state after a mid-race
+        # replan - so the board told him there was no plan while one was being
+        # executed.
+        if state.compound:
+            self.tyre_stat.show_value(state.compound, "plan")
+        elif state.has_plan:
+            self.tyre_stat.show_value("--", "the plan names no compound")
+        else:
+            self.tyre_stat.show_value("--", "no plan")
 
         if state.out_position is None:
             # **A dash, and it says why.** The gap boxes this rests on have
@@ -454,6 +520,11 @@ class _BoxPanel(QWidget):
         elif state.next_stint_laps is not None:
             self.next_stat.show_value(f"{state.next_stint_laps}",
                                       "laps, then box again")
+        elif state.has_plan:
+            # Out past the end of the stint list - an unplanned stop. NOT the
+            # same as having no plan, and emphatically not "runs to the flag":
+            # nothing has checked the fuel aboard against what is left.
+            self.next_stat.show_value("--", "past the end of the plan")
         else:
             self.next_stat.show_value("--", "no plan")
 
@@ -533,6 +604,13 @@ class DriverView(QWidget):
 
         if state.laps_to_box is None:
             self.box_stat.show_value("--", "no plan")
+        elif state.past_box_lap:
+            # **`laps_to_stop()` clamps at zero**, so a driver three laps past
+            # his box lap read "0 laps to box, box on lap 15" - the current
+            # lap, every lap, with nothing saying he was late. `past_box_lap`
+            # carries the sign the clamp discards.
+            self.box_stat.show_value("NOW", "you are past the box lap",
+                                     urgent=True)
         else:
             self.box_stat.show_value(
                 f"{state.laps_to_box:.0f}",

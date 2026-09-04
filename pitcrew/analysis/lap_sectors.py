@@ -64,17 +64,24 @@ gate is placed in **measured gaps rather than between populations**. Over the
 there is nothing at all until 1.050. Below it the laps thin out rather than
 stop: 0.9895, 0.9838, 0.9793, 0.9655, then a real gap down to 0.5593.
 
-**The two bounds are not equally well placed, and the lower one is the weak
-half.** `SPAN_RATIO[1]` sits in an empty band and is doing exactly what it was
-designed for. `SPAN_RATIO[0]` sits in a genuine gap too, but a long way below
-the cluster, so it admits laps missing up to 5% of their frames - and because
-`marks` starts at 0, **a deficit at the START of a lap lands entirely inside
-S1**: every crossing is read early and S1 is understated by the whole offset
-while S3 absorbs it. Seven stored laps sit in that band; two of them differ by
-1.9 s in S1 while agreeing to 60 ms in S2, which is the signature. None
-currently holds a session best, and `_best_sectors` does not screen on the
-ratio - so this is a known hazard rather than a known defect, and the accept
-log carries the ratio precisely so it cannot go unnoticed again.
+**Why the lower bound is 1% and not the 5% the distribution would allow.**
+`marks` starts at 0, so it assumes the first captured frame IS the crossing.
+Where frames are missing from the START of a lap that assumption is wrong by
+the whole missing interval, every crossing is read early, and **the entire
+deficit lands inside S1** - understated by the offset, with S3 absorbing it
+back so the three still sum to the lap time and nothing looks wrong. At 0.95
+that is up to 5.5 s of a 110 s lap, roughly 15% of a sector, and it is
+indistinguishable from driving.
+
+A mid-lap dropout is harmless by contrast: `t_ms` comes off the packet counter
+and stays a true clock across a gap, so the crossings are still read at the
+right moments. It is specifically the missing PREFIX that corrupts a sector,
+and the span ratio is the only thing that sees it.
+
+The cost of the tighter bound is small and known: seven of the 555 laps in the
+archive sat between 0.9655 and 0.9895 and now carry no sectors instead of a
+silently wrong S1. Two of them differ by 1.9 s in S1 while agreeing to 60 ms
+in S2, which is the signature of exactly this fault.
 
 It refuses 87 of 91 out-laps, and the four it admits are ones whose clocks
 genuinely do agree - which is the point, because the gate is about the clocks
@@ -103,9 +110,15 @@ SECTORS = 3
 SNAP_REACH = 0.04
 
 # How far the frames' own span may sit from GT7's lap time before the two are
-# not measuring the same lap. Both edges are in observed gaps - see the module
-# docstring - so neither is tuned between populations.
-SPAN_RATIO = (0.95, 1.01)
+# not measuring the same lap.
+#
+# **A principled bound, not a fitted one**, and it was 0.95 first. The frames
+# have to cover the lap: 1% is a lap time's worth of rounding either way, and
+# anything further means a stretch of the lap was never observed. The first
+# version chose 0.95 because that number sat in an empty band of the observed
+# distribution - true, but the wrong question. A lap missing 4% of its frames
+# is not admissible merely because no other lap missed 3%.
+SPAN_RATIO = (0.99, 1.01)
 
 
 @dataclass(frozen=True)

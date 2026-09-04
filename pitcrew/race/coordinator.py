@@ -36,6 +36,7 @@ from pitcrew.race.clock import RaceClock
 from pitcrew.race.composure import Composure
 from pitcrew.race.expectations import ExpectationTracker
 from pitcrew.store.tyres import gap_association_for
+from pitcrew.strategy.model import PIT_LOSS_MEASURED
 from pitcrew.telemetry.recorder import SAMPLE_HZ
 from pitcrew.telemetry.session_state import EventKind, Phase
 
@@ -222,7 +223,20 @@ class RaceCoordinator:
         # TRACK constant (CLAUDE.md 5.4); the refuel rate comes off the event
         # and is `None` until somebody measures it, which is not a rate.
         self.state.pit_loss_s = pit_loss_s
-        self.state.pit_loss_source = ("measured" if pit_loss_measured
+        # **The vocabulary `stop_costs_s` actually compares against.** This
+        # wrote the bare string "measured" while `strategy.model` - the module
+        # that defines the term, and the one `gaps.stop_costs_s` and
+        # `StrategyInputs.stop_overhead_s` both import it from - spells it
+        # `measured-this-track`. The comparison therefore never matched, so
+        # `PIT_DEAD_TIME_S` was never added to a measured pit loss by ANY
+        # pit-lane call: 7.5 s missing from every rejoin verdict against a
+        # `REJOIN_MARGIN_S` of 3 s. Two words for one concept is rule 13 with
+        # the sign hidden - the mismatch fails silently, and in the direction
+        # that makes a stop look cheap.
+        #
+        # The events column keeps its own storage vocabulary ("declared" /
+        # "measured"); it is translated here, once, at the boundary.
+        self.state.pit_loss_source = (PIT_LOSS_MEASURED if pit_loss_measured
                                       else None)
         self.state.refuel_rate_lps = refuel_rate_lps
         self._mandatory_stops = int(mandatory_stops or 0)

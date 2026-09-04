@@ -2065,7 +2065,14 @@ class Store:
         `S2` in one column.
         """
         from pitcrew.store.schema import sector_model_for
-        return sector_model_for(self._conn, circuit_key)
+
+        # **Under the lock, like every other read in this file.** The
+        # connection is opened `check_same_thread=False` and `_query` takes
+        # `self._lock` for exactly that reason; this was the one method that
+        # went straight to `self._conn`, and it is called from the lap
+        # handler on the Qt thread while writes are in flight.
+        with self._lock:
+            return sector_model_for(self._conn, circuit_key)
 
     def list_corner_models(self) -> list[str]:
         rows = self._query("SELECT circuit_key FROM corner_models ORDER BY circuit_key")

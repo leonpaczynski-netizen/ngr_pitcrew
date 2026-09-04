@@ -192,3 +192,84 @@ def test_geometry_on_a_screen_that_is_here_is_restored(app):
     window = DriverWindow()
     assert window.restore_geometry(wanted) is True
     assert window.geometry_text() == wanted
+
+
+# ------------------------------------------- every dash carries its reason
+
+def test_no_fill_rate_says_so_rather_than_showing_a_bare_dash(app):
+    """The one figure he is holding the trigger on was the only one on the
+    panel with an empty caption under its dash."""
+    view = DriverView()
+    view.update_state(DriverState(in_box=True, fuel_target_l=74.0))
+    assert view.box.release_stat.value.text() == "--"
+    assert "no fill rate" in view.box.release_stat.sub.text()
+
+
+def test_the_fill_rate_source_is_printed_beside_the_target(app):
+    """A rate measured at this pump and one typed on the event page are not
+    the same claim, and the countdown is only as good as whichever it used."""
+    view = DriverView()
+    view.update_state(DriverState(in_box=True, fuel_target_l=74.0, fuel_l=31.0,
+                                  release_in_s=43.0,
+                                  fill_rate_note="declared rate"))
+    assert "declared rate" in view.box.fuel_stat.sub.text()
+
+
+def test_a_plan_that_names_no_compound_is_not_no_plan_at_all(app):
+    """`next_compound` is None after a mid-race replan that names none, which
+    is an honest state - and the board used to report it as having no plan."""
+    view = DriverView()
+    view.update_state(DriverState(in_box=True, has_plan=True))
+    assert "names no compound" in view.box.tyre_stat.sub.text()
+    view.update_state(DriverState(in_box=True, has_plan=False))
+    assert view.box.tyre_stat.sub.text() == "no plan"
+
+
+def test_running_off_the_end_of_the_plan_is_not_no_plan_and_not_the_flag(app):
+    view = DriverView()
+    view.update_state(DriverState(in_box=True, has_plan=True))
+    assert view.box.next_stat.value.text() == "--"
+    assert "past the end of the plan" in view.box.next_stat.sub.text()
+
+
+def test_the_rejoin_caption_does_not_read_as_a_duration(app):
+    """`out in P7` collides a duration caption with a position value, and
+    "release in" directly above it genuinely is a duration."""
+    view = DriverView()
+    assert "in" not in view.box.out_stat.caption.text().lower().split()
+
+
+# ------------------------------------------------------- overdue on track
+
+def test_being_past_the_box_lap_says_so_instead_of_counting_zero(app):
+    """`laps_to_stop()` clamps at zero, so three laps late read "0 laps to
+    box, box on lap 15" - the current lap, every lap, with nothing saying he
+    was overdue."""
+    view = DriverView()
+    view.update_state(DriverState(laps_to_box=0.0, box_on_lap=15,
+                                  past_box_lap=True))
+    assert view.box_stat.value.text() == "NOW"
+    assert "past the box lap" in view.box_stat.sub.text()
+
+
+def test_a_stop_still_ahead_counts_down_normally(app):
+    view = DriverView()
+    view.update_state(DriverState(laps_to_box=3.0, box_on_lap=15))
+    assert view.box_stat.value.text() == "3"
+
+
+# ------------------------------------------------------------- getting rid of it
+
+def test_escape_closes_the_board_without_stopping_the_race(app):
+    """A frameless window has no close button, and the only other way off the
+    screen was to stop the race - which is not a thing to do because a display
+    is in the way."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QKeyEvent
+
+    window = DriverWindow()
+    window.show()
+    window.keyPressEvent(
+        QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                  Qt.KeyboardModifier.NoModifier))
+    assert not window.isVisible()

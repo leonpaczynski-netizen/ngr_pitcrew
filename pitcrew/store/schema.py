@@ -1770,10 +1770,15 @@ def derive_sectors(conn: sqlite3.Connection, *, restamp: bool = False) -> int:
         model = models[key]
         if model is None:
             continue
-        # Already cut against exactly these lines. Re-decoding a 400 KB blob
-        # to arrive at the number already in the column is the whole cost of
-        # this pass, so it is skipped rather than repeated.
-        if stamp == model.stamp:
+        # Already cut against exactly these lines, and not being asked to
+        # re-check. Re-decoding a 400 KB blob to arrive at the number already
+        # in the column is the whole cost of this pass.
+        #
+        # **`restamp` does NOT skip a matching stamp.** The stamp records the
+        # LINES, not the gate - so tightening `SPAN_RATIO` leaves every stamp
+        # identical while changing which laps are admissible, and a restamp
+        # that skipped on a stamp match could never retire them.
+        if stamp == model.stamp and not restamp:
             continue
         row = conn.execute(
             "SELECT blob FROM lap_frames WHERE lap_id = ?", (lap_id,)).fetchone()
@@ -1785,6 +1790,19 @@ def derive_sectors(conn: sqlite3.Connection, *, restamp: bool = False) -> int:
             continue
         found = read(frames, lap_time_ms, model)
         if not found.measured:
+            # **A restamp retires an accept the model no longer makes.** Rule
+            # 10: a rule that refuses a reading has to be able to refuse its
+            # own baseline, and a lap cut under a looser gate is exactly that
+            # baseline. Tightening `SPAN_RATIO` from 0.95 to 0.99 has to be
+            # able to take back the seven laps the old bound let through, or
+            # the archive keeps numbers the code would no longer produce and
+            # nothing can tell them apart.
+            if restamp and stamp is not None:
+                conn.execute(
+                    "UPDATE laps SET sector1_ms = NULL, sector2_ms = NULL, "
+                    "sector3_ms = NULL, sector_model = NULL WHERE id = ?",
+                    (lap_id,))
+                written += 1
             continue
         conn.execute(
             "UPDATE laps SET sector1_ms = ?, sector2_ms = ?, sector3_ms = ?, "

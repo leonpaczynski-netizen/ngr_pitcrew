@@ -305,6 +305,12 @@ class TelemetryBridge(QObject):
         # need a live reading rather than a per-lap aggregate - the HUD
         # calibration report is the only one today. One attribute write per
         # frame; nothing reads it on this thread.
+        # **Read on the Qt thread by five callers now**, not one. The
+        # invariant that makes that safe is that this is REPLACED wholesale
+        # every frame and never mutated in place, so a reader that takes the
+        # reference into a local once sees a coherent single frame. Anything
+        # reading `self.bridge.last_packet.x` and then
+        # `self.bridge.last_packet.y` can straddle two frames; take the local.
         self.last_packet = None
         self.racing = False
         self.beep_wanted = True
@@ -4611,6 +4617,7 @@ class PitCrewController(QObject):
         in_box = bool(state.in_pit or filling)
 
         to_stop = state.laps_to_stop()
+        has_plan = bool(getattr(self.race, "_stints", None))
         base = DriverState(
             temps_c=temps,
             # On track this is the set he is ON; in the box it is the set
@@ -4623,6 +4630,9 @@ class PitCrewController(QObject):
             laps_of_fuel=state.laps_of_fuel(),
             fuel_l=fuel_l,
             burn_l=state.fuel_per_lap_l,
+            has_plan=has_plan,
+            # The sign `laps_to_stop()` throws away when it clamps at zero.
+            past_box_lap=bool(getattr(state, "past_box_lap", False)),
         )
         if not in_box:
             return base
@@ -4632,11 +4642,13 @@ class PitCrewController(QObject):
         if found is not None:
             target_l = found[0]
             release_s = self._release_seconds(target_l, fuel_l)
+        _, rate_note = self._fill_rate()
         out_position, out_behind = self._rejoin_seat(target_l, fuel_l)
         next_laps, to_flag = self._next_stint_shape()
         return replace(
             base, in_box=True, fuel_target_l=target_l,
-            release_in_s=release_s, out_position=out_position,
+            release_in_s=release_s, fill_rate_note=rate_note,
+            out_position=out_position,
             out_behind=out_behind, next_stint_laps=next_laps,
             runs_to_flag=to_flag)
 
@@ -4655,21 +4667,47 @@ class PitCrewController(QObject):
         return {"fl": packet.tyre_temp_fl, "fr": packet.tyre_temp_fr,
                 "rl": packet.tyre_temp_rl, "rr": packet.tyre_temp_rr}
 
-    def _release_seconds(self, target_l, fuel_l):
-        """How long until the tank reaches the target, at THIS circuit rate.
+    def _fill_rate(self):
+        """`(litres per second, where it came from)` for the stop in hand.
 
-        **Measured, not assumed.** The rate comes from `race/knowledge`, which
-        holds what a stop here has actually been seen to do - 1.002 L/s at
-        Monza, 1.001 at Watkins. Where the circuit has no measured rate the
-        countdown is `None` and the board shows a dash: he is holding the
-        trigger on this number, and one the app invented is worse than none.
+        **One expression, because the board had two.** The countdown used
+        `Knowledge.refuel_l_per_s` and every other pit-lane consumer uses
+        `state.refuel_rate_lps`, so the seconds on the screen and the litres
+        in his ear were priced from different numbers and neither said which -
+        CLAUDE.md rules 12 and 13. They are also not interchangeable: the
+        first is what a stop here has actually been seen to do (1.002 L/s at
+        Monza, 1.001 at Watkins); the second is a figure typed on the event
+        page. Measured wins where it exists, the declared one is used and
+        labelled where it does not, and the board prints the label.
+        """
+        measured = getattr(self._race_knowledge(), "refuel_l_per_s", None)
+        if measured and measured > 0:
+            return measured, "measured here"
+        declared = getattr(self.race.state, "refuel_rate_lps", None)
+        if declared and declared > 0:
+            return declared, "declared rate"
+        return None, None
+
+    def _release_seconds(self, target_l, fuel_l):
+        """How long until the tank reaches the target.
+
+        Where no rate exists at all the countdown is `None` and the board
+        shows a dash with the reason on it: he is holding the trigger on this
+        number, and one the app invented is worse than none.
+
+        **Not clamped at zero as a measurement.** It reads negative when the
+        tank is already past target, and `format_release` renders that as the
+        distinct token `GO` rather than as `0` - the same answer
+        `RefuelWatch.note` gives for the same input. Rule 9 is satisfied by
+        the token being distinct, not by the clamp, so the clamp is gone and
+        the sign travels.
         """
         if target_l is None or fuel_l is None:
             return None
-        rate = getattr(self._race_knowledge(), "refuel_l_per_s", None)
-        if not rate or rate <= 0:
+        rate, _ = self._fill_rate()
+        if rate is None:
             return None
-        return max(0.0, (target_l - fuel_l) / rate)
+        return (target_l - fuel_l) / rate
 
     def _rejoin_seat(self, target_l, fuel_l):
         """Where a release now puts him, and behind whom.
@@ -4693,7 +4731,11 @@ class PitCrewController(QObject):
         from pitcrew.race.rival_calls import _snapshot
 
         state = self.race.state
-        if not state.position:
+        # Read once. `_note_position` writes `state.position` on the telemetry
+        # thread at 60 Hz, and testing it and then adding to it were two reads
+        # that a place change could fall between.
+        position = state.position
+        if not position:
             return None, None
         knowledge = self._race_knowledge()
         # **Not `max(0, ...)`.** A car arriving with more aboard than the next
@@ -4705,9 +4747,17 @@ class PitCrewController(QObject):
         # number disagreed (rule 12). Left negative, the refusal fires.
         litres = (None if (target_l is None or fuel_l is None)
                   else target_l - fuel_l)
-        cost = stop_costs_s(litres,
-                            getattr(knowledge, "refuel_l_per_s", None),
-                            getattr(knowledge, "pit_loss_s", None),
+        rate, _ = self._fill_rate()
+        cost = stop_costs_s(litres, rate,
+                            # **The state's, not `Knowledge`'s.** `Knowledge`
+                            # holds `pit_loss_s` only where a stop here has
+                            # been measured, while `state.pit_loss_s` is never
+                            # falsy - so reading it off `Knowledge` made the
+                            # board show "no gap read" at every circuit whose
+                            # briefing names no stop, while the voice happily
+                            # made a rejoin call from the same race.
+                            getattr(state, "pit_loss_s", None)
+                            or getattr(knowledge, "pit_loss_s", None),
                             # **`Knowledge` carries no `pit_loss_source`.**
                             # Reading one off it always returned None, so the
                             # 7.5 s dead time was never added and every
@@ -4720,7 +4770,7 @@ class PitCrewController(QObject):
             behind.latest() if behind is not None else None, cost)
         if verdict is None or verdict.too_close:
             return None, None
-        seat = state.position if verdict.ahead else state.position + 1
+        seat = position if verdict.ahead else position + 1
         return seat, getattr(state, "gap_behind_name", None)
 
     def _next_stint_shape(self):
@@ -4731,12 +4781,18 @@ class PitCrewController(QObject):
         board must not say "runs to the flag" for the second. `hasPlan` is on
         the snapshot for exactly this reason; here it is the stint list.
         """
-        stints = list(getattr(self.race, "_stints", None) or [])
+        # **Both read before either is used.** `replan` REPLACES the stint
+        # list wholesale, so taking the list and the index as two separate
+        # reads leaves a window where the index belongs to the old plan and
+        # the list to the new one - and the answer would be a stint from
+        # neither.
+        race = self.race
+        stints = list(getattr(race, "_stints", None) or [])
+        index = race.state.stint_index + 1
         if not stints:
             return None, False
         # `stint_index` has not advanced yet: `_apply_stint` fires on PIT EXIT,
         # so during the stop this names the stint the stop is starting.
-        index = self.race.state.stint_index + 1
         if index >= len(stints):
             # **Out of plan is not "runs to the flag".** The first version
             # returned True here, so an unplanned second stop - damage, an

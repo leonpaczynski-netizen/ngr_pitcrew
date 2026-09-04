@@ -67,6 +67,9 @@ class _State:
     gap_behind: object = None
     gap_behind_name: str | None = None
     pit_loss_source: str | None = "declared"
+    pit_loss_s: float | None = 19.0
+    refuel_rate_lps: float | None = None    # declared on the event page
+    past_box_lap: bool = False
     finished: bool = False
     _to_stop: int | None = 3
 
@@ -112,6 +115,7 @@ class _Stub:
 
     _driver_board_state = PitCrewController._driver_board_state
     _board_temps = PitCrewController._board_temps
+    _fill_rate = PitCrewController._fill_rate
     _release_seconds = PitCrewController._release_seconds
     _rejoin_seat = PitCrewController._rejoin_seat
     _next_stint_shape = PitCrewController._next_stint_shape
@@ -205,10 +209,18 @@ def test_the_countdown_is_refused_where_no_fill_rate_has_been_measured_here():
     assert _state_for(stub).release_in_s is None
 
 
-def test_the_countdown_floors_at_zero_rather_than_going_negative():
-    """Overfilled past the target is "go", not "-4 seconds"."""
+def test_a_tank_already_past_target_carries_the_sign_and_reads_GO():
+    """**Not clamped to zero.** The clamp was rule 9 at the wrong layer: a
+    negative here is a real state - he is already covered - and `format_release`
+    renders it as the distinct token `GO`, which is the same answer
+    `RefuelWatch.note` gives for the same input. The token is what keeps a
+    zero from being mistaken for a measurement, not the clamp."""
+    from pitcrew.ui.driver_view import format_release
+
     stub = _Stub(bridge=_Bridge(filling=True, packet=_Packet(fuel_level=80.0)))
-    assert _state_for(stub).release_in_s == 0.0
+    seconds = _state_for(stub).release_in_s
+    assert seconds < 0
+    assert format_release(seconds) == "GO"
 
 
 def test_a_stop_nothing_could_size_carries_no_target_and_no_countdown():
@@ -304,13 +316,41 @@ def test_a_gap_too_close_to_call_is_not_reported_as_a_place():
     assert _state_for(stub).out_position is None
 
 
-def test_no_measured_pit_loss_means_no_rejoin_verdict():
+def test_the_declared_pit_loss_is_used_where_none_was_measured_here():
+    """**The board read `Knowledge.pit_loss_s` alone**, which is None at any
+    circuit whose briefing names no stop - so it showed "no gap read" while
+    the voice, reading `state.pit_loss_s`, happily made a rejoin call from the
+    same race. One number, two sources, opposite answers (rule 12)."""
+    stub = _Stub(bridge=_Bridge(filling=True))
+    stub.race.knowledge = _Knowledge(pit_loss_s=None)
+    stub.race.state.gap_behind = _behind(5.0)
+    assert _state_for(stub).out_position == 7
+
+
+def test_no_pit_loss_from_either_source_means_no_rejoin_verdict():
     """`stop_costs_s` returns None if either half is unknown - a stop cost
     built from one of them is not a stop cost."""
     stub = _Stub(bridge=_Bridge(filling=True))
     stub.race.knowledge = _Knowledge(pit_loss_s=None)
+    stub.race.state.pit_loss_s = None
     stub.race.state.gap_behind = _behind(5.0)
     assert _state_for(stub).out_position is None
+
+
+def test_the_declared_fill_rate_stands_in_where_none_was_measured():
+    """And the board says which it used, because a rate measured at this pump
+    and one typed on the event page are not the same claim."""
+    stub = _Stub(bridge=_Bridge(filling=True))
+    stub.race.knowledge = _Knowledge(refuel_l_per_s=None)
+    stub.race.state.refuel_rate_lps = 1.0
+    got = _state_for(stub)
+    assert got.release_in_s == pytest.approx(43.0, abs=0.05)
+    assert got.fill_rate_note == "declared rate"
+
+
+def test_a_measured_rate_is_preferred_and_labelled():
+    got = _state_for(_Stub(bridge=_Bridge(filling=True)))
+    assert got.fill_rate_note == "measured here"
 
 
 # ------------------------------------------------------------- the next stint

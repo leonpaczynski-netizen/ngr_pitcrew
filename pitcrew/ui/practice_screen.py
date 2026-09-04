@@ -1437,13 +1437,14 @@ class PracticeScreen(QWidget):
         catalogue gains a circuit between one session and the next: half the
         rack is cut at 1,780 m and half at 2,097, and picking a minimum across
         the two would mark a lap best in a sector that is a different piece of
-        road.
+        road. `tools/derive_sectors.py --restamp` is what puts a rack back on
+        one set of lines.
+
+        The stamp scan is shared with `_sector_provenance` - see
+        `_sector_stamps` for the disagreement that came of having two.
         """
         counted = [r for r in self._rows if r.counted]
-        sources = {r.sector_source for r in counted
-                   if r.sector_source and any(v is not None
-                                              for v in r.sectors_ms)}
-        if len(sources) > 1:
+        if len(self._sector_stamps()) > 1:
             return (None,) * 3
         return tuple(
             min(found) if (found := [r.sectors_ms[index] for r in counted
@@ -1460,6 +1461,21 @@ class PracticeScreen(QWidget):
         "thirds": "thirds of the lap - not GT7's",
     }
 
+    def _sector_stamps(self) -> set:
+        """Every set of sector lines on this rack.
+
+        **One scan, because there were two and they disagreed.**
+        `_best_sectors` counted stamps among COUNTED rows and
+        `_sector_provenance` among ALL of them, while the latter's docstring
+        asserted they were the same rack. A catalogue change that split an
+        event along the out-laps - and four out-laps in the archive carry
+        sectors - made the screen say "two different sets of lines on this
+        rack" while still printing one of them in bold as the best.
+        """
+        return {row.sector_source for row in self._rows
+                if row.sector_source and any(value is not None
+                                             for value in row.sectors_ms)}
+
     def _sector_provenance(self) -> str | None:
         """One phrase saying how this rack's laps were cut, or None.
 
@@ -1469,9 +1485,7 @@ class PracticeScreen(QWidget):
         the best-sector emphasis refuses to work on, and the driver should be
         told why the column has gone plain.
         """
-        stamps = {row.sector_source for row in self._rows
-                  if row.sector_source and any(v is not None
-                                               for v in row.sectors_ms)}
+        stamps = self._sector_stamps()
         if not stamps:
             return None
         if len(stamps) > 1:
