@@ -120,7 +120,7 @@ the six laps carrying the banking-brake event (F6) and the lap after each.**
 
 ⚠️ First version of this note said "two clean laps in five sessions" — wrong, the driver caught it: the filter excluded
 any lap with 0.05 s of kerb time. ⚠️ Lap 1 of every session is the out-lap (pit limiter 79.5 km/h visible at 150–350 m;
-partial 91.6 s or 7–9 s on the grass) and `is_out_lap` is 0 on all of them — fix in progress.
+partial 91.6 s or 7–9 s on the grass) and `is_out_lap` was 0 on all of them — **fixed and backfilled 4 Sep** (`tools/flag_out_laps.py`).
 
 | run | change | laps (clean-banking) | best | median | S2 sector | T4 exit spin | RR temp | bank susp F / R | body min (bank) |
 |---|---|---|---|---|---|---|---|---|---|

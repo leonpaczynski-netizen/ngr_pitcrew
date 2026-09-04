@@ -438,6 +438,128 @@ FOR_RACE = "race"
 PRACTICE_INTENTS = (FOR_RACE, FOR_QUALIFYING)
 
 
+@dataclass(frozen=True)
+class OpeningLap:
+    """Whether a session's opening lap is an out-lap, and the evidence.
+
+    `is_out_lap` is tri-state. `None` is "cannot say" and every caller must
+    leave the stored flag exactly as it was on `None` - a lap the app cannot
+    place is not a lap that started on the track, and it is not a lap that
+    started in the box either.
+    """
+    is_out_lap: bool | None
+    reason: str
+
+
+def opening_lap_verdict(*, session_kind: str | None,
+                        practice_mode: str | None,
+                        standing_start_ms: int | None) -> OpeningLap:
+    """Is the first lap of a session an out-lap? One rule for every path.
+
+    **Why this exists.** The live flag came from `session_state`, which sets
+    it on a PIT EXIT - and a pit exit needs a pit ENTRY first. A session's
+    opening lap begins already in the box, so no entry is ever seen and the
+    flag could not fire: twelve Daytona sessions in a row stored their
+    opening lap as `is_out_lap = 0`, five of them 91-95 s against a 104 s
+    lap, and `min(lap_time_ms)` over the event returned a lap nobody drove.
+    The rack named those laps correctly on the screen, from `auto_out_laps`,
+    and wrote nothing back - so the screen and the database disagreed about
+    the number every session is judged by (CLAUDE.md rule 13).
+
+    **The driver's declaration is primary (rule 1) and the frames corroborate
+    it.** Where the car started the session is the whole question, and it is
+    the one thing about a session GT7 cannot say; he answers it on the rack.
+    What the feed carries is `standing_start_ms` - how long the car sat
+    before it set off on this lap. Measured across every session on file:
+    every lobby opener begins at `speed 0.0` (0.4 s to 64 s at rest, in the
+    box); every time-trial opener begins rolling at 135-272 km/h, on the
+    track ahead of the line; every race opener begins at rest on the grid.
+    So, in order:
+
+    * **A race opens from the grid, not the pit box.** Its first lap is a
+      full lap from a standing start and counts. `False`.
+    * **Declared time trial**: `False`. The frames showing the car at rest
+      would be a disagreement, and it is named in the reason rather than
+      resolved here - he can correct the declaration on the rack.
+    * **Declared lobby**: `True`. Whether the frames caught the car at rest
+      or picked it up already rolling out of the box is noted, not decided.
+    * **Undeclared**, the frames decide: at rest → `True` (a practice
+      session that begins stationary began in the box - a time trial never
+      does); rolling → `None` (the recording caught the car late and cannot
+      say where it started); no frames → `None`.
+
+    **Frame distance is deliberately not a signal.** A lobby opener at
+    Daytona integrates 3-4% short of the circuit because the pit exit skips
+    the start straight - but so does a full lap whose recording began late
+    (session 20 lap 1: rolling at 199 km/h at the first frame, 3.4% short,
+    and a full lap time). Coverage of the *frames* cannot tell a partial lap
+    from a partial recording, so it cannot flag one without also flagging
+    the other. And lap TIME is not used at all: a short lap is what this rule
+    exists to catch, so it cannot be the evidence for it.
+    """
+    at_rest = standing_start_ms is not None and standing_start_ms > 0
+    if standing_start_ms is None:
+        seen = "no frames to corroborate"
+    elif at_rest:
+        seen = f"frames begin at rest for {standing_start_ms / 1000:.1f} s"
+    else:
+        seen = "frames begin rolling"
+
+    if session_kind == "race":
+        return OpeningLap(False, f"a race opens from the grid, not the pit box "
+                                 f"({seen})")
+    if practice_mode == TIME_TRIAL:
+        if at_rest:
+            return OpeningLap(False, (
+                f"declared time trial, but {seen} - the declaration stands; "
+                f"a time trial starts rolling on track, so check it"))
+        return OpeningLap(False, f"declared time trial: started on track "
+                                 f"ahead of the line ({seen})")
+    if practice_mode == LOBBY:
+        if standing_start_ms is None:
+            return OpeningLap(True, f"declared lobby: out of the pit box "
+                                    f"({seen})")
+        if at_rest:
+            return OpeningLap(True, f"declared lobby, and {seen} in the box")
+        return OpeningLap(True, (
+            "declared lobby; the recording picked the car up already rolling "
+            "out of the box, so the frames neither confirm nor deny it"))
+    # Undeclared: only the feed can say, and only one way.
+    if at_rest:
+        return OpeningLap(True, (
+            f"undeclared, but {seen}: a practice session that begins "
+            f"stationary began in the pit box - a time trial starts rolling"))
+    if standing_start_ms is None:
+        return OpeningLap(None, "undeclared and no frames: cannot say where "
+                                "the car started")
+    return OpeningLap(None, (
+        "undeclared and the recording picked the car up already rolling: "
+        "cannot say whether it started in the box or on the track"))
+
+
+def flag_opening_lap(lap, *, session_kind: str | None,
+                     practice_mode: str | None,
+                     standing_start_ms: int | None):
+    """The live path's half of the rule: the lap as it should be stored.
+
+    Called with the lap the session state built, before it is written. Only
+    a session's first lap is judged, only a flag the detector left clear is
+    touched, and only ever SET - `None` leaves it as it was (rule 3), and
+    `False` has nothing to clear because the detector cannot have set it on
+    a lap with no pit entry before it. Returns `(lap, verdict)`; `verdict` is
+    `None` where the rule did not apply, so the caller can log what was
+    accepted as well as what was refused (rule 10).
+    """
+    if getattr(lap, "lap_num", None) != 1 or getattr(lap, "is_out_lap", False):
+        return lap, None
+    verdict = opening_lap_verdict(session_kind=session_kind,
+                                  practice_mode=practice_mode,
+                                  standing_start_ms=standing_start_ms)
+    if verdict.is_out_lap:
+        lap = replace(lap, is_out_lap=True)
+    return lap, verdict
+
+
 def auto_out_laps(laps: list[LapInput]) -> set[int]:
     """**The first lap of every run** — with one exception, and it matters.
 
@@ -472,12 +594,30 @@ def auto_out_laps(laps: list[LapInput]) -> set[int]:
     every run either: a mid-session refuel opens a genuine out-lap whatever
     mode the session is in. Where the car started the session is the whole of
     what the exception is about.
+
+    **The opener's verdict comes from `opening_lap_verdict`, the same rule
+    the live path writes with**, so the rack, the export and the stored flag
+    reach one answer (rule 13). One difference remains and is deliberate: on
+    `None` - undeclared and the frames cannot say - the live path leaves the
+    stored flag clear (rule 3, never guess into the database), while the rack
+    keeps the opener struck, as it always has. A struck lap is visible and
+    can be put back; a counted out-lap is invisible and moves every
+    aggregate. The live path can never reach `None`: the rack's mode picker
+    always holds a mode, so every session recorded since it existed is
+    declared, and the nineteen undeclared sessions on file all predate it.
     """
     runs = split_runs(laps)
     out = {run.first_lap for run in runs}
     session_openers = _session_opening_laps(laps)
     for run in runs:
-        if run.practice_mode == TIME_TRIAL and run.first_lap in session_openers:
+        if run.first_lap not in session_openers:
+            continue
+        first = run.laps[0]
+        verdict = opening_lap_verdict(
+            session_kind=getattr(first, "session_kind", None),
+            practice_mode=run.practice_mode,
+            standing_start_ms=getattr(first, "standing_start_ms", None))
+        if verdict.is_out_lap is False:
             out.discard(run.first_lap)
     return out
 

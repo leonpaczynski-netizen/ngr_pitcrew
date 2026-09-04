@@ -37,6 +37,7 @@ from pitcrew.analysis.runs import (
     REASON_FUEL_IMPLAUSIBLE,
     auto_out_laps,
     carry_compound,
+    flag_opening_lap,
     fuel_implausible_laps,
 )
 from pitcrew.diagnostics import log
@@ -2537,6 +2538,31 @@ class PitCrewController(QObject):
             frames = replace(frames, crawl_s=seen.crawl_s,
                              off_track_s=seen.off_track_s,
                              spin_s=seen.spin_s)
+        # **The session's opening lap is judged here, before it is written,
+        # by the rule the rack rebuilds with.** The session state flags an
+        # out-lap on a PIT EXIT, and a pit exit needs a pit ENTRY first -
+        # which a lap that begins already in the box never has. So the
+        # opening lap of every lobby session reached the database as
+        # `is_out_lap = 0`, the rack struck it on the screen from
+        # `auto_out_laps` and wrote nothing back, and `min(lap_time_ms)` over
+        # the Daytona event returned a 93.100 s pit-exit-to-line fragment as
+        # the best lap. Only ever set, never cleared; `None` leaves the flag
+        # as it was. The accept is logged as well as the refusal (rule 10).
+        lap, verdict = flag_opening_lap(
+            lap,
+            session_kind=self.session_kind,
+            practice_mode=(self.practice.practice_mode()
+                           if self.session_kind == "practice" else None),
+            standing_start_ms=(frames.standing_start_ms
+                               if frames is not None else None))
+        if verdict is not None:
+            log("session").info(
+                "opening lap %s: %s (%s)",
+                "is an out-lap" if verdict.is_out_lap
+                else "left as recorded" if verdict.is_out_lap is None
+                else "is not an out-lap",
+                verdict.reason,
+                "flag set" if verdict.is_out_lap else "flag unchanged")
         try:
             lap_id = self.store.add_lap(self.session_id, lap, frames=frames)
         except sqlite3.Error:
@@ -2621,6 +2647,11 @@ class PitCrewController(QObject):
             # handed it back on the next rebuild.
             practice_mode=self.practice.practice_mode(),
             lap_num_in_session=lap.lap_num,
+            # What the opening-lap rule corroborates the declaration with;
+            # without it the rack's rule and the flag just written could
+            # read the same session two ways.
+            standing_start_ms=(frames.standing_start_ms
+                               if frames is not None else None),
         ))
 
     def plan_qualifying(self) -> bool:
@@ -3056,6 +3087,7 @@ class PitCrewController(QObject):
                 session_started=row["session_started"],
                 practice_mode=self._column(row, "practice_mode"),
                 lap_num_in_session=row["lap_num"],
+                standing_start_ms=self._column(row, "standing_start_ms"),
                 crawl_s=self._column(row, "crawl_s"),
                 off_track_s=self._column(row, "off_track_s"),
                 spin_s=self._column(row, "spin_s"),

@@ -139,6 +139,11 @@ class LapRow:
     # This lap's number within its own session, as opposed to the display
     # number that runs through the whole event.
     lap_num_in_session: int = 0
+    # How long the car sat before setting off on this lap. Only the session's
+    # opening lap says anything with it: it is what `runs.opening_lap_verdict`
+    # corroborates the mode declaration with, and decides on where nothing
+    # was declared. None where the lap's frames were never captured.
+    standing_start_ms: int | None = None
     # Something happened on this lap and the frames say what. Out of the pace
     # and fuel numbers, kept for the corner aggregates — the car is what spun.
     incident: bool = False
