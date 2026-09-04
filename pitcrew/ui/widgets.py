@@ -147,7 +147,38 @@ class Measured(QLabel):
         super().__init__(text, parent)
         weight = QFont.Weight.DemiBold if bold else QFont.Weight.Normal
         self.setFont(theme.data_font(size, weight=weight))
+        # Kept so `set_fill` can put the register's ink back when the rank
+        # goes away - a row can stop being the best when a quicker lap lands.
+        self._ink = colour
+        self._fill: str | None = None
         self.setStyleSheet(f"color: {colour}; background: transparent;")
+
+
+    def set_ink(self, colour: str) -> None:
+        """Change the register's ink without losing the timing fill.
+
+        The rack re-inks a whole row every time a mark changes - struck laps
+        and out-laps go dim - and it did that with a raw `setStyleSheet`,
+        which silently wiped the background. So a lap held its purple until
+        the first time anything on its row was touched, and then lost it.
+        """
+        self._ink = colour
+        self.set_fill(self._fill)
+
+    def set_fill(self, fill: str | None) -> None:
+        """Paint a timing rank behind the number, without touching its ink.
+
+        A filled cell switches the text to `STENCIL` because the fill is dark
+        and the register has already done its job - what a purple cell says is
+        "fastest ever", and it says it whether the number inside it was
+        measured or derived.
+        """
+        self._fill = fill
+        ink = theme.STENCIL if fill else self._ink
+        ground = fill or "transparent"
+        self.setStyleSheet(
+            f"color: {ink}; background: {ground};"
+            + ("border-radius: 3px;" if fill else ""))
 
 
 class Declared(Measured):

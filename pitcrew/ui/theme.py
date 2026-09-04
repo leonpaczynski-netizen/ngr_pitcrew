@@ -79,6 +79,21 @@ CRAYON = "#A3E635"          # DECLARED - the driver typed this
 # with it: that band is a dark desaturated mid-green painted as a block, this
 # is bright acid text, and every band carries its two-letter code anyway.
 DERIVED = "#B08BD8"         # DERIVED - the app worked this out
+# ---- the timing marks, and why they are FILLS and not inks -----------------
+#
+# Purple for a personal best and green for a session best is the sport's own
+# convention and the driver reads it on every timing screen there is. It
+# cannot be done with text colour here: purple text already means DERIVED and
+# green text already means DECLARED - `CRAYON` is a lime - so a green lap time
+# would read as one he typed and a purple sector would stop saying "the app
+# worked this out".
+#
+# So the ranking is painted BEHIND the number, which is what a real timing
+# screen does anyway - it fills the cell. The ink keeps its register, the fill
+# carries the rank, and the two axes never have to argue. Both are dark enough
+# that `STENCIL` reads on them at better than 7:1.
+BEST_EVER = "#452A63"       # fastest ever here, in this car
+BEST_STINT = "#1C5433"      # fastest in this stint
 CHALK = "#7FC7D9"           # provisional annotation, notes, hints
 STRUCK = "#807870"          # struck out: excluded, disabled, not counted
 # Lifted from #6B6459, which carried 3.37:1 on the editor ground. WCAG exempts

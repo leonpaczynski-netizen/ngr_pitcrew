@@ -402,3 +402,42 @@ def test_a_slow_fuel_drain_never_reads_as_a_fill():
     packets = [make_packet(speed_ms=20.0, fuel_level=50.0 - n * 0.02)
                for n in range(200)]
     assert EventKind.PIT_ENTRY not in kinds(feed(state, packets))
+
+
+def test_a_stop_that_straddles_the_line_keeps_its_fill():
+    """Session 127 lap 13, Daytona, 4 Sep 2026.
+
+    GT7 puts the start/finish line inside the pit lane at Daytona, Fuji and
+    Monza, so the crossing fires while the car is standing in the box: the
+    ENTRY lands on one lap and the FILL on the next.  The close used to clear
+    `_fuel_added_in_stop` at every crossing, so the fill - measured correctly,
+    seconds later - was discarded, the out-lap's arithmetic went negative, and
+    `_burn` clamped it to a fabricated `fuel_used = 0.0` with `fuel_added_l`
+    NULL beside it.  Measured that night: 6.81 -> 62.96 L in the box and about
+    7 L burned finishing the lap, filed as zero.
+
+    CLAUDE.md rule 9: a quantity that came out negative is a reading whose
+    reference is wrong, not a quantity of zero.
+    """
+    state = SessionState(SessionKind.RACE)
+    packets = [make_packet(speed_ms=30.0, fuel_level=10.0),
+               make_packet(speed_ms=5.0, fuel_level=10.0)]      # crawling in
+    packets += filling(10.0, seconds=5.0)
+    # The line goes by while he is still standing in the box.
+    packets.append(make_packet(speed_ms=0.0, fuel_level=15.0,
+                               last_lap_ms=120_000))
+    packets += filling(15.0, seconds=25.0)                      # fill continues
+    packets.append(make_packet(speed_ms=40.0, fuel_level=40.0))  # away
+    packets.append(make_packet(speed_ms=40.0, fuel_level=33.0,
+                               last_lap_ms=110_000))            # out lap ends
+    feed(state, packets)
+
+    assert len(state.laps) == 2
+    out_lap = state.laps[1]
+    # It ended fuller than it started, and that is a fill, not an un-burn.
+    assert out_lap.fuel_start < out_lap.fuel_end
+    assert out_lap.fuel_added_l is not None and out_lap.fuel_added_l > 0
+    # start - end + added, and emphatically not 0.0.
+    assert out_lap.fuel_used > 0.0
+    assert out_lap.fuel_used == pytest.approx(
+        out_lap.fuel_start - out_lap.fuel_end + out_lap.fuel_added_l, abs=0.2)

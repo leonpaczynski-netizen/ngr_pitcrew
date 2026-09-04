@@ -304,6 +304,42 @@ def format_delta(ms: int) -> str:
     return f"{'+' if ms > 0 else '−'}{abs(ms) / 1000:.3f}"
 
 
+@dataclass(frozen=True)
+class Bests:
+    """The marks a row is measured against: one lap time and three sectors.
+
+    Two of these reach every row - what this stint has done, and what has ever
+    been done here in this car - and the row paints whichever it matches.
+    `None` throughout is "nothing to beat yet", which is not a time of zero.
+    """
+    lap_ms: int | None = None
+    sectors: tuple = (None, None, None)
+
+
+def rank_fill(value: int | None, stint: int | None, ever: int | None,
+              *, counted: bool) -> str | None:
+    """Which timing colour this figure earns, if any.
+
+    **Purple outranks green**, the way it does on a timing screen: a lap that
+    is the fastest ever here is also the fastest of its stint, and it is the
+    larger claim that gets said.
+
+    **Only a counted lap can hold a mark.** An out-lap, an in-lap, a lap with
+    a spin in it or one struck by hand is not a time this car set - and the
+    out-lap is the one that matters, because a pit-exit-to-line fragment is
+    SHORT. `min(lap_time_ms)` over the Daytona event once returned a 93.100 s
+    fragment as the best lap of the day, and a purple cell would have made
+    that look like an achievement.
+    """
+    if value is None or value <= 0 or not counted:
+        return None
+    if ever is not None and value <= ever:
+        return theme.BEST_EVER
+    if stint is not None and value <= stint:
+        return theme.BEST_STINT
+    return None
+
+
 def format_sector(ms: int | None) -> str:
     """Seconds to three places, or the em dash that means it was refused.
 
@@ -401,7 +437,9 @@ class RackRow(QWidget):
     restructured = pyqtSignal(int)
 
     def __init__(self, row: LapRow, best_ms: int, *, stint_end: bool = False,
-                 run_start: bool = False, best_sectors: tuple = (None,) * 3,
+                 run_start: bool = False,
+                 stint_best: "Bests | None" = None,
+                 ever_best: "Bests | None" = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.row = row
@@ -429,9 +467,15 @@ class RackRow(QWidget):
         self.lap_label.setFixedWidth(W_LAP)
         line.addWidget(self.lap_label)
 
+        stint_best = stint_best or Bests()
+        ever_best = ever_best or Bests()
+
         self.time_label = Measured(format_lap_time(row.lap_time_ms),
                                    size=theme.DATA_LARGE_PX, bold=True)
         self.time_label.setFixedWidth(W_TIME)
+        self.time_label.set_fill(rank_fill(
+            row.lap_time_ms, stint_best.lap_ms, ever_best.lap_ms,
+            counted=row.counted))
         line.addWidget(self.time_label)
 
         delta = row.lap_time_ms - best_ms if best_ms else 0
@@ -447,18 +491,19 @@ class RackRow(QWidget):
         # that means "off the telemetry stream" - CLAUDE.md rule 5, and the
         # exact substitution the three-ink register exists to prevent.
         #
-        # So the session best is NOT marked in purple the way a timing screen
-        # would mark it: purple is already spoken for here. It is the same
-        # purple, set bold.
+        # The rank is painted BEHIND the number rather than into it - see
+        # `theme.BEST_EVER`. Purple text already means DERIVED and green text
+        # already means DECLARED, so a green lap time would have read as one
+        # he typed. A filled cell is what a timing screen does anyway.
         self.sector_labels = []
         for index, value in enumerate(row.sectors_ms):
-            best = best_sectors[index]
-            is_best = (value is not None and best is not None
-                       and value == best and row.counted)
-            label = (Derived(format_sector(value), bold=True) if is_best
-                     else Derived(format_sector(value)) if value is not None
+            label = (Derived(format_sector(value)) if value is not None
                      else Measured("—", colour=theme.STENCIL_DIM))
             label.setFixedWidth(W_SECTOR)
+            if value is not None:
+                label.set_fill(rank_fill(
+                    value, stint_best.sectors[index], ever_best.sectors[index],
+                    counted=row.counted))
             if value is None:
                 label.setToolTip(
                     "No sector times for this lap. GT7 broadcasts no sectors, "
@@ -635,7 +680,19 @@ class RackRow(QWidget):
         self.band.setStruck(uncounted)
 
         ink = theme.STENCIL_DIM if uncounted else theme.STENCIL
-        self.time_label.setStyleSheet(f"color: {ink}; background: transparent;")
+        # **Through `set_ink`, which keeps the fill.** A raw `setStyleSheet`
+        # here wiped the timing mark, and this runs on every change to the
+        # row - so a purple lap held its colour exactly until he tagged its
+        # compound.
+        self.time_label.set_ink(ink)
+        # **And a lap that stops counting stops holding a mark**, at once
+        # rather than at the next rebuild. Striking the quickest lap of a
+        # stint has to take its green with it, or the rack claims a best for
+        # a lap it is simultaneously drawing as not counted.
+        if uncounted:
+            self.time_label.set_fill(None)
+            for label in self.sector_labels:
+                label.set_fill(None)
 
         if self.row.structural_reason():
             # An out-lap, in-lap or incident is structurally uncounted; there
@@ -1056,6 +1113,11 @@ class PracticeScreen(QWidget):
         # can end a stint, and a stint header is a row's worth of pixels
         # appearing above him.
         self._pending_scroll: tuple[float, int] | None = None
+        # Set when a lap lands and he was already at the bottom of the rack.
+        self._follow_tail = False
+        # Fastest ever here, keyed by sector model. Handed in by the
+        # controller, which is the only thing that can read the archive.
+        self._personal_bests: dict = {}
         self.scroller.verticalScrollBar().rangeChanged.connect(
             self._scroll_range_changed)
 
@@ -1262,26 +1324,85 @@ class PracticeScreen(QWidget):
         starts = run_start_ids(self._rows)
         best = self._best_ms()
 
+        # **Was he looking at the bottom of the rack?** Asked BEFORE the row
+        # goes in, because inserting it moves the maximum. A lap landing while
+        # he is marking up lap 3 must not yank him away from it - that is the
+        # same concern the whole of `add_lap` exists for - so the rack follows
+        # the tail only for somebody who was already at it.
+        bar = self.scroller.verticalScrollBar()
+        self._follow_tail = bar.value() >= bar.maximum() - ROW_HEIGHT
+
         # The row that just stopped being a stint end loses its gauges, so it
         # is the one row that has to be built again.
         if previous_last is not None and self._row_widgets:
             stale = self._row_widgets[-1]
             index = self.rack_layout.indexOf(stale)
-            rebuilt = self._make_row(previous_last, best, ends, starts)
+            rebuilt = self._make_row(previous_last, best, ends, starts,
+                                     self._stint_best(self._rows,
+                                                      previous_last.sector_source))
             self.rack_layout.insertWidget(index, rebuilt)
             self._row_widgets[-1] = rebuilt
             stale.setParent(None)
             stale.deleteLater()
 
-        widget = self._make_row(row, best, ends, starts)
+        widget = self._make_row(row, best, ends, starts,
+                                self._stint_best(self._rows, row.sector_source))
         # Before the trailing stretch, which is always last.
         self.rack_layout.insertWidget(self.rack_layout.count() - 1, widget)
         self._row_widgets.append(widget)
         self.rack_empty.setVisible(False)
         self.refresh()
 
+    def set_personal_bests(self, bests: dict) -> None:
+        """The fastest ever here, keyed by sector model.
+
+        **Keyed rather than a single figure**, because a rack can hold two
+        sets of lines - a catalogue entry added between one session and the
+        next - and a sector cut at 1,780 m is not comparable with one cut at
+        2,097. Each row is marked against the best for its OWN lines, so a
+        mixed rack marks both halves correctly instead of refusing both.
+
+        The lap time is keyed the same way for a duller reason: the stamp
+        carries the circuit, so it is what scopes "ever" to this track.
+        """
+        self._personal_bests = dict(bests or {})
+        # **Only redraws if there is something to redraw.** The controller
+        # pushes these before it fills the rack, so on the ordinary path this
+        # is a plain assignment and `set_laps` does the one rebuild. It still
+        # repaints when the marks arrive after the rows, which is what the
+        # archive read doing so on a slower disk would look like.
+        if self._rows:
+            self._rebuild_rack()
+            self.refresh()
+
+    def _ever_best(self, row: LapRow) -> Bests:
+        found = getattr(self, "_personal_bests", {}).get(row.sector_source)
+        if not found:
+            return Bests()
+        return Bests(lap_ms=found.get("lap_ms"),
+                     sectors=tuple(found.get("sectors") or (None, None, None)))
+
+    @staticmethod
+    def _stint_best(laps: list, stamp: str | None) -> Bests:
+        """What this stint has done, over its counted laps only.
+
+        Sectors are compared only against laps cut on the same lines - within
+        one stint that is every lap of it, but the guard costs nothing and the
+        alternative is a green cell on a sector from a different piece of road.
+        """
+        counted = [lap for lap in laps if lap.counted]
+        times = [lap.lap_time_ms for lap in counted if lap.lap_time_ms > 0]
+        same = [lap for lap in counted if lap.sector_source == stamp]
+        sectors = []
+        for index in range(3):
+            seen = [lap.sectors_ms[index] for lap in same
+                    if lap.sectors_ms[index] is not None]
+            sectors.append(min(seen) if seen else None)
+        return Bests(lap_ms=min(times) if times else None,
+                     sectors=tuple(sectors))
+
     def _make_row(self, row: LapRow, best: int, ends: set, starts: set,
-                  best_sectors: tuple | None = None) -> "RackRow":
+                  stint_best: "Bests | None" = None) -> "RackRow":
         """The one place a `RackRow` is built.
 
         **`_rebuild_rack` used to construct one itself**, so anything added to
@@ -1292,9 +1413,8 @@ class PracticeScreen(QWidget):
         """
         widget = RackRow(row, best, stint_end=row.lap_id in ends,
                          run_start=row.lap_id in starts,
-                         best_sectors=(self._best_sectors()
-                                       if best_sectors is None
-                                       else best_sectors))
+                         stint_best=stint_best,
+                         ever_best=self._ever_best(row))
         widget.changed.connect(self._on_row_changed)
         widget.restructured.connect(self._on_row_restructured)
         return widget
@@ -1346,8 +1466,6 @@ class PracticeScreen(QWidget):
         self._row_widgets.clear()
 
         best = self._best_ms()
-        # Once for the rack, not once per row: it is a scan of every lap.
-        best_sectors = self._best_sectors()
         ends = stint_end_ids(self._rows)
         starts = run_start_ids(self._rows)
         self._rendered_ends = ends
@@ -1358,8 +1476,13 @@ class PracticeScreen(QWidget):
         self.rack_empty.setVisible(not self._rows)
         if not self._rows:
             self.rack_layout.insertWidget(0, self.rack_empty)
+        runs = list(split_runs(self._rows))
         stints = {run.first_lap: (number, list(run.laps))
-                  for number, run in enumerate(split_runs(self._rows), start=1)}
+                  for number, run in enumerate(runs, start=1)}
+        # Which stint each lap belongs to, so a row can be marked against the
+        # stint it was actually driven in rather than against the rack.
+        in_stint = {lap.lap_id: list(run.laps)
+                    for run in runs for lap in run.laps}
         seen_session: int | None = None
         for row in self._rows:
             new_session = (row.session_id is not None
@@ -1375,7 +1498,10 @@ class PracticeScreen(QWidget):
                     # stints in one evening do not repeat the same timestamp.
                     started_at=row.session_started if new_session else None))
 
-            widget = self._make_row(row, best, ends, starts, best_sectors)
+            widget = self._make_row(
+                row, best, ends, starts,
+                self._stint_best(in_stint.get(row.lap_id, [row]),
+                                 row.sector_source))
             self.rack_layout.addWidget(widget)
             self._row_widgets.append(widget)
         self.rack_layout.addStretch(1)
@@ -1390,6 +1516,14 @@ class PracticeScreen(QWidget):
 
     def _scroll_range_changed(self, _minimum: int, maximum: int) -> None:
         """Put him back where he was, once there is a range to put him in."""
+        if self._follow_tail and maximum:
+            # A lap landed while he was watching the bottom of the rack, so
+            # the new row is what he wants to see. Done here rather than at
+            # the insert because the scroll area has no range yet at that
+            # point - the same reason the restore below waits to be told.
+            self._follow_tail = False
+            self.scroller.verticalScrollBar().setValue(maximum)
+            return
         if self._pending_scroll is None or not maximum:
             return
         fraction, sideways = self._pending_scroll
@@ -1423,35 +1557,6 @@ class PracticeScreen(QWidget):
         times = [r.lap_time_ms for r in self._rows if r.counted and r.lap_time_ms > 0]
         return min(times) if times else 0
 
-    def _best_sectors(self) -> tuple:
-        """The quickest each sector has been on this rack, counted laps only.
-
-        Counted only, for the same reason the best lap is: an out-lap or a lap
-        with a spin in it is not a sector this car set. The three need not come
-        from one lap - that is the point of them, and the sum of the three is
-        deliberately not shown anywhere, because a theoretical best is not a
-        lap anybody drove.
-
-        **Sectors from a different set of lines are not comparable**, so a
-        rack holding two sector models has no best. That happens when the
-        catalogue gains a circuit between one session and the next: half the
-        rack is cut at 1,780 m and half at 2,097, and picking a minimum across
-        the two would mark a lap best in a sector that is a different piece of
-        road. `tools/derive_sectors.py --restamp` is what puts a rack back on
-        one set of lines.
-
-        The stamp scan is shared with `_sector_provenance` - see
-        `_sector_stamps` for the disagreement that came of having two.
-        """
-        counted = [r for r in self._rows if r.counted]
-        if len(self._sector_stamps()) > 1:
-            return (None,) * 3
-        return tuple(
-            min(found) if (found := [r.sectors_ms[index] for r in counted
-                                     if r.sectors_ms[index] is not None])
-            else None
-            for index in range(3))
-
     # How each provenance reads on the spec line. The words matter: "thirds"
     # has to say plainly that nobody measured this boundary, or a driver reads
     # a sector split as if it were the one on a timing sheet.
@@ -1465,9 +1570,12 @@ class PracticeScreen(QWidget):
         """Every set of sector lines on this rack.
 
         **One scan, because there were two and they disagreed.**
-        `_best_sectors` counted stamps among COUNTED rows and
+        A rack-wide `_best_sectors` counted stamps among COUNTED rows and
         `_sector_provenance` among ALL of them, while the latter's docstring
-        asserted they were the same rack. A catalogue change that split an
+        asserted they were the same rack. The rack-wide best is gone - a mark
+        is now against the STINT or against everything ever driven here, which
+        is what the driver reads on a timing screen - but the two-scan lesson
+        outlived it. A catalogue change that split an
         event along the out-laps - and four out-laps in the archive carry
         sectors - made the screen say "two different sets of lines on this
         rack" while still printing one of them in bold as the best.

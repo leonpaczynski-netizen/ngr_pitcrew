@@ -2055,6 +2055,47 @@ class Store:
             return None
         return CornerModel.from_dict(json.loads(rows[0]["corners_json"]))
 
+    def personal_bests(self, car_name: str | None,
+                       sector_model: str | None) -> dict:
+        """The fastest lap and the fastest each sector has ever been here.
+
+        Scoped by **car and by sector model together**. The stamp already
+        carries the circuit and the exact lines, so two laps that share it are
+        cut at the same places on the same road; the car is on top of that
+        because a personal best in one car is not a mark to hold another one
+        against.
+
+        **Out-laps, in-laps and struck laps are excluded**, which is what the
+        driver asked for - but the flags are not trusted on their own. Every
+        lap here must also carry sector times, and that is the stronger guard:
+        the span gate refuses a lap whose frames do not cover it, so a lap
+        with sectors is one that was driven from the line to the line. It is
+        the direct answer to the Daytona defect where `min(lap_time_ms)`
+        returned a 93.100 s pit-exit-to-line fragment as the best lap of the
+        event.
+
+        Empty dict entries are `None`, never 0 - nothing has been quick here
+        yet is not a lap time of zero.
+        """
+        if not sector_model:
+            return {"lap_ms": None, "sectors": (None, None, None)}
+        rows = self._query(
+            "SELECT MIN(l.lap_time_ms) AS lap_ms, MIN(l.sector1_ms) AS s1, "
+            "       MIN(l.sector2_ms) AS s2, MIN(l.sector3_ms) AS s3 "
+            "FROM laps l "
+            "JOIN sessions s ON s.id = l.session_id "
+            "JOIN events e ON e.id = s.event_id "
+            "WHERE s.kind = 'practice' AND l.sector_model = ? "
+            "  AND l.sector1_ms IS NOT NULL AND l.lap_time_ms > 0 "
+            "  AND l.is_out_lap = 0 AND l.is_pit_lap = 0 AND l.excluded = 0 "
+            "  AND (? IS NULL OR e.car_name = ?)",
+            (sector_model, car_name, car_name))
+        row = rows[0] if rows else None
+        if row is None:
+            return {"lap_ms": None, "sectors": (None, None, None)}
+        return {"lap_ms": row["lap_ms"],
+                "sectors": (row["s1"], row["s2"], row["s3"])}
+
     def sector_model(self, circuit_key: str):
         """Where this circuit's sector lines fall, and where they came from.
 
