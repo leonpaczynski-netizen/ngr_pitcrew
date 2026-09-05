@@ -6,6 +6,8 @@ and had to rip it out; this is the guard rail against the second time.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("PyQt6.QtWidgets")
@@ -153,3 +155,138 @@ def test_fuel_and_box_turn_urgent_only_when_they_are(qt_app):
     calm_fuel = view.fuel_stat._ink
     view.update_state(DriverState(laps_of_fuel=1.4, laps_to_box=1))
     assert view.fuel_stat._ink != calm_fuel
+
+
+# ----------------------------------------------- the gap, promoted to a figure
+
+def test_the_pair_gap_is_a_number_and_only_on_the_hotter_side(qt_app):
+    """**The one reading on this screen with evidence behind it.**
+
+    Absolute temperatures are endogenous - a consequence of how hard the tyre
+    is being worked rather than an input to grip, with slopes of opposite sign
+    at Monza and Spa - and no optimal window has ever been published for GT7.
+    The pair gaps do not have that problem: measured across the archive they
+    are monotone and match the measured wear map at r=+0.82.
+
+    It was a border colour with no figure. Now it is a figure, and only on
+    the corner that is hotter - "13 degrees cooler" is the same finding said
+    about the wrong corner.
+    """
+    from pitcrew.ui.driver_view import pair_gap
+
+    temps = {"fl": 84.0, "fr": 88.0, "rl": 91.0, "rr": 104.0}
+    assert pair_gap("rr", temps) == pytest.approx(13.0)
+    assert pair_gap("rl", temps) is None, "the cooler side made the claim"
+    assert pair_gap("fr", temps) == pytest.approx(4.0)
+
+
+def test_a_gap_with_nothing_to_compare_against_is_none(qt_app):
+    """Rule 3 where it would be easiest to write a zero."""
+    from pitcrew.ui.driver_view import pair_gap
+
+    assert pair_gap("rr", {"rr": 104.0}) is None
+    assert pair_gap("rr", {"rr": None, "rl": 90.0}) is None
+    assert pair_gap("rr", {"rr": 90.0, "rl": 90.0}) is None
+
+
+def test_the_figure_shows_only_where_it_is_a_finding(qt_app):
+    """Under the threshold it shows nothing rather than a small number the
+    driver has to make a decision about at 200 km/h."""
+    from pitcrew.ui.driver_view import DriverState, DriverView
+
+    view = DriverView()
+    view.update_state(DriverState(
+        temps_c={"fl": 84.0, "fr": 88.0, "rl": 91.0, "rr": 104.0},
+        compound="RS"))
+    assert "13" in view.tyres["rr"].gap.text()
+    assert "RL" in view.tyres["rr"].gap.text()
+    # 4 degrees is under PAIR_GAP_C, so the front axle says nothing.
+    assert view.tyres["fr"].gap.text() == ""
+    assert view.tyres["rl"].gap.text() == ""
+
+
+def test_the_display_has_three_ranks_and_the_gaps_lead(qt_app):
+    """**The rank, as the driver revised it.**
+
+    His first brief made the tyres the main request and they were the
+    smallest of the big numbers, so they were promoted. Seeing that, he
+    revised it: he glances at this on the straights and nowhere else, and on
+    a straight the car ahead and the car behind are what he can act on right
+    now - the tyres are what he acts on over a stint.
+
+    Three ranks, and they must stay distinct: a display where everything is
+    the same size has no priority at all, which is where this started.
+    """
+    from pitcrew.ui.driver_view import _Stat, _Tyre
+
+    assert _Stat.GAP_PX > _Stat.VALUE_PX > _Tyre.VALUE_PX
+
+
+def test_the_leading_gap_blocks_actually_get_the_leading_size(qt_app):
+    """The rank is only real if the widgets are built with it. `_Stat` takes
+    its size per instance now, and a default that silently applied to all
+    four would leave the constants above describing nothing."""
+    from pitcrew.ui.driver_view import _Stat, DriverView
+
+    view = DriverView()
+    assert view.ahead_stat.VALUE_PX == _Stat.GAP_PX
+    assert view.behind_stat.VALUE_PX == _Stat.GAP_PX
+    assert view.box_stat.VALUE_PX == _Stat.VALUE_PX
+    assert view.fuel_stat.VALUE_PX == _Stat.VALUE_PX
+
+
+def test_the_dashboard_asks_for_faces_that_are_installed(qt_app):
+    """It asked for Archivo and JetBrains Mono, neither of which is on the
+    rig, so every number was silently drawn in Arial. A system face standing
+    in for the display voice is a failure, not a fallback."""
+    import re
+
+    from PyQt6.QtGui import QFontDatabase
+
+    from pitcrew.ui import driver_view
+
+    source = Path(driver_view.__file__).read_text(encoding="utf-8")
+    # Only what is actually declared as a face. The prose above names the two
+    # that were wrong on purpose, and a test that cannot tell a comment from a
+    # declaration would forbid writing down why.
+    asked = set()
+    for run in re.findall(r"font-family:([^;\"']+)", source):
+        asked.update(part.strip().strip("'\"")
+                     for part in run.split(",") if part.strip())
+    literal = {name for name in asked if not name.startswith("{")}
+    installed = set(QFontDatabase.families())
+    generic = {"monospace", "sans-serif", "serif"}
+    missing = {name for name in literal
+               if name not in installed and name not in generic}
+    assert not missing, f"declared but not installed: {sorted(missing)}"
+
+
+def test_a_neighbour_gap_says_which_way_it_is_going_in_colour(qt_app):
+    """**Three states, because there are three.** Catching the car ahead and
+    being unable to read a trend at all both rendered white, so the display
+    could say "this is going badly" and never "this is going well" - and on a
+    screen glanced at once down a straight, that difference is whether the
+    effort is paying."""
+    from pitcrew.ui.driver_view import (GOOD, INK, NEAR, DriverState,
+                                        DriverView, GapView)
+
+    view = DriverView()
+    view.update_state(DriverState(
+        ahead=GapView(seconds=1.2, note="catching 0.4 s a lap", good=True),
+        behind=GapView(seconds=0.8, note="he is catching 0.3 s a lap",
+                       urgent=True)))
+    assert GOOD in view.ahead_stat.value.styleSheet()
+    assert NEAR in view.behind_stat.value.styleSheet()
+
+    # Steady is neither, and stays out of the way.
+    view.update_state(DriverState(ahead=GapView(seconds=4.0, note="steady")))
+    assert INK in view.ahead_stat.value.styleSheet()
+
+
+def test_bad_news_outranks_good_if_both_ever_arrive(qt_app):
+    """The cost of missing bad news is higher than the cost of missing good."""
+    from pitcrew.ui.driver_view import NEAR, _Stat
+
+    stat = _Stat("ahead")
+    stat.show_value("1.0", "", urgent=True, good=True)
+    assert NEAR in stat.value.styleSheet()

@@ -12,11 +12,23 @@ which is glance time. What it does not give him is a tyre temperature in
 degrees - the game draws a coloured frame and nothing else - or fuel expressed
 in laps, or where he is against the plan.
 
-**Three items, and the layout is anchored to the bottom.** He is looking down
-at the game and glancing up, so the bottom edge of this screen is the shortest
-eye travel; content sits there rather than centred. A fourth item was
-considered and left out: the cost of one more is that the first three stop
-being findable.
+**The layout is anchored to the bottom.** He is looking down at the game and
+glancing up, so the bottom edge of this screen is the shortest eye travel;
+content sits there rather than centred - and once something is the priority,
+that rule decides the order as well as the position.
+
+**The gaps lead, on his own revision of the brief.** Tyre temperatures were
+the original request and were first promoted to lead; seeing that, he settled
+it differently: *"the temps can take a back seat and gaps can be the prominent
+with trend and colour"*, because **he glances at this on the straights and
+nowhere else.** On a straight the car ahead and the car behind are what he can
+act on within seconds; the tyres are what he acts on over a stint. Both are on
+the screen. Only one of them can be the first thing read.
+
+So three ranks: the two neighbour gaps at the bottom edge, laps-to-box and
+laps-of-fuel between them at the middle rank, and the four corners in the row
+above. A display where everything is the same size has no priority at all,
+which is where this one started.
 
 ### What the colours may and may not claim
 
@@ -85,6 +97,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QStackedLayout,
     QVBoxLayout,
     QWidget,
@@ -93,6 +106,7 @@ from PyQt6.QtWidgets import (
 # The one measured figure, from `store.tyres.WEAR_ONSET_C`. Imported rather
 # than restated: two copies of a threshold drift, and this one is sourced.
 from pitcrew.store.tyres import WEAR_ONSET_C
+from pitcrew.ui import theme
 
 # How far below onset still counts as approaching it.
 NEAR_ONSET_C = 5.0
@@ -100,15 +114,35 @@ NEAR_ONSET_C = 5.0
 # enough that ordinary front-to-rear bias does not trip it every lap.
 PAIR_GAP_C = 10.0
 
-GROUND = "#07090A"
-PANEL = "#11161A"
-EDGE = "#1E262C"
-INK = "#EEF3F5"
-INK_DIM = "#6C7C85"
-COOL = "#7FA8C9"          # below onset - and that is the whole claim
-NEAR = "#E0A03A"
-OVER = "#E0523F"
-LOPSIDED = "#C77CE0"
+# **The app's own tokens, and its own faces.** This window had a private
+# palette and asked for Archivo and JetBrains Mono, neither of which is
+# installed on the rig - so every number on it was silently drawn in Arial.
+# A system face standing in for the display voice is a failure rather than a
+# fallback, and two visual worlds in one product is a third thing to learn.
+GROUND = theme.RUBBER_DEEP
+PANEL = theme.SHOULDER
+EDGE = theme.TREAD
+INK = theme.STENCIL
+INK_DIM = theme.STENCIL_DIM
+# **The state ladder, and what each colour is allowed to claim.**
+#
+# `cool` is white because a temperature below onset is a measured number
+# making no further claim - there is no published grip window for GT7 and
+# this app once carried a fabricated one. Amber and red are the wear-onset
+# threshold, which is sourced. Nothing here is a grip reading.
+COOL = theme.STENCIL
+NEAR = theme.WARNING
+OVER = theme.DANGER_INK
+# The trend on a neighbour: it favours you, it favours him, or nobody knows.
+# Green is not a register here - nothing on this instrument is declared - it
+# is the third state of a three-state reading.
+GOOD = theme.WEAR_FLAT
+
+# The number faces, restated here because this window sets its own style
+# sheets rather than going through `widgets`. `QWidget { font-size }` beats
+# `setFont`, so a size only counts if it is in the rule that wins.
+NUMBER_FACE = f"'{theme.DATA_FAMILY}','{theme.DATA_FALLBACK}',monospace"
+LABEL_FACE = f"'{theme.STENCIL_CONDENSED}','{theme.STENCIL_FAMILY}',sans-serif"
 
 PAIRS = {"fl": "fr", "fr": "fl", "rl": "rr", "rr": "rl"}
 CORNERS = ("fl", "fr", "rl", "rr")
@@ -130,6 +164,13 @@ class GapView:
     # Bad news for us: he is catching, or we are being dropped. Drawn in the
     # warning ink so a glance separates "push" from "hold".
     urgent: bool = False
+    # **Good news, and it is not merely "not urgent".** Catching the car
+    # ahead and being unable to read a trend at all both used to render white,
+    # so the display could say "this is going badly" and never "this is going
+    # well" - and on a screen glanced at once down a straight, the difference
+    # between those two is whether the effort is paying. Three states, because
+    # there are three: it favours you, it favours him, or nobody can tell yet.
+    good: bool = False
 
 
 @dataclass(frozen=True)
@@ -211,6 +252,35 @@ def onset_for(compound: str | None) -> float | None:
     return WEAR_ONSET_C.get(compound.upper())
 
 
+def pair_gap(corner: str, temps: dict[str, float | None]) -> float | None:
+    """How far this corner is above the tyre opposite, or None.
+
+    **Promoted from a border colour to a number**, because it is the most
+    useful mark on the display and it was the only one with no figure. The
+    module docstring has said so from the day it was written: a corner ten
+    degrees hotter than its pair is diagnostic whatever the optimum is, and it
+    needs no window at all - which matters here more than anywhere, because
+    the absolute temperatures have no window. Nobody has ever published one
+    for GT7, and the archive says why: temperature is endogenous, a
+    consequence of how hard the tyre is being worked rather than an input to
+    grip, with slopes of opposite sign at Monza and Spa.
+
+    The gaps do not have that problem. Measured across the archive, the
+    rear-front and RR-RL splits are monotone and match the measured wear map
+    at r=+0.82 - so of everything on this screen, this is the reading with
+    evidence behind it.
+
+    Only ever positive: the cooler side of a pair returns None rather than a
+    negative, because "13 degrees hotter than the other one" is a finding and
+    "13 degrees cooler" is the same finding said about the wrong corner.
+    """
+    value = temps.get(corner)
+    pair = temps.get(PAIRS[corner])
+    if value is None or pair is None or value <= pair:
+        return None
+    return value - pair
+
+
 def classify(corner: str, temps: dict[str, float | None],
              compound: str | None) -> tuple[str, bool]:
     """`(state, lopsided)` for one corner. State is cool / near / over.
@@ -234,53 +304,99 @@ def classify(corner: str, temps: dict[str, float | None],
 
 
 class _Tyre(QWidget):
-    """One corner: a big number and its label."""
+    """One corner: the temperature, its name, and how far it is above its pair.
+
+    **The corners are the subject of this screen.** The driver's own brief was
+    *"tyre temps is probably my main request, in colour for ease of
+    visibility"* - and they were rendering at 104px while laps-to-box and
+    laps-of-fuel had 180, so the thing he asked for was the smallest of the
+    big numbers on it. They lead now.
+
+    The pair gap sits under the number as a figure rather than as a border
+    hue. It was a purple outline that said "this corner is more than ten
+    degrees above the other one" without saying how far above, on the one
+    reading this display has evidence for - see `pair_gap`.
+    """
+
+    VALUE_PX = 104
+    GAP_PX = 26
 
     def __init__(self, corner: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._corner = corner
         box = QVBoxLayout(self)
-        box.setContentsMargins(0, 14, 0, 10)
-        box.setSpacing(4)
+        box.setContentsMargins(0, 10, 0, 8)
+        box.setSpacing(2)
+
         self.value = QLabel("--")
         self.value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.value.setStyleSheet(
-            "font-family:Archivo,Arial;font-weight:800;font-size:104px;"
-            f"letter-spacing:-3px;color:{COOL};background:transparent;")
+
+        self.gap = QLabel("")
+        self.gap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.gap.setStyleSheet(
+            f"font-family:{NUMBER_FACE};font-size:{self.GAP_PX}px;"
+            f"color:{NEAR};background:transparent;border:none;")
+        self.gap.setFixedHeight(self.GAP_PX + 8)
+
         name = QLabel(corner.upper())
         name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         name.setStyleSheet(
-            "font-family:'JetBrains Mono',monospace;font-size:15px;"
-            f"letter-spacing:4px;color:{INK_DIM};background:transparent;")
+            f"font-family:{LABEL_FACE};font-size:19px;font-weight:600;"
+            f"letter-spacing:7px;color:{INK_DIM};background:transparent;"
+            f"border:none;")
+
+        # **Name tight under its number, gap below that.** With the gap
+        # between them, the corner label floated 50px clear of the figure it
+        # names - on a screen read in one glance, a label that far from its
+        # value belongs to nothing. The gap keeps a reserved height either
+        # way, so a split appearing mid-race does not shift the grid under
+        # him while he is looking at it.
         box.addWidget(self.value)
         box.addWidget(name)
+        box.addWidget(self.gap)
         self.setMinimumWidth(210)
-        self._paint("missing", False)
+        self._paint("missing")
 
     def show_value(self, value: float | None, state: str,
-                   lopsided: bool) -> None:
+                   lopsided: bool, gap: float | None = None) -> None:
         self.value.setText("--" if value is None else f"{value:.0f}")
-        self._paint(state, lopsided)
+        # **Only where it is a finding.** `lopsided` is the threshold the
+        # display has always used; the number is what it was missing. A gap
+        # under the threshold shows nothing rather than a small figure the
+        # driver would have to decide about at 200 km/h.
+        self.gap.setText(
+            f"+{gap:.0f} vs {PAIRS[self._corner].upper()}"
+            if lopsided and gap is not None else "")
+        self._paint(state)
 
-    def _paint(self, state: str, lopsided: bool) -> None:
+    def _paint(self, state: str) -> None:
+        """**The number carries the state. There is no box round it.**
+
+        Each corner used to sit in a rounded 3px-outlined panel that changed
+        colour with the reading - so a hot corner said the same thing twice,
+        in an outline and in an ink, and the outline was the louder of the
+        two. On a glance-up instrument the furniture is what you read first
+        and it is never the thing you needed.
+
+        It is also what the app's own world asks for: depth comes from value
+        steps and a 1px groove, never from rounded outlines, and there is
+        nothing here to separate - four numbers laid out as the car are
+        already four numbers laid out as the car.
+        """
         ink = {"over": OVER, "near": NEAR, "cool": COOL,
-               "missing": INK_DIM}[state]
-        border = LOPSIDED if lopsided else {
-            "over": OVER, "near": NEAR}.get(state, EDGE)
-        background = "#1D1211" if state == "over" else PANEL
+               "missing": theme.STRUCK}[state]
         self.value.setStyleSheet(
-            "font-family:Archivo,Arial;font-weight:800;font-size:104px;"
-            f"letter-spacing:-3px;color:{ink};background:transparent;")
-        self.setStyleSheet(
-            f"background:{background};border:3px solid {border};"
-            "border-radius:10px;")
+            f"font-family:{NUMBER_FACE};font-size:{self.VALUE_PX}px;"
+            f"font-weight:600;color:{ink};background:transparent;border:none;")
 
 
 class _Stat(QWidget):
     """One large number with a caption under it."""
 
-    def __init__(self, label: str, parent: QWidget | None = None) -> None:
+    def __init__(self, label: str, parent: QWidget | None = None, *,
+                 value_px: int | None = None) -> None:
         super().__init__(parent)
+        self.VALUE_PX = value_px or self.VALUE_PX
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(6)
@@ -291,29 +407,58 @@ class _Stat(QWidget):
         self.caption = QLabel(label.upper())
         self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.caption.setStyleSheet(
-            "font-family:'JetBrains Mono',monospace;font-size:15px;"
-            f"letter-spacing:4px;color:{INK_DIM};background:transparent;")
+            f"font-family:{LABEL_FACE};font-size:{self.CAPTION_PX}px;"
+            f"font-weight:600;letter-spacing:7px;color:{INK_DIM};"
+            f"background:transparent;")
         self.sub = QLabel("")
         self.sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sub.setStyleSheet(
-            "font-family:'JetBrains Mono',monospace;font-size:17px;"
+            f"font-family:{NUMBER_FACE};font-size:{self.SUB_PX}px;"
             f"color:{INK_DIM};background:transparent;")
         box.addWidget(self.value)
         box.addWidget(self.caption)
         box.addWidget(self.sub)
 
+    # **Sized for the glance he actually takes.** He looks at this on the
+    # straights and nowhere else, so the bar is a couple of seconds from a
+    # metre away with a wheel in his hands - not a desk. The captions and the
+    # trend lines under them were 15-17px on a 2560-wide display, which is
+    # desk type on an instrument.
+    #
+    # The default is the middle rank; `value_px` raises a block to the lead.
+    VALUE_PX = 120
+    CAPTION_PX = 21
+    SUB_PX = 27
+    # **The gap to a neighbour leads this display**, on the driver's own
+    # revision of the brief after seeing the corners lead: on a straight, the
+    # car ahead and the car behind are what he can act on right now, and the
+    # tyres are what he acts on over a stint. Both are on the screen; only
+    # one of them can be the first thing read.
+    GAP_PX = 210
+
     def _restyle(self) -> None:
         self.value.setStyleSheet(
-            "font-family:Archivo,Arial;font-weight:800;font-size:180px;"
-            f"letter-spacing:-7px;color:{self._ink};background:transparent;")
+            f"font-family:{NUMBER_FACE};font-size:{self.VALUE_PX}px;"
+            f"font-weight:600;color:{self._ink};background:transparent;")
 
-    def show_value(self, text: str, sub: str = "", *, urgent: bool = False) -> None:
+    def show_value(self, text: str, sub: str = "", *,
+                   urgent: bool = False, good: bool = False) -> None:
+        """`urgent` and `good` are the two ends of one reading, not two flags.
+
+        Both false is the honest middle - steady, or too few laps to say -
+        and it stays white. `urgent` wins if somehow both arrive, because the
+        cost of missing bad news is higher than the cost of missing good.
+        """
         self.value.setText(text)
         self.sub.setText(sub)
-        ink = NEAR if urgent else INK
+        ink = NEAR if urgent else GOOD if good else INK
         if ink != self._ink:
             self._ink = ink
             self._restyle()
+        self.sub.setStyleSheet(
+            f"font-family:{NUMBER_FACE};font-size:{self.SUB_PX}px;"
+            f"color:{ink if (urgent or good) else INK_DIM};"
+            f"background:transparent;")
 
 
 class DriverWindow(QWidget):
@@ -605,13 +750,17 @@ class DriverView(QWidget):
         # it is where the car is. That is what keeps this from being the
         # fourth and fifth items the docstring above warns about: they are one
         # paired mnemonic rather than two more things in a list.
-        self.ahead_stat = _Stat("ahead")
-        self.behind_stat = _Stat("behind")
+        self.ahead_stat = _Stat("ahead", value_px=_Stat.GAP_PX)
+        self.behind_stat = _Stat("behind", value_px=_Stat.GAP_PX)
 
         tyres = QWidget()
         grid = QGridLayout(tyres)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(16)
+        # **Spread across the ultrawide.** The corners are the subject and the
+        # screen is 2560 wide; at 16px apart they were a small square in the
+        # middle of it with the room going to ground nobody reads.
+        grid.setHorizontalSpacing(40)
+        grid.setVerticalSpacing(6)
         self.tyres = {c: _Tyre(c) for c in CORNERS}
         # Laid out as he sits in the car, not mirrored.
         grid.addWidget(self.tyres["fl"], 0, 0)
@@ -621,21 +770,47 @@ class DriverView(QWidget):
         self.tyre_caption = QLabel("TYRE SURFACE °C")
         self.tyre_caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tyre_caption.setStyleSheet(
-            "font-family:'JetBrains Mono',monospace;font-size:15px;"
-            f"letter-spacing:4px;color:{INK_DIM};background:transparent;")
+            f"font-family:{LABEL_FACE};font-size:21px;font-weight:600;"
+            f"letter-spacing:7px;color:{INK_DIM};background:transparent;")
         grid.addWidget(self.tyre_caption, 2, 0, 1, 2)
 
+        # **The gaps lead and they sit at the bottom.** This file's layout
+        # rule is that he glances UP from the game screen below, so the bottom
+        # edge is the shortest eye travel and content is anchored there - and
+        # once something is the priority, that rule decides the order. The
+        # tyres take the row above; the neighbours take the edge nearest his
+        # eye.
+        #
+        # **Ahead on the left, behind on the right**, which is where the cars
+        # are. That is what keeps two blocks from being two more things in a
+        # list: it is one paired mnemonic and it needs no reading. Box and
+        # fuel sit between them, at the middle rank - still the highest
+        # consequence numbers in the race, and not what a straight is for.
+        # **Bottom-aligned, because the blocks are no longer the same size.**
+        # A 210px gap beside a 120px fuel figure top-aligned puts their
+        # captions 60px apart, so the row reads as ragged rather than as a
+        # rank - and the caption is the part that says which number this is.
+        # Sitting them on one baseline lets the value heights differ, which
+        # is the whole point of ranking them.
+        for stat in (self.ahead_stat, self.box_stat,
+                     self.fuel_stat, self.behind_stat):
+            row.addStretch(1)
+            row.addWidget(stat, 0, Qt.AlignmentFlag.AlignBottom)
         row.addStretch(1)
-        row.addWidget(self.ahead_stat)
-        row.addStretch(1)
-        row.addWidget(self.box_stat)
-        row.addStretch(1)
-        row.addWidget(tyres)
-        row.addStretch(1)
-        row.addWidget(self.fuel_stat)
-        row.addStretch(1)
-        row.addWidget(self.behind_stat)
-        row.addStretch(1)
+
+        stacked = QVBoxLayout()
+        stacked.setContentsMargins(0, 0, 0, 0)
+        stacked.setSpacing(30)
+
+        centred = QHBoxLayout()
+        centred.addStretch(1)
+        centred.addWidget(tyres)
+        centred.addStretch(1)
+        stacked.addLayout(centred)
+
+        leading = QWidget()
+        leading.setLayout(row)
+        stacked.addWidget(leading)
 
         # **The two states are two widgets, swapped, not one relabelled.**
         # Relabelling five captions on a screen he reads while stationary in
@@ -644,9 +819,18 @@ class DriverView(QWidget):
         # things - a litre figure under a "laps" caption is the shape of
         # mistake this display exists to avoid.
         self.running = QWidget()
-        self.running.setLayout(row)
+        self.running.setLayout(stacked)
+        # **So the stretch above can actually push it down.** Both panels
+        # expand to fill by default, which quietly cancelled the
+        # bottom-anchoring this file's layout rule is built on - the content
+        # sat mid-screen with a band of ground under it, which is the eye
+        # travel the rule exists to save.
+        self.running.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                   QSizePolicy.Policy.Maximum)
 
         self.box = _BoxPanel()
+        self.box.setSizePolicy(QSizePolicy.Policy.Preferred,
+                               QSizePolicy.Policy.Maximum)
 
         self.states = QStackedLayout()
         self.states.addWidget(self.running)
@@ -671,7 +855,8 @@ class DriverView(QWidget):
             # sitting blank and making him wonder what broke.
             stat.show_value("--", "no gap read")
             return
-        stat.show_value(f"{gap.seconds:.1f}", gap.note, urgent=gap.urgent)
+        stat.show_value(f"{gap.seconds:.1f}", gap.note,
+                        urgent=gap.urgent, good=gap.good)
 
     def update_state(self, state: DriverState) -> None:
         self.states.setCurrentWidget(self.box if state.in_box else self.running)
@@ -680,7 +865,8 @@ class DriverView(QWidget):
         temps = state.temps_c or {}
         for corner, widget in self.tyres.items():
             kind, lopsided = classify(corner, temps, state.compound)
-            widget.show_value(temps.get(corner), kind, lopsided)
+            widget.show_value(temps.get(corner), kind, lopsided,
+                              pair_gap(corner, temps))
         self.tyre_caption.setText(
             "TYRE SURFACE °C" if not state.compound
             else f"TYRE SURFACE °C · {state.compound.upper()}")

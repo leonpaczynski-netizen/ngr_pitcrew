@@ -4763,14 +4763,16 @@ class PitCrewController(QObject):
             # spending tyre on.
             note = f"catching {pace}" if closing else f"losing {pace}"
             urgent = not closing
+            good = closing
         else:
             # Behind, a closing gap is HIM catching US. Same number, opposite
             # instruction - which is the whole reason these are two sentences.
             note = f"he is catching {pace}" if closing else f"pulling away {pace}"
             urgent = closing
+            good = not closing
         if name:
             note = f"{note} - {name}"
-        return GapView(seconds=seconds, note=note, urgent=urgent)
+        return GapView(seconds=seconds, note=note, urgent=urgent, good=good)
 
     def _board_temps(self, packet=None):
         """The four corners off ONE packet, or None.
