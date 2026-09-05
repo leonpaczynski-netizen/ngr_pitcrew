@@ -490,7 +490,7 @@ class SpecLine(QWidget):
 
     def add(self, label: str, value: str, *, declared: bool = False,
             derived: bool = False, warn: bool = False,
-            emphasis: bool = False) -> None:
+            emphasis: bool = False, tooltip: str = "") -> None:
         if self._entries:
             separator = StencilLabel("·", size=theme.BODY_PX,
                                      colour=theme.TREAD_LIGHT, tracking=0.0)
@@ -509,6 +509,12 @@ class SpecLine(QWidget):
             # paints that state in warning.
             reading.setStyleSheet(
                 f"color: {theme.WARNING}; background: transparent;")
+        if tooltip:
+            # On both halves: the label is the smaller target and it is the
+            # one a reader points at when the word is what they did not
+            # understand.
+            name.setToolTip(tooltip)
+            reading.setToolTip(tooltip)
         self._row.addWidget(name)
         self._row.addWidget(reading)
         self._entries.append((name, reading))
@@ -1387,3 +1393,147 @@ class TyreGaugeSet(QWidget):
             gauge.blockSignals(False)
         self._mark_limiting()
         self.update()
+
+
+class WearCell(QPushButton):
+    """One line that stands for the four gauges, and opens them to be set.
+
+    **The rack is a timing tower and a timing tower has one line per lap.**
+    `TyreGaugeSet` is 46x62 four times over, laid out as the car, which sets a
+    140px row wherever a reading is worth taking — three laps in a 950px
+    window on a screen whose whole job is comparing laps against each other.
+    The gauges did not get smaller and they did not become a number: they
+    moved behind this, at full size, still dragged rather than typed.
+
+    What the line shows is **the corner that ends the stint**, which is the one
+    figure the wear model actually consumes — `stint_limit` is driven by the
+    worst corner, not by an average of four. So the cell is not a summary that
+    loses information; it is the reading, with the other three a click away.
+
+    Colour is the wear model's own phase band and it is **never the only
+    channel**: the corner is named and the figure is written, so nothing here
+    depends on telling the hues apart. Struck where nothing has been read —
+    absent is not a wear of zero, which is the whole of rule 3.
+    """
+
+    changed = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._values: dict[str, float | None] = {}
+        self._popup: QWidget | None = None
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFont(theme.data_font(13))
+        self.setFlat(True)
+        self.clicked.connect(self._open)
+        self._render()
+
+    # ------------------------------------------------------------- the value
+
+    def values(self) -> dict[str, float | None]:
+        return dict(self._values)
+
+    def setValues(self, values: dict) -> None:   # noqa: N802 - Qt naming
+        self._values = {k: v for k, v in (values or {}).items()
+                        if v is not None}
+        self._render()
+        if self._popup is not None:
+            self._popup.gauges.setValues(self._values)
+
+    def worst(self) -> tuple[str, float] | None:
+        """The corner that ends the stint, and how far gone it is."""
+        if not self._values:
+            return None
+        corner = max(self._values, key=self._values.__getitem__)
+        return corner, float(self._values[corner])
+
+    # ------------------------------------------------------------ appearance
+
+    def _render(self) -> None:
+        worst = self.worst()
+        if worst is None:
+            self.setText("—")
+            self.setStyleSheet(
+                f"QPushButton {{ color: {theme.STRUCK}; background: transparent;"
+                f" border: 1px solid {theme.TREAD}; text-align: center; }}"
+                f"QPushButton:hover {{ border-color: {theme.TREAD_LIGHT}; }}")
+            self.setToolTip(
+                "No wear read off this stint. Click to set the four corners "
+                "from GT7's own tyre indicator.\n\nGT7 broadcasts no wear "
+                "channel, so this reading is the wear model's only measured "
+                "input. Left unread, the stint is modelled from lap-time "
+                "degradation alone.")
+            self.setAccessibleName("tyre wear, nothing read")
+            return
+
+        corner, fraction = worst
+        ink = wear_colour(fraction).name()
+        self.setText(f"{corner.upper()} {fraction * 100:.0f}%")
+        self.setStyleSheet(
+            f"QPushButton {{ color: {ink}; background: transparent;"
+            f" border: 1px solid {theme.TREAD}; text-align: center; }}"
+            f"QPushButton:hover {{ border-color: {ink}; }}")
+        others = "  ".join(
+            f"{c.upper()} {v * 100:.0f}%"
+            for c, v in sorted(self._values.items(),
+                               key=lambda kv: -kv[1]))
+        self.setToolTip(
+            f"Worst corner {corner.upper()} at {fraction * 100:.0f}% "
+            f"({wear_phase(fraction)} phase) — the corner that ends the "
+            f"stint, and what the wear model runs on.\n\nAll four: {others}"
+            f"\n\nClick to adjust.")
+        self.setAccessibleName(
+            f"tyre wear, worst corner {corner.upper()} "
+            f"{fraction * 100:.0f} percent")
+
+    # ---------------------------------------------------------------- popup
+
+    def _open(self) -> None:
+        """The four gauges, at full size, where the row cannot hold them.
+
+        A popup rather than a dialog: this is an adjustment on one row of a
+        rack he is working down, and a modal would put a lid on the screen
+        between every lap. It closes on click-away and on Escape, and it
+        writes through on every drag rather than on an OK button — there is
+        nothing to confirm, and a confirmation step is where a reading gets
+        lost.
+        """
+        if self._popup is not None:
+            self._popup.close()
+            return
+
+        popup = QFrame(self.window(), Qt.WindowType.Popup)
+        popup.setStyleSheet(
+            f"QFrame {{ background: {theme.SHOULDER};"
+            f" border: 1px solid {theme.TREAD_LIGHT}; }}")
+        box = QVBoxLayout(popup)
+        box.setContentsMargins(12, 10, 12, 12)
+        box.setSpacing(8)
+        box.addWidget(StencilLabel("WEAR AT END OF STINT", size=11,
+                                   colour=theme.STENCIL_DIM, tracking=10.0))
+        popup.gauges = TyreGaugeSet()
+        popup.gauges.setValues(self._values)
+        popup.gauges.changed.connect(self._take_from_popup)
+        box.addWidget(popup.gauges)
+
+        self._popup = popup
+        popup.destroyed.connect(self._forget_popup)
+        # Below the cell and right-aligned to it, so it never covers the row
+        # being read, and never runs off the right edge of a rack that is
+        # already the widest thing in the app.
+        corner = self.mapToGlobal(self.rect().bottomRight())
+        popup.adjustSize()
+        popup.move(corner.x() - popup.width(), corner.y() + 4)
+        popup.show()
+
+    def _forget_popup(self) -> None:
+        self._popup = None
+
+    def _take_from_popup(self) -> None:
+        popup = self._popup
+        if popup is None:
+            return
+        self._values = {k: v for k, v in popup.gauges.values().items()
+                        if v is not None}
+        self._render()
+        self.changed.emit()

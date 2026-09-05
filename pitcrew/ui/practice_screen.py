@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -54,16 +54,24 @@ from pitcrew.ui.widgets import (
     SpecLine,
     StencilLabel,
     StrikeRow,
-    TyreGauge,
-    TyreGaugeSet,
+    WearCell,
 )
 
-ROW_HEIGHT = 54
-# A stint-end row is taller because it carries the four-corner gauge, which is
-# two gauges deep. The rack is read between runs, not at speed, so the extra
-# height costs nothing and the taller row is itself the signal that this is
-# where a set came off.
-STINT_ROW_HEIGHT = TyreGauge.HEIGHT * 2 + 4 + 12
+# **One line per lap, because the rack is a timing tower.**
+#
+# It was 54, and 140 wherever a wear reading was worth taking, because the
+# four-corner gauge is two gauges deep. That put three laps in a 950px window
+# on the one screen whose entire job is comparing laps against each other -
+# a twelve-lap stint needed 1,700px of scrolling to be read at all, and the
+# comparison the screen exists for could never happen on screen.
+#
+# The gauges did not shrink and did not become a number: `WearCell` opens them
+# at full size, still dragged rather than typed. What the row shows is the
+# corner that ends the stint, which is the figure the wear model consumes.
+ROW_HEIGHT = 34
+# A stint-end row is no longer taller. The signal that a set came off is the
+# reading in the wear cell and the rule beneath the row, not 86px of height.
+STINT_ROW_HEIGHT = ROW_HEIGHT
 UNTAGGED = "—"
 
 # Column widths, shared by the heads and the rows so the two never drift.
@@ -85,7 +93,8 @@ W_COMPOUND = 104
 # wear rate is measured or assumed. The combo's own sizeHint is 128, and the
 # row's hint is 988 at 1280 wide, so the 10px cannot overflow.
 W_SET_ON = 128
-W_WEAR = TyreGauge.WIDTH * 2 + 4      # two gauges wide, plus the gap between
+# "RR 33%" in 13px mono, plus its border and breathing room.
+W_WEAR = 92
 W_ACTION = 104
 HEAD_HEIGHT = 30
 # Everything from the compound picker rightward, so the strike can stop before
@@ -452,7 +461,6 @@ class RackRow(QWidget):
         shell.setSpacing(0)
 
         self.frame = StrikeRow()
-        self.frame.setStrikeRight(CONTROLS_WIDTH + theme.GAP)
         shell.addWidget(self.frame)
 
         line = QHBoxLayout(self.frame)
@@ -561,7 +569,13 @@ class RackRow(QWidget):
         self.marker_label.setFixedWidth(W_MARKER)
         line.addWidget(self.marker_label)
 
-        line.addStretch(1)
+        # **No stretch here.** It used to sit between the data and the
+        # controls, so on a 1520px viewport a 1330px row opened a 190px hole
+        # across the middle of every line - which reads as a column whose
+        # values are all missing, on a screen whose whole subject is which
+        # values are missing. A timing tower packs left; the slack goes to
+        # the right edge, past everything, where it is margin rather than a
+        # gap between two things that belong together.
 
         self.compound_picker = QComboBox()
         self.compound_picker.addItem(UNTAGGED, None)
@@ -609,9 +623,10 @@ class RackRow(QWidget):
         # The gauge only appears where a reading is worth taking. On every
         # other row the column holds its width so the rack stays in line, but
         # holds nothing to fill in.
-        self.gauges: TyreGaugeSet | None = None
+        self.gauges: WearCell | None = None
         if self._stint_end:
-            self.gauges = TyreGaugeSet()
+            self.gauges = WearCell()
+            self.gauges.setFixedWidth(W_WEAR)
             self.gauges.setValues(self.row.wear)
             self.gauges.changed.connect(self._on_wear)
             line.addWidget(self.gauges)
@@ -625,14 +640,47 @@ class RackRow(QWidget):
         keep = self.exclude_button.sizePolicy()
         keep.setRetainSizeWhenHidden(True)
         self.exclude_button.setSizePolicy(keep)
-        # 34, the floor this app sets for itself everywhere else. This is
-        # the most-used control on the busiest screen, once per lap row.
-        self.exclude_button.setMinimumHeight(34)
+        # The row IS the floor now: 34px, which is what this app pins
+        # everywhere else. This is the most-used control on the busiest
+        # screen, once per lap row, and it fills its row's full height.
+        self.exclude_button.setMinimumHeight(ROW_HEIGHT - 4)
         self.exclude_button.setFont(theme.stencil_font(12, tracking=6.0))
         self.exclude_button.clicked.connect(self._on_exclude)
         line.addWidget(self.exclude_button)
 
+        line.addStretch(1)
+
         self._sync()
+        QTimer.singleShot(0, self._place_strike)
+
+    def resizeEvent(self, event) -> None:            # noqa: N802 - Qt naming
+        """Stop the strike where the controls actually start.
+
+        It was a constant measured from the right edge, which was true only
+        while a stretch pinned the controls there. Now that the row packs
+        left, the controls sit at a position the layout decides, so the inset
+        is read off the widget rather than assumed about it - otherwise the
+        line either stops in mid-air or runs straight through a combo box,
+        and a struck combo reads as a disabled one.
+        """
+        super().resizeEvent(event)
+        self._place_strike()
+
+    def _place_strike(self) -> None:
+        """Where the data ends and the controls begin.
+
+        **Read off the layout, and re-read after it has actually run.** The
+        first `resizeEvent` arrives before the child layout has placed
+        anything, so `x()` is 0 and the inset silently stayed at its default
+        of 16 - a strike drawn the full width of the row, straight through
+        the compound picker and the strike button. `_sync` re-asks on every
+        state change, and the row asks once more on the next turn of the
+        event loop, which is the first moment the geometry is real.
+        """
+        left = self.compound_picker.x()
+        if left <= 0:                       # not laid out yet
+            return
+        self.frame.setStrikeRight(max(0, self.frame.width() - left + theme.GAP))
 
     # --------------------------------------------------------------- actions
 
@@ -663,6 +711,7 @@ class RackRow(QWidget):
         self.restructured.emit(self.row.lap_id)
 
     def _sync(self) -> None:
+        self._place_strike()
         # **A structural lap is dimmed, not ruled through.** Striking says
         # "this did not happen"; an out-lap very much happened and its time is
         # evidence about how long the tyres take to come in and what a stop
@@ -1584,6 +1633,40 @@ class PracticeScreen(QWidget):
                 if row.sector_source and any(value is not None
                                              for value in row.sectors_ms)}
 
+    def optimal_lap(self) -> tuple[int, tuple[int, int, int]] | None:
+        """The three best sectors added up — a lap nobody drove.
+
+        **Derived, and it has to look derived**, because no car set this time.
+        It is the sum of three sectors taken from up to three different laps,
+        which is exactly the claim it makes: *this is available, and you have
+        already driven every part of it.* The gap between it and the best real
+        lap is the only number on this screen that is purely about stringing
+        it together rather than about the car.
+
+        **Only over COUNTED laps**, the same rule the timing marks use. An
+        out-lap is a pit-exit-to-line fragment and its S1 is short; letting
+        one into the sum would produce an "optimal" nobody could ever match,
+        and it would be indistinguishable from a real target.
+
+        **All three or nothing.** Sectors are refused on about one lap in six
+        — an out-lap whose frames start in the box, a lap whose path
+        teleported, a circuit with no lines yet — and a sum over two of three
+        is not a lap time, it is a smaller number that looks like one. None
+        is returned where any sector has no counted lap behind it.
+
+        Returns the total and its three parts, so the caller can say which
+        laps it came from rather than presenting a bare figure.
+        """
+        counted = [row for row in self._rows if row.counted]
+        best: list[int] = []
+        for index in range(3):
+            times = [row.sectors_ms[index] for row in counted
+                     if row.sectors_ms[index] and row.sectors_ms[index] > 0]
+            if not times:
+                return None
+            best.append(min(times))
+        return sum(best), (best[0], best[1], best[2])
+
     def _sector_provenance(self) -> str | None:
         """One phrase saying how this rack's laps were cut, or None.
 
@@ -1646,6 +1729,34 @@ class PracticeScreen(QWidget):
         # a boundary placed at a real circuit's timing line and one placed a
         # third of the way round are not the same claim at all. Derived ink,
         # because the provenance is as computed as the numbers under it.
+        # **The optimal lap, beside the best real one.** Purple, because
+        # nobody drove it: it is three sectors from up to three laps, and the
+        # register is the whole reason it can sit next to a measured best
+        # without being read as one. The gap comes with it - the figure he
+        # acts on is not 1:42.9, it is "0.61 s of it is stringing together".
+        optimal = self.optimal_lap()
+        if optimal is not None and times:
+            total, parts = optimal
+            self.spec.add(
+                "Optimal", format_lap_time(total), derived=True,
+                tooltip=(
+                    "The three best sectors added together, from up to three "
+                    "different laps.\n\n"
+                    f"S1 {format_sector(parts[0])}   "
+                    f"S2 {format_sector(parts[1])}   "
+                    f"S3 {format_sector(parts[2])}\n\n"
+                    "Nobody drove this lap. Counted laps only - an out-lap's "
+                    "S1 is a pit-exit fragment, and letting one in would "
+                    "produce a target nothing could match."))
+            # Only where it is actually ahead. A best lap that already IS the
+            # sum of the three best sectors gives a gap of zero, and printing
+            # "+0.000 s" invites him to go looking for a tenth that is not
+            # there. Negative cannot happen over one set of counted laps and
+            # is not defended against with a clamp - see rule 9.
+            if total < times[0]:
+                self.spec.add("Available",
+                              f"{(times[0] - total) / 1000:.3f} s",
+                              derived=True)
         cut = self._sector_provenance()
         if cut:
             self.spec.add("Sectors", cut, derived=True)
