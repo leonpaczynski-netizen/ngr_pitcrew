@@ -71,7 +71,7 @@ a voice in the driver's ear.
 
 Governing contracts, both at the repo root and both authoritative over any
 plan: **`CLAUDE.md`** (build brief) and **`EXPORT-CONTRACT.md`**
-(`gt7-pitcrew/1.1`).
+(`gt7-pitcrew/1.8`).
 
 Hard facts that bound what is buildable:
 
