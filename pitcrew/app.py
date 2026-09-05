@@ -28,7 +28,6 @@ from pitcrew.export.payload import APP_VERSION
 from pitcrew.store.db import DEFAULT_DB_PATH, Store
 from pitcrew.ui import theme
 from pitcrew.ui.car_screen import CarScreen
-from pitcrew.ui.engineer_screen import EngineerScreen
 from pitcrew.ui.event_screen import EventScreen
 from pitcrew.ui.practice_screen import PracticeScreen
 from pitcrew.ui.race_screen import RaceScreen
@@ -50,13 +49,15 @@ MIN_WINDOW = (900, 560)
 # The rail, grouped by the job each screen belongs to. Two loops run through
 # this app and they are not the same work: PREPARE/LEARN is the setup loop
 # that makes the car faster, RACE DAY is the one used under pressure. Flat,
-# they read as eight peers; named, the rail describes the work.
+# they read as seven peers; named, the rail describes the work.
 #
-# The order within each group is the order the work happens in - Engineer is
-# the last step of the setup loop, not an eighth thing after Race.
+# **There is no Engineer screen.** It existed to build a prompt, hand it to
+# the driver to paste, and take a setup sheet back - and that whole transport
+# is gone: the tune builder holds the car and issues changes directly. What
+# the app still owes him is what it measured, which is Practice and Race.
 NAV_GROUPS = (
     ("Prepare", ("Event", "Car")),
-    ("Learn", ("Practice", "Engineer")),
+    ("Learn", ("Practice",)),
     ("Race day", ("Strategy", "Race")),
     ("", ("Reference", "Settings")),
 )
@@ -683,9 +684,9 @@ class PitCrewWindow(QMainWindow):
         row.setSpacing(0)
 
         self.stack = QStackedWidget()
-        # **Three of the eight are not built here.** Engineer, Reference and
-        # Settings are made when the driver first navigates to them, which
-        # takes ~300 ms off every launch. Event and Practice are unconditional
+        # **Two of the seven are not built here.** Reference and Settings are
+        # made when the driver first navigates to them, which takes ~300 ms
+        # off every launch. Event and Practice are unconditional
         # in the controller; Strategy and Race are 16 and 8 ms and are wanted
         # on race day, so all four stay eager and none of that is worth the
         # deferral. Car stays eager too, and that one is a measurement rather
@@ -697,7 +698,6 @@ class PitCrewWindow(QMainWindow):
         self.practice_screen = PracticeScreen()
         self.strategy_screen = StrategyScreen()
         self.race_screen = RaceScreen()
-        self.engineer_screen = None
         self.reference_screen = None
         self.settings_screen = None
         # Order must match SCREENS, which NAV_GROUPS defines: the rail
@@ -706,9 +706,9 @@ class PitCrewWindow(QMainWindow):
         # **The placeholders are load-bearing.** `NavRail` disables an item
         # when its index is past `stack.count()` and labels it "Not built
         # yet". A screen that is merely waiting to be built is not that, and
-        # must not read as that - so the stack is eight wide from the start.
+        # must not read as that - so the stack is seven wide from the start.
         for screen in (self.event_screen, self.car_screen,
-                       self.practice_screen, self.engineer_screen,
+                       self.practice_screen,
                        self.strategy_screen, self.race_screen,
                        self.reference_screen, self.settings_screen):
             self.stack.addWidget(screen if screen is not None else QWidget())
@@ -722,8 +722,7 @@ class PitCrewWindow(QMainWindow):
         self.controller = PitCrewController(
             store, self.event_screen, self.practice_screen,
             self.strategy_screen, self.race_screen,
-            car_screen=self.car_screen,
-            engineer_screen=None, settings_screen=None,
+            car_screen=self.car_screen, settings_screen=None,
             port=port, warm=warm)
         # The rail says where the work stands, not only where it goes. Every
         # figure here is already in the store; nothing new is computed for it.
@@ -734,9 +733,8 @@ class PitCrewWindow(QMainWindow):
     # Index in the stack -> (attribute, class, how to wire it up). The rail
     # indexes straight into the stack, so these are positions in SCREENS.
     LATE_SCREENS = {
-        3: ("engineer_screen", EngineerScreen, "attach_engineer_screen"),
-        6: ("reference_screen", ReferenceScreen, None),
-        7: ("settings_screen", SettingsScreen, "attach_settings_screen"),
+        5: ("reference_screen", ReferenceScreen, None),
+        6: ("settings_screen", SettingsScreen, "attach_settings_screen"),
     }
 
     def _ensure_screen(self, index: int):
@@ -838,9 +836,6 @@ class PitCrewWindow(QMainWindow):
         # the screen itself.
         if current is self.practice_screen:
             self.practice_screen.export_requested.emit()
-        elif current is self.engineer_screen:
-            self.engineer_screen.generate_requested.emit(
-                self.engineer_screen.kind())
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.controller.shutdown()

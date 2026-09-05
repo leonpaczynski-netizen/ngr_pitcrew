@@ -129,7 +129,6 @@ def test_every_screen_fits_the_smallest_display_he_owns(qt_app):
     """1280x800 at 150% reports 853x501 logical, less the 178px rail."""
     from pitcrew.settings import Settings
     from pitcrew.ui.car_screen import CarScreen
-    from pitcrew.ui.engineer_screen import EngineerScreen
     from pitcrew.ui.event_screen import EventScreen
     from pitcrew.ui.practice_screen import PracticeScreen
     from pitcrew.ui.race_screen import RaceScreen
@@ -140,7 +139,7 @@ def test_every_screen_fits_the_smallest_display_he_owns(qt_app):
     settings = SettingsScreen()
     settings.load(Settings())
     for screen in (EventScreen(), CarScreen(), PracticeScreen(),
-                   StrategyScreen(), RaceScreen(), EngineerScreen(),
+                   StrategyScreen(), RaceScreen(),
                    ReferenceScreen(), settings):
         height = screen.minimumSizeHint().height()
         assert height <= 501, (

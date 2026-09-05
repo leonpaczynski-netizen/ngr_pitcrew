@@ -60,13 +60,8 @@ from pitcrew.export.build import (
     event_lap_inputs,
 )
 from pitcrew.export.payload import APP_VERSION, ExportRefused, to_json
-from pitcrew.prompts.build import KIND_LABELS, PromptRefused, build_prompt
-from pitcrew.prompts.context import gather
-from pitcrew.prompts.report import DriverReport
-from pitcrew.prompts.templates import PROMPT_VERSION
 from pitcrew.race import knowledge
 from pitcrew.setup import doubt
-from pitcrew.setup.parse import parse_reply
 from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
 from pitcrew.store import catalogs
 from pitcrew.store.db import DEFAULT_SHEET_PURPOSE, Store
@@ -739,7 +734,7 @@ class PitCrewController(QObject):
 
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
-                 car_screen=None, engineer_screen=None, settings_screen=None,
+                 car_screen=None, settings_screen=None,
                  port: int | None = None, voice=None, warm=None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -749,12 +744,10 @@ class PitCrewController(QObject):
         self.strategy = strategy_screen
         self.race_screen = race_screen
         self.car_screen = car_screen
-        self.engineer = engineer_screen
         self.settings_screen = settings_screen
         # An exclusion reason the driver gave mid-lap, waiting for
         # that lap to land. See `_note_driver_report`.
         self._exclude_next_lap: str | None = None
-        self.prompt_issue_id: int | None = None
         self.settings = settings.load(store)
         # The streams are opened deep inside two engines that must not know
         # what a settings object is, so the choice is pushed down instead.
@@ -869,7 +862,6 @@ class PitCrewController(QObject):
         self._store_errors = 0
 
         # Set once, so an attach that runs twice does not connect twice.
-        self._engineer_wired = False
         self._settings_wired = False
 
         self.bridge.lap_completed.connect(self._on_lap_completed)
@@ -917,8 +909,6 @@ class PitCrewController(QObject):
         if self.car_screen is not None:
             self.car_screen.car_changed.connect(self.load_car)
             self.car_screen.saved.connect(self.save_ranges)
-        if self.engineer is not None:
-            self.attach_engineer_screen(self.engineer)
         if self.settings_screen is not None:
             self.attach_settings_screen(self.settings_screen)
 
@@ -997,21 +987,6 @@ class PitCrewController(QObject):
         screen = self.settings_screen
         if screen is not None and hasattr(screen, "set_session_open"):
             screen.set_session_open(self.session_kind is not None)
-
-    def attach_engineer_screen(self, screen) -> None:
-        """Wire the Engineer screen, whenever it turns up."""
-        if self.engineer is screen and self._engineer_wired:
-            return
-        self.engineer = screen
-        if screen is None:
-            return
-        if not self._engineer_wired:
-            screen.generate_requested.connect(self.generate_prompt)
-            screen.copy_requested.connect(self.copy_prompt)
-            screen.reply_saved.connect(self.file_prompt_reply)
-            self._engineer_wired = True
-        # What `load_active_event` would have pushed into it had it existed.
-        self.refresh_engineer()
 
     def attach_settings_screen(self, screen) -> None:
         """Wire the Settings screen, whenever it turns up.
@@ -1265,7 +1240,6 @@ class PitCrewController(QObject):
             # visible before anything is generated. It returned early here and
             # left the plate empty on exactly the run where the division has
             # never been explained.
-            self.refresh_engineer()
             self._refresh_race_options(None)
             self._say_calendar_news(None)
             return
@@ -1292,7 +1266,6 @@ class PitCrewController(QObject):
         self.refresh_nav_state()
         if self.car_screen is not None and event["car_name"]:
             self.load_car(event["car_name"])
-        self.refresh_engineer()
         # Last, because it writes the footer note and `event_screen.load`
         # above does not - anything said earlier would be on the screen the
         # load then replaced.
@@ -1328,7 +1301,6 @@ class PitCrewController(QObject):
                 "No event yet. Fill one in on the Event screen and save it.",
                 warn=True)
             self.refresh_nav_state()
-            self.refresh_engineer()
             self.event_screen.note(
                 "New event. Nothing is stored until you save it.")
             return
@@ -1557,7 +1529,6 @@ class PitCrewController(QObject):
             f"{proposal.name} is not saved yet. Finish it on the Event screen.",
             warn=True)
         self.refresh_nav_state()
-        self.refresh_engineer()
         # **The gap is named, not left to be discovered.** The driver finding a
         # blank layout after saving is the same information arriving too late
         # to be free.
@@ -2067,160 +2038,8 @@ class PitCrewController(QObject):
                if verified else
                ". Not marked as read off the car, so they stay labelled "
                "estimates."))
-        self.refresh_engineer()
 
     # -------------------------------------------------------- race engineer
-
-    def prompt_context(self, kind: str):
-        event = self.active_event()
-        return gather(self.store, event_id=event["id"] if event else None,
-                      kind=kind, game_version=self.settings.game_version)
-
-    def refresh_engineer(self) -> None:
-        """Say what the app is filling in, before anything is generated."""
-        if self.engineer is None:
-            return
-        event = self.active_event()
-        if event is None:
-            self.engineer.set_context_note(
-                "No event yet. Create one on the Event screen — a prompt has "
-                "to be about something.")
-            return
-        context = self.prompt_context(self.engineer.kind())
-        parts = [f"{context.car or 'no car'} at "
-                 f"{context.circuit_name or 'no circuit'}"]
-        if context.sheet is not None:
-            parts.append(f"sheet {context.sheet.sheet_name}")
-        if context.ranges.source == "record":
-            parts.append("measured slider ranges"
-                         if context.ranges.verified else
-                         "slider ranges on file, unverified")
-        else:
-            parts.append("no measured ranges — estimated windows")
-        if context.laps:
-            parts.append(f"{len(context.laps)} recorded laps")
-        gaps = context.missing()
-        note = " · ".join(parts)
-        if gaps:
-            note += ". Not on file: " + ", ".join(gaps) + "."
-        self.engineer.set_context_note(note)
-        self._ask_only_what_is_left(context)
-
-    def _ask_only_what_is_left(self, context) -> None:
-        """Show the questions the data cannot answer, and answer the rest.
-
-        **`prompts/questions.py` is the whole confirm-not-recall design and it
-        had no caller anywhere in the app.** Five hundred lines, a registry, a
-        gate and working resolvers, reachable only from its own test file -
-        which is the fourth instance of that pattern found this week, and the
-        one that cost the most, because what stood in its place was the
-        thirteen-field form its own docstring is a rebuttal of.
-
-        The rule it enforces is one line: **a question with a working resolver
-        may never be asked.** It exists because on 23 Aug the driver was asked
-        to watch the tyre indicators and report whether one rear wheel was
-        spinning alone - a question `lap_frames` had answered seventeen
-        thousand times over. He noticed before the app did.
-
-        Silent on failure. A prompt screen that will not open because a
-        resolver raised is worse than one asking a question it need not.
-        """
-        if self.engineer is None or not hasattr(self.engineer, "set_questions"):
-            return
-        try:
-            from pitcrew.prompts.questions import resolve
-
-            found = resolve(self.store, context, kind=self.engineer.kind())
-        except Exception as exc:                            # noqa: BLE001
-            log("prompts").warning(
-                "could not work out what still needs asking: %s: %s",
-                type(exc).__name__, exc)
-            return
-        if found.failed:
-            # **A broken resolver ASKS rather than silently answering**, and
-            # it says so here: the driver would otherwise never learn the app
-            # had stopped looking at something it used to check.
-            log("prompts").warning(
-                "resolvers raised and their questions are being asked "
-                "instead: %s", ", ".join(found.failed))
-        self.engineer.set_questions(found)
-
-    def generate_prompt(self, kind: str) -> str | None:
-        """Compose a prompt and log it as issued."""
-        if self.engineer is None:
-            return None
-        event = self.active_event()
-        context = self.prompt_context(kind)
-        try:
-            prompt = build_prompt(context, self.engineer.report(), kind=kind)
-        except PromptRefused as exc:
-            self.engineer.show_prompt("")
-            self.engineer.note(f"Refused: {exc}", warn=True)
-            return None
-
-        self.engineer.show_prompt(prompt.text, warnings=prompt.warnings)
-        self.refresh_engineer()
-        self.prompt_issue_id = self.store.log_prompt(
-            kind=kind, body=prompt.text, prompt_version=PROMPT_VERSION,
-            app_version=APP_VERSION,
-            event_id=event["id"] if event else None,
-            session_id=context.session_id,
-            car_name=context.car, circuit=context.circuit_name)
-        self.engineer.note(
-            f"{KIND_LABELS.get(kind, kind)} logged as prompt "
-            f"#{self.prompt_issue_id}, template {PROMPT_VERSION}.")
-        self.refresh_nav_state()
-        self.engineer.note_reply("")
-        return prompt.text
-
-    def copy_prompt(self) -> str:
-        """Clipboard is the whole transport. The app makes no network calls."""
-        if self.engineer is None:
-            return ""
-        text = self.engineer.prompt_text()
-        clipboard = QApplication.clipboard()
-        if clipboard is not None and text:
-            clipboard.setText(text)
-        self.engineer.note(
-            "Copied. Paste it into the knowledge base session."
-            if text else "Nothing to copy — generate first.", warn=not text)
-        return text
-
-    def file_prompt_reply(self, reply: str) -> None:
-        """Keep what came back, against the prompt that asked for it."""
-        if self.engineer is None:
-            return
-        if self.prompt_issue_id is None:
-            self.engineer.note_reply(
-                "Generate a prompt first — a reply is filed against the "
-                "prompt that asked for it.", warn=True)
-            return
-        if not reply.strip():
-            self.engineer.note_reply("Nothing pasted.", warn=True)
-            return
-        self.store.save_prompt_reply(self.prompt_issue_id, reply)
-
-        # **Filed and fitted, from one paste.** The app had the reply in
-        # memory, had a working parser, and asked him to paste the same block
-        # a second time on a different screen - and the copy said so, which is
-        # worse than the seam itself: it documented it rather than closing it.
-        # Filing and fitting stay separate actions; the transcription between
-        # them is what goes.
-        parsed = parse_reply(reply)
-        if parsed.sheets:
-            self.event_screen.take_reply(reply)
-            fitted = ", ".join(sorted(parsed.sheets))
-            self.engineer.note_reply(
-                f"Filed against prompt #{self.prompt_issue_id}, and the "
-                f"{fitted} sheet{'' if len(parsed.sheets) == 1 else 's'} "
-                f"loaded onto the Event screen. Check it there and save. "
-                f"Your report has been cleared for the next session.")
-            self.engineer.clear_report()
-            return
-        self.engineer.note_reply(
-            f"Filed against prompt #{self.prompt_issue_id}. No setup block in "
-            f"it, so nothing was fitted - paste the sheet into the Event "
-            f"screen if there is one.", warn=True)
 
     # -------------------------------------------------------------- practice
 
