@@ -156,15 +156,44 @@ def test_only_a_stint_end_row_is_given_a_gauge(qt_app):  # noqa: F811
 
 
 def test_a_gauge_edit_reaches_the_row(qt_app):  # noqa: F811
-    """What the driver drags is what gets persisted."""
+    """What the driver drags is what gets persisted.
+
+    **Through the popup now**, not off the row. The four gauges left the row
+    on 5 Sep 2026 - laid out as the car they are 140px deep, and they put
+    three laps in a 950px window on the screen built for comparing laps. The
+    gauges themselves are unchanged and still dragged; what changed is that
+    the row shows the corner that ends the stint and opens the four on click.
+    So the path this asserts is the whole path: drag a gauge, and the row
+    behind the rack has the number.
+    """
     row = a_lap(1)
     widget = RackRow(row, 94_000, stint_end=True)
     seen = []
     widget.changed.connect(seen.append)
-    widget.gauges._gauges["fl"].setFraction(0.62)
-    assert row.wear_fl == 0.62
-    assert row.worst_wear == 0.62
-    assert seen == [1]
+
+    widget.gauges._open()
+    try:
+        widget.gauges._popup.gauges._gauges["fl"].setFraction(0.62)
+        assert row.wear_fl == 0.62
+        assert row.worst_wear == 0.62
+        assert seen == [1]
+        # And the cell says which corner is the one that ends the stint,
+        # which is the figure the wear model runs on.
+        assert widget.gauges.worst() == ("fl", 0.62)
+        assert "FL" in widget.gauges.text()
+    finally:
+        widget.gauges._popup.close()
+
+
+def test_a_cell_with_nothing_read_is_struck_not_a_zero(qt_app):  # noqa: F811
+    """Rule 3 at the wear column: no reading is not a wear of zero, and a
+    fresh set is exactly what a zero would claim."""
+    from pitcrew.ui import theme
+
+    widget = RackRow(a_lap(1), 94_000, stint_end=True)
+    assert widget.gauges.worst() is None
+    assert widget.gauges.text() == "—"
+    assert theme.STRUCK.lower() in widget.gauges.styleSheet().lower()
 
 
 def _key(key: Qt.Key) -> object:
