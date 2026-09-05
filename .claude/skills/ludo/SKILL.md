@@ -99,7 +99,10 @@ symptom→cause chain built on nothing is this mode's whole failure.
    `references/driver-model.md` has the four fields, and the third decides which
    symptom table applies at all.
 4. **One change, three clean laps**, with the prediction written down.
-5. **If a ratio moved, the shift table moved with it.** Re-issue it in the
+5. **Then read where it landed, not whether the lap moved.** The lap time
+   cannot answer this — see *Where the change landed*, above. Sectors first,
+   distance bins where the sectors are silent.
+6. **If a ratio moved, the shift table moved with it.** Re-issue it in the
    same message — see below.
 
 ### `quali` — one lap
@@ -134,6 +137,10 @@ different thing from qualifying evidence.
 4. `references/race-planner.md` for the rest.
 
 ### `debrief` — after the flag
+
+**Where the time went is a sector-and-bin question**, not a lap-time one. Run
+`tools/where_the_change_landed.py` against this session and the last one on the
+old setup before writing a word about whether the change worked.
 
 1. **Check the open predictions first.** That is the loop closing; a debrief that
    does not is a log. What was predicted, what happened, and which of the two was
@@ -197,6 +204,80 @@ Four rules, and each is a defect that has already happened somewhere:
 The beep is what he hears when he is not looking at anything, so it is held to
 the live-call standard, not the sheet standard: **if you are not confident,
 issue fewer gears rather than softer numbers.** Silence he can work with.
+
+---
+
+## Where the change landed — never the lap time alone
+
+**The lap time cannot show a tune working, and that is measured, not an
+opinion.** His lap-to-lap sigma is 0.918 s, which puts the whole-lap detection
+floor at 1.74 s — above the entire 0.5–1.5 s/lap degradation band and above
+every setup effect this project has tried to measure. The audit of 4 Sep 2026
+said it outright: no instrument in the app could show a tune working.
+
+**That is an argument about the whole lap and it does not carry to the parts.**
+A setup change is almost always local — a spring where the car is loaded, a
+diff where it is putting power down, a wing where it is fast. The lap adds that
+one effect to nine other corners of noise and then asks you to find it.
+
+The arithmetic, because the opposite is usually assumed. A corner is 3–4×
+noisier than a whole lap **in relative terms** — true, and it is exactly why
+per-corner input coaching is refused. But for an effect concentrated in one
+place what matters is *absolute* scatter. If ten corners contribute
+independently, the lap's 0.918 s is √10 × one corner's, so a corner carries
+about 0.29 s. A 0.3 s change is a third of the noise on the lap and all of it
+in its own corner. **Cutting the lap up is not a finer version of the same
+measurement — it is a better one, for anything not spread evenly around the
+circuit.**
+
+### The ladder, cheapest first
+
+```bash
+python tools/where_the_change_landed.py --before 129 130 --after 132
+python tools/where_the_change_landed.py --before 129 --after 132 --bins
+```
+
+1. **Sectors.** Always present, no frames to read. Three numbers with their own
+   spread beside them, and a delta inside that spread is printed as
+   *inside the scatter* — which is a refusal, not a small finding.
+2. **Distance bins** (`--bins`). 100 m at a time, `d/v_after − d/v_before`,
+   summing back to the delta as an identity. Each bin is labelled by what the
+   car was doing **in the BEFORE run only**, so the classification cannot be
+   moved by the thing being measured. This is what separates *drag* from
+   *grip* from *the driver adapting*: they all make one slower lap and they
+   land in different places.
+3. **Corners**, for the phase question — `corners.aggregate_corners` for the
+   metrics and `corner_findings.analyse` for trends that clear each corner's
+   *own* measured noise floor. `Report.silent` names the corners that cannot
+   carry a claim; report those as silent.
+
+### The traps, and each has been paid for
+
+- **Two sector models is two pieces of road.** GT7 broadcasts no sectors; these
+  are the app's own cut, and a rack can hold two sets of lines. The tool
+  refuses rather than comparing them. Never hand-compare S2 across runs
+  without checking `sector_model`.
+- **Out-laps and excursions come out first.** An out-lap's S1 starts in the
+  pit box — one read 5.58 s on a 95 s lap. And Daytona T1 read r=−0.86 against
+  lap time until two off-track laps came out, when it collapsed to −0.30.
+- **The compound is the first confound**, not an afterthought. A softer tyre
+  wearing a setup's clothes is the standing trap; the tool warns when the two
+  sides differ and tells you the two cannot be separated.
+- **Medians do not add up.** The sum of sector medians will not equal the lap
+  delta, because the best S1 and the best S2 came from different laps. That
+  gap is arithmetic, not an error.
+- ⛔ **Never bank per-corner "opportunities" into a lap time.** The bin total
+  is an identity — it reconstructs a delta actually driven. A sum of
+  best-cases is session scatter, and scatter is a state, never a loss.
+
+### Straights are not a free measurement
+
+A straight looks like the cleanest thing on the circuit and is not. Terminal
+speed has a measured floor of **0.56–2.77 km/h** at Daytona, and it is
+**confounded by wind**: a +10.9 km/h reading there was wind, proved because the
+two straights face 347° and 144° and moved in *opposite* directions. So a
+straight-speed claim needs both ends of the circuit, or it needs the wind
+checked — and a one-straight gain is not evidence of less drag.
 
 ---
 

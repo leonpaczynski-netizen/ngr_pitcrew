@@ -57,6 +57,15 @@ rake.
   post-session debrief that replaced live corner coaching. **`Report.silent`
   names the corners that cannot carry a claim.** Report those as silent; do not
   omit them.
+- `tools/where_the_change_landed.py --before <sessions> --after <sessions>`
+  — **where on the lap a change landed.** Sector medians with their own spread
+  (a delta inside it prints as *inside the scatter*, which is a refusal), and
+  with `--bins` a 100 m attribution that sums back to the delta as an
+  identity. Bins are labelled from the BEFORE run only, so the classification
+  cannot be moved by the change being measured. It refuses when the two runs
+  were cut on different sector models and warns when the compound differs.
+  **This is the answer to "the lap time cannot show a tune working"** — the
+  lap cannot, the parts can.
 - `RangeRecord.fraction_of_range(key, value)` — advisory only. Nothing refuses
   on it, so a value outside range still needs your eyes.
 
