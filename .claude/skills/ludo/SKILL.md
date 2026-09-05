@@ -84,6 +84,8 @@ symptom→cause chain built on nothing is this mode's whole failure.
    memory of another car.
 4. Deliver a conservative sheet **plus the runs that would turn its assumptions
    into evidence**, priced in laps.
+5. **And the shift table with it** — see *Every sheet carries its shift table*,
+   below. A gearbox delivered without one leaves the beep silent.
 
 ### `refine` — a sheet ran and he has a report
 
@@ -97,6 +99,8 @@ symptom→cause chain built on nothing is this mode's whole failure.
    `references/driver-model.md` has the four fields, and the third decides which
    symptom table applies at all.
 4. **One change, three clean laps**, with the prediction written down.
+5. **If a ratio moved, the shift table moved with it.** Re-issue it in the
+   same message — see below.
 
 ### `quali` — one lap
 
@@ -149,21 +153,76 @@ different thing from qualifying evidence.
 
 ---
 
+## Every sheet carries its shift table
+
+**A sheet that changes a gear ratio and does not re-issue the shift table is
+incomplete.** He asked for this by name: he does not set shift points by hand,
+and he should not have to. You design them, for maximum performance and for
+fuel saving, and they ship with the setup they belong to.
+
+This is the *only* part of a setup that reaches him through the app rather
+than through GT7's own screens — it is a beep in his ear at 60 Hz — so it is
+the only part the app still stores, and it is written by you:
+
+```python
+write_shift_points(
+    car_name="Lamborghini Huracán GT3 EVO",
+    circuit_key="daytona-road-course",
+    performance_rpm={1: 8100, 2: 8150, 3: 8200, 4: 8200, 5: 8250, 6: 8250},
+    fuel_saving_rpm={3: 7400, 4: 7400, 5: 7450, 6: 7500},
+    note="Rev C box. Fuel table is the -20% short-shift, ~0.5 s/lap.")
+```
+
+Four rules, and each is a defect that has already happened somewhere:
+
+1. **Keyed by car AND circuit.** A gearbox is cut for the circuit, so the same
+   car at two tracks is two boxes wanting two tables. Omit the circuit and it
+   will not be found when he goes out — deliberately, because the alternative
+   is beeping Daytona's rpm at Spa.
+2. **A gear you leave out does not beep, and that is correct.** One car wants
+   the limiter in every gear and another wants 8250 in all five. Never pad the
+   table to look complete: a number nobody designed sounds at the wheel
+   exactly like one that was.
+3. **`fuel_saving_rpm` must be below `performance_rpm` in every gear it
+   names.** The app refuses the pair otherwise, by name, because the failure
+   is two columns transposed — silent at the wheel, and it costs fuel in the
+   direction he was told it saved. Roughly 20% fuel for about 0.5 s/lap, and
+   it lowers rear tyre wear as well, which is why it is worth issuing even on
+   a sheet that is not fuel-bound.
+4. **Measure before you assert.** `tools/shift_points.py` finds the optimal
+   upshift rpm per gear from the archive. Where you have not measured this
+   box, say `[ASSUMED]` in the note and give him the run that would settle it
+   — the same standard as every other number you issue.
+
+The beep is what he hears when he is not looking at anything, so it is held to
+the live-call standard, not the sheet standard: **if you are not confident,
+issue fewer gears rather than softer numbers.** Silence he can work with.
+
+---
+
 ## The spine — every mode runs these, in this order
 
 **1 — Rank zero, and it has two halves.** Above everything, including any
 telemetry reading.
 
 *1a. What is actually in the car.* The setup record has been wrong in five
-consecutive sessions, and one of the two instruments that catches it is a
-gearbox comparison.
-```bash
-python tools/check_setup_sheets.py          # circuit-matched; exit 1 = mismatch
-```
-Then `pitcrew.analysis.gearing.matches_sheet(laps, sheet_gears)` — **the only
-setup value telemetry can verify.** Twenty-one of the twenty-three have no
-ground truth in the feed at all, so for those you *ask him*, and you ask before
-reading any telemetry off the car.
+consecutive sessions — **and as of 5 Sep 2026 the app no longer keeps one.**
+You hold the car. `brain/car-state/<car>-<circuit>.md` is the only place a
+setup value may be written; every other file links to it and restates nothing.
+The app has no sheet to disagree with you and no sheet to check against, so
+rank zero is now entirely yours:
+
+- **Ask for the screenshot.** GT7's own settings screen is the ground truth
+  and it is the only one left. SCREEN beats ISSUED every time — a value you
+  sent him is a request, not a reading, and it does not become SCREEN without
+  a photograph.
+- **The gearbox is still verifiable from the feed**, and it is now the only
+  setup value that is: `pitcrew.analysis.gearing.fitted_ratios(laps)` reads
+  the box out of the packet. Compare it against the ratios in the car-state
+  file yourself. The app used to do this and refuse the export over it; it
+  cannot any more, because it does not know what the box is supposed to be.
+- The other twenty-two values have no ground truth in the feed at all. You
+  *ask him*, and you ask before reading any telemetry off the car.
 
 *1b. What is actually in the wheel.* Still open, and it invalidates grip
 readings if wrong. GT7 1.71 changed force feedback, understeer vibration **and
@@ -187,15 +246,16 @@ archive is on disk: per-wheel slip, suspension, surface, steering, pedals. The
 LSD question sat open for three revisions while the answer was in 17,421
 corner-exit frames.
 
-**4 — Then ask, at most four questions, one at a time.** A question with a
-working resolver may never be asked. Run the gate rather than guessing at it:
-```python
-from pitcrew.prompts.context import gather
-from pitcrew.prompts.questions import resolve
-context = gather(store, event_id=<id>, kind="refinement")
-answer = resolve(store, context, kind="refinement")   # .asked / .answered
-```
-Report what the resolvers already settled; ask only what is left.
+**4 — Then ask, at most four questions, one at a time.** A question the
+telemetry already answers may never be asked. The resolver that used to
+enforce this went with the prompt builder on 5 Sep 2026, so the discipline is
+yours to keep: before asking anything, check whether `lap_frames` has already
+answered it seventeen thousand times. On 23 Aug he was asked to watch the
+tyre indicators and report whether one rear wheel was spinning alone — a
+question the archive had answered all along, and he noticed before the app
+did.
+
+Report what the telemetry already settled; ask only what is left.
 Each question states what the data already shows, so he is confirming rather
 than reporting from scratch. If something cannot be measured, say
 `unmeasurable_because` — never dress a gap as a preference.

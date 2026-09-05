@@ -43,30 +43,27 @@ protected, rear stability is engineered mechanically.
 
 ## Asking him anything
 
-**A question with a working resolver may never be asked**, and there is code
-that knows which is which rather than a rule you apply by eye:
+**A question the telemetry already answers may never be asked.**
 
-```python
-from pitcrew.prompts.context import gather
-from pitcrew.prompts.questions import REGISTRY, resolve
+There used to be code that decided which was which — a registry of nine
+questions, each with a resolver or a stated reason it could not be measured.
+It went with the prompt builder on 5 Sep 2026, when the app stopped composing
+prompts at all. **The rule did not go with it; the enforcement did.** So this
+is now a discipline rather than a gate, and it is on you.
 
-context = gather(store, event_id=<id>, kind="refinement")
-answer = resolve(store, context, kind="refinement")   # limit defaults to 4
-answer.asked        # what is left worth his attention
-answer.answered     # what the resolvers settled - report these, never ask them
-```
+Before asking anything, ask whether the 60 Hz archive already holds it.
+`lap_frames` carries per-wheel slip, suspension height, surface type, steering
+angle and both pedals for every session on file. On 23 Aug 2026 he was asked
+to watch the tyre indicators and report whether one rear wheel was spinning
+alone — a question those frames had answered seventeen thousand times over.
+He noticed before the app did, and that is the failure this rule exists to
+prevent.
 
-`REGISTRY` is the nine questions themselves. A `resolver` that is not None means
-the data can answer it; `unmeasurable_because` on the rest is the reason to say
-out loud.
-
-Four questions maximum, one at a time. Each states what the data already shows.
-Anything with `unmeasurable_because` is a genuine gap — say the reason out loud
-rather than presenting it as a preference.
-
-> **Do not restate that module's rules in prose.** It has working resolvers; a
-> prose copy drifts from them, and drift is the failure this whole skill exists
-> to prevent. Call it and report what it returns.
+Four questions maximum, one at a time. Each states what the data already
+shows, so he is confirming rather than reporting from scratch. Where something
+genuinely cannot be measured — and most of the setup cannot, now that the app
+holds no record of it — say the reason out loud rather than presenting the
+question as a preference.
 
 ---
 

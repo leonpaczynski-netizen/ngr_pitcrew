@@ -18,6 +18,8 @@ Written 11 Aug 2026 · GT7 v1.70 · rebuild of an existing codebase.
 > - **Rank zero of every diagnosis is "what is actually in the car."** The setup
 >   record has been wrong in five consecutive sessions. A correct telemetry
 >   reading against a wrong setup record produces a confident wrong answer.
+>   **On 5 Sep 2026 the app stopped keeping that record at all** — see §1a. The
+>   question is unchanged and it is now answered entirely outside this app.
 > - **Per-lap, per-corner input coaching may not ship.** Measured over 307 clean
 >   laps, a corner is 3–4× noisier in relative terms than a whole lap. Multi-lap
 >   trends, whole-lap comparisons and pooled findings are fair; *"brake 10 m
@@ -33,17 +35,52 @@ maturity:
 
 1. **Capture.** Read GT7's UDP telemetry stream and record it.
 2. **Record practice sessions.** Persist runs, aggregate them per lap and per
-   corner, keep the setup that was in the car at the time.
-3. **Export for setup refinement.** Emit a `gt7-pitcrew/1.1` JSON payload that the
-   driver pastes into an external HTML tool (the "GT7 Race Engineering" artifact).
-   That tool wraps it in a prompt and sends it to a race-engineering knowledge base,
-   which returns revised setup sheets. **`EXPORT-CONTRACT.md` defines this payload
-   exactly. It is the app's most important output — treat the schema as an API.**
+   corner.
+3. **Export what was measured.** Emit a `gt7-pitcrew` JSON payload the tune
+   builder reads — directly, over MCP, or pasted. **`EXPORT-CONTRACT.md` defines
+   this payload exactly. It is the app's most important output — treat the schema
+   as an API.**
 4. **Race strategy.** Compute a stint and fuel plan before the race, then talk the
    driver through it live and adapt it as the race actually unfolds.
 
 Jobs 1–3 are the loop that makes the car faster. Job 4 is the one used under
 pressure, so it has the strictest correctness bar.
+
+## 1a. What the app does NOT hold — the setup
+
+**5 Sep 2026. The app no longer records what is in the car, and this is not a
+gap to be filled in.** No setup sheet, no per-slider values, no gear ratios, no
+mid-session change ledger, and no UI to enter any of it. Do not rebuild one.
+
+The reason is the failure it caused. The setup record was wrong in five
+consecutive sessions — a Yas Marina sheet at Road Atlanta, a v1 sheet against a
+Rev B car, `bb -1` in the car against `0` on every sheet on file — and every one
+was caught by the driver mentioning it in passing, never by the app. Two copies
+of a setup existed, so there were two setups. Better checking does not fix that;
+having one copy does.
+
+**Where it lives now.** The tune builder (the `ludo` skill) holds the car and the
+gearbox and issues changes directly. `brain/car-state/<car>-<circuit>.md` is the
+only place a setup value may be written; everything else links to it and restates
+nothing. The driver confirms what is actually in the car with a screenshot of
+GT7's own settings screen, which is the ground truth and the only one left.
+
+**Three things stayed, and each for a stated reason:**
+
+- **The range record and the Car screen.** A range record is not a setup — it is
+  the car's own slider min and max, read off its settings screen once and never
+  re-entered. It is what lets the whole programme reason in percent of slider
+  range rather than absolute values (§4 rule 6), and it outlives every sheet ever
+  run on the car.
+- **The shift table** (`engineer/shift_points.py`). This is the one part of a
+  setup that has to reach the driver *through the app* — it is a beep in his ear
+  at 60 Hz, not something he can read off a screen mid-corner. It is **issued by
+  the tune builder, never typed in**, keyed by car AND circuit because a gearbox
+  is cut for the circuit, and it carries two absolute per-gear tables: one for lap
+  time and one for a fuel-bound stint. A gear with no issued point does not beep.
+- **The `setup_sheets` table, as archive.** 96 sessions of laps reference it and
+  `lap_frames` cascades off `laps`. It is read by `archived_setup_sheet` for the
+  offline tools and written by nothing.
 
 ## 2. Who it is for
 
@@ -320,15 +357,15 @@ audited afterwards against what actually happened.
 - **Persist the raw stream to disk during a session,** then aggregate. Re-aggregating
   a stored session after fixing a corner-detection bug is the difference between one
   evening of work and re-running every test.
-- **The setup as run is app state, not telemetry.** It requires no capture code at
-  all and it is the single highest-value section of the export, because it removes
-  all ambiguity about which version of a sheet produced these symptoms. **Build it
-  first.**
+- **The setup as run is not app state, and not the app's business.** It was, and
+  it is the removal described in §1a. Do not reintroduce it: a value kept here as
+  well as in the tune builder's car-state file is two values, which is the defect,
+  not a redundancy.
 - **Slider ranges are measured once per car and never re-entered.** Store them
   keyed by car in the vocabulary given in `EXPORT-CONTRACT.md` §6 — the consuming
   tool uses those exact keys, so a range record round-trips with no translation.
 - Recommended build order, highest return per hour first:
-  1. `setup` + `rangeRecord` — pure app state, no telemetry needed
+  1. `rangeRecord` — pure app state, no telemetry needed
   2. `corners` with min speed, consistency and flags — the diagnostic core
   3. `laps` with tyre temperatures and fuel — feeds strategy and wear
   4. `session` aggregates — cheap once the rest exists

@@ -1,4 +1,4 @@
-# Pit Crew export contract — `gt7-pitcrew/1.7`
+# Pit Crew export contract — `gt7-pitcrew/1.8`
 
 **What this is.** The exact payload Pit Crew emits after a session. The driver copies
 it and pastes it into the **Pit Crew data** box on the Driver Feedback tab of the GT7
@@ -15,7 +15,7 @@ Two consequences, and they drive every decision below:
    setup decision and nothing else.
 
 Supersedes `gt7-pitcrew/1.0`. Changes and their justification are in §15 (through
-1.1) and §16 (1.2, 1.3, 1.4, 1.5, 1.6 and 1.7). **Every version bump lands with its change table in
+1.1) and §16 (1.2 through 1.8). **Every version bump lands with its change table in
 the same commit** — without one the consumer cannot tell an added field from a
 renamed one, and has to read every unfamiliar field conservatively.
 
@@ -30,9 +30,8 @@ section full of zeros is not.
 
 ```json
 {
-  "format": "gt7-pitcrew/1.7",
+  "format": "gt7-pitcrew/1.8",
   "meta":        { },
-  "setup":       { },
   "rangeRecord": { },
   "session":     { },
   "laps":        [ ],
@@ -86,10 +85,24 @@ section full of zeros is not.
 
 ---
 
-## 3. `setup` — the sheet as run
+## 3. `setup` — the sheet as run · **RETIRED in 1.8, read-only**
 
-**The highest-value section, and the cheapest: it is pure app state, no telemetry.**
-It removes all ambiguity about which version of a sheet produced these symptoms.
+> ⚠ **Pit Crew no longer emits this section, as of 5 Sep 2026.** The app does not
+> record what is in the car. The tune builder holds the setup and the gearbox,
+> issues changes directly, and the driver confirms them against GT7's own settings
+> screen — so the reader of this payload already has the sheet, from the side that
+> wrote it. A second copy travelling from here is the defect the removal was for:
+> a value kept in two places becomes two values, and it had already happened
+> twice on one car.
+>
+> **The shape below is still declared, and a reader must still accept it**, because
+> the archive holds exports going back to 1.0 that carry it. Nothing new will.
+> `rangeRecord` (§4) did *not* go with it — a range record is the car's own slider
+> limits, not a claim about what is bolted to it, and it is what makes reasoning in
+> percent of range possible at all.
+
+**Was:** the highest-value section, and the cheapest — pure app state, no telemetry.
+It removed all ambiguity about which version of a sheet produced these symptoms.
 Keys are the **shared vocabulary** (§4) — the same keys the consuming tool uses for
 its per-car range library, so ranges round-trip with no translation.
 
@@ -1062,3 +1075,20 @@ the refusal gate working correctly against a contract that had fallen behind.
 | # | Change | Reason |
 |---|---|---|
 | 1 | **`setup.build` gains `drivetrain`, `weightBalance`, `torqueKgfm` and `displacementCc`** | None is derivable from `values`, and each changes what a recommendation should say: an MR car at 43:57 and an FR car at 57:43 do not want the same answer to the same mid-corner complaint. `drivetrain` matters most — the app had no drivetrain field anywhere on file, so every diagnosis that depends on which axle drives was being made without it. All four are null wherever the sheet does not record them, which is the ordinary case for a sheet typed from a plan rather than read off the screen |
+
+### `gt7-pitcrew/1.8`
+
+**The app stopped claiming to know what is in the car.** The setup record was
+wrong in five consecutive sessions and every one of them was caught by the driver
+mentioning it in passing, never by the app. The answer is not a better check: it
+is that two copies of a setup existed at all. The tune builder holds the car and
+the gearbox now, issues changes directly, and the driver confirms them against
+GT7's own settings screen — one place a setup value lives, and it is not here.
+
+| # | Change | Reason |
+|---|---|---|
+| 1 | **`setup` is retired (§3).** Never emitted; still declared, and readers must still accept it | The archive holds exports back to 1.0 that carry it, and a reader that rejects them loses the history. What changes is that nothing new will carry one — so a consumer must not read an absent `setup` as "the app failed to record it". It is not recorded anywhere in this app by design |
+| 2 | **`setup.driverChanges` goes with it** | The mid-session change ledger was a second record of the same thing, keyed to sheets that no longer exist. A change to the car is now recorded where the car is recorded |
+| 3 | **The export no longer refuses on an untrustworthy setup record** | The rank-zero gate existed because an export is where a wrong premise becomes a knowledge base's permanent learning. There is no longer a setup record to distrust, so the gate has nothing to weigh — and `acknowledge_setup_doubt` is gone with it. **The question has not gone away**; it has moved to the side that can actually answer it, which is the one holding the sheet and the screenshot |
+| 4 | **`gearing` keeps every field and several are now always `null`** | `matchesSheet`, `finalGearSheet`, `finalGearVsSheetPct` and `rollingRadiusImpliedM` all compare the fitted box against a stated one, and there is no stated one. They report `null` — *not measured*, which is what the tri-state was built for — rather than being dropped. `fittedRatios`, `limiterRpm` and `gearboxChangedMidSession` are read from the packet and are unaffected. `gearingConstantK` now always falls back to the derived final drive, which reads a few percent high through GT7's unloaded tyre radius; `gearingConstantFinalGearSource` says so, and it always said so |
+| 5 | **`rangeRecord` is untouched, and that is the distinction worth stating** | It looks like a setup section and is not. A range record is the car's own slider limits, read off its settings screen once and never re-entered — it is what makes reasoning in percent of range possible at all, and it outlives every sheet ever run on the car |
