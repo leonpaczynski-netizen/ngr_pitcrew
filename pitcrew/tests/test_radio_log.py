@@ -59,61 +59,6 @@ def test_the_event_view_spans_its_sessions_in_order(store: Store):
     assert got[1]["session_kind"] == "practice"
 
 
-def test_the_debrief_prompt_carries_the_radio_verbatim(store: Store):
-    """His words are not tidied. `CLAUDE.md` §4.1 makes the driver's report
-    primary evidence, and a paraphrase of primary evidence is secondary."""
-    from pitcrew.prompts.build import _radio_section
-
-    class Lines:
-        def __init__(self):
-            self.out = []
-
-        def add(self, *items):
-            self.out.extend(items)
-
-    class Context:
-        radio = [{"lap_num": 12, "session_kind": "race", "intent": "box-when",
-                  "heard": "how many to go", "said": "Two to go."}]
-
-    lines = Lines()
-    _radio_section(lines, Context())
-    text = "\n".join(lines.out)
-    assert "## Radio" in text
-    assert '"how many to go"' in text and '"Two to go."' in text
-    assert "Lap 12" in text and "box-when" in text
-
-
-def test_a_session_with_no_radio_adds_no_heading(store: Store):
-    """An empty section reads as "nothing was said", which is a claim. An
-    absent one does not."""
-    from pitcrew.prompts.build import _radio_section
-
-    class Lines:
-        def __init__(self):
-            self.out = []
-
-        def add(self, *items):
-            self.out.extend(items)
-
-    class Context:
-        radio: list = []
-
-    lines = Lines()
-    _radio_section(lines, Context())
-    assert lines.out == []
-
-
-# --- the verdict, rather than a second opinion of it -------------------------
-#
-# The ledger stored an intent re-derived by `intents.match_intent` - a literal
-# keyword test - while the decision the driver actually heard came from the
-# semantic matcher and `gate.judge`. Those disagree by design, so a row could
-# read `fuel` on a press the engineer had refused. And every refused press was
-# dropped before it reached the table at all, which is the half that matters:
-# a question his engineer could not take, in his own words, is exactly what the
-# phrase list is missing.
-
-
 def test_the_gate_verdict_is_kept_beside_the_words(store: Store):
     _event_id, session_id = a_session(store)
     store.log_radio(session_id, heard="how far behind is he",

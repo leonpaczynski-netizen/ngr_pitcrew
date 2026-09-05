@@ -11,7 +11,6 @@ import threading
 import pytest
 
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
-from pitcrew.setup.sheet import SetupSheet
 from pitcrew.store.db import Store
 
 pytest.importorskip("PyQt6.QtWidgets")
@@ -73,27 +72,6 @@ def test_a_timed_race_does_not_count_its_minutes_as_laps():
     counted.arm(None, PlanContext(car="RSR", track="Monza", layout=None,
                                   race_laps=24))
     assert counted.state.laps_total == 24
-
-
-def test_the_event_screen_is_given_the_race_sheet_not_the_last_saved(store: Store):
-    """A pasted pair is written inside one second, so `updated_at` ties.
-
-    `list_setup_sheets` breaks the tie on `id DESC`, which put the qualifying
-    sheet on top; the screen showed it under the Race label and one Save
-    rewrote it as the race sheet.
-    """
-    store.save_setup_sheet(SetupSheet(
-        car_name="RSR", sheet_name="race v3", purpose="race",
-        values={"rh_f": 60.0}))
-    store.save_setup_sheet(SetupSheet(
-        car_name="RSR", sheet_name="quali v3", purpose="qualifying",
-        values={"rh_f": 55.0}))
-
-    newest_first = store.list_setup_sheets("RSR")[0]
-    assert newest_first.purpose == "qualifying", "fixture no longer reproduces the tie"
-
-    assert store.sheet_for("RSR", "race").values["rh_f"] == 60.0
-    assert store.sheet_for("RSR", "qualifying").values["rh_f"] == 55.0
 
 
 def test_an_untouched_pit_loss_is_not_recorded_as_declared(store: Store):

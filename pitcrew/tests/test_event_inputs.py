@@ -56,15 +56,6 @@ def test_a_focused_widget_still_takes_the_wheel(qt_app):  # noqa: F811
         assert combo.currentIndex() == 1
 
 
-def test_every_setup_editor_is_guarded(qt_app):  # noqa: F811
-    screen = EventScreen(tracks=["Fuji Speedway"],
-                         car_groups=[("Gr.3", ["Some Car"])])
-    for editor in screen._setup_editors.values():
-        before = editor.value()
-        scroll(editor)
-        assert editor.value() == before
-
-
 def test_the_regulation_boxes_are_guarded(qt_app):  # noqa: F811
     screen = EventScreen(tracks=["Fuji Speedway"],
                          car_groups=[("Gr.3", ["Some Car"])])

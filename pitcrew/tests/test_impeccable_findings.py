@@ -272,30 +272,6 @@ def test_every_labelled_control_is_named_for_assistive_tech(qt_app):
     assert editor.accessibleDescription() == "Litres a second"
 
 
-def test_a_paste_replaces_the_sheet_rather_than_merging_into_it(qt_app):
-    """Only the keys present were written, so a reply missing three settings
-    left the previous sheet's values in those three editors - a hybrid nobody
-    issued, saved against the event and exported as the setup as run."""
-    import json
-
-    from pitcrew.ui.event_screen import EventScreen
-
-    screen = EventScreen()
-    screen.paste_box.setPlainText(json.dumps(
-        {"sheets": [{"purpose": "race", "values": {"rh_f": 62, "cam_f": 3.2}}]}))
-    screen._on_read_sheet()
-    assert screen.values()["setup_values"]["cam_f"] == 3.2
-
-    screen.paste_box.setPlainText(json.dumps(
-        {"sheets": [{"purpose": "race", "values": {"rh_f": 70}}]}))
-    screen._on_read_sheet()
-    values = screen.values()["setup_values"]
-    assert values["rh_f"] == 70
-    assert values.get("cam_f") is None, "the old sheet's value survived a paste"
-
-
-# ------------------------------------------------- the pre-UAT gap sweep, UI
-
 def test_changing_the_track_does_not_leak_its_layout_into_the_next_one(qt_app):
     """`Picker.set_groups` restored the previous selection with
     `setCurrentText`, which ADDS when `findData` misses - so Le Mans / Full
@@ -324,7 +300,7 @@ def test_the_switch_guard_releases_on_an_event_id_above_the_int_cache(qt_app):
     screen = EventScreen()
     screen.set_events([{"id": 900, "name": "Round 9"},
                        {"id": 901, "name": "Round 10"}])
-    screen.load({"id": 900, "name": "Round 9"}, None)
+    screen.load({"id": 900, "name": "Round 9"})
     screen.name_edit.setText("Round 9 - edited")
     assert screen.is_dirty()
 

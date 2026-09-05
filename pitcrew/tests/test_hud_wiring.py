@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-from pitcrew.setup.sheet import SetupSheet
+from pitcrew.engineer.shift_points import ShiftPoints
 from pitcrew.store.db import WEAR_DRIVER, WEAR_HUD_VIDEO, Store
 from pitcrew.telemetry.hud import LiveWearSampler
 
@@ -108,10 +108,11 @@ def test_the_sampler_is_not_built_at_all_when_it_is_switched_off(store: Store):
     assert settings_module.Settings().hud_wear_enabled is False
 
 
-def test_the_sheet_keeps_its_shift_table_alongside(store: Store):
-    """Unrelated to wear, and the reason it is here: both landed in the same
-    afternoon and both write through `save_setup_sheet`."""
-    sheet_id = store.save_setup_sheet(SetupSheet(
-        car_name="Porsche 911 RSR (991) '17", sheet_name="Monza race",
-        values={"rh_f": 60}, shift_rpm={1: 7400.0, 6: 8500.0}))
-    assert store.get_setup_sheet(sheet_id).shift_rpm == {1: 7400.0, 6: 8500.0}
+def test_the_shift_table_lives_beside_the_session_it_is_used_in(store: Store):
+    """The gauge and the beep are wired in the same afternoon, and both have
+    to survive the same store."""
+    store.save_shift_points(ShiftPoints(
+        car_name="Porsche 911 RSR (991) '17", circuit_key="monza",
+        performance={1: 7400.0, 6: 8500.0}))
+    back = store.shift_points_for("Porsche 911 RSR (991) '17", "monza")
+    assert back.performance == {1: 7400.0, 6: 8500.0}

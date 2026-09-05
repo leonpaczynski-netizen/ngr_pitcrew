@@ -67,8 +67,8 @@ def test_a_gear_with_no_measured_figure_is_silent():
     five. A fallback quietly told him a number nobody had taken on that
     gearbox.
 
-    The thresholds now live on the setup sheet, because a shift point belongs
-    to the gearbox: change a ratio and it moves. A sheet with none means the
+    The thresholds are issued with the setup, because a shift point belongs
+    to the gearbox: change a ratio and it moves. No table issued means the
     box has not been measured, and silence is the honest answer.
     """
     beep, played = beeper(per_gear={2: 7000.0})
@@ -81,7 +81,7 @@ def test_a_gear_with_no_measured_figure_is_silent():
     assert played == []
 
 
-def test_a_sheet_with_no_table_at_all_never_beeps():
+def test_a_gearbox_with_no_table_at_all_never_beeps():
     """The normal state of a gearbox nobody has measured yet."""
     beep, played = beeper(per_gear={})
     for gear in (1, 2, 3, 4, 5, 6):
@@ -185,59 +185,105 @@ def test_nothing_beeps_off_track_whatever_the_table_says():
     assert run(beep, frames) == []
 
 
-# ------------------------------------------------------ the table, in settings
+# ------------------------------------------- the table, as the engineer issues it
 
-def test_the_table_survives_the_round_trip_through_the_setup_sheet(tmp_path):
-    """**Moved off settings and onto the sheet, 21 Aug 2026.**
+def test_the_table_survives_the_round_trip_through_the_store(tmp_path):
+    """**Moved off the setup sheet and into its own record, 5 Sep 2026.**
 
-    It is written by a tool and read back as JSON, and JSON turns integer keys
+    It is written over MCP and read back as JSON, and JSON turns integer keys
     into strings - so a table has to come home keyed the way it went out, or
     every lookup by gear number silently misses.
     """
-    from pitcrew.setup.sheet import SetupSheet
+    from pitcrew.engineer.shift_points import ShiftPoints
     from pitcrew.store.db import Store
 
     store = Store(str(tmp_path / "pitcrew.db"))
-    sheet_id = store.save_setup_sheet(SetupSheet(
-        car_name="Ford Shelby GT350R '16", sheet_name="Yas race",
-        values={"rh_f": 89}, gears=[2.614, 1.948],
-        shift_rpm={3: 8250.0, 4: 8250.0}))
-    back = store.get_setup_sheet(sheet_id)
-    assert back.shift_rpm == {3: 8250.0, 4: 8250.0}
-    assert all(isinstance(gear, int) for gear in back.shift_rpm)
+    store.save_shift_points(ShiftPoints(
+        car_name="Ford Shelby GT350R '16", circuit_key="yas-marina",
+        performance={3: 8250.0, 4: 8250.0}, fuel_saving={4: 7500.0}))
+    back = store.shift_points_for("Ford Shelby GT350R '16", "yas-marina")
+    assert back.performance == {3: 8250.0, 4: 8250.0}
+    assert all(isinstance(gear, int) for gear in back.performance)
+    assert back.drops() == {4: 750.0}
     store.close()
 
 
-def test_a_sheet_with_no_table_gets_an_empty_one_not_a_neighbours(tmp_path):
-    """The whole value of a per-gear threshold is that it was measured on that
-    gearbox. A table that quietly filled itself would be indistinguishable at
-    the wheel from one that had been measured - and there is no fallback left
-    to fill it from."""
-    from pitcrew.setup.sheet import SetupSheet
+def test_a_car_with_no_table_gets_an_empty_one_not_a_neighbours(tmp_path):
+    """The whole value of a per-gear threshold is that somebody designed it
+    for that gearbox. A table that quietly filled itself would be
+    indistinguishable at the wheel from one that had been - and there is no
+    fallback left to fill it from."""
+    from pitcrew.engineer.shift_points import ShiftPoints
     from pitcrew.store.db import Store
 
     store = Store(str(tmp_path / "pitcrew.db"))
-    measured = store.save_setup_sheet(SetupSheet(
-        car_name="A", sheet_name="s", shift_rpm={3: 8250.0}))
-    bare = store.save_setup_sheet(SetupSheet(car_name="B", sheet_name="s"))
-    assert store.get_setup_sheet(measured).shift_rpm == {3: 8250.0}
-    assert store.get_setup_sheet(bare).shift_rpm == {}
+    store.save_shift_points(ShiftPoints(
+        car_name="A", circuit_key="monza", performance={3: 8250.0}))
+    assert store.shift_points_for("A", "monza").performance == {3: 8250.0}
+    assert store.shift_points_for("B", "monza") is None
+    store.close()
+
+
+def test_a_table_does_not_cross_circuits(tmp_path):
+    """A gearbox is cut for the circuit, so the same car at two tracks is two
+    boxes. Returning the other one's rpm would sound at the wheel exactly like
+    a table designed for the box that is fitted."""
+    from pitcrew.engineer.shift_points import ShiftPoints
+    from pitcrew.store.db import Store
+
+    store = Store(str(tmp_path / "pitcrew.db"))
+    store.save_shift_points(ShiftPoints(
+        car_name="A", circuit_key="monza", performance={6: 8000.0}))
+    assert store.shift_points_for("A", "daytona-road") is None
+    assert store.shift_points_for("A", None) is None
+    store.close()
+
+
+def test_re_issuing_replaces_rather_than_accumulates(tmp_path):
+    """sqlite counts two NULLs as distinct in a unique index, which is how
+    `setup_sheets` lost sheets before v8. The circuit is stored as the empty
+    string when there is none, so the upsert keeps matching."""
+    from pitcrew.engineer.shift_points import ShiftPoints
+    from pitcrew.store.db import Store
+
+    store = Store(str(tmp_path / "pitcrew.db"))
+    for rpm in (8000.0, 8200.0, 8400.0):
+        store.save_shift_points(ShiftPoints(car_name="A", performance={6: rpm}))
+    assert len(store.list_shift_points("A")) == 1
+    assert store.shift_points_for("A").performance == {6: 8400.0}
     store.close()
 
 
 def test_a_shift_point_no_gt7_car_could_have_is_refused():
-    """Refused at the sheet, where a person typed it, rather than stored and
-    beeped at."""
+    """Refused where it is issued, rather than stored and beeped at."""
     import pytest as _pytest
 
-    from pitcrew.setup.sheet import SetupSheet
+    from pitcrew.engineer.shift_points import ShiftPoints
 
-    with _pytest.raises(Exception, match="not an rpm"):
-        SetupSheet(car_name="A", sheet_name="s",
-                   shift_rpm={3: 250_000.0}).validate()
+    with _pytest.raises(Exception, match="not an upshift rpm"):
+        ShiftPoints(car_name="A", performance={3: 250_000.0}).validate()
     with _pytest.raises(Exception, match="keyed by gear number"):
-        SetupSheet(car_name="A", sheet_name="s",
-                   shift_rpm={11: 8250.0}).validate()
+        ShiftPoints(car_name="A", performance={11: 8250.0}).validate()
+
+
+def test_a_fuel_saving_point_above_its_own_performance_point_is_refused():
+    """The two columns swapped. It is silent at the wheel, and it costs fuel
+    in the direction the driver was told it saved."""
+    import pytest as _pytest
+
+    from pitcrew.engineer.shift_points import ShiftPoints
+
+    with _pytest.raises(Exception, match="not below performance"):
+        ShiftPoints(car_name="A", performance={3: 8000.0},
+                    fuel_saving={3: 8400.0}).validate()
+    # Equal is not a saving either.
+    with _pytest.raises(Exception, match="not below performance"):
+        ShiftPoints(car_name="A", performance={3: 8000.0},
+                    fuel_saving={3: 8000.0}).validate()
+    # And a gear performance never named cannot be short-shifted.
+    with _pytest.raises(Exception, match="names gears performance does not"):
+        ShiftPoints(car_name="A", performance={3: 8000.0},
+                    fuel_saving={4: 7000.0}).validate()
 
 
 def test_a_short_shift_saving_that_is_zero_or_negative_is_refused():

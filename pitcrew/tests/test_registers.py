@@ -191,45 +191,6 @@ def test_a_spec_line_carries_provenance_per_entry(qt_app):
                                             theme.DERIVED}
 
 
-def test_every_unanswered_perception_combo_reads_struck(qt_app):
-    """The Race Engineer's left column IS the driver's report.
-
-    All seven combos painted their unanswered "—" in crayon - the register
-    that means he entered it - because `mark_unset` was never called on a bare
-    QComboBox and `QPalette.ButtonText` is crayon. Measured, not read off the
-    stylesheet: there is no `color` rule on QComboBox at all, so reading the
-    cascade would have found nothing either way.
-    """
-    from pitcrew.ui.engineer_screen import EngineerScreen
-
-    screen = EngineerScreen()
-    combos = (screen.costs_most, screen.balance_drift, screen.tyre_state,
-              screen.priority, screen.conditions, screen.clean_air,
-              screen.worst)
-    for combo in combos:
-        assert nearest_register(ink_of(combo)) == "struck", \
-            f"{combo.currentText()!r} reads as a declaration"
-
-    screen.costs_most.setCurrentIndex(1)
-    assert nearest_register(ink_of(screen.costs_most)) == "declared"
-
-
-def test_the_biggest_limitation_re_inks_after_a_silent_rebuild(qt_app):
-    """`_refresh_worst` clears and refills inside `blockSignals(True)`, so the
-    signal `mark_unset` wires itself to cannot fire - the ink has to be
-    re-asked for by hand or it describes the list the combo used to hold."""
-    from pitcrew.ui.engineer_screen import EngineerScreen
-
-    screen = EngineerScreen()
-    screen._symptom_boxes[0].setChecked(True)
-    screen.worst.setCurrentIndex(1)
-    assert nearest_register(ink_of(screen.worst)) == "declared"
-
-    screen._symptom_boxes[0].setChecked(False)
-    assert screen.worst.currentData() is None
-    assert nearest_register(ink_of(screen.worst)) == "struck"
-
-
 def test_an_event_with_no_stop_costs_entered_paints_them_struck(qt_app):
     """Refuel rate and pit loss shipped holding 2.5 and 20.0 in crayon, so the
     evidence column swore he had entered two app defaults. Pit loss sets what
@@ -495,14 +456,14 @@ def test_the_nav_rail_is_reachable_without_a_mouse(qt_app):
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QStackedWidget, QWidget
 
-    from pitcrew.app import NAV_GROUPS, NavRail
+    from pitcrew.app import NAV_GROUPS, SCREENS, NavRail
 
     stack = QStackedWidget()
-    for _ in range(8):
+    for _ in range(len(SCREENS)):
         stack.addWidget(QWidget())
     rail = NavRail(stack, NAV_GROUPS)
 
-    assert len(rail._labels) == 8
+    assert len(rail._labels) == len(SCREENS)
     for item in rail._labels:
         assert item.focusPolicy() != Qt.FocusPolicy.NoFocus
         assert item.accessibleName()
@@ -513,10 +474,10 @@ def test_enter_on_a_focused_rail_item_selects_its_screen(qt_app):
     from PyQt6.QtGui import QKeyEvent
     from PyQt6.QtWidgets import QStackedWidget, QWidget
 
-    from pitcrew.app import NAV_GROUPS, NavRail
+    from pitcrew.app import NAV_GROUPS, SCREENS, NavRail
 
     stack = QStackedWidget()
-    for _ in range(8):
+    for _ in range(len(SCREENS)):
         stack.addWidget(QWidget())
     rail = NavRail(stack, NAV_GROUPS)
 
@@ -531,10 +492,10 @@ def test_the_rail_wraps_at_both_ends(qt_app):
     off-screen rather than the assertion weakened."""
     from PyQt6.QtWidgets import QStackedWidget, QWidget
 
-    from pitcrew.app import NAV_GROUPS, NavRail
+    from pitcrew.app import NAV_GROUPS, SCREENS, NavRail
 
     stack = QStackedWidget()
-    for _ in range(8):
+    for _ in range(len(SCREENS)):
         stack.addWidget(QWidget())
     rail = NavRail(stack, NAV_GROUPS)
     rail.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
@@ -542,8 +503,8 @@ def test_the_rail_wraps_at_both_ends(qt_app):
     QApplication.processEvents()
 
     rail.focus_item(-1)
-    assert rail.focusWidget() is rail._labels[7]
-    rail.focus_item(8)
+    assert rail.focusWidget() is rail._labels[len(SCREENS) - 1]
+    rail.focus_item(len(SCREENS))
     assert rail.focusWidget() is rail._labels[0]
     rail.focus_item(3)
     assert rail.focusWidget() is rail._labels[3]
@@ -615,15 +576,13 @@ def test_discard_is_connected_to_something(qt_app):
 
 def test_no_pane_hides_content_it_cannot_scroll_to(qt_app):
     """Hiding the bar did not stop the overflow, it stopped it being
-    reachable: Event lost 96px and the Race Engineer 107px at 1280x800 with
-    no way to get at them."""
+    reachable: Event lost 96px at 1280x800 with no way to get at it."""
     from PyQt6.QtWidgets import QScrollArea
 
     from pitcrew.ui.car_screen import CarScreen
-    from pitcrew.ui.engineer_screen import EngineerScreen
     from pitcrew.ui.event_screen import EventScreen
 
-    for cls in (EventScreen, CarScreen, EngineerScreen):
+    for cls in (EventScreen, CarScreen):
         screen = cls()
         screen.resize(1170 - 178, 745)
         screen.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)

@@ -120,34 +120,12 @@ def test_a_new_event_cannot_take_a_name_already_in_use(wired):
     assert "already called" in event_screen.footer_note.text()
 
 
-def test_the_sheet_is_saved_with_the_event(wired):
-    controller, _, _, store = wired
-    controller._on_event_saved(an_event())
-
-    sheets = store.list_setup_sheets("Porsche 911 RSR (991) '17")
-    assert len(sheets) == 1
-    assert sheets[0].sheet_name == "Fuji race v2"
-    assert sheets[0].values["rh_f"] == 62.0
-    assert sheets[0].gears == [3.10, 2.28, 1.79]
-
-
-def test_a_refused_sheet_does_not_lose_the_event(wired):
-    """Gears out of order are refused - but the event still saves."""
-    controller, event_screen, _, store = wired
-    controller._on_event_saved(an_event(gear_text="1.00 2.00 3.00"))
-
-    assert len(store.list_events()) == 1
-    assert store.list_setup_sheets() == []
-    assert "refused" in event_screen.footer_note.text()
-
-
 def test_an_event_round_trips_into_the_form(wired):
     controller, event_screen, _, store = wired
     controller._on_event_saved(an_event())
 
     fresh = EventScreen()
-    fresh.load(store.get_event(store.active_event_id()),
-               store.list_setup_sheets()[0])
+    fresh.load(store.get_event(store.active_event_id()))
     assert fresh.name_edit.text() == "Round 4 - Fuji"
     assert fresh.pit_loss.value() == 20.0
     assert fresh.tyre_mult.currentText() == "4x"
@@ -323,7 +301,7 @@ def test_export_produces_a_validated_payload(wired, tmp_path, monkeypatch):
     assert payload["format"] == FORMAT
     assert payload["meta"]["packet"] == "C"
     assert payload["session"]["lapsRun"] == 1
-    assert payload["setup"]["values"]["rh_f"] == 62.0
+    assert "setup" not in payload
 
     written = list((tmp_path / "exports").glob("pitcrew-*.json"))
     assert len(written) == 1
@@ -425,47 +403,6 @@ def test_switching_writes_nothing_to_either_event(wired):
     assert (store.get_event(porsche), store.get_event(v8)) == before
 
 
-def test_a_sheet_does_not_follow_the_driver_to_an_event_without_one(wired):
-    """The bug this feature would otherwise have shipped with.
-
-    A round with no sheet yet is the ordinary state of the next race on the
-    calendar. Loading it used to leave the previous car's springs, dampers
-    and gears on the form - and the next save would file them against it.
-    """
-    controller, event_screen, _, store = wired
-    porsche, _ = two_events(controller, store)
-    controller._on_event_saved(an_event(
-        name="Gr.3 - Monza", track="Monza", layout=None,
-        car_name="Nissan GT-R Gr.3", race_laps=18,
-        sheet_name="", setup_values={}, gear_text="",
-        priority="", start_type="", time_of_day=""))
-    monza = store.active_event_id()
-
-    controller.switch_event(porsche)
-    assert event_screen._setup_editors["arb_r"].value() == 4.0
-    assert event_screen.gear_edit.text() != ""
-
-    controller.switch_event(monza)
-
-    assert event_screen._setup_editors["arb_r"].value() == EMPTY
-    assert event_screen._setup_editors["rh_f"].value() == EMPTY
-    assert event_screen.sheet_name.text() == ""
-    assert event_screen.gear_edit.text() == ""
-    assert event_screen.values()["setup_values"] == {}
-
-
-def test_a_sheet_does_not_follow_the_driver_to_another_car(wired):
-    controller, event_screen, _, store = wired
-    porsche, v8 = two_events(controller, store)
-    controller.switch_event(porsche)
-    assert event_screen._setup_editors["arb_r"].value() == 4.0
-
-    controller.switch_event(v8)
-
-    assert event_screen._setup_editors["arb_r"].value() == EMPTY
-    assert event_screen._setup_editors["rh_f"].value() == 80.0
-
-
 def test_practice_laps_stay_with_the_event_they_were_run_at(wired):
     controller, _, practice, store = wired
     porsche, v8 = two_events(controller, store)
@@ -529,7 +466,6 @@ def test_new_event_blanks_the_form_and_stops_recording_against_the_old_one(wired
     assert store.active_event_id() is None
     assert event_screen.name_edit.text() == ""
     assert event_screen.values()["id"] is None
-    assert event_screen._setup_editors["rh_f"].value() == EMPTY
     # Nothing was deleted to get here.
     assert len(store.list_events()) == 2
     assert store.get_event(porsche)["track"] == "Fuji Speedway"

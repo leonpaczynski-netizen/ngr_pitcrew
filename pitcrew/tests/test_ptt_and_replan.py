@@ -548,20 +548,34 @@ def test_the_beep_ignores_the_games_shift_light(qt_app, store):  # noqa: F811
         controller.shutdown()
 
 
-def test_the_fitted_sheets_table_is_what_the_beep_uses(qt_app, store):  # noqa: F811
-    """And it arrives before the car has turned a wheel, because the sheet is
-    known at session start while the packet car id is not."""
+def test_the_issued_table_is_what_the_beep_uses(qt_app, store):  # noqa: F811
+    """And it arrives before the car has turned a wheel, because the table is
+    issued ahead of the session while the packet car id is not known yet."""
     from pitcrew.controller import PitCrewController
+    from pitcrew.engineer.shift_points import ShiftPoints
     from pitcrew.ui.event_screen import EventScreen
     from pitcrew.ui.practice_screen import PracticeScreen
 
     controller = PitCrewController(store, EventScreen(), PracticeScreen())
     try:
-        controller.bridge.set_sheet_shift_rpm({1: 8200.0, 2: 8150.0})
+        controller.bridge.set_issued_shift_points(ShiftPoints(
+            car_name="A", circuit_key="monza",
+            performance={1: 8200.0, 2: 8150.0}, fuel_saving={2: 7400.0}))
         assert controller.bridge.shift_beep.threshold_for(1) == 8200.0
         assert controller.bridge.shift_beep.threshold_for(2) == 8150.0
-        # A gear the sheet does not name stays silent.
+        # A gear the table does not name stays silent.
         assert controller.bridge.shift_beep.threshold_for(6) is None
+
+        # Short-shifting uses the fuel-saving point where one was issued, and
+        # the scalar drop where one was not.
+        controller.bridge.shift_beep.short_shifting = True
+        assert controller.bridge.shift_beep.threshold_for(2) == 7400.0
+        assert controller.bridge.shift_beep.threshold_for(1) < 8200.0
+
+        # **Clearing is a real instruction.** A car whose table has not been
+        # issued must not keep beeping the last one's.
+        controller.bridge.set_issued_shift_points(None)
+        assert controller.bridge.shift_beep.threshold_for(1) is None
     finally:
         controller.shutdown()
 

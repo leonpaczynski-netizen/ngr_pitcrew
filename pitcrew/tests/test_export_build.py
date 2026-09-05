@@ -14,7 +14,7 @@ from pitcrew.export.build import (
     multiplier_factor,
 )
 from pitcrew.export.payload import to_json, validate
-from pitcrew.setup.sheet import RangeRecord, SetupChange, SetupSheet
+from pitcrew.setup.ranges import RangeRecord
 from pitcrew.store.db import Store
 from pitcrew.telemetry.recorder import (
     FRAME_FIELDS,
@@ -81,17 +81,13 @@ def recorded(store: Store):
         game_version="1.70", abs_setting="Weak", tcs=1, countersteer=0,
         available_compounds=["RH", "RM", "RS"])
 
-    sheet_id = store.save_setup_sheet(SetupSheet(
-        car_name="Porsche 911 RSR (991) '17", sheet_name="Fuji race v2",
-        values={"rh_f": 62, "arb_r": 4}, gears=[3.10, 2.28, 1.79]))
     store.save_range_record(RangeRecord(
         car_name="Porsche 911 RSR (991) '17", measured_date="2026-08-11",
         ranges={"rh_f": [55, 80], "arb_r": [1, 10]}, verified=True))
 
-    session_id = store.start_session(event_id, "practice", setup_sheet_id=sheet_id)
+    session_id = store.start_session(event_id, "practice")
     store.note_stream_facts(session_id, packet_format="C", car_category="GR3",
                             fuel_capacity_l=100.0)
-    store.add_setup_change(session_id, SetupChange(3, "arb_r", 4, 3))
 
     frames = synthetic_lap(apex_positions=(300.0, 900.0, 1500.0))
     for lap_num, kwargs in enumerate([
@@ -131,10 +127,15 @@ def test_compound_is_reported_by_full_name(store: Store, recorded):
     assert meta["compound"]["rear"] == "Racing Medium"
 
 
-def test_setup_and_range_record_ride_along(store: Store, recorded):
+def test_the_range_record_rides_along_and_the_setup_never_does(store: Store,
+                                                              recorded):
+    """**The setup is not in the payload at all**, and the range record still
+    is. They look alike and they are not: a sheet is a claim about what is
+    bolted to the car, which this app stopped making on 5 Sep 2026, and a
+    range record is the car's own slider limits, read off its settings screen
+    - which is what lets the reader reason in percent of range at all."""
     payload = build_session_export(store, recorded["session_id"])
-    assert payload["setup"]["sheetName"] == "Fuji race v2"
-    assert payload["setup"]["driverChanges"][0]["key"] == "arb_r"
+    assert "setup" not in payload
     assert payload["rangeRecord"]["verified"] is True
     assert payload["rangeRecord"]["r"]["rh_f"] == [55, 80]
 
@@ -216,13 +217,12 @@ def test_strategy_section_is_absent_until_it_exists(store: Store, recorded):
     assert "strategy" not in build_session_export(store, recorded["session_id"])
 
 
-def test_a_session_with_no_setup_sheet_omits_the_section(store: Store, recorded):
+def test_a_session_with_no_laps_omits_the_corner_section(store: Store, recorded):
     event_id = recorded["event_id"]
     bare = store.start_session(event_id, "practice")
     store.note_stream_facts(bare, packet_format="C")
     store.add_lap(bare, a_stored_lap(1))
     payload = build_session_export(store, bare)
-    assert "setup" not in payload
     assert "corners" not in payload
     assert validate(payload) == []
 
@@ -338,30 +338,6 @@ def test_an_event_with_no_version_exports_on_the_app_setting(store: Store, recor
     payload = build_event_export(store, recorded["event_id"],
                                  game_version="1.70")
     assert payload["meta"]["gameVersion"] == "1.70"
-
-
-def test_a_session_can_be_told_which_sheet_it_actually_ran(store: Store,
-                                                           recorded):
-    """A revision that arrives after the session has to be attachable.
-
-    The app could file a sheet and never re-point a session at one, so a
-    session recorded before a revision landed kept reporting the older sheet -
-    and a session with no sheet for its purpose reported none at all, which is
-    what both league races on file did.
-    """
-    later = store.start_session(recorded["event_id"], "practice",
-                                game_version="1.71")
-    assert store.get_session(later)["setup_sheet_id"] is None
-
-    sheet_id = store.save_setup_sheet(SetupSheet(
-        car_name="Porsche 911 RSR (991) '17", sheet_name="Fuji race Rev C",
-        values={"rh_f": 68, "rh_r": 75}))
-    store.set_session_sheet(later, sheet_id)
-    assert store.get_session(later)["setup_sheet_id"] == sheet_id
-
-    # And it must be able to say "actually, none of them" again.
-    store.set_session_sheet(later, None)
-    assert store.get_session(later)["setup_sheet_id"] is None
 
 
 def test_the_catalogue_supplies_a_drivetrain_nobody_declared(store: Store):

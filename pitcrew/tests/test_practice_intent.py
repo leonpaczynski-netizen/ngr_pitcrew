@@ -18,7 +18,6 @@ from __future__ import annotations
 
 
 from pitcrew.analysis.runs import FOR_QUALIFYING, FOR_RACE, LOBBY, TIME_TRIAL
-from pitcrew.setup.sheet import SetupSheet
 from pitcrew.store.db import Store
 from pitcrew.ui.practice_screen import LapRow, PracticeScreen
 
@@ -64,68 +63,6 @@ def _labels(screen) -> list[str]:
 
 
 # ------------------------------------------------------- which sheet is fitted
-
-def test_a_car_can_hold_a_race_sheet_and_a_qualifying_sheet(store: Store):
-    race = SetupSheet(car_name="RSR", sheet_name="Monza race",
-                      values={"rh_f": 60}, purpose="race")
-    quali = SetupSheet(car_name="RSR", sheet_name="Monza quali",
-                       values={"rh_f": 55}, purpose="qualifying")
-    store.save_setup_sheet(race)
-    store.save_setup_sheet(quali)
-
-    assert store.sheet_for("RSR", "race").sheet_name == "Monza race"
-    assert store.sheet_for("RSR", "qualifying").sheet_name == "Monza quali"
-
-
-def test_an_unlabelled_sheet_counts_as_a_race_sheet_and_never_as_quali(store: Store):
-    """Every sheet stored before the question was asked was a race sheet. A
-    qualifying sheet that was never labelled has to be labelled, not guessed."""
-    store.save_setup_sheet(SetupSheet(car_name="RSR", sheet_name="v1",
-                                      values={"rh_f": 60}))
-    assert store.sheet_for("RSR", "race").sheet_name == "v1"
-    assert store.sheet_for("RSR", "qualifying") is None
-
-
-def test_the_race_resolves_a_sheet_by_the_same_rule_as_practice(store: Store):
-    """**The race recorded no sheet at all**, so the Watkins export reported
-    the event's v1 values as the setup as run - the low car with the trimmed
-    rear wing that Rev C had been written to replace. It also nulled
-    `laps.compound` on all twenty laps, which kept sixteen fit-eligible laps
-    out of the RS tyre model, and it dropped `gearingConstantK` onto the
-    derived final drive the payload's own note calls high.
-    """
-    store.save_setup_sheet(SetupSheet(car_name="RSR", sheet_name="race v3",
-                                      values={"rh_f": 68}, purpose="race"))
-    store.save_setup_sheet(SetupSheet(car_name="RSR", sheet_name="quali",
-                                      values={"rh_f": 55},
-                                      purpose="qualifying"))
-    assert store.sheet_for("RSR", "race").sheet_name == "race v3"
-
-    # And where the car has several sheets and none of them is a race sheet,
-    # the honest answer is still none - a named sheet he was not running is
-    # worse than no sheet, because the export presents it as the setup as run.
-    store.save_setup_sheet(SetupSheet(car_name="GTR", sheet_name="quali a",
-                                      values={"rh_f": 55},
-                                      purpose="qualifying"))
-    store.save_setup_sheet(SetupSheet(car_name="GTR", sheet_name="quali b",
-                                      values={"rh_f": 56},
-                                      purpose="qualifying"))
-    assert store.sheet_for("GTR", "race") is None
-    assert len(store.list_setup_sheets("GTR")) == 2
-
-
-def test_the_purpose_travels_into_the_export(store: Store):
-    sheet = SetupSheet(car_name="RSR", sheet_name="q", values={"rh_f": 55},
-                       purpose="qualifying")
-    assert sheet.as_export()["purpose"] == "qualifying"
-
-
-def test_a_sheet_that_has_not_said_omits_it_rather_than_guessing(store: Store):
-    sheet = SetupSheet(car_name="RSR", sheet_name="v1", values={"rh_f": 60})
-    assert "purpose" not in sheet.as_export()
-
-
-# -------------------------------------------------------------- the rehearsal
 
 def test_a_rehearsal_is_a_race_session_that_is_not_the_race(store: Store, event_id):
     """It makes real stops under race conditions, which is the only place that

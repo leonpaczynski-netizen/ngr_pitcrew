@@ -19,6 +19,8 @@ import pytest
 
 pytest.importorskip("PyQt6.QtWidgets")
 
+from pitcrew.app import SCREENS  # noqa: E402
+
 from pitcrew.store.db import Store                      # noqa: E402
 
 
@@ -40,20 +42,19 @@ def window(qt_app, store: Store):
     made.controller.shutdown()
 
 
-LATE = (3, 6, 7)          # Engineer, Reference, Settings
+LATE = (5, 6)             # Reference, Settings
 SIGNALS = {
-    3: ("generate_requested", "copy_requested", "reply_saved"),
-    7: ("saved", "test_beep_requested", "test_voice_requested",
+    6: ("saved", "test_beep_requested", "test_voice_requested",
         "test_haptics_requested", "test_feed_requested",
         "test_gauge_requested", "capture_toggled", "listen_toggled"),
 }
 
 
-def test_the_stack_is_eight_wide_before_anything_is_built(window):
+def test_the_stack_is_full_width_before_anything_is_built(window):
     """`NavRail` disables an item past `stack.count()` and calls it "Not built
     yet". A screen waiting to be built is not that, and must not read as
     that - the rail would be telling the driver the app is unfinished."""
-    assert window.stack.count() == 8
+    assert window.stack.count() == len(SCREENS)
     assert all(label.isEnabled() for label in window.rail._labels)
 
 
@@ -71,19 +72,16 @@ def test_navigating_builds_the_screen_and_shows_it(window, index):
     assert isinstance(screen, factory)
     assert window.stack.widget(index) is screen
     assert window.stack.currentWidget() is screen
-    assert window.stack.count() == 8
+    assert window.stack.count() == len(SCREENS)
 
 
 @pytest.mark.parametrize("index", LATE)
 def test_the_controller_sees_the_screen_it_was_given(window, index):
-    """The controller keeps `engineer` and `settings_screen`; a screen the
-    window has but the controller does not is a screen whose buttons are
-    wired to nothing."""
+    """The controller keeps `settings_screen`; a screen the window has but the
+    controller does not is a screen whose buttons are wired to nothing."""
     window.rail.select(index)
     screen = window.stack.widget(index)
-    if index == 3:
-        assert window.controller.engineer is screen
-    elif index == 7:
+    if index == 6:
         assert window.controller.settings_screen is screen
     else:
         # Reference is never passed to the controller at all, by design.
@@ -98,7 +96,7 @@ def test_the_rig_and_the_bench_see_the_settings_screen(window):
     assert window.controller.rig.settings_screen is None
     assert window.controller.bench.settings_screen is None
 
-    window.rail.select(7)
+    window.rail.select(6)
     screen = window.settings_screen
     assert window.controller.rig.settings_screen is screen
     assert window.controller.bench.settings_screen is screen
@@ -147,7 +145,7 @@ def test_warming_builds_them_all_without_navigating(window, qt_app):
 
     for index in LATE:
         assert getattr(window, window.LATE_SCREENS[index][0]) is not None
-    assert window.stack.count() == 8
+    assert window.stack.count() == len(SCREENS)
     # It warmed them; it did not navigate to one.
     assert window.stack.currentIndex() == 0
 
@@ -161,7 +159,7 @@ def test_a_screen_that_will_not_build_does_not_spin_the_chain(window, qt_app,
     def boom():
         raise RuntimeError("this screen will not build")
 
-    monkeypatch.setitem(window.LATE_SCREENS, 6,
+    monkeypatch.setitem(window.LATE_SCREENS, 5,
                         ("reference_screen", boom, None))
     with caplog.at_level("ERROR"):
         window.warm_screens()
@@ -172,7 +170,7 @@ def test_a_screen_that_will_not_build_does_not_spin_the_chain(window, qt_app,
     assert any("could not warm" in record.getMessage()
                for record in caplog.records)
     # The chain stopped rather than retrying, and the rail can still try.
-    assert window.stack.count() == 8
+    assert window.stack.count() == len(SCREENS)
 
 
 def test_the_lazy_window_ends_up_like_an_eager_one(qt_app, store: Store):
@@ -193,7 +191,7 @@ def test_the_lazy_window_ends_up_like_an_eager_one(qt_app, store: Store):
                 assert (wired(lazy.stack.widget(index), name)
                         == wired(eager.stack.widget(index), name)), (
                     f"{name} on screen {index} is wired differently")
-        assert lazy.stack.count() == eager.stack.count() == 8
+        assert lazy.stack.count() == eager.stack.count() == len(SCREENS)
     finally:
         lazy.controller.shutdown()
         eager.controller.shutdown()

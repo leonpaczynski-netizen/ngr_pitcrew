@@ -46,8 +46,8 @@ def call(tool: str, args: dict | None = None, *, db: str) -> dict | list:
 
 @pytest.fixture()
 def seeded(tmp_path):
-    """A database with one event, one sheet and one lap, on disk."""
-    from pitcrew.setup.sheet import SetupSheet
+    """A database with one event, one shift table and one lap, on disk."""
+    from pitcrew.engineer.shift_points import ShiftPoints
     from pitcrew.store.db import Store
     from pitcrew.telemetry.session_state import Lap
 
@@ -57,10 +57,9 @@ def seeded(tmp_path):
         name="Monza", track="Autodromo Nazionale Monza", layout="Full",
         car_name="Porsche 911 RSR (991) '17", race_type="laps", race_laps=20,
         tyre_wear_mult="8x", fuel_mult="3x", game_version="1.71")
-    store.save_setup_sheet(SetupSheet(
-        car_name="Porsche 911 RSR (991) '17", sheet_name="Monza race",
-        purpose="race", values={"rh_f": 60, "rh_r": 68},
-        gears=[2.727, 1.925], shift_rpm={1: 7400.0}))
+    store.save_shift_points(ShiftPoints(
+        car_name="Porsche 911 RSR (991) '17", circuit_key="monza",
+        performance={1: 7400.0}, fuel_saving={1: 6800.0}))
     session_id = store.start_session(event_id, "practice", game_version="1.71")
     store.add_lap(session_id, Lap(
         lap_num=1, lap_time_ms=110_000, best_lap_ms=110_000, delta_ms=0,
@@ -90,11 +89,30 @@ def test_it_serves_the_events_it_has(seeded):
     assert got[0]["game_version"] == "1.71"
 
 
-def test_a_sheet_comes_back_with_its_shift_table(seeded):
+def test_a_shift_table_comes_back_for_the_circuit_it_was_issued_for(seeded):
     db, _ = seeded
-    got = call("setup_sheets", {"car_name": "Porsche 911 RSR (991) '17"}, db=db)
-    assert got[0]["values"]["rh_f"] == 60
-    assert got[0]["shiftRpm"] == {"1": 7400.0}
+    got = call("shift_points",
+               {"car_name": "Porsche 911 RSR (991) '17",
+                "circuit_key": "monza"}, db=db)
+    assert got["performanceRpm"] == {"1": 7400.0}
+    assert got["fuelSavingRpm"] == {"1": 6800.0}
+
+    elsewhere = call("shift_points",
+                     {"car_name": "Porsche 911 RSR (991) '17",
+                      "circuit_key": "spa"}, db=db)
+    assert elsewhere is None, "a gearbox is cut for the circuit"
+
+
+def test_issuing_a_swapped_pair_of_columns_is_refused(seeded):
+    """A fuel-saving point above its own performance point is silent at the
+    wheel and costs fuel in the direction he was told it saved."""
+    db, _ = seeded
+    got = call("write_shift_points",
+               {"car_name": "A", "circuit_key": "monza",
+                "performance_rpm": {"3": 8000},
+                "fuel_saving_rpm": {"3": 8400}}, db=db)
+    assert got["written"] is False
+    assert "not below performance" in got["error"]
 
 
 def test_missing_slider_ranges_say_so_rather_than_return_nothing(seeded):
@@ -103,25 +121,6 @@ def test_missing_slider_ranges_say_so_rather_than_return_nothing(seeded):
     db, _ = seeded
     got = call("slider_ranges", {"car_name": "Porsche 911 RSR (991) '17"}, db=db)
     assert got["found"] is False and "percent of range" in got["note"]
-
-
-def test_proposing_a_sheet_files_it_and_changes_nothing(seeded):
-    """**The discipline.** It lands in the prompt log for review; the stored
-    sheet is untouched, because only the driver knows what went into the car."""
-    from pitcrew.store.db import Store
-
-    db, event_id = seeded
-    got = call("propose_setup_sheet",
-               {"event_id": event_id, "reply": "rh_f: 999\nrh_r: 999"}, db=db)
-    assert got["filed"] is True and got["promptId"]
-
-    store = Store(db)
-    try:
-        sheet = store.sheet_for("Porsche 911 RSR (991) '17", "race")
-        assert sheet.values["rh_f"] == 60, "the proposal became the sheet"
-        assert store.get_prompt(got["promptId"])["reply"]
-    finally:
-        store.close()
 
 
 def test_a_proposed_plan_is_saved_unapproved(seeded):
