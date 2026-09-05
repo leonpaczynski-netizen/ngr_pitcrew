@@ -79,6 +79,26 @@ you feel. The reflash changes what you feel and nothing in the log.
 >    this removes it.
 > 3. Only then the 1900 Hz shield frequency.
 
+> ### 6 Sep 2026 — do this with `scripts/wind-reflash.sh`
+>
+> **The branch that applies to this rig is the two-wire one in section 0:**
+> raise the shield frequency from 1200 to 1900. Sections 3 and 4 — the 25 kHz
+> PWM-fan conversion — need a blue control wire the fans do not have.
+>
+> **And the rollback in section 2 had never been run.** There was no `.hex` in
+> `reference/simhub-baseline/` at all, so until today nothing could be put
+> back. The script takes one first, and reads the board **twice** and compares,
+> because a backup nobody has checked is a file rather than a rollback.
+>
+> ```bash
+> bash scripts/wind-reflash.sh            # backup, then the reflash, guided
+> bash scripts/wind-reflash.sh --restore  # put the original image back
+> ```
+>
+> It refuses to go on if the two reads differ, if the image is under 1 kB, or
+> if avrdude is not where SimHub puts it — and it writes nothing to the board
+> in any of those cases.
+
 ## 0. Two things to check before touching anything
 
 Both decide whether this procedure applies at all.
