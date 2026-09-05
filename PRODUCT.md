@@ -49,11 +49,17 @@ a voice in the driver's ear.
 
 - **Two monitors at the rig.** The app sits on the upper monitor, above the one
   the PS5 feeds.
-- **He is in a VR headset while driving, so he cannot see the app at all during
-  a session.** Every screen is used *between* sessions, headset off, from the
-  driving position. Nothing needs to be glanceable at speed.
-- **The only live channel during a race is audio.** That is why the race
-  engineer speaks; it is not a stylistic choice.
+- **He has left VR (5 Sep 2026), so he can see the app while he drives.**
+  This reverses the constraint most of the UI was designed under: for the
+  whole life of the app he was in a PSVR2 headset and could not see any screen
+  during a session, so nothing was built to be glanceable and the numbers that
+  decide a race were set at body size. The Race screen is now built as a pit
+  board — the box-in lap, fuel in hand, lap and position at a size readable
+  from the wheel. Practice and the rest are still used between sessions.
+- **The engineer speaking is still the primary live channel**, and not only
+  out of habit: a glance costs a corner and a call in the ear does not. What
+  the screen adds is the ability to check a call against the numbers behind it
+  without waiting for the flag.
 - SimHub relays GT7's raw encrypted packets to `127.0.0.1:33741`, already in the
   368-byte `C` format.
 - Setup sheets arrive as text from the Claude project and are pasted in.

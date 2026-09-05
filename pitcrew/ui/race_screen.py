@@ -1,14 +1,28 @@
 """Race — the pit wall.
 
-The driver is in a headset and cannot see this while he is driving, so nothing
-here is a live instrument. It is for the moment before the start, the glance
-between stints, and the read afterwards. The engineer's job during the race is
-done out loud.
+**The premise changed on 5 Sep 2026: he is out of VR and can see this while
+he drives.** For the whole life of this file he could not — he was in a PSVR2
+headset, so nothing here could be a live instrument and the engineer's job was
+done out loud. That is why the numbers that decide the race were a 15px run of
+dots shared with the Practice screen's session totals: nobody could read them
+anyway.
 
-So the screen shows two things: the last thing said, large enough to read from
-the seat with the headset pushed up, and the log of everything said with its
-reason and confidence. The log is the point — a call the driver acted on and a
-call he ignored are both evidence about the model, and the export carries them.
+They can be read now, so the screen is built the way a pit board is. The four
+figures that decide what he does next are sized to be read at a glance from
+the wheel, with the box-in lap the largest thing on the screen because it is
+the only one that says *do something*. The plan sits beside them as one object
+— stints, stops, compounds, and which stint he is in — rather than as numbers
+to reassemble.
+
+**The engineer still speaks, and that is still the primary channel.** A glance
+is a glance; a call in the ear does not need one. What the screen adds is the
+ability to check the call against the numbers it came from without waiting for
+the flag.
+
+Below that: the last thing said, and the log of everything said with its
+reason and its confidence. The log is the point after the race — a call the
+driver acted on and a call he ignored are both evidence about the model, and
+the export carries them.
 """
 from __future__ import annotations
 
@@ -26,6 +40,7 @@ from pitcrew.race.calls import HIGH, LOW, MEDIUM
 from pitcrew.ui import theme
 from pitcrew.ui.widgets import (
     block_wheel,
+    BigReading,
     Field,
     BodyLabel,
     Declared,
@@ -33,7 +48,7 @@ from pitcrew.ui.widgets import (
     MarkButton,
     Measured,
     Plate,
-    SpecLine,
+    PlanSpine,
     StencilLabel,
 )
 
@@ -57,6 +72,21 @@ class CallRow(QWidget):
         lap.setFixedWidth(34)
         row.addWidget(lap)
 
+        # **Beside what it qualifies, not 1,300px away at the far edge.**
+        # Confidence was a right-aligned column, so on a wide screen the word
+        # that says whether a call was measured or modelled sat across an
+        # empty gulf from the call itself - and after the race, reading the
+        # log is the whole point of keeping it. It reads as a gutter now:
+        # lap, then how sure, then what was said.
+        badge = StencilLabel(call.confidence, size=10, tracking=14.0,
+                             colour=CONFIDENCE_INK.get(call.confidence,
+                                                       theme.STENCIL_DIM))
+        badge.setFixedWidth(64)
+        badge.setToolTip(
+            "How sure the engineer was. A modelled call and a measured one "
+            "must not look the same afterwards any more than during.")
+        row.addWidget(badge)
+
         text = QVBoxLayout()
         text.setSpacing(0)
         # Wrapped. A call's reason is a sentence by design, and an
@@ -69,16 +99,6 @@ class CallRow(QWidget):
             text.addWidget(BodyLabel(call.reason, size=13,
                                      colour=theme.STENCIL_DIM, wrap=False))
         row.addLayout(text, 1)
-
-        # Confidence is shown, not implied: a modelled call and a measured one
-        # must not look the same after the race any more than during it.
-        badge = StencilLabel(call.confidence, size=10, tracking=14.0,
-                             colour=CONFIDENCE_INK.get(call.confidence,
-                                                       theme.STENCIL_DIM))
-        badge.setFixedWidth(70)
-        badge.setAlignment(Qt.AlignmentFlag.AlignRight
-                           | Qt.AlignmentFlag.AlignVCenter)
-        row.addWidget(badge)
 
 
 class RaceScreen(QWidget):
@@ -178,11 +198,68 @@ class RaceScreen(QWidget):
         header.addWidget(self.start_button, 0, Qt.AlignmentFlag.AlignBottom)
         page.addLayout(header)
 
-        self.spec = SpecLine()
-        page.addWidget(self.spec)
-
+        page.addWidget(self._pit_board())
         page.addWidget(self._radio_plate())
         page.addWidget(self._log_plate(), 1)
+
+    def _pit_board(self) -> QWidget:
+        """The four figures that decide the race, at a size you can read.
+
+        **The driver is out of VR and can see this screen while he drives.**
+        That is a change of premise, not of taste: this file's own docstring
+        said nothing here is a live instrument, because nothing here could be
+        seen. It can be seen now, so the numbers that decide what he does next
+        get the scale they always warranted.
+
+        They were a `SpecLine` - a 15px run of dots shared with the Practice
+        screen's session totals - and `Box in 3` is the highest-consequence
+        number this product emits. At three metres, glancing up from a wheel,
+        there is time to read one thing.
+
+        The registers do the rest of the work and are not decoration here:
+        lap and position came off the stream and are `STENCIL`; fuel in hand
+        and the box-in lap are `DERIVED`, because a laps-of-fuel figure is
+        litres divided by a burn rate that is *planned* until three laps are
+        in. One of these is measured and one is a model, and on the surface
+        used at racing speed they must not look alike.
+        """
+        board = QWidget()
+        row = QHBoxLayout(board)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(theme.GAP_WIDE * 2)
+
+        # Box in is the biggest thing on the screen, because it is the only
+        # one that says do something.
+        # **Sized against the smallest display he owns, not against taste.**
+        # 1280x800 at 150% reports 501 logical pixels of height less the rail,
+        # and `test_every_screen_fits_the_smallest_display_he_owns` holds every
+        # screen to it - a guard that exists because Save once sat below the
+        # fold on Settings with no bar to reach it. Measured: at 78/56 this
+        # screen asked for 503, at 68/48 it asked 505, at 64/46 exactly 501,
+        # and at 60/44 it asks 497 - four pixels of headroom rather than
+        # landing on the limit, because the guard is there to be cleared and
+        # not to be met. The hierarchy is what carries the design, not the
+        # absolute size, and it survives intact: the box-in lap is still
+        # half again the height of everything beside it.
+        self.box_in = BigReading("Box in", size=60, ink=theme.DERIVED)
+        self.fuel_left = BigReading("Fuel in hand", size=44, ink=theme.DERIVED)
+        self.lap_now = BigReading("Lap", size=44)
+        self.position = BigReading("Position", size=44)
+        for reading in (self.box_in, self.fuel_left, self.lap_now,
+                        self.position):
+            row.addWidget(reading, 0, Qt.AlignmentFlag.AlignBottom)
+        row.addStretch(1)
+
+        # The plan, as one object rather than four numbers to reassemble.
+        spine = QVBoxLayout()
+        spine.setSpacing(4)
+        spine.addWidget(StencilLabel("The plan", size=11,
+                                     colour=theme.STENCIL_DIM, tracking=14.0))
+        self.spine = PlanSpine()
+        self.spine.setMinimumWidth(360)
+        spine.addWidget(self.spine)
+        row.addLayout(spine, 1)
+        return board
 
     def _radio_plate(self) -> Plate:
         """The last thing said, large. Read from the seat, headset up."""
@@ -278,9 +355,15 @@ class RaceScreen(QWidget):
                 "No plan approved — the engineer will call fuel only.")
             self.plan_line.setStyleSheet(
                 f"color: {theme.STENCIL_DIM};background: transparent;")
+            # An empty spine draws a bare rule rather than nothing, so the
+            # absence of a plan is visible in the place a plan would be.
+            self.spine.setPlan([])
             return
         plan = strategy.get("plan") or {}
         stints = plan.get("stints") or []
+        # The same stints the line below spells out in words, as one object.
+        self.spine.setPlan([st.get("laps") for st in stints],
+                           [st.get("compound") for st in stints])
         stops = plan.get("stops")
         parts: list[str] = []
         if stops is not None:
@@ -395,30 +478,45 @@ class RaceScreen(QWidget):
         self.last_reason.setText("")
 
     def show_snapshot(self, snapshot: dict) -> None:
-        self.spec.clear()
-        lap = snapshot.get("lap") or 0
+        """The pit board, from whatever the coordinator knows this lap.
+
+        Every figure is set through `BigReading.setValue`, which renders
+        `None` struck rather than as a zero. That is not a formality here:
+        a race with no plan armed has no box-in lap, and a `0` on this board
+        reads as *box now* - the most expensive misreading available on this
+        screen.
+        """
+        lap = snapshot.get("lap")
         total = snapshot.get("lapsTotal")
-        self.spec.add("Lap", f"{lap}/{total}" if total else str(lap),
-                      emphasis=True)
-        if snapshot.get("position"):
-            self.spec.add("Position", f"P{snapshot['position']}")
+        self.lap_now.setValue(
+            None if lap is None else (f"{lap}/{total}" if total else str(lap)))
+        self.position.setValue(
+            f"P{snapshot['position']}" if snapshot.get("position") else None)
+
+        # **Derived, like the box-in beside it.** Litres in the tank is
+        # measured; laps of fuel is `fuel_l / fuel_per_lap_l`, and that rate
+        # is the *planned* burn until three laps are in and the median of
+        # observed burns after. A model output and a stream reading may not
+        # wear the same ink on the surface used at racing speed.
         fuel = snapshot.get("lapsOfFuel")
-        if fuel is not None:
-            # **Derived, like the Box-in beside it.** Litres in the tank is
-            # measured; laps of fuel is `fuel_l / fuel_per_lap_l`, and that
-            # rate is the *planned* burn until three laps are in and the
-            # median of observed burns after. One spec line was carrying a
-            # model output and a stream reading in the same ink, on the
-            # surface used at racing speed.
-            self.spec.add("Fuel", f"{fuel:.1f} laps", derived=True)
+        self.fuel_left.setValue(None if fuel is None else f"{fuel:.1f}")
+
+        # **A stop that is overdue says so.** This was `max(0, to_stop)`, and
+        # that is CLAUDE.md rule 9 on the highest-consequence number the app
+        # emits: a plan he is two laps past reported as `0`, which reads as
+        # "box now" and is a different instruction from "you are two laps
+        # late". The clamp turned the more urgent of the two into the less
+        # urgent one, and nothing downstream could tell them apart.
         to_stop = snapshot.get("lapsToStop")
-        if to_stop is not None:
-            # The model worked this out. It is the highest-consequence
-            # number the app emits and it used to wear the ink that means
-            # "the driver typed this".
-            self.spec.add("Box in", f"{max(0, to_stop)}", derived=True)
-        if snapshot.get("nextCompound"):
-            # The plan's next stint, not the stream's - nothing has gone on
-            # the car yet.
-            self.spec.add("Then", snapshot["nextCompound"], derived=True)
-        self.spec.finish()
+        if to_stop is None:
+            self.box_in.setValue(None)
+        elif to_stop < 0:
+            self.box_in.setValue(f"{-int(to_stop)} LATE", ink=theme.WARNING)
+            self.box_in.name.setText("OVERDUE")
+        else:
+            self.box_in.setValue(str(int(to_stop)))
+            self.box_in.name.setText("BOX IN")
+
+        # Where the car is on the plan. `None` before the green: nobody is on
+        # the spine yet, and the plan is still worth reading.
+        self.spine.setLap(lap)

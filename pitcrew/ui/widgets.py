@@ -151,7 +151,20 @@ class Measured(QLabel):
         # away - a row stops being the best the moment a quicker lap lands.
         self._ink = colour
         self._rank: str | None = None
-        self.setStyleSheet(f"color: {colour}; background: transparent;")
+        # **The size goes in the stylesheet, not only in the font.**
+        # `theme.apply` sets `QWidget { font-size: 15px }`, and a stylesheet
+        # rule beats `setFont` - so every label in this app was 15px whatever
+        # size it asked for, and nothing showed it until something asked for
+        # 78. It is the same cascade the registers were caught by, where
+        # `QWidget { color }` beat `QPalette.Text` and every declared value
+        # rendered as a measured one.
+        self._size_css = f"font-size: {size}px;"
+        self._paint()
+
+    def _paint(self) -> None:
+        self.setStyleSheet(
+            f"color: {self._rank or self._ink}; background: transparent;"
+            + self._size_css)
 
     def set_ink(self, colour: str) -> None:
         """Change the ordinary ink without losing the timing mark.
@@ -162,7 +175,7 @@ class Measured(QLabel):
         first time anything on its row was touched, and then lost it.
         """
         self._ink = colour
-        self.set_rank(self._rank)
+        self._paint()
 
     def set_rank(self, rank: str | None) -> None:
         """Mark this figure as the fastest ever, the fastest this stint, or
@@ -180,8 +193,7 @@ class Measured(QLabel):
         the stream.
         """
         self._rank = rank
-        self.setStyleSheet(
-            f"color: {rank or self._ink}; background: transparent;")
+        self._paint()
 
 
 class Declared(Measured):
@@ -1540,3 +1552,139 @@ class WearCell(QPushButton):
                         if v is not None}
         self._render()
         self.changed.emit()
+
+
+class BigReading(QWidget):
+    """One figure, allowed to be enormous, with its name under it.
+
+    **The scale IS the design.** The race screen carried lap, position, fuel
+    in hand and the box-in lap as a 15px spec run of dots — the same size as
+    every other word on the screen — and "Box in 3" is the highest-consequence
+    number this product emits. A driver glancing up from the wheel at three
+    metres has time to read one thing, so one thing has to be readable.
+
+    Deliberately not a stat card: no box, no border, no ground, no icon. The
+    figure sits on the page in its register's ink with a small stencilled name
+    beneath it, which is what a pit board is. The `refuses` list in DESIGN.md
+    names the big-number-and-label card as a template to avoid; the difference
+    is that a card makes a grid of equal boxes, and this makes a hierarchy —
+    these figures are not peers and are not sized as peers.
+    """
+
+    def __init__(self, name: str, *, size: int = 56, ink: str = theme.STENCIL,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        self._ink = ink
+        self.value = Measured("—", size=size, bold=True, colour=theme.STRUCK)
+        column.addWidget(self.value)
+        self.name = StencilLabel(name, size=11, colour=theme.STENCIL_DIM,
+                                 tracking=14.0)
+        column.addWidget(self.name)
+
+    def setValue(self, text: str | None, *,      # noqa: N802 - Qt naming
+                 ink: str | None = None) -> None:
+        """`None` renders struck, never a zero.
+
+        A race with no plan armed has no box-in lap, and "0" would read as
+        *box now* — the single most expensive misreading available on this
+        screen. Absent is absent.
+        """
+        if text is None:
+            self.value.setText("—")
+            self.value.set_ink(theme.STRUCK)
+            return
+        self.value.setText(text)
+        self.value.set_ink(ink or self._ink)
+
+
+class PlanSpine(QWidget):
+    """The whole race as one horizontal run: stints, stops, and where you are.
+
+    **Not a progress bar, and the distinction is the point.** A bar says how
+    far through something you are as a fraction. This says what the plan IS —
+    how many stints, how long each one, on what rubber, and which one you are
+    driving now — so the strategy is a single object you can check at a glance
+    instead of four numbers you have to reassemble in your head.
+
+    Drawn rather than composed from widgets because the segments have to be
+    proportional to their stint lengths, and a layout with stretch factors
+    rounds them into lying about the plan. Each segment carries its lap count
+    stencilled inside it and its compound in the compound band's own colour,
+    so colour is never the only channel here either.
+
+    `None` for the current lap is honest: before the green nobody is on the
+    spine, and the plan is still worth reading.
+    """
+
+    HEIGHT = 44
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._stints: list[tuple[int, str | None]] = []
+        self._lap: int | None = None
+        self.setFixedHeight(self.HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Fixed)
+
+    def setPlan(self, stints, compounds=None) -> None:   # noqa: N802
+        codes = list(compounds or [])
+        self._stints = [
+            (int(laps), codes[i] if i < len(codes) else None)
+            for i, laps in enumerate(stints or []) if laps]
+        self.update()
+
+    def setLap(self, lap: int | None) -> None:           # noqa: N802
+        self._lap = lap
+        self.update()
+
+    def total(self) -> int:
+        return sum(laps for laps, _ in self._stints)
+
+    def paintEvent(self, event) -> None:                 # noqa: N802 - Qt naming
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        total = self.total()
+        if not total:
+            painter.setPen(QPen(QColor(theme.TREAD), 1))
+            painter.drawLine(0, self.HEIGHT // 2, self.width(), self.HEIGHT // 2)
+            return
+
+        # The stop is a real gap in the run, not a tick on top of it: the car
+        # is not on track for it, and a plan is easier to read as separated
+        # stints than as one bar with marks in it.
+        gap = 6
+        usable = self.width() - gap * (len(self._stints) - 1)
+        top, height = 4, 26
+        x = 0
+        driven = 0
+        for laps, code in self._stints:
+            width = max(2, round(usable * laps / total))
+            colour = theme.band_colour(code) if code else QColor(theme.TREAD)
+            here = (self._lap is not None
+                    and driven < self._lap <= driven + laps)
+
+            painter.fillRect(x, top, width, height, colour)
+            # The stint being driven is the one with a lid on it. An outline
+            # rather than a brighter fill, because the fill is the compound
+            # and the compound must not change to say where the car is.
+            if here:
+                painter.setPen(QPen(QColor(theme.STENCIL), 2))
+                painter.drawRect(x, top, width - 1, height - 1)
+
+            painter.setPen(QPen(theme.band_ink_for(colour)))
+            painter.setFont(theme.stencil_font(12, tracking=4.0))
+            label = f"{laps}" if width < 58 else f"{laps} LAPS"
+            painter.drawText(x, top, width, height,
+                             Qt.AlignmentFlag.AlignCenter, label)
+
+            if code and width >= 34:
+                painter.setPen(QPen(QColor(theme.STENCIL_DIM)))
+                painter.setFont(theme.stencil_font(10, tracking=10.0))
+                painter.drawText(x, top + height + 2, width, 14,
+                                 Qt.AlignmentFlag.AlignHCenter, code)
+
+            driven += laps
+            x += width + gap

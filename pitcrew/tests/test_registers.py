@@ -210,18 +210,46 @@ def test_an_event_with_no_stop_costs_entered_paints_them_struck(qt_app):
 
 def test_laps_of_fuel_is_not_painted_as_a_measurement(qt_app):
     """`fuel_l / fuel_per_lap_l`, where the rate is the *planned* burn until
-    three laps are in. One spec line was carrying a model output and a stream
-    reading in the same ink, on the surface read at racing speed."""
+    three laps are in. The pit board carries a model output and a stream
+    reading side by side, at 56px, on the surface read at racing speed - so
+    which is which cannot be left to the reader."""
+    from pitcrew.ui import theme
     from pitcrew.ui.race_screen import RaceScreen
-    from pitcrew.ui.widgets import Derived
 
     screen = RaceScreen()
     screen.show_snapshot({"lap": 12, "lapsTotal": 30, "lapsOfFuel": 8.3,
                           "lapsToStop": 3, "nextCompound": "RM"})
-    by_label = {label.text(): reading
-                for label, reading in screen.spec._entries}
-    for name in ("Fuel", "Box in", "Then"):
-        assert isinstance(by_label[name], Derived), f"{name} claims measured"
+    for reading in (screen.fuel_left, screen.box_in):
+        assert theme.DERIVED in reading.value.styleSheet(),             f"{reading.name.text()} claims to be measured"
+    for reading in (screen.lap_now, screen.position):
+        assert theme.DERIVED not in reading.value.styleSheet()
+
+
+def test_a_missing_board_figure_is_struck_and_never_a_zero(qt_app):
+    """A `0` box-in reads as *box now*, which is the most expensive
+    misreading available on this screen. Absent is absent."""
+    from pitcrew.ui import theme
+    from pitcrew.ui.race_screen import RaceScreen
+
+    screen = RaceScreen()
+    screen.show_snapshot({"lap": 4})
+    assert screen.box_in.value.text() == "—"
+    assert theme.STRUCK in screen.box_in.value.styleSheet()
+    assert screen.fuel_left.value.text() == "—"
+
+
+def test_an_overdue_stop_says_overdue_rather_than_zero(qt_app):
+    """CLAUDE.md rule 9 on the highest-consequence number the app emits: it
+    was `max(0, to_stop)`, so a plan he was two laps past reported as `0` -
+    'box now', which is a different instruction from 'you are two laps
+    late'."""
+    from pitcrew.ui.race_screen import RaceScreen
+
+    screen = RaceScreen()
+    screen.show_snapshot({"lap": 15, "lapsToStop": -2})
+    assert "2" in screen.box_in.value.text()
+    assert screen.box_in.value.text() != "0"
+    assert "OVERDUE" in screen.box_in.name.text().upper()
 
 
 def test_the_fresh_set_picker_fits_its_longest_state(qt_app):
