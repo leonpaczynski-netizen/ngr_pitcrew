@@ -54,6 +54,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pitcrew.analysis import spread as spread_mod            # noqa: E402
+from pitcrew.analysis.incidents import CRAWL_MIN_S           # noqa: E402
 from pitcrew.store.db import Store                           # noqa: E402
 
 BIN_M = 100.0
@@ -65,12 +66,23 @@ LAP_FLOOR_S = 1.74
 
 
 def laps_for(store, session_ids):
-    """Clean, counted laps only.
+    """Clean, counted laps only - by the same test the export uses.
 
     **Excursions come out before anything is compared.** Daytona T1 once read
     r=-0.86 against lap time and collapsed to -0.30 when two off-track laps
     came out - its 12.8 km/h of scatter fell to 2.8. An incident lap is not a
     slower lap, it is a different lap.
+
+    **And a crawl is an incident.** The first version of this filtered
+    `off_track_s` and `spin_s` and forgot `crawl_s`, which is the third column
+    `analysis.incidents` weighs - so session 93 lap 9, which the app had
+    correctly recorded as crawling for 7.3 s and which took 64.810 s against a
+    50.7 s baseline, was counted as clean. It put 18x its neighbours' spread
+    into S1 and the tool then reported that as a question about the car. It
+    was a question about this function.
+
+    `CRAWL_MIN_S` is 0.5 s, and it is imported rather than restated: two
+    copies of a threshold drift, and this is not the file that owns it.
     """
     if not session_ids:
         return []
@@ -82,8 +94,9 @@ def laps_for(store, session_ids):
         "  AND l.excluded = 0 AND l.is_out_lap = 0 AND l.is_pit_lap = 0 "
         "  AND COALESCE(l.off_track_s, 0) = 0 "
         "  AND COALESCE(l.spin_s, 0) = 0 "
+        "  AND COALESCE(l.crawl_s, 0) < ? "
         "  AND l.lap_time_ms IS NOT NULL ORDER BY l.id",
-        tuple(session_ids))
+        tuple(session_ids) + (CRAWL_MIN_S,))
     return [dict(row) for row in rows]
 
 

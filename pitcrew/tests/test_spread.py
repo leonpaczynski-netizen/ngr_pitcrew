@@ -15,6 +15,7 @@ import pytest
 from pitcrew.analysis.spread import (
     ALPHA,
     IMPLAUSIBLE_RELATIVE,
+    RESOLVE_ABOVE_RELATIVE,
     MIN_LAPS,
     _betai,
     detrended_sd,
@@ -114,3 +115,42 @@ def test_one_part_alone_says_nothing():
     only = measure("S1", [35.0, 35.2, 35.1, 35.3, 35.0, 35.2, 35.1])
     assert least_repeatable([only]) is None
     assert least_repeatable([None, None]) is None
+
+
+# ------------------------------------------- what the first real use turned up
+
+def test_a_crawl_is_an_incident_and_the_lap_filter_must_say_so():
+    """**Session 93, 6 Sep 2026 - the tool's first real finding was its own.**
+
+    It reported S1 carrying 18x its neighbours' spread and asked whether that
+    was the instrument or the car. It was neither. Lap 9 crawled for 7.3 s and
+    took 64.810 s against a 50.7 s baseline; the app had recorded `crawl_s`
+    correctly and `where_the_change_landed` filtered `off_track_s` and
+    `spin_s` and forgot it. With that lap out, S1 fell from 23% to 10%.
+
+    This asserts the query text rather than the data, because the archive is
+    not a fixture and the defect was a missing clause.
+    """
+    from pathlib import Path
+
+    source = Path("tools/where_the_change_landed.py").read_text(encoding="utf-8")
+    for column in ("off_track_s", "spin_s", "crawl_s"):
+        assert column in source, f"{column} is not in the clean-lap filter"
+    assert "CRAWL_MIN_S" in source, (
+        "the crawl threshold is restated rather than imported - two copies of "
+        "a threshold drift, and this is not the file that owns it")
+
+
+def test_removing_two_incidents_leaves_no_finding_at_all():
+    """The rest of the same resolution, kept as arithmetic.
+
+    With the crawl lap and lap 3 - a 6.9 s loss the incident detector could
+    not explain - both out, S1's spread is 2.97% and 2.0x S2 at p=0.044.
+    Ordinary. **There was no setup finding in session 93's S1**, and that is
+    the right answer to have reached rather than the interesting one.
+    """
+    with_incident = [23.561, 17.727, 17.724, 17.656, 17.538, 17.363, 18.764,
+                     17.334]
+    without = with_incident[1:]
+    assert measure("S1", with_incident).relative > RESOLVE_ABOVE_RELATIVE
+    assert measure("S1", without).relative < 0.04
