@@ -290,3 +290,54 @@ def test_bad_news_outranks_good_if_both_ever_arrive(qt_app):
     stat = _Stat("ahead")
     stat.show_value("1.0", "", urgent=True, good=True)
     assert NEAR in stat.value.styleSheet()
+
+
+def test_a_widening_split_says_so_and_a_settling_one_goes_green(qt_app):
+    """The direction is in the word and in the ink. A split that is opening
+    and one that has settled are the same figure and opposite news."""
+    from pitcrew.ui.driver_view import GOOD, NEAR, DriverState, DriverView
+
+    view = DriverView()
+    temps = {"fl": 84.0, "fr": 85.0, "rl": 91.0, "rr": 104.0}
+    view.update_state(DriverState(temps_c=temps, compound="RS",
+                                  split_rates={"rr": 2.9}))
+    assert "WIDENING" in view.tyres["rr"].gap.text()
+    assert NEAR in view.tyres["rr"].gap.styleSheet()
+
+    view.update_state(DriverState(temps_c=temps, compound="RS",
+                                  split_rates={"rr": -2.1}))
+    assert "SETTLING" in view.tyres["rr"].gap.text()
+    assert GOOD in view.tyres["rr"].gap.styleSheet()
+
+
+def test_no_rate_yet_states_the_split_and_claims_no_direction(qt_app):
+    """Five laps have not said so. "Steady" would be a claim; silence is
+    the honest half of the reading."""
+    from pitcrew.ui.driver_view import DriverState, DriverView
+
+    view = DriverView()
+    view.update_state(DriverState(
+        temps_c={"fl": 84.0, "fr": 85.0, "rl": 91.0, "rr": 104.0},
+        compound="RS"))
+    text = view.tyres["rr"].gap.text()
+    assert "13" in text
+    assert "WIDENING" not in text and "SETTLING" not in text
+
+
+def test_every_corner_is_painted_even_when_only_one_has_a_split(qt_app):
+    """**The bug this guards.** An early return for the corners with no split
+    to report skipped the repaint, so three of the four went dead grey the
+    moment the fourth had something to say - on the reading this screen
+    exists for."""
+    from pitcrew.ui.driver_view import NEAR, OVER, DriverState, DriverView
+
+    view = DriverView()
+    view.update_state(DriverState(
+        temps_c={"fl": 84.0, "fr": 85.0, "rl": 91.0, "rr": 104.0},
+        compound="RS", split_rates={"rr": 2.9}))
+    # 84 and 85 are within 5 of the RS onset of 88, so both are "near";
+    # 91 and 104 are over it. None of them is struck.
+    assert NEAR in view.tyres["fl"].value.styleSheet()
+    assert NEAR in view.tyres["fr"].value.styleSheet()
+    assert OVER in view.tyres["rl"].value.styleSheet()
+    assert OVER in view.tyres["rr"].value.styleSheet()

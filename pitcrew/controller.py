@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 import threading
+from collections import deque
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic as _monotonic
@@ -61,6 +62,9 @@ from pitcrew.export.build import (
 )
 from pitcrew.export.payload import APP_VERSION, ExportRefused, to_json
 from pitcrew.race import knowledge
+from pitcrew.race.tyre_split import BOARD_SMOOTHING_S
+from pitcrew.race.tyre_split import CORNERS as _SPLIT_CORNERS
+from pitcrew.race.tyre_split import SplitHistory
 from pitcrew.setup.ranges import RangeRecord, SetupError
 from pitcrew.store import catalogs
 from pitcrew.store.db import Store
@@ -332,6 +336,11 @@ class TelemetryBridge(QObject):
         # being driven. None until a packet arrives - a lap nobody watched
         # makes no claim about how it was driven.
         self._lap_short_shift_rpm = None
+        # Whole-lap corner accumulation for the tyre split - see `on_packet`.
+        self._corner_sums = {c: 0.0 for c in _SPLIT_CORNERS}
+        self._corner_frames = 0
+        # The last few seconds of frames, for the board's smoothed reading.
+        self._temp_window: deque = deque()
         # **The issued table for the box now fitted**, set when a session
         # opens. A shift point belongs to the gearbox - change a ratio or the
         # final drive and the rpm worth shifting at moves with it - so it is
@@ -366,6 +375,44 @@ class TelemetryBridge(QObject):
         every car as though a regulator were fitted.
         """
         self.effects.set_abs(setting)
+
+    def recent_corner_means(self) -> dict[str, float] | None:
+        """The last `BOARD_SMOOTHING_S` of frames, meaned per corner.
+
+        **What the driver reads.** A single packet jitters at 60 Hz against a
+        per-lap signal of about 10 °C, and the display's own docstring claimed
+        a smoothing that had never been built. `None` where nothing recent is
+        on track, which is a dash on the board and never a zero.
+        """
+        now = _monotonic()
+        window = self._temp_window
+        while window and now - window[0][0] > BOARD_SMOOTHING_S:
+            window.popleft()
+        if not window:
+            return None
+        total = [0.0, 0.0, 0.0, 0.0]
+        for _stamp, temps in window:
+            for index, value in enumerate(temps):
+                total[index] += value
+        count = len(window)
+        return {corner: total[index] / count
+                for index, corner in enumerate(_SPLIT_CORNERS)}
+
+    def take_corner_means(self) -> dict[str, float] | None:
+        """The lap's mean temperature per corner, and start the next lap.
+
+        **Takes and clears in one call**, so a lap can only be counted once
+        and a lap nobody asked about cannot leak into the next one's mean.
+        `None` where no frame of the lap was on track - which is a lap that
+        says nothing about the tyres, not a lap at zero degrees.
+        """
+        if not self._corner_frames:
+            return None
+        means = {c: self._corner_sums[c] / self._corner_frames
+                 for c in _SPLIT_CORNERS}
+        self._corner_sums = {c: 0.0 for c in _SPLIT_CORNERS}
+        self._corner_frames = 0
+        return means
 
     def set_issued_shift_points(self, table) -> None:
         """Take the table issued for the box now fitted, or clear it.
@@ -560,6 +607,21 @@ class TelemetryBridge(QObject):
             race_clock.note_frame(_monotonic(),
                                   paused=packet.paused or packet.loading)
         self.shift_beep.update(packet, _monotonic())
+        # **The four corners, accumulated across the whole lap.** A tyre
+        # split has to be read per lap and never per frame: peaks reach 117.8
+        # °C at Monza and 158.8 at Spa, so a single frame's split says mostly
+        # where in the lap it was taken. The whole-lap mean is the unit the
+        # archive's r=+0.82 against the wear map was measured in.
+        if packet.car_on_track and not (packet.paused or packet.loading):
+            temps = packet.tyre_temps
+            if temps is not None and all(t is not None for t in temps):
+                for corner, value in zip(_SPLIT_CORNERS, temps):
+                    self._corner_sums[corner] += float(value)
+                self._corner_frames += 1
+                # And the short window the board actually reads - see
+                # `recent_corner_means`.
+                self._temp_window.append(
+                    (_monotonic(), tuple(float(t) for t in temps)))
         # **How the lap being driven right now is being shifted.** Held per
         # frame rather than read at the line, because the switch can be thrown
         # mid-lap and what matters afterwards is that the lap was driven under
@@ -879,6 +941,12 @@ class PitCrewController(QObject):
 
         # Set once, so an attach that runs twice does not connect twice.
         self._settings_wired = False
+        # **The tyre split's per-lap history, and it is reset per session.**
+        # See CLAUDE.md rule 11: state that outlives a session gets read as
+        # though it belongs to this one, and this app has already opened a
+        # race judging its fresh tyres against practice's worn ones. Both
+        # session-open paths call `new_session` below.
+        self._splits = SplitHistory()
 
         self.bridge.lap_completed.connect(self._on_lap_completed)
         self.bridge.debriefed.connect(self._on_debriefed)
@@ -2011,6 +2079,9 @@ class PitCrewController(QObject):
         here = circuit_key_for(event)
         table = self.store.shift_points_for(event["car_name"] or "", here)
         self.bridge.set_issued_shift_points(table)
+        # A new session's tyres are not the last session's tyres.
+        self._splits.new_session()
+        self.bridge.take_corner_means()
         if table is None:
             self.practice.set_status(
                 "No upshift table issued for this car at this circuit, so "
@@ -2508,6 +2579,12 @@ class PitCrewController(QObject):
 
     def _on_lap_completed(self, lap, rows) -> None:
         """Qt thread: compress, store, and put the lap on the rack."""
+        # **The tyre split's sample, before the early return.** It is taken
+        # on every crossing the bridge saw, session or not, because taking it
+        # is also what clears the accumulator - skip it and the next lap's
+        # mean carries this one's frames. `take_corner_means` is the only
+        # caller and it takes and clears in one.
+        self._splits.note_lap(self.bridge.take_corner_means())
         if self.session_id is None:
             return
         # **The ruler closes its lap on the crossing**, so the next one starts
@@ -3715,6 +3792,8 @@ class PitCrewController(QObject):
         here = circuit_key_for(event)
         table = self.store.shift_points_for(event["car_name"] or "", here)
         self.bridge.set_issued_shift_points(table)
+        self._splits.new_session()
+        self.bridge.take_corner_means()
         if table is None:
             self.race_screen.set_status(
                 "No upshift table issued for this car at this circuit, so "
@@ -4678,6 +4757,9 @@ class PitCrewController(QObject):
         has_plan = bool(getattr(self.race, "_stints", None))
         base = DriverState(
             temps_c=temps,
+            # Which way each split is going, for the corners where five laps
+            # say so. Absent is absent - see `race/tyre_split.py`.
+            split_rates=self._split_rates(),
             # On track this is the set he is ON; in the box it is the set
             # going on. Two different claims, and the box panel captions its
             # own as the plan decision it is.
@@ -4774,6 +4856,22 @@ class PitCrewController(QObject):
             note = f"{note} - {name}"
         return GapView(seconds=seconds, note=note, urgent=urgent, good=good)
 
+    def _split_rates(self) -> dict[str, float]:
+        """Per-corner split rates, only where there is an answer.
+
+        A corner with too little history or movement inside the instrument is
+        left out of the dict entirely rather than carried as a zero: the
+        board renders a missing key as no claim and a zero as "it has
+        settled", and those are different things to tell a driver about a
+        tyre.
+        """
+        found: dict[str, float] = {}
+        for corner in _SPLIT_CORNERS:
+            rate, _laps = self._splits.rate(corner)
+            if rate is not None:
+                found[corner] = rate
+        return found
+
     def _board_temps(self, packet=None):
         """The four corners off ONE packet, or None.
 
@@ -4782,6 +4880,16 @@ class PitCrewController(QObject):
         reference once and the fields off that is what keeps the four
         temperatures from straddling two frames.
         """
+        # **The smoothed reading first.** The board's docstring said it was
+        # fed a smoothed temperature and never a raw frame, and it was not -
+        # this returned one packet, so four numbers jittered at 60 Hz against
+        # a per-lap signal of about 10 °C. The driver asked for instant or a
+        # three-second mean; this is the mean.
+        smoothed = self.bridge.recent_corner_means()
+        if smoothed is not None:
+            return smoothed
+        # Nothing recent on track: fall back to the frame in hand, which is
+        # still better than a dash on a car sitting in the pit box.
         if packet is None:
             packet = getattr(self.bridge, "last_packet", None)
         if packet is None:

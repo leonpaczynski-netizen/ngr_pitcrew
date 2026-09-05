@@ -52,7 +52,8 @@ So there are exactly two things a colour here is allowed to mean:
 Anything cooler than onset is drawn in one neutral colour and claims nothing
 beyond "not yet wearing faster for heat".
 
-**And it is fed a smoothed temperature, never a raw frame.** Per-lap peaks
+**And it is fed a 3-second mean, never a raw frame - which for a long time
+was a claim this file made and the controller did not honour.** Per-lap peaks
 reach 117.8 degC at Monza and 158.8 at Spa against an onset of 88-93, so a
 display driven from instantaneous samples would sit red almost permanently and
 mean nothing.
@@ -181,6 +182,12 @@ class DriverState:
     nothing else, so it can be built and tested without a race.
     """
     temps_c: dict[str, float | None] | None = None
+    # **Which way each corner's split against its opposite is going**, in °C
+    # per lap, for the corners where five laps say so and the movement is
+    # outside the instrument. Absent means no answer, which is not a rate of
+    # zero - see `race/tyre_split.py`, which owns the arithmetic and the
+    # threshold. Positive is widening.
+    split_rates: dict[str, float] | None = None
     compound: str | None = None
     laps_to_box: float | None = None
     box_on_lap: int | None = None
@@ -333,9 +340,7 @@ class _Tyre(QWidget):
 
         self.gap = QLabel("")
         self.gap.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.gap.setStyleSheet(
-            f"font-family:{NUMBER_FACE};font-size:{self.GAP_PX}px;"
-            f"color:{NEAR};background:transparent;border:none;")
+        self.gap.setStyleSheet(self._gap_css(NEAR))
         self.gap.setFixedHeight(self.GAP_PX + 8)
 
         name = QLabel(corner.upper())
@@ -358,16 +363,40 @@ class _Tyre(QWidget):
         self._paint("missing")
 
     def show_value(self, value: float | None, state: str,
-                   lopsided: bool, gap: float | None = None) -> None:
+                   lopsided: bool, gap: float | None = None,
+                   rate: float | None = None) -> None:
         self.value.setText("--" if value is None else f"{value:.0f}")
+        # **`_paint` runs on every path.** An early return here left every
+        # corner that was NOT lopsided holding the grey it was constructed
+        # with, so three of the four went dead the moment the fourth had a
+        # split to report - on the reading this screen exists for.
+        self._paint(state)
+
         # **Only where it is a finding.** `lopsided` is the threshold the
         # display has always used; the number is what it was missing. A gap
         # under the threshold shows nothing rather than a small figure the
         # driver would have to decide about at 200 km/h.
-        self.gap.setText(
-            f"+{gap:.0f} vs {PAIRS[self._corner].upper()}"
-            if lopsided and gap is not None else "")
-        self._paint(state)
+        if not lopsided or gap is None:
+            self.gap.setText("")
+            self.gap.setStyleSheet(self._gap_css(NEAR))
+            return
+
+        text = f"+{gap:.0f} vs {PAIRS[self._corner].upper()}"
+        # **The direction, in the word and in the ink.** A split that is
+        # opening and one that has settled are the same figure and opposite
+        # news - the first says the tyre is going, the second says it has
+        # found its level. Silent where five laps do not say so yet: no rate
+        # is not a rate of zero, and "steady" would be a claim.
+        ink = NEAR
+        if rate is not None:
+            text += "  WIDENING" if rate > 0 else "  SETTLING"
+            ink = NEAR if rate > 0 else GOOD
+        self.gap.setText(text)
+        self.gap.setStyleSheet(self._gap_css(ink))
+
+    def _gap_css(self, ink: str) -> str:
+        return (f"font-family:{NUMBER_FACE};font-size:{self.GAP_PX}px;"
+                f"color:{ink};background:transparent;border:none;")
 
     def _paint(self, state: str) -> None:
         """**The number carries the state. There is no box round it.**
@@ -383,8 +412,13 @@ class _Tyre(QWidget):
         nothing here to separate - four numbers laid out as the car are
         already four numbers laid out as the car.
         """
+        # `INK_DIM`, not `STRUCK`. A corner with no reading is a dash, and
+        # the dash is the sentinel - but `STRUCK` means "removed from the
+        # count" and `test_struck_is_only_used_where_low_contrast_is_the_point`
+        # holds no screen may paint with it. It is also the wrong call for a
+        # glance instrument on its own terms: 6.5:1 against 4.5:1.
         ink = {"over": OVER, "near": NEAR, "cool": COOL,
-               "missing": theme.STRUCK}[state]
+               "missing": INK_DIM}[state]
         self.value.setStyleSheet(
             f"font-family:{NUMBER_FACE};font-size:{self.VALUE_PX}px;"
             f"font-weight:600;color:{ink};background:transparent;border:none;")
@@ -866,7 +900,8 @@ class DriverView(QWidget):
         for corner, widget in self.tyres.items():
             kind, lopsided = classify(corner, temps, state.compound)
             widget.show_value(temps.get(corner), kind, lopsided,
-                              pair_gap(corner, temps))
+                              pair_gap(corner, temps),
+                              (state.split_rates or {}).get(corner))
         self.tyre_caption.setText(
             "TYRE SURFACE °C" if not state.compound
             else f"TYRE SURFACE °C · {state.compound.upper()}")

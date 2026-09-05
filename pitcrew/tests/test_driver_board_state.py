@@ -105,9 +105,21 @@ class _Packet:
 
 
 class _Bridge:
-    def __init__(self, filling=False, packet=None):
+    def __init__(self, filling=False, packet=None, smoothed=None):
         self.last_packet = packet if packet is not None else _Packet()
         self.refuel = type("R", (), {"filling": filling})()
+        self._smoothed = smoothed
+
+    def recent_corner_means(self):
+        """The board's 3-second mean, or None to fall through to the packet.
+
+        `None` by default so these tests go on asserting against the single
+        frame they set up. The smoothing has its own tests in
+        `test_tyre_split.py`; what matters here is that `_board_temps` still
+        has an answer when nothing recent is on track - a car sitting in the
+        box has an empty window and four real temperatures.
+        """
+        return self._smoothed
 
 
 class _Stub:
@@ -130,8 +142,16 @@ class _Stub:
     _race_knowledge = PitCrewController._race_knowledge
 
     _someone_set = PitCrewController._someone_set
+    _split_rates = PitCrewController._split_rates
 
-    def __init__(self, *, race=None, bridge=None, target=74.0, event=None):
+    def __init__(self, *, race=None, bridge=None, target=74.0, event=None,
+                 splits=None):
+        # **Per instance, never on the class.** A `SplitHistory` shared by
+        # every stub in the file would be exactly the cross-session leak the
+        # real one is reset to avoid, and it would leak between tests too.
+        from pitcrew.race.tyre_split import SplitHistory
+
+        self._splits = splits if splits is not None else SplitHistory()
         self.race = race if race is not None else _Race()
         self.bridge = bridge if bridge is not None else _Bridge()
         self._target = target
@@ -559,3 +579,21 @@ def test_both_neighbours_reach_the_board_while_running():
     got = _state_for(stub)
     assert got.ahead is not None and got.behind is not None
     assert got.ahead.note != got.behind.note
+
+
+def test_the_board_prefers_the_smoothed_reading_over_the_frame_in_hand():
+    """**What the driver reads.** The board's own docstring claimed a smoothed
+    temperature and `_board_temps` returned a single packet, so four numbers
+    jittered at 60 Hz against a per-lap signal of about 10 °C."""
+    smoothed = {"fl": 81.0, "fr": 82.0, "rl": 88.0, "rr": 99.0}
+    stub = _Stub(bridge=_Bridge(smoothed=smoothed))
+    assert _state_for(stub).temps_c == smoothed
+
+
+def test_an_empty_window_still_has_an_answer():
+    """A car stationary in the box has no recent on-track frame and four
+    perfectly real temperatures. A dash there would be wrong."""
+    stub = _Stub(bridge=_Bridge(smoothed=None))
+    temps = _state_for(stub).temps_c
+    assert temps is not None
+    assert set(temps) == {"fl", "fr", "rl", "rr"}
