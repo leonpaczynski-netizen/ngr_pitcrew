@@ -104,7 +104,27 @@ def block_wheel(widget: QWidget) -> QWidget:
 
 
 class StencilLabel(QLabel):
-    """Tracked condensed caps, cut the way a technical plate is stencilled."""
+    """Tracked condensed caps, cut the way a technical plate is stencilled.
+
+    **The size travels in the style sheet, and for a long time it did not.**
+    `theme.apply` sets `QWidget { font-size: 15px }`, a style-sheet rule beats
+    `setFont`, and nothing here restated it - so every stencilled label in the
+    app rendered at 15px whatever size it asked for. `StencilLabel(size=10)`,
+    `size=15` and `size=20` all painted 111px wide and 15px tall, measured.
+
+    It flattened the whole type hierarchy: the 10px column heads, the 11px
+    plate captions, the 12px hints and the 13px stint lines were one size, and
+    DESIGN.md described a scale the app was not drawing. It surfaced as a
+    clipped column head - "WEAR AT END" needs 48px at the 10px it asks for and
+    111px at the 15px it was given, in a 92px column - which is how a defect
+    that had been in every screen for the life of the app came to be reported
+    as one word losing a letter.
+
+    Third instance of this cascade, and they are all the same shape: a
+    style-sheet rule silently beating a per-widget setting. `QWidget { color }`
+    beat `QPalette.Text` and made every declared value render as a measured
+    one; `QWidget { font-size }` beat `setFont` here and in `Measured`.
+    """
 
     def __init__(self, text: str = "", *, size: int = theme.LABEL_PX,
                  colour: str = theme.STENCIL_DIM, tracking: float = 10.0,
@@ -112,7 +132,12 @@ class StencilLabel(QLabel):
                  parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
         self.setFont(theme.stencil_font(size, weight=weight, tracking=tracking))
-        self.setStyleSheet(f"color: {colour}; background: transparent;")
+        self._size_css = f"font-size: {size}px;"
+        self.set_ink(colour)
+
+    def set_ink(self, colour: str) -> None:
+        self.setStyleSheet(
+            f"color: {colour}; background: transparent;" + self._size_css)
 
 
 class BodyLabel(QLabel):
@@ -123,11 +148,15 @@ class BodyLabel(QLabel):
         super().__init__(text, parent)
         self.setFont(theme.text_font(
             size, weight=QFont.Weight.DemiBold if bold else QFont.Weight.Normal))
+        # Same cascade as `StencilLabel`: `QWidget { font-size: 15px }` beats
+        # `setFont`, so a size asked for here has to be restated in the rule
+        # that is winning or it is not applied at all.
+        self._size_css = f"font-size: {size}px;"
         self.set_ink(colour)
         self.setWordWrap(wrap)
 
     def set_ink(self, colour: str) -> None:
-        """Recolour without dropping the transparent background.
+        """Recolour without dropping the transparent background or the size.
 
         Five call sites across three screens replaced the whole style sheet
         with `color:` alone, so the label fell back to the app-wide
@@ -135,7 +164,8 @@ class BodyLabel(QLabel):
         `SHOULDER` plate it was sitting on. Nine other sites got it right,
         which made it inconsistency rather than a decision.
         """
-        self.setStyleSheet(f"color: {colour}; background: transparent;")
+        self.setStyleSheet(
+            f"color: {colour}; background: transparent;" + self._size_css)
 
 
 class Measured(QLabel):

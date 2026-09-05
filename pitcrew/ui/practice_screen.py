@@ -75,6 +75,12 @@ STINT_ROW_HEIGHT = ROW_HEIGHT
 UNTAGGED = "—"
 
 # Column widths, shared by the heads and the rows so the two never drift.
+# **Every column is at least as wide as its own heading**, and
+# `test_no_column_head_is_clipped` holds it. The widths themselves did not
+# need to change: "WEAR AT END" needs 73px at the 10px it asks for and had
+# 92. It was clipping because it was not being drawn at 10px - see
+# `widgets.StencilLabel`. Widening the column would have been a workaround
+# for a bug in every other label in the app.
 W_LAP = 34
 W_TIME = 132
 W_DELTA = 78
@@ -93,7 +99,9 @@ W_COMPOUND = 104
 # wear rate is measured or assumed. The combo's own sizeHint is 128, and the
 # row's hint is 988 at 1280 wide, so the 10px cannot overflow.
 W_SET_ON = 128
-# "RR 33%" in 13px mono, plus its border and breathing room.
+# "RR 100%" in 13px mono, plus the button's border and breathing room, and
+# "WEAR AT END" above it at 10px. Both fit; the head only appeared not to
+# because it was being painted at 15px - see `widgets.StencilLabel`.
 W_WEAR = 92
 W_ACTION = 104
 HEAD_HEIGHT = 30

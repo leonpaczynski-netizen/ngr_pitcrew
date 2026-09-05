@@ -234,17 +234,20 @@ class RaceScreen(QWidget):
         # 1280x800 at 150% reports 501 logical pixels of height less the rail,
         # and `test_every_screen_fits_the_smallest_display_he_owns` holds every
         # screen to it - a guard that exists because Save once sat below the
-        # fold on Settings with no bar to reach it. Measured: at 78/56 this
-        # screen asked for 503, at 68/48 it asked 505, at 64/46 exactly 501,
-        # and at 60/44 it asks 497 - four pixels of headroom rather than
-        # landing on the limit, because the guard is there to be cleared and
-        # not to be met. The hierarchy is what carries the design, not the
-        # absolute size, and it survives intact: the box-in lap is still
-        # half again the height of everything beside it.
-        self.box_in = BigReading("Box in", size=60, ink=theme.DERIVED)
-        self.fuel_left = BigReading("Fuel in hand", size=44, ink=theme.DERIVED)
-        self.lap_now = BigReading("Lap", size=44)
-        self.position = BigReading("Position", size=44)
+        # fold on Settings with no bar to reach it.
+        #
+        # **Measured with the real faces, which matters more than it sounds.**
+        # These were first sized against a run where every `StencilLabel` in
+        # the app was painting at 15px instead of the 10-13 it asked for - see
+        # `widgets.StencilLabel` - so the labels around these figures were
+        # inflated and the board had to shrink to 60/44 to fit. With the
+        # cascade fixed the surrounding type is the size it always claimed to
+        # be, and the readings can have the room back: 68/48 asks 499px
+        # against the 501 floor, where 78/56 asks 509 and does not fit.
+        self.box_in = BigReading("Box in", size=68, ink=theme.DERIVED)
+        self.fuel_left = BigReading("Fuel in hand", size=48, ink=theme.DERIVED)
+        self.lap_now = BigReading("Lap", size=48)
+        self.position = BigReading("Position", size=48)
         for reading in (self.box_in, self.fuel_left, self.lap_now,
                         self.position):
             row.addWidget(reading, 0, Qt.AlignmentFlag.AlignBottom)

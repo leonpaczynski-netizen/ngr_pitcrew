@@ -175,6 +175,26 @@ what WCAG exempts. A test asserts no screen paints prose with it.
 
 ## Lettering
 
+> **Every label carries its own size in its style sheet, and for the life of
+> the app none of them did.** `theme.apply` sets `QWidget { font-size: 15px }`;
+> a style-sheet rule beats `setFont`; nothing in `StencilLabel`, `BodyLabel`
+> or `Measured` restated it. Measured before the fix: `StencilLabel` at size
+> 10, 15 and 20 all painted 111px wide and 15px tall. The scale below was
+> described and not drawn — the 10px column heads, 11px plate captions, 12px
+> hints and 13px stint lines were all one size, and the app had no type
+> hierarchy at all below body.
+>
+> It surfaced as one clipped word. "WEAR AT END" needs 73px at the 10px it
+> asks for and 111px at the 15px it was given, in a 92px column — so a defect
+> present on every screen since the beginning was reported as a heading
+> losing a letter. **Third instance of this exact cascade**, and they are one
+> shape: `QWidget { color }` beat `QPalette.Text` and made every declared
+> value render as measured; `QWidget { font-size }` beat `setFont` here.
+> `tests/test_rack_columns.py` guards it in a way that needs no fonts — three
+> sizes must not paint as one.
+
+
+
 | Role | Face | Why |
 |---|---|---|
 | Labels, headings, buttons | **Bahnschrift Condensed**, caps, tracked +8-14% | Bahnschrift is DIN 1451 — the German industrial signage standard that technical plates and moulded sidewall codes are lettered in. The correct letter for this world, not the convenient one. |
