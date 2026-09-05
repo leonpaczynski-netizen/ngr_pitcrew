@@ -82,8 +82,11 @@ def test_green_where_it_leads_the_stint_but_not_the_archive():
     assert rank_ink(100, 100, 95, counted=True) == theme.BEST_STINT
 
 
-def test_nothing_where_it_leads_neither():
-    assert rank_ink(110, 100, 95, counted=True) is None
+def test_yellow_where_it_leads_neither():
+    """**The ordinary state, and it is not a criticism.** Most laps are
+    slower than your best by definition; yellow is the baseline the two
+    faster colours are legible against, exactly as on a timing screen."""
+    assert rank_ink(110, 100, 95, counted=True) == theme.SLOWER
 
 
 def test_an_uncounted_lap_can_never_hold_a_mark():
@@ -98,8 +101,32 @@ def test_a_missing_or_zero_figure_holds_no_mark():
     assert rank_ink(0, 100, 95, counted=True) is None
 
 
-def test_nothing_to_beat_yet_holds_no_mark():
+def test_no_reference_yet_is_not_the_same_as_slower():
+    """White, in the convention: the first counted lap of a rack has nothing
+    to be slower than, and painting it yellow would say it failed to beat
+    something that does not exist."""
     assert rank_ink(100, None, None, counted=True) is None
+
+
+def test_the_four_colours_are_the_motorsport_ones():
+    """Looked up, not recalled. Purple outright, green a personal best,
+    yellow slower, white no reference - the FIA convention, and GT7's own.
+
+    This app got it wrong twice: once as two dark fills behind the number
+    (leaving every sector purple, because every sector is derived), and once
+    as purple/blue/white from the driver's memory of GT7 rendering the
+    personal-best green with a blue cast.
+    """
+    assert rank_ink(90, 95, 90, counted=True) == theme.BEST_EVER
+    assert rank_ink(95, 95, 90, counted=True) == theme.BEST_STINT
+    assert rank_ink(99, 95, 90, counted=True) == theme.SLOWER
+    assert rank_ink(99, None, None, counted=True) is None
+    # And the ordinary state must never outshine the marks it exists to make
+    # legible - the first yellow tried was brighter than both of them.
+    assert (theme.contrast_ratio(theme.QColor(theme.SLOWER),
+                                 theme.QColor(theme.RUBBER_DEEP))
+            < theme.contrast_ratio(theme.QColor(theme.BEST_STINT),
+                                   theme.QColor(theme.RUBBER_DEEP)))
 
 
 # ------------------------------------------------------------------ on a rack
@@ -195,19 +222,24 @@ def test_an_ordinary_sector_is_neither_purple_nor_white(app):
     assert theme.STENCIL_DIM in plain.styleSheet()
 
 
-def test_the_column_head_carries_the_claim_the_value_gave_up(app):
-    """Rule 5 did not stop applying - it moved to where a timing screen
-    declares what a column is."""
+def test_the_sector_heads_do_not_wear_a_timing_colour(app):
+    """**Purple is spoken for.** The heads briefly carried DERIVED purple to
+    say "this cut is ours" - the same collision one level up, since a purple
+    heading sits over a column where purple means fastest. The claim is made
+    in words instead: the spec line names the cut, and the head's tooltip
+    says it too. A sentence cannot be mistaken for a timing mark.
+    """
     from pitcrew.ui.widgets import StencilLabel
 
     screen = PracticeScreen()
-    # The one the screen actually built and parented, not a fresh throwaway:
-    # an unparented head widget is collected out from under the assertion.
-    derived = [w for w in screen.head_view.widget().findChildren(StencilLabel)
-               if w.text() in ("S1", "S2", "S3")]
-    assert len(derived) == 3, "the sector heads are not there to carry it"
-    for head in derived:
-        assert theme.DERIVED in head.styleSheet()
+    heads = [w for w in screen.head_view.widget().findChildren(StencilLabel)
+             if w.text() in ("S1", "S2", "S3")]
+    assert len(heads) == 3
+    for head in heads:
+        for timing in (theme.BEST_EVER, theme.BEST_STINT, theme.SLOWER,
+                       theme.DERIVED):
+            assert timing not in head.styleSheet()
+        assert "GT7" in head.toolTip(), "the claim is not made anywhere"
 
 
 def test_a_mark_is_the_ink_and_it_survives_a_re_ink(app):

@@ -79,36 +79,61 @@ CRAYON = "#A3E635"          # DECLARED - the driver typed this
 # with it: that band is a dark desaturated mid-green painted as a block, this
 # is bright acid text, and every band carries its two-letter code anyway.
 DERIVED = "#B08BD8"         # DERIVED - the app worked this out
-# ---- the timing marks: purple, then blue, then ordinary --------------------
+# ---- the timing marks: the motorsport convention, verbatim -----------------
 #
-# **These were fills, and the reasoning that made them fills was inverted.**
-# It argued that the rank could not be carried in ink because purple text
-# already means DERIVED - and then justified purple-for-derived on the grounds
-# that purple is "the sport's own mark" on a timing screen. Both cannot be
-# true. On a timing screen purple means FASTEST, and the driver reads that
-# every night; it is not available to mean something else in a column of lap
-# and sector times.
+# **Purple, green, yellow, white — and it is not ours to reinterpret.** This
+# is the FIA timing convention, used on every F1 timing screen, and GT7's own
+# HUD follows it:
 #
-# What that cost was reported by the driver in one sentence: *every sector
-# looks like it is the best sector, as they are all purple.* And they were -
-# every sector on the rack is the app's own cut of the lap, so every sector
-# was DERIVED, so every sector was purple, while the actual marks were two
-# very dark fills behind the number that read as nothing at all.
+#   purple  the fastest anyone has set in the session
+#   green   a personal best — you improved on your own
+#   yellow  slower than your own best
+#   white   no reference set yet
 #
-# So on the rack the timing convention wins, because it is the column's own
-# language: **purple fastest ever here, blue fastest this stint, ordinary
-# otherwise.** Bright enough to be a mark rather than a shade - these are
-# inks on `RUBBER_DEEP` now, not grounds under `STENCIL`.
+# It got here in two wrong steps, both worth writing down. First the rank was
+# painted as two very dark FILLS behind the number, on the argument that
+# purple ink was spoken for by the DERIVED register — while purple-for-derived
+# was itself argued FROM timing-screen convention. Both cannot be true, and
+# the cost was that every sector on the rack came out purple, because every
+# sector is the app's own cut of the lap. The driver read exactly what was
+# painted: *every sector looks like it's the best sector.*
 #
-# The derived-ness of a sector did not go anywhere. It moved to where a
-# timing screen declares what a column IS: the S1/S2/S3 heads carry `DERIVED`,
-# the spec line names the cut in words ("thirds of the lap - not GT7's"), and
-# an ordinary sector reads dimmer than a measured lap time. The column says
-# the cut is ours; the value says how quick it was. That is CLAUDE.md rule 5
-# satisfied in the channel that can carry it, rather than in the one the
-# driver was already using to read something else.
-BEST_EVER = "#C99BF0"       # fastest ever here, in this car
-BEST_STINT = "#5AA9E6"      # fastest in this stint
+# Then it was rebuilt as purple / blue / white on the driver's own offhand
+# description, which was his memory of GT7 rendering the personal-best green
+# with a blue cast. Close, and still not the convention. **A convention is
+# looked up, not recalled** — the whole value of using one is that he already
+# knows how to read it, and a private variant of it is worth less than none.
+#
+# The one-driver mapping, which is the only interpretation this app has to
+# make: the outright benchmark is the fastest ever set here in this car, and
+# "your own best" is the best of the stint being driven.
+BEST_EVER = "#C77DFF"       # purple - fastest ever here, in this car
+BEST_STINT = "#2FD16B"      # green  - a personal best for this stint
+SLOWER = "#A89A45"          # yellow - slower than the best of its stint
+# Measured on `RUBBER_DEEP`: purple 7.31:1, green 9.79:1, yellow 6.91:1.
+#
+# **The yellow is deliberately the dimmest of the three**, and the first
+# attempt at it was not - a lemon at 13.88:1, brighter than both marks and
+# nearly as bright as white. The hue was right and the hierarchy was upside
+# down: yellow is the ORDINARY state, most laps are slower than your best by
+# definition, and on a rack of twelve laps that is fifty figures competing
+# with the two that matter. A timing screen carries a handful of rows; this
+# carries a stint. Same convention, sized for the density it is actually
+# used at.
+#
+# **Yellow sits 9 degrees of hue from `WARNING`, and that is allowed here**
+# because the two never appear in the same role: `WARNING` is prose — a footer
+# sentence, a refused export — and never a value, and the timing yellow is
+# only ever a value in a time column and never prose. The pairing to avoid is
+# two meanings in one place, not two colours in one app.
+#
+# **Green sits 59 degrees from `CRAYON`**, which is an acid lime, and the
+# argument that they cannot be confused is stronger than the distance: the
+# rack's time columns contain no declared values at all. A lap time, a delta
+# and three sectors are measured or computed — never typed. Everything the
+# driver declares on this screen is a control on the right of the row: the
+# compound picker, the fresh-set picker, the wear cell. Green in a time column
+# cannot be read as "he typed this", because nothing in a time column ever is.
 CHALK = "#7FC7D9"           # provisional annotation, notes, hints
 STRUCK = "#807870"          # struck out: excluded, disabled, not counted
 # Lifted from #6B6459, which carried 3.37:1 on the editor ground. WCAG exempts

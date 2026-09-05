@@ -71,25 +71,55 @@ admitted to them.
 
 ### The rack is the one place the timing convention outranks the registers
 
-**Purple means fastest, and that is not available to mean anything else in a
-column of times.** The registers were applied to the rack the way they are
-applied everywhere else: a sector is the app's own cut of the lap, so a sector
-is derived, so a sector is purple — and the rank was pushed into two very dark
-fills behind the number. Every sector on the rack came out purple. The driver
-read it exactly as a driver would: *every sector looks like it's the best
-sector.*
+**Purple, green, yellow, white — the FIA convention, verbatim.** It is what
+every F1 timing screen uses and what GT7's own HUD uses, which means the
+driver already knows how to read it and it is not ours to reinterpret:
 
-The justification had eaten itself. Purple-for-derived was argued **from**
-timing-screen convention, and then the timing rank was denied ink **because**
-purple was taken. Only one of those can stand, and on a rack of lap and sector
-times it is the one the driver has read ten thousand times: **purple fastest
-ever here, blue fastest this stint, ordinary otherwise.**
+| Colour | Means | Here |
+|---|---|---|
+| Purple | fastest anyone has set | fastest ever here, in this car |
+| Green | a personal best | the best of its own stint |
+| Yellow | slower than your own best | everything else |
+| White | no reference set yet | the first counted lap |
 
-Rule 5 did not lapse; it moved to the channel a timing screen actually uses to
-say what a column is. The S1/S2/S3 **heads** are derived purple, the spec line
-names the cut in words, and an ordinary sector sits at `STENCIL_DIM` — visibly
-a lesser claim than a measured lap time in `STENCIL`, never white, never
-purple. The column says whose cut it is; the value says how quick it was.
+**It took two wrong attempts to get here, and both are worth keeping.**
+
+First the rank was two very dark *fills* behind the number, on the argument
+that purple ink was spoken for by the DERIVED register — while
+purple-for-derived was itself argued *from* timing-screen convention. Both
+cannot stand. The cost was that every sector on the rack came out purple,
+because every sector is the app's own cut of the lap, and the driver read
+what was painted: *every sector looks like it's the best sector.*
+
+Then it was rebuilt as purple / blue / white, from the driver's own offhand
+description — his memory of GT7 rendering the personal-best green with a blue
+cast. Close, and still not the convention. **A convention is looked up, not
+recalled**; the entire value of using one is that he already knows it, and a
+private variant is worth less than none.
+
+Two collisions, both answered rather than dodged:
+
+- **Green is not `CRAYON`.** It sits 59° of hue from the acid lime, but the
+  stronger argument is that the rack's time columns contain no declared
+  values at all — a lap time, a delta and three sectors are measured or
+  computed, never typed. Everything the driver declares on this screen is a
+  control to the right of the row. Green in a time column cannot read as "he
+  typed this", because nothing in a time column ever is.
+- **Yellow is 9° from `WARNING`**, and allowed, because the two never appear
+  in the same role: `WARNING` is prose and never a value; timing yellow is a
+  value and never prose.
+
+**The yellow is the dimmest of the three, deliberately** — 6.9:1 against
+green's 9.8:1 and purple's 7.3:1. The first attempt was a lemon at 13.9:1,
+brighter than both marks: right hue, upside-down hierarchy. Yellow is the
+*ordinary* state, and on a rack of twelve laps that is fifty figures
+competing with the two that matter. A timing screen carries a handful of
+rows; this carries a stint.
+
+Rule 5 did not lapse — it moved off colour entirely. The sectors are the
+app's own cut of the lap, and that is said **in words**, on the spec line
+above the rack ("Sectors · thirds of the lap — not GT7's") and in each
+head's tooltip. A sentence cannot be mistaken for a timing mark.
 
 ## Ground and material
 

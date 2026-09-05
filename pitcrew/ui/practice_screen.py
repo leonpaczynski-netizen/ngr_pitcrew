@@ -327,25 +327,37 @@ class Bests:
 
 def rank_ink(value: int | None, stint: int | None, ever: int | None,
              *, counted: bool) -> str | None:
-    """Which timing colour this figure earns, if any.
+    """The motorsport timing colour this figure earns.
 
-    **The ink, not a fill behind it.** It was a fill, and the driver read the
-    result exactly right: every sector on the rack was purple, because every
-    sector is the app's own cut and therefore DERIVED, so nothing stood out
-    and the whole column looked like a column of best sectors. Purple means
-    fastest on a timing screen and that is not negotiable in a column of
-    times. `theme.BEST_EVER` carries the full argument.
+    **The FIA convention, verbatim** — the same one on every F1 timing screen
+    and on GT7's own HUD. `theme.BEST_EVER` carries the full history of how
+    this app got it wrong twice before looking it up.
 
-    **Purple outranks green**, the way it does on a timing screen: a lap that
-    is the fastest ever here is also the fastest of its stint, and it is the
-    larger claim that gets said.
+        purple   the outright best — here, the fastest ever set in this car
+        green    a personal best — here, the best of its own stint
+        yellow   slower than that
+        None     no reference to be measured against yet
 
-    **Only a counted lap can hold a mark.** An out-lap, an in-lap, a lap with
-    a spin in it or one struck by hand is not a time this car set - and the
-    out-lap is the one that matters, because a pit-exit-to-line fragment is
-    SHORT. `min(lap_time_ms)` over the Daytona event once returned a 93.100 s
-    fragment as the best lap of the day, and a purple cell would have made
-    that look like an achievement.
+    **Purple outranks green**, as it does on a timing screen: a lap that is
+    the fastest ever here is also the fastest of its stint, and the larger
+    claim is the one that gets said.
+
+    **Yellow is not a criticism.** On a live timing screen it is the ordinary
+    state — most laps are slower than your best, by definition — and a rack
+    that is mostly yellow is a rack of ordinary laps, which is what a stint
+    is. Reading it as an alarm is the mistake; it is the baseline the two
+    faster colours are legible against.
+
+    **`None` means no reference, and it is not the same as yellow.** The
+    first counted lap of a rack has nothing to be slower than. Painting it
+    yellow would say it failed to beat something that does not exist.
+
+    **Only a counted lap can hold a mark at all.** An out-lap, an in-lap, a
+    lap with a spin in it or one struck by hand is not a time this car set -
+    and the out-lap is the one that matters, because a pit-exit-to-line
+    fragment is SHORT. `min(lap_time_ms)` over the Daytona event once
+    returned a 93.100 s fragment as the best lap of the day, and a purple
+    cell would have made that look like an achievement.
     """
     if value is None or value <= 0 or not counted:
         return None
@@ -353,6 +365,8 @@ def rank_ink(value: int | None, stint: int | None, ever: int | None,
         return theme.BEST_EVER
     if stint is not None and value <= stint:
         return theme.BEST_STINT
+    if stint is not None or ever is not None:
+        return theme.SLOWER
     return None
 
 
@@ -1218,18 +1232,21 @@ class PracticeScreen(QWidget):
             return label
 
         def sector_cap(text: str) -> StencilLabel:
-            """**The head carries the claim the value used to carry.**
+            """**Said in words, not in a hue — purple is spoken for.**
 
             GT7 broadcasts no sectors, so S1/S2/S3 are the app's own cut of
             the lap, and rule 5 says that may not be presented as measured.
-            It used to be said in the value's ink - every sector purple - and
-            that collided head-on with what purple means in a column of
-            times. A timing screen declares what a column IS at the head of
-            it, so that is where it is said: the head is derived, the values
-            underneath carry their rank, and the spec line names the cut in
-            words for anyone who wants to know which lines were used.
+            This head briefly carried `DERIVED` purple to say so, which was
+            the same mistake one level up: purple means FASTEST in a column
+            of times, and a purple heading over a column where purple is the
+            best sector is the collision again in miniature.
+
+            So the claim is made where it cannot be misread - in words, on
+            the spec line above the rack ("Sectors · thirds of the lap - not
+            GT7's"), and in this head's own tooltip. A sentence cannot be
+            confused with a timing mark.
             """
-            label = cap(text, W_SECTOR, colour=theme.DERIVED)
+            label = cap(text, W_SECTOR)
             label.setToolTip(
                 "The app's own cut of the lap, not GT7's - it broadcasts no "
                 "sectors. Which lines were used is named on the spec line "
