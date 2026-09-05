@@ -370,6 +370,30 @@ def rank_ink(value: int | None, stint: int | None, ever: int | None,
     return None
 
 
+def _mark_note(rank: str | None, value: int, record: int | None,
+               what: str) -> str:
+    """What a timing colour means, in words, for whoever hovers it.
+
+    Colour is never the only channel. It also carries the one claim that has
+    no colour of its own: whether this is the fastest ever set here. That is
+    a track record rather than a session mark, and timing screens do not
+    paint one purple - so it is said rather than shown.
+    """
+    if rank == theme.BEST_EVER:
+        said = f"Fastest {what} of this session."
+    elif rank == theme.BEST_STINT:
+        said = f"Best {what} of this stint, but not of the session."
+    elif rank == theme.SLOWER:
+        said = f"Slower than the best {what} of its own stint."
+    else:
+        said = f"No faster {what} to be measured against yet."
+    if record is not None and value <= record:
+        said += " And the fastest ever set here, in this car."
+    elif record is not None:
+        said += f" The fastest ever here is {record / 1000:.3f} s."
+    return said
+
+
 def format_sector(ms: int | None) -> str:
     """Seconds to three places, or the em dash that means it was refused.
 
@@ -470,6 +494,7 @@ class RackRow(QWidget):
                  run_start: bool = False,
                  stint_best: "Bests | None" = None,
                  ever_best: "Bests | None" = None,
+                 all_time: "Bests | None" = None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.row = row
@@ -496,15 +521,22 @@ class RackRow(QWidget):
         self.lap_label.setFixedWidth(W_LAP)
         line.addWidget(self.lap_label)
 
+        # `ever_best` is the OUTRIGHT benchmark - the fastest on this rack,
+        # which is what purple means. `all_time` is the archive's record for
+        # this circuit, which is a track record rather than a session mark
+        # and rides in the tooltip instead of taking a colour of its own.
         stint_best = stint_best or Bests()
         ever_best = ever_best or Bests()
+        all_time = all_time or Bests()
 
         self.time_label = Measured(format_lap_time(row.lap_time_ms),
                                    size=theme.DATA_LARGE_PX, bold=True)
         self.time_label.setFixedWidth(W_TIME)
-        self.time_label.set_rank(rank_ink(
-            row.lap_time_ms, stint_best.lap_ms, ever_best.lap_ms,
-            counted=row.counted))
+        rank = rank_ink(row.lap_time_ms, stint_best.lap_ms, ever_best.lap_ms,
+                        counted=row.counted)
+        self.time_label.set_rank(rank)
+        self.time_label.setToolTip(
+            _mark_note(rank, row.lap_time_ms, all_time.lap_ms, "lap"))
         line.addWidget(self.time_label)
 
         delta = row.lap_time_ms - best_ms if best_ms else 0
@@ -535,9 +567,11 @@ class RackRow(QWidget):
                 colour=theme.STENCIL_DIM)
             label.setFixedWidth(W_SECTOR)
             if value is not None:
-                label.set_rank(rank_ink(
-                    value, stint_best.sectors[index], ever_best.sectors[index],
-                    counted=row.counted))
+                rank = rank_ink(value, stint_best.sectors[index],
+                                ever_best.sectors[index], counted=row.counted)
+                label.set_rank(rank)
+                label.setToolTip(_mark_note(
+                    rank, value, all_time.sectors[index], f"S{index + 1}"))
             if value is None:
                 label.setToolTip(
                     "No sector times for this lap. GT7 broadcasts no sectors, "
@@ -1476,11 +1510,45 @@ class PracticeScreen(QWidget):
             self.refresh()
 
     def _ever_best(self, row: LapRow) -> Bests:
+        """The fastest ever set here, from the archive. **Not what earns
+        purple** - see `_outright_best`. It survives as the tooltip on a
+        marked figure, so a session best that is also an all-time best says
+        so in words rather than needing a fifth colour."""
         found = getattr(self, "_personal_bests", {}).get(row.sector_source)
         if not found:
             return Bests()
         return Bests(lap_ms=found.get("lap_ms"),
                      sectors=tuple(found.get("sectors") or (None, None, None)))
+
+    def _outright_best(self, row: LapRow) -> Bests:
+        """**What earns purple: the fastest on this rack.**
+
+        Purple means *fastest anyone has set in the session*, and the session
+        is what is on this screen. It was wired to the archive instead - the
+        fastest ever set here in this car - which is a different claim and,
+        on a car with nothing on file yet, is no claim at all. The result was
+        a rack with no purple anywhere: every stint painted its own green
+        best and nothing said which of them was the quickest of the day.
+
+        An all-time best is a track record, not a session mark, and timing
+        screens do not colour it purple. It rides in the tooltip instead.
+
+        Sectors are compared only against laps cut on the same lines. A rack
+        can hold two sector models - a catalogue entry added between one
+        session and the next - and a sector cut at 1,780 m is not comparable
+        with one cut at 2,097.
+        """
+        counted = [lap for lap in self._rows if lap.counted]
+        times = [lap.lap_time_ms for lap in counted if lap.lap_time_ms > 0]
+        same = [lap for lap in counted if lap.sector_source == row.sector_source]
+        sectors = []
+        for index in range(3):
+            seen = [lap.sectors_ms[index] for lap in same
+                    if lap.sectors_ms[index] is not None
+                    and lap.sectors_ms[index] > 0]
+            sectors.append(min(seen) if seen else None)
+        return Bests(lap_ms=min(times) if times else None,
+                     sectors=tuple(sectors))
 
     @staticmethod
     def _stint_best(laps: list, stamp: str | None) -> Bests:
@@ -1514,7 +1582,8 @@ class PracticeScreen(QWidget):
         widget = RackRow(row, best, stint_end=row.lap_id in ends,
                          run_start=row.lap_id in starts,
                          stint_best=stint_best,
-                         ever_best=self._ever_best(row))
+                         ever_best=self._outright_best(row),
+                         all_time=self._ever_best(row))
         widget.changed.connect(self._on_row_changed)
         widget.restructured.connect(self._on_row_restructured)
         return widget

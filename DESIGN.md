@@ -77,12 +77,21 @@ driver already knows how to read it and it is not ours to reinterpret:
 
 | Colour | Means | Here |
 |---|---|---|
-| Purple | fastest anyone has set | fastest ever here, in this car |
-| Green | a personal best | the best of its own stint |
+| Purple | fastest anyone has set in the session | the fastest lap and sector **on this rack** |
+| Green | a personal best | the best of its own stint, where that is not the session's |
 | Yellow | slower than your own best | everything else |
 | White | no reference set yet | the first counted lap |
 
-**It took two wrong attempts to get here, and both are worth keeping.**
+**Purple is a claim about the session, not about the archive.** It was
+first wired to the fastest ever set here in this car, which is a different
+claim and — on a car with nothing on file — no claim at all: the rack showed a
+green in every stint and nothing at all saying which of them held the quickest
+lap of the day. An all-time best is a track record, and timing screens do not
+paint one purple. It is said in the tooltip instead, which is also where a
+purple figure says whether it is the record too. Colour is never the only
+channel, and the claim that has no colour is the one that gets words.
+
+**It took three wrong attempts to get here, and all three are worth keeping.**
 
 First the rank was two very dark *fills* behind the number, on the argument
 that purple ink was spoken for by the DERIVED register — while

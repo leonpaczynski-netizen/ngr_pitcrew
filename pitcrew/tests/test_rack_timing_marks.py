@@ -142,12 +142,19 @@ def test_the_out_lap_holds_no_mark_even_when_it_is_the_shortest(app):
     ])
     laps, sectors = zip(*_fills(screen))
     assert laps[0] is None                  # the fragment holds nothing
-    assert laps[2] == theme.BEST_STINT      # the real quickest does
+    assert laps[2] == theme.BEST_EVER       # the real quickest is the session's
 
 
-def test_green_is_per_stint_not_per_rack(app):
-    """Two stints, and each keeps its own green - which is the whole point of
-    the colour. A refuel between them is what splits the run."""
+def test_green_is_the_stints_own_best_and_purple_is_the_sessions(app):
+    """**The two-tier reading, and the whole point of having two colours.**
+
+    Purple is the fastest of the session; green is the best of a stint that
+    was not the fastest of the session. A rack with a green in every stint
+    and no purple anywhere - which is what shipped first - cannot say which
+    of those stints held the quickest lap of the day.
+
+    A refuel between them is what splits the run.
+    """
     screen = PracticeScreen()
     screen.set_laps([
         _lap(1, 100_000, fuel_start=90.0),
@@ -156,24 +163,48 @@ def test_green_is_per_stint_not_per_rack(app):
         # starts a new run - which is what a stint is.
         _lap(3, 101_000, fuel_start=90.0),
         _lap(4, 100_500, fuel_start=87.0),
+        _lap(5, 101_500, fuel_start=84.0),
     ])
     laps = [fill for fill, _ in _fills(screen)]
-    assert laps[1] == theme.BEST_STINT      # quickest of the first stint
-    assert laps[3] == theme.BEST_STINT      # and of the second, though slower
+    assert laps[1] == theme.BEST_EVER       # quickest of the whole session
+    assert laps[3] == theme.BEST_STINT      # best of stint two, and slower
+    assert laps[4] == theme.SLOWER          # slower than its own stint's best
+    # Lap 3 is the refuel lap, which OPENS stint two - so it is an out-lap by
+    # the rack's own rule and holds no mark at all, which is not the same
+    # claim as being slower than something.
     assert laps[2] is None
 
 
-def test_purple_comes_from_the_archive_and_not_from_the_rack(app):
-    """Nothing on the rack can be purple on its own - "ever" is a claim about
-    every practice session, which only the store can answer."""
+def test_purple_is_the_session_best_and_comes_from_the_rack(app):
+    """**The reported defect.** Purple was wired to the archive - the fastest
+    ever set here - so a car with nothing on file got no purple at all, and a
+    rack showed a green per stint with nothing saying which was the quickest
+    of the day. Purple means *fastest anyone has set in the session*, and the
+    session is what is on this screen."""
     screen = PracticeScreen()
-    rows = [_lap(1, 100_000), _lap(2, 99_000)]
-    screen.set_laps(rows)
-    assert all(mark != theme.BEST_EVER for mark, _ in _fills(screen))
+    screen.set_laps([_lap(1, 100_000), _lap(2, 99_000)])
+    marks = [mark for mark, _ in _fills(screen)]
+    assert marks[1] == theme.BEST_EVER, "the session best is not purple"
+    assert theme.BEST_EVER in marks
 
+
+def test_the_all_time_best_is_said_in_words_not_given_a_colour(app):
+    """A track record is not a session mark and timing screens do not paint
+    one purple. It rides in the tooltip so it needs no fifth colour."""
+    screen = PracticeScreen()
+    screen.set_laps([_lap(1, 100_000), _lap(2, 99_000)])
     screen.set_personal_bests({STAMP: {"lap_ms": 99_000,
                                        "sectors": (None, None, None)}})
-    assert _fills(screen)[1][0] == theme.BEST_EVER
+    marked = screen._row_widgets[1].time_label
+    assert marked._rank == theme.BEST_EVER
+    assert "fastest ever set here" in marked.toolTip()
+
+    screen.set_personal_bests({STAMP: {"lap_ms": 90_000,
+                                       "sectors": (None, None, None)}})
+    still = screen._row_widgets[1].time_label
+    # Still the session best, and told plainly that it is not the record.
+    assert still._rank == theme.BEST_EVER
+    assert "fastest ever here is" in still.toolTip()
 
 
 def test_a_sector_is_marked_against_its_own_lines(app):
@@ -189,13 +220,11 @@ def test_a_sector_is_marked_against_its_own_lines(app):
         _lap(3, 105_000, (44_000, 40_000, 33_000), stamp=OTHER, session=2),
         _lap(4, 100_000, (39_000, 36_000, 30_000), stamp=OTHER, session=2),
     ])
-    screen.set_personal_bests({
-        STAMP: {"lap_ms": None, "sectors": (40_000, None, None)},
-        OTHER: {"lap_ms": None, "sectors": (38_000, None, None)},
-    })
     fills = _fills(screen)
-    assert fills[1][1][0] == theme.BEST_EVER    # 40.000 is the best on ITS lines
-    assert fills[3][1][0] != theme.BEST_EVER    # 39.000 is not, on the other's
+    # Each half is the outright best on its OWN lines, so both are purple -
+    # and neither is measured against the other's road.
+    assert fills[1][1][0] == theme.BEST_EVER    # 40.000, best on STAMP's lines
+    assert fills[3][1][0] == theme.BEST_EVER    # 39.000, best on OTHER's
 
 
 def test_a_sector_the_model_refused_is_never_marked(app):
@@ -249,9 +278,9 @@ def test_a_mark_is_the_ink_and_it_survives_a_re_ink(app):
     screen = PracticeScreen()
     screen.set_laps([_lap(1, 100_000), _lap(2, 99_000)])
     marked = screen._row_widgets[1].time_label
-    assert theme.BEST_STINT in marked.styleSheet()
+    assert theme.BEST_EVER in marked.styleSheet()
     marked.set_ink(theme.STENCIL_DIM)
-    assert theme.BEST_STINT in marked.styleSheet(), "the re-ink wiped the mark"
+    assert theme.BEST_EVER in marked.styleSheet(), "the re-ink wiped the mark"
 
 
 # ------------------------------------------------------------- following the tail
