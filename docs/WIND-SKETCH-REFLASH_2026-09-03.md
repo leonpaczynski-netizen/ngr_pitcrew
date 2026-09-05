@@ -37,6 +37,48 @@ you feel. The reflash changes what you feel and nothing in the log.
 > branch, raising the shield frequency to 1900 Hz in the setup tool. The
 > VIN jumper's position could not be made out in the photos.
 
+> ### 6 Sep 2026 — the driver's pattern sharpens this, and corrects one line
+>
+> *"Coming from a fast straight to a tight turn that leads to quick
+> acceleration out of the corner — coming out of the corner is where the fans
+> seem to die and have to reboot."*
+>
+> **That is not "worst at high duty", and the difference matters.** On the
+> straight the duty is at its highest and the fans survive it; they drop on
+> the way back up. The supply hypothesis survives this — it is strengthened by
+> it — but the mechanism is re-acceleration, not steady load:
+>
+> - A blower draws its largest current when the **rotor is slow and the duty
+>   is high**, because back-EMF is low. At speed on a straight the same duty
+>   draws considerably less.
+> - Out of a slow corner the rotors have spun down and the duty is climbing,
+>   which is the highest-current condition of the whole lap.
+> - And it is not brief. Measured off `logs/pitcrew-wind-frames.log`,
+>   72,437 frames on 5 Sep: the app ramps duty at **+1 per 50 ms frame**
+>   (median +1, p99 +1, i.e. ~20 units/s). Corner duty ~82 to straight duty
+>   ~185 is therefore a **~5 second sustained high-current window**. A 3 A
+>   supply has ample time to reach current limit and hiccup.
+>
+> **The serial link is ruled out for this symptom**, on the same log: 4
+> non-acked frames in 72,437 over two hours, and all three driver-faults sit
+> at high *steady* duty on a straight (184 at 160 km/h) or at 0 km/h. **None
+> is at a corner exit.** The app is also not slamming the fans — a +1 step per
+> frame is gentle, so there is no commanded transient to blame.
+>
+> **This makes it a STARTING problem in `wind_sweep.py`'s sense**, and that
+> tool was built for exactly this discrimination: a duty that misbehaves on
+> the way up but not on the way down is a starting problem; one that
+> misbehaves in both directions is a running problem, and they want opposite
+> fixes. So the order of work is unchanged but now carries a prediction that
+> can fail:
+>
+> 1. `python tools/wind_sweep.py sweep --channels 0,1 --step 8` — **expect the
+>    marks to cluster on the way UP and not on the way down.** If they appear
+>    in both directions, this refinement is wrong and it is a running fault.
+> 2. The 12 V 5 A supply. If it is supply current limit on re-acceleration,
+>    this removes it.
+> 3. Only then the 1900 Hz shield frequency.
+
 ## 0. Two things to check before touching anything
 
 Both decide whether this procedure applies at all.
