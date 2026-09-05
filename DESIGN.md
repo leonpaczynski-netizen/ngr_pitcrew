@@ -36,7 +36,7 @@ This is the system. Everything else serves it.
 |---|---|---|---|
 | Stencil | `#E8E4DC` warm white, mono | **Measured** — came off the telemetry stream | Lap times, deltas, fuel used |
 | Crayon | `#A3E635` NGR lime | **Declared** — the driver entered it | Every editor, compound tags, wear gauge |
-| Derived | `#B08BD8` timing-screen purple | **Derived** — the app worked it out | Box-in call, modelled stint, assumed inputs |
+| Derived | `#B08BD8` purple | **Derived** — the app worked it out | Box-in call, modelled stint, assumed inputs, the S1/S2/S3 column heads |
 | Chalk | `#7FC7D9` | Provisional annotation, hints, parse results | Status lines |
 | Struck | `#807870` | Removed from the count, disabled, placeholder | Excluded laps, empty fields |
 
@@ -68,6 +68,28 @@ nor declared here. Setting them in stencil white would make them look like
 they came off the stream. They are set as `BodyLabel` at `STENCIL_DIM` — a
 sentence, not a value. The registers apply to values; nothing else is
 admitted to them.
+
+### The rack is the one place the timing convention outranks the registers
+
+**Purple means fastest, and that is not available to mean anything else in a
+column of times.** The registers were applied to the rack the way they are
+applied everywhere else: a sector is the app's own cut of the lap, so a sector
+is derived, so a sector is purple — and the rank was pushed into two very dark
+fills behind the number. Every sector on the rack came out purple. The driver
+read it exactly as a driver would: *every sector looks like it's the best
+sector.*
+
+The justification had eaten itself. Purple-for-derived was argued **from**
+timing-screen convention, and then the timing rank was denied ink **because**
+purple was taken. Only one of those can stand, and on a rack of lap and sector
+times it is the one the driver has read ten thousand times: **purple fastest
+ever here, blue fastest this stint, ordinary otherwise.**
+
+Rule 5 did not lapse; it moved to the channel a timing screen actually uses to
+say what a column is. The S1/S2/S3 **heads** are derived purple, the spec line
+names the cut in words, and an ordinary sector sits at `STENCIL_DIM` — visibly
+a lesser claim than a measured lap time in `STENCIL`, never white, never
+purple. The column says whose cut it is; the value says how quick it was.
 
 ## Ground and material
 

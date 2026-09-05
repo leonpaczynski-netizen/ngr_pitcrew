@@ -147,38 +147,41 @@ class Measured(QLabel):
         super().__init__(text, parent)
         weight = QFont.Weight.DemiBold if bold else QFont.Weight.Normal
         self.setFont(theme.data_font(size, weight=weight))
-        # Kept so `set_fill` can put the register's ink back when the rank
-        # goes away - a row can stop being the best when a quicker lap lands.
+        # Kept so `set_rank` can put the ordinary ink back when the mark goes
+        # away - a row stops being the best the moment a quicker lap lands.
         self._ink = colour
-        self._fill: str | None = None
+        self._rank: str | None = None
         self.setStyleSheet(f"color: {colour}; background: transparent;")
 
-
     def set_ink(self, colour: str) -> None:
-        """Change the register's ink without losing the timing fill.
+        """Change the ordinary ink without losing the timing mark.
 
         The rack re-inks a whole row every time a mark changes - struck laps
         and out-laps go dim - and it did that with a raw `setStyleSheet`,
-        which silently wiped the background. So a lap held its purple until
-        the first time anything on its row was touched, and then lost it.
+        which silently wiped the mark. So a lap held its purple until the
+        first time anything on its row was touched, and then lost it.
         """
         self._ink = colour
-        self.set_fill(self._fill)
+        self.set_rank(self._rank)
 
-    def set_fill(self, fill: str | None) -> None:
-        """Paint a timing rank behind the number, without touching its ink.
+    def set_rank(self, rank: str | None) -> None:
+        """Mark this figure as the fastest ever, the fastest this stint, or
+        neither — **in the ink, which is where the driver reads it.**
 
-        A filled cell switches the text to `STENCIL` because the fill is dark
-        and the register has already done its job - what a purple cell says is
-        "fastest ever", and it says it whether the number inside it was
-        measured or derived.
+        This was a fill behind the number, on the argument that purple text
+        was spoken for by the DERIVED register. The driver's report settles
+        it the other way: on a column of times, purple already means fastest
+        to him, so a rack whose every sector was purple read as a rack where
+        every sector was the best one. See `theme.BEST_EVER`.
+
+        `None` restores the ordinary ink rather than clearing to a default -
+        an ordinary sector is dimmer than a measured lap time, and losing
+        that would make the app's own cut of the lap look like a figure off
+        the stream.
         """
-        self._fill = fill
-        ink = theme.STENCIL if fill else self._ink
-        ground = fill or "transparent"
+        self._rank = rank
         self.setStyleSheet(
-            f"color: {ink}; background: {ground};"
-            + ("border-radius: 3px;" if fill else ""))
+            f"color: {rank or self._ink}; background: transparent;")
 
 
 class Declared(Measured):

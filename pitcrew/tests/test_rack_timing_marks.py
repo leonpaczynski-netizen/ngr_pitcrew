@@ -1,11 +1,14 @@
-"""Purple and green on the rack, and the tail the rack follows.
+"""Purple and blue on the rack, and the tail the rack follows.
 
-The driver asked for the timing convention he reads everywhere else: purple
-for a personal best, green for the best of the stint. It could not be done
-with ink — purple text already means DERIVED and `CRAYON` green already means
-DECLARED — so the rank is painted behind the number and the register is left
-alone. These tests are mostly about which cells earn a fill and, more
-importantly, which must not.
+The driver asked for the timing convention he reads everywhere else: **purple
+fastest, then blue, then ordinary.** It was first built as a fill behind the
+number, on the argument that purple ink was spoken for by the DERIVED
+register — and that inverted the thing it was protecting. Every sector on the
+rack is the app's own cut of the lap, so every sector was DERIVED, so every
+sector was purple, and the driver reported the result exactly: *every sector
+looks like it is the best sector*. The rank is the ink now; the claim that the
+cut is ours moved to the column head. These tests are mostly about which
+figures earn a mark and, more importantly, which must not.
 
 The one that matters is the out-lap. A pit-exit-to-line fragment is SHORT:
 `min(lap_time_ms)` over the Daytona event once returned 93.100 s as the best
@@ -28,7 +31,7 @@ from pitcrew.ui.practice_screen import (  # noqa: E402
     Bests,
     LapRow,
     PracticeScreen,
-    rank_fill,
+    rank_ink,
 )
 
 STAMP = "somewhere-full-course:landmark:2000/4000"
@@ -61,9 +64,9 @@ def _lap(num, ms, sectors=(40_000, 36_000, 30_000), *, out=False,
 
 
 def _fills(screen):
-    """`(lap fill, [three sector fills])` per drawn row."""
-    return [(row.time_label._fill,
-             [label._fill for label in row.sector_labels])
+    """`(lap mark, [three sector marks])` per drawn row."""
+    return [(row.time_label._rank,
+             [label._rank for label in row.sector_labels])
             for row in screen._row_widgets]
 
 
@@ -72,31 +75,31 @@ def _fills(screen):
 def test_purple_outranks_green():
     """A lap that is the fastest ever here is also the fastest of its stint,
     and it is the larger claim that gets said."""
-    assert rank_fill(100, 100, 100, counted=True) == theme.BEST_EVER
+    assert rank_ink(100, 100, 100, counted=True) == theme.BEST_EVER
 
 
 def test_green_where_it_leads_the_stint_but_not_the_archive():
-    assert rank_fill(100, 100, 95, counted=True) == theme.BEST_STINT
+    assert rank_ink(100, 100, 95, counted=True) == theme.BEST_STINT
 
 
 def test_nothing_where_it_leads_neither():
-    assert rank_fill(110, 100, 95, counted=True) is None
+    assert rank_ink(110, 100, 95, counted=True) is None
 
 
 def test_an_uncounted_lap_can_never_hold_a_mark():
     """The out-lap case, and the reason the whole rule exists."""
-    assert rank_fill(90, 100, 95, counted=False) is None
+    assert rank_ink(90, 100, 95, counted=False) is None
 
 
 def test_a_missing_or_zero_figure_holds_no_mark():
     """A refused sector and a lap whose time was cleared as a phantom are
     both `None`/0 here, and neither is a fast lap."""
-    assert rank_fill(None, 100, 95, counted=True) is None
-    assert rank_fill(0, 100, 95, counted=True) is None
+    assert rank_ink(None, 100, 95, counted=True) is None
+    assert rank_ink(0, 100, 95, counted=True) is None
 
 
 def test_nothing_to_beat_yet_holds_no_mark():
-    assert rank_fill(100, None, None, counted=True) is None
+    assert rank_ink(100, None, None, counted=True) is None
 
 
 # ------------------------------------------------------------------ on a rack
@@ -139,7 +142,7 @@ def test_purple_comes_from_the_archive_and_not_from_the_rack(app):
     screen = PracticeScreen()
     rows = [_lap(1, 100_000), _lap(2, 99_000)]
     screen.set_laps(rows)
-    assert all(fill != theme.BEST_EVER for fill, _ in _fills(screen))
+    assert all(mark != theme.BEST_EVER for mark, _ in _fills(screen))
 
     screen.set_personal_bests({STAMP: {"lap_ms": 99_000,
                                        "sectors": (None, None, None)}})
@@ -174,17 +177,49 @@ def test_a_sector_the_model_refused_is_never_marked(app):
     assert _fills(screen)[0][1] == [None, None, None]
 
 
-def test_the_ink_register_survives_a_mark(app):
-    """A filled cell switches to `STENCIL` so it reads on the dark ground -
-    but an unfilled sector is still DERIVED purple text, because it is still
-    a figure the app worked out."""
+def test_an_ordinary_sector_is_neither_purple_nor_white(app):
+    """**The defect the driver reported, asserted so it cannot come back.**
+
+    Purple meant DERIVED, every sector is derived, so every sector was
+    purple - and purple is what a timing screen uses for fastest, so the
+    whole column read as best sectors. It may not be white either: a sector
+    is the app's own cut of the lap and white is the ink for what came off
+    the stream.
+    """
     screen = PracticeScreen()
     screen.set_laps([_lap(1, 100_000), _lap(2, 99_000)])
     plain = screen._row_widgets[0].sector_labels[0]
-    assert theme.DERIVED in plain.styleSheet()
+    assert theme.BEST_EVER not in plain.styleSheet()
+    assert theme.DERIVED not in plain.styleSheet()
+    assert theme.STENCIL not in plain.styleSheet()
+    assert theme.STENCIL_DIM in plain.styleSheet()
+
+
+def test_the_column_head_carries_the_claim_the_value_gave_up(app):
+    """Rule 5 did not stop applying - it moved to where a timing screen
+    declares what a column is."""
+    from pitcrew.ui.widgets import StencilLabel
+
+    screen = PracticeScreen()
+    # The one the screen actually built and parented, not a fresh throwaway:
+    # an unparented head widget is collected out from under the assertion.
+    derived = [w for w in screen.head_view.widget().findChildren(StencilLabel)
+               if w.text() in ("S1", "S2", "S3")]
+    assert len(derived) == 3, "the sector heads are not there to carry it"
+    for head in derived:
+        assert theme.DERIVED in head.styleSheet()
+
+
+def test_a_mark_is_the_ink_and_it_survives_a_re_ink(app):
+    """The rack re-inks a whole row whenever a mark changes. A raw
+    `setStyleSheet` used to wipe the mark, so a lap held its purple until the
+    first time anything on its row was touched."""
+    screen = PracticeScreen()
+    screen.set_laps([_lap(1, 100_000), _lap(2, 99_000)])
     marked = screen._row_widgets[1].time_label
     assert theme.BEST_STINT in marked.styleSheet()
-    assert theme.STENCIL in marked.styleSheet()
+    marked.set_ink(theme.STENCIL_DIM)
+    assert theme.BEST_STINT in marked.styleSheet(), "the re-ink wiped the mark"
 
 
 # ------------------------------------------------------------- following the tail

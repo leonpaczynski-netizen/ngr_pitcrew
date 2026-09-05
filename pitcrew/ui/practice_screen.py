@@ -325,9 +325,16 @@ class Bests:
     sectors: tuple = (None, None, None)
 
 
-def rank_fill(value: int | None, stint: int | None, ever: int | None,
-              *, counted: bool) -> str | None:
+def rank_ink(value: int | None, stint: int | None, ever: int | None,
+             *, counted: bool) -> str | None:
     """Which timing colour this figure earns, if any.
+
+    **The ink, not a fill behind it.** It was a fill, and the driver read the
+    result exactly right: every sector on the rack was purple, because every
+    sector is the app's own cut and therefore DERIVED, so nothing stood out
+    and the whole column looked like a column of best sectors. Purple means
+    fastest on a timing screen and that is not negotiable in a column of
+    times. `theme.BEST_EVER` carries the full argument.
 
     **Purple outranks green**, the way it does on a timing screen: a lap that
     is the fastest ever here is also the fastest of its stint, and it is the
@@ -481,7 +488,7 @@ class RackRow(QWidget):
         self.time_label = Measured(format_lap_time(row.lap_time_ms),
                                    size=theme.DATA_LARGE_PX, bold=True)
         self.time_label.setFixedWidth(W_TIME)
-        self.time_label.set_fill(rank_fill(
+        self.time_label.set_rank(rank_ink(
             row.lap_time_ms, stint_best.lap_ms, ever_best.lap_ms,
             counted=row.counted))
         line.addWidget(self.time_label)
@@ -499,17 +506,22 @@ class RackRow(QWidget):
         # that means "off the telemetry stream" - CLAUDE.md rule 5, and the
         # exact substitution the three-ink register exists to prevent.
         #
-        # The rank is painted BEHIND the number rather than into it - see
-        # `theme.BEST_EVER`. Purple text already means DERIVED and green text
-        # already means DECLARED, so a green lap time would have read as one
-        # he typed. A filled cell is what a timing screen does anyway.
+        # **So an ordinary sector is dim, not purple, and not white.** Purple
+        # was the whole column, because the whole column is derived, and the
+        # driver read a rack of purple sectors as a rack of best sectors -
+        # which is what purple means on every timing screen he has ever
+        # looked at. The claim "this cut is ours" moved to where a timing
+        # screen makes that claim: the column head, which carries `DERIVED`,
+        # and the spec line, which names the cut in words. What is left in
+        # the value is the rank. See `theme.BEST_EVER`.
         self.sector_labels = []
         for index, value in enumerate(row.sectors_ms):
-            label = (Derived(format_sector(value)) if value is not None
-                     else Measured("—", colour=theme.STENCIL_DIM))
+            label = Measured(
+                format_sector(value) if value is not None else "—",
+                colour=theme.STENCIL_DIM)
             label.setFixedWidth(W_SECTOR)
             if value is not None:
-                label.set_fill(rank_fill(
+                label.set_rank(rank_ink(
                     value, stint_best.sectors[index], ever_best.sectors[index],
                     counted=row.counted))
             if value is None:
@@ -739,9 +751,9 @@ class RackRow(QWidget):
         # stint has to take its green with it, or the rack claims a best for
         # a lap it is simultaneously drawing as not counted.
         if uncounted:
-            self.time_label.set_fill(None)
+            self.time_label.set_rank(None)
             for label in self.sector_labels:
-                label.set_fill(None)
+                label.set_rank(None)
 
         if self.row.structural_reason():
             # An out-lap, in-lap or incident is structurally uncounted; there
@@ -1199,10 +1211,29 @@ class PracticeScreen(QWidget):
         row.setContentsMargins(0, 0, 16, 0)
         row.setSpacing(theme.GAP)
 
-        def cap(text: str, width: int) -> StencilLabel:
-            label = StencilLabel(text, size=10, colour=theme.STENCIL_DIM,
-                                 tracking=14.0)
+        def cap(text: str, width: int, *,
+                colour: str = theme.STENCIL_DIM) -> StencilLabel:
+            label = StencilLabel(text, size=10, colour=colour, tracking=14.0)
             label.setFixedWidth(width)
+            return label
+
+        def sector_cap(text: str) -> StencilLabel:
+            """**The head carries the claim the value used to carry.**
+
+            GT7 broadcasts no sectors, so S1/S2/S3 are the app's own cut of
+            the lap, and rule 5 says that may not be presented as measured.
+            It used to be said in the value's ink - every sector purple - and
+            that collided head-on with what purple means in a column of
+            times. A timing screen declares what a column IS at the head of
+            it, so that is where it is said: the head is derived, the values
+            underneath carry their rank, and the spec line names the cut in
+            words for anyone who wants to know which lines were used.
+            """
+            label = cap(text, W_SECTOR, colour=theme.DERIVED)
+            label.setToolTip(
+                "The app's own cut of the lap, not GT7's - it broadcasts no "
+                "sectors. Which lines were used is named on the spec line "
+                "above the rack.")
             return label
 
         # Not "SET". Three columns on this rack were called some form of
@@ -1212,18 +1243,21 @@ class PracticeScreen(QWidget):
         row.addWidget(cap("LAP", W_LAP))
         row.addWidget(cap("TIME", W_TIME))
         row.addWidget(cap("DELTA", W_DELTA))
-        row.addWidget(cap("S1", W_SECTOR))
-        row.addWidget(cap("S2", W_SECTOR))
-        row.addWidget(cap("S3", W_SECTOR))
+        row.addWidget(sector_cap("S1"))
+        row.addWidget(sector_cap("S2"))
+        row.addWidget(sector_cap("S3"))
         # Not two columns both called "FUEL". See the row's own note.
         row.addWidget(cap("USED", W_FUEL))
         row.addWidget(cap("ON BOARD", W_TANK))
         row.addWidget(cap("", W_MARKER))
-        row.addStretch(1)
         row.addWidget(cap("COMPOUND", W_COMPOUND))
         row.addWidget(cap("FRESH SET", W_SET_ON))
         row.addWidget(cap("WEAR AT END", W_WEAR))
         row.addWidget(cap("", W_ACTION))
+        # Left-packed, exactly as the rows are. The heads carried a stretch
+        # here while the rows had one in the middle, so the two disagreed
+        # about where every column after the marker sat.
+        row.addStretch(1)
         return head
 
     def _footer(self) -> QHBoxLayout:

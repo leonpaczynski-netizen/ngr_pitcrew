@@ -79,21 +79,36 @@ CRAYON = "#A3E635"          # DECLARED - the driver typed this
 # with it: that band is a dark desaturated mid-green painted as a block, this
 # is bright acid text, and every band carries its two-letter code anyway.
 DERIVED = "#B08BD8"         # DERIVED - the app worked this out
-# ---- the timing marks, and why they are FILLS and not inks -----------------
+# ---- the timing marks: purple, then blue, then ordinary --------------------
 #
-# Purple for a personal best and green for a session best is the sport's own
-# convention and the driver reads it on every timing screen there is. It
-# cannot be done with text colour here: purple text already means DERIVED and
-# green text already means DECLARED - `CRAYON` is a lime - so a green lap time
-# would read as one he typed and a purple sector would stop saying "the app
-# worked this out".
+# **These were fills, and the reasoning that made them fills was inverted.**
+# It argued that the rank could not be carried in ink because purple text
+# already means DERIVED - and then justified purple-for-derived on the grounds
+# that purple is "the sport's own mark" on a timing screen. Both cannot be
+# true. On a timing screen purple means FASTEST, and the driver reads that
+# every night; it is not available to mean something else in a column of lap
+# and sector times.
 #
-# So the ranking is painted BEHIND the number, which is what a real timing
-# screen does anyway - it fills the cell. The ink keeps its register, the fill
-# carries the rank, and the two axes never have to argue. Both are dark enough
-# that `STENCIL` reads on them at better than 7:1.
-BEST_EVER = "#452A63"       # fastest ever here, in this car
-BEST_STINT = "#1C5433"      # fastest in this stint
+# What that cost was reported by the driver in one sentence: *every sector
+# looks like it is the best sector, as they are all purple.* And they were -
+# every sector on the rack is the app's own cut of the lap, so every sector
+# was DERIVED, so every sector was purple, while the actual marks were two
+# very dark fills behind the number that read as nothing at all.
+#
+# So on the rack the timing convention wins, because it is the column's own
+# language: **purple fastest ever here, blue fastest this stint, ordinary
+# otherwise.** Bright enough to be a mark rather than a shade - these are
+# inks on `RUBBER_DEEP` now, not grounds under `STENCIL`.
+#
+# The derived-ness of a sector did not go anywhere. It moved to where a
+# timing screen declares what a column IS: the S1/S2/S3 heads carry `DERIVED`,
+# the spec line names the cut in words ("thirds of the lap - not GT7's"), and
+# an ordinary sector reads dimmer than a measured lap time. The column says
+# the cut is ours; the value says how quick it was. That is CLAUDE.md rule 5
+# satisfied in the channel that can carry it, rather than in the one the
+# driver was already using to read something else.
+BEST_EVER = "#C99BF0"       # fastest ever here, in this car
+BEST_STINT = "#5AA9E6"      # fastest in this stint
 CHALK = "#7FC7D9"           # provisional annotation, notes, hints
 STRUCK = "#807870"          # struck out: excluded, disabled, not counted
 # Lifted from #6B6459, which carried 3.37:1 on the editor ground. WCAG exempts
