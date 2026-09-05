@@ -24,11 +24,12 @@ protecting against, arriving by the other road.
 So the writes apply, and `unrecoverable` is the word that had to stop being
 true:
 
-* `write_setup_sheet` lands in `setup_sheets` and the session re-binds. **Every
-  write records the row it replaced, in full** (`engineer_writes`), and
-  `undo_setup_sheet` puts it back. That table is also the only record of who
-  changed the car and when - without it a sheet written from outside is
-  indistinguishable from one the driver typed himself.
+* `write_shift_points` lands in `shift_points` and the beep uses it from the
+  next session. **The app no longer holds a setup sheet at all** - the tune
+  builder holds the car and the gearbox, and the driver confirms what is in
+  it against GT7's own settings screen. The upshift table is the exception,
+  and only because it has to reach a speaker at 60 Hz: it is issued with the
+  setup it belongs to, and nobody types it in by hand.
 * `write_strategy` writes an **approved** plan, but `certify.py` has to pass or
   it cannot arm. A sheet describes something that already exists; a plan is an
   instruction that will be executed under a helmet, and the failure on record
@@ -37,8 +38,8 @@ true:
   replaced by writing a better one.
 * `write_race_knowledge` writes the briefing George's rules read.
 
-`propose_setup_sheet` and `propose_strategy` remain, unchanged, for a reply he
-wants to read before it touches anything.
+`propose_strategy` remains, unchanged, for a plan he wants to read before it
+touches anything.
 
 ### Running it
 
@@ -50,13 +51,14 @@ app wants during a session.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 
 from mcp.server.mcpserver import MCPServer
 
+from pitcrew.engineer.shift_points import ShiftPoints
 from pitcrew.export.build import build_event_export, drivetrain_of
-from pitcrew.setup.parse import parse_reply
 from pitcrew.store.db import Store
 
 mcp = MCPServer("pitcrew")
@@ -64,6 +66,10 @@ mcp = MCPServer("pitcrew")
 # Enough to answer a question, few enough that the reply is readable. A tool
 # that returns four hundred laps has answered nothing.
 MAX_ROWS = 60
+
+
+def _today() -> str:
+    return _dt.date.today().isoformat()
 
 
 def _dump(value) -> str:
@@ -91,22 +97,6 @@ def list_events() -> str:
                 "race_laps", "race_minutes", "tyre_wear_mult", "fuel_mult",
                 "game_version", "abs_setting", "tcs", "drivetrain")
         return _dump([{k: e.get(k) for k in keep} for e in store.list_events()])
-    finally:
-        store.close()
-
-
-@mcp.tool()
-def setup_sheets(car_name: str) -> str:
-    """Every stored sheet for a car, newest first, with its shift table."""
-    store = _store()
-    try:
-        out = []
-        for sheet in store.list_setup_sheets(car_name):
-            out.append({"id": sheet.id, "name": sheet.sheet_name,
-                        "purpose": sheet.purpose, "values": sheet.values,
-                        "gears": sheet.gears, "shiftRpm": sheet.shift_rpm,
-                        "notes": sheet.notes})
-        return _dump(out)
     finally:
         store.close()
 
@@ -219,39 +209,6 @@ def prompt_log(event_id: int | None = None) -> str:
 # Both propose. Neither applies.
 
 @mcp.tool()
-def propose_setup_sheet(event_id: int, reply: str) -> str:
-    """File a setup reply for the driver to review and apply himself.
-
-    **It does not become the sheet.** It lands in the prompt log, which is
-    where a pasted reply goes today, and he applies it on the Event screen. The
-    app has been wrong about which sheet was in the car three sessions out of
-    three; a tool that wrote one directly would make that unrecoverable.
-
-    The reply is parsed here only to report what was understood - anything not
-    recognised comes back in `unmatched` rather than being dropped.
-    """
-    store = _store()
-    try:
-        parsed = parse_reply(reply)
-        issue_id = store.log_prompt(
-            kind="refinement", body="(proposed over MCP)",
-            prompt_version="mcp", app_version="mcp", event_id=event_id)
-        store.save_prompt_reply(issue_id, reply)
-        race = getattr(parsed, "race", None) or getattr(parsed, "sheet", None)
-        return _dump({
-            "filed": True, "promptId": issue_id,
-            "note": "filed for review - apply it on the Event screen. Nothing "
-                    "has changed in the car or in the app's record of it.",
-            "understood": getattr(race, "values", None),
-            "unmatched": list(getattr(parsed, "unmatched", []) or [])[:20],
-        })
-    except Exception as exc:                                 # noqa: BLE001
-        return _dump({"filed": False, "error": f"{type(exc).__name__}: {exc}"})
-    finally:
-        store.close()
-
-
-@mcp.tool()
 def propose_strategy(event_id: int, plan: str, label: str = "") -> str:
     """Save a race plan as a candidate. It is not approved and cannot be armed.
 
@@ -299,71 +256,75 @@ def propose_strategy(event_id: int, plan: str, label: str = "") -> str:
 # one records what it replaced; the sheet write can be undone.
 
 @mcp.tool()
-def write_setup_sheet(car_name: str, reply: str, purpose: str = "race",
-                      circuit_key: str = "", event_id: int = 0) -> str:
-    """Write a setup sheet straight into the app's record of the car. ⚠
+def shift_points(car_name: str, circuit_key: str = "") -> str:
+    """The upshift tables issued for a car, newest first.
 
-    **This changes what the app believes is bolted to the car**, which is rank
-    zero of every diagnosis. Use it when the sheet has actually been typed into
-    GT7; use `propose_setup_sheet` when it is a suggestion he should read first.
-
-    The previous sheet is recorded in full before it is replaced, so
-    `undo_setup_sheet` can put it back, and `engineer_writes` is the record of
-    who changed it and when.
+    With a `circuit_key`, only the table for that circuit - which is the one
+    the beep will actually use, because a gearbox is cut for the circuit.
     """
     store = _store()
     try:
-        parsed = parse_reply(reply)
-        race = getattr(parsed, "race", None) or getattr(parsed, "sheet", None)
-        if race is None or not getattr(race, "values", None):
-            return _dump({
-                "written": False,
-                "error": "nothing in that reply parsed as a setup sheet",
-                "unmatched": list(getattr(parsed, "unmatched", []) or [])[:20]})
-
-        key = circuit_key or None
-        before = store.sheet_for(car_name, purpose, key)
-        sheet = _sheet_from(race, car_name, purpose, key)
-        sheet_id = store.save_setup_sheet(sheet)
-        store.note_engineer_write(
-            "setup_sheet", target_id=sheet_id,
-            event_id=event_id or None, author="race engineer (MCP)",
-            summary=f"wrote {sheet.sheet_name!r} for {car_name}"
-                    + (f" at {key}" if key else ""),
-            before=_as_dict(before), after=_as_dict(sheet))
-        return _dump({
-            "written": True, "sheetId": sheet_id,
-            "values": getattr(race, "values", None),
-            "unmatched": list(getattr(parsed, "unmatched", []) or [])[:20],
-            "note": "this is now the app's record of what is in the car. "
-                    "`undo_setup_sheet` puts the previous one back.",
-        })
-    except Exception as exc:                                 # noqa: BLE001
-        return _dump({"written": False, "error": f"{type(exc).__name__}: {exc}"})
+        if circuit_key:
+            one = store.shift_points_for(car_name, circuit_key)
+            return _dump(one.as_export() if one else None)
+        return _dump([t.as_export() for t in store.list_shift_points(car_name)])
     finally:
         store.close()
 
 
 @mcp.tool()
-def undo_setup_sheet(write_id: int = 0) -> str:
-    """Put back the sheet an authoritative write replaced.
+def write_shift_points(car_name: str, performance_rpm: dict,
+                       circuit_key: str = "", fuel_saving_rpm: dict | None = None,
+                       note: str = "") -> str:
+    """Issue the upshift table for the gearbox in this car at this circuit. ⚠
 
-    With no `write_id`, undoes the most recent sheet write that has not already
-    been undone. Returns what it did, in words.
+    **This is what the driver hears at the wheel**, and it is the one piece of
+    the setup that reaches him through the app rather than through GT7's own
+    screens - so it is issued here with the setup it belongs to, never typed
+    in by hand against last week's box.
+
+    `performance_rpm` maps gear number to the rpm to upshift at when lap time
+    is the objective. `fuel_saving_rpm` is the short-shift table for a
+    fuel-bound stint - worth about 20% fuel for about 0.5 s/lap, and it lowers
+    rear tyre wear with it. Both keyed by gear as `{"1": 8000, "2": 8100}`.
+
+    Refused rather than stored where a fuel-saving point is at or above its
+    own performance point: that is a swapped pair of columns, it is silent at
+    the wheel, and it costs fuel in the direction the driver was told it saved.
+
+    **A gear left out of `performance_rpm` does not beep.** That is the honest
+    answer, not a gap to be filled: one car wants the limiter in every gear
+    and another wants 8250 in all five, and any fallback sounds exactly like a
+    measurement without being one.
     """
     store = _store()
     try:
-        if not write_id:
-            recent = [row for row in store.list_engineer_writes(
-                kind="setup_sheet", limit=20) if not row["undone_at"]]
-            if not recent:
-                return _dump({"undone": False,
-                              "error": "no sheet write left to undo"})
-            write_id = recent[0]["id"]
-        return _dump({"undone": True, "writeId": write_id,
-                      "result": store.undo_engineer_write(write_id)})
+        def table(raw) -> dict[int, float]:
+            return {int(g): float(r) for g, r in (raw or {}).items()}
+
+        issued = ShiftPoints(
+            car_name=car_name, circuit_key=circuit_key or None,
+            performance=table(performance_rpm),
+            fuel_saving=table(fuel_saving_rpm),
+            issued_by="race engineer (MCP)", issued_at=_today(), note=note)
+        before = store.shift_points_for(car_name, circuit_key or None)
+        table_id = store.save_shift_points(issued)
+        store.note_engineer_write(
+            "shift_points", target_id=table_id,
+            author="race engineer (MCP)",
+            summary=f"issued shift points for {car_name}"
+                    + (f" at {circuit_key}" if circuit_key else ""),
+            before=before.as_export() if before else None,
+            after=issued.as_export())
+        return _dump({
+            "written": True, "shiftPointsId": table_id,
+            "table": issued.as_export(),
+            "note": "the beep uses this from the next session in this car at "
+                    "this circuit. Gears absent from performanceRpm stay "
+                    "silent.",
+        })
     except Exception as exc:                                 # noqa: BLE001
-        return _dump({"undone": False, "error": f"{type(exc).__name__}: {exc}"})
+        return _dump({"written": False, "error": f"{type(exc).__name__}: {exc}"})
     finally:
         store.close()
 
@@ -536,28 +497,6 @@ def engineer_writes(kind: str = "", limit: int = 20) -> str:
                                                 limit=min(limit, MAX_ROWS)))
     finally:
         store.close()
-
-
-def _sheet_from(race, car_name: str, purpose: str, circuit_key: str | None):
-    """A parsed reply as a `SetupSheet` bound to this car and circuit."""
-    from pitcrew.setup.sheet import SetupSheet
-
-    return SetupSheet(
-        car_name=car_name,
-        sheet_name=getattr(race, "sheet_name", None) or "written by the engineer",
-        values=dict(getattr(race, "values", None) or {}),
-        gears=list(getattr(race, "gears", None) or []),
-        purpose=purpose,
-        circuit_key=circuit_key)
-
-
-def _as_dict(sheet):
-    """A `SetupSheet` as plain JSON for the audit trail, or None."""
-    if sheet is None:
-        return None
-    from dataclasses import asdict
-
-    return asdict(sheet)
 
 
 def main() -> None:

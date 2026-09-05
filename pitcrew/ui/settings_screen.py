@@ -538,11 +538,11 @@ class SettingsScreen(QWidget):
         plate.body.addWidget(self.beep_enabled)
 
         plate.body.addWidget(BodyLabel(
-            "The thresholds live on the setup sheet, one per gear, because a "
-            "shift point belongs to the gearbox - change a ratio and it "
-            "moves. A sheet with none means that gearbox has not been "
-            "measured, and the beep stays silent rather than guessing at a "
-            "number. Measure one with tools/shift_points.py.",
+            "The thresholds are issued by the tune builder, one per gear, "
+            "because a shift point belongs to the gearbox - change a ratio "
+            "and it moves. No table issued for the car and circuit means "
+            "nobody has designed one, and the beep stays silent rather than "
+            "guessing at a number.",
             size=13, colour=theme.STENCIL_DIM))
 
         row = QHBoxLayout()

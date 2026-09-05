@@ -100,13 +100,6 @@ EVIDENCE_IDENTITY_SQL = (
     "COALESCE(sessions.identity_status, 'ok') "
     "NOT IN ('car-mismatch', 'car-unknown')")
 
-# What a sheet is for when nobody said. Written down here because the
-# convention already existed in prose - `sheet_for` documented that a sheet
-# stored before the question was asked is a race sheet - and v8 turned it into
-# a NOT NULL column with this default, so the string has to be one string.
-DEFAULT_SHEET_PURPOSE = "race"
-
-
 def _record_declared_constants(fields: dict) -> None:
     for value_key, source_key in _DECLARED_CONSTANTS.items():
         if value_key not in fields:
@@ -500,108 +493,6 @@ class Store:
 
     # ----------------------------------------------------- setup (app state)
 
-    def save_setup_sheet(self, sheet) -> int:
-        """Insert or update a sheet by (car, name, **purpose**).  Returns its id.
-
-        The purpose is in the conflict target because it is in the key, and it
-        is in the key because it was not: the driver reported that loading a
-        race sheet and then a qualifying sheet kept only the last one. It was
-        not keeping the last one - it was overwriting the first and flipping
-        its label, because `ON CONFLICT(car_name, sheet_name)` matched a sheet
-        that answers a different question.
-
-        `purpose` is normalised rather than allowed through as None. Sqlite
-        counts two NULLs as distinct in a UNIQUE index, so an untagged sheet
-        would stop matching its own row and accumulate a new one on every
-        save - the same shape of bug in the opposite direction.
-        """
-        sheet.validate()
-        purpose = (sheet.purpose or DEFAULT_SHEET_PURPOSE).strip()
-        with self._write() as conn:
-            conn.execute(
-                "INSERT INTO setup_sheets (car_name, sheet_name, values_json, "
-                "gears_json, shift_rpm_json, performance_json, build_json, "
-                "notes, purpose, circuit_key, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(car_name, sheet_name, purpose) DO UPDATE SET "
-                "values_json=excluded.values_json, gears_json=excluded.gears_json, "
-                "shift_rpm_json=excluded.shift_rpm_json, "
-                "performance_json=excluded.performance_json, "
-                "build_json=excluded.build_json, notes=excluded.notes, "
-                # **COALESCE, not excluded.** A save that does not know
-                # the circuit must not erase one already established.
-                "circuit_key=COALESCE(excluded.circuit_key, setup_sheets.circuit_key), "
-                "updated_at=excluded.updated_at",
-                (sheet.car_name, sheet.sheet_name, json.dumps(sheet.values),
-                 json.dumps(sheet.gears),
-                 # Keys are gear numbers; JSON turns them into strings and the
-                 # reader turns them back, so a table never comes home keyed
-                 # differently from how it went out.
-                 json.dumps({str(g): r for g, r in (sheet.shift_rpm or {}).items()}),
-                 json.dumps(sheet.performance),
-                 json.dumps(sheet.build), sheet.notes, purpose,
-                 sheet.circuit_key,
-                 _now(), _now()))
-            row = conn.execute(
-                "SELECT id FROM setup_sheets WHERE car_name = ? "
-                "AND sheet_name = ? AND purpose = ?",
-                (sheet.car_name, sheet.sheet_name, purpose)).fetchone()
-            return int(row["id"])
-
-    def get_setup_sheet(self, sheet_id: int):
-        rows = self._query("SELECT * FROM setup_sheets WHERE id = ?", (sheet_id,))
-        return _setup_sheet(rows[0]) if rows else None
-
-    def sheet_for(self, car_name: str, purpose: str,
-                  circuit_key: str | None = None):
-        """The car's most recent sheet for this purpose **at this circuit**.
-
-        **None means none, and never another purpose's or another circuit's
-        sheet.** A qualifying run measured against the race sheet files a
-        symptom on a setup that was not on the car. The caller decides what to
-        do about a missing sheet; substituting one here hides the question.
-
-        Every sheet now carries a purpose - v8 made the column NOT NULL and
-        back-filled the seven untagged rows to `race`, which is the convention
-        this method already documented - so there is no null case left to
-        interpret.
-
-        **The circuit was missing from this key until 23 Aug 2026, and it cost
-        five sessions.** Without it this returned the car's most recent race
-        sheet whatever circuit he was at: a Road Atlanta session bound itself
-        to "Yas Marina race Rev C", the export reported that as the setup as
-        run, and its empty shift table silenced the beep for the session.
-
-        `circuit_key=None` asks the old question - the most recent sheet for
-        this car and purpose, circuit unexamined - and is kept for callers
-        that genuinely have no circuit, such as listing what a car has ever
-        run. **It is not what a session should ask.**
-
-        A sheet whose own `circuit_key` is NULL never matches a named circuit.
-        Missing is missing: a sheet that has never said which circuit it is
-        for cannot be asserted to be for this one, and asserting it is exactly
-        how the failure happened.
-        """
-        wanted = [sheet for sheet in self.list_setup_sheets(car_name)
-                  if sheet.purpose == purpose
-                  and (circuit_key is None
-                       or sheet.circuit_key == circuit_key)]
-        return wanted[0] if wanted else None
-
-    def list_setup_sheets(self, car_name: str | None = None) -> list:
-        # id breaks the tie: timestamps are second-resolution, so two sheets
-        # saved in the same second come back in any order - and the caller
-        # takes the first as "the current sheet", which then silently becomes
-        # whichever one sqlite felt like.
-        if car_name is None:
-            rows = self._query(
-                "SELECT * FROM setup_sheets ORDER BY updated_at DESC, id DESC")
-        else:
-            rows = self._query(
-                "SELECT * FROM setup_sheets WHERE car_name = ? "
-                "ORDER BY updated_at DESC, id DESC", (car_name,))
-        return [_setup_sheet(r) for r in rows]
-
     def note_engineer_write(self, kind: str, *, summary: str,
                             target_id: int | None = None,
                             event_id: int | None = None,
@@ -644,45 +535,6 @@ class Store:
                 "SELECT * FROM engineer_writes ORDER BY id DESC LIMIT ?",
                 (limit,))
         return [dict(row) for row in rows]
-
-    def undo_engineer_write(self, write_id: int) -> str:
-        """Put back what an authoritative write replaced. Returns what it did.
-
-        **Only a `setup_sheet` write, and deliberately.** A sheet describes
-        something that already exists, so restoring the previous description is
-        always meaningful. A plan is an instruction that may already have been
-        armed and partly executed, and rewinding one mid-race would leave the
-        coordinator running against a document nobody approved; a plan is
-        replaced by writing a better one, not by undoing.
-
-        A write with no `before` created the row rather than replacing one, and
-        there is nothing to restore - said rather than silently doing nothing.
-        """
-        rows = self._query("SELECT * FROM engineer_writes WHERE id = ?",
-                           (write_id,))
-        if not rows:
-            raise ValueError(f"no engineer write with id {write_id}")
-        row = rows[0]
-        if row["undone_at"]:
-            return f"write {write_id} was already undone at {row['undone_at']}"
-        if row["kind"] != "setup_sheet":
-            raise ValueError(
-                f"only a setup_sheet write can be undone, not {row['kind']!r} "
-                f"- a plan is replaced by writing a better one, because it may "
-                f"already be armed and partly executed")
-        if not row["before_json"]:
-            return (f"write {write_id} created a sheet rather than replacing "
-                    f"one, so there is nothing to put back. Delete it instead.")
-
-        from pitcrew.setup.sheet import SetupSheet
-
-        before = json.loads(row["before_json"])
-        self.save_setup_sheet(SetupSheet(**before))
-        with self._write() as conn:
-            conn.execute("UPDATE engineer_writes SET undone_at = ? WHERE id = ?",
-                         (_now(), write_id))
-        return (f"restored {before.get('sheet_name')!r} for "
-                f"{before.get('car_name')}")
 
     def get_race_knowledge(self, circuit_key: str, event_id: int | None = None):
         """Ludo's briefing for this race, or None where nobody wrote one.
@@ -797,190 +649,6 @@ class Store:
         length = rows[0]["length_m"] if rows else None
         return float(length) if length else None
 
-    def sheet_filed_on(self, sheet_id: int) -> str | None:
-        """When a sheet was last written into the app, as `YYYY-MM-DD`.
-
-        **`SetupSheet` carries no timestamp and should not.** It is the sheet
-        as a setup - values, gears, purpose, circuit - and a filing date is a
-        fact about the record rather than about the car. But the record's date
-        is exactly what `setup/doubt.py` needs: a revision document issued
-        after it is one the app was never told about, which is the highest
-        severity defect in the whole loop and the one nothing inside the app
-        could see.
-
-        The first draft of the doubt detector read `sheet.updated_at`, which
-        does not exist, so `_sheet_date` returned `None` on every sheet and the
-        detector was silent on all eight events - correct-looking, and dead.
-        """
-        rows = self._query(
-            "SELECT COALESCE(updated_at, created_at) AS filed "
-            "FROM setup_sheets WHERE id = ?", (sheet_id,))
-        filed = rows[0]["filed"] if rows else None
-        return str(filed)[:10] if filed else None
-
-    def add_setup_change(self, session_id: int, change) -> int:
-        change.validate()
-        with self._write() as conn:
-            cur = conn.execute(
-                "INSERT INTO setup_changes (session_id, from_lap, key, from_value, "
-                "to_value, reason, source, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                (session_id, change.from_lap, change.key, change.from_value,
-                 change.to_value, change.reason, change.source, _now()))
-            return int(cur.lastrowid)
-
-    def set_setup_change_reason(self, change_id: int, reason: str | None,
-                                source: str | None = None) -> bool:
-        """Attach the why to a row that already exists.
-
-        The ledger is written at session open, before anyone has said what the
-        change was for; the reason usually arrives in the debrief. Without this
-        the only way to record intent was to have had it at insert time, which
-        is why 202 rows carry none.
-
-        `reason=None` clears it rather than being ignored - a reason recorded
-        against the wrong row has to be removable. `source` is left alone when
-        not given, so correcting a reason cannot silently unset it.
-        """
-        from pitcrew.setup.sheet import SetupChange
-        if source is not None:
-            SetupChange(from_lap=1, key="rh_f", from_value=None,
-                        to_value=None, source=source).validate()
-        with self._write() as conn:
-            if source is None:
-                cur = conn.execute(
-                    "UPDATE setup_changes SET reason = ? WHERE id = ?",
-                    (reason, change_id))
-            else:
-                cur = conn.execute(
-                    "UPDATE setup_changes SET reason = ?, source = ? "
-                    "WHERE id = ?", (reason, source, change_id))
-            return cur.rowcount > 0
-
-    def note_sheet_change(self, session_id: int) -> int:
-        """Record what changed on the car since the last session like this one.
-
-        **`setup_changes` had both ends built and no caller, and after 88
-        sessions it held zero rows.** The charter calls that the single biggest
-        gap in the system, because everything downstream of it is blocked:
-        every change is an experiment, a regression cannot be recognised
-        without knowing what moved, and setup history is not knowledge until a
-        change is tied to the run that tested it.
-
-        The caller was missing because the obvious one is impossible. The table
-        is written as *mid-session* changes, and of the 23 setup values the
-        only one the feed can see change mid-session is the gearbox - the other
-        22 have no channel at all. So the mid-session case needs a human to
-        type it and has no interface.
-
-        **The between-session case needs neither, and it is the one that
-        carries the experiment.** A session opens against a sheet; the last
-        session on this car and circuit opened against another; the difference
-        between them is exactly what this run is testing. Recorded at
-        `from_lap=1`, which is what the column means - from lap one of this
-        session, these values were different.
-
-        Idempotent: a session that already has rows is left alone, so opening
-        the same session twice cannot double the ledger.
-
-        Returns the number of rows written. Silent when there is nothing to
-        compare against - a first session on a car is not a change.
-        """
-        from pitcrew.setup.sheet import SetupChange
-
-        rows = self._query(
-            "SELECT s.setup_sheet_id, e.car_name FROM sessions s "
-            "JOIN events e ON e.id = s.event_id WHERE s.id = ?", (session_id,))
-        if not rows or not rows[0]["setup_sheet_id"]:
-            return 0
-        sheet_id, car_name = rows[0]["setup_sheet_id"], rows[0]["car_name"]
-        if self._query("SELECT 1 FROM setup_changes WHERE session_id = ? "
-                       "LIMIT 1", (session_id,)):
-            return 0
-
-        current = self.get_setup_sheet(sheet_id)
-        if current is None:
-            return 0
-        # **The same circuit, or it is not a comparison.** A sheet built for
-        # another track differs in every value that responds to the track, and
-        # calling that an experiment would fill the ledger with noise - the
-        # same error `tools/check_setup_sheets.py` was making one level up.
-        previous = self._query(
-            "SELECT sh.id FROM sessions s "
-            "JOIN events e ON e.id = s.event_id "
-            "JOIN setup_sheets sh ON sh.id = s.setup_sheet_id "
-            "WHERE s.id < ? AND e.car_name = ? AND sh.purpose = ? "
-            "AND sh.circuit_key IS ? AND sh.id != ? "
-            "ORDER BY s.id DESC LIMIT 1",
-            (session_id, car_name, current.purpose, current.circuit_key,
-             sheet_id))
-        if not previous:
-            return 0
-        before = self.get_setup_sheet(previous[0]["id"])
-        if before is None:
-            return 0
-
-        # **All three parts of the sheet, not just the sliders.** This loop
-        # read `sheet.values` alone until 3 Sep 2026, so a build could move its
-        # restrictor, its ECU, its ballast or its whole gearbox and the ledger
-        # would stay empty and look healthy. The Huracán's restrictor went
-        # 99 -> 93 and its ECU 94 -> 100 across that blind spot with no row
-        # anywhere recording it.
-        pairs: dict[str, tuple] = {}
-        for key in set(current.values) | set(before.values):
-            pairs[key] = (before.values.get(key), current.values.get(key))
-        for key in set(current.performance) | set(before.performance):
-            pairs[key] = (before.performance.get(key),
-                          current.performance.get(key))
-        # Gears are a list, so they are compared by position and named
-        # `gear1`..`gearN`. A gearbox that gained or lost a ratio shows as a
-        # change from or to None, which is what happened, rather than a
-        # silently shorter loop.
-        for index in range(max(len(current.gears), len(before.gears))):
-            name = f"gear{index + 1}"
-            pairs[name] = (
-                before.gears[index] if index < len(before.gears) else None,
-                current.gears[index] if index < len(current.gears) else None)
-
-        written = 0
-        for key in sorted(pairs):
-            was, now = pairs[key]
-            if was is None and now is None:
-                continue
-            if was is not None and now is not None and abs(was - now) <= 1e-9:
-                continue
-            try:
-                self.add_setup_change(
-                    session_id,
-                    # **`source="sheet-diff"`, and no reason.** This is derived
-                    # by comparing two sheets, not read off the car and not
-                    # explained by anybody. Inventing a reason here would be
-                    # exactly the fabrication the column exists to prevent -
-                    # `set_setup_change_reason` is how the why arrives later.
-                    SetupChange(from_lap=1, key=key, from_value=was,
-                                to_value=now, source="sheet-diff"))
-            except Exception:                          # noqa: BLE001
-                # A key outside the shared vocabulary is a sheet problem, not a
-                # reason to lose the rest of the ledger. `SetupChange.validate`
-                # has already refused it and said why.
-                continue
-            written += 1
-        if written:
-            log("store").info(
-                "session %s opens with %s value(s) changed from %r - filed as "
-                "this run's experiment", session_id, written, before.sheet_name)
-        return written
-
-    def list_setup_changes(self, session_id: int) -> list:
-        from pitcrew.setup.sheet import SetupChange
-        rows = self._query(
-            "SELECT * FROM setup_changes WHERE session_id = ? ORDER BY from_lap, id",
-            (session_id,))
-        return [SetupChange(from_lap=r["from_lap"], key=r["key"],
-                            from_value=r["from_value"], to_value=r["to_value"],
-                            reason=_row_value(r, "reason"),
-                            source=_row_value(r, "source"))
-                for r in rows]
-
     def log_radio(self, session_id: int | None, *, heard: str, said: str,
                   lap_num: int | None = None, intent: str | None = None,
                   action: str | None = None, distance: float | None = None,
@@ -1019,6 +687,97 @@ class Store:
             "FROM radio JOIN sessions ON sessions.id = radio.session_id "
             "WHERE sessions.event_id = ? ORDER BY radio.id", (event_id,))]
 
+    def archived_setup_sheet(self, sheet_id: int) -> dict | None:
+        """A sheet from the archive, as a plain dict. **Read-only history.**
+
+        The app stopped recording what is in the car on 5 Sep 2026 - the tune
+        builder holds the setup now - but 96 sessions of laps still point at
+        `setup_sheets`, and the offline tools that re-read those sessions need
+        to be able to say what a lap was driven on.
+
+        A dict rather than an object, deliberately: there is no `SetupSheet`
+        class any more and reviving one would give the app a shape to start
+        writing into again. This reads and cannot write.
+        """
+        rows = self._query("SELECT * FROM setup_sheets WHERE id = ?", (sheet_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        keys = row.keys()
+        return {
+            "id": row["id"],
+            "car_name": row["car_name"],
+            "sheet_name": row["sheet_name"],
+            "purpose": row["purpose"] if "purpose" in keys else None,
+            "circuit_key": row["circuit_key"] if "circuit_key" in keys else None,
+            "values": json.loads(row["values_json"] or "{}"),
+            "gears": json.loads(row["gears_json"] or "[]"),
+            "notes": row["notes"] or "",
+        }
+
+    # ------------------------------------------------ shift points (issued)
+
+    def save_shift_points(self, table) -> int:
+        """Insert or replace one gearbox's upshift table. Returns its id.
+
+        Keyed by car and circuit, because the box is cut for the circuit. A
+        table issued without one is stored under the empty string rather than
+        NULL: sqlite counts two NULLs as distinct in a unique index, so a
+        nullable key would let every write add a row while the upsert quietly
+        stopped matching - which is exactly how `setup_sheets` lost sheets
+        before v8 put `purpose` inside its key.
+        """
+        table.validate()
+        with self._write() as conn:
+            conn.execute(
+                "INSERT INTO shift_points (car_name, circuit_key, "
+                "performance_json, fuel_saving_json, issued_by, issued_at, "
+                "note, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(car_name, COALESCE(circuit_key, '')) DO UPDATE SET "
+                "performance_json=excluded.performance_json, "
+                "fuel_saving_json=excluded.fuel_saving_json, "
+                "issued_by=excluded.issued_by, issued_at=excluded.issued_at, "
+                "note=excluded.note, updated_at=excluded.updated_at",
+                (table.car_name, table.circuit_key or None,
+                 json.dumps({str(g): float(r)
+                             for g, r in table.performance.items()}),
+                 json.dumps({str(g): float(r)
+                             for g, r in table.fuel_saving.items()}),
+                 table.issued_by or None, table.issued_at or None,
+                 table.note or None, _now(), _now()))
+        rows = self._query(
+            "SELECT id FROM shift_points WHERE car_name = ? "
+            "AND COALESCE(circuit_key, '') = ?",
+            (table.car_name, table.circuit_key or ""))
+        return int(rows[0]["id"]) if rows else 0
+
+    def shift_points_for(self, car_name: str, circuit_key: str | None = None):
+        """The table issued for this car **at this circuit**, or None.
+
+        **None means none, and never another circuit's table.** A gearbox is
+        cut for the track; a Daytona table at Road Atlanta is a set of rpm
+        nobody measured on the box that is fitted, and it sounds at the wheel
+        exactly like one that was. The setup record was given this same rule
+        after five sessions were recorded against the wrong circuit's sheet.
+
+        A table whose own circuit is NULL never matches a named circuit.
+        """
+        rows = self._query(
+            "SELECT * FROM shift_points WHERE car_name = ? "
+            "AND COALESCE(circuit_key, '') = ?",
+            (car_name, circuit_key or ""))
+        return _shift_points(rows[0]) if rows else None
+
+    def list_shift_points(self, car_name: str | None = None) -> list:
+        if car_name is None:
+            rows = self._query(
+                "SELECT * FROM shift_points ORDER BY updated_at DESC, id DESC")
+        else:
+            rows = self._query(
+                "SELECT * FROM shift_points WHERE car_name = ? "
+                "ORDER BY updated_at DESC, id DESC", (car_name,))
+        return [_shift_points(row) for row in rows]
+
     def save_range_record(self, record) -> None:
         record.validate()
         with self._write() as conn:
@@ -1033,7 +792,7 @@ class Store:
                  int(record.verified), json.dumps(record.ranges), _now()))
 
     def get_range_record(self, car_name: str):
-        from pitcrew.setup.sheet import RangeRecord
+        from pitcrew.setup.ranges import RangeRecord
         rows = self._query(
             "SELECT * FROM range_records WHERE car_name = ?", (car_name,))
         if not rows:
@@ -1060,7 +819,7 @@ class Store:
         read off the car's own settings screen, and shipped data must never
         overwrite it.
         """
-        from pitcrew.setup.sheet import RangeRecord
+        from pitcrew.setup.ranges import RangeRecord
 
         known = set(self.cars_with_ranges())
         seeded = 0
@@ -2527,22 +2286,20 @@ def _event_row(row: sqlite3.Row) -> dict:
     return event
 
 
-def _setup_sheet(row: sqlite3.Row):
-    from pitcrew.setup.sheet import SetupSheet
-    return SetupSheet(
+def _shift_points(row: sqlite3.Row):
+    from pitcrew.engineer.shift_points import ShiftPoints
+
+    def table(raw) -> dict[int, float]:
+        return {int(g): float(r) for g, r in json.loads(raw or "{}").items()}
+
+    return ShiftPoints(
         car_name=row["car_name"],
-        sheet_name=row["sheet_name"],
-        values=json.loads(row["values_json"] or "{}"),
-        gears=json.loads(row["gears_json"] or "[]"),
-        shift_rpm={int(g): float(r) for g, r in json.loads(
-            (row["shift_rpm_json"] if "shift_rpm_json" in row.keys() else None)
-            or "{}").items()},
-        performance=json.loads(row["performance_json"] or "{}"),
-        build=json.loads(row["build_json"] or "{}"),
-        notes=row["notes"] or "",
-        purpose=row["purpose"] if "purpose" in row.keys() else None,
-        circuit_key=(row["circuit_key"]
-                     if "circuit_key" in row.keys() else None),
+        circuit_key=row["circuit_key"],
+        performance=table(row["performance_json"]),
+        fuel_saving=table(row["fuel_saving_json"]),
+        issued_by=row["issued_by"] or "",
+        issued_at=row["issued_at"] or "",
+        note=row["note"] or "",
         id=row["id"],
     )
 

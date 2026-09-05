@@ -385,7 +385,7 @@ class CarScreen(QWidget):
         **A max below its min is refused, not stored.** This screen exists to
         copy 22 pairs of numbers off the car's own settings screen by hand,
         which is exactly the place a pair gets transposed - and the record it
-        writes is a hard slider limit. `fraction_of_range` (setup/sheet.py:173)
+        writes is a hard slider limit. `fraction_of_range` (setup/ranges.py)
         and `prompts/build.py:113` both divide by `high - low` and both guard
         only `high == low`, so 200/50 makes every percentage quoted against
         that key come out negative, on the axis the whole programme reasons in

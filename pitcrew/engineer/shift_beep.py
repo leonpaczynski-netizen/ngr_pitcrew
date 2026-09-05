@@ -150,9 +150,10 @@ class ShiftBeep:
         # harder to notice than a wrong beep.
         self.top_gear = top_gear
         # **Measured per-gear thresholds, keyed by gear, and the only source
-        # there is.** They come off the setup sheet, because a shift point
-        # belongs to the gearbox: change a ratio and the rpm worth shifting at
-        # moves with it. A gear that is not in here does not beep - the global
+        # there is.** They are issued by the tune builder with the setup they
+        # belong to, because a shift point belongs to the gearbox: change a
+        # ratio and the rpm worth shifting at moves with it. See
+        # `engineer/shift_points.py`. A gear not in here does not beep - the global
         # fallback and GT7's own shift light both used to fill the gap, and
         # both sounded at the wheel exactly like a measurement without being
         # one.
@@ -184,9 +185,10 @@ class ShiftBeep:
         five, which is the whole reason this is a table, and a fallback quietly
         told the driver a number nobody had taken on that gearbox.
 
-        The thresholds live on the setup sheet, because a shift point belongs
-        to the gearbox: change a ratio and it moves. A sheet with none means
-        the box has not been measured, and silence is the honest answer.
+        The thresholds are issued with the setup, because a shift point
+        belongs to the gearbox: change a ratio and it moves. No table issued
+        for this box means nobody has designed one, and silence is the honest
+        answer.
 
         Public because the export has to be able to show what the driver was
         actually being told, and a threshold that can only be inferred from

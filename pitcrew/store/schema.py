@@ -185,9 +185,18 @@ CREATE TABLE IF NOT EXISTS events (
     updated_at          TEXT    NOT NULL
 );
 
--- The sheet as run.  Pure app state: no telemetry, no derivation, no advice.
--- Keys inside values_json are the export contract's shared vocabulary, so a
--- sheet round-trips to the tune builder and back with no translation.
+-- **HISTORY ONLY, as of 5 Sep 2026.  Nothing writes these two any more.**
+--
+-- The app no longer records what is in the car: the tune builder holds the
+-- setup and the gearbox, issues changes directly, and the driver confirms
+-- them with a screenshot of GT7's own settings screen.  A value kept in two
+-- places becomes two values, and it had already happened twice on one car.
+--
+-- The tables stay, and they are not empty: `sessions.setup_sheet_id` and
+-- `laps.setup_sheet_id` reference `setup_sheets`, and 96 sessions of history
+-- point into it.  Dropping it would either break those references or take a
+-- rebuild of `laps` with it, and `lap_frames` cascades off `laps`.  So this
+-- is read as archive and written by nothing.
 CREATE TABLE IF NOT EXISTS setup_sheets (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     car_name     TEXT    NOT NULL,
@@ -238,6 +247,37 @@ CREATE TABLE IF NOT EXISTS setup_changes (
     created_at TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_changes_session ON setup_changes(session_id);
+
+-- **The upshift rpm table, issued by the tune builder.**
+--
+-- Not a setup and not a preference: a shift point is a property of the
+-- gearbox, so it is keyed by car AND circuit - the box is cut for the track,
+-- and the same car at two circuits is two boxes wanting two tables.
+--
+-- Two columns because there are two ways to drive one gearbox.  `performance`
+-- is where to shift when lap time is the objective; `fuel_saving` is where to
+-- short-shift when the stint is fuel-bound.  Both absolute rpm per gear: an
+-- offset hides a swapped pair of columns, an absolute pair does not.
+--
+-- A NULL circuit_key never matches a named circuit.  Missing is missing.
+CREATE TABLE IF NOT EXISTS shift_points (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    car_name         TEXT    NOT NULL,
+    circuit_key      TEXT,
+    performance_json TEXT    NOT NULL DEFAULT '{}',
+    fuel_saving_json TEXT    NOT NULL DEFAULT '{}',
+    issued_by        TEXT,
+    issued_at        TEXT,
+    note             TEXT,
+    created_at       TEXT    NOT NULL,
+    updated_at       TEXT    NOT NULL
+);
+-- sqlite counts two NULLs as distinct in a UNIQUE constraint, so a table
+-- issued without a circuit would accumulate a row per write while the upsert
+-- silently stopped matching - the exact defect v8 fixed on setup_sheets.
+-- The empty string is the "no circuit" value in the index instead.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shift_points_car_circuit
+    ON shift_points(car_name, COALESCE(circuit_key, ''));
 
 -- The car's slider limits, read off its settings screen once and never
 -- re-entered.  Worth more than the setup values themselves: they are what

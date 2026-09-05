@@ -18,7 +18,7 @@ from pitcrew.analysis.corners import (
     observed_minimum,
 )
 from pitcrew.analysis import distance
-from pitcrew.analysis.gearing import gearing_export, sheets_disagree
+from pitcrew.analysis.gearing import gearing_export
 from pitcrew.analysis.resolve import resolve_corner_model
 from pitcrew.race.expectations import audit_line_from_laps
 from pitcrew.analysis.runs import classify_exclusions, runs_export, split_runs
@@ -38,9 +38,8 @@ from pitcrew.analysis.session import (
 )
 from pitcrew.analysis.wear import wear_export
 from pitcrew.race.outcome import fuel_left_note, race_outcome
-from pitcrew.export.payload import (Derived, ExportRefused, Meta,
+from pitcrew.export.payload import (Derived, Meta,
                                     build_payload)
-from pitcrew.setup import doubt as setup_doubt
 from pitcrew.store.tyres import get_by_code
 
 # GT7 multipliers are shown as "Off" or "Nx". "Off" means the thing does not
@@ -213,15 +212,6 @@ def _compounds_run(runs) -> list[str]:
     return seen
 
 
-def _sheet_final_gear(sheet) -> float | None:
-    """The final drive the driver typed, which is exact, unlike the derived one."""
-    value = (sheet.values or {}).get("fg")
-    try:
-        return float(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
 def _counted_lap(lap: LapInput) -> CountedLap:
     """A lap in the shape the corner aggregates read.
 
@@ -276,7 +266,6 @@ def _reference_frames(laps: list[LapInput]) -> list[dict] | None:
 
 def build_session_export(store, session_id: int, *, notes: str = "",
                          game_version: str | None = None,
-                         acknowledge_setup_doubt: bool = False,
                          calibrated_at_race_multiplier: bool = True) -> dict:
     """The payload for one run on its own."""
     session = store.get_session(session_id)
@@ -284,14 +273,12 @@ def build_session_export(store, session_id: int, *, notes: str = "",
         raise ValueError(f"no session with id {session_id}")
     return _build(store, session, session_lap_inputs(store, session_id),
                   notes=notes, game_version=game_version,
-                  acknowledge_setup_doubt=acknowledge_setup_doubt,
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
 
 
 def build_event_export(store, event_id: int, *, kind: str = "practice",
                        notes: str = "",
                        game_version: str | None = None,
-                       acknowledge_setup_doubt: bool = False,
                        calibrated_at_race_multiplier: bool = True,
                        laps: list[LapInput] | None = None) -> dict:
     """The payload for everything run at this event.
@@ -317,7 +304,6 @@ def build_event_export(store, event_id: int, *, kind: str = "practice",
         laps = event_lap_inputs(store, event_id, kind)
     return _build(store, _merged_session(sessions), laps, notes=notes,
                   game_version=game_version,
-                  acknowledge_setup_doubt=acknowledge_setup_doubt,
                   calibrated_at_race_multiplier=calibrated_at_race_multiplier)
 
 
@@ -490,7 +476,6 @@ def _fuel_capacity(session) -> tuple[float | None, str]:
 
 def _build(store, session: dict, laps: list[LapInput], *, notes: str,
            game_version: str | None = None,
-           acknowledge_setup_doubt: bool = False,
            calibrated_at_race_multiplier: bool) -> dict:
     """Assemble the `gt7-pitcrew/1.7` payload."""
     event = store.get_event(session["event_id"])
@@ -649,77 +634,28 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
             # watching all four.
             drivetrain=drivetrain)
 
-    setup = None
-    driver_changes = None
-    sheet_gears = None
-    sheet_final_gear = None
-    if session["setup_sheet_id"]:
-        sheet = store.get_setup_sheet(session["setup_sheet_id"])
-        if sheet is not None:
-            setup = sheet.as_export()
-            sheet_gears = sheet.gears
-            sheet_final_gear = _sheet_final_gear(sheet)
-            # **Across every session of the event.** A change made in a later
-            # run belongs to this body of evidence as much as one made in the
-            # first, and the merged record names only one id - see
-            # `_merged_session`.
-            changes = []
-            for one in session.get("session_ids") or [session["id"]]:
-                changes.extend(store.list_setup_changes(one))
-            # **The ledger is wider than the contract, so it is filtered
-            # here.** `setup_changes` now records performance and gearing
-            # moves too (restrictor, ECU, ballast, `gear1`..`gearN`), which are
-            # real changes and belong in the record - but `EXPORT-CONTRACT.md`
-            # §3 keys `driverChanges` on the 23 sliders, and a key the tune
-            # builder does not know is silently dropped at the far end rather
-            # than refused. Filtered, not dropped from the ledger.
-            driver_changes = [c.as_export() for c in changes
-                              if c.exportable] or None
-
-    gearing = gearing_export(counted, sheet_gears,
-                             sheet_final_gear=sheet_final_gear)
-
-    # **Rank zero: is this the setup that was actually in the car?**
+    # **The setup is not in this payload, and that is deliberate.**
     #
-    # The record was wrong in five consecutive sessions and the app caught
-    # none of them - every one was found by the driver mentioning it in
-    # passing. An export is where a wrong premise becomes permanent: it is
-    # read by a knowledge base, which reasons from it and issues a revision
-    # built on a car that was not on the circuit.
+    # The app no longer records what is in the car. The tune builder holds the
+    # setup and the gearbox, issues changes directly, and the driver confirms
+    # them against GT7's own settings screen - so the reader of this payload
+    # already has the sheet, from the side that wrote it. Carrying a second
+    # copy from here would be the thing the removal was for: a value in two
+    # places becomes two values, and it had already happened twice on one car.
     #
-    # **The export refuses; the capture never does.** A session not recorded
-    # cannot be re-driven. A sheet can be corrected afterwards and the session
-    # re-bound, so the honest place to stop is here, on the way out, and not
-    # at the green.
-    # **Which sheets disagree with THEIR OWN laps**, not whether the last box
-    # matches whichever sheet the merged session happens to carry. An event
-    # that spans a gearbox revision is the ordinary way of testing one, and
-    # the flat comparison read every such event as a wrong setup record.
-    disagreeing = sheets_disagree(
-        laps, lambda sheet_id: getattr(store.get_setup_sheet(sheet_id),
-                                       "gears", None))
-    doubt = setup_doubt.for_event(store, event, gearing, disagreeing)
-    doubt_note = ""
-    if doubt and not acknowledge_setup_doubt:
-        raise ExportRefused(
-            "the setup record for this event is not trustworthy, and an "
-            "export is where a wrong premise becomes permanent learning. "
-            + doubt.describe()
-            + " Confirm what is in the car - a photograph of the setup and "
-              "gear screens settles it - file the sheet, and export again. "
-              "If the record cannot be repaired, export with "
-              "acknowledge_setup_doubt and the doubt travels with the "
-              "payload instead of being suppressed.")
-    if doubt:
-        # **Acknowledged, never suppressed.** A refusal with no way forward
-        # makes every historical event permanently unexportable, and three of
-        # the eight on file fail this on the day it was written. But a
-        # payload that quietly drops the warning is worse than the refusal it
-        # replaced: the reader would diagnose a car nobody has confirmed and
-        # have no way to know. So the doubt goes into the notes, which is
-        # where the reader looks, in the driver's own words.
-        doubt_note = ("SETUP RECORD UNVERIFIED, exported anyway on the "
-                      "driver's instruction: " + doubt.describe())
+    # What went with it is the rank-zero doubt gate. It refused an export
+    # whose setup record could not be trusted, and there is no longer a setup
+    # record to distrust. **The question it asked has not gone away** - it has
+    # moved to the side that can actually answer it, which is the one holding
+    # the sheet and the screenshot.
+    #
+    # `gearing` stays, and it is now the only channel that speaks about the
+    # gearbox at all: the ratios are in the packet, so `fittedRatios` is
+    # measured. With no sheet to compare against, `matchesSheet` is null - not
+    # measured rather than agreeing - and `gearingConstantK` comes off the
+    # derived rolling radius, which the payload's own note says reads high
+    # through the unloaded tyre.
+    gearing = gearing_export(counted)
 
     strategy = _strategy_section(store, event["id"])
 
@@ -729,7 +665,7 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
         if record is not None:
             range_record = record.as_export()
 
-    all_notes = " ".join(part for part in (doubt_note, exclusion_note(laps),
+    all_notes = " ".join(part for part in (exclusion_note(laps),
                                            capacity_note, length_note,
                                            notes) if part)
 
@@ -739,8 +675,6 @@ def _build(store, session: dict, laps: list[LapInput], *, notes: str,
 
     return build_payload(
         meta,
-        setup=setup,
-        driver_changes=driver_changes,
         range_record=range_record,
         session=session_export(laps, fuel_capacity_l=fuel_capacity_l),
         laps=[lap_export(lap) for lap in laps],

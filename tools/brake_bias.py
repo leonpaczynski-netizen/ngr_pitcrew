@@ -208,14 +208,14 @@ def sheet_bias(store: Store, session: dict) -> float | None:
     if not sheet_id:
         return None
     try:
-        sheet = store.get_setup_sheet(sheet_id)
+        sheet = store.archived_setup_sheet(sheet_id)
     except Exception:                                        # noqa: BLE001
         return None
     if sheet is None:
         return None
-    # `SetupSheet.values` is the 23-key dict, keyed by the export contract's
-    # own vocabulary - `bb` is brake balance there and everywhere else.
-    values = getattr(sheet, "values", None)
+    # The archived sheet's `values` is the 23-key dict, keyed by the export
+    # contract's own vocabulary - `bb` is brake balance there and everywhere.
+    values = sheet.get("values")
     if not isinstance(values, dict):
         return None
     raw = values.get("bb")

@@ -483,17 +483,22 @@ def longest_stint_by_compound(laps: list[LapInput]) -> dict[str, int]:
 
 
 def _current_sheet_id(store, event) -> int | None:
-    """The sheet fitted to the car now, which older laps are weighed against.
+    """Always None: the app no longer records which setup is in the car.
 
-    None where the car has no sheet on file. Everything then weighs on age
-    alone, which is right: with nothing to be superseded by, no lap is
-    describing a car that no longer exists.
+    This used to name the sheet fitted now, so that a lap run on a superseded
+    one could be weighed down - it is describing a car that no longer exists.
+    With the setup record gone there is nothing to be superseded BY, and
+    everything weighs on age alone, which the recency model already documents
+    as the right answer in that case.
+
+    **Kept as a seam rather than deleted.** `recency.weight_of` still honours
+    a sheet id, and the stored laps of 96 sessions still carry theirs, so the
+    demotion is not dead code - it is a question this app can no longer ask.
+    Returning a stale id would be worse than returning none: the last sheet
+    ever written would silently become "the current car" forever, and every
+    lap driven since would be weighed against a setup nobody is running.
     """
-    sheets = store.list_setup_sheets(event["car_name"] or "")
-    for sheet in sheets:
-        if sheet.purpose in (None, "race"):
-            return sheet.id
-    return sheets[0].id if sheets else None
+    return None
 
 
 def _achieved_lap_ms(counted) -> int | None:

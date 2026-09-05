@@ -61,10 +61,9 @@ from pitcrew.export.build import (
 )
 from pitcrew.export.payload import APP_VERSION, ExportRefused, to_json
 from pitcrew.race import knowledge
-from pitcrew.setup import doubt
-from pitcrew.setup.sheet import RangeRecord, SetupError, SetupSheet
+from pitcrew.setup.ranges import RangeRecord, SetupError
 from pitcrew.store import catalogs
-from pitcrew.store.db import DEFAULT_SHEET_PURPOSE, Store
+from pitcrew.store.db import Store
 from pitcrew.store.identity import IDENTITY_OK
 from pitcrew.race.calls import (STATUS, STATUS_EVERY_LAPS, STAY_OUT,
                                fuel_in_hand, fuel_target_l, fuel_to_flag_l)
@@ -333,11 +332,13 @@ class TelemetryBridge(QObject):
         # being driven. None until a packet arrives - a lap nobody watched
         # makes no claim about how it was driven.
         self._lap_short_shift_rpm = None
-        # **The fitted sheet's own table**, set when a session opens. A shift
-        # point belongs to the gearbox, so it belongs to the sheet: change a
-        # ratio or the final drive and the rpm worth shifting at moves with
-        # it, which a table keyed by car alone cannot express.
-        self._sheet_shift_rpm: dict[int, float] = {}
+        # **The issued table for the box now fitted**, set when a session
+        # opens. A shift point belongs to the gearbox - change a ratio or the
+        # final drive and the rpm worth shifting at moves with it - so it is
+        # keyed by car AND circuit, which a table keyed by car alone cannot
+        # express. Issued by the tune builder; see `engineer/shift_points.py`.
+        self._issued_shift_rpm: dict[int, float] = {}
+        self._issued_short_shift: dict[int, float] = {}
 
     def set_short_shift(self, drop_rpm: float | None) -> None:
         """Engage or release the beep's short-shift, at the rpm asked for.
@@ -345,7 +346,7 @@ class TelemetryBridge(QObject):
         The drop is the engineer's, not the setting's: it comes from
         `short_shift_for`, which costs the saving against this car's measured
         litres-per-1000-rpm. Where no drop was named the beep returns to the
-        sheet's own thresholds - the call that says "short-shift and lift into
+        issued thresholds - the call that says "short-shift and lift into
         the slow corners" deliberately withheld a number, and inventing one to
         move the beep by would put back the fabrication it avoided.
         """
@@ -366,26 +367,42 @@ class TelemetryBridge(QObject):
         """
         self.effects.set_abs(setting)
 
-    def set_sheet_shift_rpm(self, table: dict | None) -> None:
-        self._sheet_shift_rpm = {int(g): float(r)
-                                 for g, r in (table or {}).items()}
+    def set_issued_shift_points(self, table) -> None:
+        """Take the table issued for the box now fitted, or clear it.
+
+        `None` clears, and clearing is a real instruction rather than a
+        no-op: a car whose table has not been issued must not keep beeping
+        the last car's, and the two are indistinguishable at the wheel.
+        """
+        self._issued_shift_rpm = {int(g): float(r) for g, r
+                                  in (getattr(table, "performance", None)
+                                      or {}).items()}
+        self._issued_short_shift = {int(g): float(r) for g, r
+                                    in (table.drops() if table else {}).items()}
         self._apply_shift_points()
 
     def _apply_shift_points(self) -> None:
         """Install the measured per-gear table for the car now on track.
 
-        **The fitted sheet first**, then the legacy per-car setting for a car
-        whose sheet has not been given one yet. A car with no measured table
-        anywhere gets an EMPTY one, never a neighbour's and never a default:
-        the whole value of a per-gear threshold is that it was measured on
-        that gearbox, and a table that quietly fills itself would be
-        indistinguishable at the wheel from one that was.
+        **Only the table issued for this car at this circuit.** A car with no
+        issued table gets an EMPTY one, never a neighbour's and never a
+        default: the whole value of a per-gear threshold is that somebody
+        designed it for that gearbox, and a table that quietly fills itself
+        would be indistinguishable at the wheel from one that was.
+
+        The fuel-saving points come down with it, as the per-gear drop the
+        beep works in. Where a gear has a performance point and no fuel-saving
+        one, the beep falls back to its scalar drop - a stated default, and
+        the one place a default is better than silence, because the
+        alternative is the beep going quiet exactly when fuel is being saved.
         """
         settings = self._shift_points
         if settings is None:
             return
-        table = dict(self._sheet_shift_rpm)
+        table = dict(self._issued_shift_rpm)
         self.shift_beep.per_gear = table
+        self.shift_beep.short_shift_drop_per_gear = dict(
+            self._issued_short_shift)
         if self._car_id is None:
             return
         if table:
@@ -399,10 +416,9 @@ class TelemetryBridge(QObject):
             # measurement without being one. A silence nobody can account for
             # is its own defect, so the log says which car and what to do.
             log("beep").info(
-                "car %s has no measured shift points on the fitted sheet, so "
-                "the beep is silent. Run tools/shift_points.py against a "
-                "session in this car and put the table on the setup sheet.",
-                self._car_id)
+                "car %s has no issued shift points for this circuit, so the "
+                "beep is silent. Ask the tune builder for the upshift table "
+                "that goes with the gearbox in the car.", self._car_id)
 
     def apply_settings(self, settings) -> None:
         self.beep_wanted = settings.beep_enabled
@@ -412,9 +428,9 @@ class TelemetryBridge(QObject):
         self._shift_points = settings
         self.shift_beep.short_shift_drop_rpm = settings.beep_short_shift_drop
         self._apply_shift_points()
-        # **On means "sound the measured thresholds", not "sound something".**
+        # **On means "sound the issued thresholds", not "sound something".**
         # The beep no longer waits on a packet for a threshold, because the
-        # threshold is on the sheet and the sheet is known before the car
+        # table is issued ahead of the session and is known before the car
         # turns a wheel.
         self.shift_beep.enabled = settings.beep_enabled
 
@@ -1244,22 +1260,7 @@ class PitCrewController(QObject):
             self._say_calendar_news(None)
             return
 
-        # The race sheet, by purpose - not whichever row sorted first.
-        # `list_setup_sheets` orders by `updated_at DESC, id DESC`, and a pasted
-        # race+qualifying pair is written inside the same second, so the
-        # qualifying sheet came back on top.  `EventScreen.load` then showed it
-        # under the Race label and one Save rewrote it as the race sheet, which
-        # left the car with two race sheets and no qualifying one.
-        car = event["car_name"] or ""
-        here = circuit_key_for(event)
-        sheet = self.store.sheet_for(car, "race", here)
-        if sheet is None:
-            # Falling back across circuits is what put a Yas Marina sheet on
-            # the Event screen for a Road Atlanta event.
-            sheets = [x for x in self.store.list_setup_sheets(car)
-                      if x.circuit_key == here]
-            sheet = sheets[0] if sheets else None
-        self.event_screen.load(event, sheet)
+        self.event_screen.load(event)
         self.practice.set_laps(self._rows_for_event(event["id"]))
         self.practice.set_status(self._idle_status(event))
         self._refresh_race_options(event)
@@ -1607,18 +1608,6 @@ class PitCrewController(QObject):
         event_id = int(event_id)
 
         message = f"{verb} {data['name']}."
-        if (data["setup_values"] or data["sheet_name"]
-                or data.get("build") or data.get("performance")):
-            try:
-                self._save_sheet(data)
-                message += " Sheet saved."
-            except SetupError as exc:
-                self.event_screen.note(f"Event saved, but the sheet was "
-                                       f"refused: {exc}", warn=True)
-                self.store.set_state("active_event_id", event_id)
-                self.load_active_event()
-                return
-
         self.store.set_state("active_event_id", event_id)
         self.event_screen.note(message)
         self.load_active_event()
@@ -1640,83 +1629,6 @@ class PitCrewController(QObject):
         self.load_active_event()
         self.event_screen.note(f"Reloaded {event['name']} as stored. "
                                f"Unsaved edits are gone.")
-
-    def _save_sheet(self, data: dict) -> int:
-        """Save the sheet on the form, and the other half of a pasted pair.
-
-        The prompts ask for a race sheet and a qualifying sheet in one reply,
-        so one paste carries both and the form can only hold one at a time.
-        Saving only what is on screen would mean asking for two and keeping
-        one, which is worse than not asking.
-
-        Returns the id of the sheet the form was showing - that is the one the
-        event is fitted with, and the caller records it against the session.
-        """
-        gears = []
-        for chunk in data.get("gear_text", "").replace(",", " ").split():
-            try:
-                gears.append(float(chunk))
-            except ValueError:
-                continue
-        # **Positional, 1st gear first, same as the ratios beside it.** A
-        # blank entry is a gear nobody measured and is skipped rather than
-        # filled: the value of a per-gear threshold is that it was measured on
-        # that gearbox, and a table that quietly completes itself is
-        # indistinguishable at the wheel from one that did not.
-        shift_rpm: dict[int, float] = {}
-        for gear, chunk in enumerate(
-                data.get("shift_rpm_text", "").replace(",", " ").split(), 1):
-            try:
-                rpm = float(chunk)
-            except ValueError:
-                continue
-            if rpm > 0:
-                shift_rpm[gear] = rpm
-
-        purpose = data.get("sheet_purpose") or DEFAULT_SHEET_PURPOSE
-        name = data["sheet_name"] or f"{data['name']} sheet"
-        # **Stamped with the circuit it was built for.** A sheet is a property
-        # of the car and the circuit, and until this was written the lookup
-        # had no way to tell one from another - so a Road Atlanta session
-        # bound itself to a Yas Marina sheet.
-        here = circuit_key_for(data)
-        sheet = SetupSheet(
-            car_name=data["car_name"],
-            sheet_name=name,
-            values=dict(data["setup_values"]),
-            gears=gears,
-            shift_rpm=shift_rpm,
-            performance=dict(data.get("performance") or {}),
-            build=dict(data.get("build") or {}),
-            purpose=purpose,
-            circuit_key=here,
-        )
-        sheet_id = self.store.save_setup_sheet(sheet)
-
-        for other_purpose, parsed in (data.get("other_sheets") or {}).items():
-            # **The name is kept, and the purpose keeps them apart.**
-            #
-            # This used to rename the second sheet to "<name> (qualifying)"
-            # because the store's key was `(car_name, sheet_name)` and two
-            # sheets of one name could not coexist - the comment here called
-            # the collision out and then worked around it. The workaround only
-            # covered the half of the case where the reply gave no name of its
-            # own; where it did, and the names matched, the second sheet still
-            # overwrote the first and relabelled it. That is the defect the
-            # driver reported. The key carries `purpose` now, so the two are
-            # two rows and re-pasting the same reply updates both in place
-            # instead of breeding a third.
-            self.store.save_setup_sheet(SetupSheet(
-                car_name=data["car_name"],
-                sheet_name=parsed.sheet_name or name,
-                values=dict(parsed.values),
-                gears=list(parsed.gears),
-                purpose=other_purpose,
-                circuit_key=here,
-            ))
-        return sheet_id
-
-    # ------------------------------------------------------------- nav state
 
     def nav_state(self) -> dict:
         """One line per screen for the rail: where the work actually stands.
@@ -2078,74 +1990,41 @@ class PitCrewController(QObject):
         """Start a practice session without touching the network.
 
         Separate from `start_practice` so the whole recording path can be
-        driven without a socket - and so the sheet that was fitted is recorded
-        the same way whoever opens the session.
+        driven without a socket - and so the upshift table the beep will use
+        is installed the same way whoever opens the session.
         """
         event = self.active_event()
         if event is None:
             return None
 
-        # **The sheet that matches what he is about to practise.** A
-        # qualifying run on the race sheet is a measurement of the race
-        # sheet, and filing it against the qualifying one would put a
-        # symptom on the wrong car.
+        # **The upshift table for the box that is actually fitted.** Keyed
+        # on the circuit as well as the car, because the gearbox is cut for
+        # the circuit: without that this would take the car's most recent
+        # table whatever track he was at, which is how a Road Atlanta session
+        # came to be recorded against a Yas Marina sheet on 23 Aug 2026.
         #
-        # Where the car has exactly ONE sheet on file, that is the sheet that
-        # is on the car whatever it was labelled, and the session records it -
-        # a car with one sheet is the normal case and refusing to open a
-        # session over it would be bureaucracy. Where it has several and none
-        # of them is for this purpose, the honest answer is that the app does
-        # not know which one is fitted, so **the session records no sheet at
-        # all rather than the wrong one**. Missing is null, never a
-        # substitute: a `setup_sheet_id` that names a sheet he was not running
-        # is worse than one that names none, because the export presents it as
-        # the setup as run.
-        # **Keyed on the circuit as well as the car.** Without it this picked
-        # the car's most recent race sheet whatever circuit he was at - which
-        # is how a Road Atlanta session came to be recorded against a Yas
-        # Marina sheet on 23 Aug 2026, five sessions after the same class of
-        # error was first written down.
+        # **No fallback across circuits, and none to a neighbouring car.**
+        # None means the beep is silent for this session, which is the honest
+        # answer - an rpm nobody designed for this box sounds at the wheel
+        # exactly like one that was.
         intent = self.practice.practice_intent()
         here = circuit_key_for(event)
-        sheet = self.store.sheet_for(event["car_name"] or "", intent, here)
-        if sheet is None:
-            # **The one-sheet fallback may not cross a circuit.** "This car
-            # has exactly one sheet, so that is what is on it" is sound
-            # reasoning within a circuit and wrong across one: the single
-            # sheet on file is then demonstrably for somewhere else.
-            sheets = [s for s in self.store.list_setup_sheets(
-                event["car_name"] or "") if s.circuit_key == here]
-            sheet = sheets[0] if len(sheets) == 1 else None
-            if sheet is None:
-                others = len(self.store.list_setup_sheets(
-                    event["car_name"] or ""))
-                if others:
-                    self.practice.set_status(
-                        f"No {intent} sheet on file for this car at this "
-                        f"circuit, and it has {others} for elsewhere - this "
-                        f"run is recorded without one. Load the {intent} "
-                        f"sheet on the Event screen.")
-        sheet_id = sheet.id if sheet else None
-        # The beep follows the gearbox that is actually fitted.
-        self.bridge.set_sheet_shift_rpm(sheet.shift_rpm if sheet else None)
+        table = self.store.shift_points_for(event["car_name"] or "", here)
+        self.bridge.set_issued_shift_points(table)
+        if table is None:
+            self.practice.set_status(
+                "No upshift table issued for this car at this circuit, so "
+                "the shift beep is silent for this run. Ask the tune builder "
+                "for the table that goes with the gearbox in the car.")
 
         self.bridge.reset()
         self.session_id = self.store.start_session(
-            event["id"], "practice", setup_sheet_id=sheet_id,
+            event["id"], "practice",
             practice_mode=self.practice.practice_mode(),
             practice_intent=intent,
             game_version=self.settings.game_version)
         self.session_kind = "practice"
         self._tell_settings_about_the_session()
-        # **Every change is an experiment, and this is where it is filed.**
-        # The session that opens against a different sheet from the last one on
-        # this car and circuit IS the run that tests the difference. Recorded
-        # here rather than asked for later, because a ledger that depends on
-        # somebody remembering is the ledger that held zero rows for 88
-        # sessions. Silent and harmless when nothing changed.
-        self._note_sheet_change()
-        self._check_setup_record(event)
-
         # The rack is NOT cleared. Going out again adds to the session's
         # evidence; it does not replace it. Three runs at one circuit are one
         # body of evidence about one car.
@@ -2378,58 +2257,6 @@ class PitCrewController(QObject):
 
     def _stop_video(self, session_id: int | None) -> None:
         self.hud.stop_video(session_id)
-
-
-    def _note_sheet_change(self) -> None:
-        """File this session's setup delta, and never let it cost a session.
-
-        The ledger is worth having and it is worth nothing at all compared with
-        the session opening. Every failure here is logged and swallowed - see
-        `Store.note_sheet_change` for what it records and why the caller was
-        missing for so long.
-        """
-        if self.session_id is None:
-            return
-        try:
-            self.store.note_sheet_change(self.session_id)
-        except Exception as exc:                            # noqa: BLE001
-            log("store").warning(
-                "could not file this session's setup delta: %s: %s",
-                type(exc).__name__, exc)
-
-    def _check_setup_record(self, event: dict) -> None:
-        """Ask, at the top of a session, whether anybody has checked the car.
-
-        **Rank zero, and the app has never once caught it itself.** The setup
-        record was wrong in five consecutive sessions - a Yas Marina sheet at
-        Road Atlanta, a v1 sheet against a Rev B car, `bb -1` in the car
-        against `0` on every sheet on file - and every one was found by the
-        driver mentioning it in passing.
-
-        **It prompts and it never blocks.** A session not recorded cannot be
-        re-driven, and a sheet can be corrected afterwards and the session
-        re-bound. The place that refuses is the export, because that is where
-        a wrong premise stops being a local error and becomes a knowledge
-        base's permanent learning. See `setup/doubt.py` and `export/build.py`.
-
-        The gearbox detector needs a fitted box and there is none before the
-        first lap, so at this point only the unfiled-revision half can speak.
-        That is the half that matters here anyway: it is answerable at the
-        desk, with the headset off, before he goes out.
-        """
-        try:
-            found = doubt.for_event(self.store, event)
-        except Exception as exc:                            # noqa: BLE001
-            log("setup").warning("could not check the setup record: %s: %s",
-                                 type(exc).__name__, exc)
-            return
-        if not found:
-            return
-        note = (f"Setup record unverified. {found.describe()} "
-                f"Photograph the setup and gear screens before you go out.")
-        log("setup").warning("%s", note)
-        if self.practice is not None:
-            self.practice.note(note, warn=True)
 
 
     def start_practice(self) -> None:
@@ -3880,58 +3707,25 @@ class PitCrewController(QObject):
         self._say_brief(event, plan, speaks=speaks)
 
         self.bridge.reset(race=True)
-        # **The race records the sheet it was run on, exactly as practice
-        # does.** It did not, and that is the most expensive omission in the
-        # loop: with no `setup_sheet_id` the export reports the *event's* v1
-        # sheet as the setup as run, so the Watkins race post-mortem described
-        # the low car with the trimmed rear wing - precisely the setup Rev C
-        # had been written to replace. Every delta and every ranked cost would
-        # have been computed against a car that was not on the circuit, and
-        # coherently enough that nothing would have looked wrong.
-        #
-        # It cascades further than the setup block. `laps.compound` comes off
-        # the sheet, so all twenty race laps landed with a null compound and
-        # sixteen fit-eligible laps sat outside the RS tyre model entirely;
-        # `fuelMap` went null for the same reason; and `gearingConstantK`,
-        # which prefers the sheet's final drive and only falls back to the
-        # derived one, fell back - and the derived figure reads high through
-        # the unloaded tyre radius, which the payload's own note says.
-        #
-        # Same rule as practice, and the same refusal: where the car has one
-        # sheet that is the sheet, where a race sheet exists it is that, and
-        # where neither holds the session records NO sheet rather than a
-        # plausible wrong one. A named sheet he was not running is worse than
-        # none, because the export presents it as the setup as run.
+        # **The race installs the upshift table, exactly as practice does.**
+        # Keyed on car and circuit, because the gearbox is cut for the
+        # circuit, and with no fallback across either: an rpm nobody designed
+        # for the box that is fitted sounds at the wheel exactly like one that
+        # was, and the race is the session where that costs the most.
         here = circuit_key_for(event)
-        sheet = self.store.sheet_for(event["car_name"] or "", "race", here)
-        if sheet is None:
-            # The one-sheet rule holds within a circuit and breaks across one.
-            sheets = [x for x in self.store.list_setup_sheets(
-                event["car_name"] or "") if x.circuit_key == here]
-            sheet = sheets[0] if len(sheets) == 1 else None
-            if sheet is None and self.store.list_setup_sheets(
-                    event["car_name"] or ""):
-                sheets = self.store.list_setup_sheets(event["car_name"] or "")
-                self.race_screen.set_status(
-                    f"No race sheet on file for this car at this circuit, and "
-                    f"it has {len(sheets)} elsewhere - this race is recorded without "
-                    f"one, so its laps carry no compound and the export "
-                    f"cannot say what was on the car. Load the race sheet on "
-                    f"the Event screen.", warn=True)
-        self.bridge.set_sheet_shift_rpm(sheet.shift_rpm if sheet else None)
+        table = self.store.shift_points_for(event["car_name"] or "", here)
+        self.bridge.set_issued_shift_points(table)
+        if table is None:
+            self.race_screen.set_status(
+                "No upshift table issued for this car at this circuit, so "
+                "the shift beep is silent for this race. Ask the tune builder "
+                "for the table that goes with the gearbox in the car.",
+                warn=True)
         self.session_id = self.store.start_session(
-            event["id"], "race", setup_sheet_id=sheet.id if sheet else None,
+            event["id"], "race",
             rehearsal=rehearsal, game_version=self.settings.game_version)
         self.session_kind = "race"
         self._tell_settings_about_the_session()
-        # **Every change is an experiment, and this is where it is filed.**
-        # The session that opens against a different sheet from the last one on
-        # this car and circuit IS the run that tests the difference. Recorded
-        # here rather than asked for later, because a ledger that depends on
-        # somebody remembering is the ledger that held zero rows for 88
-        # sessions. Silent and harmless when nothing changed.
-        self._note_sheet_change()
-
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
 

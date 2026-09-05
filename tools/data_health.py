@@ -164,11 +164,11 @@ def sheet_vs_gearbox(store, car_name: str, circuit_key: str) -> list[str]:
             if _event_circuit(row) == circuit_key:
                 untagged.append(row["id"])
             continue
-        sheet = store.get_setup_sheet(row["setup_sheet_id"])
-        if sheet is None or not sheet.gears:
+        sheet = store.archived_setup_sheet(row["setup_sheet_id"])
+        if sheet is None or not sheet["gears"]:
             no_gears.append(row["id"])
             continue
-        if matches_sheet(store.list_laps(row["id"]), sheet.gears) is False:
+        if matches_sheet(store.list_laps(row["id"]), sheet["gears"]) is False:
             bad.append(f"  ** session {row['id']} ({row['kind']}) is tagged "
                        f"{row['sheet_name']!r} but ran a different gearbox")
         else:
