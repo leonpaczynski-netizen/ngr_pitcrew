@@ -9,6 +9,13 @@ config.json.tmp
 data/*.db
 data/*.db-wal
 data/*.db-shm
+# The pre-migration backups. Same rule as the database itself, and they were
+# missing it: `git add -A` swept 1.5 GB of them into a commit on 5 Sep 2026.
+data/*.db.bak-*
+
+# Scratch capture dirs written by the board and traffic readers.
+_board/
+_traffic/
 
 # Derived: the phrase embeddings are a pure function of the phrase
 # list and the model file, rebuilt on demand if absent or stale.
