@@ -278,17 +278,26 @@ typical window standing in for them, because that difference decides whether a
 returned sheet can be entered without clamping. Measured is crayon; the
 checkbox that claims it fills with crayon too.
 
-**Practice** (`practice_screen.py`) — the rack. One row per lap, band on the
-left. He is in a headset while driving and cannot see this at all, so nothing
-is designed to be read at speed; it is the surface he returns to between
-stints to mark up, strike out, and export.
+**Practice** (`practice_screen.py`) — the rack, a timing tower: one line per
+lap, band on the left, on the motorsport colours above. It is the surface he
+returns to between stints to mark up, strike out and export.
 
-**Race Engineer** (`engineer_screen.py`) — split along the line the whole
-feature is built on: left is perception, all of it crayon because he declared
-it; right is the assembled prompt, presented as a block rather than a form
-because it is the thing being sent, not something to fill in. A plate above the
-form says what the app is filling in, so the division is visible before
-anything is generated.
+**Race** (`race_screen.py`) — a pit board since he left VR. The four figures
+that decide the race at a size readable from the wheel, the box-in lap largest
+because it is the only one that says *do something*; the plan drawn as a spine
+of proportional stints; then the last call and the log of every call with its
+reason and confidence.
+
+**Driver view** (`driver_view.py`) — the separate window on the screen above
+the game, and the only surface read while driving. It shows what GT7 does not:
+tyre temperature in degrees, fuel in laps, and the neighbours. Three ranks —
+the two gaps at the bottom edge where the eye travel is shortest, box and fuel
+between them, the four corners above. Its own instrument idiom, but the app's
+faces and tokens.
+
+**There is no Engineer screen.** It existed to compose a prompt, hand it to the
+driver to paste, and take a setup sheet back; that whole transport went on
+5 Sep 2026 when the tune builder took the car.
 
 **Reference** (`reference_screen.py`) — the knowledge base's own tables,
 verbatim and read-only. No controls, because there is nothing here to act on.

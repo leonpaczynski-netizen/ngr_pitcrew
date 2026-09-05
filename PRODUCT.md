@@ -28,10 +28,12 @@ He trail-brakes deep by design and runs low or no assists.
 A local race-engineering companion for GT7. Four jobs, in order of maturity:
 
 1. **Capture** GT7's 60 Hz UDP telemetry.
-2. **Record practice sessions** — laps, corners, and the setup that was in the
-   car at the time.
-3. **Export** a `gt7-pitcrew/1.1` JSON payload that Leon pastes into an external
-   Claude project, which returns a revised setup sheet.
+2. **Record practice sessions** — laps and corners. **Not the setup**: the tune
+   builder holds the car and the gearbox, and the driver confirms what is in it
+   against GT7's own settings screen. A value kept in two places becomes two
+   values, and on this project it did, twice, on one car.
+3. **Export** a `gt7-pitcrew/1.8` JSON payload the tune builder reads — over
+   MCP, or pasted.
 4. **Race strategy** — a stint and fuel plan, then talk him through it live and
    adapt as the race unfolds.
 
