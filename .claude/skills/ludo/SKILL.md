@@ -251,6 +251,82 @@ python tools/where_the_change_landed.py --before 129 --after 132 --bins
    *own* measured noise floor. `Report.silent` names the corners that cannot
    carry a claim; report those as silent.
 
+### Inconsistency is a finding, not the bar a finding has to clear
+
+**The driver's correction, 5 Sep 2026, and it is the more useful half of
+this.** Scatter had one job here — a delta inside it claims nothing — and that
+is right as far as it goes and stops one lap short:
+
+> *Why is the car not set up for a certain part of the track? If two sectors
+> are close each lap and one has spread, what is in that sector causing it?
+> Like the Bus Stop at Daytona and T1. T1 needed `lsd_b`, the Bus Stop needed
+> front compression lowered. That could have been identified earlier if laps
+> weren't thrown away as noise but actually analysed as to why there is noise.*
+
+**A corner he cannot repeat is a corner where the car is not repeatable** —
+a setup finding with a location already attached. And the mean cannot give you
+it: a mean over an unrepeatable corner is a confident number describing
+nothing that happened. Both of those changes were found late for exactly this
+reason.
+
+The tool prints it under `CONSISTENCY`, per sector, either side of the change.
+Three things it does before it will say anything:
+
+- **Detrended.** Improvement across a run is ~0.3 s and beats every setup
+  effect on file, so a sector getting quicker every lap has a big raw spread
+  and a small residual one. Only the residual is about the car.
+- **Relative, not absolute.** Sectors are not the same length; ranking raw
+  spread puts the longest first by construction.
+- **F-tested.** Nine laps a side needs about **3.2×**, six laps about **5.1×**,
+  before the extremes are distinguishable. It reports the ratio *and* the p,
+  and refuses to rank what it cannot separate. A sector 1.4× another is not
+  the answer to anything.
+
+⚠ **Above 10% relative spread, resolve it — never dismiss it.** The driver's
+second correction, and it is a rule about your posture, not about a threshold:
+*don't dismiss as data error, Ludo should ask, not dismiss. The variability of
+data is data to investigate.*
+
+Ten percent of a sector is seconds, which is more than a driver is normally
+inconsistent by — so it is **ambiguous**, and both branches matter. It is
+either an instrument fault (7% of laps in this archive teleport and speed
+integration cannot see it; a sector model can straddle a pit entry; an out-lap
+can slip the filter) **or it is the most important finding on the screen** — a
+corner the car cannot be driven the same way twice. Those demand opposite
+answers, so settle it rather than picking one:
+
+```python
+from pitcrew.analysis.distance import teleports   # the instrument half, measured
+```
+
+**This fired on real data the day it was written**: session 93's S1 carried 23%
+and 18× its neighbours. That is a question, and it has not been answered yet.
+
+Then ask what is physically in that sector — and note that `corner_models` is
+`auto-segment` everywhere, so you locate it by **distance into the lap**
+(`--bins` ranks it) and describe it, rather than naming a turn the app cannot
+honestly name.
+
+### A change is never judged where it was aimed
+
+**The Spa lesson, in his words:** *setting a car up for one section can leave
+it vulnerable in other sections, and it is about finding a setup that maximises
+driver, car and track.*
+
+A change assessed only in the sector it was meant to fix will look like a
+success nearly every time. The tool prints a **TRADE-OFF** line when one sector
+improved and another went the other way — counting only movements outside
+their own scatter, because a gain inside the noise paying for a loss inside the
+noise is two pieces of nothing being traded.
+
+**Sectors do not carry equal leverage, so a trade is not settled by adding it
+up.** Measured at Daytona: zone 4 is the highest-leverage exit by 3×, at 0.67 s
+per km/h and carrying 1,525 m, while the banking is last at 0.0367 — a risk
+corner, not a time corner. Half a tenth bought in a low-leverage place does not
+pay for half a tenth lost in a high-leverage one, and it certainly does not pay
+for a corner that has become unrepeatable. Say what the trade was and what it
+was worth; do not report the net and call it an improvement.
+
 ### The traps, and each has been paid for
 
 - **Two sector models is two pieces of road.** GT7 broadcasts no sectors; these

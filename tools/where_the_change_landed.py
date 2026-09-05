@@ -53,6 +53,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from pitcrew.analysis import spread as spread_mod            # noqa: E402
 from pitcrew.store.db import Store                           # noqa: E402
 
 BIN_M = 100.0
@@ -102,6 +103,7 @@ def sector_table(before, after):
         return
 
     total = 0.0
+    deltas = {}
     for index in (1, 2, 3):
         key = "sector" + str(index) + "_ms"
         was = [lap[key] for lap in before if lap[key]]
@@ -116,11 +118,13 @@ def sector_table(before, after):
                      st.pstdev(now) if len(now) > 1 else 0.0)
         delta = (st.median(now) - st.median(was)) / 1000.0
         total += delta
+        deltas["S%d" % index] = (delta, spread / 1000.0)
         verdict = "  <- inside the scatter" if abs(delta) * 1000 < spread else ""
         print("    S%d  %7.3f -> %7.3f   %+6.3f s   (n %d/%d, 1sd %.3f s)%s"
               % (index, st.median(was) / 1000, st.median(now) / 1000, delta,
                  len(was), len(now), spread / 1000, verdict))
     print("    sum of sectors: %+.3f s" % total)
+    tradeoff(deltas)
     # **It will not equal the whole-lap delta, and that is arithmetic rather
     # than a fault.** The median of the sums is not the sum of the medians:
     # the quickest S1 and the quickest S2 usually came from different laps.
@@ -128,6 +132,98 @@ def sector_table(before, after):
     # exists to prevent.
     print("        (medians do not add up to the lap delta - the best S1 and "
           "the best S2 are usually different laps)")
+    consistency(before, after)
+
+
+def tradeoff(deltas):
+    """Did the change help one section and cost another?
+
+    **The Spa lesson, in the driver's words:** *setting a car up for one
+    section can leave it vulnerable in other sections, and it is about
+    finding a setup that maximises driver, car and track.* A change judged
+    only where it was aimed will look like a success every time - the
+    question is what it did everywhere else.
+
+    Only movements outside their own scatter are counted either way. A gain
+    inside the noise paying for a loss inside the noise is two pieces of
+    nothing being traded.
+    """
+    real = {name: value for name, (value, spread) in deltas.items()
+            if abs(value) > spread}
+    if len(real) < 2:
+        return
+    gained = {n: v for n, v in real.items() if v < 0}
+    lost = {n: v for n, v in real.items() if v > 0}
+    if not gained or not lost:
+        return
+    print("    ** TRADE-OFF: %s improved (%s), %s went the other way (%s)."
+          % (", ".join(sorted(gained)),
+             " ".join("%+.3f" % v for v in gained.values()),
+             ", ".join(sorted(lost)),
+             " ".join("%+.3f" % v for v in lost.values())))
+    print("       A change aimed at one section is not judged there. Weigh "
+          "what each sector is worth - they do not carry equal leverage - "
+          "before calling this an improvement.")
+
+
+def consistency(before, after):
+    """**Which sector the car is not repeatable in — a finding in itself.**
+
+    The driver, 5 Sep 2026: *if two sectors are close each lap and one has
+    spread, what is in that sector causing it?* Daytona T1 wanted `lsd_b` and
+    the Bus Stop wanted front compression lowered, and both were found late
+    because the scatter was averaged away instead of being asked about.
+
+    Detrended, because improvement across a run is ~0.3 s and beats every
+    setup effect on file - a sector getting quicker every lap is not an
+    unstable one.
+    """
+    print("\n  CONSISTENCY - where the car is not repeatable")
+    for label, laps in (("before", before), ("after", after)):
+        spreads = [spread_mod.measure(
+            "S%d" % index, [lap["sector%d_ms" % index] for lap in laps])
+            for index in (1, 2, 3)]
+        got = [s for s in spreads if s is not None]
+        if not got:
+            print("    %-7s silent - fewer than %d laps with sectors"
+                  % (label, spread_mod.MIN_LAPS))
+            continue
+        parts = "  ".join(
+            "%s %.3f s (%.2f%%)" % (s.label, s.sd / 1000, 100 * s.relative)
+            for s in got)
+        print("    %-7s %s" % (label, parts))
+        # **Rule the measurement out before the car.** A driver is
+        # inconsistent by a few percent of a corner; ten percent of a sector
+        # is seconds, and the likelier causes are all faults - 7% of laps in
+        # this archive teleport, and speed integration cannot see it.
+        for suspect in got:
+            if spread_mod.needs_resolving(suspect):
+                print("            ?? %s spread is %.0f%% of the sector. That "
+                      "is larger than a driver is normally inconsistent by, "
+                      "so it is AMBIGUOUS and must be resolved - not waved "
+                      "away." % (suspect.label, 100 * suspect.relative))
+                print("               Either an instrument fault (teleports, "
+                      "a straddled pit entry, an out-lap through the filter) "
+                      "- run analysis.distance.teleports on these laps -")
+                print("               or the most important finding here: a "
+                      "corner the car cannot be driven the same way twice. "
+                      "Those demand opposite answers. Settle it.")
+        verdict = spread_mod.least_repeatable(got)
+        if verdict is None:
+            continue
+        worst, steadiest, ratio, pvalue = verdict
+        if pvalue is None:
+            print("            %s is %.1fx %s - too few laps to separate them"
+                  % (worst.label, ratio, steadiest.label))
+        elif pvalue < spread_mod.ALPHA:
+            print("            ** %s carries %.1fx the spread of %s "
+                  "(p=%.3f, n=%d/%d). Ask what is in %s."
+                  % (worst.label, ratio, steadiest.label, pvalue,
+                     worst.laps, steadiest.laps, worst.label))
+        else:
+            print("            %s is %.1fx %s but p=%.2f - inside what %d "
+                  "laps can distinguish"
+                  % (worst.label, ratio, steadiest.label, pvalue, worst.laps))
 
 
 def trace(store, lap_id):
