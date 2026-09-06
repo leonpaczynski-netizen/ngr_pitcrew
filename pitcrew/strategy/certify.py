@@ -72,6 +72,34 @@ def _stints(plan: dict) -> list[dict]:
     return [s for s in raw if isinstance(s, dict)] if isinstance(raw, list) else []
 
 
+def _clock_allows(inputs: RaceInputs, stints: list[dict]) -> int | None:
+    """How many laps this plan's timed race can run, with its stops off the
+    clock. None where there is no reference lap to count with."""
+    from pitcrew.strategy.model import laps_from_minutes
+
+    if not inputs.race_minutes or not inputs.lap_time_ms:
+        return None
+    stops = max(0, len(stints) - 1)
+    stop_s = 0.0
+    if stops:
+        fills = []
+        for index in range(1, len(stints)):
+            load = stints[index].get("fuel_l")
+            if load is not None and inputs.fuel_capacity_l:
+                # What goes through the hose is the next stint's load less
+                # whatever the previous stint left - unknown here, so the
+                # load itself is the ceiling, and a ceiling shortens the
+                # race, which is the safe direction.
+                fills.append(float(load))
+        litres = (sum(fills) / len(fills)) if fills else 0.0
+        stop_s = (float(inputs.pit_loss_s or 0.0)
+                  + float(inputs.pit_dead_time_s or 0.0)
+                  + (litres / inputs.refuel_rate_lps
+                     if inputs.refuel_rate_lps else 0.0))
+    return laps_from_minutes(inputs.race_minutes, inputs.lap_time_ms,
+                             stops=stops, stop_s=stop_s)
+
+
 def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     """Check a proposed plan against the car, the tank and the clock."""
     refusals: list[str] = []
@@ -127,8 +155,26 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     # ------------------------------------------------------------- the race
     total = sum(laps)
     if inputs.is_timed:
-        unchecked.append("the lap count, because a timed race's distance is an "
-                         "output of the plan rather than a target")
+        # **Checked against the clock, with this plan's own stops taken off
+        # it.** It used to be listed as unchecked by design, and the one plan
+        # that was a lap long armed on that. The distance IS an output of the
+        # plan - so it is computed from the plan: its stop count, its fills at
+        # the pump's rate, the lane loss and the dead time.
+        allowed = _clock_allows(inputs, stints)
+        if allowed is None:
+            unchecked.append("the lap count against the clock, because no "
+                             "reference lap time is known")
+        elif total > allowed:
+            refusals.append(
+                f"the stints cover {total} laps but the clock allows about "
+                f"{allowed} with {max(0, len(stints) - 1)} stop"
+                f"{'' if len(stints) - 1 == 1 else 's'} taken off it - the "
+                f"last stint would be filled for a lap that is never driven")
+        elif total < allowed - 1:
+            warnings.append(
+                f"the stints cover {total} laps and the clock allows about "
+                f"{allowed}; the last stint runs to the flag regardless, but "
+                f"the fill call will size it by the clock, not the plan")
     elif inputs.race_laps:
         if total < inputs.race_laps:
             refusals.append(

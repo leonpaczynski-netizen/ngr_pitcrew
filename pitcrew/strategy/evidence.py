@@ -39,6 +39,7 @@ from pitcrew.strategy.model import (
     RaceInputs,
     consecutive_sd,
     laps_from_minutes,
+    timed_race_stop_s,
 )
 
 MEASURED = "measured"      # off the telemetry stream
@@ -669,6 +670,7 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     timed = event["race_type"] == "time"
     race_minutes = float(event["race_laps"] or 0) if timed else None
     race_laps = event["race_laps"] or 0
+    timed_stops, timed_stop_s = 0, 0.0
     if timed:
         # **How many laps fit in the clock is a different question from how
         # fast the car goes, and it wants a different median.**
@@ -689,7 +691,19 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
         # starting estimate that `clock_bound_stints` re-derives per plan.
         achieved = _achieved_lap_ms(counted) or reference_ms
         if achieved:
-            race_laps = laps_from_minutes(race_minutes or 0, achieved)
+            # **Less the stops.** First the count without them, then the
+            # stops that count forces and what each costs, then the count
+            # again with that time off the clock - see `laps_from_minutes`.
+            naive = laps_from_minutes(race_minutes or 0, achieved)
+            timed_stops, timed_stop_s = timed_race_stop_s(
+                laps=naive, fuel_per_lap_l=fuel_per_lap, capacity_l=capacity,
+                refuel_rate_lps=refuel["rateLps"] or event["refuel_rate_lps"],
+                pit_loss_s=event["pit_loss_secs"],
+                dead_time_s=PIT_DEAD_TIME_S,
+                mandatory_stops=event["mandatory_stops"] or 0)
+            race_laps = laps_from_minutes(race_minutes or 0, achieved,
+                                          stops=timed_stops,
+                                          stop_s=timed_stop_s)
 
     inputs = RaceInputs(
         weighting=weighting,
@@ -722,7 +736,11 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     evidence = [
         Evidence("Race length",
                  (f"{race_laps} laps" if not timed
-                  else f"{race_minutes:g} min, about {race_laps} laps"),
+                  else f"{race_minutes:g} min, about {race_laps} laps"
+                       + (f" with {timed_stops} stop"
+                          f"{'' if timed_stops == 1 else 's'} of ~"
+                          f"{timed_stop_s:.0f} s off the clock"
+                          if timed_stops else "")),
                  DECLARED if not timed else ASSUMED,
                  "" if not timed else _timed_race_note(inputs)),
         Evidence("Reference lap",

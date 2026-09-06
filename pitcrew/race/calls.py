@@ -1288,7 +1288,14 @@ def _crossing_the_line(state: RaceState) -> bool:
 def _green(state: RaceState) -> Call | None:
     if state.lap != 0 or state.finished:
         return None
-    laps = f"{state.laps_total} laps." if state.laps_total else ""
+    # **A timed race's count is an estimate and is said as one.** "21 laps"
+    # at Deep Forest was the plan's distance; the flag fell on 20. The
+    # number is still worth saying - it is what every "to the flag" figure
+    # rests on - but the driver has to hear that it can move by one.
+    if state.laps_total and state.race_minutes is not None:
+        laps = f"About {state.laps_total} laps on the clock."
+    else:
+        laps = f"{state.laps_total} laps." if state.laps_total else ""
     # **"No notes for this circuit" is said HERE or it is never said.**
     #
     # The briefing is what makes George anything other than generic - the

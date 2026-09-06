@@ -99,13 +99,21 @@ def test_what_could_not_be_checked_is_named_rather_than_passed():
     assert "Not checked" in got.describe()
 
 
-def test_a_timed_race_does_not_have_its_lap_count_judged():
-    """A timed race's distance is an OUTPUT of the plan: a stop costs laps, so
-    the lap count follows from the stops rather than constraining them."""
+def test_a_timed_race_has_its_lap_count_checked_against_the_clock():
+    """A timed race's distance is an OUTPUT of the plan - so it is computed
+    FROM the plan: its stops, its fills at the pump's rate, the lane loss and
+    the dead time come off the clock, and the stints are judged against what
+    is left. It used to be listed as unchecked by design, and the one plan
+    that was a lap long (Deep Forest, 6 Sep 2026) armed on that."""
     got = certify(plan(stint(10), stint(10, "RM")),
                   inputs(race_laps=None, race_minutes=50.0))
     assert not any("reach the flag" in r for r in got.refusals)
-    assert any("timed race" in u for u in got.unchecked)
+    assert not any("lap count" in u for u in got.unchecked)
+    # A plan that outruns the clock is refused, and the refusal says by
+    # how much and with how many stops.
+    long = certify(plan(stint(30), stint(30, "RM")),
+                   inputs(race_laps=None, race_minutes=50.0))
+    assert any("clock allows about" in r for r in long.refusals)
 
 
 def test_an_empty_or_nonsense_plan_is_refused_outright():

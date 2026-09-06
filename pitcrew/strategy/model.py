@@ -2045,8 +2045,48 @@ def _compound_sequence(inputs: RaceInputs, stints: int) -> list[str] | None:
     return sequence
 
 
-def laps_from_minutes(minutes: float, lap_time_ms: int) -> int:
-    """A timed race, expressed in laps so the same model applies."""
+def laps_from_minutes(minutes: float, lap_time_ms: int, *,
+                      stops: int = 0, stop_s: float = 0.0) -> int:
+    """A timed race, expressed in laps so the same model applies.
+
+    **With the stops taken off the clock.** A stop is a minute of race time
+    that covers no ground; `ceil(minutes / lap)` counts it as a lap. Deep
+    Forest, 6 Sep 2026: 30 min / 88.9 s said 21, the certifier marked the
+    count unchecked, George said "21 laps" at the green, and the flag fell
+    on lap 20 - the 52 s stop was the missing lap, and the fill was sized
+    for a race a lap longer than the one being driven.
+
+    `stops` and `stop_s` are the count and the duration of each (lane loss,
+    dead time and the litres through the hose at the pump's rate).
+    """
     if lap_time_ms <= 0:
         raise StrategyImpossible("no reference lap time")
-    return max(1, math.ceil(minutes * 60_000 / lap_time_ms))
+    on_track_ms = minutes * 60_000 - max(0, stops) * max(0.0, stop_s) * 1000.0
+    return max(1, math.ceil(on_track_ms / lap_time_ms))
+
+
+def timed_race_stop_s(*, laps: int, fuel_per_lap_l: float | None,
+                      capacity_l: float | None, refuel_rate_lps: float | None,
+                      pit_loss_s: float | None, dead_time_s: float,
+                      mandatory_stops: int = 0) -> tuple[int, float]:
+    """How many stops a timed race needs at least, and what each costs.
+
+    The least stops the tank forces (or the rules demand), and the seconds
+    each takes: lane loss, dead time, and the litres that have to go in
+    spread evenly over the stops at the pump's rate. Both are inputs to
+    `laps_from_minutes`; both are rough, and rough in the direction of a
+    shorter race, which is the direction that does not run him dry.
+    """
+    stops = max(0, int(mandatory_stops or 0))
+    litres_total = None
+    if fuel_per_lap_l and capacity_l:
+        litres_total = laps * fuel_per_lap_l
+        forced = max(0, math.ceil(litres_total / capacity_l) - 1)
+        stops = max(stops, forced)
+    if stops <= 0:
+        return 0, 0.0
+    seconds = float(pit_loss_s or 0.0) + float(dead_time_s or 0.0)
+    if litres_total is not None and capacity_l and refuel_rate_lps:
+        to_add = max(0.0, litres_total - capacity_l) / stops
+        seconds += to_add / refuel_rate_lps
+    return stops, seconds

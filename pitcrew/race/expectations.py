@@ -55,6 +55,10 @@ from statistics import median, stdev
 # 1.80%; three laps resolve to +/-2.18% and five to +/-1.69%. Raised from the
 # three that used to be here for exactly that reason.
 RACE_BURN_LAPS = 5
+# Clean laps a stint needs before its own burn sizes the fill. Three is the
+# floor the fill's scatter term already asks for, and the stint after a
+# stop has usually driven three before the next stop is in question.
+STINT_BURN_LAPS = 3
 
 # And the same question for pace, which is a different number because the
 # channel is different: three clean laps is the minimum a median can be taken
@@ -220,6 +224,14 @@ class ExpectationTracker:
         # positionally in several places. Empty where the lap did not report a
         # tank level, and then the load correction stands down.
         self._green_loads: list[float | None] = []
+        # **Which stint each green lap belongs to**, parallel to `_green`.
+        # A pit or out lap closes a stint. The burn that sizes a fill and
+        # judges the plan is the CURRENT stint's once it has enough laps:
+        # at Deep Forest the whole-race median (7.35, from a stint driven
+        # lift-and-coasting) said "burning 6% under plan" with the hose in
+        # while the stint about to be driven ran 7.9-8.1.
+        self._green_stint: list[int] = []
+        self._stint = 0
 
     # ------------------------------------------------------------------ feed
 
@@ -241,6 +253,9 @@ class ExpectationTracker:
             self._all_lap_ms.append(int(lap.lap_time_ms))
         pit = bool(getattr(lap, "is_pit_lap", False)
                    or getattr(lap, "is_out_lap", False))
+        if pit:
+            # The next green lap opens a new stint.
+            self._stint += 1
         if pit or lap.lap_num <= 1 or lap.lap_time_ms <= 0:
             return
         saving = bool(getattr(lap, "short_shift_rpm", None))
@@ -249,6 +264,7 @@ class ExpectationTracker:
         # to answer "did the saving work" - see `saving_response`.
         self._green.append((int(lap.lap_time_ms), float(lap.fuel_used or 0.0),
                             saving, int(lap.lap_num)))
+        self._green_stint.append(self._stint)
         start = getattr(lap, "fuel_start", None)
         end = getattr(lap, "fuel_end", None)
         self._green_loads.append((start + end) / 2.0
@@ -430,6 +446,59 @@ class ExpectationTracker:
             return None
         return round(median(clean), 3)
 
+    def _clean_this_stint(self) -> list[tuple[int, float, bool, int]]:
+        """The clean rows of the stint being driven now."""
+        if not self._green:
+            return []
+        current = self._stint
+        rows = [row for row, stint in zip(self._green, self._green_stint)
+                if stint == current]
+        if not rows:
+            return []
+        cutoff = min(row[0] for row in rows) * (1.0 + BURN_OUTLIER_FRACTION)
+        return [row for row in rows if row[0] <= cutoff and not row[2]]
+
+    def stint_green_laps(self) -> int:
+        return len(self._clean_this_stint())
+
+    def stint_fuel_per_lap_l(self) -> float | None:
+        """This stint's own green burn, or None until it has enough laps.
+
+        The whole-race median is kept for anything that spans stints; the
+        stint's figure is what the next laps will actually burn - the car is
+        lighter, and the driver may have stopped saving.
+        """
+        clean = [used for _, used, _, _ in self._clean_this_stint()
+                 if used > 0]
+        if len(clean) < STINT_BURN_LAPS:
+            return None
+        return round(median(clean), 3)
+
+    def stint_fuel_reference_load_l(self) -> float | None:
+        """The mean fuel aboard across the laps `stint_fuel_per_lap_l` used."""
+        rows = self._clean_this_stint()
+        if len(rows) < STINT_BURN_LAPS:
+            return None
+        loads = []
+        for row, load in zip(self._green, self._green_loads):
+            if load is not None and row in rows:
+                loads.append(load)
+        if not loads:
+            return None
+        return round(sum(loads) / len(loads), 2)
+
+    def current_fuel_per_lap_l(self) -> float | None:
+        """The burn to size the next laps on: the stint's once it can speak,
+        the race's until then."""
+        stint = self.stint_fuel_per_lap_l()
+        return stint if stint is not None else self.race_fuel_per_lap_l()
+
+    def current_fuel_reference_load_l(self) -> float | None:
+        stint = self.stint_fuel_per_lap_l()
+        if stint is not None:
+            return self.stint_fuel_reference_load_l()
+        return self.race_fuel_reference_load_l()
+
     def race_fuel_reference_load_l(self) -> float | None:
         """The mean fuel aboard across the laps `race_fuel_per_lap_l` came from.
 
@@ -476,7 +545,9 @@ class ExpectationTracker:
         measured race, and fewer laps than this cannot resolve it.
         """
         clean = [used for _, used, _, _ in self._clean() if used > 0]
-        observed = self.race_fuel_per_lap_l()
+        # Against the plan as the car is burning NOW: this stint's figure
+        # once it has three clean laps, the race's before that.
+        observed = self.current_fuel_per_lap_l()
         if (observed is None or not self._planned_fuel
                 or len(clean) < RACE_BURN_LAPS):
             return None

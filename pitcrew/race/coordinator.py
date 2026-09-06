@@ -671,7 +671,12 @@ class RaceCoordinator:
         # the coordinator by hand.
         if lap.fuel_used > 0:
             self._burns.append(lap.fuel_used)
-        green = self.expect.race_fuel_per_lap_l()
+        # **This stint's burn once it has three clean laps, the race's until
+        # then.** The whole-race median said "6% under plan" with the hose
+        # in at Deep Forest, from a first stint driven lift-and-coasting,
+        # while the stint about to be run burned 8% more. The fill and every
+        # "vs plan" sentence size the laps AHEAD, and those are this stint's.
+        green = self.expect.current_fuel_per_lap_l()
         if green is not None and self.expect.green_laps() >= self.BURN_LAPS_NEEDED:
             self.state.fuel_per_lap_l = green
             # **And the load it was measured at, or the burn is unanchored.**
@@ -680,7 +685,7 @@ class RaceCoordinator:
             # stop is sized on laps the car is no longer running. Installed on
             # the same terms as the rate - this race's own laps, or nothing.
             self.state.fuel_reference_load_l = (
-                self.expect.race_fuel_reference_load_l())
+                self.expect.current_fuel_reference_load_l())
         # **And the scatter beside it, because the scatter sizes the fill.**
         # Installed on the same terms as the rate: this race's own laps, or
         # nothing. Where it is None the fill falls back to CLAUDE.md's flat
