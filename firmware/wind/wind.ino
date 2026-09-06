@@ -68,6 +68,32 @@
 // atexit handler can promise. `SHShakeitBaseSafetyDelay`, unchanged.
 #define SAFETY_DELAY_MS    1000
 
+// ------------------------------------------------------ which board drives
+//
+// **Two backends, and the reason the second exists.**
+//
+// The shield path chops the fans' SUPPLY through an H-bridge, and the
+// PCA9685 that times it cannot go above 1526 Hz. A 2-wire brushless blower
+// carries its own commutation controller, and that controller runs off a
+// small internal capacitor. At 1526 Hz the off-phase is up to 650 us, and a
+// fan drawing ~1.5 A empties a ~100 uF internal cap in far less than that -
+// so the controller browns out and restarts, in bands of duty rather than in
+// proportion to load. That is the fault the driver has reported since
+// August, and it is why no setting change ever helped in a consistent
+// direction.
+//
+// At 20 kHz the same arithmetic gives an off-phase of 50 us and a droop
+// under a volt. **The frequency is the fix, and the shield could never
+// reach it** - which is why the drive moved off the shield entirely rather
+// than being tuned.
+#define DRIVE_BTS7960
+//#define DRIVE_ADAFRUIT_SHIELD
+
+#if defined(DRIVE_BTS7960) == defined(DRIVE_ADAFRUIT_SHIELD)
+#error "Select exactly one drive backend."
+#endif
+
+#ifdef DRIVE_ADAFRUIT_SHIELD
 // -------------------------------------------------------------- the shield
 //
 // Adafruit Motor Shield V2 = a PCA9685 16-channel PWM driver at 0x60 feeding
@@ -109,6 +135,8 @@
 #define PCA9685_PRESCALE_MIN  3
 #define WIND_PWM_HZ           1526
 
+#endif  // DRIVE_ADAFRUIT_SHIELD
+
 // **The slew limit, deliberately off.**
 //
 // If raising the frequency does not fix it, the next hypothesis is inrush:
@@ -136,6 +164,7 @@ static uint8_t motorValue[CHANNELS];        // what each channel is set to now
 static unsigned long lastMotorsRead = 0;    // 0 = nothing to time out yet
 
 // ------------------------------------------------------------- PCA9685 I/O
+#ifdef DRIVE_ADAFRUIT_SHIELD
 
 static void pcaWrite(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(SHIELD_I2C_ADDR);
@@ -230,6 +259,80 @@ static void shieldBegin() {
     setMotorOutput(i, 0);
   }
 }
+
+#else   // ============================================ DRIVE_BTS7960
+
+// **Timer1 hardware PWM straight out of the ATmega, into two BTS7960
+// half-bridge modules.** No I2C, no PCA9685, no shield - and therefore no
+// 1526 Hz ceiling.
+//
+// 20 kHz, exactly: fast PWM with ICR1 as TOP and no prescaler gives
+// 16 MHz / (ICR1 + 1), so ICR1 = 799. That is 13x the shield's best and
+// above most people's hearing. The BTS7960 is rated to 25 kHz, so there is
+// headroom left in this number, which the shield never had.
+#define WIND_PWM_HZ        20000UL
+#define PWM_TOP            ((uint16_t)((F_CPU / WIND_PWM_HZ) - 1))
+
+// Pins 9 and 10 are OC1A and OC1B - the only two the timer can drive
+// directly, and the reason the two fans live on channels 0 and 1.
+#define PIN_PWM_LEFT       9
+#define PIN_PWM_RIGHT      10
+// Each module's R_EN and L_EN, tied together and driven from one pin.
+#define PIN_EN_LEFT        7
+#define PIN_EN_RIGHT       8
+
+// **Only two of the four channels reach hardware, and that is deliberate.**
+// The protocol carries four because the host reads exactly `motorCount()`
+// bytes with no delimiters, so the wire format may not be trimmed to the
+// hardware. Channels 2 and 3 are accepted, recorded and driven nowhere.
+// A third and fourth fan would go on Timer2 (pins 3 and 11).
+#define DRIVEN_CHANNELS    2
+
+// **Zero disables the bridge rather than commanding zero duty, and the
+// difference matters for these fans.** With R_EN low the BTS7960's outputs
+// go high-impedance and the fan free-wheels, exactly as the old shield's
+// `run(RELEASE)` did. Held enabled at zero duty the bridge would instead
+// clamp both fan terminals to ground - shorting the blower's own internal
+// supply capacitor, which is the one thing its controller likes least.
+static void setMotorOutput(uint8_t idx, uint8_t value) {
+  motorValue[idx] = value;
+  if (idx >= DRIVEN_CHANNELS) return;
+
+  const uint8_t enable = (idx == 0) ? PIN_EN_LEFT : PIN_EN_RIGHT;
+  if (value == 0) {
+    digitalWrite(enable, LOW);
+    if (idx == 0) OCR1A = 0; else OCR1B = 0;
+    return;
+  }
+  // 255 maps to TOP, so full duty is genuinely full rather than 99.6%.
+  const uint16_t duty = (uint16_t)(((uint32_t)value * PWM_TOP) / 255u);
+  if (idx == 0) OCR1A = duty; else OCR1B = duty;
+  digitalWrite(enable, HIGH);
+}
+
+static void shieldBegin() {
+  pinMode(PIN_PWM_LEFT, OUTPUT);
+  pinMode(PIN_PWM_RIGHT, OUTPUT);
+  pinMode(PIN_EN_LEFT, OUTPUT);
+  pinMode(PIN_EN_RIGHT, OUTPUT);
+  digitalWrite(PIN_EN_LEFT, LOW);      // bridges off until commanded
+  digitalWrite(PIN_EN_RIGHT, LOW);
+
+  // Fast PWM, TOP = ICR1 (mode 14), non-inverting on both outputs,
+  // prescaler 1. Timer0 keeps millis(); Timer1 is ours.
+  TCCR1A = _BV(COM1A1) | _BV(COM1B1) | _BV(WGM11);
+  TCCR1B = _BV(WGM13)  | _BV(WGM12)  | _BV(CS10);
+  ICR1  = PWM_TOP;
+  OCR1A = 0;
+  OCR1B = 0;
+
+  for (uint8_t i = 0; i < CHANNELS; i++) {
+    motorValue[i] = 0;
+    setMotorOutput(i, 0);
+  }
+}
+
+#endif  // drive backend
 
 // ============================================================== ARQ SERIAL
 //
@@ -478,8 +581,19 @@ static void commandExpandedList() {
 // the read failed** - nothing answered at 0x60 - and is the one value that
 // cannot be a real setting, since the datasheet floor is 3.
 static void commandShieldFreq() {
+#ifdef DRIVE_ADAFRUIT_SHIELD
   writeValue(pcaRead(PCA9685_PRESCALE));
   writeValue(pcaRead(PCA9685_MODE1));
+#else
+  // TOP is what sets the frequency here, so it is what gets reported:
+  // f = 16 MHz / (TOP + 1). Sent low byte first. The third value is the
+  // timer's own mode register, which proves the timer was actually
+  // configured rather than left in the core's default 490 Hz state - the
+  // same question the PCA9685 prescale answered on the old board.
+  writeValue((uint8_t)(ICR1 & 0xFF));
+  writeValue((uint8_t)(ICR1 >> 8));
+  writeValue(TCCR1B);
+#endif
 }
 
 // **The registers M1 and M2 are actually holding, read back off the chip.**
@@ -498,11 +612,24 @@ static void commandShieldFreq() {
 // (ON_L, ON_H, OFF_L, OFF_H) in that order. Bit 4 of an _H register is the
 // part's full-on/full-off flag rather than a count.
 static void commandShieldDump() {
+#ifdef DRIVE_ADAFRUIT_SHIELD
   static const uint8_t DUMP[6] = { 8, 9, 10, 13, 12, 11 };
   for (uint8_t i = 0; i < 6; i++) {
     uint8_t base = (uint8_t)(PCA9685_LED0_ON_L + 4 * DUMP[i]);
     for (uint8_t r = 0; r < 4; r++) writeValue(pcaRead((uint8_t)(base + r)));
   }
+#else
+  // The same question on the new hardware: what are the outputs actually
+  // holding? Compare duty against TOP, and the enable state says whether
+  // the bridge is driving at all. Left channel then right: duty low, duty
+  // high, enabled.
+  writeValue((uint8_t)(OCR1A & 0xFF));
+  writeValue((uint8_t)(OCR1A >> 8));
+  writeValue((uint8_t)digitalRead(PIN_EN_LEFT));
+  writeValue((uint8_t)(OCR1B & 0xFF));
+  writeValue((uint8_t)(OCR1B >> 8));
+  writeValue((uint8_t)digitalRead(PIN_EN_RIGHT));
+#endif
 }
 
 // Feature letters. G gear, N name, I unique id, J buttons, P custom
