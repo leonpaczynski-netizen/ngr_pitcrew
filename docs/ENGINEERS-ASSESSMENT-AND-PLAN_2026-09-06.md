@@ -663,6 +663,76 @@ the held-up window and the sector map (the trend wipes on any subject
 change); two consecutive locator misreads would still cut the gauge series;
 the sector map's offset path (gap ≥ 2 s) has no test.
 
+### Where we stopped — 7 Sep 2026, evening
+
+**Done and committed (master, suite green on each by pytest's own exit line):**
+Phase −1; Phase 0 rows 0.0–0.14; Phase 1 rows 1.1, 1.2, 1.3, 1.4, 1.5, 1.9,
+1.11, 1.12, and half of 1.6 (gap reads and board positions persist). Last
+commits: `78a728a` (the undercut and the chase), `d26e23e` (critic 5's fixes,
+the tow trade, penalties). **The driver's acceptance test is in and holds:**
+`pitcrew/tests/test_undercut_deep_forest.py` — sector split on lap 5, the
+undercut on lap 6 on the real burn scatter, the tow priced and found not
+worth it. Its remaining premises are written in its docstring (a lap race for
+a timed one; one car ahead all race).
+
+**Critic pass 6 (af83b53) on `d26e23e` — NOT AGREED, reported as we stopped.
+The six pass-5 fixes are confirmed real (each driven, not just tested).
+FIRST JOB ON RESUME — three defects, two of them calls wrong under a helmet:**
+
+1. **`TOW_TRADE` speaks after the last stop** (`rival_calls.tow_trade_call`):
+   no guard on a stop remaining, and `clear_stint` clears `said` at PIT_EXIT,
+   so a new car ahead after the lap-13 stop gets *"Worth it — stay in it"*
+   about a saving tow.py itself says is worth nothing once the fill is in.
+   Fix: return None when no stop remains; gate the undercut on `worth_it`
+   only while one does.
+2. **The tow pairing is off by one live** (`coordinator._weigh_the_tow`):
+   the trend's keys are laps COMPLETED (`lap_now()`), so the gap read
+   during lap N pairs with lap N−1's burn and time; the acceptance test's
+   `_drive` keys the trend on the lap itself with the FIRST read, which is
+   neither the live nor the replay convention, so it cannot see it. Fix:
+   shift keys by one in `_weigh_the_tow`, and make `_drive` note `lap−1`
+   with the last read like the replay. (Also: the replay's `lap_num−1`
+   ignores `laps_missed()`, so keys drift after a lost pit-lane lap.)
+3. **The penalty detector's false positives become a spoken fact**
+   (`analysis/penalties.py`, controller `_corner_windows`): a 0.6 s
+   avoidance stab on a straight, a wet brake 300 m before a corner, or an
+   auto-segment corner model missing a corner (the Bus Stop flagged every
+   lap) each produce *"Penalty served. About 0.3 seconds."* Fix: refuse on
+   auto-segment models (`CornerModel.source`) and wet sessions; speak it
+   LOW with "Unconfirmed." since the HUD indicator is not read.
+
+Minor: `_box_soon` lacks the "dropping the stop was not granted" clause
+`_box_now` carries. Questions carried: the plan-burn reference for the tow is
+inside the practice-over-race band (3–9 %), so "Worth it" can come from bias
+alone — say it LOW on that reference; the rail without a `fuel_long:
+drop_stop` entry re-enacts Fuji-lite (three box calls for a stop the fuel
+does not need, then the fold) — the driver should be shown that choice;
+`_offset_bins` is dead live and would clamp rather than wrap if wired; CHASE
+plus CLOSING can speak about the same car four laps in five.
+
+**Parked, ready to apply — `docs/pending/`:** the other half of 1.6, a verdict
+per call. `apply_p1_verdicts.py` is the edit script (run from the repo root:
+`python docs/pending/apply_p1_verdicts.py`), `test_call_verdicts.py` its test
+(move back to `pitcrew/tests/` after applying). It gives `call_outcome.judge`,
+`race_revisions.verdict/verdict_detail` (v17), `board_positions`, the
+controller judging every filed call at each crossing and at the flag,
+`CallRow.set_outcome` finally called, and the export carrying the verdict.
+Not applied because critic 6 was mid-run on the tree.
+
+**Left in Phase 1:** 1.7 (race page absorbs the loaded card, Strategy page
+goes), 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
+inventory — the "to the stop / to the flag" pair and "Box this lap" from three
+kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic
+5's carried questions (a misidentified board row resets the held-up window;
+two locator misreads still cut the gauge series; the sector map's offset path
+is untested). **Then Phases 2–4.**
+
+**How to resume:** read §9a from "Fourth critic pass" down, run
+`python -m pytest pitcrew/tests -q` and read the exit line, run
+`python tools/wiring_audit.py`, then apply the parked verdict change and put
+it to a critic before anything new. Every batch: build, test, critic, fix,
+commit — in that order.
+
 ## 9. Critic record
 
 **Pass 1 (6 Sep, late).** Twenty-six claims spot-checked: 21 confirmed, 2 wrong
