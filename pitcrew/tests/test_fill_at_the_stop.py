@@ -50,7 +50,7 @@ def test_a_late_last_stop_is_sized_by_the_laps_left_not_the_plan():
     assert litres is not None
     # Seven laps plus a margin - never the plan's ten.
     assert 7 * 7.35 <= litres < 8.5 * 7.35
-    assert fuel_target_basis(state) == "7 laps to the flag"
+    assert fuel_target_basis(state) == "7 laps after the box"
 
 
 def test_an_early_last_stop_is_sized_by_the_laps_left_too():
@@ -59,7 +59,7 @@ def test_an_early_last_stop_is_sized_by_the_laps_left_too():
                         laps_after_stops=12, race_minutes=None)
 
     assert _laps(state) >= 11
-    assert fuel_target_basis(state) == "11 laps to the flag"
+    assert fuel_target_basis(state) == "11 laps after the box"
 
 
 def test_a_plan_longer_than_the_race_cannot_size_the_fill():
@@ -67,7 +67,7 @@ def test_a_plan_longer_than_the_race_cannot_size_the_fill():
     state = deep_forest(next_stint_laps=10, laps_after_stops=8)
 
     assert _laps(state) < 9
-    assert "to the flag" in fuel_target_basis(state)
+    assert "after the box" in fuel_target_basis(state)
 
 
 def test_the_stint_still_sizes_an_intermediate_stop():
@@ -94,7 +94,7 @@ def test_no_stint_and_no_plan_falls_back_to_the_laps_remaining():
 
     laps_left = state.laps_remaining() - 1  # the lap the stop is on
     assert math.isclose(_laps(state), laps_left, abs_tol=1.5)
-    assert fuel_target_basis(state) == f"{laps_left} laps to the flag"
+    assert fuel_target_basis(state) == f"{laps_left} laps after the box"
 
 
 def test_the_box_call_names_the_bound_behind_the_litres():
@@ -104,8 +104,8 @@ def test_the_box_call_names_the_bound_behind_the_litres():
     middle = deep_forest(lap=6, next_stint_laps=7, further_stop_planned=True,
                          laps_after_stops=15)
 
-    assert _fuel_instruction(late).endswith("- 7 laps to the flag.")
-    assert _fuel_instruction(early).endswith("- 11 laps to the flag.")
+    assert _fuel_instruction(late).endswith("- 7 laps after the box.")
+    assert _fuel_instruction(early).endswith("- 11 laps after the box.")
     assert _fuel_instruction(middle).endswith("- the next 7-lap stint.")
 
 

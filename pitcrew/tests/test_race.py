@@ -559,7 +559,7 @@ def test_an_unknown_capacity_does_not_invent_a_clamp():
     """No capacity is not a 0 L tank. The old behaviour stands."""
     state = RaceState(lap=5, laps_total=60, fuel_l=40.0, fuel_per_lap_l=10.0,
                       stint_ends_on_lap=10, fuel_capacity_l=None)
-    assert _fuel_instruction(state) == "Fuel to 510 litres - 50 laps to the flag."
+    assert _fuel_instruction(state) == "Fuel to 510 litres - 50 laps after the planned box."
 
 
 def test_no_box_now_call_ever_asks_for_more_than_the_tank():

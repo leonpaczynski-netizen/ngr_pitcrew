@@ -652,6 +652,15 @@ class RaceState:
     # plan's compound, and the driver took a set - ~4.4 s. A decision that
     # lives in prose is not a decision the car can say.
     next_tyres: bool | None = None
+    # **Whether this stop's start/finish crossing has already happened.** At
+    # Daytona and Spa the line is inside the pit lane before the box, so the
+    # lap counter has already moved by the time the hose is in and the lap in
+    # progress is the out-lap - which the fill has to cover in full. At Deep
+    # Forest and Monza the crossing comes after the box, and the lap in
+    # progress is mostly behind the car. Set on LAP_COMPLETED while `in_pit`,
+    # cleared at PIT_ENTRY and PIT_EXIT. Without it the fill was a lap short
+    # at the two circuits where the line comes first (critic, 7 Sep 2026).
+    crossed_in_box: bool = False
     # How long the stint *after* the next stop is. The fill at that stop is
     # for that stint and not for the rest of the race: fuelling to the flag at
     # stop 1 of a two-stop asks for a tankful nobody needs, and where the tank
@@ -1534,7 +1543,12 @@ def _laps_after_this_stop(state: RaceState) -> int | None:
                  else state.laps_remaining())
     if remaining is None:
         return None
-    return max(0, remaining - 1) if state.in_pit else remaining
+    # **Only while the crossing is still ahead.** Once the line has been
+    # crossed in the lane, `laps_remaining` already excludes the lap just
+    # completed and the lap in progress is the out-lap, run in full.
+    if state.in_pit and not state.crossed_in_box:
+        return max(0, remaining - 1)
+    return remaining
 
 
 def _laps_the_fill_covers(state: RaceState) -> tuple[int | None, str | None]:
@@ -1564,17 +1578,27 @@ def _laps_the_fill_covers(state: RaceState) -> tuple[int | None, str | None]:
     driver has to be able to tell which one he is hearing (CLAUDE.md rule 12).
     """
     remaining = _laps_after_this_stop(state)
+    # **The frame travels with the count (rule 13).** "N laps to go" in the
+    # heartbeat counts the lap in progress; the fill before the crossing does
+    # not, so it is said as "after the box" and never as "to the flag" until
+    # the two counts are the same number.
+    frame = ("laps after the box"
+             if state.in_pit and not state.crossed_in_box else "laps to the flag")
     if state.next_stint_laps is not None:
         if state.further_stop_planned is False and remaining is not None:
-            return remaining, f"{remaining} laps to the flag"
+            return remaining, f"{remaining} {frame}"
         stint = state.next_stint_laps
         return stint, f"the next {stint}-lap stint"
-    if state.stint_ends_on_lap is not None:
-        laps = (state.laps_total or 0) - state.stint_ends_on_lap
-        return laps, f"{laps} laps to the flag"
-    if remaining is None:
-        return None, None
-    return remaining, f"{remaining} laps to the flag"
+    if (state.stint_ends_on_lap is not None and state.laps_total
+            and not state.in_pit and state.lap < state.stint_ends_on_lap):
+        # The box is still laps away: the fill it will need starts at the
+        # planned box lap, not at the current lap. Labelled as the plan's.
+        laps = state.laps_total - state.stint_ends_on_lap
+        if laps > 0:
+            return laps, f"{laps} laps after the planned box"
+    if remaining is not None:
+        return remaining, f"{remaining} {frame}"
+    return None, None
 
 
 def fuel_target_basis(state: RaceState) -> str | None:

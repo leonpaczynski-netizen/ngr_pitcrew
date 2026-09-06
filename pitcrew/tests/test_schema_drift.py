@@ -60,6 +60,9 @@ def _old_shape(path: Path) -> None:
 
 def test_the_parser_reads_every_declared_table():
     tables = declared_columns()
+    # Every CREATE TABLE in the DDL is parsed - a table the regex missed
+    # (a WITHOUT ROWID or STRICT suffix, say) would vanish from the audit.
+    assert len(tables) == DDL.count("CREATE TABLE IF NOT EXISTS")
     assert "rival_stops" in tables
     assert "compound_reads" in tables["rival_stops"]
     assert "laps" in tables and "fuel_used" in tables["laps"]

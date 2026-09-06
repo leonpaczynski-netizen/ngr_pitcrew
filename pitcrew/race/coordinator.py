@@ -113,10 +113,20 @@ class PlanContext:
 
 
 def _tri(value) -> bool | None:
-    """A plan field to a tri-state: absent or null stays None."""
-    if value is None:
-        return None
-    return bool(value)
+    """A plan field to a tri-state: absent or null stays None.
+
+    **A bool, 0 or 1, or nothing.** `bool("false")` is True, so a plan written
+    with the word in quotes would have said "RS on" for a stop meant to be
+    fuel only - the opposite instruction. Anything else is None here (the
+    plan did not say) and is refused by `Handover.validate` at the door.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if value in (0, 1):
+        return bool(value)
+    log("race").warning("a stint's tyres field reads %r - not a bool, so it "
+                        "is treated as unsaid", value)
+    return None
 
 
 class RaceCoordinator:
@@ -490,9 +500,15 @@ class RaceCoordinator:
         if self.phase is not RacePhase.RUNNING:
             return None
         if event.kind is EventKind.LAP_COMPLETED:
+            if self.state.in_pit:
+                # The line is inside the lane here (Daytona, Spa): the lap
+                # counter has moved before the fill, so the lap in progress
+                # is the out-lap and the fill covers it whole.
+                self.state.crossed_in_box = True
             return self._on_lap(event, packet)
         if event.kind is EventKind.PIT_ENTRY:
             self.state.in_pit = True
+            self.state.crossed_in_box = False
             # **What we arrived with, so a rival's fill has ours to beat.**
             # `rival_boxed` says "he stands N seconds longer than you did", and
             # without our own stop it can only say his standing time in
@@ -502,6 +518,7 @@ class RaceCoordinator:
             return None
         if event.kind is EventKind.PIT_EXIT:
             self.state.in_pit = False
+            self.state.crossed_in_box = False
             entry = getattr(self, "_our_entry_fuel_l", None)
             if entry is not None and self.state.fuel_l is not None:
                 self.state.our_stop = Stop(
