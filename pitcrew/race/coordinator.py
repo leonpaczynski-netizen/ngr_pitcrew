@@ -467,6 +467,37 @@ class RaceCoordinator:
         if following is None:
             self.state.stint_ends_on_lap = None
 
+    def note_driving(self, lap_num: int, read) -> None:
+        """One lap's driving read off its frames, from the controller.
+
+        Kept per stint - a stop resets it, because the saving that stopped
+        at the stop is the stop's own news and the next stint starts clean.
+        The step is looked for here, the sentence is composed here, and
+        `_saving_change` says it at the next crossing.
+        """
+        from pitcrew.analysis.driving import saving_change
+
+        history = getattr(self, "_driving", None)
+        if history is None:
+            history = self._driving = []
+        history.append((int(lap_num), read))
+        change = saving_change(history)
+        if change is None or change.lap == getattr(self, "_saving_change_lap", None):
+            return
+        self._saving_change_lap = change.lap
+        burn = self.state.fuel_per_lap_l
+        tail = (f" Burn is {burn:.1f} a lap now." if burn else "")
+        if change.what == "lift-and-coast":
+            note = (f"You've stopped lift-and-coasting since lap {change.lap} - "
+                    f"{change.before:.0f} percent of the lap off the pedals "
+                    f"before, {change.after:.0f} now.{tail}")
+        else:
+            note = (f"You've stopped short-shifting since lap {change.lap} - "
+                    f"upshifts at {change.before:.0f} before, "
+                    f"{change.after:.0f} now.{tail}")
+        self.state.saving_change_note = note
+        self.state.saving_change_lap = change.lap
+
     def _brief_the_wear_rate(self) -> None:
         """The measured rate for the compound now on the car, or nothing.
 
@@ -528,6 +559,10 @@ class RaceCoordinator:
         if event.kind is EventKind.PIT_EXIT:
             self.state.in_pit = False
             self.state.crossed_in_box = False
+            # A new stint: the driving history and any pending note restart.
+            self._driving = []
+            self.state.saving_change_note = None
+            self.state.saving_change_lap = None
             entry = getattr(self, "_our_entry_fuel_l", None)
             if entry is not None and self.state.fuel_l is not None:
                 self.state.our_stop = Stop(

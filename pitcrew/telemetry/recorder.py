@@ -235,6 +235,13 @@ class LapFrames:
     crawl_s: float | None = None
     off_track_s: float | None = None
     spin_s: float | None = None
+    # Set by the caller from `analysis.driving.read_rows`, likewise: how the
+    # lap was driven - share of the lap off both pedals at speed, share at
+    # full throttle, and the median upshift rpm under power. None where the
+    # lap cannot carry them, never zero.
+    coast_pct: float | None = None
+    full_throttle_pct: float | None = None
+    upshift_rpm: float | None = None
     # **The fastest frame of the lap, taken here rather than read back out.**
     # `Store._note_top_speed` used to `decode_frames(blob)` - a full
     # `zlib.decompress` plus `json.loads` of the lap that had just been

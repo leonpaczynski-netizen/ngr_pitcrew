@@ -1133,6 +1133,15 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("crawl_s", "REAL"),
         ("off_track_s", "REAL"),
         ("spin_s", "REAL"),
+        # **How the lap was driven, off its own frames** (7 Sep 2026). The
+        # share of the lap off both pedals above walking pace, the share at
+        # full throttle, and the median upshift rpm under power. Deep Forest's
+        # burn step decomposed exactly into these two and `short_shift_rpm`
+        # could not see either, because it records the app's switch and not
+        # his hand. NULL where the lap could not carry them, never 0.
+        ("coast_pct", "REAL"),
+        ("full_throttle_pct", "REAL"),
+        ("upshift_rpm", "REAL"),
         # **How far the shift beep was dropped while this lap was driven, in
         # rpm.** Null where it was never recorded, 0.0 where the lap was
         # driven on the normal threshold, positive where he was short-

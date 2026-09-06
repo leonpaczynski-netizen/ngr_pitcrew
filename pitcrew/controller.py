@@ -722,8 +722,11 @@ class TelemetryBridge(QObject):
             self._lap_short_shift_rpm = max(
                 self._lap_short_shift_rpm or 0.0,
                 self.shift_beep.short_shift_drop_rpm)
-        elif self._lap_short_shift_rpm is None:
-            self._lap_short_shift_rpm = 0.0
+        # **And nothing else.** This used to write 0.0 for "the switch was
+        # never thrown", and 717 laps of 0.0 were then read as "he did not
+        # short-shift" on a night he short-shifted twelve laps by hand. The
+        # switch not used is NULL (rule 3); what he actually did is
+        # `laps.upshift_rpm`, measured off the frames.
         events = self.state.update(packet)
         for event in events:
             if event.kind is EventKind.LAP_COMPLETED:
@@ -2939,6 +2942,20 @@ class PitCrewController(QObject):
             frames = replace(frames, crawl_s=seen.crawl_s,
                              off_track_s=seen.off_track_s,
                              spin_s=seen.spin_s)
+            # **And how the lap was driven**, off the same rows: the coast
+            # share and the upshift rpm the burn actually depends on. Handed
+            # to the race too, so George can say when the saving stopped.
+            from pitcrew.analysis.driving import read_rows as read_driving
+            driven = read_driving(rows, FRAME_FIELDS)
+            frames = replace(frames, coast_pct=driven.coast_pct,
+                             full_throttle_pct=driven.full_throttle_pct,
+                             upshift_rpm=driven.upshift_rpm)
+            if self.race is not None and getattr(self.race, "running", False):
+                try:
+                    self.race.note_driving(lap.lap_num, driven)
+                except Exception:                            # noqa: BLE001
+                    log("race").warning("driving read not handed to the "
+                                        "race", exc_info=True)
             # And the three sectors, off the same rows, for the same reason.
             cut = sector_rows(rows, FRAME_FIELDS, lap.lap_time_ms,
                               self._sector_model())

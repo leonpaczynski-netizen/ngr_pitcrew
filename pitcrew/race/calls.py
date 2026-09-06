@@ -120,6 +120,9 @@ STOPS_OFF = "stops-off"
 # closes a loop the engineer opened, and an unclosed loop leaves the
 # driver believing a shortfall was covered when it was not.
 SAVING_RESPONSE = "saving-response"
+# **The driver has stopped saving on his own** - the lift-and-coast or the
+# hand short-shift has gone, measured off the frames, and the burn with it.
+SAVING_CHANGE = "saving-change"
 CHEQUER = "chequer"
 # **"Two to go" and "Last lap", which only an accurate clock makes sayable.**
 # GT7's own race clock is not accurate - the driver measured it - so a timed
@@ -189,6 +192,8 @@ URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            # that only ever arrives by another road is exactly the one that
            # goes unranked until a race finds it.
            FUEL_LONG, INCIDENT, WEAR, TYRE_TEMP,
+           # A fact about his own driving, below every call about the car.
+           SAVING_CHANGE,
            # **A rival's stop ranks below every call about our own car**, and
            # below the incident and the wear note too. It is the only thing
            # here that is about somebody else: a car of ours about to run dry,
@@ -252,6 +257,7 @@ REGISTER = {
     FUEL_LONG: DECISION,
     STAY_OUT: DECISION,
     SAVING_RESPONSE: DECISION,
+    SAVING_CHANGE: FACT,
     WEAR: DECISION,
     TYRE_TEMP: DECISION,
     TYRE: DECISION,
@@ -691,6 +697,10 @@ class RaceState:
     briefed_wear_samples: int = 0
     # The tyre-wear multiplier this race runs at ("2x"), from the event.
     tyre_wear_mult: str | None = None
+    # Set by the coordinator when the frames say he stopped saving: the
+    # sentence to say, once, and the lap it was first true on.
+    saving_change_note: str | None = None
+    saving_change_lap: int | None = None
     # **What a short-shift is worth on this car, in litres per lap per 1000
     # rpm.** Measured by `tools/shortshift_trade.py` from laps where his own
     # upshift rpm varied: 1.762 on the Porsche at Monza, 95% CI [0.92, 2.60],
@@ -1219,6 +1229,26 @@ def _worth_saying_again(state: RaceState, call: Call) -> bool:
     return call.severity >= was + margin
 
 
+def _saving_change(state: RaceState) -> Call | None:
+    """He stopped lift-and-coasting, or stopped short-shifting - said once.
+
+    The Deep Forest fill was sized on a stint driven saving and the stint
+    after it was not; the engineer had no way to see either. Now the frames
+    say so at the crossing after the change, and the burn the fill is sized
+    on (this stint's, `expectations.stint_fuel_per_lap_l`) already reflects
+    it. A FACT, once per change, tagged by the lap it started.
+    """
+    note = state.saving_change_note
+    if not note or state.in_pit or state.finished:
+        return None
+    if _crossing_the_line(state):
+        return None
+    tag = f"saving-change-{state.saving_change_lap}"
+    if tag in state.said_tags:
+        return None
+    return Call(SAVING_CHANGE, state.lap, note, "", tag=tag)
+
+
 def _candidates(state: RaceState) -> list[Call | None]:
     return [
         _chequer(state),
@@ -1249,6 +1279,7 @@ def _candidates(state: RaceState) -> list[Call | None]:
         _incident(state),
         _wear(state),
         _tyre_temp(state),
+        _saving_change(state),
         *_rivals(state),
         _status(state),
     ]
