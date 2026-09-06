@@ -195,6 +195,53 @@ def circuit_key_for(event) -> str | None:
 # tail of forty-odd clusters seen once each.
 PIT_WALL_MIN_SIGHTINGS = 20
 
+# Consecutive failed board pushes before the panel comes off the screen.
+#
+# **One is too few, and that is measured.** On 6 Sep 2026 a single data race in
+# `recent_corner_means` tore the board down 105 seconds into a race and it
+# never came back; the driver reported it as the board "disappearing". At four
+# pushes a second, twelve is three seconds of a board that cannot draw at all -
+# long enough that a transient survives it, short enough that a genuinely dead
+# panel is not left sitting over the game looking live, which is the failure
+# `_push_driver_board`'s teardown exists to prevent.
+BOARD_FAILURES_BEFORE_TEARDOWN = 12
+
+# ...and a ceiling on the total, which a success does NOT clear.
+#
+# **The consecutive count alone has a hole, and a critic found it.** A board
+# that raises eleven times and draws on the twelfth, for ever, never reaches
+# the consecutive limit and never comes down - so it redraws once every three
+# seconds while looking live, which is exactly the frozen panel the teardown
+# exists to prevent. `telemetry/hud.py` had already met this and answered it
+# the same way: a give-up count that a partial success cannot reset, kept
+# deliberately distinct from its consecutive one. 120 is thirty seconds of a
+# board failing more often than it draws.
+BOARD_FAILURES_BEFORE_STANDING_DOWN = 120
+
+# One traceback per this many failed pushes. At 4 Hz an unrated `exc_info` on
+# every failure writes four full tracebacks a second to disk, on the UI thread,
+# for the rest of the race - `hud.py` records the same lesson as "half a
+# thousand log lines saying the same thing".
+BOARD_TRACEBACK_EVERY = 20
+
+
+def new_temp_window() -> tuple[deque, threading.Lock]:
+    """The board's temperature window, and the lock that guards it.
+
+    **One definition, because there are three callers and two of them are
+    tests.** `TelemetryBridge` is built with `__new__` in the suite - a real
+    one needs a QApplication - so every test that reads a smoothed temperature
+    hand-builds this deque. Adding the lock to `__init__` alone broke three of
+    them, which is the same shape as a setup value living in two places: the
+    next test to need a window would have got a deque without a lock and no
+    hint that it wanted one.
+
+    The cap is four times what 60 Hz needs for `BOARD_SMOOTHING_S`, so it
+    bounds growth while the board is closed and can never truncate a real
+    window. See `recent_corner_means` for what the lock is for.
+    """
+    return deque(maxlen=int(BOARD_SMOOTHING_S * 240)), threading.Lock()
+
 
 class TelemetryBridge(QObject):
     """Turns the packet stream into Qt signals, on the right threads."""
@@ -340,7 +387,19 @@ class TelemetryBridge(QObject):
         self._corner_sums = {c: 0.0 for c in _SPLIT_CORNERS}
         self._corner_frames = 0
         # The last few seconds of frames, for the board's smoothed reading.
-        self._temp_window: deque = deque()
+        #
+        # **Locked, because two threads touch it and one of them is the UI.**
+        # `on_packet` appends at 60 Hz on the telemetry thread while the board
+        # timer reads at 4 Hz on the main thread, and iterating a deque another
+        # thread is appending to raises. It did, 105 s into the race sim of
+        # 6 Sep 2026 - `RuntimeError: deque mutated during iteration` - and the
+        # handler in `_push_driver_board` then took the board off the screen
+        # for the rest of the race. `append` and `popleft` are individually
+        # atomic; the loop over the contents is not, so the copy is taken under
+        # the lock and the arithmetic done outside it. Bounded as well, because
+        # nothing trims the window unless somebody reads it. See
+        # `new_temp_window`.
+        self._temp_window, self._temp_lock = new_temp_window()
         # **The issued table for the box now fitted**, set when a session
         # opens. A shift point belongs to the gearbox - change a ratio or the
         # final drive and the rpm worth shifting at moves with it - so it is
@@ -385,18 +444,52 @@ class TelemetryBridge(QObject):
         on track, which is a dash on the board and never a zero.
         """
         now = _monotonic()
-        window = self._temp_window
-        while window and now - window[0][0] > BOARD_SMOOTHING_S:
-            window.popleft()
-        if not window:
-            return None
+        # **Copied under the lock, summed outside it.** The telemetry thread
+        # is appending to this deque while the board timer calls in; iterating
+        # it directly is what raised mid-race on 6 Sep 2026. Holding the lock
+        # across the arithmetic would work too and would stall the 60 Hz path
+        # for no reason.
+        with self._temp_lock:
+            window = self._temp_window
+            while window and now - window[0][0] > BOARD_SMOOTHING_S:
+                window.popleft()
+            if not window:
+                return None
+            frames = list(window)
         total = [0.0, 0.0, 0.0, 0.0]
-        for _stamp, temps in window:
+        for _stamp, temps in frames:
             for index, value in enumerate(temps):
                 total[index] += value
-        count = len(window)
+        count = len(frames)
         return {corner: total[index] / count
                 for index, corner in enumerate(_SPLIT_CORNERS)}
+
+    def note_corner_temps(self, temps) -> None:
+        """One frame of tyre temperature, into both accumulators.
+
+        **A method rather than four lines inside `on_packet`, so the locking
+        can be tested.** The first version of this fix put the lock in
+        `on_packet` and tested it with a writer thread in the test taking the
+        lock itself - which pinned the reader's half and left the producer's
+        free to be deleted with the suite still green. A critic found that;
+        this is the seam that closes it.
+
+        **Both accumulators, under one lock, and the second is not
+        belt-and-braces.** `take_corner_means` reads and clears the whole-lap
+        sums from the main thread while this runs on the telemetry thread.
+        `self._corner_frames += 1` is load-add-store, so a clear landing
+        between the load and the store resurrects the count to N+1 against
+        sums that have just been zeroed - and the next lap's mean comes out as
+        one frame divided by N+1, a tyre temperature near zero that raises
+        nothing and reads exactly like a measurement. CLAUDE.md rule 3.
+        """
+        with self._temp_lock:
+            for corner, value in zip(_SPLIT_CORNERS, temps):
+                self._corner_sums[corner] += float(value)
+            self._corner_frames += 1
+            # And the short window the board reads - see `recent_corner_means`.
+            self._temp_window.append(
+                (_monotonic(), tuple(float(t) for t in temps)))
 
     def take_corner_means(self) -> dict[str, float] | None:
         """The lap's mean temperature per corner, and start the next lap.
@@ -406,12 +499,16 @@ class TelemetryBridge(QObject):
         `None` where no frame of the lap was on track - which is a lap that
         says nothing about the tyres, not a lap at zero degrees.
         """
-        if not self._corner_frames:
-            return None
-        means = {c: self._corner_sums[c] / self._corner_frames
-                 for c in _SPLIT_CORNERS}
-        self._corner_sums = {c: 0.0 for c in _SPLIT_CORNERS}
-        self._corner_frames = 0
+        # Under the same lock the telemetry thread accumulates under - see
+        # `on_packet`. Read and clear have to be one step or a frame lands
+        # half in the lap that has just ended and half in the next.
+        with self._temp_lock:
+            if not self._corner_frames:
+                return None
+            means = {c: self._corner_sums[c] / self._corner_frames
+                     for c in _SPLIT_CORNERS}
+            self._corner_sums = {c: 0.0 for c in _SPLIT_CORNERS}
+            self._corner_frames = 0
         return means
 
     def set_issued_shift_points(self, table) -> None:
@@ -615,13 +712,7 @@ class TelemetryBridge(QObject):
         if packet.car_on_track and not (packet.paused or packet.loading):
             temps = packet.tyre_temps
             if temps is not None and all(t is not None for t in temps):
-                for corner, value in zip(_SPLIT_CORNERS, temps):
-                    self._corner_sums[corner] += float(value)
-                self._corner_frames += 1
-                # And the short window the board actually reads - see
-                # `recent_corner_means`.
-                self._temp_window.append(
-                    (_monotonic(), tuple(float(t) for t in temps)))
+                self.note_corner_temps(temps)
         # **How the lap being driven right now is being shifted.** Held per
         # frame rather than read at the line, because the switch can be thrown
         # mid-lap and what matters afterwards is that the lap was driven under
@@ -1007,6 +1098,13 @@ class PitCrewController(QObject):
         # the release countdown moves at one litre a second and there are no
         # crossings during a stop, so it needs a clock of its own.
         self.driver_board = None
+        # Failed pushes, consecutive and total. See `_push_driver_board`: one
+        # bad frame is not a broken board, and this instrument has already
+        # been lost for a whole race to a single transient. Both are reset by
+        # `_open_driver_board`, because they are about ONE race - CLAUDE.md
+        # rule 11.
+        self._board_failures = 0
+        self._board_failures_total = 0
         self._board_timer = QTimer(self)
         self._board_timer.timeout.connect(self._push_driver_board)
 
@@ -2317,6 +2415,92 @@ class PitCrewController(QObject):
     # which used to be four loose attributes on this class read from three
     # different places. See that module for why `new_session` matters.
 
+    def gauge_preflight_ok(self, what: str) -> bool:
+        """Check the gauge can see the screen before a session opens.
+
+        **The failure this exists to stop is silent, total and unrecoverable.**
+        With no OBS projector open the sampler stands down about thirty
+        seconds in and never comes back. Session 126 lost its whole wear
+        record that way; on 6 Sep 2026 session 133 lost its gauge because the
+        driver forgot to turn OBS on, and only found out afterwards. **GT7
+        broadcasts no tyre wear channel in any packet format**, so a session
+        without the gauge has no wear evidence at all and none of it can be
+        recovered from the recording later - unlike pace or fuel, which the
+        stream carries regardless.
+
+        Returns True to go out. `False` only when the driver, asked, chose to
+        go and set OBS up - his own answer, not the app's refusal.
+        """
+        check = self.hud.preflight()
+        if check.ok:
+            return True
+        try:
+            answer = self.confirm_without_gauge(what, check)
+        except Exception as exc:                            # noqa: BLE001
+            # **The gauge may not be able to abort the app.** These are Qt
+            # slots, and PyQt aborts the process after `sys.excepthook`
+            # returns - so an unwrapped dialog failure would kill the app at
+            # the moment he arms the race. An instrument that cannot be
+            # asked about is not a reason to stop him driving.
+            log("ui").error("could not ask about the gauge, going out "
+                            "without it: %s", exc, exc_info=True)
+            return True
+        # **His answer goes in the log.** Rule 10: without it, a session that
+        # turns out to have an empty wear record cannot be told apart from a
+        # gauge that went blind later, a gauge switched off, or a gate that
+        # never ran at all.
+        log("pitcrew").warning(
+            "hud-wear: pre-flight refused (%s: %s) and the driver chose to "
+            "%s", check.source, check.reason,
+            "go out anyway" if answer else "set OBS up first")
+        return answer
+
+    def confirm_without_gauge(self, what: str, check) -> bool:
+        """Ask whether to go out with no live tyre-wear gauge. True to go.
+
+        **Separated from the check so the check can be tested.** This is the
+        only modal question the app asks, and a test exercising the gate
+        should not need a QApplication - overriding this on the instance is
+        how.
+
+        Every sentence comes off the `GaugeCheck` rather than being written
+        here, because the first version of this dialog was wrong twice: it
+        named a projector on a configuration whose default source is the OBS
+        websocket - the same mistake `find_projector` records as having cost a
+        whole race night - and it told him the wear "cannot be recovered"
+        when `tools/read_hud_wear.py` exists to do exactly that off a
+        recording.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        # **Parented, and NOT on a `window` attribute that does not exist.**
+        # The first version wrote `self.window if hasattr(self, "window")`,
+        # which is always False - `PitCrewController` is a QObject and never
+        # assigns one, so the box opened parentless: not centred on the app,
+        # not tied to it in the taskbar, and on a multi-monitor rig it lands on
+        # the primary screen rather than the one he is looking at. From the
+        # seat that reads as the app having frozen at the moment he arms.
+        parent = getattr(self, "race_screen", None) or getattr(
+            self, "practice", None)
+        box = QMessageBox(parent if hasattr(parent, "window") else None)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("No tyre gauge")
+        box.setText(f"{check.headline} {what.capitalize()} would record no "
+                    "live tyre wear.")
+        box.setInformativeText(
+            (f"{check.reason}\n\n" if check.reason else "")
+            + check.recovery + "\n\n" + check.caveat
+            + "\n\nPace, fuel and lap times are unaffected either way.")
+        proceed = box.addButton("Go out anyway",
+                                QMessageBox.ButtonRole.DestructiveRole)
+        fix = box.addButton("Set it up first",
+                            QMessageBox.ButtonRole.RejectRole)
+        # **The safe answer is the default.** Enter should not silently cost
+        # the session's only wear evidence.
+        box.setDefaultButton(fix)
+        box.exec()
+        return box.clickedButton() is proceed
+
     def _new_hud_session(self) -> None:
         self.hud.new_session()
 
@@ -2338,6 +2522,15 @@ class PitCrewController(QObject):
         if self.session_id is not None:
             self.practice.set_status(
                 "A session is already open. Stop it before starting another.",
+                warn=True)
+            self.practice.set_recording(False)
+            return
+        # **Before the session row exists.** Asked here so that choosing to go
+        # and set OBS up leaves nothing behind - no half-open session, no
+        # orphan listener, nothing to stop before trying again.
+        if not self.gauge_preflight_ok("this practice session"):
+            self.practice.set_status(
+                "Not started - set the OBS projector up and start again.",
                 warn=True)
             self.practice.set_recording(False)
             return
@@ -3642,6 +3835,16 @@ class PitCrewController(QObject):
                 "Create an event before racing.", warn=True)
             return False
 
+        # **Before anything is armed.** A race is the session where losing the
+        # gauge costs most - it is the only stint run at race pace on a race
+        # fuel load, and the wear rate measured in one is 32% above practice
+        # at Deep Forest. See `gauge_preflight_ok`.
+        if not self.gauge_preflight_ok("this race"):
+            self.race_screen.set_status(
+                "Not armed - set the OBS projector up and arm again.",
+                warn=True)
+            return False
+
         # **Three choices, all his.** Whether this is the league race or a
         # rehearsal, whether the engineer speaks, and whether it runs to the
         # approved plan at all. Running without the plan is how you find out
@@ -4628,6 +4831,16 @@ class PitCrewController(QObject):
         """
         if not self.settings.driver_board_enabled:
             return
+        # **The failure counts belong to this race, and this is their caller.**
+        # CLAUDE.md rule 11: without it a race that ended on eleven
+        # consecutive failures would destroy the next race's brand-new board
+        # on its first frame that raised, with no tolerance at all - and the
+        # log would say "taken down for this race" about a race that had
+        # barely started. The rule's own worked example is a reset that
+        # existed, documented why it was needed, and was called only from a
+        # test file.
+        self._board_failures = 0
+        self._board_failures_total = 0
         if self.driver_board is None:
             from pitcrew.ui.driver_view import DriverWindow
 
@@ -4684,6 +4897,29 @@ class PitCrewController(QObject):
         try:
             self.driver_board.update_state(self._driver_board_state())
         except Exception as exc:                            # noqa: BLE001
+            # **One bad frame is not a broken board.** The teardown below is
+            # right for a board that cannot draw at all, and wrong for a
+            # transient: on 6 Sep 2026 a single data race on the temperature
+            # window cost the driver his board for the remaining eleven
+            # minutes, and he noticed. So a run of consecutive failures has to
+            # establish that it is really broken before the panel comes down -
+            # and any success clears the count, because an instrument that
+            # works three times in four is still an instrument.
+            self._board_failures += 1
+            self._board_failures_total += 1
+            if (self._board_failures < BOARD_FAILURES_BEFORE_TEARDOWN
+                    and self._board_failures_total
+                    < BOARD_FAILURES_BEFORE_STANDING_DOWN):
+                log("ui").warning(
+                    "the driver board raised (%d consecutive of %d, %d total "
+                    "of %d): %s: %s", self._board_failures,
+                    BOARD_FAILURES_BEFORE_TEARDOWN,
+                    self._board_failures_total,
+                    BOARD_FAILURES_BEFORE_STANDING_DOWN,
+                    type(exc).__name__, exc,
+                    exc_info=self._board_failures_total
+                    % BOARD_TRACEBACK_EVERY == 1)
+                return
             # **A board that raises must not take the race with it.** It is an
             # output, and CLAUDE.md is clear the app observes and advises: a
             # display fault cannot be allowed to cost him the session it is
@@ -4721,6 +4957,12 @@ class PitCrewController(QObject):
                 # and never written, on the one path where the driver is most
                 # likely to reopen the app.
                 log("ui").warning("could not remember where the board was")
+        else:
+            # A frame that drew clears the run. The count is CONSECUTIVE
+            # failures, not failures ever - a board that hiccups once a lap
+            # for twenty laps is working, and would otherwise be torn down
+            # partway through the race on an accumulated total.
+            self._board_failures = 0
 
     def _driver_board_state(self):
         """Everything the board draws, in one object.

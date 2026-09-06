@@ -116,9 +116,14 @@ def test_the_bridge_takes_and_clears_in_one_call(qt_app=None):
     QApplication.instance() or QApplication([])
     from pitcrew.controller import TelemetryBridge
 
+    from pitcrew.controller import new_temp_window
+
     bridge = TelemetryBridge.__new__(TelemetryBridge)
     bridge._corner_sums = {"fl": 200.0, "fr": 200.0, "rl": 200.0, "rr": 240.0}
     bridge._corner_frames = 2
+    # Taking the means is now locked against the telemetry thread that fills
+    # them - see `note_corner_temps`.
+    bridge._temp_window, bridge._temp_lock = new_temp_window()
     means = bridge.take_corner_means()
     assert means["rr"] == pytest.approx(120.0)
     assert bridge.take_corner_means() is None, "the accumulator was not cleared"
@@ -127,15 +132,16 @@ def test_the_bridge_takes_and_clears_in_one_call(qt_app=None):
 # ------------------------------------------------- what the board actually reads
 
 def _a_bridge():
-    from collections import deque
-
     from PyQt6.QtWidgets import QApplication
 
     QApplication.instance() or QApplication([])
-    from pitcrew.controller import TelemetryBridge
+    from pitcrew.controller import TelemetryBridge, new_temp_window
 
     bridge = TelemetryBridge.__new__(TelemetryBridge)
-    bridge._temp_window = deque()
+    # **Through the same factory the real one uses.** These built a bare
+    # deque, so when the window gained a lock on 6 Sep 2026 three tests here
+    # failed on an attribute the bridge was now expected to have.
+    bridge._temp_window, bridge._temp_lock = new_temp_window()
     return bridge
 
 

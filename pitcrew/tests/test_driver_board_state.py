@@ -597,3 +597,328 @@ def test_an_empty_window_still_has_an_answer():
     temps = _state_for(stub).temps_c
     assert temps is not None
     assert set(temps) == {"fl", "fr", "rl", "rr"}
+
+
+# --- the board's temperature window, and the two threads on it -------------
+
+def test_the_temperature_window_survives_the_telemetry_thread():
+    """The crash that took the board off the screen mid-race, 6 Sep 2026.
+
+    `on_packet` appends at 60 Hz on the telemetry thread while the board timer
+    reads at 4 Hz on the main thread, and iterating a deque another thread is
+    appending to raises `RuntimeError: deque mutated during iteration`. It did,
+    105 seconds into a race, and the board did not come back.
+    """
+    import threading
+
+    from pitcrew.controller import TelemetryBridge, new_temp_window
+
+    bridge = TelemetryBridge.__new__(TelemetryBridge)
+    bridge._temp_window, bridge._temp_lock = new_temp_window()
+
+    stop = threading.Event()
+    raised: list[BaseException] = []
+
+    def writer():
+        from pitcrew.controller import _monotonic
+        while not stop.is_set():
+            with bridge._temp_lock:
+                bridge._temp_window.append(
+                    (_monotonic(), (80.0, 81.0, 82.0, 83.0)))
+
+    thread = threading.Thread(target=writer, daemon=True)
+    thread.start()
+    try:
+        for _ in range(400):
+            try:
+                TelemetryBridge.recent_corner_means(bridge)
+            except BaseException as exc:            # noqa: BLE001
+                raised.append(exc)
+                break
+    finally:
+        stop.set()
+        thread.join(timeout=2.0)
+
+    assert not raised, f"reader raised {raised[0]!r}"
+
+
+def test_the_temperature_window_cannot_grow_without_bound():
+    """Nothing trims it unless somebody reads it, so with the board closed it
+    grew for the whole race - 60 Hz for half an hour is 108,000 tuples."""
+    from pitcrew.controller import (
+        BOARD_SMOOTHING_S, TelemetryBridge, new_temp_window)
+
+    bridge = TelemetryBridge.__new__(TelemetryBridge)
+    bridge._temp_window, bridge._temp_lock = new_temp_window()
+    for _ in range(50_000):
+        bridge._temp_window.append((0.0, (80.0, 80.0, 80.0, 80.0)))
+    # Pinned against what the window is FOR, not against the expression that
+    # built it - asserting `len <= int(BOARD_SMOOTHING_S * 240)` restates the
+    # constructor and cannot fail for any cap, including a wrong one.
+    assert bridge._temp_window.maxlen is not None, "unbounded"
+    assert len(bridge._temp_window) < 5_000, "half an hour of 60 Hz got in"
+    # ...and it can never truncate a real window: 60 Hz for BOARD_SMOOTHING_S
+    # is the most a reader will ever ask for, with headroom above it.
+    assert bridge._temp_window.maxlen >= BOARD_SMOOTHING_S * 60 * 2
+
+
+# --- one bad frame is not a broken board -----------------------------------
+
+class _Board:
+    """Just enough board to raise on demand and be closed."""
+
+    def __init__(self, fail_for: int):
+        self.left = fail_for
+        self.closed = False
+        self.drawn = 0
+
+    def update_state(self, _state):
+        if self.left > 0:
+            self.left -= 1
+            raise RuntimeError("deque mutated during iteration")
+        self.drawn += 1
+
+    def close(self):
+        self.closed = True
+
+    def geometry_text(self):
+        return "0,0,100,100"
+
+    # Enough of a QWidget for `_open_driver_board` to put it back on screen.
+    def show(self):
+        self.shown = True
+
+    def raise_(self):
+        pass
+
+    def restore_geometry(self, _geometry):
+        pass
+
+
+class _Timer:
+    def __init__(self):
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+
+def _board_harness(fail_for: int):
+    from pitcrew.controller import PitCrewController
+
+    app = PitCrewController.__new__(PitCrewController)
+    app.driver_board = _Board(fail_for)
+    app._board_failures = 0
+    app._board_failures_total = 0
+    app._board_timer = _Timer()
+    app.store = None
+    app.settings = type("S", (), {"driver_board_geometry": ""})()
+    # The real one needs a whole live race; the board's own raise is what is
+    # under test here, and it is raised inside the same `try`.
+    app._driver_board_state = lambda: None
+    return app
+
+
+def test_a_transient_does_not_cost_him_the_board_for_the_race():
+    """6 Sep 2026: one data race tore the board down 105 s into the race and
+    it never came back. He noticed and reported it."""
+    from pitcrew.controller import (
+        BOARD_FAILURES_BEFORE_TEARDOWN, PitCrewController)
+
+    app = _board_harness(fail_for=BOARD_FAILURES_BEFORE_TEARDOWN - 1)
+    for _ in range(BOARD_FAILURES_BEFORE_TEARDOWN + 2):
+        PitCrewController._push_driver_board(app)
+    assert app.driver_board is not None, "the board was torn down"
+    assert not app.driver_board.closed
+    assert app._board_timer.running
+    assert app.driver_board.drawn >= 1
+    # A frame that drew clears the run, so the next transient starts again.
+    assert app._board_failures == 0
+
+
+def test_a_board_that_never_draws_still_comes_down():
+    """The teardown is right for a board that cannot draw at all: a frozen
+    always-on-top panel over the game, looking live, is worse than none."""
+    from pitcrew.controller import (
+        BOARD_FAILURES_BEFORE_TEARDOWN, PitCrewController)
+
+    app = _board_harness(fail_for=10_000)
+    for _ in range(BOARD_FAILURES_BEFORE_TEARDOWN):
+        PitCrewController._push_driver_board(app)
+    assert app.driver_board is None
+    assert not app._board_timer.running
+
+
+class _SumsThatPause(dict):
+    """A sums dict that stops inside the producer's critical section.
+
+    `self._corner_sums[corner] += value` calls `__setitem__`, which happens
+    INSIDE `note_corner_temps`'s lock. Pausing there puts the producer exactly
+    where the reader must not be able to reach it.
+    """
+
+    def __init__(self, *args, inside=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.inside = inside
+        self.paused_once = False
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        if self.inside is not None and not self.paused_once:
+            self.paused_once = True
+            self.inside()
+
+
+def test_the_producer_holds_the_lock_across_the_whole_update():
+    """Deterministic, because the race itself is not.
+
+    Running a producer and a reader flat out for thousands of iterations did
+    NOT catch the lock being deleted - the critical section is four lines and
+    the interleaving that corrupts it is rare. A test that only sometimes
+    fails is a test that will be believed when it passes, so this forces the
+    interleaving instead of hoping for it: the producer is stopped inside its
+    own critical section and the lock is then asked whether anyone else could
+    get in.
+
+    An unlocked producer lets the reader in mid-update, which is how
+    `_corner_frames` gets resurrected against zeroed sums.
+    """
+    import threading
+
+    from pitcrew.controller import TelemetryBridge, new_temp_window
+
+    bridge = TelemetryBridge.__new__(TelemetryBridge)
+    bridge._temp_window, bridge._temp_lock = new_temp_window()
+    bridge._corner_frames = 0
+
+    inside = threading.Event()
+    may_finish = threading.Event()
+
+    def pause_inside():
+        inside.set()
+        may_finish.wait(timeout=5.0)
+
+    bridge._corner_sums = _SumsThatPause(
+        {c: 0.0 for c in ("fl", "fr", "rl", "rr")}, inside=pause_inside)
+
+    thread = threading.Thread(
+        target=TelemetryBridge.note_corner_temps,
+        args=(bridge, (80.0, 81.0, 82.0, 83.0)), daemon=True)
+    thread.start()
+    try:
+        assert inside.wait(timeout=5.0), "the producer never reached the sums"
+        # The whole property, in one line: while the producer is part-way
+        # through, nobody else can be.
+        got_in = bridge._temp_lock.acquire(blocking=False)
+        if got_in:
+            bridge._temp_lock.release()
+        assert not got_in, (
+            "the reader could enter mid-update - the producer is not holding "
+            "the lock across the accumulator")
+    finally:
+        may_finish.set()
+        thread.join(timeout=5.0)
+
+
+def test_the_producer_side_is_locked_too_and_the_test_drives_it():
+    """The reader's lock alone is only half of it.
+
+    The first version of this test had its writer thread take the lock itself,
+    so deleting the lock from the producer left the suite green - and the
+    producer is the thread the whole fix is about. A critic found that, and a
+    mutation run confirmed it. This drives `note_corner_temps`, the real
+    producer, so removing its lock is now a failing mutation.
+
+    It asserts on the WHOLE-LAP accumulator rather than the window, because
+    that is where an unlocked producer fabricates a number instead of raising:
+    a clear landing inside `_corner_frames += 1` leaves one frame divided by a
+    resurrected count, and a tyre temperature near zero reads like a
+    measurement. CLAUDE.md rule 3.
+    """
+    import threading
+
+    from pitcrew.controller import TelemetryBridge, new_temp_window
+
+    bridge = TelemetryBridge.__new__(TelemetryBridge)
+    bridge._temp_window, bridge._temp_lock = new_temp_window()
+    bridge._corner_sums = {c: 0.0 for c in ("fl", "fr", "rl", "rr")}
+    bridge._corner_frames = 0
+
+    stop = threading.Event()
+    trouble: list[str] = []
+
+    def producer():
+        while not stop.is_set():
+            TelemetryBridge.note_corner_temps(bridge, (80.0, 81.0, 82.0, 83.0))
+
+    thread = threading.Thread(target=producer, daemon=True)
+    thread.start()
+    try:
+        for _ in range(3000):
+            try:
+                means = TelemetryBridge.take_corner_means(bridge)
+            except BaseException as exc:            # noqa: BLE001
+                trouble.append(f"raised {exc!r}")
+                break
+            if means is None:
+                continue
+            # Every frame carries 80-83 degC, so any mean outside that band is
+            # a torn read - and a LOW one is the fabricated near-zero.
+            if not all(79.0 <= v <= 84.0 for v in means.values()):
+                trouble.append(f"fabricated a mean: {means}")
+                break
+    finally:
+        stop.set()
+        thread.join(timeout=2.0)
+
+    assert not trouble, trouble[0]
+
+
+def test_a_board_that_fails_more_often_than_it_draws_still_stands_down():
+    """The hole in a consecutive-only count, found by a critic.
+
+    Eleven failures then a draw, repeating for ever, never reaches the
+    consecutive limit - so the panel stays up redrawing once every three
+    seconds while looking live, which is the frozen board the teardown exists
+    to prevent. The total ceiling is what closes it, and a success does not
+    clear that one.
+    """
+    from pitcrew.controller import (
+        BOARD_FAILURES_BEFORE_STANDING_DOWN,
+        BOARD_FAILURES_BEFORE_TEARDOWN,
+        PitCrewController,
+    )
+
+    app = _board_harness(fail_for=0)
+    board = app.driver_board
+    for _ in range(BOARD_FAILURES_BEFORE_STANDING_DOWN * 2):
+        if app.driver_board is None:
+            break
+        # Eleven raises, then one that draws - for ever.
+        board.left = BOARD_FAILURES_BEFORE_TEARDOWN - 1
+        for _ in range(BOARD_FAILURES_BEFORE_TEARDOWN):
+            if app.driver_board is None:
+                break
+            PitCrewController._push_driver_board(app)
+    assert app.driver_board is None, "it never stood down"
+    assert board.drawn > 0, "the pattern never actually drew"
+
+
+def test_the_failure_counts_belong_to_one_race():
+    """CLAUDE.md rule 11. A race that ends on eleven consecutive failures must
+    not destroy the next race's board on its first bad frame."""
+    from pitcrew.controller import (
+        BOARD_FAILURES_BEFORE_TEARDOWN, PitCrewController)
+
+    app = _board_harness(fail_for=BOARD_FAILURES_BEFORE_TEARDOWN - 1)
+    for _ in range(BOARD_FAILURES_BEFORE_TEARDOWN - 1):
+        PitCrewController._push_driver_board(app)
+    assert app._board_failures == BOARD_FAILURES_BEFORE_TEARDOWN - 1
+
+    app.settings.driver_board_enabled = True
+    app.driver_board = _Board(fail_for=0)
+    app._board_timer.start = lambda _ms: None
+    app._push_driver_board = lambda: None
+    PitCrewController._open_driver_board(app)
+    assert app._board_failures == 0
+    assert app._board_failures_total == 0

@@ -64,9 +64,79 @@ the gauge does.
 from __future__ import annotations
 
 import datetime
+from dataclasses import dataclass
 
 from pitcrew.diagnostics import log
+from pitcrew.settings import HUD_SOURCE_SCREEN
 from pitcrew.store.db import WEAR_HUD_VIDEO
+
+# How long a pre-flight grab may take before it is called a failure.
+#
+# **The default source is the OBS websocket, not the projector**, and a grab
+# there is a connect, an identify and a whole-canvas screenshot - measured at
+# about two seconds, and `ObsSource._request` re-arms its receive timeout on
+# every message, so a socket that chatters without answering never returns at
+# all. This runs on the Qt thread inside a button handler, so it is bounded.
+#
+# **5.0 was too short and it blocked the driver minutes before a race.** It was
+# chosen for the websocket path and never costed against the SCREEN path, where
+# the first grab in a fresh worker thread pays cold-start: importing win32gui
+# and mss, creating a per-thread mss instance, and enumerating every top-level
+# window. On 6 Sep 2026 that exceeded 5 s three times running and told him
+# nothing was being captured while his projector was open in front of him.
+# 12 s is past that cold start and still finite for a genuinely sick OBS.
+PREFLIGHT_TIMEOUT_S = 12.0
+
+
+@dataclass(frozen=True)
+class GaugeCheck:
+    """What one pre-flight grab found, and what may honestly be said about it.
+
+    `ok` is "something was captured", **not** "the gauge will read" - see
+    `HudSession.preflight` for why those are different and `caveat` for the
+    sentence that keeps the dialog honest about it.
+    """
+
+    ok: bool
+    reason: str | None = None
+    # "projector" or "OBS" - the message has to name the thing he must go and
+    # fix, and naming the wrong one has already cost a race night here.
+    source: str = "OBS"
+    enabled: bool = True
+    # False where the check could not be run at all, as distinct from run and
+    # failed. Unknown is not the same as absent - CLAUDE.md rule 3.
+    checked: bool = True
+    # Whether OBS is recording, so the gauge could be transcribed afterwards
+    # with `tools/read_hud_wear.py`. None where it could not be told.
+    recording: bool | None = None
+
+    @property
+    def headline(self) -> str:
+        if self.source == "projector":
+            return "No OBS projector window is being captured."
+        return "The app cannot get a frame from OBS."
+
+    @property
+    def recovery(self) -> str:
+        """What is still true about recovering the wear afterwards."""
+        if self.recording is True:
+            return ("OBS IS recording, so the gauge can be transcribed from "
+                    "the recording afterwards with tools/read_hud_wear.py. "
+                    "You would not lose the wear record - only the live "
+                    "readings during the session.")
+        if self.recording is False:
+            return ("OBS is not recording either, so there would be nothing "
+                    "to transcribe afterwards. GT7 broadcasts no wear "
+                    "channel, so this session would simply have no wear "
+                    "evidence.")
+        return ("I could not tell whether OBS is recording, so I cannot say "
+                "whether the wear could be transcribed afterwards.")
+
+    @property
+    def caveat(self) -> str:
+        return ("This only checks that something is being captured. It cannot "
+                "check the gauge itself - you are in a menu, so the gauge is "
+                "not on screen yet.")
 
 # How many lap ids to remember when attributing a reading. The sampler answers
 # a crossing or two later, never more, so this only has to outlive the lag.
@@ -84,6 +154,9 @@ class HudSession:
         self._settings = settings if callable(settings) else (lambda: settings)
         self.store = store
         self._sampler = None
+        # The settings the cached sampler was built from. A change to any of
+        # them has to rebuild it - see `sampler`.
+        self._sampler_key: tuple | None = None
         self._lap_nums: dict[int, int] = {}
         self._wear_now: dict | None = None
         self._wear_now_lap: int | None = None
@@ -135,6 +208,174 @@ class HudSession:
         sampler.request(lap_id)
         return True
 
+    def _source_key(self) -> tuple:
+        """Everything about the settings that changes what gets read."""
+        settings = self.settings
+        return (settings.hud_source, settings.obs_host, settings.obs_port,
+                settings.obs_password,
+                float(settings.hud_sample_interval_s or 0.0))
+
+    def build_source(self):
+        """The screen source the gauge reads, per the settings.
+
+        **One definition, because `preflight` has to test the SAME source the
+        sampler will use.** A pre-flight that opened a different source would
+        be checking something the session then does not do, which is worse
+        than not checking at all - it would say "the gauge can see" about a
+        path nothing reads from.
+        """
+        from pitcrew.settings import HUD_SOURCE_SCREEN
+        from pitcrew.telemetry.hud import ObsSource, ScreenSource
+
+        if self.settings.hud_source == HUD_SOURCE_SCREEN:
+            # Reads an OBS projector window off the desktop. No socket is
+            # opened at all, which is also why nothing here can hang on one.
+            return ScreenSource()
+        return ObsSource(self.settings.obs_host, self.settings.obs_port,
+                         self.settings.obs_password)
+
+    def preflight(self, *, timeout_s: float = PREFLIGHT_TIMEOUT_S):
+        """Can anything be captured for the gauge right now? A `GaugeCheck`.
+
+        **This exists because the failure is silent and total.** The sampler
+        stands down about thirty seconds in and never recovers: session 126
+        lost its whole wear record that way, and on 6 Sep 2026 session 133 lost
+        its gauge because the driver forgot to open OBS, went out, and only
+        found out afterwards. GT7 broadcasts no wear channel, so the gauge is
+        the only instrument that measures it.
+
+        ⚠️ **What this can and cannot prove, because the dialog it feeds must
+        not overclaim.** It takes one grab. A grab that succeeds means
+        *something was captured* - it does NOT mean the gauge will read:
+
+        * `ScreenSource` captures the MONITOR the projector is on, not the
+          window, so a projector sitting behind another window returns a full,
+          healthy-looking frame. That is a measured failure - a stint sampled
+          every two seconds for six minutes came back dark for exactly that
+          reason (`hud.py`).
+        * `find_projector` matches the word "projector" in any visible window
+          title, so an editor or a browser tab can satisfy it.
+        * At the moment he presses Start he is in a GT7 menu, so the gauge is
+          not on screen at all and `locate_gauge` would return None. **The
+          gauge itself cannot be tested at the only moment this check runs.**
+
+        So this catches "nothing is being captured", which is the case that
+        actually happened twice. It does not catch "the wrong thing is being
+        captured", and `GaugeCheck.caveat` says so in the driver's own words.
+
+        Never raises, and never blocks for long: on the default `obs` source a
+        grab is a websocket round trip that has been measured at about two
+        seconds and whose response wait re-arms on every message, so it is run
+        with a hard timeout - this is called from a button handler on the Qt
+        thread and the gauge must never be able to freeze the app.
+        """
+        settings = self.settings
+        kind = ("projector" if settings.hud_source == HUD_SOURCE_SCREEN
+                else "OBS")
+        if not settings.hud_wear_enabled:
+            # Not a nag: turning it off is a choice. But it IS the other way
+            # to end a session with no wear record, so it goes in the log
+            # rather than passing invisibly.
+            log("pitcrew").info(
+                "hud-wear: pre-flight skipped - the gauge is switched off")
+            return GaugeCheck(ok=True, source=kind, enabled=False)
+
+        TIMED_OUT = object()
+        frame, why = self._bounded(
+            lambda: self.build_source().grab(), timeout_s,
+            lambda t: (TIMED_OUT, f"it did not answer within {t:g}s"))
+        if frame is TIMED_OUT:
+            # **A timeout is "I could not tell", NOT "there is nothing there".**
+            # CLAUDE.md rule 3. Reported as a refusal it blocked the driver
+            # minutes before a race with his projector open in front of him,
+            # three times, and the sentence he was shown was false. He is not
+            # asked - the gauge may never stop him driving - and the log
+            # carries it so an empty wear record afterwards is still
+            # explicable.
+            log("pitcrew").warning(
+                "hud-wear: pre-flight could not CHECK the %s source in %gs - "
+                "going out without an answer either way. The gauge itself is "
+                "unaffected; its own sampler thread is long-lived and does not "
+                "pay this cold start.", kind, timeout_s)
+            return GaugeCheck(ok=True, source=kind, checked=False,
+                              reason=why)
+        if frame is not None:
+            # **The accept is logged, not only the refusal.** CLAUDE.md rule
+            # 10: the ratchet was invisible for a whole race precisely because
+            # only refusals reached the log. Without this line an empty wear
+            # record cannot be told apart from a gate that never ran.
+            log("pitcrew").info(
+                "hud-wear: pre-flight OK - %s source is capturing", kind)
+            return GaugeCheck(ok=True, source=kind)
+
+        recording = self._obs_recording()
+        log("pitcrew").warning(
+            "hud-wear: pre-flight found nothing to capture on the %s source: "
+            "%s (obs recording: %s)", kind, why, recording)
+        return GaugeCheck(ok=False, reason=why or "nothing to capture",
+                          source=kind, recording=recording)
+
+    def _bounded(self, work, timeout_s: float, on_timeout):
+        """Run `work` off the Qt thread with a hard timeout.
+
+        **Everything that touches OBS from a button handler goes through
+        here.** The first version bounded the grab and then called
+        `_obs_recording` - down the identical `ObsSource._request` path, whose
+        receive timeout re-arms on every message so a chattering socket never
+        returns - straight on the Qt thread, immediately after. A critic found
+        it. Bounding one of two doors is not bounding the room.
+
+        An exception is the answer, not an error: nothing here may escape into
+        the start path.
+        """
+        import threading
+
+        out: list = []
+
+        def run():
+            try:
+                out.append(work())
+            except Exception as exc:                        # noqa: BLE001
+                out.append(("__raised__", f"{type(exc).__name__}: {exc}"))
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout_s)
+        if not out:
+            return on_timeout(timeout_s)
+        got = out[0]
+        if isinstance(got, tuple) and len(got) == 2 and got[0] == "__raised__":
+            return None, got[1]
+        return got
+
+    def _obs_recording(self) -> bool | None:
+        """Is OBS recording, so the gauge could be transcribed afterwards?
+
+        **The dialog is wrong without this.** `tools/read_hud_wear.py` reads
+        this gauge off a recorded file, and `LiveWearSampler` already tells the
+        driver to use it - so "the wear cannot be recovered" is only true when
+        nothing is recording. Telling him otherwise either aborts a session he
+        did not need to abort, or stops him running the recovery pass on one
+        he did.
+
+        `None` where it cannot be told, which is not the same as `False`.
+        """
+        from pitcrew.telemetry.hud import ObsSource
+
+        # **`obs_record_sessions` is "the APP drives the recording", not "OBS
+        # is recording".** Reading it as the second told him "OBS is not
+        # recording either, so there would be nothing to transcribe" whenever
+        # the app was not driving it - while he may well have started the
+        # recording himself. That is a confident claim about the world derived
+        # from a flag about the app, and it is the sentence most likely to make
+        # him abort a race he did not need to abort. CLAUDE.md rule 3: unknown
+        # is not False. A critic found it.
+        obs = ObsSource(self.settings.obs_host, self.settings.obs_port,
+                        self.settings.obs_password)
+        state, _why = self._bounded(obs.recording, PREFLIGHT_TIMEOUT_S,
+                                    lambda _t: (None, "timed out"))
+        return state
+
     def sampler(self):
         """The live gauge reader, built on first use, or None if it is off.
 
@@ -146,19 +387,28 @@ class HudSession:
         if not self.settings.hud_wear_enabled:
             return None
         existing = self._sampler
-        if existing is not None:
+        if existing is not None and self._source_key() == self._sampler_key:
             return existing
-        from pitcrew.settings import HUD_SOURCE_SCREEN
-        from pitcrew.telemetry.hud import (LiveWearSampler, ObsSource,
-                                           ScreenSource)
+        if existing is not None:
+            # **A settings change has to reach the cached sampler.** It is
+            # built once and only `shutdown` stops it, and `save_settings`
+            # rebinds settings without touching it - so switching source, host
+            # or port left the old sampler reading the path he had just
+            # abandoned, while `preflight` checked the new one and passed.
+            # That is exactly what `build_source`'s docstring says must not
+            # happen: a check on a source nothing reads from.
+            log("pitcrew").info(
+                "hud-wear: settings changed, rebuilding the sampler")
+            try:
+                existing.stop()
+            except Exception:                               # noqa: BLE001
+                log("pitcrew").warning("hud-wear: the old sampler would not "
+                                       "stop; dropping it anyway")
+            self._sampler = None
+        from pitcrew.telemetry.hud import LiveWearSampler
 
-        if self.settings.hud_source == HUD_SOURCE_SCREEN:
-            # Reads an OBS projector window off the desktop. No socket is
-            # opened at all, which is also why nothing here can hang on one.
-            source = ScreenSource()
-        else:
-            source = ObsSource(self.settings.obs_host, self.settings.obs_port,
-                               self.settings.obs_password)
+        source = self.build_source()
+        self._sampler_key = self._source_key()
         interval = float(self.settings.hud_sample_interval_s or 0.0)
         sampler = LiveWearSampler(source, self._write_wear,
                                   on_status=self._status,
