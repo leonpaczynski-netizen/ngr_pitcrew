@@ -98,7 +98,40 @@ class CallRow(QWidget):
         if call.reason:
             text.addWidget(BodyLabel(call.reason, size=13,
                                      colour=theme.STENCIL_DIM, wrap=False))
+        # **What happened next, where the app can tell.** Filled in after the
+        # fact by `set_outcome`: at the moment a call is made nothing has
+        # happened yet, so this is blank on the way past and written when the
+        # laps that answer it have been driven.
+        self.outcome = BodyLabel("", size=13, colour=theme.STENCIL_DIM,
+                                 wrap=False)
+        self.outcome.setVisible(False)
+        text.addWidget(self.outcome)
+
         row.addLayout(text, 1)
+
+
+    def set_outcome(self, verdict: str, detail: str) -> None:
+        """Say what followed, in the ink the verdict earns.
+
+        **`cannot-tell` is shown, not hidden.** Most calls are unanswerable -
+        GT7 broadcasts no fuel map, brake balance or driving style - and a log
+        that quietly showed an outcome only where it had one would read as
+        though the app had watched every call and this driver ignored most of
+        them.
+        """
+        from pitcrew.race.call_outcome import ACTED, CANNOT_TELL, NOT_ACTED
+
+        # `STENCIL_DIM`, not `STRUCK`: this line is prose, and
+        # `test_struck_is_only_used_where_low_contrast_is_the_point` holds
+        # that no screen paints prose with the ink that means "removed from
+        # the count". It caught this on the way in.
+        ink = {ACTED: theme.WEAR_FLAT,
+               NOT_ACTED: theme.WARNING}.get(verdict, theme.STENCIL_DIM)
+        word = {ACTED: "ACTED", NOT_ACTED: "NOT ACTED",
+                CANNOT_TELL: "CANNOT TELL"}.get(verdict, verdict.upper())
+        self.outcome.setText(f"{word} — {detail}")
+        self.outcome.set_ink(ink)
+        self.outcome.setVisible(True)
 
 
 class RaceScreen(QWidget):
