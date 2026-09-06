@@ -4,6 +4,26 @@ Written 3 Sep 2026. For the Sector 17 / Redion Wind Sim on COM5: Arduino Uno
 (ATmega328P), CH340 bridge, Adafruit Motor Shield V2, two fans. SimHub
 v9.11.13 generated the sketch that is on it now.
 
+> **SUPERSEDED IN PART, 6 Sep 2026.** Two things below are now wrong, and
+> the rest still stands as background.
+>
+> * **The procedure is no longer a SimHub one.** SimHub is uninstalled. The
+>   firmware is ours — `firmware/wind/wind.ino` — and `scripts/wind-reflash.cmd`
+>   compiles and uploads it with the toolchain SimHub left behind. See
+>   `firmware/wind/README.md` for why rebuilding SimHub's sketch was the worse
+>   route.
+> * **"vendor cap 1900" is wrong, and so is anything below that treats 1900 as
+>   reachable.** The PCA9685's prescale floor of 3 caps the part at
+>   25e6/(4096×4) = **1525.9 Hz**. SimHub's field was *labelled* 1900 and
+>   defaulted to it; the chip cannot produce it. This rig's 1200 is really
+>   1220.7 Hz, so the change available is **1221 → 1526 Hz** and that is the
+>   whole of it. If the dropouts survive it, the frequency was not the cause —
+>   there is no faster setting to try next.
+>
+> The 25 kHz `SHAKEITPWMFANS` path this document was written to enable does
+> **not** apply: the fans are two-wire (photos, 3 Sep), so there is no control
+> line to drive.
+
 ## Why, in two paragraphs
 
 The sketch drives the fans through the motor shield's brushed-motor H-bridge,
