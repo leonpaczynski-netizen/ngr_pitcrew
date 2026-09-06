@@ -2260,7 +2260,6 @@ class PitCrewController(QObject):
         compounds = tuple(
             s.get("compound") for s in stints
             if isinstance(s, dict) and s.get("compound"))
-        sampler = getattr(self, "_hud", None)
         # **`events.race_laps` holds MINUTES when `race_type` is `time`, and
         # `race_minutes` is NEVER written** - `race/coordinator.py` says so in
         # its own docstring. Gating on `race_minutes` therefore never fired,
@@ -2276,12 +2275,13 @@ class PitCrewController(QObject):
             else event.get("race_minutes"),
             stops=(len(stints) - 1) if stints else None,
             compounds=compounds,
-            # **Only if it is actually working now.** Switched on, built, and
-            # not already stood down - promising an instrument that is not
-            # there is worse than promising nothing.
-            wear_gauge=bool(self.settings.hud_wear_enabled
-                            and sampler is not None
-                            and not sampler.stood_down),
+            # **Only if it can actually work this session.** Switched on and
+            # not stood down - promising an instrument that is not there is
+            # worse than promising nothing. The first draft read
+            # `getattr(self, '_hud', None)`, a name that never existed, so it
+            # promised nothing every race (Deep Forest, 6 Sep 2026: "No tyre
+            # gauge this race" against 19 of 20 laps read).
+            wear_gauge=self.hud.armed(),
             temp_window=measured_temp_window(self.store, event["id"]) is not None,
             # The `A` format carries no per-wheel surface, so nothing can
             # see a kerb or an off. Read off the last packet rather than a

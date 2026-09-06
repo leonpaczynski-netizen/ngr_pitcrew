@@ -376,6 +376,23 @@ class HudSession:
                                     lambda _t: (None, "timed out"))
         return state
 
+    def armed(self) -> bool:
+        """Whether the gauge can be promised for the session about to start.
+
+        **A probe, not a build.** `sampler()` is lazy on purpose - constructing
+        it opens a socket - and the grid brief runs before `new_session`, so a
+        brief that built the reader would open one for a practice that may
+        never cross a line. Read the cached one instead: switched on in
+        settings, and either not built yet (nothing has stood it down) or built
+        and still standing. The brief used to read `getattr(self, "_hud",
+        None)` on the controller - a name that never existed - so it said "No
+        tyre gauge this race" at Deep Forest while the gauge read 19 of 20 laps.
+        """
+        if not self.settings.hud_wear_enabled:
+            return False
+        sampler = self._sampler
+        return sampler is None or not bool(getattr(sampler, "stood_down", False))
+
     def sampler(self):
         """The live gauge reader, built on first use, or None if it is off.
 
