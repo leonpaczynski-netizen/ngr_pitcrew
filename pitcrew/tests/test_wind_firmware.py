@@ -245,3 +245,21 @@ def test_the_ramp_limiter_is_off(source):
     does not fix the dropouts, and shipping both at once would mean learning
     nothing from either."""
     assert define(source, "WIND_RAMP_STEP") == "0"
+
+def test_the_shield_frequency_can_be_read_back_off_the_chip(source):
+    """**Measured on the board, 6 Sep 2026: PRESCALE 3, MODE1 0x20.**
+
+    Without this command the "1526 Hz" claim rested on the number in the
+    source reaching the part, and nothing verified that - an I2C write that
+    goes nowhere is silent, and the board would acknowledge every frame
+    exactly as it does when the shield is working. Asked over `X shieldfreq`
+    it answered `08 03 08 20`: prescale 3, so 25e6/(4096*4) = 1525.9 Hz, and
+    MODE1 awake with auto-increment on.
+
+    A prescale of 0 is the failure signal - nothing answered at 0x60 - and
+    cannot be a real setting, the datasheet floor being 3.
+    """
+    assert "shieldfreq" in source, "the readback command is gone"
+    body = source[source.index("static void commandShieldFreq"):]
+    body = body[:body.index("\n}")]
+    assert "PCA9685_PRESCALE" in body and "PCA9685_MODE1" in body

@@ -61,6 +61,20 @@ the frequency was not the cause — `WIND_RAMP_STEP` in the sketch is the next
 hypothesis (inrush on a fast duty step), and it ships disabled on purpose so
 that this change can be judged on its own.
 
+**Flashed and measured on the board, 6 Sep 2026 13:2x.** The chip was asked
+what it is running rather than told what it should be:
+
+    X shieldfreq  ->  08 03 08 20
+    PRESCALE = 3  ->  25e6 / (4096 × 4) = 1525.9 Hz   (+25.0%)
+    MODE1 = 0x20  ->  awake, auto-increment on
+
+That command exists for exactly this reason. Without it, "1526 Hz" would rest
+on the number in the source reaching the part, and **nothing verifies that** —
+an I2C write that goes nowhere is silent, and the board would acknowledge
+every frame precisely as it does when the shield is working. A `PRESCALE` of
+0 is the failure signal (nothing answered at 0x60) and cannot be a real
+setting, the datasheet floor being 3.
+
 Everything else is byte-identical to the SimHub build: the device name, the
 unique id, the version letter `j`, the four channels, the feature letters, and
 the 1000 ms deadman that means the fans cannot stick on if the PC side dies.

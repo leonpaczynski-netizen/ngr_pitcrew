@@ -452,7 +452,25 @@ static void commandMcuType() {
 static void commandExpandedList() {
   writeStringLn("mcutype");
   writeStringLn("keepalive");
+  writeStringLn("shieldfreq");
   writeValue('\n');
+}
+
+// **What the shield is actually running at, read back off the chip.**
+//
+// Not a diagnostic nicety. The whole point of this firmware is a frequency
+// change, and without this the claim "1526 Hz" rests entirely on the number
+// in the source reaching the part - which nothing verifies, because an I2C
+// write that goes nowhere is silent and the board would acknowledge every
+// frame exactly as it does now.
+//
+// Two bytes: PRESCALE, then MODE1. Frequency is 25e6/(4096*(prescale+1)), so
+// prescale 3 is 1525.9 Hz and prescale 4 is 1220.7. **A prescale of 0 means
+// the read failed** - nothing answered at 0x60 - and is the one value that
+// cannot be a real setting, since the datasheet floor is 3.
+static void commandShieldFreq() {
+  writeValue(pcaRead(PCA9685_PRESCALE));
+  writeValue(pcaRead(PCA9685_MODE1));
 }
 
 // Feature letters. G gear, N name, I unique id, J buttons, P custom
@@ -544,8 +562,9 @@ void loop() {
           c = arqRead();
         }
         word[pos] = 0;
-        if (!strcmp(word, "list"))         commandExpandedList();
-        else if (!strcmp(word, "mcutype")) commandMcuType();
+        if (!strcmp(word, "list"))            commandExpandedList();
+        else if (!strcmp(word, "mcutype"))    commandMcuType();
+        else if (!strcmp(word, "shieldfreq")) commandShieldFreq();
       }
     }
   }
