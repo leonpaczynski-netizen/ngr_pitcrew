@@ -1554,10 +1554,16 @@ def _laps_after_this_stop(state: RaceState) -> int | None:
         return None
     # **Only while the crossing is still ahead.** Once the line has been
     # crossed in the lane, `laps_remaining` already excludes the lap just
-    # completed and the lap in progress is the out-lap, run in full.
-    if state.in_pit and not state.crossed_in_box:
-        return max(0, remaining - 1)
-    return remaining
+    # completed and the lap in progress is the out-lap, run in full. Before
+    # it - at the box call on the crossing that starts the in-lap, or in the
+    # box at a circuit whose line comes after the box - the lap in progress
+    # is the in-lap, mostly driven before the fill, and comes off. The same
+    # rule at both moments, so the box call and the hose-in figure name the
+    # same laps (rule 13): the replay of Daytona s127 said "9 laps to the
+    # flag" at the crossing and "8 laps to the flag" with the hose in.
+    if state.crossed_in_box:
+        return remaining
+    return max(0, remaining - 1)
 
 
 def _laps_the_fill_covers(state: RaceState) -> tuple[int | None, str | None]:
@@ -1591,8 +1597,7 @@ def _laps_the_fill_covers(state: RaceState) -> tuple[int | None, str | None]:
     # heartbeat counts the lap in progress; the fill before the crossing does
     # not, so it is said as "after the box" and never as "to the flag" until
     # the two counts are the same number.
-    frame = ("laps after the box"
-             if state.in_pit and not state.crossed_in_box else "laps to the flag")
+    frame = "laps to the flag" if state.crossed_in_box else "laps after the box"
     if state.next_stint_laps is not None:
         if state.further_stop_planned is False and remaining is not None:
             return remaining, f"{remaining} {frame}"

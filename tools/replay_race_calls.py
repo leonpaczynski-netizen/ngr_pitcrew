@@ -22,6 +22,16 @@ What this can and cannot show:
   in this harness re-plans the race.
 * Fuel per lap is the **race's own measured burn** once five green laps exist,
   exactly as the live path does it, and the plan's figure before that.
+* **It CAN show the in-box "Fuel to N" (since 7 Sep 2026).** The pit lap's and
+  the out-lap's own frames are read off `lap_frames`, the fill is found where
+  the tank rises at walking pace, and the real `RefuelWatch` is driven over
+  those frames with the coordinator's state as it stood - in the order the
+  line and the box actually came. At Daytona and Spa the crossing is inside
+  the lane before the fill; at Deep Forest and Monza it is after. The harness
+  used to hand PIT_ENTRY / lap / PIT_EXIT in one fixed order and could not
+  see the difference, which is the one the fill depends on.
+* **It cannot show the gaps or the rival calls**: the pit wall's readings
+  are not persisted (assessment S8), so there is nothing to replay.
 """
 from __future__ import annotations
 
@@ -32,7 +42,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pitcrew.race.coordinator import RaceCoordinator, context_from_stored
-from pitcrew.race.calls import STATUS
+from pitcrew.race.calls import (STATUS, fuel_target_basis, fuel_target_l,
+                                fuel_to_flag_l)
+from pitcrew.race.refuel import FILL_MAX_KPH, RefuelWatch
 from pitcrew.store.db import Store
 from pitcrew.strategy.execution import context_from_event
 from pitcrew.telemetry.session_state import EventKind, Lap, SessionEvent
@@ -70,6 +82,41 @@ def as_event(row: dict) -> SessionEvent:
         position=int(row["position"] or 0),
         is_pit_lap=bool(row["is_pit_lap"]),
         is_out_lap=bool(row["is_out_lap"]))})
+
+
+def _frames(store: Store, row: dict) -> list[dict]:
+    """The 60 Hz frames of one lap, or nothing where none were kept."""
+    try:
+        stored = store.get_lap_frames(row["id"])
+    except Exception:                                        # noqa: BLE001
+        return []
+    return list((stored or {}).get("frames") or [])
+
+
+def _fill_frames(frames: list[dict]) -> list[dict]:
+    """The frames of a fill: walking pace, from the first rise in the tank."""
+    slow = [f for f in frames
+            if f.get("fuel_l") is not None
+            and (f.get("speed_kph") or 0.0) <= FILL_MAX_KPH]
+    if not slow:
+        return []
+    low = min(f["fuel_l"] for f in slow)
+    rising = [f for f in slow if f["fuel_l"] > low + 0.05]
+    return slow if rising else []
+
+
+def replay_stop(race, watch: RefuelWatch, frames: list[dict], lap_num: int,
+                out) -> None:
+    """Drive the refuel watch over a fill's frames and print what it said."""
+    for frame in frames:
+        target = fuel_target_l(race.state)
+        basis = fuel_target_basis(race.state)
+        call = watch.note(frame.get("fuel_l"), speed_kph=frame.get("speed_kph"),
+                          target_l=target, fuel_per_lap_l=race.state.fuel_per_lap_l,
+                          to_flag_l=fuel_to_flag_l(race.state), basis=basis)
+        if call is not None:
+            out(f"lap {lap_num:>2}  {frame.get('fuel_l', 0):5.1f}L  "
+                f"{'box':>12} | {call.call} {call.reason}".strip())
 
 
 def main() -> int:
@@ -148,14 +195,36 @@ def main() -> int:
 
         race.handle(SessionEvent(EventKind.RACE_STARTED, {}))
         spoken = 0
+        by_num = {r["lap_num"]: r for r in rows}
         for row in rows:
             elapsed["s"] += (row["lap_time_ms"] or 0) / 1000.0
             if row["is_pit_lap"]:
-                race.handle(SessionEvent(EventKind.PIT_ENTRY, {}))
-            call = race.handle(as_event(row))
-            if row["is_pit_lap"]:
-                race.handle(SessionEvent(EventKind.PIT_EXIT,
-                                         {"tyres_changed": True}))
+                # **The order the line and the box actually came.** A fill
+                # inside the pit lap's own frames precedes the crossing (Deep
+                # Forest, Monza); a fill inside the out-lap's frames follows
+                # it (Daytona, Spa). The coordinator's `crossed_in_box` and
+                # the fill's lap count depend on exactly this.
+                pit_frames = _fill_frames(_frames(store, row))
+                following = by_num.get(row["lap_num"] + 1)
+                out_frames = (_fill_frames(_frames(store, following))
+                              if following is not None else [])
+                watch = RefuelWatch()
+                race.handle(SessionEvent(EventKind.PIT_ENTRY,
+                                         {"fuel": row["fuel_end"]}))
+                if pit_frames:
+                    replay_stop(race, watch, pit_frames, row["lap_num"], print)
+                call = race.handle(as_event(row))
+                if out_frames and not pit_frames:
+                    replay_stop(race, watch, out_frames, row["lap_num"] + 1,
+                                print)
+                tyres = row["tyres_changed"] if "tyres_changed" in row.keys() \
+                    else None
+                race.handle(SessionEvent(EventKind.PIT_EXIT, {
+                    "fuel_added": row["fuel_added_l"] or 0.0,
+                    "tyres_changed": (None if tyres is None else bool(tyres)),
+                }))
+            else:
+                call = race.handle(as_event(row))
             state = race.state
             fuel = f"{state.fuel_l:5.1f}L" if state.fuel_l is not None else "   --"
             if call is not None:

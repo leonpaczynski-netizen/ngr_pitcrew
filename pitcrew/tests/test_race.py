@@ -634,11 +634,14 @@ def test_the_fill_is_sized_on_measured_scatter_not_a_flat_lap():
                       stint_ends_on_lap=12, next_stint_laps=8,
                       further_stop_planned=False, fuel_capacity_l=100.0)
     said = said_litres(_fuel_instruction(state))
-    # 8 x 6.068 = 48.5, plus 3 x 0.166 x sqrt(8) = 1.41 -> 50.
-    assert said == 50
-    # The old flat lap asked for 55.3, and every litre of the difference is a
+    # Lap 13 is the in-lap and comes off (its fuel is already aboard): 7
+    # laps after the box. 7 x 6.068 = 42.5, plus 3 x 0.166 x sqrt(7) = 1.32
+    # -> 44. The plan's "8-lap stint" counted the in-lap, a lap the car
+    # drives on the tank it arrived with.
+    assert said == 44
+    # The old flat lap asked for 48.5, and every litre of the difference is a
     # second in the pit lane at this circuit's measured rate.
-    assert said < 55
+    assert said < 49
 
 
 def test_a_timed_race_carries_the_lap_only_while_it_can_still_happen():
@@ -657,9 +660,9 @@ def test_a_timed_race_carries_the_lap_only_while_it_can_still_happen():
     firm = replace(unresolved, laps_estimate_firm=True)
 
     # Count still inside the noise: the extra lap is real, so it is fuelled.
-    assert said_litres(_fuel_instruction(unresolved)) == 55
+    assert said_litres(_fuel_instruction(unresolved)) == 49
     # Count resolved: fuel exactly for it, same margin as a lap race.
-    assert said_litres(_fuel_instruction(firm)) == 50
+    assert said_litres(_fuel_instruction(firm)) == 44
     assert said_litres(_fuel_instruction(firm)) ==         said_litres(_fuel_instruction(lap_race))
 
 
@@ -670,7 +673,7 @@ def test_an_unmeasured_spread_keeps_the_flat_lap():
                       fuel_per_lap_l=6.068, fuel_sd_l=None,
                       stint_ends_on_lap=12, next_stint_laps=8,
                       further_stop_planned=False, fuel_capacity_l=100.0)
-    assert said_litres(_fuel_instruction(state)) == 55
+    assert said_litres(_fuel_instruction(state)) == 49   # 7 laps + a flat lap
 
 
 def test_the_margin_never_exceeds_the_flat_lap():
@@ -679,7 +682,7 @@ def test_the_margin_never_exceeds_the_flat_lap():
                       fuel_per_lap_l=6.068, fuel_sd_l=5.0,
                       stint_ends_on_lap=12, next_stint_laps=8,
                       further_stop_planned=False, fuel_capacity_l=100.0)
-    assert said_litres(_fuel_instruction(state)) == 55
+    assert said_litres(_fuel_instruction(state)) == 49   # 7 laps + a flat lap
 
 
 def test_consecutive_sd_does_not_measure_the_gap_between_sessions():

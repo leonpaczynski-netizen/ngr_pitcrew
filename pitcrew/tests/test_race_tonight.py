@@ -1286,13 +1286,14 @@ def test_a_box_call_that_cannot_make_the_flag_escalates_instead():
 # ---------------------------------------------------------- the stale fill
 
 def test_a_stale_plan_does_not_size_a_fill_below_the_race():
-    """Next stint 3 laps, no stop after it, 8 laps left: the fill must reach
-    the flag, not the plan's stale stint length."""
+    """Next stint 3 laps, no stop after it, 8 laps left of which lap 8 is
+    the in-lap: the fill must reach the flag - 7 laps after the box - not
+    the plan's stale stint length."""
     state = RaceState(lap=7, laps_total=15, fuel_l=5.0, fuel_per_lap_l=6.79,
                       stint_ends_on_lap=7, next_stint_laps=3,
                       further_stop_planned=False, fuel_capacity_l=100.0)
     said = _fuel_instruction(state)
-    assert said == "Fuel to 62 litres - 8 laps to the flag."  # (8+1) x 6.79, rounded up; sized by the flag, and it says so
+    assert said == "Fuel to 55 litres - 7 laps after the box."  # (7+1) x 6.79, rounded up; sized by the flag, and it says so
 
 
 def test_a_hand_built_state_keeps_the_stints_own_figure():
@@ -2025,15 +2026,16 @@ def test_the_fill_is_sized_on_laps_that_are_actually_driven():
 
 
 def test_no_pending_stop_means_no_discount():
-    """The last stint runs to the flag. Nothing is coming off the clock, and
-    the fill must not be cut for a stop that is not going to happen."""
+    """The last stint runs to the flag. Nothing is coming off the CLOCK - no
+    pending stop is priced - and the fill falls through to `laps_remaining`;
+    the in-lap (lap 21) still comes off, because the fill is for the laps
+    after the box whichever way the count was reached."""
     burn = 5.529
     state = RaceState(lap=20, fuel_per_lap_l=burn, race_minutes=50,
                       next_stint_laps=None, further_stop_planned=False,
                       laps_estimate_firm=False, laps_total=28,
                       laps_after_stops=None)
-    # Falls through to `laps_remaining` exactly as it did before the field.
-    assert fuel_target_l(state) == pytest.approx(8 * burn + burn, abs=0.1)
+    assert fuel_target_l(state) == pytest.approx(7 * burn + burn, abs=0.1)
 
 
 def test_a_dropped_lap_names_the_pit_lane_rather_than_the_two_measures():
