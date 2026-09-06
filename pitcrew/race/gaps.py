@@ -70,6 +70,7 @@ at all because the box is framed with scenery in it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from statistics import median
 
 from pitcrew.strategy.model import PIT_DEAD_TIME_S, PIT_LOSS_MEASURED
 from pitcrew.telemetry.board import gap_lines
@@ -317,23 +318,52 @@ class GapTrend:
         Positive means the gap is shrinking, whichever side this is. See the
         class docstring on why that is not "we are catching him".
 
-        A least-squares slope, and the count travels with it because a slope
-        through three points is not a trend - CLAUDE.md rule 4. Note that for a
-        random walk the least-squares fit is barely better than subtracting the
-        first sample from the last; the machinery is kept because it degrades
-        more gracefully when one reading is off.
+        **The median of ADJACENT differences, with the largest one trimmed,
+        and a step is why.** Session 135, 6 Sep 2026: the driver crashed on
+        lap 2 and lost about ten seconds in that one lap, and at lap 5 the fit
+        still reached back across it and reported "you are losing 1.6 seconds a
+        lap to the car ahead" - at medium confidence, under a helmet - when the
+        recent laps were going the other way and he passed that car two laps
+        later.
+
+        The two ANALOGOUS failures were already defended above and neither
+        helps: a change of `subject` throws the history away, and `_window`
+        demands consecutive laps because a series broken by our own stop
+        "reported the stop itself as ten seconds a lap of lost pace". A crash
+        breaks neither - it is consecutive and it is the same car. Those guards
+        catch a hole in the DATA; this catches a step in the VALUE.
+
+        **An OUTLIER and a STEP are different contaminations and they do not
+        take the same estimator.** `analysis.wear.trend_slope` is Theil-Sen and
+        is right for its own question - one lap five seconds off the pace that
+        then returns to trend. A crash is not that: the ten seconds STAY lost,
+        so every pairwise slope that spans the crash is contaminated, which at
+        five laps is up to six of the ten pairs. Theil-Sen was tried here and a
+        critic measured it failing: with the step in the MIDDLE of the window
+        it returns "losing 1.92 a lap" while the driver is closing at 1.0. It
+        only appeared to work because session 135's crash happened to sit at
+        the very start, which is the best place for it rather than the worst.
+
+        **A step contaminates exactly ONE adjacent difference.** Five laps give
+        four differences; dropping the single largest leaves three clean ones,
+        which is immunity to exactly one incident - the failure that was
+        actually measured. On clean data every difference is alike and the trim
+        changes nothing. On a genuinely accelerating close it under-reports
+        slightly, which is the same direction `TREND_WORTH_SAYING_S` already
+        chose deliberately: it will miss real trends rather than invent them.
+
+        The count travels with the rate because a slope through three points is
+        not a trend - CLAUDE.md rule 4 - and it still means the consecutive
+        laps fitted, unchanged by this.
         """
         laps = self._window(over_laps)
         if len(laps) < 3:
             return None, len(laps)
-        mean_lap = sum(laps) / len(laps)
-        mean_gap = sum(self.seen[k] for k in laps) / len(laps)
-        spread = sum((k - mean_lap) ** 2 for k in laps)
-        if spread <= 0:
-            return None, len(laps)
-        slope = sum((k - mean_lap) * (self.seen[k] - mean_gap)
-                    for k in laps) / spread
-        return -slope, len(laps)
+        steps = [self.seen[b] - self.seen[a] for a, b in zip(laps, laps[1:])]
+        if len(steps) >= 3:
+            worst = max(range(len(steps)), key=lambda i: abs(steps[i]))
+            steps = steps[:worst] + steps[worst + 1:]
+        return -median(steps), len(laps)
 
     def laps_to_catch(self, over_laps: int = MIN_LAPS_FOR_TREND,
                       laps_left: int | None = None) -> float | None:

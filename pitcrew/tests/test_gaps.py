@@ -20,6 +20,7 @@ import pytest
 
 import pitcrew.race.gaps as gaps
 from pitcrew.telemetry.board import find
+from pitcrew.race.rival_calls import closing_call
 from pitcrew.race.gaps import (
     MIN_LAPS_FOR_TREND,
     REJOIN_MARGIN_S,
@@ -177,6 +178,144 @@ def test_a_series_broken_by_our_own_stop_is_not_a_pace_trend():
         trend.note(lap, gap)
     rate, count = trend.closing_s_per_lap()
     assert count == 1 and rate is None
+
+
+# --- one bad lap does not become a rate -------------------------------------
+#
+# Session 135, 6 Sep 2026. The engineer told the driver at lap 5 "You are
+# losing 1.6 seconds a lap to the car ahead"; he was closing, and passed that
+# car two laps later. His own laps were 95.325, 97.698, 90.228, 88.966, 87.459
+# - lap 2 was a crash, about ten seconds gone in one lap - and a least-squares
+# fit over five laps described the crash rather than the pace.
+#
+# **The gaps themselves were never recorded.** `GapSample` lives in memory for
+# the race and nothing writes it, so the real series cannot be replayed and
+# these tests do not pretend to. Swept over the one free parameter - the
+# rival's pace - NO constant rival pace reproduces both the call that was
+# spoken and the overtake that followed, so the rival's pace moved too. What
+# the tests below pin is the property that matters and does not depend on it:
+# one bad lap must not set the rate.
+
+OUR_LAPS_135 = [95.325, 97.698, 90.228, 88.966, 87.459]
+
+
+def _gaps_against(rival_s: float, ours=OUR_LAPS_135) -> list[tuple[int, float]]:
+    """The gap series our laps produce against a rival holding `rival_s`."""
+    gap, out = 0.0, []
+    for lap, lap_time in enumerate(ours, start=1):
+        gap += lap_time - rival_s
+        out.append((lap, gap))
+    return out
+
+
+def _trend(series) -> GapTrend:
+    trend = GapTrend()
+    for lap, gap in series:
+        trend.note(lap, gap)
+    return trend
+
+
+def _ols(series) -> float:
+    """The estimator as it stood when the wrong call was made."""
+    laps = [lap for lap, _ in series]
+    mx = sum(laps) / len(laps)
+    my = sum(g for _, g in series) / len(series)
+    sxx = sum((k - mx) ** 2 for k in laps)
+    return -sum((k - mx) * (g - my) for k, g in series) / sxx
+
+
+def test_a_crash_ANYWHERE_in_the_window_no_longer_sets_the_rate():
+    """The case a critic found the Theil-Sen version still failing.
+
+    A crash is a STEP, not an outlier - the ten seconds stay lost - so every
+    pairwise slope spanning it is contaminated, which at five laps is up to six
+    of the ten pairs. Theil-Sen only survived session 135 because that crash
+    sat at the very START of the window, which is the BEST place for it. Moved
+    into the middle it returned "losing 1.92 a lap" while the driver was
+    closing at 1.0.
+    """
+    for name, gaps in (
+            ("at the start", [0.0, 10.0, 9.0, 8.0, 7.0]),
+            ("second lap", [10.0, 19.0, 18.0, 17.0, 16.0]),
+            ("MID-window", [10.0, 9.0, 18.0, 17.0, 16.0]),
+            ("late", [10.0, 9.0, 8.0, 7.0, 16.0])):
+        trend = _trend(list(enumerate(gaps, start=1)))
+        rate, count = trend.closing_s_per_lap()
+        assert count == MIN_LAPS_FOR_TREND
+        assert rate == pytest.approx(1.0, abs=0.01), (
+            f"a crash {name} still set the rate: {rate:+.2f}")
+
+
+def test_it_never_says_losing_where_he_actually_caught_and_passed():
+    """The previous fix passed its test by 0.087 s/lap - it was passing on
+    `TREND_WORTH_SAYING_S`, not on the estimator, and a critic showed one tenth
+    of rival pace either side brought the same wrong sentence back (at 88.3 the
+    Theil-Sen version read "losing 1.61").
+
+    The honest assertion is not "always silent" - against a slow enough rival
+    "losing" is the CORRECT call. It is that in the regime consistent with what
+    actually happened, where he closes the gap out by lap 7, the engineer must
+    never tell him he is losing ground.
+    """
+    ours7 = OUR_LAPS_135 + [87.479, 87.430]
+    checked = 0
+    for tenth in range(0, 60):
+        rival = 88.0 + tenth / 10
+        if _gaps_against(rival, ours7)[-1][1] > 0:
+            continue                    # he does not pass: not this regime
+        checked += 1
+        call = closing_call(_trend(_gaps_against(rival)), lap=5)
+        assert call is None or "losing" not in call.call, (
+            f"rival {rival:.1f}: {call.call}")
+    assert checked >= 10, "the sweep did not cover the regime"
+
+
+def test_a_step_is_not_an_outlier_and_they_need_different_estimators():
+    """`analysis.wear.trend_slope` (Theil-Sen) is right for its OWN question -
+    one lap off the pace that returns to trend - and wrong for this one. Pinned
+    so the next person does not swap them back."""
+    from pitcrew.analysis.wear import trend_slope
+
+    spike = [10.0, 9.0, 16.0, 7.0, 6.0]      # returns to trend
+    step = [10.0, 9.0, 18.0, 17.0, 16.0]     # the time stays lost
+
+    # On a spike the two agree - that is why Theil-Sen looked sufficient.
+    ts_spike = -trend_slope(list(enumerate(spike))) 
+    assert ts_spike == pytest.approx(1.0, abs=0.01)
+    assert _trend(list(enumerate(spike, start=1))).closing_s_per_lap()[0] ==         pytest.approx(1.0, abs=0.01)
+
+    # On a step they do not, and Theil-Sen gets the SIGN wrong.
+    ts_step = -trend_slope(list(enumerate(step)))
+    assert ts_step < 0, "Theil-Sen should call this losing (it is wrong)"
+    assert _trend(list(enumerate(step, start=1))).closing_s_per_lap()[0] > 0.9
+
+
+def test_a_clean_series_reads_the_same_as_it_always_did():
+    """The estimator changed twice; the answer on a series with nothing wrong
+    in it must not."""
+    trend = _trend(list(enumerate([10.0, 8.9, 7.8, 6.7, 5.6], start=1)))
+    rate, count = trend.closing_s_per_lap()
+    assert count == MIN_LAPS_FOR_TREND
+    assert rate == pytest.approx(1.1, abs=0.01)
+
+
+def test_a_steady_loss_is_still_reported_as_a_loss():
+    """Trimming the largest difference must not silence a real, steady loss -
+    on clean data every difference is alike and the trim changes nothing."""
+    trend = _trend(list(enumerate([5.0, 6.5, 8.0, 9.5, 11.0], start=1)))
+    rate, _ = trend.closing_s_per_lap()
+    assert rate == pytest.approx(-1.5, abs=0.01)
+
+
+def test_the_trim_costs_a_little_on_an_accelerating_close():
+    """Stated rather than hidden: dropping the largest difference under-reports
+    a genuinely accelerating trend. That is the same direction
+    `TREND_WORTH_SAYING_S` already chose - miss a real trend rather than
+    invent one."""
+    trend = _trend(list(enumerate([10.0, 9.5, 8.5, 7.0, 5.0], start=1)))
+    rate, _ = trend.closing_s_per_lap()
+    assert rate == pytest.approx(1.0, abs=0.01), "under-reports 1.25 as 1.00"
+    assert rate > 0, "but it must not lose the sign"
 
 
 # --- laps to catch ---------------------------------------------------------
