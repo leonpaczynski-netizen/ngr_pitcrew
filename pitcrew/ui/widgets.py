@@ -57,7 +57,41 @@ class _WheelGuard(QObject):
         return True
 
 
-_WHEEL_GUARD = _WheelGuard()
+# **Built on demand, not at import, and rebuilt if Qt takes it away.**
+#
+# This was `_WHEEL_GUARD = _WheelGuard()` at module scope, which constructs a
+# QObject before any QApplication exists and keeps one Python reference to it
+# for the life of the process. When a test file tears its QApplication down,
+# Qt deletes the C++ object underneath, and the next file to call
+# `block_wheel` dies with `RuntimeError: wrapped C/C++ object of type
+# _WheelGuard has been deleted` - in setup, so every test in that file errors
+# rather than fails.
+#
+# That is why the suite could not be run as one command: it was not a product
+# defect and not the test that tripped over it, it was a module-level QObject
+# outliving the application it belonged to. The full run cost a quarter of the
+# suite to it.
+_WHEEL_GUARD: "_WheelGuard | None" = None
+
+
+def _wheel_guard() -> "_WheelGuard":
+    """The shared guard, alive. Recreated if its C++ side has been deleted.
+
+    Liveness is tested by calling into the object rather than by asking sip,
+    because the question is exactly "will the next call raise" and that is
+    the call that answers it.
+    """
+    global _WHEEL_GUARD
+    guard = _WHEEL_GUARD
+    if guard is not None:
+        try:
+            guard.parent()
+        except RuntimeError:
+            guard = None
+    if guard is None:
+        guard = _WheelGuard()
+        _WHEEL_GUARD = guard
+    return guard
 
 
 def struck_when_empty(box: QAbstractSpinBox) -> QAbstractSpinBox:
@@ -95,7 +129,7 @@ def block_wheel(widget: QWidget) -> QWidget:
     """Make a value widget ignore the wheel until it is deliberately focused."""
     if isinstance(widget, (QComboBox, QAbstractSpinBox)):
         widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        widget.installEventFilter(_WHEEL_GUARD)
+        widget.installEventFilter(_wheel_guard())
         if isinstance(widget, QComboBox):
             # A combo's own view scrolls on wheel too; the guard above only
             # covers the collapsed control.

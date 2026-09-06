@@ -385,12 +385,26 @@ audited afterwards against what actually happened.
   and refuse to export rather than export something wrong.
 - Round-trip test: export → parse → confirm every non-null field has a unit and a
   sample count, and every null is genuinely unmeasured rather than defaulted.
-- **Run the suite in quarters.** The full run crashes natively on Windows /
-  Python 3.14 in a PyQt teardown — `0xC0000409`, no traceback, and the exit code
-  is the only signal because the summary line is lost with the process. It is an
-  environment fault, not a product defect, but it means a green "all tests pass"
-  from one command is not available: check exit codes per quarter, and re-run any
-  crashing quarter file-by-file before believing a failure is yours.
+- **The full suite runs in one command, as of 6 Sep 2026.** `python -m pytest
+  pitcrew/tests` — green, exit 0, verified twice.
+
+  It did not, for months, and the reason was one line. `ui/widgets.py` built its
+  wheel guard at module scope: `_WHEEL_GUARD = _WheelGuard()`, a QObject
+  constructed before any QApplication exists and held by a Python reference for
+  the life of the process. When one test file tore its QApplication down, Qt
+  deleted the C++ object underneath, and every later file died in *setup* on
+  `RuntimeError: wrapped C/C++ object of type _WheelGuard has been deleted` —
+  so a whole quarter of the suite errored, and the `0xC0000409` in PyQt teardown
+  came from the same orphan. It is built on demand now, and rebuilt if Qt takes
+  it away.
+
+  **This was diagnosed as an environment fault for months and it was a product
+  defect**, in the widest-used helper in the UI. The instruction here used to be
+  to run in quarters and treat a crashing quarter as the machine's fault, which
+  is exactly the reading that kept it alive: a rule that tells you to expect a
+  failure stops anyone asking what causes it. Quarters still work and are still
+  quicker to bisect with, but a green "all tests pass" is now available and
+  should be the thing you check.
 - **A test that passes in a group and fails alone — or the reverse — is telling
   you about shared state, not about the change in front of you.** Before
   attributing a failure to your own work, reproduce it with your change reverted.
