@@ -169,6 +169,20 @@ class _NothingMeasured:
 _NOTHING_MEASURED = _NothingMeasured()
 
 
+
+def _planned_distance_of(stints) -> int | None:
+    """The lap a plan expects to finish on - `RaceCoordinator._planned_distance`
+    off a plain stint list, so the brief and the green say one number."""
+    last = None
+    for stint in stints or ():
+        if isinstance(stint, dict):
+            last = stint
+    if not last:
+        return None
+    start = int(last.get("start_lap") or 1)
+    laps = int(last.get("laps") or 0)
+    return start + laps - 1 if laps > 0 else None
+
 def circuit_key_for(event) -> str | None:
     """Which circuit an event is at, in the store's own vocabulary.
 
@@ -2334,9 +2348,11 @@ class PitCrewController(QObject):
             race_laps=None if timed else declared,
             race_minutes=(float(declared) if declared else None) if timed
             else event.get("race_minutes"),
-            laps_estimate=(sum(int(s.get("laps") or 0) for s in stints
-                               if isinstance(s, dict)) or None) if timed
-            else None,
+            # The same expression the coordinator counts down from
+            # (`_planned_distance`): the last stint's start plus its laps,
+            # less one - not a sum, which differs when start laps are not
+            # contiguous.
+            laps_estimate=_planned_distance_of(stints) if timed else None,
             stops=(len(stints) - 1) if stints else None,
             compounds=compounds,
             # **Only if it can actually work this session.** Switched on and
@@ -4614,6 +4630,13 @@ class PitCrewController(QObject):
             self._pit_wall = None
 
     def stop_race(self) -> None:
+        # A race ended without a flag still ends: whatever the rig held back
+        # is said now rather than carried into the next race's flag. Here and
+        # at the flag only - never on the per-event close-out path, which
+        # runs at every crossing (critic, 7 Sep 2026).
+        rig = self.__dict__.get("rig")
+        if rig is not None and hasattr(rig, "release_notices"):
+            rig.release_notices()
         # **First, so the position survives whatever else teardown does.** It
         # is the one piece of state here the driver set by hand, and every
         # line below it can raise.
@@ -4700,11 +4723,6 @@ class PitCrewController(QObject):
         Idempotent: `race_run_id` is cleared, so a second crossing after the
         flag does nothing.
         """
-        # A race ended without a flag still ends: whatever the rig held
-        # back is said now rather than carried into the next race's flag.
-        rig = getattr(self, "rig", None)
-        if rig is not None and hasattr(rig, "release_notices"):
-            rig.release_notices()
         if self.race is None or self.race_run_id is None:
             return
         if not self.race.state.finished:
@@ -5656,6 +5674,13 @@ class PitCrewController(QObject):
         where it is not reading - never a zero, which would say fresh."""
         wear = self.hud.latest_wear()[0]
         if not wear:
+            return None, None
+        # The held reading is the OLD set's until an unconfirmed stop is
+        # settled - "FR 42." on the new set's out-lap is the same defect the
+        # wear call now refuses.
+        race = self.race
+        if race is not None and getattr(race.state, "tyre_change_unconfirmed",
+                                        False):
             return None, None
         corner, worst = max(wear.items(), key=lambda kv: kv[1])
         return worst, corner

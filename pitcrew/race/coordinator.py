@@ -468,7 +468,15 @@ class RaceCoordinator:
             self.state.stint_ends_on_lap = None
 
     def note_tyres_word(self, changed: bool) -> None:
-        """The driver said "new tyres" or "no tyres" on the radio."""
+        """The driver said "new tyres" or "no tyres" on the radio.
+
+        **Held while he is still in the lane.** PIT_EXIT needs 120 km/h, and
+        a word said leaving the box would otherwise find the stop not yet
+        marked and be applied to the previous one, or dropped.
+        """
+        if self.state.in_pit:
+            self._pending_tyres_word = changed
+            return
         self.state.note_tyres_word(changed, lap=self.state.lap)
 
     def note_driving(self, lap_num: int, read) -> None:
@@ -579,6 +587,10 @@ class RaceCoordinator:
             # call for the stint after it.
             clear_stint(self.state,
                         tyres_changed=event.data.get("tyres_changed"))
+            pending = getattr(self, "_pending_tyres_word", None)
+            if pending is not None:
+                self._pending_tyres_word = None
+                self.state.note_tyres_word(pending, lap=self.state.lap)
             self._apply_stint(self.state.stint_index + 1,
                               over_a_stop=True)
             return None

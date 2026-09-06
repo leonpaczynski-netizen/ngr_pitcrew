@@ -114,13 +114,17 @@ def test_two_readings_near_zero_are_a_fresh_set():
 
 
 def test_the_gauge_carrying_on_resolves_it_as_the_same_set():
+    """Two readings, like a fresh set: one stale grab of the old set must
+    not latch the verdict either way."""
     state = _after_unknown_stop()
     state.note_wear(14, {"fl": 0.37, "fr": 0.45})
+    assert state.tyre_change_unconfirmed is True, "one reading is not a verdict"
+    state.note_wear(15, {"fl": 0.39, "fr": 0.47})
 
     assert state.tyre_change_unconfirmed is False
     assert state.tyre_change_resolution == "gauge: same set"
     assert state.laps_since_stop == 13, "the count was right all along"
-    assert len(state.wear_history) == 2
+    assert len(state.wear_history) == 3
     assert state.tyre_change_write_back == (13, False, "gauge: same set")
 
 
@@ -199,10 +203,12 @@ def test_no_tyres_from_the_driver_keeps_the_history():
 def test_the_driver_overrules_a_gauge_that_settled_it_the_other_way():
     state = _after_unknown_stop()
     state.note_wear(14, {"fl": 0.37, "fr": 0.45})
+    state.note_wear(15, {"fl": 0.39, "fr": 0.47})
     assert state.tyre_change_resolution == "gauge: same set"
     state.note_tyres_word(True, lap=15)
     assert state.tyre_change_resolution == "driver: new tyres"
-    assert state.laps_since_stop == 0
+    assert state.laps_since_stop == 2, "15 - 13: the stop it names, not zero"
+    assert state.tyre_change_disagreement == ("gauge: same set", "driver: new tyres")
 
 
 # ------------------------------------------------------- the wear call waits

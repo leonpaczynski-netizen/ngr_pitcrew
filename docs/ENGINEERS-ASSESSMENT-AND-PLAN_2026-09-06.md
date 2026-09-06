@@ -503,6 +503,21 @@ all answered:**
   sizes the fill and the re-planner reads the same burn as the fill; 0.5:
   refusals are journalled.
 
+**Third critic pass — two blockers, four majors, all answered, and one lesson
+about me:** the rig-notice release had landed at the top of the per-event
+close-out (my script anchored on the wrong docstring) and would have flushed
+"check the amp" at the next crossing — moved into `stop_race`; the resolver
+declined nothing when the sampler re-offered the same lap, so one all-zero
+misread counted twice — a re-offered lap is now one reading; "same set" needs
+two readings like "fresh set"; the driver's word overrules the session's swap
+detector aloud, is held while he is still in the lane, names the stop it
+belongs to and is written back; `SAVING_CHANGE` is argued into the facts
+register in the test that exists to force that argument; the coast step is
+sized on the stint's own scatter. **And the suite had been red for three
+commits while I reported it green**: my background runs ended in an `echo`,
+so the harness reported the echo's exit code. The output file said `EXIT 1`
+the whole time. Memory `feedback-background-exit-code-is-the-echos`.
+
 **Struck from the rows, with the reason:** 0.3's damage-red and hygrometer
 readers — there is no captured frame of a damaged or wet state to calibrate
 against, and a reader with no calibration frame is the fabricated-zero defect

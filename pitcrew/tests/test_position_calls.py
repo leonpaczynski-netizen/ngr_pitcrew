@@ -192,11 +192,17 @@ def test_only_three_facts_are_volunteered_and_each_had_to_be_argued():
 
     If a fourth joins them, someone has to have decided the same thing about
     it - so this test exists to make that a decision rather than a drift.
+
+    **`SAVING_CHANGE` is the fourth, admitted 7 Sep 2026 on the same
+    argument as `CLOSING`:** he cannot see his own coast share or his median
+    upshift rpm - neither is on any HUD, both are a slope through the frames
+    of several laps - and the burn the fill is sized on moved by 8% at Deep
+    Forest when they changed, with nothing in the car able to say so.
     """
-    from pitcrew.race.calls import CLOSING
+    from pitcrew.race.calls import CLOSING, SAVING_CHANGE
 
     facts = {kind for kind, reg in REGISTER.items() if reg == FACT}
-    assert facts == {POSITION, STATUS, CLOSING}
+    assert facts == {POSITION, STATUS, CLOSING, SAVING_CHANGE}
 
 
 def test_the_box_call_is_an_instruction():

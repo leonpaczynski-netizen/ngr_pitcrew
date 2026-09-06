@@ -116,6 +116,13 @@ class SavingChange:
     after: float
 
 
+def _sd(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    return (sum((v - mean) ** 2 for v in values) / (len(values) - 1)) ** 0.5
+
+
 def saving_change(history: list[tuple[int, DrivingRead]]) -> SavingChange | None:
     """The lap the driver stopped saving, if the last two laps say so.
 
@@ -139,6 +146,13 @@ def saving_change(history: list[tuple[int, DrivingRead]]) -> SavingChange | None
         if len(old) < STEP_LAPS or len(new) < STEP_LAPS:
             continue
         before, after = median(old), median(new)
+        # **Sized on the stint's own scatter where there is enough of it.** A
+        # coast share varies lap to lap by a couple of points on a clean
+        # stint (Deep Forest stint 2: sd ~1.7), so a fixed 2-point step would
+        # fire on about one pair in a hundred. Two of the stint's own sd, or
+        # the fixed step, whichever is larger.
+        if len(old) >= 3:
+            step = max(step, 2.0 * _sd(old))
         moved = (after - before) if up else (before - after)
         # Every recent lap has to sit past the step, not just their median -
         # one saving lap and one flat-out lap average to nothing.

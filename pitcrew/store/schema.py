@@ -1143,10 +1143,10 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("full_throttle_pct", "REAL"),
         ("upshift_rpm", "REAL"),
         # **How far the shift beep was dropped while this lap was driven, in
-        # rpm.** Null where it was never recorded, 0.0 where the lap was
-        # driven on the normal threshold, positive where he was short-
-        # shifting - and the three are genuinely different claims, which is
-        # why this is not a boolean.
+        # rpm.** NULL where the app's switch was never thrown (since 7 Sep
+        # 2026 - it used to write 0.0, and 717 zeros were read as "he did not
+        # short-shift"), positive where he drove under the app's own
+        # instruction. What he actually did is `upshift_rpm`, measured.
         #
         # It exists because a lap driven under the app's own fuel-saving
         # instruction is not evidence about the car. A short-shift costs

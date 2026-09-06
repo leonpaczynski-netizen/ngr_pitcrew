@@ -737,6 +737,11 @@ class RaceState:
     # `laps.tyres_changed` back; None until a resolution has been reached
     # and then cleared once written.
     tyre_change_write_back: tuple | None = None
+    # The lap of the last stop, whatever was known about its tyres - so a
+    # driver's word that arrives after a verdict still names the stop.
+    last_stop_lap: int | None = None
+    # (what was settled before, what the driver said) when the two disagree.
+    tyre_change_disagreement: tuple | None = None
     # --- tyre temperature, per-lap frame means fed by the coordinator ---
     # The measured working window per axle, (floor, ceiling) in degC, from
     # this event's own practice laps. None where nobody has measured one -
@@ -1050,6 +1055,12 @@ class RaceState:
         off the wear call, and the resolution is logged so the audit can see
         which instrument answered.
         """
+        # **A reading offered twice is one reading.** The sampler holds its
+        # last good read until a new one lands, and the controller offers it
+        # at every crossing - so one all-zero misread at lap 14 would arrive
+        # again at crossing 15 and satisfy "two readings" on its own.
+        if self.parked_wear and lap <= self.parked_wear[-1][0]:
+            return
         before = self.unconfirmed_before
         if before is None:
             # No reading before the stop to judge against: the gauge cannot
@@ -1084,12 +1095,18 @@ class RaceState:
                 self.temp_history = []
                 self._settle_tyre_change("gauge: fresh set", before, now, True)
                 return
-        if now >= before - GAUGE_SAME_SET_SLACK and not looks_fresh:
-            # The series carries on from where it was: the old set.
-            self.wear_history.extend(self.parked_wear)
-            self.wear_history.append((lap, present))
-            self._settle_tyre_change("gauge: same set", before, now, False)
-            return
+        looks_same = now >= before - GAUGE_SAME_SET_SLACK and not looks_fresh
+        if looks_same and previous is not None:
+            # **Two readings for "same set" as well.** One stale grab of the
+            # old set at 0.40 would otherwise latch the verdict, and the new
+            # set's 0.02, 0.03 would then be appended to the old history
+            # with no gauge-side way back. Symmetric on purpose.
+            earlier = max(previous[1].values())
+            if earlier >= before - GAUGE_SAME_SET_SLACK:
+                self.wear_history.extend(self.parked_wear)
+                self.wear_history.append((lap, present))
+                self._settle_tyre_change("gauge: same set", before, now, False)
+                return
         # Neither shape yet: a first near-zero reading, or a partial drop.
         # Parked, and the next reading is judged against the SAME pre-stop
         # baseline, never against this one.
@@ -1112,23 +1129,32 @@ class RaceState:
     def note_tyres_word(self, changed: bool, lap: int | None = None) -> None:
         """The driver said it: "new tyres" or "no tyres". Primary evidence.
 
-        Settles an unconfirmed stop outright, and disagrees out loud with a
-        gauge that had already settled it the other way - the disagreement
-        is the finding (CLAUDE.md 4.1), never averaged.
+        Settles an unconfirmed stop outright, and disagrees out loud with ANY
+        verdict already reached the other way - the gauge's or the session's
+        own swap detector - and his word stands: the disagreement is the
+        finding (CLAUDE.md 4.1), never averaged and never silently kept.
         """
         how = "driver: " + ("new tyres" if changed else "no tyres")
-        stop_lap = self.unconfirmed_stop_lap
+        stop_lap = (self.unconfirmed_stop_lap
+                    if self.unconfirmed_stop_lap is not None
+                    else self.last_stop_lap)
         if not self.tyre_change_unconfirmed:
             prior = self.tyre_change_resolution
-            if prior and prior.startswith("gauge") and (
-                    ("fresh" in prior) != changed):
-                log("race").warning(
-                    "the driver says %s at the last stop; the gauge had "
-                    "settled it as %s - his word stands, the disagreement "
-                    "is recorded", how, prior)
+            prior_changed = (None if not prior else
+                             ("fresh" in prior or "swap seen" in prior
+                              or "new tyres" in prior))
+            if prior_changed is None or prior_changed == changed:
+                # Nothing to overrule: agreement, or no verdict at all.
+                if prior is None and stop_lap is not None:
+                    pass
+                else:
+                    return
             else:
-                return
-            stop_lap = None
+                log("race").warning(
+                    "the driver says %s at the lap-%s stop; it had been "
+                    "settled as %s - his word stands, the disagreement is "
+                    "recorded", how, stop_lap, prior)
+                self.tyre_change_disagreement = (prior, how)
         if changed:
             self.laps_since_stop = (max(0, (lap or self.lap) - stop_lap)
                                     if stop_lap is not None else 0)
@@ -3106,6 +3132,8 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
     state.incident_lap = None
     state.incident_cost_ms = None
     state.incident_reported = False
+    state.last_stop_lap = state.lap
+    state.tyre_change_disagreement = None
     if tyres_changed:
         state.laps_since_stop = 0
         state.tyre_change_unconfirmed = False
