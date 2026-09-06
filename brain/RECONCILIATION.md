@@ -931,3 +931,92 @@ merging, and I neutered the central fix and watched the tests go red.**
 | AK8 | Suite state | Four quarters, all run, no `0xC0000409`. **12 failures, and they are exactly the declared known-red set** - `test_setup_doubt` x6, `test_lap_distance_anchor` x3, `test_race_wiring` x2, `test_wear_rates` x1. None of those four files imports `smallfont`, `hud_time`, `race/gaps` or `telemetry/board`. Green in full: `test_smallfont` (new, 23), `test_board` (36), `test_gaps` (27), `test_hud_time` (16), `test_hud_digits`, `test_pit_wall`, `test_pit_columns` |
 | AK9 | Verified before merging, not taken on report | **I RE-RAN IT ON A SAMPLE I CHOSE MYSELF AND CHECKED THE READINGS BY EYE.** 30 frames at 71-2111 s, none of them the author's: **52 boxes framed, 34 read** against 0 before. Then blind ground truth - crops saved at 7x with the reader's answer printed only afterwards: **`- 6.468` by eye against 6.468 read, `+ 6.511` against 6.511**, sign matching side in both. And one refusal opened: **`gap_lines` had framed the pit wall and the track alongside a `+ 0.288` squeezed into the corner** - an honest refusal, and the residual fault the author names |
 
+
+---
+
+## AL - Two records that disagree with the driver, found preparing Sardegna, 5 Sep 2026
+
+**Context.** First sheet for the Porsche 911 RSR (991) '17 at Sardegna Road
+Track Layout A, `initial` mode, nothing on file at the circuit in any car.
+
+| # | Record says | Against | Verdict |
+|---|---|---|---|
+| AL1 | `05-track-reference.md` §2.12: at Sardegna, **"ride height 2 clicks up"** | Driver, 31 Aug / 1 Sep 2026: *"don't ever recommend high ride height again in GR3 it must be solved differently with suspension"*; *"increasing ride height should be a last option not a first."* `brain/driver.md` carries it as a non-negotiable | **The driver wins.** Springs took the undulation instead (nf 3.05/3.20 -> 3.40/3.60, 2.5%/10% -> 20%/30% of range); ride height held at 60/68. The Spa lesson is the same shape: being soft is why the car had to be high |
+| AL2 | `05-track-reference.md` §2.12: at Sardegna, **"brake bias: one to two clicks forward"** | Driver standing refusal, `brain/driver.md`: front bias locks his fronts and creates understeer. Already recorded as a general trap at `01` §16 and specifically for Fuji at `05` §1.12 | **The driver wins.** Held at `bb 0`; his lever is LSD braking sensitivity, already at 24. **This is the second circuit whose §2 entry carries the forward-bias line** - it is a systematic property of that document, not a one-off, and every future circuit read out of `05` needs the same check |
+
+**AL3 - the Ludo skill points at a module that no longer exists.** The skill's
+spine step 4 instructs the engineer to run a question-resolver gate:
+
+```python
+from pitcrew.prompts.context import gather
+from pitcrew.prompts.questions import resolve
+```
+
+`pitcrew/prompts/` is an **empty package** - only `__pycache__` survives. The
+prompt screen and its resolvers were removed in `f4e30a0`
+*("refactor(engineer): the prompt screen goes - the tune builder is spoken to
+directly")*. The skill was not amended. **Verdict: amend the skill** - there
+are no resolvers, so every question is asked directly and nothing can be
+pre-resolved from the store. Sixth instance of this codebase's
+built-both-ends-skipped-the-caller pattern, inverted: here the caller survived
+the callee.
+
+**AL4 - `range_records.measured_date` is restamped by any re-save.** The RSR's
+record read `2026-08-21` at the start of this session and `2026-09-05` minutes
+later; `controller.save_ranges` sets `measured_date=date.today()`
+unconditionally, so re-opening the car screen and saving re-dates a
+measurement that was not re-taken. The **endpoints** are unchanged and still
+reconcile exactly with Rev C §5's percentages, so nothing downstream is wrong
+today - but a record whose date moves without its numbers moving cannot
+support the rule that every measurement carries its date. **Not fixed; logged.**
+
+---
+
+## AM - Sardegna session 128, RSR, v1.71, 5 Sep 2026
+
+**AM1 - `05-track-reference.md` §2.12's lap-time band is 7+ seconds wrong.**
+It gives Sardegna Road Track A as *"Gr.3 ~1:50-1:54"*. The RSR ran **1:42.917**
+on lap 15 of its first ever session here, with five laps inside 1:43.4 and the
+driver still learning the circuit. §3.2's summary table repeats the same band.
+
+**Consequence, and it is not cosmetic:** the race is 50 minutes, so the band
+sets the lap count. At 1:52 it reads 27 laps; at 1:43 it is **29**. Two laps of
+fuel is 13 L, which is 13 seconds of standing time — enough to move a stop
+decision. Every strategy figure I issued for this round before session 128 used
+27 and has been re-derived.
+
+**Verdict: the reference is wrong for this car.** Whether it is wrong for Gr.3
+generally, or was written against a slower reference car, is not established
+from one session. Amend it with the measurement and its date.
+
+**AM2 - the refusal card's brake-balance sign warning may be over-general.**
+The card says *"Signs differ by car - on the Shelby `bb -1` is forward, on the
+Huracan `bb +1` is rearward."* Those two instances **do not differ**: both are
+consistent with a single convention, **negative = forward, positive = rearward**.
+`brain/driver.md` records the same two and no third.
+
+This matters now because Rev B moves the RSR's balance rearward and the sign has
+never been established on that car. **Verdict: unresolved, and stated as such to
+the driver rather than assumed.** If a third car ever contradicts the convention,
+record it here; if none does, the card should say *"confirm the sign per car"*
+rather than *"signs differ by car"* - the first is true and the second is a claim
+with no instance behind it.
+
+**AM3 - the wear gauge sampled nothing, for the second event running.**
+`wear_fl` is null on all 15 laps of session 128. The known cause is on file: the
+sampler stops permanently about 30 s in when no OBS windowed projector is open,
+which also killed session 126. **This is the second consecutive event where the
+one measurement that decides the stop count was not captured.** Not a new defect
+and not diagnosed further here - recorded because it has now cost two events, and
+because the pre-flight for the next run has to name it.
+
+**AM4 - a self-correction inside one analysis pass, recorded because the
+retraction is the finding.** Pooled over 7,326 braking frames the front L/R slip
+split read **FL-FR = -0.0135** against a measured floor of 0.003-0.006, which
+looks like a standing left-front bias and matches a real signature found at
+Daytona. Split by corner direction it **flips sign symmetrically** (-0.0258 one
+way, +0.0201 the other): it is the inside front unloading, and the pooled figure
+was an artefact of this circuit turning predominantly one way, 10,776 cornering
+frames against 6,923. **A pooled left/right asymmetry is uninterpretable on a
+circuit that is not left/right balanced** - it must be split by direction before
+it means anything. The Daytona finding stands; this one never existed.
