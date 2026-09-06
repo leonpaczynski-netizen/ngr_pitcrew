@@ -1020,3 +1020,73 @@ was an artefact of this circuit turning predominantly one way, 10,776 cornering
 frames against 6,923. **A pooled left/right asymmetry is uninterpretable on a
 circuit that is not left/right balanced** - it must be split by direction before
 it means anything. The Daytona finding stands; this one never existed.
+
+---
+
+## AS1 — Shelby `arb_f`: the app's sheet 31 is the wrong record (6 Sep 2026)
+
+| | |
+|---|---|
+| **App sheet 31** `Road Atlanta race Rev B` | `arb_f` **4** |
+| **Sheets 5, 12, 18, 45, 50** and every issued document | `arb_f` **5** |
+| **THE CAR, settings screenshot 6 Sep 2026** | **`arb_f` 5** |
+
+**Verdict: 5. Sheet 31 is wrong and has been since 23 Aug 2026.** Flagged by
+`tools/check_setup_sheets.py` and carried as an open dispute on the Round 5
+sheet for eleven days; closed by a screenshot.
+
+**Consequence, and it is not cosmetic:** the Round 4 race at Road Atlanta
+(session 77) was run on `arb_f` **5**, not the 4 its own stored sheet records.
+Any reading taken against sheet 31 describes a car that was never on track.
+Superseded material kept, not deleted.
+
+## AS2 — Shelby brake balance: every record on file is wrong (6 Sep 2026)
+
+| | |
+|---|---|
+| Sheets 5, 12, 18, 45, 50 | `bb` **0** |
+| Sheet 31 | `bb` **-1** |
+| Driver, 23 Aug 2026 | *"I have had to move BB forward"*, one click |
+| **THE CAR, screenshot 6 Sep 2026** | **`bb` -2** |
+
+**Verdict: -2, two clicks FORWARD on this car.** This is the driver's own in-car
+trim, which is his to make and is recorded rather than corrected — but **no
+sheet has ever carried it**, and the trend across the season is one-directional:
+0 -> -1 -> -2. With **ABS prohibited** in this series that is 20% of the bias
+range, and it is one of three indicators that the front axle is this car's
+limit. See `brain/car-state/shelby-deep-forest.md`.
+
+## AS3 — Round 5 (RBR Short) was ended by a hardware fault, not by the car (6 Sep 2026)
+
+Session 101 shows P3 -> P9 with a 1.08 s spin on lap 8, 20.2 s and 10.4 s
+off-track on laps 14 and 15, and the capture stopping at 15:04 with 904 s still
+to run. **Driver, 6 Sep 2026: the Fanatec wheelbase locked up from a GT7 error
+introduced by the 1.71 update, since resolved by a Fanatec firmware update.**
+
+**Nothing after lap 13 of session 101 describes the car, the setup or the
+driver.** Laps 1-13 are clean and the race burn figure (3.813 L/lap, sd 0.082,
+n = 12) is drawn from them and stands. Any pace or wear reading taken from the
+tail of that race must be discarded.
+
+## AS4 — Deep Forest tyre wear: the circuit reference is wrong by ~4x (6 Sep 2026)
+
+| | |
+|---|---|
+| `05-track-reference.md` §2.4 | *"High and front-biased ... expect **13-16 laps at 1x**"* -> 6.5-8 laps at the 2x raced here |
+| `data/gt7_circuits.json` | Deep Forest `wearSeverity` **5**, Red Bull Ring **3** |
+| **MEASURED, session 134, 6 Sep 2026, v1.71** | worst wheel (front right) **2.808 %/lap = 0.660 %/km** -> **30.3-lap stint** |
+
+**Verdict: the reference figure is refuted.** Five monotone HUD-gauge readings
+across laps 2-6, all four wheels, OBS on. The stint is **~4x** what the
+reference implies, and the tyre does not bind on a ~20.5-lap race.
+
+**And `wearSeverity` is anti-predictive on the only two circuits where this car
+has a clean measurement.** Deep Forest is graded 5 and measures 0.660 %/km on
+its worst wheel; Red Bull Ring Short is graded 3 and measured 0.90-1.35 %/km.
+The higher-graded circuit is the gentler one per kilometre. **Do not use
+`wearSeverity` to scale a wear rate.** Superseded material kept.
+
+The direction claim in the same entry DID hold: Deep Forest is
+direction-balanced (front-right leads front-left by only 1.27x, front/rear split
+5.9%) where RBR Short — all heavy corners to the right — ran its front-left at
+~1.6x its front-right.
