@@ -31,6 +31,7 @@ import logging.handlers
 import platform
 import sys
 import threading
+import time
 from pathlib import Path
 
 LOG_DIR = Path("logs")
@@ -167,6 +168,71 @@ def _os_description() -> str:
     version = sys.getwindowsversion()
     return (f"Windows-{version.major}.{version.minor}.{version.build} "
             f"({version.major}, {version.minor}, {version.build})")
+
+
+def seconds_since_process_start() -> float | None:
+    """How long this process has been alive, or `None` where it cannot be asked.
+
+    **The clock the driver is actually running.** Timing from the top of
+    `main()` misses the interpreter and the import graph, which the startup
+    investigation of 5 Sep measured at 323 ms of imports alone - so a figure
+    starting there is a smaller number about a different thing. Windows will
+    say when the process was created; this asks it.
+
+    `None` rather than a fallback to "since this function was first called",
+    because a duration measured from an arbitrary later point, reported under
+    the same name, is the kind of substitution that gets believed.
+    """
+    try:
+        import ctypes
+        import ctypes.wintypes as wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        # **The signatures are not optional.** Left to ctypes' defaults,
+        # `GetCurrentProcess` comes back as a C int and the -1 pseudo-handle
+        # is truncated on 64-bit, so `GetProcessTimes` fails and sets no
+        # error - it returned 0 with `GetLastError` 0, which reads exactly
+        # like "not available on this platform" and is not.
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.GetProcessTimes.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME)]
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
+        created = wintypes.FILETIME()
+        ended = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        ok = kernel32.GetProcessTimes(
+            kernel32.GetCurrentProcess(), ctypes.byref(created),
+            ctypes.byref(ended), ctypes.byref(kernel), ctypes.byref(user))
+        if not ok:
+            return None
+        ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+        # FILETIME counts 100 ns units from 1601-01-01; 11644473600 s to epoch.
+        started = ticks / 10_000_000.0 - 11_644_473_600.0
+        return max(0.0, time.time() - started)
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+def mark(phase: str) -> None:
+    """Log how far into the launch we are, at a named phase.
+
+    **Nothing recorded time-to-window before this**, which is why "the app
+    takes ages to open" could not be settled: the 5 Sep investigation measured
+    imports and construction and then had to say plainly that it could not
+    measure paint, and an adversarial review found the conclusion unsupported
+    partly for that reason. One line per phase costs nothing and makes the
+    question answerable from the log the driver already has.
+    """
+    elapsed = seconds_since_process_start()
+    if elapsed is None:
+        log("startup").info("startup: %s", phase)
+        return
+    log("startup").info("startup: %-22s %6.0f ms since process start",
+                        phase, elapsed * 1000.0)
 
 
 def banner(**facts) -> None:

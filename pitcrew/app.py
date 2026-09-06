@@ -854,8 +854,10 @@ def main() -> int:
     diagnostics.banner(pid=os.getpid(), version=APP_VERSION,
                        database=DEFAULT_DB_PATH, log=log_path)
 
+    diagnostics.mark("logging up")
     _claim_taskbar_identity()
     app = QApplication(sys.argv)
+    diagnostics.mark("QApplication")
     # **Before the store, the controller, or any device.** Checked after
     # QApplication exists so the refusal can be shown rather than only
     # logged - the shortcut runs this through pythonw, which has no console,
@@ -873,9 +875,11 @@ def main() -> int:
     if ICON.exists():
         app.setWindowIcon(QIcon(str(ICON)))
     theme.apply(app)
+    diagnostics.mark("theme")
 
     try:
         store = Store(DEFAULT_DB_PATH)
+        diagnostics.mark("store open")
         # **Started here and joined inside the controller.** The two speech
         # models are 250 MB of ONNX and cost 2.6 s to build; ONNX releases the
         # GIL while it does it, so they load while the screens are being made
@@ -886,10 +890,17 @@ def main() -> int:
         # about to be refused must not first load a quarter of a gigabyte.
         warm = ptt.start_warm_up(settings.load(store).speech_backend)
         window = PitCrewWindow(store, warm=warm)
+        diagnostics.mark("window built")
         window.show()
+        diagnostics.mark("window shown")
         # After `show`, so none of this is between the launch and the window.
         # It only removes the pause on the first visit to a deferred screen;
         # it saves nothing, and it must not be moved above this line.
+        # **The one the driver actually experiences.** `show()` returns
+        # before anything is painted; the first idle turn of the event loop
+        # is the closest honest proxy for "there is a window on the screen",
+        # and it is what the 5 Sep investigation could not measure at all.
+        QTimer.singleShot(0, lambda: diagnostics.mark("first idle after show"))
         QTimer.singleShot(0, window.warm_screens)
         if claim.message:
             from PyQt6.QtWidgets import QMessageBox
