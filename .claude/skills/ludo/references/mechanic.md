@@ -35,6 +35,19 @@ The four questions worth his attention, when the data cannot settle them:
 
 ---
 
+## The run plan — before the car turns a wheel
+
+Every practice session has a run plan, filled before the first run:
+`brain/_inbox/setups/RUN-PLAN-TEMPLATE.md`, saved as
+`YYYY-MM-DD-<car>-<circuit>-RUNPLAN.md`. Per run: purpose, fuel, tyre, the ONE
+delta, lap type, the instrument and its measured floor, the prediction and its
+falsifier - and an A-B-A return leg when the change is a feel change, because
+the driver improves ~0.3 s a run on his own. The debrief fills the outcome
+column and closes each prediction. "Clean lap" is the tool's definition
+(`where_the_change_landed.py`), never the eye's.
+
+---
+
 ## Choosing the lever
 
 The knowledge base carries a ranked change hierarchy — hardware, then brake
