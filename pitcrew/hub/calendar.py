@@ -42,8 +42,10 @@ and not `declared`, because the driver did not type it. The league did.
   settings.** `NO_LIMIT` says the league permits ABS; it does not say what the
   driver runs, and the app's column is what he runs. Only `PROHIBITED` is
   translatable, because then there is only one thing he can be running.
-- **`carRegulations.powerLimitBhp` / `weightLimitKg` have no event column.**
-  They are carried on the proposal for display and go nowhere near the row.
+- **`carRegulations.powerLimitBhp` / `weightLimitKg` are event columns since
+  7 Sep 2026** (`power_limit_bhp`, `weight_limit_kg`). Sardegna's 509 BHP /
+  1,243 kg and Supercars' 1,335 kg bind the setup, and a sheet issued
+  without them is a sheet the lobby refuses.
 - **`timeWeather.variableTimeSpeedRate` is not `events.time_multiplier`** -
   or rather, it is the same quantity and writing it still breaks something.
   `store.record_measured_clock` refuses to overwrite a multiplier that is
@@ -408,6 +410,17 @@ def regulations(settings: dict | None) -> dict:
     # what he drives.
     if cars.get("drivetrainLimit") in DRIVETRAINS:
         out["drivetrain"] = cars["drivetrainLimit"]
+    # **The car regulations that bind a setup.** A limit the hub states is
+    # written as a number; one it does not state is left out, so a prefill
+    # never writes 0 over "unlimited" (rule 3).
+    for hub_key, column in (("powerLimitBhp", "power_limit_bhp"),
+                            ("weightLimitKg", "weight_limit_kg")):
+        value = cars.get(hub_key)
+        if value is not None:
+            try:
+                out[column] = float(value)
+            except (TypeError, ValueError):
+                pass
 
     if assists.get("absLimit") == "PROHIBITED":
         out["abs_setting"] = "Off"

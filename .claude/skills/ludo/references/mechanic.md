@@ -8,6 +8,13 @@ right file. Nothing here restates a measurement.
 
 ## Before a slider moves
 
+**The league's limits first.** `events.power_limit_bhp` and
+`events.weight_limit_kg` carry the hub's `carRegulations` (Porsche Cup 509 BHP
+/ 1,243 kg; Supercars 1,335 kg). A sheet whose ECU, restrictor or ballast puts
+the car outside them is not a sheet - the lobby refuses it - so read them off
+the event row and say them on the sheet before anything else is priced. Where
+the row is NULL the league did not limit it; that is not zero.
+
 **Rank zero first, both halves** (SKILL.md step 1). A correct telemetry reading
 against a wrong setup record produces a confident wrong answer, and that has
 happened in five consecutive sessions.

@@ -1010,6 +1010,12 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("time_of_day", "TEXT"),
         ("priority", "TEXT"),
         ("pp_cap", "REAL"),
+        # **The league's car regulations, from the hub.** Porsche Cup runs
+        # 509 BHP / 1,243 kg, Supercars 1,335 kg; Ludo issued sheets against
+        # neither because the app carried neither. NULL is "the league did
+        # not limit it", never 0 (rule 3).
+        ("power_limit_bhp", "REAL"),
+        ("weight_limit_kg", "REAL"),
         # Whether `start_hour` and `time_multiplier` were typed or measured
         # off the game clock. Without it a figure the app wrote back is
         # indistinguishable from one he entered, and the app would overwrite

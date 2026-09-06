@@ -100,6 +100,11 @@ TRANSMISSION  — unchanged pending the Vmax lap, §5
 ──────────────────────────────────────────────────────────────────────────────
 ```
 
+> ⟂ **League limits, from the hub (added 7 Sep 2026):** Porsche Cup
+> `carRegulations` — **509 BHP, 1,243 kg, drivetrain MR**. Every sheet on
+> this file is bounded by them; the app's event row now carries them as
+> `power_limit_bhp` / `weight_limit_kg`.
+
 ## 0. What the settings screen confirmed on its own account
 
 Three facts the screenshot settles that were previously assumed, single-sourced

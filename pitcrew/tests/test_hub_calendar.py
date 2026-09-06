@@ -610,3 +610,17 @@ def test_a_class_whose_car_the_roster_does_not_carry_is_refused(tmp_path):
     assert got.car_name is None
     assert any("no Gr.3 car on the roster" in u for u in got.unknowns)
     hub.close()
+
+
+def test_the_car_regulations_reach_the_event_row():
+    """Porsche Cup: 509 BHP / 1,243 kg. Absent stays absent, never zero."""
+    from pitcrew.hub.calendar import regulations
+
+    out = regulations({"carRegulations": {"powerLimitBhp": 509,
+                                          "weightLimitKg": "1243",
+                                          "drivetrainLimit": "MR"}})
+    assert out["power_limit_bhp"] == 509.0
+    assert out["weight_limit_kg"] == 1243.0
+    assert "power_limit_bhp" not in regulations({"carRegulations": {}})
+    assert "weight_limit_kg" not in regulations({"carRegulations": {
+        "weightLimitKg": None}})
