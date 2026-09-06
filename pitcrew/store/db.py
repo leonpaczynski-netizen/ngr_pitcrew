@@ -1263,9 +1263,10 @@ class Store:
                 " sector1_ms, sector2_ms, sector3_ms, sector_model, "
                 " short_shift_rpm, laps_completed, race_elapsed_s, "
                 " race_remaining_s, laps_dropped, recorded_at, "
-                " coast_pct, full_throttle_pct, upshift_rpm) "
+                " coast_pct, full_throttle_pct, upshift_rpm, "
+                " penalties_served, penalty_lost_s) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-                "?,?,?)",
+                "?,?,?,?,?)",
                 (session_id, lap.lap_num, lap.lap_time_ms, lap.delta_ms,
                  lap.fuel_start, lap.fuel_end, lap.fuel_used, lap.position,
                  lap.compound, int(lap.is_pit_lap), int(lap.is_out_lap),
@@ -1304,7 +1305,9 @@ class Store:
                  _now(),
                  getattr(frames, "coast_pct", None) if frames is not None else None,
                  getattr(frames, "full_throttle_pct", None) if frames is not None else None,
-                 getattr(frames, "upshift_rpm", None) if frames is not None else None))
+                 getattr(frames, "upshift_rpm", None) if frames is not None else None,
+                 getattr(frames, "penalties_served", None) if frames is not None else None,
+                 getattr(frames, "penalty_lost_s", None) if frames is not None else None))
             # **The declared fuel map, because no channel carries it.** It was
             # null on every lap of every session ever recorded - the cheapest
             # field on the sheet, and the whole fuel model is expressed per

@@ -138,7 +138,10 @@ class SectorMap:
 
         shift = self._offset_bins(usable[0][1], speed_ms)
         per_bin: dict[int, list[float]] = {}
-        origin = usable[0][0]
+        # **Binned from the line, not from the first read.** Keyed off the
+        # lap's first sample, a read taken 180 m past the line put every
+        # bin 180 m late while `sectors()` cut from zero - half a tenth of
+        # sector 3's loss credited to sector 2 (critic pass 5, 7 Sep 2026).
         for (m0, g0), (m1, g1) in zip(usable, usable[1:]):
             # **A delta that straddles a bin line is shared by distance.**
             # Credited whole to the bin it started in, a 200 m reading
@@ -148,15 +151,15 @@ class SectorMap:
             delta = g1 - g0
             span = m1 - m0
             if span <= 0:
-                index = int((m0 - origin) / self.bin_length_m)
+                index = int(m0 / self.bin_length_m)
                 index = max(0, min(self.bins - 1, index - shift))
                 per_bin.setdefault(index, []).append(delta)
                 continue
-            first = int((m0 - origin) / self.bin_length_m)
-            last = int((m1 - origin) / self.bin_length_m)
+            first = int(m0 / self.bin_length_m)
+            last = int(m1 / self.bin_length_m)
             for raw in range(first, last + 1):
-                lo = max(m0, origin + raw * self.bin_length_m)
-                hi = min(m1, origin + (raw + 1) * self.bin_length_m)
+                lo = max(m0, raw * self.bin_length_m)
+                hi = min(m1, (raw + 1) * self.bin_length_m)
                 if hi <= lo:
                     continue
                 index = max(0, min(self.bins - 1, raw - shift))

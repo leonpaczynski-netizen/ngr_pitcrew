@@ -2889,7 +2889,13 @@ class PitCrewController(QObject):
                 # the sector map so "where he has you" is computable live.
                 samples = wall.take_samples()
                 try:
-                    self.store.record_gap_reads(self.session_id, samples)
+                    # Filed under the driver's NAME, not the roster's
+                    # cluster id, which is a number nothing outside this
+                    # process can turn back into a person.
+                    named = [replace(s, subject=(wall.roster.name_of(s.subject)
+                                                 or s.subject))
+                             for s in samples]
+                    self.store.record_gap_reads(self.session_id, named)
                 except Exception:
                     log("race").exception("the gap reads could not be filed")
                 ahead_subject = wall.ahead.subject
@@ -2990,6 +2996,24 @@ class PitCrewController(QObject):
                 except Exception:                            # noqa: BLE001
                     log("race").warning("driving read not handed to the "
                                         "race", exc_info=True)
+            # **And any penalty served**, off the same rows, against the
+            # circuit's corner model - a brake to a crawl where nothing is
+            # braked for. Six Daytona laps carried one unflagged (plan 1.11).
+            from pitcrew.analysis.penalties import read_columns as read_penalties
+            corners = self._corner_windows()
+            served = (read_penalties(rows, FRAME_FIELDS, corners)
+                      if corners is not None else None)
+            if served is not None:
+                lost = sum(p.lost_s for p in served) if served else None
+                frames = replace(frames, penalties_served=len(served),
+                                 penalty_lost_s=lost)
+                if served and self.race is not None and getattr(
+                        self.race, "running", False):
+                    try:
+                        self.race.note_penalty(lap.lap_num, lost)
+                    except Exception:                        # noqa: BLE001
+                        log("race").warning("penalty not handed to the race",
+                                            exc_info=True)
             # And the three sectors, off the same rows, for the same reason.
             cut = sector_rows(rows, FRAME_FIELDS, lap.lap_time_ms,
                               self._sector_model())
@@ -3546,6 +3570,34 @@ class PitCrewController(QObject):
                                 row.wear_rl, row.wear_rr)
         self.store.exclude_lap(
             lap_id, "struck by hand" if row.excluded else None)
+
+    def _corner_windows(self):
+        """The circuit's corners as the penalty detector wants them, or None.
+
+        None - not an empty list - where there is no corner model: without
+        one every hard brake on a straight would read as a penalty, so the
+        detector is not run at all rather than run against nothing. Cached
+        against the session id, like `_sector_model`, for the same rule-11
+        reason.
+        """
+        if self.session_id is None:
+            return None
+        cached = getattr(self, "_corner_windows_cache", None)
+        if cached is not None and cached[0] == self.session_id:
+            return cached[1]
+        windows = None
+        try:
+            key = circuit_key_for(self.active_event())
+            model = self.store.get_corner_model(key) if key else None
+            if model is not None:
+                windows = [{"start_m": c.start_m, "end_m": c.end_m}
+                           for c in model.corners]
+        except Exception:                                    # noqa: BLE001
+            log("session").warning("corner model not readable - penalties "
+                                   "will not be looked for", exc_info=True)
+            windows = None
+        self._corner_windows_cache = (self.session_id, windows)
+        return windows
 
     def _sector_model(self):
         """Where this circuit's sector lines are, for the session in hand.

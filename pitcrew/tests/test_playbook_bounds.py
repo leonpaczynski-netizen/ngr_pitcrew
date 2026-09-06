@@ -187,6 +187,27 @@ def test_stops_off_is_a_drop_stop_and_the_desk_can_withhold_it():
     assert heard.structural_action is None
 
 
+def test_a_withheld_drop_keeps_the_stop_in_the_plan():
+    """Critic pass 5: the rail changed the sentence and not the behaviour -
+    `stop_still_needed` was decided by fuel alone, so on the planned lap he
+    heard "You can push" and never "Box this lap"."""
+    from pitcrew.race.calls import BOX_NOW, _box_now, stop_still_needed
+
+    race = _fuelled_to_the_flag(a_plan())
+    assert race.state.drop_stop_granted is False
+    assert stop_still_needed(race.state) is True
+    race.state.lap = 10
+    call = _box_now(race.state)
+    assert call is not None and call.kind == BOX_NOW
+    assert "dropping the stop was not granted" in call.reason
+
+    granted = _fuelled_to_the_flag(a_plan([an_entry(trigger="fuel_long",
+                                                     action="drop_stop",
+                                                     when="over a lap")]))
+    assert granted.state.drop_stop_granted is True
+    assert stop_still_needed(granted.state) is False
+
+
 def test_stops_off_granted_keeps_the_instruction():
     from pitcrew.race.calls import _stops_off
 

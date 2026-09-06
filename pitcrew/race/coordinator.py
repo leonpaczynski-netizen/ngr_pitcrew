@@ -88,6 +88,10 @@ class PlanContext:
     # ("2x"). Not part of `matches`: a plan is not refused over it, but a
     # briefed wear rate measured at another multiplier is.
     tyre_wear_mult: str | None = None
+    # How the race starts, as the event declares it ("Rolling", "Standing",
+    # "Grid - no track limit"). Not part of `matches`: it decides whether lap
+    # one is evidence, not whether the plan fits.
+    start_type: str | None = None
 
     @property
     def is_timed(self) -> bool:
@@ -242,6 +246,9 @@ class RaceCoordinator:
 
         self._playbook = {entry.trigger: entry
                           for entry in playbook_of(self.plan)}
+        # Whether a fuel-long may drop a stop - `_may` reads the playbook,
+        # and with none it refuses, which is the one place absence is no.
+        self.state.drop_stop_granted = self._may("fuel_long", "drop_stop")
         # **Why the plan's stops exist**, in the plan's own word for it. Only
         # a fuel-bound stop can be cancelled by a tankful, and a plan that
         # does not say keeps every stop it named - see `calls.stop_still_needed`
@@ -325,6 +332,10 @@ class RaceCoordinator:
         if actual is not None:
             self.state.race_minutes = actual.race_minutes
             self.state.tyre_wear_mult = getattr(actual, "tyre_wear_mult", None)
+            # Lap one is evidence after a rolling start and not after a
+            # standing one - see `ExpectationTracker.rolling_start`.
+            self.expect.rolling_start = (
+                (getattr(actual, "start_type", None) or "") == "Rolling")
             # The first stint was briefed at construction, before the race's
             # multiplier was known; brief it again now that it is.
             self._brief_the_wear_rate()
@@ -478,6 +489,17 @@ class RaceCoordinator:
             self._pending_tyres_word = changed
             return
         self.state.note_tyres_word(changed, lap=self.state.lap)
+
+    def note_penalty(self, lap_num: int, lost_s: float | None) -> None:
+        """A track-limit penalty served on this lap, from the controller.
+
+        The lap leaves the pace and burn populations, and the crossing says
+        so with the derived cost. Guarded like its siblings.
+        """
+        if not self.running:
+            return
+        self.expect.note_penalty(lap_num)
+        self.state.penalty_note = (int(lap_num), lost_s)
 
     def note_driving(self, lap_num: int, read) -> None:
         """One lap's driving read off its frames, from the controller.
@@ -719,6 +741,7 @@ class RaceCoordinator:
                             lap_num=lap.lap_num)
         self.expect.note_lap(lap)
         self._corroborate_pit_lap(lap)
+        self._weigh_the_tow()
 
         # Fuel calls must use what this race is actually burning, not what
         # practice suggested. Told he could push while burning 35% more than
@@ -906,6 +929,30 @@ class RaceCoordinator:
         self.state.rivals_entering.append(entered)
         log("race").info("rival entered the lane: %s on %s L, lap %s",
                          entered.driver, entered.fuel_in_l, entered.lap)
+
+    def _weigh_the_tow(self) -> None:
+        """Remake the tow trade from this race's laps and the wall's gaps.
+
+        Every crossing, so the verdict the driver hears is the one the laps
+        just driven support. None where fewer than three laps were held up,
+        or nothing can stand as the clear-air reference.
+        """
+        from pitcrew.race import tow
+
+        trend = self.state.gap_ahead
+        seen = dict(getattr(trend, "seen", None) or {})
+        if not seen:
+            self.state.tow_trade = None
+            return
+        try:
+            self.state.tow_trade = tow.trade(
+                seen, self.expect.laps_by_number(),
+                refuel_rate_lps=self.state.refuel_rate_lps,
+                planned_fuel_per_lap_l=self.planned_fuel_per_lap_l,
+                planned_lap_time_ms=self.planned_lap_time_ms)
+        except Exception:
+            log("race").exception("the tow trade could not be made")
+            self.state.tow_trade = None
 
     def note_circuit(self, length_m: float | None,
                      sector_cuts_m=None) -> None:
@@ -1964,6 +2011,7 @@ def context_from_event(event: dict, plan: dict | None = None) -> PlanContext:
         race_laps=0 if timed else declared,
         race_minutes=float(declared) if timed else None,
         tyre_wear_mult=event.get("tyre_wear_mult"),
+        start_type=event.get("start_type"),
     )
 
 

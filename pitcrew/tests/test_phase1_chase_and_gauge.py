@@ -40,11 +40,33 @@ def test_no_spread_measured_means_no_claim_about_it():
 
 def test_every_other_lap_and_never_in_the_window_edges():
     state = _chasing()
-    assert _chase(state) is not None
+    call = _chase(state)
+    assert call is not None
+    state.record(call)
     state.lap = 15
     assert _chase(state) is None, "the lap after is quiet"
     state.lap = 16
     assert _chase(state) is not None
+
+
+def test_the_chase_is_made_again_through_next_call():
+    """Critic pass 5: through `next_call` it was spoken once a stint, the
+    kind being in `said` - while the builder marked laps it never spoke."""
+    from pitcrew.race.calls import next_call
+
+    # Fuel neither long nor short, so nothing above the chase has a claim.
+    state = _chasing(gap=6.0, fuel_l=20.0, fuel_per_lap_l=3.0)
+    heard = []
+    for lap in (14, 15, 16, 17, 18):
+        state.lap = lap
+        # A third of a lap in hand every lap: never long, never short.
+        state.fuel_l = 3.0 * (20 - lap) + 1.0
+        state.gap_ahead.note(lap, 6.0)
+        call = next_call(state)
+        if call is not None:
+            state.record(call)
+            heard.append((lap, call.kind))
+    assert [lap for lap, kind in heard if kind == CHASE] == [14, 16, 18]
     assert _chase(_chasing(gap=25.0)) is None, "outside the window"
     assert _chase(_chasing(lap=5)) is None, "15 laps left is not a chase yet"
     assert _chase(_chasing(in_pit=True)) is None

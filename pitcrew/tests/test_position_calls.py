@@ -208,12 +208,23 @@ def test_only_three_facts_are_volunteered_and_each_had_to_be_argued():
     acceptance test:** the HUD shows one gap and never which stretch of
     road it moved on. "Faster through 1 and 2, he has you in 3" is the gap
     binned by position over four laps - nothing on any screen says it.
+
+    **`TOW_TRADE` is the seventh, same day, on the driver's own question:**
+    "was the fuel saving worth the lost lap time?" is a litre count priced
+    at the pump against a lap-time difference, both over several laps, and
+    no screen carries either side of it.
+
+    **`PENALTY` is the eighth, same day (plan 1.11):** the HUD shows him
+    the penalty - what it cannot show is what it cost, a derived figure off
+    the frames, and that the lap has left the pace population the calls
+    are made on. Both are the app's computations, not readings.
     """
-    from pitcrew.race.calls import CHASE, CLOSING, SAVING_CHANGE, SECTOR_SPLIT
+    from pitcrew.race.calls import (CHASE, CLOSING, PENALTY, SAVING_CHANGE,
+                                    SECTOR_SPLIT, TOW_TRADE)
 
     facts = {kind for kind, reg in REGISTER.items() if reg == FACT}
     assert facts == {POSITION, STATUS, CLOSING, SAVING_CHANGE, CHASE,
-                     SECTOR_SPLIT}
+                     SECTOR_SPLIT, TOW_TRADE, PENALTY}
 
 
 def test_the_box_call_is_an_instruction():

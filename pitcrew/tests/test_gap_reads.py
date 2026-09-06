@@ -88,6 +88,28 @@ def test_sectors_roll_the_bins_up_on_the_circuits_own_lines():
     assert [s.gaining for s in rolled] == [True, True, False]
 
 
+def test_a_lap_whose_first_read_is_past_the_line_bins_the_same():
+    """Critic pass 5: bins were keyed off the first read, so a lap read
+    from 180 m put every bin 180 m late against sector lines cut from 0."""
+    length = 4253.0
+    cuts = (length / 3, 2 * length / 3)
+    from_zero = SectorMap(circuit_length_m=length)
+    from_180 = SectorMap(circuit_length_m=length)
+    for _ in range(5):
+        lap = _lap((-0.2, -0.2, 0.4))
+        from_zero.note_lap(lap, subject="p2")
+        # The same lap, the first read taken 180 m past the line.
+        late = [(m + 180.0, g) for m, g in lap if m + 180.0 < length]
+        assert from_180.note_lap(late, subject="p2")
+    a = [round(s.mean_s, 2) for s in from_zero.sectors(cuts)]
+    b = [round(s.mean_s, 2) for s in from_180.sectors(cuts)]
+    # What differs is the road not read - the first 180 m of sector 1 and
+    # the last 180 m of sector 3 (0.025 and 0.05 of their built-in moves) -
+    # and nothing moves between sectors: sector 2 is the same to a hundredth.
+    assert abs(a[1] - b[1]) <= 0.015, (a, b)
+    assert all(abs(x - y) <= 0.08 for x, y in zip(a, b)), (a, b)
+
+
 def test_a_new_subject_drops_the_lap_sums_too():
     sectors = SectorMap(circuit_length_m=4253.0)
     sectors.note_lap(_lap((-0.2, -0.2, 0.4)), subject="p2")

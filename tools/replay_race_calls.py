@@ -224,13 +224,14 @@ def main() -> int:
         by_num = {r["lap_num"]: r for r in rows}
         for row in rows:
             elapsed["s"] += (row["lap_time_ms"] or 0) / 1000.0
-            reads = reads_by_lap.get(row["lap_num"]) or []
+            # **Stored under laps COMPLETED**, so the reads taken while lap
+            # N was being driven carry N-1 - and the trend's figure for the
+            # lap is the LAST read, as the live wall overwrites per lap.
+            reads = reads_by_lap.get(row["lap_num"] - 1) or []
             if reads:
-                # The lap's reads, in the order they were taken, and the
-                # first one as the lap's figure on the trend - as the wall
-                # notes it live, keyed by lap.
-                subject = reads[0]["subject"]
-                trend.note(row["lap_num"], reads[0]["gap_s"], subject=subject)
+                subject = reads[-1]["subject"]
+                trend.note(row["lap_num"] - 1, reads[-1]["gap_s"],
+                           subject=subject)
                 race.note_gaps(
                     ahead=trend, ahead_name=subject,
                     ahead_samples=[(r["track_m"], r["gap_s"]) for r in reads

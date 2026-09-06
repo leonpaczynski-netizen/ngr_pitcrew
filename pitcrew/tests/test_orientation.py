@@ -311,6 +311,14 @@ def test_the_count_stops_being_discounted_once_the_stop_is_off():
     assert race._pending_stops() == 1, "a stop the fuel still needs"
 
     race.state.fuel_l = 90.0            # now it reaches the flag
+    # **Since 7 Sep 2026 the rail decides who may drop the stop.** This
+    # race has no playbook, so `drop_stop_granted` is False, the stop stays
+    # in the plan (he hears "You're fuelled to the flag." and then the box
+    # call, with why), and the count keeps discounting it. Granted, it goes.
+    assert race.state.drop_stop_granted is False
+    assert race._pending_stops() == 1, \
+        "a stop the desk did not let George drop is still a stop"
+    race.state.drop_stop_granted = True
     assert race._pending_stops() == 0, \
         "the discount survived the stop being declared off"
 

@@ -65,11 +65,13 @@ from pitcrew.race.calls import (
     RIVAL_SHORT,
     SECTOR_SPLIT,
     STAY_OUT_FUEL,
+    TOW_TRADE,
     UNDERCUT,
     WEAR_STINT_LIMIT,
     Call,
     _crossing_the_line,
     _laps_after_this_stop,
+    _tyre_word,
     fuel_to_flag_l,
     stop_still_needed,
 )
@@ -611,10 +613,12 @@ def closing_call(trend: GapTrend, *, lap: int, who: str | None = None,
 
 # --------------------------------------------------- where he has us
 
-# Held up: the car ahead inside this many seconds on this many consecutive
-# laps. A second and a half is a car length or two at racing speed on a
-# 90 s lap - inside it the gap reads as traffic, not as pace.
-HELD_UP_GAP_S = 1.5
+# Held up: the car ahead inside `HELD_UP_GAP_S` (from `race/tow.py`, so the
+# trade and the undercut agree about what "held up" is) on this many
+# consecutive laps. A second and a half is a car length or two at racing
+# speed on a 90 s lap - inside it the gap reads as traffic, not as pace.
+from pitcrew.race.tow import HELD_UP_GAP_S  # noqa: E402
+
 HELD_UP_LAPS = 3
 
 
@@ -686,6 +690,28 @@ def sector_split_call(state) -> Call | None:
     return Call(SECTOR_SPLIT, state.lap, call, reason, MEDIUM, tag=tag)
 
 
+def tow_trade_call(state) -> Call | None:
+    """What sitting in his wake is worth, and what it costs. Once a stint.
+
+    The driver's question, 7 Sep 2026: *"was the fuel saving worth the lost
+    lap time or not - that's what George needs to calculate in real time."*
+    A fact with a verdict in it, because the arithmetic has one answer: a
+    litre saved before the stop is worth its standing time at the pump, and
+    a second given away in his wake is gone. See `race/tow.py`.
+    """
+    if state.in_pit or state.finished:
+        return None
+    trade = getattr(state, "tow_trade", None)
+    if trade is None:
+        return None
+    them = state.gap_ahead_name or "the car ahead"
+    tag = f"{TOW_TRADE}:{them}"
+    if tag in state.said_tags:
+        return None
+    call, reason = trade.sentence(them)
+    return Call(TOW_TRADE, state.lap, call, reason, MEDIUM, tag=tag)
+
+
 def _held_up(trend, lap: int) -> bool:
     """Inside `HELD_UP_GAP_S` on the last `HELD_UP_LAPS` consecutive laps."""
     seen = getattr(trend, "seen", None) or {}
@@ -716,7 +742,10 @@ def undercut_call(state) -> Call | None:
       and `_laps_the_fill_covers` already says so;
     * the tank holds it - `fuel_to_flag_l` is None while it does not;
     * the tyres reach the flag on the briefed rate, or the call says they
-      are unchecked and goes out LOW.
+      are unchecked and goes out LOW;
+    * **and the tow is not worth more than the traffic costs** - where the
+      trade says stay in it, there is no undercut to call. Where it says get
+      out, the call carries the two figures.
 
     **Why now costs nothing.** The fill is the flag's laps times the burn
     less what is aboard, and both fall by one lap's burn per lap - so the
@@ -746,6 +775,9 @@ def undercut_call(state) -> Call | None:
         return None                     # only the last stop fills to the flag
     if not stop_still_needed(state):
         return None
+    trade = getattr(state, "tow_trade", None)
+    if trade is not None and trade.worth_it is True:
+        return None                     # the tow pays: stay in it
     litres = fuel_to_flag_l(state)
     if litres is None:
         return None                     # the tank cannot hold the flag yet
@@ -753,16 +785,30 @@ def undercut_call(state) -> Call | None:
     rate = state.wear_per_lap or state.briefed_wear_per_lap
     confidence = MEDIUM
     tyres = ""
-    if rate and laps_after is not None:
-        if laps_after * rate > WEAR_STINT_LIMIT:
+    if rate and laps_after is not None and state.next_tyres is not None:
+        # **The set that reaches the flag is the one he leaves the box on.**
+        # A fuel-only stop (Ludo's Deep Forest instruction) keeps the laps
+        # already on the rubber; critic pass 5 built the call that boxed him
+        # for fuel only onto a set at 95% at the flag.
+        on_the_set = laps_after + (0 if state.next_tyres
+                                   else max(0, state.laps_since_stop or 0))
+        if on_the_set * rate > WEAR_STINT_LIMIT:
             return None                 # the set will not reach the flag
     else:
         confidence = LOW
         tyres = " Tyre life to the flag unchecked."
+    tow = ""
+    if trade is not None and trade.worth_it is False:
+        tow = (f" The tow's {max(0.0, trade.saving_s_per_lap):.1f} seconds at "
+               f"the stop against {trade.losing_s_per_lap:.1f} seconds a lap "
+               f"lost.")
     reason = (f"Undercut on {them}: you're held up, and faster through "
               f"{_sector_names(g.index for g in gains)}. The fill costs the "
-              f"same now as on lap {state.stint_ends_on_lap}.{tyres}")
-    return Call(UNDERCUT, state.lap, "Box this lap. Fuel to the flag.",
+              f"same now as on lap {state.stint_ends_on_lap}.{tow}{tyres}")
+    # The same tyre word every box instruction carries (rule 13): "No
+    # tyres." / "RS on." - the driver decides in the box on it.
+    return Call(UNDERCUT, state.lap,
+                f"Box this lap.{_tyre_word(state)} Fuel to the flag.",
                 reason, confidence, tag=f"{UNDERCUT}:{them}")
 
 
@@ -823,6 +869,7 @@ def candidates(state) -> list:
     # fill." on the opening lap of every race, which is true, useless, and
     # displaced the cold-tyre warning that opens the race.
     out.append(sector_split_call(state))
+    out.append(tow_trade_call(state))
     out.append(undercut_call(state))
 
     if _a_stop_is_in_question(state):

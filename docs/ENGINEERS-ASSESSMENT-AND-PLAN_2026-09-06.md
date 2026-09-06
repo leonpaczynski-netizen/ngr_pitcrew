@@ -606,11 +606,62 @@ the package unimported): `rival_stops` empty, and `analysis.rivals`,
 `analysis.wear_rates`, `race.rival_answers`, `race.teammate` imported by
 nothing — `race.sectors` was on that list and is not now.
 
+**Fifth critic pass (aac66fc) — NOT AGREED on 78a728a, and right.** The
+call it built that I would not want under a helmet: a fuel-only plan, a
+briefed 5 %/lap set, held up on lap 7 — *"Box this lap. Fuel to the flag."*
+with no tyre word, onto a set at 95 % at the flag. Fixed: the undercut's tyre
+check counts the laps already on the rubber when the stop takes none, and
+the call carries the same tyre word every box call does. Also from the pass:
+the rail had changed the sentence and not the behaviour — `stop_still_needed`
+was decided by fuel alone, so a withheld `drop_stop` still dropped the stop
+(now `drop_stop_granted` keeps it and the box call says why); the sector map
+binned from the lap's first read while the sectors were cut from the line;
+`gap_reads.lap` is laps *completed* and the replay fed the wrong lap and the
+first read where the wall keeps the last; the reads are filed under the
+driver's name; `CHASE` was spoken once a stint through `next_call` (its kind
+was in `said`) while the builder marked laps it never spoke — tagged per lap
+now, `chase_said_lap` set in `record()`, the trend read off a copy. **And the
+acceptance test's pinned lap was the reconstruction's:** a constant burn
+never measures a scatter, so the fill carried the model's whole-lap fallback
+margin and lap 7 was that margin's lap. Driven on the session's real per-lap
+burn the scatter measures (~0.15 L), the margin is two litres, and it is
+**lap 6** — the test now holds both, says which premise each rests on, and
+names the two that remain the reconstruction's (a lap race for a timed one;
+one car ahead all race where he was P2 himself on laps 5 and 12).
+
+**The driver's second half, same day (7 Sep):** *"I was saving fuel sitting
+behind Boxhead but I was also losing lap time to first — was the fuel saving
+worth the lost lap time? That's what George needs to calculate in real
+time."* `race/tow.py`: a litre not burned before the stop is worth its
+standing time at the pump and nothing else; against it, the lap time given
+away in his wake. Held-up laps are the wall's; the clear-air reference is
+this race's own laps with nothing within 3 s, else the plan's burn and lap
+time, and the sentence says which. Deep Forest at the hub's 2 L/s: *"The tow
+saves you 0.6 litres a lap — 0.3 seconds at the stop. You're losing 1.4
+seconds a lap to Boxhead. Not worth it."* (`TOW_TRADE`, a fact; litres and
+seconds both named — rule 13). A tow that pays means no undercut is called;
+one that does not puts its two figures in the undercut's reason.
+
+**1.11 landed:** `analysis/penalties.py` reads a served penalty off the frames
+— a hard brake at speed, going straight, outside every corner's 250 m
+approach in the circuit's corner model — and `tools/find_penalties.py`
+reproduces the six laps the driver named from the 4 Sep Daytona runs at
+5,194–5,218 m with no false positive at the Bus Stop or in the race (the
+memory's count, exactly). The lap row carries `penalties_served` and the
+derived `penalty_lost_s`; the lap leaves the pace and burn populations; he
+hears *"Penalty served. About 1.5 seconds."* The HUD's penalty indicator is
+NOT read — no calibration frame exists. And lap one is keyed on
+`events.start_type`: evidence after a rolling start, out after a standing
+one.
+
 **Struck or deferred, with the reason:** the chase's *"silence announced when
 the wall cannot read it"* is the brief's *"I can't see other cars"* line and
 was not duplicated per lap. 1.6 is half done — the reads persist; verdicts per
-call and the plan-vs-actual snapshot are not yet — and 1.7, 1.8, 1.10, 1.11
-are open.
+call and the plan-vs-actual snapshot are not yet — and 1.7, 1.8, 1.10 are
+open. Critic 5's open questions, carried: one misidentified board row resets
+the held-up window and the sector map (the trend wipes on any subject
+change); two consecutive locator misreads would still cut the gauge series;
+the sector map's offset path (gap ≥ 2 s) has no test.
 
 ## 9. Critic record
 

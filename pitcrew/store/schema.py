@@ -939,7 +939,7 @@ CREATE INDEX IF NOT EXISTS idx_rival_stops_driver ON rival_stops(driver);
 CREATE TABLE IF NOT EXISTS gap_reads (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    lap         INTEGER,                 -- OUR lap in progress when read
+    lap         INTEGER,                 -- OUR laps COMPLETED when read (lap_now())
     side        TEXT    NOT NULL,        -- 'ahead' | 'behind'
     gap_s       REAL    NOT NULL,
     track_m     REAL,                    -- ego lap distance, integrated
@@ -1167,6 +1167,15 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         ("coast_pct", "REAL"),
         ("full_throttle_pct", "REAL"),
         ("upshift_rpm", "REAL"),
+        # **Track-limit penalties served on the lap, off its frames** (7 Sep
+        # 2026, plan 1.11). Six laps of the 4 Sep Daytona runs braked to a
+        # crawl at 5,200 m on the banking and went into the pace population
+        # as driven. `penalties_served` is a count - 0 is a lap looked at
+        # and clean, NULL a lap with no frames; `penalty_lost_s` is the
+        # derived cost, NULL where nothing was served. See
+        # `analysis/penalties.py`.
+        ("penalties_served", "INTEGER"),
+        ("penalty_lost_s", "REAL"),
         # **How far the shift beep was dropped while this lap was driven, in
         # rpm.** NULL where the app's switch was never thrown (since 7 Sep
         # 2026 - it used to write 0.0, and 717 zeros were read as "he did not

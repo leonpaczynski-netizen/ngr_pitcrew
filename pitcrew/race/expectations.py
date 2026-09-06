@@ -231,6 +231,16 @@ class ExpectationTracker:
         # lift-and-coasting) said "burning 6% under plan" with the hose in
         # while the stint about to be driven ran 7.9-8.1.
         self._green_stint: list[int] = []
+        # Laps that served a track-limit penalty, by number. Out of the
+        # clean population whichever order the row and the read arrive in.
+        self._penalised: set[int] = set()
+        # **Whether the race started rolling.** Lap one of a standing start
+        # carries the launch and the grid and is slower by construction; a
+        # rolling start's lap one is a flying lap in the same traffic as lap
+        # two, and there is no reason to throw it away. Set from the event's
+        # `start_type` by the coordinator at arming; False (standing) where
+        # nobody said, which is the exclusion every race had.
+        self.rolling_start: bool = False
         self._stint = 0
 
     # ------------------------------------------------------------------ feed
@@ -256,7 +266,8 @@ class ExpectationTracker:
         if pit:
             # The next green lap opens a new stint.
             self._stint += 1
-        if pit or lap.lap_num <= 1 or lap.lap_time_ms <= 0:
+        first = lap.lap_num <= 1 and not self.rolling_start
+        if pit or first or lap.lap_time_ms <= 0:
             return
         saving = bool(getattr(lap, "short_shift_rpm", None))
         # **The lap number rides along.** Without it there is no way to split
@@ -283,7 +294,13 @@ class ExpectationTracker:
             return []
         cutoff = min(row[0] for row in self._green) * (
             1.0 + BURN_OUTLIER_FRACTION)
-        return [row for row in self._green if row[0] <= cutoff and not row[2]]
+        return [row for row in self._green if row[0] <= cutoff and not row[2]
+                and row[3] not in self._penalised]
+
+    def note_penalty(self, lap_num: int) -> None:
+        """A lap that served a track-limit penalty is not evidence of pace
+        or of burn - the crawl is in both."""
+        self._penalised.add(int(lap_num))
 
     # ------------------------------------------------- did the saving work
 
@@ -427,6 +444,15 @@ class ExpectationTracker:
         if len(clean) < SIGMA_MIN_LAPS:
             return None
         return float(stdev(clean))
+
+    def laps_by_number(self) -> dict[int, tuple[int, float]]:
+        """lap -> (lap_time_ms, fuel_used_l) for the laps that are evidence.
+
+        For pairing a lap's burn and time with what the wall read of the gap
+        on that lap - the tow trade (`race/tow.py`) is made on exactly that
+        pairing, and nothing else keys the clean population by lap.
+        """
+        return {row[3]: (row[0], row[1]) for row in self._clean()}
 
     def green_laps(self) -> int:
         """How many laps of this race are evidence about anything.

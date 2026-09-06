@@ -25,11 +25,28 @@ What the test holds the engineer to:
   the lap-7 crossing and does not at lap 6 (13 laps, 103 L).
 * **The fill it then asks for is to the flag**, on the same expression the
   box already uses.
+* **It prices the tow** (the driver's second half, 7 Sep: *"I was saving
+  fuel sitting behind Boxhead but I was also losing lap time to first - was
+  the fuel saving worth the lost lap time or not?"*): the litres not burned
+  in his wake are worth their standing time at Deep Forest's 2 L/s pump -
+  about 0.3 s a lap - against the second a lap given away. Not worth it, and
+  the undercut says so. Where the tow DOES pay, there is no undercut.
+
+**What the pinned lap rests on, said plainly (critic pass 5).** The
+constant-burn form below never measures a burn scatter, so the fill carries
+the model's whole-lap fallback margin and the tank first holds the flag at
+lap 7. Driven on the session's real per-lap burn the scatter measures at
+about 0.15 L, the margin shrinks to about two litres, and it is lap 6 - the
+second test below holds that, and it is the number the driver would have
+been given. Two premises remain the reconstruction's: the race is run as a
+20-lap lap race (session 138 was timed, 30 minutes, where the margin is a
+lap while the count is soft), and P2 is one car all race (he was P2 himself
+on laps 5 and 12, and a subject change wipes the trend and the map).
 """
 from __future__ import annotations
 
-from pitcrew.race.calls import (SECTOR_SPLIT, UNDERCUT, fuel_target_basis,
-                                fuel_target_l)
+from pitcrew.race.calls import (SECTOR_SPLIT, TOW_TRADE, UNDERCUT,
+                                fuel_target_basis, fuel_target_l)
 from pitcrew.race.coordinator import PlanContext, RaceCoordinator
 from pitcrew.race.gaps import GapTrend
 from pitcrew.telemetry.session_state import EventKind, Lap, SessionEvent
@@ -52,8 +69,9 @@ P2 = "Boxhead"
 
 PLAN = {
     "stints": [
-        {"laps": 11, "compound": "RH", "fuel_l": 85.0, "start_lap": 1},
-        {"laps": 9, "compound": "RH", "fuel_l": 70.0, "start_lap": 12},
+        {"laps": 11, "compound": "RS", "fuel_l": 85.0, "start_lap": 1},
+        {"laps": 9, "compound": "RS", "fuel_l": 70.0, "start_lap": 12,
+         "tyres": True},
     ],
     "stops": 1, "pit_laps": [11], "laps": 20,
     "binding_constraint": "fuel",
@@ -67,11 +85,12 @@ def _context(**over) -> PlanContext:
     return PlanContext(**fields)
 
 
-def _lap_event(lap, ms, fuel_end, position, pit) -> SessionEvent:
-    fuel_start = fuel_end + BURN_L if not pit else fuel_end
+def _lap_event(lap, ms, fuel_end, position, pit, *,
+               fuel_used: float = BURN_L) -> SessionEvent:
+    fuel_start = fuel_end + fuel_used if not pit else fuel_end
     return SessionEvent(EventKind.LAP_COMPLETED, {"lap": Lap(
         lap_num=lap, lap_time_ms=ms, best_lap_ms=86996, delta_ms=0,
-        fuel_start=fuel_start, fuel_end=fuel_end, fuel_used=BURN_L,
+        fuel_start=fuel_start, fuel_end=fuel_end, fuel_used=fuel_used,
         position=position, is_pit_lap=bool(pit), is_out_lap=False)})
 
 
@@ -100,10 +119,15 @@ def _held_up_lap(gap_at_line: float, *, s12_gain: float = 0.2,
     return out
 
 
-def _race():
+def _race(*, planned_burn: float = 8.0, planned_ms: int = 87_000,
+          refuel_lps: float | None = 2.0):
+    """Strategy 27's expectations were a clear-air 87.0 s at 8.0 L a lap
+    (the plan's burn, measured in practice); the pump at Deep Forest is the
+    hub's 2 L/s. Behind P2 he lapped about 88.2 s on about 7.4 L."""
     race = RaceCoordinator(PLAN, fuel_per_lap_l=BURN_L, fuel_capacity_l=100.0,
-                           planned_fuel_per_lap_l=BURN_L,
-                           planned_lap_time_ms=88_000, mandatory_stops=0)
+                           planned_fuel_per_lap_l=planned_burn,
+                           planned_lap_time_ms=planned_ms, mandatory_stops=0,
+                           refuel_rate_lps=refuel_lps)
     assert race.arm(_context(), _context())
     race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
     race.note_circuit(CIRCUIT_M, sector_cuts_m=CUTS_M)
@@ -113,13 +137,18 @@ def _race():
     return race
 
 
-def _drive(race, upto: int, *, gaps_from: int = 2):
+def _drive(race, upto: int, *, gaps_from: int = 2, real_burn: bool = False):
     """Feed the race to lap `upto`, held up behind P2 from `gaps_from`.
+
+    `real_burn` feeds each lap the litres the session actually burned (the
+    fuel at the line less the last), so the burn scatter is measured as it
+    was live; otherwise every lap burns the round 7.4 L.
 
     Returns every call the engineer made, keyed by the lap it landed on.
     """
     trend = GapTrend(side="ahead")
     calls = {}
+    last_fuel = 99.1
     for lap, ms, fuel_end, position, pit in RACE:
         if lap > upto:
             break
@@ -127,7 +156,10 @@ def _drive(race, upto: int, *, gaps_from: int = 2):
             samples = _held_up_lap(1.0)
             trend.note(lap, samples[0][1], subject=P2)
             race.note_gaps(ahead=trend, ahead_name=P2, ahead_samples=samples)
-        call = race.handle(_lap_event(lap, ms, fuel_end, position, pit))
+        used = (last_fuel - fuel_end) if real_burn and not pit else BURN_L
+        last_fuel = fuel_end
+        call = race.handle(_lap_event(lap, ms, fuel_end, position, pit,
+                                      fuel_used=used))
         if call is not None:
             race.state.record(call)
             calls.setdefault(lap, []).append(call)
@@ -165,11 +197,49 @@ def test_he_is_boxed_on_the_first_lap_the_tank_holds_the_flag():
     calls = _drive(race, upto=7)
     assert _kinds(calls, UNDERCUT) == [7]
     call = next(c for c in calls[7] if c.kind == UNDERCUT)
-    assert call.call == "Box this lap. Fuel to the flag."
+    assert call.call == "Box this lap. RS on. Fuel to the flag."
     assert call.reason.startswith(
         f"Undercut on {P2}: you're held up, and faster through 1 and 2. "
         "The fill costs the same now as on lap 11.")
     assert call.confidence == "medium", "the tyre life to the flag was checked"
+
+
+def test_on_the_real_burn_scatter_it_is_lap_six():
+    """The session's own per-lap burn: the scatter measures, the margin is
+    two litres rather than a lap, and the tank holds the flag a lap earlier.
+    This is the lap he would have been given."""
+    race = _race()
+    calls = _drive(race, upto=8, real_burn=True)
+    assert _kinds(calls, UNDERCUT) == [6]
+
+
+def test_a_fuel_only_stop_keeps_the_set_it_has():
+    """Ludo's Deep Forest instruction was fuel only. At 5 %/lap the set he
+    keeps would be at 95 % at the flag: no undercut. At 3.7 % it reaches,
+    and the call says "No tyres." like every other box call (rule 13)."""
+    import copy
+
+    plan = copy.deepcopy(PLAN)
+    plan["stints"][1]["tyres"] = False
+    race = RaceCoordinator(plan, fuel_per_lap_l=BURN_L, fuel_capacity_l=100.0,
+                           planned_fuel_per_lap_l=BURN_L,
+                           planned_lap_time_ms=88_000, mandatory_stops=0)
+    assert race.arm(_context(), _context())
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    race.note_circuit(CIRCUIT_M, sector_cuts_m=CUTS_M)
+    race.state.briefed_wear_per_lap = 0.05
+    assert _kinds(_drive(race, upto=9), UNDERCUT) == []
+
+    race = RaceCoordinator(plan, fuel_per_lap_l=BURN_L, fuel_capacity_l=100.0,
+                           planned_fuel_per_lap_l=BURN_L,
+                           planned_lap_time_ms=88_000, mandatory_stops=0)
+    assert race.arm(_context(), _context())
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    race.note_circuit(CIRCUIT_M, sector_cuts_m=CUTS_M)
+    race.state.briefed_wear_per_lap = 0.037
+    calls = _drive(race, upto=7)
+    call = next(c for c in calls[7] if c.kind == UNDERCUT)
+    assert call.call == "Box this lap. No tyres. Fuel to the flag."
 
 
 def test_the_fill_it_asks_for_is_to_the_flag():
@@ -220,6 +290,82 @@ def test_an_unbriefed_tyre_is_said_to_be_unchecked():
     assert call.confidence == "low"
     assert call.reason.endswith("Tyre life to the flag unchecked.")
     assert call.spoken().endswith("Unconfirmed.")
+
+
+# ---------------------------------------------- the second half: the tow
+
+def test_the_tow_is_priced_at_the_pump_and_found_not_worth_it():
+    race = _race()
+    calls = _drive(race, upto=7)
+    laps = _kinds(calls, TOW_TRADE)
+    assert laps and laps[0] <= 6, "three laps behind him and it is sayable"
+    said = next(c for c in calls[laps[0]] if c.kind == TOW_TRADE)
+    assert said.call.startswith("The tow saves you 0.6 litres a lap - "
+                                "0.3 seconds at the stop.")
+    assert "You're losing 1." in said.call and "seconds a lap to Boxhead" in said.call
+    assert said.call.endswith("Not worth it.")
+    assert said.reason.endswith("against the plan.")
+    trade = race.state.tow_trade
+    assert trade is not None and trade.worth_it is False
+    undercut = next(c for c in calls[7] if c.kind == UNDERCUT)
+    assert "The tow's 0.3 seconds at the stop against 1." in undercut.reason
+
+
+def test_a_tow_that_pays_means_no_undercut():
+    """Saving 2.6 L a lap at 2 L/s is 1.3 s at the stop against two tenths
+    given away: stay in it, and the stop is the plan's."""
+    race = _race(planned_burn=10.0, planned_ms=88_000)
+    calls = _drive(race, upto=9)
+    said = next(c for made in calls.values() for c in made
+                if c.kind == TOW_TRADE)
+    assert said.call.endswith("Worth it - stay in it.")
+    assert race.state.tow_trade.worth_it is True
+    assert _kinds(calls, UNDERCUT) == []
+
+
+def test_no_refuel_rate_means_the_saving_is_not_priced():
+    race = _race(refuel_lps=None)
+    calls = _drive(race, upto=7)
+    said = next(c for made in calls.values() for c in made
+                if c.kind == TOW_TRADE)
+    assert "no refuel rate on file to price it" in said.call
+    assert race.state.tow_trade.worth_it is None
+    assert _kinds(calls, UNDERCUT) == [7], "unpriced is not 'worth it'"
+
+
+def test_the_trade_prefers_this_races_clear_air_laps():
+    from pitcrew.race.tow import BY_CLEAR_LAPS, trade
+
+    gaps = {2: 8.0, 3: 8.5, 4: 1.0, 5: 1.1, 6: 0.9}
+    laps = {2: (87_000, 8.0), 3: (87_200, 8.1), 4: (88_300, 7.4),
+            5: (88_100, 7.5), 6: (88_400, 7.3)}
+    made = trade(gaps, laps, refuel_rate_lps=2.0,
+                 planned_fuel_per_lap_l=9.0, planned_lap_time_ms=90_000)
+    assert made.reference == BY_CLEAR_LAPS
+    assert round(made.saving_l_per_lap, 2) == 0.65
+    assert round(made.losing_s_per_lap, 1) == 1.2
+    assert made.worth_it is False
+
+
+def test_a_tow_that_saves_nothing_says_so():
+    from pitcrew.race.tow import trade
+
+    gaps = {2: 1.0, 3: 1.1, 4: 0.9}
+    laps = {2: (88_000, 8.2), 3: (88_100, 8.3), 4: (88_000, 8.1)}
+    made = trade(gaps, laps, refuel_rate_lps=2.0,
+                 planned_fuel_per_lap_l=8.0, planned_lap_time_ms=87_000)
+    call, _ = made.sentence("him")
+    assert call.startswith("No fuel saving in the tow.")
+    assert made.worth_it is False
+
+
+def test_a_wash_is_said_as_one():
+    from pitcrew.race.tow import TowTrade
+
+    made = TowTrade(laps_held=3, saving_l_per_lap=1.0, saving_s_per_lap=1.0,
+                    losing_s_per_lap=0.9, reference="the plan")
+    assert made.worth_it is None
+    assert made.sentence()[0].endswith("About a wash.")
 
 
 def test_a_tyre_that_will_not_reach_the_flag_refuses():

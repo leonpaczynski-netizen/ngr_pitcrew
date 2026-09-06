@@ -140,6 +140,14 @@ SECTOR_SPLIT = "sector-split"
 # first one the tank can hold fuel to the flag on - so the stop is taken NOW
 # and buys clear air, and he pays the same toll later.
 UNDERCUT = "undercut"
+# **Is the tow worth it.** The fuel saved in his wake priced at the pump,
+# against the lap time given away there. A fact, with a verdict in it -
+# "Not worth it" - because the arithmetic has one answer and the driver
+# asked for it in real time. See `race/tow.py`.
+TOW_TRADE = "tow-trade"
+# **A penalty served, and what it cost.** Read off the frames at the
+# crossing; the lap leaves the pace population and he hears the figure.
+PENALTY = "penalty"
 CHEQUER = "chequer"
 # **"Two to go" and "Last lap", which only an accurate clock makes sayable.**
 # GT7's own race clock is not accurate - the driver measured it - so a timed
@@ -221,6 +229,10 @@ URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW,
            CHASE,
            # And where he has us: said once a stint, and it can wait a lap.
            SECTOR_SPLIT,
+           # And what his wake is worth against what it costs.
+           TOW_TRADE,
+           # A penalty served: one crossing's news, below the plan's calls.
+           PENALTY,
            # **A rival's stop ranks below every call about our own car**, and
            # below the incident and the wear note too. It is the only thing
            # here that is about somebody else: a car of ours about to run dry,
@@ -287,6 +299,8 @@ REGISTER = {
     SAVING_CHANGE: FACT,
     CHASE: FACT,
     SECTOR_SPLIT: FACT,
+    TOW_TRADE: FACT,
+    PENALTY: FACT,
     UNDERCUT: DECISION,
     WEAR: DECISION,
     TYRE_TEMP: DECISION,
@@ -679,6 +693,20 @@ class RaceState:
     # sector lines, so the map speaks in the sectors on his rack.
     sector_map: object = None
     sector_cuts_m: tuple | None = None
+    # **What the tow is worth against what it costs** - a `tow.TowTrade`,
+    # remade by the coordinator on every crossing from this race's own laps
+    # and the wall's gaps. None until three laps have been held up.
+    tow_trade: object = None
+    # `(lap, seconds lost)` of a penalty served on the lap just completed,
+    # from the controller's read of the frames; cleared once said.
+    penalty_note: tuple | None = None
+    # **Whether the desk granted George `drop_stop`** (`fuel_long` in the
+    # playbook). False keeps every planned stop whatever the tank says -
+    # the report "You're fuelled to the flag" is still made, the box call
+    # still comes. None is a state built by hand, and the tank decides as
+    # it always did. Critic pass 5: the rail had changed the sentence and
+    # not the behaviour.
+    drop_stop_granted: bool | None = None
     # **Rivals seen entering the lane, as a queue.** A single slot lost one of
     # two cars entering in the same frame, and was never cleared - so the same
     # lap-8 entry was re-spoken five laps later, after our own stop had reset
@@ -1310,6 +1338,8 @@ class RaceState:
             self.said_tags.add(GAUGE_ASK)
         if call.kind == STOPS_OFF:
             self.stops_off_said = True
+        if call.kind == CHASE:
+            self.chase_said_lap = call.lap
         if call.kind == INCIDENT:
             self.incident_lap = None
             self.incident_cost_ms = None
@@ -1396,7 +1426,10 @@ def _worth_saying_again(state: RaceState, call: Call) -> bool:
     # over 9 laps" said again on lap 18 of 20, describing a window that is
     # mostly spent. Tagged per driver, so two rivals do not swallow each other
     # either. Below the `said` check it never ran at all.
-    if call.kind in (RIVAL_SHORT, RIVAL_COMMITTED, RIVAL_BOXED, CLOSING):
+    if call.kind in (RIVAL_SHORT, RIVAL_COMMITTED, RIVAL_BOXED, CLOSING,
+                     CHASE):
+        # `CHASE` too: tagged per lap, so `said` never silences it for the
+        # stint - critic pass 5 found it spoken once and then never.
         # `RIVAL_BOXED` and `CLOSING` joined them: untagged, one CLOSING call
         # swallowed the other for the whole stint - "he is taking 1.5 a lap out
         # of you" silencing "you are taking 1.4 a lap out of Rocky", which are
@@ -1444,8 +1477,9 @@ def _chase(state: RaceState) -> Call | None:
     """
     if state.in_pit or state.finished or _crossing_the_line(state):
         return None
-    trend = state.gap_ahead
-    latest = trend.latest() if trend is not None else None
+    # A copy: the sampler thread clears the live trend on a subject change.
+    seen = dict(getattr(state.gap_ahead, "seen", None) or {})
+    latest = seen[max(seen)] if seen else None
     if latest is None or latest <= 0 or latest > CHASE_WINDOW_S:
         return None
     laps_left = state.laps_remaining()
@@ -1464,9 +1498,26 @@ def _chase(state: RaceState) -> Call | None:
         reason += (" That's more than your lap-to-lap spread."
                    if need > sigma else
                    " That's inside your lap-to-lap spread.")
-    state.chase_said_lap = state.lap
+    # `chase_said_lap` is set by `record()`, when the call is actually
+    # made - a builder that marks its own call as said marks calls that
+    # were outranked and never spoken.
     return Call(CHASE, state.lap, call, reason, MEDIUM,
                 tag=f"chase-{state.lap}")
+
+
+def _penalty(state: RaceState) -> Call | None:
+    """A penalty served on the lap just run, with its derived cost."""
+    note = state.penalty_note
+    if note is None or state.in_pit or state.finished:
+        return None
+    lap, lost = note
+    tag = f"{PENALTY}:{lap}"
+    if tag in state.said_tags:
+        return None
+    cost = (f" About {lost:.1f} seconds." if lost is not None and lost > 0
+            else "")
+    return Call(PENALTY, state.lap, f"Penalty served.{cost}",
+                f"Lap {lap} is out of the pace.", MEDIUM, tag=tag)
 
 
 def _saving_change(state: RaceState) -> Call | None:
@@ -1521,6 +1572,7 @@ def _candidates(state: RaceState) -> list[Call | None]:
         _tyre_temp(state),
         _saving_change(state),
         _chase(state),
+        _penalty(state),
         *_rivals(state),
         _status(state),
     ]
@@ -1694,6 +1746,15 @@ def stop_still_needed(state: RaceState) -> bool:
     * **The fuel does not actually reach**, which is the arithmetic this is
       about, and `None` from it keeps the stop for the same reason.
     """
+    if state.drop_stop_granted is False:
+        # The tank may say otherwise; dropping a stop is the desk's to
+        # grant, and it was not.
+        return True
+    return _stop_needed_on_fuel(state)
+
+
+def _stop_needed_on_fuel(state: RaceState) -> bool:
+    """`stop_still_needed` on the arithmetic alone, grant or no grant."""
     if state.mandatory_stops_left is None or state.mandatory_stops_left > 0:
         return True
     if (state.plan_binding_constraint or "").lower() != "fuel":
@@ -1713,7 +1774,7 @@ def _stops_off(state: RaceState) -> Call | None:
         return None
     if state.stint_ends_on_lap is None or state.lap < 1:
         return None
-    if stop_still_needed(state):
+    if _stop_needed_on_fuel(state):
         return None
     remaining = state.laps_remaining()
     spare = None
@@ -1787,6 +1848,16 @@ def _box_now(state: RaceState) -> Call | None:
             reason += f" {fuel}"
         return Call(BOX_NOW, state.lap, f"Box this lap.{compound}", reason,
                     confidence, severity=float(overdue))
+    if state.drop_stop_granted is False and not _stop_needed_on_fuel(state):
+        # He has heard "You're fuelled to the flag." and now hears the box
+        # call anyway: say why, or the two contradict each other.
+        return Call(
+            BOX_NOW, state.lap,
+            f"Box this lap.{compound}",
+            "On the plan. Fuel would reach the flag - dropping the stop was "
+            "not granted.",
+            severity=float(overdue),
+        )
     return Call(
         BOX_NOW, state.lap,
         f"Box this lap.{compound}",

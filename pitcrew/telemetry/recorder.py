@@ -242,6 +242,12 @@ class LapFrames:
     coast_pct: float | None = None
     full_throttle_pct: float | None = None
     upshift_rpm: float | None = None
+    # Set by the caller from `analysis.penalties.read_columns`: how many
+    # track-limit penalties the lap served (0 is a lap that was looked at
+    # and served none; None is a lap that could not be looked at) and the
+    # derived time they cost, None where none were served.
+    penalties_served: int | None = None
+    penalty_lost_s: float | None = None
     # **The fastest frame of the lap, taken here rather than read back out.**
     # `Store._note_top_speed` used to `decode_frames(blob)` - a full
     # `zlib.decompress` plus `json.loads` of the lap that had just been
