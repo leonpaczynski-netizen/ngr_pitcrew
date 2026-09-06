@@ -504,7 +504,8 @@ def rejoin_call(*, lap: int, gap_behind_s: float | None,
                 refuel_rate_lps: float | None,
                 pit_loss_s: float | None,
                 pit_loss_source: str | None = None,
-                who: str | None = None) -> Call | None:
+                who: str | None = None,
+                due: bool = True) -> Call | None:
     """Where a stop taken now would put us against the car behind.
 
     **The call that decides a PLACE where the rest of this module decides
@@ -523,14 +524,21 @@ def rejoin_call(*, lap: int, gap_behind_s: float | None,
     if rejoin is None:
         return None
     them = who or "the car behind"
+    # **"Box now" only when a stop is actually due.** Three laps before the
+    # planned stop at Deep Forest the call opened "Box now and the car behind
+    # comes out in front" - an instruction-shaped sentence about a stop
+    # nobody was taking, heard under a helmet as the box call. When the stop
+    # is not due the same arithmetic is said as the conditional it is.
     if rejoin.ahead is False:
         return Call(REJOIN, lap,
-                    f"Box now and {them} comes out in front.",
+                    (f"Box now and {them} comes out in front." if due
+                     else f"A stop now puts you behind {them}."),
                     f"He is {rejoin.their_gap_s:.0f} seconds back and the stop "
-                    f"costs {rejoin.ours_lost_s:.0f}.", HIGH)
+                    f"costs {rejoin.ours_lost_s:.0f}.", HIGH if due else MEDIUM)
     if rejoin.too_close:
         return Call(REJOIN, lap,
-                    "Box now and it is too close to call.",
+                    ("Box now and it is too close to call." if due
+                     else f"A stop now is too close to call against {them}."),
                     f"He is {rejoin.their_gap_s:.0f} seconds back against a "
                     f"{rejoin.ours_lost_s:.0f} second stop.", MEDIUM)
     return None
@@ -664,13 +672,15 @@ def candidates(state) -> list:
         # silent on the lap it exists for. Its own module calls it "the call,
         # and it dominates everything else here".
         if _a_stop_is_in_question(state):
+            to_stop = state.laps_to_stop()
             out.append(rejoin_call(
                 lap=lap, gap_behind_s=behind.latest(),
                 litres_to_take=_fill_at_the_stop(state),
                 refuel_rate_lps=state.refuel_rate_lps,
                 pit_loss_s=state.pit_loss_s,
                 pit_loss_source=state.pit_loss_source,
-                who=state.gap_behind_name))
+                who=state.gap_behind_name,
+                due=(to_stop is not None and to_stop <= 1)))
         out.append(closing_call(behind, lap=lap,
                                 who=state.gap_behind_name,
                                 laps_left=laps_left))

@@ -1007,6 +1007,12 @@ class PitCrewController(QObject):
             voice=self.voice,
             settings_screen=lambda: self.settings_screen,
             event=self.active_event)
+        # Rig faults are logged as they happen and SPOKEN only when no
+        # race is running - 'check the amp' landed on the Deep Forest
+        # out-lap. Released at the flag.
+        self.rig.hold_spoken_while = (
+            lambda: self.race is not None
+            and bool(getattr(self.race, "running", False)))
         # **The wear gauge and the recording**, likewise out of this file. It
         # hands back four values - the latest reading, its lap, a blind note,
         # and whether a request was taken - and those used to be four loose
@@ -2350,6 +2356,9 @@ class PitCrewController(QObject):
         title = self._league_line()
         if title:
             lines = list(lines) + [title]
+        # Remembered so that losing the instrument mid-race is said once -
+        # `lost_the_gauge()` was imported and never called anywhere.
+        self._gauge_promised = self.hud.armed()
         for line in lines:
             log("race").info("brief: %s", line)
         if self.race_screen is not None:
@@ -4743,10 +4752,24 @@ class PitCrewController(QObject):
                 if self._engineer_speaks:
                     self.voice.say(blind)
                 log("pitcrew").warning("hud-wear: told the driver: %s", blind)
+            elif getattr(self, "_gauge_promised", False) and not self.hud.armed():
+                # The brief promised the gauge and the reader has since stood
+                # down. Once, and only when the sampler's own blind note did
+                # not already say so this lap.
+                self._gauge_promised = False
+                if self._engineer_speaks:
+                    self.voice.say(lost_the_gauge())
+                log("pitcrew").warning("hud-wear: told the driver the gauge "
+                                       "promised at the green is gone")
             wear_now, wear_lap = self.hud.latest_wear()
             if wear_lap and wear_now:
                 self.race.state.note_wear(wear_lap, wear_now)
         call = self.race.handle(event)
+        if getattr(self.race.state, "finished", False):
+            # The flag: say what the rig held back during the race.
+            rig = getattr(self, "rig", None)
+            if rig is not None and hasattr(rig, "release_notices"):
+                rig.release_notices()
         replan = None
         if event.kind is EventKind.LAP_COMPLETED:
             replan = self._check_replan(event.data["lap"], against=call)
@@ -5393,6 +5416,26 @@ class PitCrewController(QObject):
         if self.race is None:
             return {}
         snapshot = self._race_snapshot()
+        # **The gaps, from the pit wall's reading of the board.** The PTT
+        # used to refuse "gap" outright while `state.gap_ahead/behind` were
+        # populated and the driver board was drawing them. Latest reading per
+        # side, the name where the roster has one, and the closing rate where
+        # the trend has five laps to say so.
+        snapshot["wallRunning"] = getattr(self, "_pit_wall", None) is not None
+        for side in ("ahead", "behind"):
+            trend = getattr(self.race.state, f"gap_{side}", None)
+            key = f"gap{side.capitalize()}"
+            latest = trend.latest() if trend is not None else None
+            snapshot[f"{key}S"] = latest
+            snapshot[f"{key}Name"] = getattr(self.race.state,
+                                             f"gap_{side}_name", None)
+            rate = None
+            if trend is not None and latest is not None:
+                try:
+                    rate, _count = trend.closing_s_per_lap()
+                except Exception:                            # noqa: BLE001
+                    rate = None
+            snapshot[f"{key}ClosingSPerLap"] = rate
         # The fuel target for the stop, so "how much fuel do I take" has an
         # answer rather than a refusal.
         stints = (self.race.plan or {}).get("stints") or []
@@ -5673,7 +5716,12 @@ class PitCrewController(QObject):
         # Said second because the place is the thing he can see out of the
         # window and the championship is the thing he cannot.
         moved = self._league_moved()
+        if moved and moved == getattr(self, "_league_last_said", None):
+            # The same championship line twice is the position flapping,
+            # not the championship moving - said once per change.
+            moved = None
         if moved:
+            self._league_last_said = moved
             log("race").info("league: %s", moved)
             if self._engineer_speaks:
                 self.voice.say(moved)

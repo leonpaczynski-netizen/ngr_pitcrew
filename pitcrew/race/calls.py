@@ -240,6 +240,10 @@ DECISION = "decision"
 EVENT = "event"
 FACT = "fact"
 
+# **Calls that are advice, not orders.** Spoken with a one-word suffix so
+# the driver can tell them from an instruction without a second sentence.
+SUGGESTIONS = frozenset({FUEL_LONG, TYRE_TEMP, STAY_OUT})
+
 REGISTER = {
     BOX_NOW: DECISION,
     BOX_SOON: DECISION,
@@ -500,12 +504,24 @@ class Call:
     structural_action: str | None = None
 
     def spoken(self) -> str:
-        """Instruction, then reason. Confidence only when it is not high."""
+        """Instruction, then reason. Then the one word that marks a register.
+
+        An instruction is the default and carries no suffix (§5.5: one thing
+        at a time). A **suggestion** - "You can push", the tyre-temperature
+        advice, the stay-out offer - ends "Suggestion." so it cannot be heard
+        as an order; a LOW-confidence call ends "Unconfirmed.". That is what a
+        real pit wall does with "diff mid plus one, suggestion". The box call's
+        "copy?" waits on the push-to-talk round trip being proven live (A5):
+        "copy that" already accepts a re-plan, and a confirmation word that
+        can be misheard as one is worse than none.
+        """
         text = self.call
         if self.reason:
             text = f"{text} {self.reason}"
         if self.confidence == LOW:
             text = f"{text} Unconfirmed."
+        elif self.kind in SUGGESTIONS:
+            text = f"{text} Suggestion."
         return text
 
     def as_export(self) -> dict:
@@ -1828,6 +1844,22 @@ def _fuel(state: RaceState) -> Call | None:
 
     confidence = MEDIUM if state.lap < 3 else HIGH
     if gap < -FUEL_SHORT_LAPS:
+        # **A shortfall no lever can cover is a stop, and is said as one.**
+        # The Deep Forest race sim heard "Short-shift and lift into the slow
+        # corners" three times while 6-8 laps short of the flag with no stop
+        # planned: a saving of a fifth of the burn cannot close a gap of
+        # that size, so the honest instruction is the stop. Priced against
+        # what the laps still to run could save at the most a short-shift is
+        # worth, plus the half-lap the call's own threshold allows.
+        remaining = state.laps_remaining()
+        if (remaining is not None and state.stint_ends_on_lap is None
+                and not state.stop_pending
+                and abs(gap) > SHORT_SHIFT_RECOVERY * remaining
+                + FUEL_SHORT_LAPS):
+            return Call(FUEL_SHORT, state.lap,
+                        "Fuel needs a stop.",
+                        f"{abs(gap):.1f} laps short of the flag - short-shifting "
+                        f"cannot cover it.", confidence, severity=-gap)
         drop, still = short_shift_for(state)
         reason = f"You're {abs(gap):.1f} laps short on fuel."
         if still > 0.05:
@@ -1855,6 +1887,14 @@ def _fuel(state: RaceState) -> Call | None:
         # Only worth saying once the stint is half run. At the start of a
         # stint there is always surplus - the tank was just filled - and
         # "you can push" on lap one is noise the driver learns to ignore.
+        #
+        # **And not twice in one lap.** The heartbeat already carries the
+        # same figure as "N spare to the flag"; at Deep Forest the two were
+        # spoken two seconds apart on three laps. If the heartbeat has spoken
+        # this lap the number has been said.
+        if state.last_said_lap == state.lap and state.last_said_kind in (
+                STATUS, FUEL_LONG):
+            return None
         return Call(
             FUEL_LONG, state.lap,
             "You can push.",
@@ -2472,15 +2512,25 @@ def _status(state: RaceState) -> Call | None:
     return Call(STATUS, state.lap, said, "")
 
 
+# **What a short-shift can recover, as a fraction of the remaining burn.**
+# Measured in-house on v1.71 at about a fifth (-21.6% fuel, brain/_inbox/17
+# s4). A shortfall larger than this over the laps still to run is a stop.
+SHORT_SHIFT_RECOVERY = 0.20
+
+
 # How many agreeing frames a new position needs before it is believed.
 #
 # **Not a de-bounce for a noisy field - a guard against a true one.** The
 # position byte is exact; what is not exact is the moment it turns over. A
 # side-by-side into a braking zone swaps the two cars for a handful of frames
 # and swaps them back, and "down to P8, up to P7, down to P8" inside two
-# seconds is three sentences about nothing. At 60 Hz this is a third of a
-# second of the new position actually holding.
-POSITION_HOLD_FRAMES = 20
+# seconds is three sentences about nothing. A third of a second was not
+# enough: Deep Forest lap 5 (6 Sep 2026) produced P2 / P3 / P2 / P3 seven
+# times in nineteen seconds through one side-by-side, each with a
+# championship line behind it. A place is a place once it has been held for
+# eight seconds - the length of a straight - and a battle that has not
+# settled in that time is one the driver is in, not one he needs told about.
+POSITION_HOLD_FRAMES = 8 * 60
 
 # Places gained or lost in one step past which this is not a place change.
 # A restart, a re-grid, or the field being renumbered around a pit sequence

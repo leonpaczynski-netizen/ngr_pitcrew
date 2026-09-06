@@ -619,7 +619,29 @@ class RigSupervisor:
             return
         written, spoken = notice
         log("haptics").error(written)
+        # **Never during a race.** "Haptics dropped and are back after a
+        # device rebuild. Check the amp after the race." was spoken on the
+        # Deep Forest out-lap, at 20:37:12, in the register the box call
+        # uses. The log line is the record; the spoken line waits for the
+        # flag, where `release_notices` says it.
+        hold = getattr(self, "hold_spoken_while", None)
+        if hold is not None and hold():
+            if not hasattr(self, "_held_notices"):
+                self._held_notices = []
+            self._held_notices.append(spoken)
+            log("haptics").info("rig notice held until the race ends: %s",
+                                spoken)
+            return
         self.voice.say(spoken)
+
+    # Set by the owner: a callable that is true while a race is running.
+    hold_spoken_while = None
+
+    def release_notices(self) -> None:
+        """Say what was held back during the race, once it is over."""
+        held, self._held_notices = list(getattr(self, "_held_notices", [])), []
+        for spoken in held:
+            self.voice.say(spoken)
     # Below this an effect was not doing anything worth writing down.
     _EXPLAIN_FLOOR = 0.01
 

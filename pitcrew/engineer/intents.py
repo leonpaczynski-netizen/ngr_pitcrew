@@ -443,6 +443,32 @@ _REPORT_REPLY = {
 }
 
 
+def _gap_answer(intent: str, snapshot: dict) -> Answer:
+    """Ahead and behind, from the pit wall's last reading of the board."""
+    parts = []
+    for side, label in (("Ahead", "gapAhead"), ("Behind", "gapBehind")):
+        gap = snapshot.get(f"{label}S")
+        if gap is None:
+            continue
+        who = snapshot.get(f"{label}Name") or ("the car ahead" if side == "Ahead"
+                                                else "the car behind")
+        line = f"{side}: {who}, {gap:.1f} seconds"
+        rate = snapshot.get(f"{label}ClosingSPerLap")
+        if rate is not None and abs(rate) >= 0.1:
+            # Positive is the gap shrinking on both sides - see `GapTrend`.
+            word = "closing" if rate > 0 else "opening"
+            line += f", {word} {abs(rate):.1f} a lap"
+        parts.append(line + ".")
+    if parts:
+        return Answer(" ".join(parts), intent, answered=True)
+    if not snapshot.get("wallRunning"):
+        return Answer("No pit wall this session - I can't see other cars. "
+                      "Position and the field I have - ask me for position.",
+                      intent, answered=False)
+    return Answer("No gap read yet - the wall has nothing this lap. "
+                  "Ask again on the next straight.", intent, answered=False)
+
+
 def _report_answer(intent: str, snapshot: dict) -> Answer:
     """Acknowledge a report. Never analyse one."""
     plain = _REPORT_REPLY.get(intent)
@@ -515,9 +541,15 @@ def answer(intent: str, snapshot: dict, *,
         # just failed to get an answer lands on the one exchange that has
         # already gone wrong. Interpolating the position here would make every
         # utterance unique and send all of them to live synthesis.
-        return Answer("I can't see other cars - no gaps, no closing speed. "
-                      "Position and the field I have - ask me for position.",
-                      intent, answered=False)
+        # **Reworded again, 7 Sep 2026: the refusal was false.** The feed
+        # carries one car, and that is still true - but the pit wall reads
+        # GT7's own leaderboard off the screen, and at Deep Forest it read
+        # 154 gap frames through the 7-lap chase for P2 while this line told
+        # the driver there were none. So the answer comes from the wall's
+        # reading when there is one, names both cars, and gives the closing
+        # rate where five laps have said so. The refusal survives only for
+        # the session with no wall at all, and it says which.
+        return _gap_answer(intent, snapshot)
 
     if intent == TYRES_RED:
         # Acknowledged, never analysed out loud. One observation is one
