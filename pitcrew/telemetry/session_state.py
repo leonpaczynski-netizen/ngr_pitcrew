@@ -688,12 +688,20 @@ class SessionState:
             # oldest reading in the window is the closest thing to the level
             # before it started.
             self._fuel_at_pit_entry = min(litres for _, litres in self._fuel_window)
-            # A stop has been seen, so "did the tyres come off" now has an
-            # answer rather than being unasked.
-            self._tyres_changed_in_stop = swapped
+            # A stop has been seen. **The swap detector's silence is not "no
+            # tyres".** It fires on all four corners stepping down in ONE
+            # frame at walking pace, and at Deep Forest (6 Sep 2026, lap 13)
+            # it did not fire on a stop that fitted a fresh set - the gauge
+            # read 0.42 -> 0.00 across it. So a swap seen is True and a swap
+            # not seen is None, never False: False is the positive claim
+            # "fuel only", and the coordinator acts on it (rule 3).
+            self._tyres_changed_in_stop = True if swapped else None
             return [SessionEvent(EventKind.PIT_ENTRY,
                                  {"fuel": self._fuel_at_pit_entry,
-                                  "tyres_changed": swapped,
+                                  # Tri-state here too: at entry the swap
+                                  # has usually not happened yet, so "not
+                                  # seen" is unknown, never "no".
+                                  "tyres_changed": True if swapped else None,
                                   # Which signal found it. `speed-step` is the
                                   # frame-exact one; the others are seconds
                                   # late and say so by being named.
@@ -715,7 +723,11 @@ class SessionState:
             self._phase = Phase.RACING if self.race_started else Phase.ON_TRACK
             return [SessionEvent(EventKind.PIT_EXIT, {
                 "fuel_added": fuel_added,
-                "tyres_changed": bool(self._tyres_changed_in_stop),
+                # Tri-state, as held: True when the swap was seen, None when
+                # it was not. `bool(None)` here used to emit False, and the
+                # coordinator then kept the old set's wear history across a
+                # fresh set and fitted a rate through the discontinuity.
+                "tyres_changed": self._tyres_changed_in_stop,
             })]
 
         return []

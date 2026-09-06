@@ -18,6 +18,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from pitcrew.diagnostics import log
+
 from pitcrew.strategy.model import fuel_margin_l
 
 # What George says at the green when nobody wrote a briefing. Imported rather
@@ -679,6 +681,11 @@ class RaceState:
     # model keeps counting through it - GT7 lets you take fuel without taking
     # tyres - and the call that rests on it says so out loud.
     tyre_change_unconfirmed: bool = False
+    # The lap the unconfirmed stop happened on, so a later resolution can
+    # restart the stint count from the right place; and what resolved it,
+    # for the log and the audit ("gauge: fresh set" / "gauge: same set").
+    unconfirmed_stop_lap: int | None = None
+    tyre_change_resolution: str | None = None
     # --- tyre temperature, per-lap frame means fed by the coordinator ---
     # The measured working window per axle, (floor, ceiling) in degC, from
     # this event's own practice laps. None where nobody has measured one -
@@ -972,7 +979,47 @@ class RaceState:
             return
         if self.wear_history and self.wear_history[-1][0] >= lap:
             return
+        self._resolve_tyre_change(lap, present)
         self.wear_history.append((lap, present))
+
+    def _resolve_tyre_change(self, lap: int, present: dict) -> None:
+        """A stop said nothing about the tyres; the gauge can.
+
+        **The gauge saw the fresh set at Deep Forest and nobody asked it.**
+        The swap detector missed the lap-13 change, PIT_EXIT said "not
+        changed", and the live fit ran through 0.42 -> 0.00 -> 0.03 while the
+        briefed projection counted thirteen laps on a set that was one lap
+        old. The first reading after an unconfirmed stop settles it: every
+        corner back near zero is a new set, a series that carries on from
+        where it was is the old one. Either way the word "unconfirmed" comes
+        off the wear call, and the resolution is logged so the audit can see
+        which instrument answered.
+        """
+        if not self.tyre_change_unconfirmed or not self.wear_history:
+            return
+        _last_lap, last = self.wear_history[-1]
+        before = max(last.values())
+        now = max(present.values())
+        stop_lap = self.unconfirmed_stop_lap
+        if now <= GAUGE_FRESH_SET_MAX and before - now >= GAUGE_FRESH_SET_DROP:
+            self.laps_since_stop = (max(0, lap - stop_lap)
+                                    if stop_lap is not None else 0)
+            self.wear_history = []
+            self.temp_history = []
+            self.tyre_change_resolution = "gauge: fresh set"
+        elif now >= before - GAUGE_SAME_SET_SLACK:
+            self.tyre_change_resolution = "gauge: same set"
+        else:
+            # Neither shape - a partial drop. Say nothing yet; the next
+            # reading may settle it, and a guess here is the thing this
+            # exists to remove.
+            return
+        self.tyre_change_unconfirmed = False
+        self.unconfirmed_stop_lap = None
+        log("race").info(
+            "tyre change at the lap-%s stop resolved by the %s (worst corner "
+            "%.0f%% -> %.0f%%)", stop_lap if stop_lap is not None else "last",
+            self.tyre_change_resolution, before * 100, now * 100)
 
     def note_temps(self, lap: int, front_c: float, rear_c: float) -> None:
         """One completed lap's measured axle means, in order driven."""
@@ -2744,6 +2791,17 @@ def orientation(state: RaceState) -> str:
 # Laps a gauge reading may be old before the engineer asks for another, and
 # the tag under which the ask is remembered for the stint.
 GAUGE_STALE_LAPS = 5
+
+# **How the gauge settles an unconfirmed tyre change.** A fresh set reads at
+# or under GAUGE_FRESH_SET_MAX on its worst corner AND has fallen by at least
+# GAUGE_FRESH_SET_DROP from the last reading before the stop - the two halves
+# together, because a set at 8% that reads 8% again is the same set, and a
+# set at 60% that reads 40% is a gauge artefact, not new rubber. Deep Forest,
+# 6 Sep 2026: 0.42 before the stop, 0.00 after. The same-set test is the
+# series carrying on within a little slack for the gauge's own resolution.
+GAUGE_FRESH_SET_MAX = 0.10
+GAUGE_FRESH_SET_DROP = 0.15
+GAUGE_SAME_SET_SLACK = 0.03
 GAUGE_ASK = "gauge-ask"
 
 
@@ -2842,6 +2900,8 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
     if tyres_changed:
         state.laps_since_stop = 0
         state.tyre_change_unconfirmed = False
+        state.unconfirmed_stop_lap = None
+        state.tyre_change_resolution = "session: swap seen"
         state.temp_history = []
         # **A rate fitted across a stop describes neither set.** The gauge
         # snaps back to white on a fresh set, so keeping the old points would
@@ -2850,3 +2910,5 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
         state.wear_history = []
     elif tyres_changed is None:
         state.tyre_change_unconfirmed = True
+        state.unconfirmed_stop_lap = state.lap
+        state.tyre_change_resolution = None
