@@ -112,6 +112,13 @@ class PlanContext:
         return True, ""
 
 
+def _tri(value) -> bool | None:
+    """A plan field to a tri-state: absent or null stays None."""
+    if value is None:
+        return None
+    return bool(value)
+
+
 class RaceCoordinator:
     """Turns telemetry events into engineer calls against an approved plan."""
 
@@ -400,6 +407,7 @@ class RaceCoordinator:
         if index >= len(self._stints):
             self.state.stint_ends_on_lap = None
             self.state.next_compound = None
+            self.state.next_tyres = None
             return
         self._note_mandatory_stops()
         stint = self._stints[index]
@@ -422,6 +430,12 @@ class RaceCoordinator:
         self.state.stint_ends_on_lap = start + stint.get("laps", 0) - 1
         following = self._stints[index + 1] if index + 1 < len(self._stints) else None
         self.state.next_compound = following.get("compound") if following else None
+        # **The plan's tyre decision for the coming stop, tri-state.** A
+        # stint written before the field existed has no `tyres` key and reads
+        # None - "the plan did not say" - never False, because False is the
+        # positive claim "fuel only" and the box call acts on it.
+        self.state.next_tyres = (_tri(following.get("tyres"))
+                                 if following else None)
         # How long the stint after the next stop runs, so the fill at that
         # stop is for that stint and not for the whole rest of the race.
         self.state.next_stint_laps = (following.get("laps") if following
@@ -1515,6 +1529,7 @@ class RaceCoordinator:
             state.stint_ends_on_lap = None
             state.next_stint_laps = None
             state.next_compound = None
+            state.next_tyres = None
         return call
 
     def observed_fuel_per_lap(self) -> float | None:

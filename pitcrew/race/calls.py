@@ -626,6 +626,14 @@ class RaceState:
     stint_index: int = 0
     stint_ends_on_lap: int | None = None
     next_compound: str | None = None
+    # **Whether the next stop takes tyres - the plan's decision, tri-state.**
+    # True: a set goes on. False: fuel only. None: the plan did not say, and
+    # the box call then names the compound as it always has. Deep Forest,
+    # 6 Sep 2026: Ludo wrote "TYRES: DO NOT TAKE THEM" into a knowledge note
+    # nothing reads, the box call said "Box this lap. RS." because that is the
+    # plan's compound, and the driver took a set - ~4.4 s. A decision that
+    # lives in prose is not a decision the car can say.
+    next_tyres: bool | None = None
     # How long the stint *after* the next stop is. The fill at that stop is
     # for that stint and not for the rest of the race: fuelling to the flag at
     # stop 1 of a two-stop asks for a tankful nobody needs, and where the tank
@@ -1365,6 +1373,23 @@ def _stops_off(state: RaceState) -> Call | None:
                 reason)
 
 
+def _tyre_word(state: RaceState) -> str:
+    """The tyre half of the box call, from the plan's decision.
+
+    "No tyres." when the plan says fuel only - the two words the driver was
+    never given at Deep Forest. "RS on." when it says a set goes on, so the
+    word is a decision rather than a label. A bare "RS." when the plan names
+    a compound and says nothing about changing - the old sentence, kept for
+    plans written before the field existed rather than guessed either way.
+    """
+    if state.next_tyres is False:
+        return " No tyres."
+    if state.next_compound:
+        return (f" {state.next_compound} on." if state.next_tyres
+                else f" {state.next_compound}.")
+    return " Tyres on." if state.next_tyres else ""
+
+
 def _box_now(state: RaceState) -> Call | None:
     to_stop = state.laps_to_stop()
     if to_stop is None or state.in_pit or state.finished:
@@ -1375,7 +1400,7 @@ def _box_now(state: RaceState) -> Call | None:
         return None
 
     fuel = _fuel_instruction(state)
-    compound = f" {state.next_compound}." if state.next_compound else ""
+    compound = _tyre_word(state)
     # `to_stop` is not None here, so neither is the lap it came from.
     overdue = state.lap - (state.stint_ends_on_lap or 0)
     if overdue > 0:

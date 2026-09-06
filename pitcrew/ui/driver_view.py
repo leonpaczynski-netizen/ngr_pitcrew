@@ -189,6 +189,10 @@ class DriverState:
     # threshold. Positive is widening.
     split_rates: dict[str, float] | None = None
     compound: str | None = None
+    # The plan's tyre decision for the coming stop: True a set goes on, False
+    # fuel only, None the plan did not say. Shown in the box panel beside the
+    # compound so "RS" cannot be read as "fit RS" when the plan says not to.
+    tyres_at_stop: bool | None = None
     laps_to_box: float | None = None
     box_on_lap: int | None = None
     laps_of_fuel: float | None = None
@@ -720,8 +724,15 @@ class _BoxPanel(QWidget):
         # for the next stint - which is the honest state after a mid-race
         # replan - so the board told him there was no plan while one was being
         # executed.
-        if state.compound:
-            self.tyre_stat.show_value(state.compound, "plan")
+        if state.tyres_at_stop is False:
+            # The plan's decision in the box is "fuel only". Said as the
+            # decision, not as a compound - the compound on the car is what
+            # stays on it.
+            self.tyre_stat.show_value("NO TYRES", "plan · fuel only")
+        elif state.compound:
+            self.tyre_stat.show_value(
+                state.compound,
+                "plan · new set" if state.tyres_at_stop else "plan")
         elif state.has_plan:
             self.tyre_stat.show_value("--", "the plan names no compound")
         else:

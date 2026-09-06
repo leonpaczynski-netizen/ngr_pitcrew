@@ -5007,6 +5007,9 @@ class PitCrewController(QObject):
             # own as the plan decision it is.
             compound=(state.next_compound if in_box
                       else getattr(state, "tyre_compound", None)),
+            # The plan's tyre decision for the coming stop, as stated, so the
+            # box panel can say "NO TYRES" rather than the compound's name.
+            tyres_at_stop=getattr(state, "next_tyres", None),
             laps_to_box=None if to_stop is None else float(max(0, to_stop)),
             box_on_lap=None if to_stop is None else state.lap + max(0, to_stop),
             laps_of_fuel=state.laps_of_fuel(),
