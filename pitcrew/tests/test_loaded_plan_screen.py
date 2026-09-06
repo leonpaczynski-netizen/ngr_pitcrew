@@ -85,7 +85,8 @@ def test_it_separates_what_he_cannot_see_from_what_he_has_no_rule_for(
 
     card = screen.findChildren(LoadedCard)[0]
     text = " ".join(w.text() for w in card.findChildren(type(screen.footer_note)))
-    assert "cannot see rain, safety car" in text, text
+    assert "cannot see rain at all" in text, text
+    assert "safety car" not in text, "retired from TRIGGERS on 7 Sep 2026"
     assert "tell him" in text
     assert "No rule from the desk" in text
     assert "falls back to his own" in text

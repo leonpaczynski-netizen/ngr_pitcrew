@@ -99,6 +99,14 @@ Versions, and what upgrading means here:
   asks this of every row on every redraw and cannot answer it from a 400 KB
   compressed buffer.
 
+* **v16** adds `gap_reads`: every gap the pit wall read off the leaderboard,
+  with the road position it was read at.  **One brand-new table and nothing
+  else**, so like v6 and v12 there is no migration function.  It exists
+  because the 6 Sep 2026 Deep Forest race - seven laps held up behind P2 -
+  cannot be replayed with its gaps: the wall read them on 154 frames and
+  kept none.  A gap with no track position cannot be binned into sectors
+  afterwards, and the position cannot be recovered - the frame is gone.
+
   A lap whose sectors are refused is left null and **its `sector_model` is left
   null too**, so a later run tries it again rather than recording a refusal as
   a settled answer.  `laps` is not rebuilt - `lap_frames` cascades off it.
@@ -114,7 +122,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -925,6 +933,23 @@ CREATE TABLE IF NOT EXISTS rival_stops (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rival_stops_driver ON rival_stops(driver);
+
+-- Every gap the pit wall read, with where on the road it was read. NULL where
+-- the ruler could not say - never 0, which is the start line.
+CREATE TABLE IF NOT EXISTS gap_reads (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    lap         INTEGER,                 -- OUR lap in progress when read
+    side        TEXT    NOT NULL,        -- 'ahead' | 'behind'
+    gap_s       REAL    NOT NULL,
+    track_m     REAL,                    -- ego lap distance, integrated
+    at_s        REAL,                    -- monotonic clock, the join key
+    position    INTEGER,
+    subject     TEXT,                    -- the roster's id for the car, as text
+    recorded_at TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gap_reads_session ON gap_reads(session_id, lap);
 
 CREATE TABLE IF NOT EXISTS series_teammates (
     -- One team mate per series. **A row, not a flag on the driver**: being

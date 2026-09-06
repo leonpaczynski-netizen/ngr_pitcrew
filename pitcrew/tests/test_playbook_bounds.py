@@ -155,6 +155,107 @@ def test_a_granted_structural_instruction_survives():
     assert race._within_the_playbook(call).structural_action == "add_stop"
 
 
+# ------------------------------------------- the calls that ride the rail
+
+def _fuelled_to_the_flag(plan) -> RaceCoordinator:
+    """Lap 8 of 20 with a fuel-bound stop planned at 10 and 60 L aboard
+    against 3 L a lap: the stop is not needed."""
+    race = RaceCoordinator(plan)
+    state = race.state
+    state.lap, state.laps_total = 8, 20
+    state.stint_ends_on_lap = 10
+    state.fuel_l, state.fuel_per_lap_l = 60.0, 3.0
+    state.plan_binding_constraint = "fuel"
+    return race
+
+
+def test_stops_off_is_a_drop_stop_and_the_desk_can_withhold_it():
+    """The Daytona handover says `fuel_long: report_only`. Executed, that is
+    the litres without the instruction - and the stops stay in the plan."""
+    from pitcrew.race.calls import STOPS_OFF, _stops_off
+
+    race = _fuelled_to_the_flag(a_plan([an_entry(trigger="fuel_long",
+                                                 action="report_only",
+                                                 when="more than a lap over")]))
+    call = _stops_off(race.state)
+    assert call is not None and call.kind == STOPS_OFF
+    assert call.structural_action == "drop_stop" and call.trigger == "fuel_long"
+
+    heard = race._within_the_playbook(call)
+    assert heard.call == "You're fuelled to the flag."
+    assert heard.reason == call.reason, "the litres are the report"
+    assert heard.structural_action is None
+
+
+def test_stops_off_granted_keeps_the_instruction():
+    from pitcrew.race.calls import _stops_off
+
+    race = _fuelled_to_the_flag(a_plan([an_entry(trigger="fuel_long",
+                                                 action="drop_stop",
+                                                 when="more than a lap over")]))
+    heard = race._within_the_playbook(_stops_off(race.state))
+    assert heard.call == "You're fuelled to the flag. No more stops on fuel."
+    assert heard.structural_action == "drop_stop"
+
+
+def test_stops_off_with_no_playbook_is_the_report_only():
+    """Absence means no, in the one place it does."""
+    from pitcrew.race.calls import _stops_off
+
+    race = _fuelled_to_the_flag(a_plan())
+    heard = race._within_the_playbook(_stops_off(race.state))
+    assert heard.call == "You're fuelled to the flag."
+
+
+def _at_the_cliff(plan, *, stop_planned: bool) -> RaceCoordinator:
+    race = RaceCoordinator(plan)
+    state = race.state
+    state.lap, state.laps_total = 10, 20
+    state.fuel_l, state.fuel_per_lap_l = 60.0, 5.0
+    state.stint_ends_on_lap = 14 if stop_planned else None
+    for step in range(4):
+        worst = 0.70 + 0.08 * step
+        state.note_wear(6 + step, {"fl": worst - 0.10, "fr": worst - 0.12,
+                                   "rl": worst, "rr": worst - 0.05})
+    return race
+
+
+def test_the_wear_cliff_with_no_stop_planned_is_an_add_stop():
+    from pitcrew.race.calls import WEAR, _wear
+
+    race = _at_the_cliff(a_plan(), stop_planned=False)
+    call = _wear(race.state)
+    assert call is not None and call.kind == WEAR and call.tag == "cliff"
+    assert call.structural_action == "add_stop" and call.trigger == "tyre_short"
+
+    heard = race._within_the_playbook(call)
+    assert heard.call == "Tyres past the stint limit.", \
+        "no playbook: the reading reaches him, the pit lane does not"
+    assert "measured at" in heard.reason
+
+
+def test_the_wear_cliff_granted_under_tyre_short_boxes_him():
+    from pitcrew.race.calls import _wear
+
+    race = _at_the_cliff(a_plan([an_entry(trigger="tyre_short",
+                                          action="add_stop",
+                                          when="past the stint limit")]),
+                         stop_planned=False)
+    heard = race._within_the_playbook(_wear(race.state))
+    assert heard.call == "Box this lap."
+    assert heard.structural_action == "add_stop"
+
+
+def test_the_wear_cliff_with_a_stop_ahead_brings_it_forward_for_free():
+    """Timing, not shape: the stop exists and comes earlier."""
+    from pitcrew.race.calls import _wear
+
+    race = _at_the_cliff(a_plan(), stop_planned=True)
+    call = _wear(race.state)
+    assert call.structural_action is None
+    assert race._within_the_playbook(call).call == "Box this lap."
+
+
 def test_the_gate_is_still_wired_into_the_call_the_driver_gets():
     """**The mutant that survived the first draft of this file**, kept.
 

@@ -34,13 +34,20 @@ from dataclasses import dataclass, field
 # The triggers George is allowed to act on alone. A playbook entry naming
 # anything else is refused rather than ignored, because a rule the driver
 # believes is armed and which silently is not is worse than no rule.
+#
+# **`safety_car` was retired on 7 Sep 2026.** GT7 broadcasts no flag state in
+# any packet format and the league has no lobby setting for one, so it was a
+# trigger that could never fire, listed under *unhandled* on every card as if
+# a rule were missing. `tyre_short` joined the same day: the wear cliff's
+# "Box this lap" adds a stop when none was planned, and an added stop is one
+# of the structural four, so it needs a trigger the desk can grant it under.
 TRIGGERS = (
     "fuel_short",        # the tank will not reach the flag or the next stop
     "fuel_long",         # more fuel aboard than the plan needs
     "stop_missed",       # the planned pit lap has gone by
     "incident",          # time lost to an off, a spin or contact
     "rain",              # the surface is wet and the plan assumed dry
-    "safety_car",        # the field has been neutralised
+    "tyre_short",        # the tyres will not reach the planned stop or the flag
 )
 
 # What George may do about one. Deliberately short: every entry here is

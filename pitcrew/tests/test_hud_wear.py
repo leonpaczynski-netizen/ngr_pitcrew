@@ -506,12 +506,16 @@ def test_a_fresh_set_cuts_the_series():
         assert len(sampler.series) >= 2
         source.results = [(fresh, None)]
         deadline = time.time() + 2.0
-        while time.time() < deadline and len(sampler.series) != 1:
+        # Cut on the SECOND fresh reading (7 Sep 2026): the series restarts
+        # with both of them, never with one.
+        while time.time() < deadline and not (
+                sampler.series
+                and all(v == 0.0 for v in sampler.series[0][1].values())):
             time.sleep(0.01)
     finally:
         sampler.stop()
-    assert len(sampler.series) == 1
-    assert all(v == 0.0 for v in sampler.series[0][1].values())
+    assert 2 <= len(sampler.series)
+    assert all(v == 0.0 for _, wear in sampler.series for v in wear.values())
 
 
 def test_interval_zero_keeps_the_original_behaviour():
@@ -579,8 +583,15 @@ def test_a_real_tyre_change_still_cuts_the_series():
     """Session 52's stop: every corner back to a tenth or less."""
     sampler = a_sampler()
     assert _kept(sampler, {"fl": 0.77, "fr": 0.50, "rl": 0.87, "rr": 0.69})
-    assert _kept(sampler, {"fl": 0.07, "fr": 0.07, "rl": 0.10, "rr": 0.07})
-    assert len(sampler.series) == 1, "the series should have been cut"
+    # The first fresh-shaped reading is held (an all-four-corners zero is a
+    # documented locator failure); the second cuts the series, and both
+    # readings start the new set.
+    assert not _kept(sampler, {"fl": 0.07, "fr": 0.07, "rl": 0.10, "rr": 0.07})
+    assert sampler._held_last
+    assert len(sampler.series) == 1, "held, not cut - the old set stands"
+    assert _kept(sampler, {"fl": 0.14, "fr": 0.07, "rl": 0.14, "rr": 0.13})
+    assert len(sampler.series) == 2, "the series should have been cut"
+    assert sampler.series[0][1]["fl"] == 0.07
 
 
 def test_quantisation_alone_never_refuses_a_reading():
@@ -617,9 +628,13 @@ def test_the_known_good_race_is_accepted_end_to_end():
              (0.53, 0.33, 0.57, 0.47), (0.58, 0.40, 0.62, 0.53)]
     sampler = a_sampler()
     for fl, fr, rl, rr in stint + after:
-        assert _kept(sampler, {"fl": fl, "fr": fr, "rl": rl, "rr": rr}), (
+        kept = _kept(sampler, {"fl": fl, "fr": fr, "rl": rl, "rr": rr})
+        # The first reading after the stop is held for its second, which is
+        # not a refusal: nothing is lost from the series.
+        assert kept or sampler._held_last, (
             f"refused a reading from the race the model rests on: {fl, fr, rl, rr}")
-    # The stop cut the series, so only the second stint is left in it.
+    # The stop cut the series, so only the second stint is left in it - all
+    # of it, the held reading included.
     assert len(sampler.series) == len(after)
 
 

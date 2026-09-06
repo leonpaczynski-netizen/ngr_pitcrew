@@ -57,13 +57,21 @@ from dataclasses import dataclass, replace
 from pitcrew.race.calls import (
     CLOSING,
     HIGH,
+    LOW,
     MEDIUM,
     REJOIN,
     RIVAL_BOXED,
     RIVAL_COMMITTED,
     RIVAL_SHORT,
+    SECTOR_SPLIT,
     STAY_OUT_FUEL,
+    UNDERCUT,
+    WEAR_STINT_LIMIT,
     Call,
+    _crossing_the_line,
+    _laps_after_this_stop,
+    fuel_to_flag_l,
+    stop_still_needed,
 )
 from pitcrew.race.gaps import (
     MIN_LAPS_FOR_TREND,
@@ -601,6 +609,163 @@ def closing_call(trend: GapTrend, *, lap: int, who: str | None = None,
                 reason, MEDIUM, tag=tag)
 
 
+# --------------------------------------------------- where he has us
+
+# Held up: the car ahead inside this many seconds on this many consecutive
+# laps. A second and a half is a car length or two at racing speed on a
+# 90 s lap - inside it the gap reads as traffic, not as pace.
+HELD_UP_GAP_S = 1.5
+HELD_UP_LAPS = 3
+
+
+def _sector_names(numbers) -> str:
+    words = [str(n + 1) for n in numbers]
+    if len(words) <= 1:
+        return "".join(words)
+    return ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def _split(state):
+    """`(gains, losses, laps)` from the sector map, or None without evidence.
+
+    Gains are sectors where the gap to him SHRINKS outside its own noise;
+    losses where it grows. Both are `Bin`s. `None` until the map has the
+    laps and the cuts to say anything.
+    """
+    sector_map = getattr(state, "sector_map", None)
+    cuts = getattr(state, "sector_cuts_m", None)
+    if sector_map is None or not cuts:
+        return None
+    try:
+        sectors = sector_map.sectors(cuts)
+    except Exception:
+        return None
+    said = [s for s in sectors if s.worth_saying]
+    if not said:
+        return None
+    gains = [s for s in said if s.gaining]
+    losses = [s for s in said if not s.gaining]
+    return gains, losses, max(s.laps for s in said)
+
+
+def sector_split_call(state) -> Call | None:
+    """Where round the lap we take time out of him, and where he takes it back.
+
+    A FACT, once a stint per rival: the HUD shows one gap, and never which
+    stretch of road it moved on. Deep Forest, 6 Sep 2026: seven laps behind
+    P2, quicker through the first two sectors every lap and losing it all
+    back in the third, and the wall read the gap on 154 frames and said
+    nothing about where.
+    """
+    if state.in_pit or state.finished:
+        return None
+    trend = _snapshot(getattr(state, "gap_ahead", None))
+    if trend is None or trend.latest() is None:
+        return None
+    split = _split(state)
+    if split is None:
+        return None
+    gains, losses, laps = split
+    them = state.gap_ahead_name or "the car ahead"
+    tag = f"{SECTOR_SPLIT}:{them}"
+    if tag in state.said_tags:
+        return None
+    if gains and losses:
+        call = (f"Faster than {them} through {_sector_names(g.index for g in gains)}. "
+                f"He has you in {_sector_names(l.index for l in losses)}.")
+        reason = (f"Over {laps} laps: {sum(-g.mean_s for g in gains):.1f} a lap "
+                  f"through {_sector_names(g.index for g in gains)}, "
+                  f"{sum(l.mean_s for l in losses):.1f} back in "
+                  f"{_sector_names(l.index for l in losses)}.")
+    elif gains:
+        call = f"Faster than {them} through {_sector_names(g.index for g in gains)}."
+        reason = f"Over {laps} laps."
+    else:
+        call = f"{them} has you in {_sector_names(l.index for l in losses)}."
+        reason = f"Over {laps} laps."
+    return Call(SECTOR_SPLIT, state.lap, call, reason, MEDIUM, tag=tag)
+
+
+def _held_up(trend, lap: int) -> bool:
+    """Inside `HELD_UP_GAP_S` on the last `HELD_UP_LAPS` consecutive laps."""
+    seen = getattr(trend, "seen", None) or {}
+    if not seen:
+        return False
+    newest = max(seen)
+    if newest < lap - 1:
+        return False                    # the wall has not read this lap
+    laps = [newest - i for i in range(HELD_UP_LAPS)]
+    if any(l not in seen for l in laps):
+        return False
+    return all(0 < seen[l] <= HELD_UP_GAP_S for l in laps)
+
+
+def undercut_call(state) -> Call | None:
+    """Box now for clear air, on the first lap the tank holds fuel to the flag.
+
+    **The traffic undercut, and it is the driver's own acceptance test for
+    this engineer** (7 Sep 2026): held up behind a car he is faster than
+    through two sectors of three, with the stop still to come, George is to
+    pit him as soon as enough fuel to finish fits in the tank. Every term of
+    it is read, not assumed:
+
+    * held up - the gap inside `HELD_UP_GAP_S` for `HELD_UP_LAPS` laps;
+    * faster - a sector where the gap to him shrinks outside its own noise;
+    * he has not stopped - a rival with a stop on file is a different race;
+    * a stop is still owed and it is the LAST one, so the fill is to the flag
+      and `_laps_the_fill_covers` already says so;
+    * the tank holds it - `fuel_to_flag_l` is None while it does not;
+    * the tyres reach the flag on the briefed rate, or the call says they
+      are unchecked and goes out LOW.
+
+    **Why now costs nothing.** The fill is the flag's laps times the burn
+    less what is aboard, and both fall by one lap's burn per lap - so the
+    litres, and the seconds standing, are the same on every lap from this
+    one to the planned box. Waiting buys nothing and keeps him in the
+    traffic. The tyre undercut CLAUDE.md 5.4 calls weak is not part of the
+    argument and is not claimed.
+    """
+    if state.in_pit or state.finished or _crossing_the_line(state):
+        return None
+    if UNDERCUT in state.said:
+        return None
+    trend = _snapshot(getattr(state, "gap_ahead", None))
+    if trend is None or not _held_up(trend, state.lap):
+        return None
+    them = state.gap_ahead_name or "the car ahead"
+    rival = (state.rivals or {}).get(them)
+    if rival is not None and getattr(rival, "stop", None) is not None:
+        return None
+    split = _split(state)
+    if split is None or not split[0]:
+        return None                     # no measured sector where we gain
+    gains = split[0]
+    if state.stint_ends_on_lap is None or state.lap >= state.stint_ends_on_lap:
+        return None                     # no stop ahead, or it is due: BOX_NOW
+    if state.further_stop_planned is not False:
+        return None                     # only the last stop fills to the flag
+    if not stop_still_needed(state):
+        return None
+    litres = fuel_to_flag_l(state)
+    if litres is None:
+        return None                     # the tank cannot hold the flag yet
+    laps_after = _laps_after_this_stop(state)
+    rate = state.wear_per_lap or state.briefed_wear_per_lap
+    confidence = MEDIUM
+    tyres = ""
+    if rate and laps_after is not None:
+        if laps_after * rate > WEAR_STINT_LIMIT:
+            return None                 # the set will not reach the flag
+    else:
+        confidence = LOW
+        tyres = " Tyre life to the flag unchecked."
+    reason = (f"Undercut on {them}: you're held up, and faster through "
+              f"{_sector_names(g.index for g in gains)}. The fill costs the "
+              f"same now as on lap {state.stint_ends_on_lap}.{tyres}")
+    return Call(UNDERCUT, state.lap, "Box this lap. Fuel to the flag.",
+                reason, confidence, tag=f"{UNDERCUT}:{them}")
+
+
 def candidates(state) -> list:
     """Every rival call true this lap, for `calls.next_call` to rank.
 
@@ -615,7 +780,10 @@ def candidates(state) -> list:
     """
     out = []
     lap = state.lap
-    laps_left = (state.laps_total - lap) if state.laps_total else None
+    # **The one expression** (rule 12): `laps_remaining` corrects for a
+    # crossing that went missing in the pit lane; `laps_total - lap` did
+    # not, and read a lap long on every pit lap at Monza.
+    laps_left = state.laps_remaining()
 
     for rival in (state.rivals or {}).values():
         if not isinstance(rival, Rival):
@@ -654,6 +822,9 @@ def candidates(state) -> list:
     # calls. Offered from lap 1 it said "Stay out. Too much fuel aboard to
     # fill." on the opening lap of every race, which is true, useless, and
     # displaced the cold-tyre warning that opens the race.
+    out.append(sector_split_call(state))
+    out.append(undercut_call(state))
+
     if _a_stop_is_in_question(state):
         out.append(stay_out(
             lap=lap, laps_left=laps_left,

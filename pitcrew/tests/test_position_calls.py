@@ -198,11 +198,22 @@ def test_only_three_facts_are_volunteered_and_each_had_to_be_argued():
     upshift rpm - neither is on any HUD, both are a slope through the frames
     of several laps - and the burn the fill is sized on moved by 8% at Deep
     Forest when they changed, with nothing in the car able to say so.
+
+    **`CHASE` is the fifth, admitted 7 Sep 2026 on the same argument again:**
+    the HUD shows the gap; it does not divide it by the laps left, and it
+    does not know his own lap-to-lap spread. "You need 1.1 a lap, and that
+    is more than your spread" is a computation across laps, not a reading.
+
+    **`SECTOR_SPLIT` is the sixth, admitted 7 Sep 2026 for the driver's own
+    acceptance test:** the HUD shows one gap and never which stretch of
+    road it moved on. "Faster through 1 and 2, he has you in 3" is the gap
+    binned by position over four laps - nothing on any screen says it.
     """
-    from pitcrew.race.calls import CLOSING, SAVING_CHANGE
+    from pitcrew.race.calls import CHASE, CLOSING, SAVING_CHANGE, SECTOR_SPLIT
 
     facts = {kind for kind, reg in REGISTER.items() if reg == FACT}
-    assert facts == {POSITION, STATUS, CLOSING, SAVING_CHANGE}
+    assert facts == {POSITION, STATUS, CLOSING, SAVING_CHANGE, CHASE,
+                     SECTOR_SPLIT}
 
 
 def test_the_box_call_is_an_instruction():

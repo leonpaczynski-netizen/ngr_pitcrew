@@ -88,6 +88,10 @@ class SectorMap:
     subject: object = None
     # bin index -> the per-lap deltas seen in it
     seen: dict[int, list[float]] = field(default_factory=dict)
+    # One dict per lap kept, bin index -> that lap's delta in it. `seen`
+    # loses the lap alignment across bins (a bin with no sample on a lap is
+    # simply absent), and the roll-up into sectors needs each lap whole.
+    lap_sums: list[dict[int, float]] = field(default_factory=list)
     laps_used: int = 0
     laps_dropped: int = 0
 
@@ -98,6 +102,7 @@ class SectorMap:
     def new_session(self) -> None:
         """CLAUDE.md rule 11."""
         self.seen = {}
+        self.lap_sums = []
         self.subject = None
         self.laps_used = self.laps_dropped = 0
 
@@ -113,6 +118,7 @@ class SectorMap:
         if subject is not None and subject != self.subject:
             if self.subject is not None:
                 self.seen = {}
+                self.lap_sums = []
                 self.laps_used = self.laps_dropped = 0
             self.subject = subject
         usable = [(m, g) for m, g in samples
@@ -132,12 +138,33 @@ class SectorMap:
 
         shift = self._offset_bins(usable[0][1], speed_ms)
         per_bin: dict[int, list[float]] = {}
+        origin = usable[0][0]
         for (m0, g0), (m1, g1) in zip(usable, usable[1:]):
-            index = int((m0 - usable[0][0]) / self.bin_length_m)
-            index = max(0, min(self.bins - 1, index - shift))
-            per_bin.setdefault(index, []).append(g1 - g0)
-        for index, deltas in per_bin.items():
-            self.seen.setdefault(index, []).append(sum(deltas))
+            # **A delta that straddles a bin line is shared by distance.**
+            # Credited whole to the bin it started in, a 200 m reading
+            # interval put up to 200 m of one sector's gain into its
+            # neighbour - a third of a lap read a tenth low at Deep Forest
+            # on the reconstruction of 7 Sep 2026.
+            delta = g1 - g0
+            span = m1 - m0
+            if span <= 0:
+                index = int((m0 - origin) / self.bin_length_m)
+                index = max(0, min(self.bins - 1, index - shift))
+                per_bin.setdefault(index, []).append(delta)
+                continue
+            first = int((m0 - origin) / self.bin_length_m)
+            last = int((m1 - origin) / self.bin_length_m)
+            for raw in range(first, last + 1):
+                lo = max(m0, origin + raw * self.bin_length_m)
+                hi = min(m1, origin + (raw + 1) * self.bin_length_m)
+                if hi <= lo:
+                    continue
+                index = max(0, min(self.bins - 1, raw - shift))
+                per_bin.setdefault(index, []).append(delta * (hi - lo) / span)
+        sums = {index: sum(deltas) for index, deltas in per_bin.items()}
+        for index, total in sums.items():
+            self.seen.setdefault(index, []).append(total)
+        self.lap_sums.append(sums)
         self.laps_used += 1
         return True
 
@@ -167,6 +194,36 @@ class SectorMap:
     def all_bins(self) -> list[Bin]:
         return [b for b in (self.bin_at(i) for i in range(self.bins))
                 if b is not None]
+
+    def sectors(self, cuts_m) -> list[Bin]:
+        """The bins rolled up into the circuit's own sectors.
+
+        `cuts_m` are the sector lines from the start, metres - the same two
+        numbers the lap rows' sector times were cut at, so "faster through
+        1 and 2" means the sectors the driver already sees on his rack. A
+        bin belongs to the sector its centre falls in. Each sector's mean
+        and standard error come from its per-lap sums, so a sector is
+        judged on the same footing as a bin: `worth_saying` is twice its
+        own standard error, over `MIN_LAPS` laps.
+        """
+        lines = [float(c) for c in (cuts_m or ())]
+        edges = [0.0] + lines + [self.circuit_length_m]
+        out = []
+        for number in range(len(edges) - 1):
+            lo, hi = edges[number], edges[number + 1]
+            members = [i for i in range(self.bins)
+                       if lo <= (i + 0.5) * self.bin_length_m < hi]
+            per_lap = [sum(lap.get(i, 0.0) for i in members)
+                       for lap in self.lap_sums
+                       if any(i in lap for i in members)]
+            if not per_lap:
+                continue
+            mean = sum(per_lap) / len(per_lap)
+            spread = statistics.stdev(per_lap) if len(per_lap) > 1 else 0.0
+            error = spread / (len(per_lap) ** 0.5)
+            out.append(Bin(index=number, from_m=lo, to_m=hi, mean_s=mean,
+                           standard_error_s=error, laps=len(per_lap)))
+        return out
 
     def worth_saying(self, most: int = 2) -> list[Bin]:
         """The strongest bins past the standard-error gate, biggest first.

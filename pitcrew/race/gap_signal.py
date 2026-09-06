@@ -75,6 +75,9 @@ class GapSample:
     position: int | None = None
     subject: object = None           # who the gap is TO
     ok: bool = True
+    # "ahead" or "behind". Without it the two trends' samples were one list
+    # that nothing could split again, and the sector map bins the car AHEAD.
+    side: str = "ahead"
 
 
 @dataclass

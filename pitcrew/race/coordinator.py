@@ -756,6 +756,9 @@ class RaceCoordinator:
         # boundary contains the STEP between stints (7.32 -> 7.8-8.1 at Deep
         # Forest), which this codebase's own rule says is not scatter; a
         # margin sized on it buys fuel against a fault that does not exist.
+        # The lap-to-lap spread, for the chase call to state its noise.
+        sigma_ms = self.expect.sigma_ms()
+        self.state.lap_sigma_s = (sigma_ms / 1000.0) if sigma_ms else None
         measured_sd = (self.expect.stint_fuel_sd_l()
                        if self.expect.stint_fuel_per_lap_l() is not None
                        else self.expect.race_fuel_sd_l())
@@ -904,12 +907,34 @@ class RaceCoordinator:
         log("race").info("rival entered the lane: %s on %s L, lap %s",
                          entered.driver, entered.fuel_in_l, entered.lap)
 
+    def note_circuit(self, length_m: float | None,
+                     sector_cuts_m=None) -> None:
+        """The circuit's length and sector lines, for binning the gap.
+
+        Without the length no lap can be judged against the circuit and the
+        sector map is never built; without the cuts the map cannot speak in
+        the sectors on his rack. Both come from the store, through the
+        controller, once per race.
+        """
+        from pitcrew.race.sectors import SectorMap
+
+        if not length_m:
+            return
+        self.state.sector_map = SectorMap(circuit_length_m=float(length_m))
+        self.state.sector_cuts_m = (tuple(float(c) for c in sector_cuts_m)
+                                    if sector_cuts_m else None)
+
     def note_gaps(self, ahead=None, behind=None,
-                  ahead_name=None, behind_name=None) -> None:
+                  ahead_name=None, behind_name=None,
+                  ahead_samples=None) -> None:
         """The two gap trends the board reader keeps, and whose they are.
 
         Guarded like its two siblings: a gap noted before the green or after
         the flag describes a race that is not being run.
+
+        `ahead_samples` are the lap just driven's `(track_m, gap_s)` readings
+        of the car ahead, in order, folded into the sector map - which drops
+        a lap whole when its span does not look like the circuit.
         """
         if not self.running:
             return
@@ -917,6 +942,13 @@ class RaceCoordinator:
         self.state.gap_behind = behind
         self.state.gap_ahead_name = ahead_name
         self.state.gap_behind_name = behind_name
+        sector_map = self.state.sector_map
+        if sector_map is not None and ahead_samples:
+            subject = getattr(ahead, "subject", None)
+            try:
+                sector_map.note_lap(list(ahead_samples), subject=subject)
+            except Exception:
+                log("race").exception("the sector map could not take the lap")
 
     def note_rival_positions(self, positions: dict) -> None:
         """Where the other cars are, refreshed each lap from the board.
@@ -1774,20 +1806,27 @@ class RaceCoordinator:
         The rail is for the four that are not reversible - see
         `handover.STRUCTURAL_ACTIONS`.
 
-        Nothing today rides a structural instruction on a call, so this is a
-        seam rather than a filter. It is kept, and kept called, because the
-        one defect this whole area has produced twice is a gate that existed,
-        was correct, and reached no race.
+        **Two calls ride one, as of 7 Sep 2026.** `STOPS_OFF` is a
+        `drop_stop` under `fuel_long`; the wear cliff's "Box this lap" is an
+        `add_stop` under `tyre_short` when no stop was planned. Withheld,
+        each falls back to its `report_form` - the reading, the litres - so
+        the driver hears what was seen and decides the shape himself. That
+        is the Daytona handover's `fuel_long: report_only`, executed.
+
+        **The trigger is the call's own**, not its kind: no kind is a
+        trigger, so the old lookup refused everything the desk had granted.
         """
         if call is None or not call.structural_action:
             return call
-        if self._may(call.kind.replace("-", "_"), call.structural_action):
+        trigger = call.trigger or call.kind.replace("-", "_")
+        if self._may(trigger, call.structural_action):
             return call
         log("race").info(
             "structural instruction %r withheld on a %r call: the playbook "
-            "does not grant it. The call still says what it saw.",
-            call.structural_action, call.kind)
-        return replace(call, structural_action=None)
+            "does not grant it under %r. The call still says what it saw.",
+            call.structural_action, call.kind, trigger)
+        return replace(call, structural_action=None,
+                       call=call.report_form or call.call)
 
     def _saving_response(self) -> Call | None:
         asked = getattr(self, "_saving_asked_lap", None)

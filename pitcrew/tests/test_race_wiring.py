@@ -487,7 +487,7 @@ def test_the_replan_narrows_and_then_stands_down_rather_than_blocking(raced):
     assert controller._replan_max_stops == 0
 
 
-def test_an_oversized_search_narrows_before_it_stands_down(raced):
+def test_an_oversized_search_narrows_before_it_stands_down(raced, monkeypatch):
     """**The pre-solve guard used to skip the narrowing rung entirely.**
 
     It cost the Monza race of 18 Aug 2026 its whole adaptation. A third
@@ -509,6 +509,13 @@ def test_an_oversized_search_narrows_before_it_stands_down(raced):
     )
 
     controller, _, _, _ = raced
+    # **This test is about the pre-solve ESTIMATE, not the wall clock.** The
+    # post-hoc budget (`_note_replan_cost`, 50 ms) climbs the same ladder,
+    # and under full-suite load the narrowed solve itself can take longer
+    # than that - so the test stood down for a reason it was not testing.
+    # Reproduced on a clean checkout of 418deb4, 7 Sep 2026; the sibling
+    # test above covers the clock rung explicitly.
+    monkeypatch.setattr("pitcrew.controller.REPLAN_BUDGET_S", 10.0)
     controller.start_race()
     green(controller)
     inputs = controller._race_inputs

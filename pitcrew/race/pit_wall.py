@@ -344,6 +344,17 @@ class PitWall:
         except Exception:                                    # pragma: no cover
             _log.exception("pit-wall: the entry hook raised")
 
+    def take_samples(self) -> list[GapSample]:
+        """Every gap reading since the last take, and the list is cleared.
+
+        Drained on our crossing by the controller, which files them and
+        hands the lap's samples to the sector map. **Taken and cleared in
+        one**, so a lap's readings are never folded in twice. Worker thread
+        appends and the Qt thread takes; the swap is a single rebinding.
+        """
+        taken, self.samples = self.samples, []
+        return taken
+
     def new_session(self) -> None:
         """Forget the last race. Everything here is about one of them.
 
@@ -550,7 +561,7 @@ class PitWall:
                 self.samples.append(GapSample(
                     at_s=now, gap_s=gap, track_s=at_m, lap=lap,
                     position=own_place, subject=who,
-                    ok=True))
+                    ok=True, side=trend.side))
 
         for driver in identified - in_lane:
             self._seen_clean.add(driver)

@@ -58,6 +58,38 @@ def test_the_drivers_word_overrules_the_session_and_is_written_back():
     assert state.tyre_change_write_back == (13, False, "driver: no tyres")
 
 
+def test_no_tyres_puts_the_old_set_back_under_the_projection():
+    """Critic pass 4: the ledger said his word stood while the live wear
+    projection still counted the set as fresh - `clear_stint(True)` had
+    zeroed the count and emptied the history, and the overrule restored
+    neither. The old laps and readings come back, ahead of the new ones."""
+    state = RaceState(lap=13, laps_since_stop=13,
+                      wear_history=[(11, {"fr": 0.38}), (12, {"fr": 0.42})],
+                      temp_history=[(12, 80.0, 84.0)])
+    clear_stint(state, tyres_changed=True)
+    assert state.laps_since_stop == 0 and state.wear_history == []
+    # Two laps run and one reading taken on what the session thinks is a
+    # fresh set.
+    state.lap = 15
+    state.laps_since_stop = 2
+    state.note_wear(15, {"fr": 0.47})
+    state.note_tyres_word(False, lap=15)
+    assert state.laps_since_stop == 15, "13 before the stop plus 2 since"
+    assert [lap for lap, _ in state.wear_history] == [11, 12, 15]
+    assert state.temp_history == [(12, 80.0, 84.0)]
+    assert state.stint_before_stop is None
+
+
+def test_new_tyres_confirmed_drops_the_held_old_set():
+    state = RaceState(lap=13, laps_since_stop=13,
+                      wear_history=[(12, {"fr": 0.42})])
+    clear_stint(state, tyres_changed=True)
+    state.lap = 15
+    state.note_tyres_word(True, lap=15)
+    assert state.stint_before_stop is None
+    assert state.wear_history == []
+
+
 def test_a_driver_overrule_of_the_gauge_names_the_stop_and_the_count():
     state = _open_stop()
     state.note_wear(14, {"fr": 0.45})

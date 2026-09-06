@@ -123,6 +123,23 @@ SAVING_RESPONSE = "saving-response"
 # **The driver has stopped saving on his own** - the lift-and-coast or the
 # hand short-shift has gone, measured off the frames, and the burn with it.
 SAVING_CHANGE = "saving-change"
+# **The chase.** A car ahead inside the window with few laps left: the gap,
+# the laps, and what he has to find per lap - stated against his own
+# lap-to-lap spread so a target inside the noise is not heard as one he can
+# drive to. Deep Forest, 6 Sep 2026: seven laps chasing P2 with the wall
+# reading the gap on 154 frames, and not one of them spoken.
+CHASE = "chase"
+# **Where round the lap the car ahead has us, and where we have him.** The
+# gap binned by road position over laps, rolled up into the circuit's own
+# sectors. A fact: "Faster than Boxhead through 1 and 2. He has you in 3."
+SECTOR_SPLIT = "sector-split"
+# **The undercut, as it exists in GT7.** Not the tyre undercut - CLAUDE.md
+# 5.4 says that one is weak here and it is not imported. This is the
+# TRAFFIC undercut: held up behind a car we are faster than, with the stop
+# still to come, the fill costs the same standing time on any lap from the
+# first one the tank can hold fuel to the flag on - so the stop is taken NOW
+# and buys clear air, and he pays the same toll later.
+UNDERCUT = "undercut"
 CHEQUER = "chequer"
 # **"Two to go" and "Last lap", which only an accurate clock makes sayable.**
 # GT7's own race clock is not accurate - the driver measured it - so a timed
@@ -160,7 +177,13 @@ RIVAL_COMMITTED = "rival-committed"
 RIVAL_SHORT = "rival-short"
 STAY_OUT_FUEL = "stay-out-fuel"
 
-URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
+URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW,
+           # **`UNDERCUT` sits directly below `BOX_NOW`.** It is a box
+           # instruction that brings the planned stop forward, so a stop
+           # already due wins, and a fuel shortfall is an argument FOR it
+           # rather than against - the fill it asks for is to the flag.
+           UNDERCUT,
+           FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            # **`STAY_OUT_FUEL` sits immediately below `BOX_SOON`, because it
            # is the argument against it.** The two answer the same question
            # and must be adjacent, or the driver hears them in an order that
@@ -194,6 +217,10 @@ URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW, FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
            FUEL_LONG, INCIDENT, WEAR, TYRE_TEMP,
            # A fact about his own driving, below every call about the car.
            SAVING_CHANGE,
+           # And the chase, below it: news about the car ahead, not about ours.
+           CHASE,
+           # And where he has us: said once a stint, and it can wait a lap.
+           SECTOR_SPLIT,
            # **A rival's stop ranks below every call about our own car**, and
            # below the incident and the wear note too. It is the only thing
            # here that is about somebody else: a car of ours about to run dry,
@@ -258,6 +285,9 @@ REGISTER = {
     STAY_OUT: DECISION,
     SAVING_RESPONSE: DECISION,
     SAVING_CHANGE: FACT,
+    CHASE: FACT,
+    SECTOR_SPLIT: FACT,
+    UNDERCUT: DECISION,
     WEAR: DECISION,
     TYRE_TEMP: DECISION,
     TYRE: DECISION,
@@ -499,15 +529,30 @@ class Call:
     short_shift_drop_rpm: float | None = None
     # **A change to the plan's SHAPE riding on this call**, named from
     # `handover.STRUCTURAL_ACTIONS`, or None where the call changes nothing
-    # structural - which is every call today.
+    # structural. Two calls carry one as of 7 Sep 2026: `STOPS_OFF` is a
+    # `drop_stop`, and the wear cliff's "Box this lap" is an `add_stop` when
+    # no stop was planned. The stay-out fold carries none on purpose - see
+    # `handover.STRUCTURAL_ACTIONS`: it recognises a stop the driver has
+    # already declined, it does not take one.
     #
     # It exists because the rail has to gate something nameable. George may
     # not add a stop, drop a reachable one, change compound or abandon the
     # plan unless the desk wrote it down, and a gate needs the instruction to
     # be a field it can strip rather than a side effect it cannot see. The
-    # words are never stripped; only this is. See
+    # report is never stripped; the instruction is - see `report_form` and
     # `RaceCoordinator._within_the_playbook`.
     structural_action: str | None = None
+    # The playbook trigger the structural action rides under, from
+    # `handover.TRIGGERS`. The gate used to look the call's KIND up as a
+    # trigger, and no kind is one, so every structural action would have
+    # been refused whatever the desk granted.
+    trigger: str | None = None
+    # **What the call says when the desk withheld the action.** The report
+    # without the instruction: "You're fuelled to the flag." without "No
+    # more stops on fuel." A call that carries a structural action and no
+    # report form keeps its words when stripped, which is the old behaviour
+    # and means the rail changed nothing audible.
+    report_form: str | None = None
 
     def spoken(self) -> str:
         """Instruction, then reason. Then the one word that marks a register.
@@ -628,6 +673,12 @@ class RaceState:
     # thread boundary, so the translation happens where the roster is.
     gap_ahead_name: str | None = None
     gap_behind_name: str | None = None
+    # **The gap to the car ahead binned by road position** - a
+    # `sectors.SectorMap`, fed by the coordinator once a lap from the wall's
+    # samples. None until the wall runs. `sector_cuts_m` are the circuit's
+    # sector lines, so the map speaks in the sectors on his rack.
+    sector_map: object = None
+    sector_cuts_m: tuple | None = None
     # **Rivals seen entering the lane, as a queue.** A single slot lost one of
     # two cars entering in the same frame, and was never cleared - so the same
     # lap-8 entry was re-spoken five laps later, after our own stop had reset
@@ -701,6 +752,18 @@ class RaceState:
     # sentence to say, once, and the lap it was first true on.
     saving_change_note: str | None = None
     saving_change_lap: int | None = None
+    # This car's lap-to-lap spread at this circuit, seconds, from the race's
+    # own clean laps (`expectations.sigma_ms`). None until enough laps exist.
+    lap_sigma_s: float | None = None
+    # What the tyre model held the moment a stop was taken as a tyre change:
+    # (laps_since_stop, wear_history, temp_history). Kept so that a driver's
+    # "no tyres" can put the OLD set back under the live projection, not only
+    # onto the record. Critic pass 4, 7 Sep 2026: the ledger said his word
+    # stood while the projection still counted the set as fresh.
+    stint_before_stop: tuple | None = None
+    # The lap the chase line was last said on, so it is said every other lap
+    # and not every crossing.
+    chase_said_lap: int | None = None
     # **What a short-shift is worth on this car, in litres per lap per 1000
     # rpm.** Measured by `tools/shortshift_trade.py` from laps where his own
     # upshift rpm varied: 1.762 on the Porsche at Monza, 95% CI [0.92, 2.60],
@@ -1145,6 +1208,10 @@ class RaceState:
                               or "new tyres" in prior))
             if prior_changed is None or prior_changed == changed:
                 # Nothing to overrule: agreement, or no verdict at all.
+                if changed:
+                    # The old set's model, held against a "no tyres" that is
+                    # not coming, is no longer wanted.
+                    self.stint_before_stop = None
                 if prior is None and stop_lap is not None:
                     pass
                 else:
@@ -1161,7 +1228,23 @@ class RaceState:
             self.wear_history = [(l, w) for l, w in self.parked_wear]
             self.temp_history = []
         else:
+            stashed = self.stint_before_stop
+            if stashed is not None:
+                # The stop had been taken as a tyre change and the old set's
+                # model zeroed. His word says the rubber never left the car,
+                # so the count and the history resume from where they were:
+                # the pre-stop laps plus the laps run since, and the old
+                # readings ahead of whatever the new stint has read.
+                old_laps, old_wear, old_temps = stashed
+                self.laps_since_stop = old_laps + max(0, self.laps_since_stop)
+                self.wear_history = list(old_wear) + list(self.wear_history)
+                self.temp_history = list(old_temps) + list(self.temp_history)
+                log("race").info(
+                    "the old set's model is back under the projection: %d "
+                    "laps on it, %d readings", self.laps_since_stop,
+                    len(self.wear_history))
             self.wear_history.extend(self.parked_wear)
+        self.stint_before_stop = None
         self.tyre_change_resolution = how
         self.tyre_change_unconfirmed = False
         self.unconfirmed_stop_lap = None
@@ -1342,6 +1425,50 @@ def _worth_saying_again(state: RaceState, call: Call) -> bool:
     return call.severity >= was + margin
 
 
+# The chase is spoken while the car ahead is inside this many seconds and
+# the flag is inside this many laps - beyond either there is nothing to drive
+# to yet - and every other lap, so it never fills the radio.
+CHASE_WINDOW_S = 20.0
+CHASE_LAPS = 10
+CHASE_EVERY_LAPS = 2
+
+
+def _chase(state: RaceState) -> Call | None:
+    """The car ahead, the laps left, and the pace it takes - with its noise.
+
+    A FACT: catching him is the driver's decision. What the HUD cannot show
+    him is the division - the gap over the laps left - and whether that
+    number is inside his own lap-to-lap spread, which is the difference
+    between a target and a coin toss. Every other lap, inside the window,
+    and never in the box or on the flag.
+    """
+    if state.in_pit or state.finished or _crossing_the_line(state):
+        return None
+    trend = state.gap_ahead
+    latest = trend.latest() if trend is not None else None
+    if latest is None or latest <= 0 or latest > CHASE_WINDOW_S:
+        return None
+    laps_left = state.laps_remaining()
+    if laps_left is None or laps_left < 1 or laps_left > CHASE_LAPS:
+        return None
+    if (state.chase_said_lap is not None
+            and state.lap - state.chase_said_lap < CHASE_EVERY_LAPS):
+        return None
+    need = latest / laps_left
+    them = state.gap_ahead_name or "the car ahead"
+    laps_word = "lap" if laps_left == 1 else "laps"
+    call = f"{them} {latest:.1f} ahead, {laps_left} {laps_word} to go."
+    reason = f"You need {need:.1f} a lap."
+    sigma = state.lap_sigma_s
+    if sigma:
+        reason += (" That's more than your lap-to-lap spread."
+                   if need > sigma else
+                   " That's inside your lap-to-lap spread.")
+    state.chase_said_lap = state.lap
+    return Call(CHASE, state.lap, call, reason, MEDIUM,
+                tag=f"chase-{state.lap}")
+
+
 def _saving_change(state: RaceState) -> Call | None:
     """He stopped lift-and-coasting, or stopped short-shifting - said once.
 
@@ -1393,6 +1520,7 @@ def _candidates(state: RaceState) -> list[Call | None]:
         _wear(state),
         _tyre_temp(state),
         _saving_change(state),
+        _chase(state),
         *_rivals(state),
         _status(state),
     ]
@@ -1593,9 +1721,13 @@ def _stops_off(state: RaceState) -> Call | None:
         spare = state.fuel_l - remaining * state.fuel_per_lap_l
     reason = (f"{spare:.0f} litres more than the flag needs."
               if spare is not None and spare >= 1 else "")
+    # **A `drop_stop`, under `fuel_long`.** The desk that wrote
+    # `fuel_long: report_only` hears "You're fuelled to the flag." and the
+    # litres, and the stops stay in the plan for the driver to decide.
     return Call(STOPS_OFF, state.lap,
                 "You're fuelled to the flag. No more stops on fuel.",
-                reason)
+                reason, structural_action="drop_stop", trigger="fuel_long",
+                report_form="You're fuelled to the flag.")
 
 
 def _tyre_word(state: RaceState) -> str:
@@ -2350,6 +2482,14 @@ def _wear(state: RaceState) -> Call | None:
 
     # --- past the limit. An instruction, and the reading is enough on its own.
     if consumed >= WEAR_STINT_LIMIT and "cliff" not in state.wear_said:
+        # **An `add_stop` when no stop was planned** - the plan's shape
+        # changes, and the desk has to have granted it under `tyre_short`.
+        # With a stop still ahead this brings it forward, which is timing,
+        # and timing is free. Withheld, the reading still reaches him.
+        unplanned = state.stint_ends_on_lap is None
+        rail = dict(structural_action="add_stop" if unplanned else None,
+                    trigger="tyre_short",
+                    report_form="Tyres past the stint limit.")
         if briefed:
             return Call(
                 WEAR, state.lap,
@@ -2358,14 +2498,14 @@ def _wear(state: RaceState) -> Call | None:
                 f"this compound. No gauge reading this stint.",
                 MEDIUM,
                 severity=consumed,
-                tag="cliff")
+                tag="cliff", **rail)
         return Call(
             WEAR, state.lap,
             "Box this lap.",
             f"{name} measured at {reading * 100:.0f} percent.",
             HIGH,
             severity=consumed,
-            tag="cliff")
+            tag="cliff", **rail)
 
     # --- the tyres run out before the fuel does.
     fuel_laps = state.laps_of_fuel()
@@ -3134,7 +3274,14 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
     state.incident_reported = False
     state.last_stop_lap = state.lap
     state.tyre_change_disagreement = None
+    state.stint_before_stop = None
     if tyres_changed:
+        # Held, not dropped: a "no tyres" from the driver can still overrule
+        # this session's swap detector, and it has to be able to restore
+        # what it overrules (`note_tyres_word`).
+        state.stint_before_stop = (state.laps_since_stop,
+                                   list(state.wear_history),
+                                   list(state.temp_history))
         state.laps_since_stop = 0
         state.tyre_change_unconfirmed = False
         state.unconfirmed_stop_lap = None

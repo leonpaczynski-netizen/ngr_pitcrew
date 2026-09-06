@@ -107,7 +107,8 @@ def test_it_names_what_george_will_not_handle():
     unhandled = h.unhandled()
 
     assert "fuel_short" not in unhandled
-    assert "rain" in unhandled and "safety_car" in unhandled
+    assert "rain" in unhandled and "tyre_short" in unhandled
+    assert "safety_car" not in unhandled, "retired 7 Sep 2026: no channel"
 
 
 def test_unhandled_travels_on_the_stored_form():
@@ -150,4 +151,14 @@ def test_the_drivers_two_refusals_are_not_reachable_as_actions():
 def test_every_trigger_is_something_the_app_can_detect():
     """A trigger the app cannot see is a rule that never fires, which is the
     silent-armed problem again."""
-    assert set(TRIGGERS) >= {"fuel_short", "stop_missed", "incident"}
+    assert set(TRIGGERS) >= {"fuel_short", "stop_missed", "incident",
+                             "tyre_short"}
+    assert "safety_car" not in TRIGGERS, \
+        "no flag state in any packet, no lobby setting - retired 7 Sep 2026"
+
+
+def test_a_stored_safety_car_entry_is_refused_not_crashed():
+    """Strategies 15 and 16 on the live file carry one. They are raced and
+    gone; loading them must name the problem, not raise."""
+    problems = an_entry(trigger="safety_car").validate()
+    assert problems and "safety_car" in problems[0]

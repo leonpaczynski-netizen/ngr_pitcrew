@@ -1579,6 +1579,17 @@ class LiveWearSampler:
         # `REFUSALS_BEFORE_RESEED`.
         self._refused_running = 0
         self._last_free_log = 0.0
+        # **A fresh-set reading, held until a second agrees.** A drop to zero
+        # on all four corners was accepted instantly while a rise was refused
+        # twelve times - and an all-four-corners 0.000 is a documented
+        # failure of the locator, so the series was cut on a misread nine
+        # times in one race (Deep Forest, 6 Sep 2026). Symmetric now: the cut
+        # waits for the next accepted reading to agree.
+        self._pending_fresh: tuple[float, Reading] | None = None
+        # Whether the last `_keep` HELD its reading rather than refusing it.
+        # The callers count a refusal as a blind sample; a held reading is a
+        # good reading awaiting its second, and must not.
+        self._held_last = False
 
     def new_session(self) -> None:
         """Forget what has already been said about the gauge being blind.
@@ -1604,6 +1615,7 @@ class LiveWearSampler:
         self.series = []
         self._refused_running = 0
         self._latest = None
+        self._pending_fresh = None
 
     def start(self) -> None:
         """Start the reader. A no-op while one is already running.
@@ -1713,7 +1725,7 @@ class LiveWearSampler:
             # `new_session` exists.
             return
         if reading.ok:
-            if not self._keep(now, reading):
+            if not self._keep(now, reading) and not self._held_last:
                 self._saw_nothing()
             return
         self._saw_nothing()
@@ -1780,6 +1792,7 @@ class LiveWearSampler:
         Returns whether it was kept. A reading the gauge cannot physically
         have produced is refused here rather than filed - see `_coherent`.
         """
+        self._held_last = False
         accept, fresh, why = self._coherent(reading.wear)
         if not accept:
             self._refused_running += 1
@@ -1806,11 +1819,31 @@ class LiveWearSampler:
         self._refused_running = 0
         self._nothing_seen = 0
         if fresh:
+            pending = self._pending_fresh
+            if pending is None:
+                # The first reading that looks like a new set: held, not
+                # believed. The series and the held reading stay the old
+                # set's until the next reading says the same.
+                self._pending_fresh = (at, reading)
+                self._held_last = True
+                _log.info("hud-wear: a fresh-set reading (worst %.0f%%) is "
+                          "held until the next reading agrees",
+                          max(v for v in reading.wear.values()
+                              if v is not None) * 100)
+                return False
+            self._pending_fresh = None
             _log.info("hud-wear: fresh set - every corner back to "
-                      "%.0f%% or less",
+                      "%.0f%% or less, on two readings",
                       max(v for v in reading.wear.values() if v is not None)
                       * 100)
-            self.series = []
+            self.series = [(pending[0], dict(pending[1].wear))]
+        else:
+            # A reading that follows the OLD series: whatever was held as a
+            # fresh set was the locator, not the tyres.
+            if self._pending_fresh is not None:
+                _log.info("hud-wear: the held fresh-set reading did not repeat "
+                          "- discarded")
+            self._pending_fresh = None
         self._latest = (at, reading)
         self.series.append((at, dict(reading.wear)))
         # **Refusals were logged and accepts were not, which is why the
@@ -1856,6 +1889,14 @@ class LiveWearSampler:
                 self._failed(f"lap {lap_id}: {reading.reason}")
                 return
             if reading.ok and not self._keep(now, reading):
+                if self._held_last:
+                    # A fresh-set reading held for its second. Not blind, not
+                    # refused, and not this lap's figure either: the price of
+                    # not cutting the series on one all-zero misread is one
+                    # lap's point after a real change, in per-lap sampling.
+                    _log.info("hud-wear: lap %s: fresh-set reading held for "
+                              "the next to agree", lap_id)
+                    return
                 # Readable, and not of the gauge. **Not blind and not a source
                 # failure**: the source is fine and the next grab may well be
                 # good, so this does not tell the driver the gauge has gone

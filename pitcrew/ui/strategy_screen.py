@@ -235,11 +235,12 @@ class PlanCard(QWidget):
         painter.end()
 
 
-# Triggers the feed carries nothing for. GT7 broadcasts no weather and no
-# flag state in any packet format, so George cannot detect either whatever a
-# playbook says - and the card must say "he cannot see it", not "he has no
-# rule", because those ask different things of the driver.
-CANNOT_SEE = ("rain", "safety_car")
+# Triggers the feed carries nothing for. GT7 broadcasts no weather in any
+# packet format, so George cannot detect rain whatever a playbook says - and
+# the card must say "he cannot see it", not "he has no rule", because those
+# ask different things of the driver. (The safety car left `TRIGGERS` on
+# 7 Sep 2026 for the same reason, so it no longer needs saying here.)
+CANNOT_SEE = ("rain",)
 
 
 class LoadedCard(QWidget):
@@ -342,7 +343,13 @@ class LoadedCard(QWidget):
                     + (f", until {entry.until}" if entry.until else ""),
                     size=13, colour=theme.CRAYON, wrap=True))
 
-        unhandled = handover.get("unhandled") or []
+        # **Recomputed against today's triggers**, not read off the stored
+        # row: a handover stored before a trigger was retired or added would
+        # otherwise show a gap that no longer exists, or hide one that does.
+        from pitcrew.strategy.handover import TRIGGERS
+
+        covered = {entry.trigger for entry in entries}
+        unhandled = [t for t in TRIGGERS if t not in covered]
         blind = [t for t in unhandled if t in CANNOT_SEE]
         no_rule = [t for t in unhandled if t not in CANNOT_SEE]
         if blind:

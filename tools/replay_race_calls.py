@@ -30,8 +30,13 @@ What this can and cannot show:
   the lane before the fill; at Deep Forest and Monza it is after. The harness
   used to hand PIT_ENTRY / lap / PIT_EXIT in one fixed order and could not
   see the difference, which is the one the fill depends on.
-* **It cannot show the gaps or the rival calls**: the pit wall's readings
-  are not persisted (assessment S8), so there is nothing to replay.
+* **It CAN show the gap calls, from the next race on (7 Sep 2026).** The
+  wall's readings are persisted in `gap_reads` with the road position each
+  was taken at, and `--gaps` feeds them back lap by lap: the trend to the car
+  ahead, and the lap's samples into the sector map, so `SECTOR_SPLIT` and
+  the `UNDERCUT` replay exactly as they were - or were not - made. Races
+  recorded before the table existed have nothing to replay, and the harness
+  says so rather than running silent. The rival STOPS are still not fed.
 """
 from __future__ import annotations
 
@@ -41,7 +46,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from pitcrew.analysis.resolve import circuit_key
 from pitcrew.race.coordinator import RaceCoordinator, context_from_stored
+from pitcrew.race.gaps import GapTrend
 from pitcrew.race.calls import (STATUS, fuel_target_basis, fuel_target_l,
                                 fuel_to_flag_l)
 from pitcrew.race.refuel import FILL_MAX_KPH, RefuelWatch
@@ -128,6 +135,8 @@ def main() -> int:
                     help="which race run; default is the longest on file")
     ap.add_argument("--quiet", action="store_true",
                     help="only print the laps he actually hears something on")
+    ap.add_argument("--gaps", action="store_true",
+                    help="feed the wall's persisted gap reads back, lap by lap")
     args = ap.parse_args()
 
     store = Store()
@@ -183,6 +192,23 @@ def main() -> int:
             return 1
         race.state.status_every_laps = args.every
 
+        reads_by_lap: dict[int, list[dict]] = {}
+        if args.gaps:
+            session_id = run["session_id"]
+            reads = store.gap_reads(session_id, side="ahead") if session_id else []
+            if not reads:
+                print("no gap reads on file for this run - the wall kept none "
+                      "(recorded before 7 Sep 2026?)")
+            for read in reads:
+                if read["lap"] is not None:
+                    reads_by_lap.setdefault(int(read["lap"]), []).append(read)
+            key = circuit_key(event["track"], event["layout"]) \
+                if event["track"] else None
+            model = store.sector_model(key) if key else None
+            race.note_circuit(store.layout_length_m(key) if key else None,
+                              sector_cuts_m=(model.lines_m if model else None))
+        trend = GapTrend(side="ahead")
+
         stints = (plan or {}).get("stints") or []
         print(f"{event['name']} - {event['car_name']} - {event['track']}")
         print(f"run {run['id']} of {len(runs)} on file - {len(rows)} laps, "
@@ -198,6 +224,17 @@ def main() -> int:
         by_num = {r["lap_num"]: r for r in rows}
         for row in rows:
             elapsed["s"] += (row["lap_time_ms"] or 0) / 1000.0
+            reads = reads_by_lap.get(row["lap_num"]) or []
+            if reads:
+                # The lap's reads, in the order they were taken, and the
+                # first one as the lap's figure on the trend - as the wall
+                # notes it live, keyed by lap.
+                subject = reads[0]["subject"]
+                trend.note(row["lap_num"], reads[0]["gap_s"], subject=subject)
+                race.note_gaps(
+                    ahead=trend, ahead_name=subject,
+                    ahead_samples=[(r["track_m"], r["gap_s"]) for r in reads
+                                   if r["track_m"] is not None])
             if row["is_pit_lap"]:
                 # **The order the line and the box actually came.** A fill
                 # inside the pit lap's own frames precedes the crossing (Deep

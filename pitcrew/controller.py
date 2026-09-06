@@ -2883,13 +2883,28 @@ class PitCrewController(QObject):
         if self.race is not None and wall is not None:
             try:
                 self.race.note_rival_positions(wall.positions())
+                # **Every gap reading since the last crossing, filed and
+                # binned.** Persisted so the race can be replayed with its
+                # gaps (assessment S8: the 6 Sep race cannot be); handed to
+                # the sector map so "where he has you" is computable live.
+                samples = wall.take_samples()
+                try:
+                    self.store.record_gap_reads(self.session_id, samples)
+                except Exception:
+                    log("race").exception("the gap reads could not be filed")
+                ahead_subject = wall.ahead.subject
+                ahead_samples = [
+                    (s.track_s, s.gap_s) for s in samples
+                    if s.side == "ahead" and s.subject == ahead_subject
+                    and s.track_s is not None and s.gap_s is not None]
                 # **The trends hold a cluster id; the roster turns it into a
                 # name, and the roster is here.** Without it every gap call
                 # says "the car ahead" about a driver the app can name.
                 self.race.note_gaps(
                     ahead=wall.ahead, behind=wall.behind,
                     ahead_name=wall.roster.name_of(wall.ahead.subject),
-                    behind_name=wall.roster.name_of(wall.behind.subject))
+                    behind_name=wall.roster.name_of(wall.behind.subject),
+                    ahead_samples=ahead_samples)
             except Exception:
                 log("race").exception("the gap trends could not be read")
             # **Said out loud once a lap, whether or not it found anything.**
@@ -4265,6 +4280,14 @@ class PitCrewController(QObject):
             log("pitcrew").info(
                 "pit-wall: watching, seeded with %d known driver%s",
                 len(seed), "" if len(seed) == 1 else "s")
+            # The circuit's length and sector lines, so the gap can be
+            # binned by road and spoken in the sectors on his rack.
+            if self.race is not None:
+                model = self._sector_model()
+                self.race.note_circuit(
+                    self._circuit_length_m(),
+                    sector_cuts_m=(model.lines_m if model is not None
+                                   else None))
         except Exception:
             # Never the race path. A pit wall that cannot start is a pit wall
             # the driver races without, exactly as he did before it existed.
@@ -5979,7 +6002,10 @@ class PitCrewController(QObject):
 
         started = _monotonic()
         verdict = assess(
-            laps_done=self.race.state.lap,
+            # The missed-crossing correction travels with the count (rule
+            # 12): `laps_remaining()` is the one expression, and the
+            # re-planner's `laps_total - laps_done` has to equal it.
+            laps_done=self.race.state.lap + self.race.state.laps_missed(),
             laps_total=self.race.state.laps_total,
             fuel_l=self.race.state.fuel_l,
             planned_fuel_per_lap=self.race.planned_fuel_per_lap_l,

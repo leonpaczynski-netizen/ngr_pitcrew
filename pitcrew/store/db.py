@@ -1532,6 +1532,41 @@ class Store:
                  watched_s, 1 if partial else 0, _now()))
             return int(cur.lastrowid)
 
+    def record_gap_reads(self, session_id: int | None, samples) -> int:
+        """File one crossing's worth of gap readings. Returns rows written.
+
+        `samples` are `gap_signal.GapSample`s. A sample with no gap is not a
+        reading and is skipped; a sample with no track position is filed
+        with `track_m` NULL, which is "the ruler could not say" and never
+        the start line (CLAUDE.md rule 3).
+        """
+        if session_id is None:
+            return 0
+        rows = [(session_id, s.lap, getattr(s, "side", "ahead"),
+                 float(s.gap_s), s.track_s, s.at_s, s.position,
+                 None if s.subject is None else str(s.subject), _now())
+                for s in samples if s.gap_s is not None]
+        if not rows:
+            return 0
+        with self._write() as conn:
+            conn.executemany(
+                """INSERT INTO gap_reads
+                       (session_id, lap, side, gap_s, track_m, at_s,
+                        position, subject, recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", rows)
+        return len(rows)
+
+    def gap_reads(self, session_id: int, side: str | None = None) -> list[dict]:
+        """The readings of one session, in the order they were taken."""
+        sql = ("SELECT lap, side, gap_s, track_m, at_s, position, subject "
+               "FROM gap_reads WHERE session_id = ?")
+        params: list = [session_id]
+        if side is not None:
+            sql += " AND side = ?"
+            params.append(side)
+        sql += " ORDER BY at_s, id"
+        return [dict(r) for r in self._query(sql, params)]
+
     def rename_driver(self, old: str, new: str) -> int:
         """Give a driver his real name, and carry his stops across with him.
 

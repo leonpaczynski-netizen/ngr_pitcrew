@@ -531,6 +531,87 @@ median kept for the flag projection only" was not implemented: the stint's
 burn is the best predictor of the laps ahead, flag included, and the race
 median survives in the export and the audit line.
 
+**Fourth critic pass (a34be79) — AGREED on Phase 0 and 1.1 at 418deb4,** all
+ten items verified against HEAD, one residual: when "no tyres" overruled the
+session's swap detector the record was corrected but the live projection still
+counted the set as fresh, because `clear_stint(True)` had zeroed the count and
+emptied the history. Fixed: the pre-stop count and readings are held in
+`stint_before_stop` and put back under the projection on the overrule.
+
+### Phase 1 — first batch, 7 Sep 2026
+
+**The acceptance test, in the driver's words (7 Sep):** *"having that Deep
+Forest Supercars race over again George would notice I was losing time to a
+car in front that I was faster than through sector 1 and 2 but that he was
+faster in sector 3, and pit me as soon as I could take enough fuel on board to
+finish the race and perform an undercut."* That is now
+`tests/test_undercut_deep_forest.py`, and it holds. The race is session 138 as
+recorded — every lap time, fuel figure, position and the lap-13 stop — against
+strategy 27. **The gaps are reconstructed**, because the wall read them on 154
+frames that night and kept none (S8): built to his account, a second behind P2
+at the line, two tenths gained through each of sectors 1 and 2 and four given
+back in 3. The engineer now says *"Faster than Boxhead through 1 and 2. He has
+you in 3."* on lap 5 (four laps of gaps, each sector outside twice its own
+standard error) and *"Box this lap. Fuel to the flag. Undercut on Boxhead:
+you're held up, and faster through 1 and 2. The fill costs the same now as on
+lap 11."* on lap 7 — the first crossing at which 12 laps after the box at
+7.4 L (96 L) fits the tank, and not on lap 6 (13 laps, 103 L). The fill it
+then sizes is *"12 laps after the box"* off the same expression the box uses.
+The next race replays its own reads: `gap_reads` (v16) files every gap the
+wall reads with its road position, and `tools/replay_race_calls.py --gaps`
+feeds them back.
+
+**What the undercut IS here, and is not.** Not the tyre undercut — §5.4 calls
+it weak in GT7 and it is not claimed. It is the *traffic* undercut: the fill
+is the flag's laps times the burn less what is aboard, and both fall by one
+lap's burn per lap, so the litres and the seconds standing are the same on
+every lap from the first the tank can hold the flag on to the planned box.
+Waiting buys nothing and keeps him in the traffic. Every term is read, not
+assumed: held up is the gap inside 1.5 s for three consecutive laps; faster is
+a sector where the gap shrinks outside its own noise; he has not stopped; the
+stop is still owed and is the last one, so the fill is to the flag; the tank
+holds it (`fuel_to_flag_l` is None while it does not); the tyres reach the flag
+on the briefed rate, or the call says *"Tyre life to the flag unchecked"* and
+goes out LOW with *"Unconfirmed."* A rival who has stopped, a sector map with
+no measured gain, a set that will not reach the flag: silence, and the plan's
+stop on the plan's lap.
+
+**Rows landed:** 1.2 the chase (`CHASE`, a fact: gap, laps left, the required
+delta against his own measured lap-to-lap spread from `expectations.sigma_ms`,
+every other lap inside 20 s and 10 laps — not every lap, the closing call has
+the other laps, and not the 0.918 s σ in the row, which is Monza's); 1.3 the
+undercut, above, with `SECTOR_SPLIT` and `sectors.SectorMap` wired
+(`note_circuit` / `note_gaps(ahead_samples=…)`), the map's bins rolled up onto
+the circuit's own sector lines, and a straddling delta shared between bins by
+distance — credited whole to its first bin, a 200 m read interval put a tenth
+of one sector into its neighbour; 1.4 one remaining-laps expression
+(`rival_calls` and the re-planner's `laps_done` both carry `laps_missed()`);
+1.5 the rail — decided *set*, not delete: `STOPS_OFF` rides `drop_stop` under
+`fuel_long`, the wear cliff's *"Box this lap"* rides `add_stop` under the new
+`tyre_short` trigger when no stop was planned (a planned one brought forward is
+timing, and free), the stay-out fold rides nothing because it recognises a stop
+the driver already declined; the gate uses the call's own trigger (it looked
+the KIND up as a trigger, and no kind is one, so every structural action would
+have been refused whatever the desk granted); withheld, a call falls to its
+`report_form` — *"You're fuelled to the flag."* and the litres — which is the
+Daytona handover's `fuel_long: report_only` executed; `safety_car` retired from
+`TRIGGERS` and the loaded card recomputes *unhandled* against today's triggers;
+1.9 the gauge guard — a fresh-set reading is held until a second agrees (two,
+not the row's three: a rise is refused up to twelve times, but the fresh-set
+shape is an all-four-corners drop the locator is documented to produce, and
+one confirming read separates the two), a held read is not a blind sample, and
+in per-lap sampling it costs that lap its point; 1.12 the wiring audit
+(`tools/wiring_audit.py`, importer regex fixed — its first run reported half
+the package unimported): `rival_stops` empty, and `analysis.rivals`,
+`analysis.wear_rates`, `race.rival_answers`, `race.teammate` imported by
+nothing — `race.sectors` was on that list and is not now.
+
+**Struck or deferred, with the reason:** the chase's *"silence announced when
+the wall cannot read it"* is the brief's *"I can't see other cars"* line and
+was not duplicated per lap. 1.6 is half done — the reads persist; verdicts per
+call and the plan-vs-actual snapshot are not yet — and 1.7, 1.8, 1.10, 1.11
+are open.
+
 ## 9. Critic record
 
 **Pass 1 (6 Sep, late).** Twenty-six claims spot-checked: 21 confirmed, 2 wrong
