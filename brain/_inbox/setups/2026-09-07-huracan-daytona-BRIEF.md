@@ -2,7 +2,7 @@
 
 **Written 6 Sep 2026, late, by Ludo. This is the driver's written brief.** The
 car-state file is `brain/car-state/huracan-daytona.md` and restates nothing here;
-the plan is strategy **28** (approved, with a playbook); the knowledge row is
+the plan is strategy **29** (approved, with a playbook; 28 and 17 are superseded candidates); the knowledge row is
 event 10's. Everything below is either measured with its source, or labelled.
 
 ```
@@ -34,19 +34,22 @@ still fits the tank for the run home.
 > late — lap 12 done or later — take laps left × this stint's burn plus the margin
 > and ignore his number.**
 
-Why: George's fill logic can *raise* the plan's 9-lap stint to the laps actually
-left but cannot *lower* it (`race/calls.py:1467`). It cost P2 at Deep Forest last
-night — a 10-lap fill with 7 to go, 19.7 L over the line, 9.9 s parked. Fix is
-in this week's work; not in the car tomorrow. On a 1 L/s hose every litre you
-do not need is one second standing still.
+Why: George's fill logic could *raise* the plan's 9-lap stint to the laps actually
+left but not *lower* it. It cost P2 at Deep Forest last night — a 10-lap fill
+with 7 to go, 19.7 L over the line, 9.9 s parked. **Fixed tonight (commit
+`bd074e8`): on tonight's build George sizes a last stop by the laps to the flag
+and says so — "Fuel to 63 litres - 7 laps to the flag."** The rule above still
+stands as your check: if the sentence names a stint instead of the flag at the
+last stop, use your own number. On a 1 L/s hose every litre you do not need is
+one second standing still.
 
-### Playbook George is running (strategy 28)
+### Playbook George is running (strategy 29)
 
 | trigger | action | when |
 |---|---|---|
 | fuel short | **short-shift** (his call: "Short-shift and lift") | tank misses the stop or flag by > 0.5 lap |
-| fuel long | report only | > 1.5 laps in hand |
-| stop missed | re-cost to the flag, name the new lap **once** | lap 12 completed without a stop |
+| fuel long | George says "You can push. N laps in hand" past half-stint — take it as information, not a re-plan | > 1.5 laps in hand |
+| stop missed | George re-fires "Box this lap. N laps overdue" **every lap** with the fuel gap to the flag; he does not name a new lap — the new lap is yours to pick, fuel by the §1 rule | lap 12 completed without a stop |
 | incident | report only | > 8 s lost |
 | rain | report only — **you tell him**; George cannot see rain | any wet reading |
 | safety car | *unhandled on purpose* | no channel, no lobby setting |
@@ -83,12 +86,12 @@ Quali gap to pole by round: 1.60 / 1.60 / 1.13 / 2.35 / 3.53 s. Race-lap gap to
 the fastest lap: 1.15 / 1.19 / **0.18 (you set P1 pace)** / 1.91 / 4.82 s. The
 qualifying gap is the bigger number at every round but Watkins.
 
-**The two to cover:** Magical daddy (pole 3 of 5, never off the podium) and
-CruisingChaos (fastest lap 3 of 5, P2/P3/P5/P3/P2 — quicker in the race than on
-the grid). Boxhead is in the same car as you and has qualified P2/—/P1/—/P5;
-his race pace has faded relative to quali this season (Rd5 P5 from Q5, best lap
-1.7 s off). PUNISHED is P4 at three of five rounds and will be around you on the
-grid.
+**The two to cover:** Magical daddy (pole at 2 of 5, never off the podium:
+P1/P3/P2/P2/P1) and CruisingChaos (entered 4 rounds, fastest lap in all 4,
+P2/P5/P3/P2 — quicker in the race than on the grid). Boxhead is in the same car
+as you and has qualified P2/—/P1/—/P5; his race pace has faded relative to quali
+this season (Rd5 P5 from Q5, best lap 1.7 s off). PUNISHED (P8/P11/P9/P4/P4) is
+P4 at the last two rounds and will be around you on the grid.
 
 Nothing here reads any rival's stop habits — the rival book has never held a row
 (the column defect is Phase 0 work). What George *will* say: who has boxed and on
@@ -124,8 +127,8 @@ screenshot before the first run tomorrow, and brake balance by voice.
 ## 6. Before you go out — the checklist
 
 1. Settings screenshot → confirm against `huracan-daytona.md`. Brake balance said aloud.
-2. Strategy screen: **strategy 28 approved** — confirm it shows the playbook.
-   (Strategy 17 is demoted to candidate.)
+2. Strategy screen: **strategy 29 approved** — confirm it shows the playbook.
+   (Strategies 17 and 28 are candidates, superseded.)
 3. OBS projector open; the pre-flight now *asks* on a timeout instead of blocking.
 4. Practice: the pit-loss run (§4), then a 3-lap clean run for the burn at race load.
 5. On the grid: George opens with "20 laps, 1 stop". Tyres YES at the stop.
