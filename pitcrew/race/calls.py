@@ -689,6 +689,8 @@ class RaceState:
     # sample count (CLAUDE.md 4.4) - a rate from one stint and one from six
     # are not the same claim.
     briefed_wear_samples: int = 0
+    # The tyre-wear multiplier this race runs at ("2x"), from the event.
+    tyre_wear_mult: str | None = None
     # **What a short-shift is worth on this car, in litres per lap per 1000
     # rpm.** Measured by `tools/shortshift_trade.py` from laps where his own
     # upshift rpm varied: 1.762 on the Porsche at Monza, 95% CI [0.92, 2.60],

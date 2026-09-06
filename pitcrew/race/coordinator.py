@@ -84,6 +84,10 @@ class PlanContext:
     # 45-minute Monza as a 45-lap one. Kept separate so the two can never be
     # confused again, and so the plan match compares like with like.
     race_minutes: float | None = None
+    # The tyre-wear multiplier the race runs at, as the event declares it
+    # ("2x"). Not part of `matches`: a plan is not refused over it, but a
+    # briefed wear rate measured at another multiplier is.
+    tyre_wear_mult: str | None = None
 
     @property
     def is_timed(self) -> bool:
@@ -320,6 +324,10 @@ class RaceCoordinator:
                 return False
         if actual is not None:
             self.state.race_minutes = actual.race_minutes
+            self.state.tyre_wear_mult = getattr(actual, "tyre_wear_mult", None)
+            # The first stint was briefed at construction, before the race's
+            # multiplier was known; brief it again now that it is.
+            self._brief_the_wear_rate()
             self.state.laps_total = self._laps_total_for(actual)
             # **The race's own declared duration, from the event page.**
             # `events.race_laps` holds MINUTES for a timed race - the
@@ -476,7 +484,8 @@ class RaceCoordinator:
         self.state.briefed_wear_samples = 0
         if self.knowledge is None or not self.state.tyre_compound:
             return
-        rate, samples = self.knowledge.wear_per_lap(self.state.tyre_compound)
+        rate, samples = self.knowledge.wear_per_lap(
+            self.state.tyre_compound, multiplier=self.state.tyre_wear_mult)
         if rate:
             self.state.briefed_wear_per_lap = rate
             self.state.briefed_wear_samples = samples
@@ -1855,6 +1864,7 @@ def context_from_event(event: dict, plan: dict | None = None) -> PlanContext:
         layout=event.get("layout"),
         race_laps=0 if timed else declared,
         race_minutes=float(declared) if timed else None,
+        tyre_wear_mult=event.get("tyre_wear_mult"),
     )
 
 

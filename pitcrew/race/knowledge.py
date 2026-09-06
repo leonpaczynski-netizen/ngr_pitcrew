@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 
+from pitcrew.diagnostics import log
 from dataclasses import dataclass, field
 
 # What George says at the green when nobody wrote anything down. Said once, and
@@ -76,6 +77,17 @@ def silenceable() -> frozenset:
     from pitcrew.race.calls import REGISTER
 
     return frozenset(REGISTER)
+
+
+def _multiplier(raw) -> float | None:
+    """`"2x"`, `"2"`, `2`, `2.0` -> 2.0; nothing -> None."""
+    if raw is None:
+        return None
+    text = str(raw).strip().lower().rstrip("x")
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 class KnowledgeError(ValueError):
@@ -136,16 +148,38 @@ class Knowledge:
                 return entry.get("why")
         return None
 
-    def wear_per_lap(self, compound: str | None) -> tuple[float | None, int]:
+    def wear_per_lap(self, compound: str | None,
+                     multiplier: str | float | None = None
+                     ) -> tuple[float | None, int]:
         """The measured wear rate for this compound, with its sample count.
 
         Every aggregate carries its sample count (CLAUDE.md 4.4): a rate from
         one stint and one from six are not the same claim, and the second
         number is what lets a caller decide whether to trust the first.
+
+        **And only at the multiplier it was measured at** (CLAUDE.md 5.2:
+        multiplier linearity is assumed, never proven; never silently
+        convert). An entry that names its multiplier is refused for a race at
+        a different one - Sardegna at x8 must not inherit a rate fitted at
+        x2. An entry that names none is accepted and logged as assumed,
+        because the older rows on file predate the field and refusing them
+        all would silence every briefed rate at once.
         """
         entry = (self.wear_rates or {}).get((compound or "").upper() or None)
         if not entry:
             return None, 0
+        theirs = _multiplier(entry.get("multiplier"))
+        ours = _multiplier(multiplier)
+        if theirs is not None and ours is not None and theirs != ours:
+            log("race").warning(
+                "wear rate for %s at %s was measured at x%g and this race "
+                "runs x%g - refused, never converted (CLAUDE.md 5.2)",
+                compound, self.circuit_key, theirs, ours)
+            return None, 0
+        if theirs is None and ours is not None:
+            log("race").info(
+                "wear rate for %s at %s names no multiplier; used for a x%g "
+                "race as [ASSUMED]", compound, self.circuit_key, ours)
         return entry.get("perLap"), int(entry.get("samples") or 0)
 
     def as_export(self) -> dict:

@@ -179,7 +179,10 @@ def carry_into_knowledge(store, event_id: int, *, kind: str = "race",
     key = circuit_key(event["track"], event.get("layout"))
     existing = store.get_race_knowledge(key, None)
     rates = dict(existing.wear_rates) if existing else {}
-    rates.update({compound: got.as_record()
+    # **Stamped with the multiplier it was measured at.** A rate is a claim
+    # about one multiplier; `Knowledge.wear_per_lap` refuses it for another.
+    multiplier = event.get("tyre_wear_mult")
+    rates.update({compound: {**got.as_record(), "multiplier": multiplier}
                   for compound, got in fits.items()})
 
     base = existing or Knowledge(circuit_key=key)
