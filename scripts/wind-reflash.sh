@@ -258,10 +258,25 @@ if [[ "${1:-}" == "--restore" ]]; then
   say "Restoring: $have"
   say "Close Pit Crew first - it holds $PORT continuously."
   confirm "Write that image back to the board on $PORT?" || exit 0
+
+  # **The backup is a full 32 KB read and includes the bootloader.** Writing
+  # that back THROUGH the bootloader asks it to overwrite itself, which it
+  # refuses - correctly - and the restore then reports a protocol error and
+  # cannot verify. Measured 6 Sep 2026; the board was fine and the restore
+  # looked like it had failed, which is the worst way for a rollback to
+  # behave. Trim to the application region first.
+  trimmed="$(dirname "$have")/.restore-trimmed.hex"
+  if ! python scripts/trim_bootloader.py "$have" "$trimmed"; then
+    say "Could not trim the bootloader region out of the backup."
+    say "Nothing has been written to the board."
+    exit 1
+  fi
   if "$AVRDUDE" -C "$AVRCONF" -c arduino -p m328p -P "$PORT" -b 115200 -D \
-        -U "flash:w:$have:i"; then
+        -U "flash:w:$trimmed:i"; then
+    rm -f "$trimmed"
     say "Restored. The board is back to how it was before the reflash."
   else
+    rm -f "$trimmed"
     say "Write failed. The board may be half-written. Try again; if it will"
     say "not sync at either rate, unplug the USB, plug it back in, and run"
     say "--restore once more before doing anything else with the rig."

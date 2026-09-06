@@ -213,6 +213,14 @@ static void setMotorOutput(uint8_t idx, uint8_t value) {
   }
 }
 
+// **No I2C timeout is set, and it is not an oversight.** `Wire.setWireTimeout`
+// would stop a hung bus wedging this loop - and because the PCA9685 has its
+// own oscillator, a hang leaves the fans STUCK AT LAST DUTY rather than
+// stopping them, which the deadman cannot help with because the deadman's own
+// writes would hang too. It is the right guard and it does not exist here:
+// the bundled core is Arduino 1.6.13 from 2016 and the call was added around
+// 2020. Reaching it means a newer AVR core, not a change to this file.
+// Checked 6 Sep 2026 - `setWireTimeout` appears nowhere in this core's Wire.h.
 static void shieldBegin() {
   Wire.begin();
   pcaWrite(PCA9685_MODE1, 0x00);        // reset
@@ -453,6 +461,7 @@ static void commandExpandedList() {
   writeStringLn("mcutype");
   writeStringLn("keepalive");
   writeStringLn("shieldfreq");
+  writeStringLn("shielddump");
   writeValue('\n');
 }
 
@@ -471,6 +480,29 @@ static void commandExpandedList() {
 static void commandShieldFreq() {
   writeValue(pcaRead(PCA9685_PRESCALE));
   writeValue(pcaRead(PCA9685_MODE1));
+}
+
+// **The registers M1 and M2 are actually holding, read back off the chip.**
+//
+// 6 Sep 2026: the right fan (M2) did not turn while the left one did, and
+// 767 of 767 frames were acknowledged - because an ACK is sent when the FRAME
+// ARRIVES, before any motor is touched. It says nothing about the outputs.
+//
+// This is what tells the two candidate faults apart without a meter. If M2's
+// registers match M1's, the firmware is writing what it should and the fault
+// is past the chip - the H-bridge channel, the wiring, or the fan. If they
+// differ, the fault is here.
+//
+// Twelve channels' worth would not fit a useful reply, so it dumps the six
+// that matter, PWM/IN2/IN1 for M1 then the same for M2, four registers each
+// (ON_L, ON_H, OFF_L, OFF_H) in that order. Bit 4 of an _H register is the
+// part's full-on/full-off flag rather than a count.
+static void commandShieldDump() {
+  static const uint8_t DUMP[6] = { 8, 9, 10, 13, 12, 11 };
+  for (uint8_t i = 0; i < 6; i++) {
+    uint8_t base = (uint8_t)(PCA9685_LED0_ON_L + 4 * DUMP[i]);
+    for (uint8_t r = 0; r < 4; r++) writeValue(pcaRead((uint8_t)(base + r)));
+  }
 }
 
 // Feature letters. G gear, N name, I unique id, J buttons, P custom
@@ -565,6 +597,7 @@ void loop() {
         if (!strcmp(word, "list"))            commandExpandedList();
         else if (!strcmp(word, "mcutype"))    commandMcuType();
         else if (!strcmp(word, "shieldfreq")) commandShieldFreq();
+        else if (!strcmp(word, "shielddump")) commandShieldDump();
       }
     }
   }
