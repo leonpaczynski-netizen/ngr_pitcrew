@@ -1,0 +1,64 @@
+{
+  "author": "ludo",
+  "plan": {
+    "stops": 1,
+    "pit_laps": [11],
+    "laps": 20,
+    "stints": [
+      {"laps": 11, "compound": "RS", "fuel_l": 85.37, "start_lap": 1, "tyres": true},
+      {"laps": 9, "compound": "RS", "fuel_l": 69.41, "start_lap": 12, "tyres": true}
+    ],
+    "binding_constraint": "fuel",
+    "notes": [
+      "Strategy 17's stints (4 Sep), re-issued with a playbook. 11 + 9 on RS, one mandatory stop.",
+      "Fuel: refuel is 1.0 L/s here (measured 1.003, 4 Sep) so the fill is the slow part of the stop - the litres added are the same whichever lap you stop on, so the stop lap is free inside the tank; stop early rather than late.",
+      "Tyres at the stop: YES. Measured RR wear 0.0570/lap (s118, 3 Sep, x2): a set reaches lap 14.9 at the 0.85 ceiling, so one set cannot do 20 laps.",
+      "Pit loss is DECLARED 20 s, not measured. Provisional from the 4 Sep race lap rows: in-lap + out-lap - 2 clean laps = ~76 s including ~49 L at 1 L/s and ~7 s dead time, so ~20 s ex-fuel; straddle-affected, measure in practice."
+    ]
+  },
+  "playbook": [
+    {
+      "trigger": "fuel_short",
+      "action": "short_shift",
+      "when": "the tank will not reach the planned stop or the flag by more than 0.5 lap",
+      "until": "the projection reaches the target with 1 L in hand, then stop short-shifting",
+      "note": "His first fuel lever, and his own. Never a fuel-map call - map 1, always. Lift-and-coast is his second lever and he applies it himself."
+    },
+    {
+      "trigger": "fuel_long",
+      "action": "report_only",
+      "when": "more than 1.5 laps of fuel in hand against the plan at the same point",
+      "until": "the driver acknowledges",
+      "note": "Report it. With a 1 L/s hose the fill is what it is; surplus at the flag is standing time already paid. Say the number, do not re-plan."
+    },
+    {
+      "trigger": "stop_missed",
+      "action": "recost_to_flag",
+      "when": "lap 12 has been completed without a stop",
+      "until": "the new stop lap is named once",
+      "note": "The box call fires at 11 laps completed, so lap 12 is the in-lap. If he drives past, re-price to the flag and name the new stop lap ONCE. The fill at a LATE last stop is laps left x this stint's burn plus the margin - George's fill logic cannot lower the plan's 9-lap stint, so the driver has the rule in his brief."
+    },
+    {
+      "trigger": "incident",
+      "action": "report_only",
+      "when": "more than 8 seconds lost to an off, a spin or contact",
+      "until": "the lap is complete",
+      "note": "Seconds in the ledger. The stop lap is worth tenths on a 1 L/s hose, so an incident does not move it."
+    },
+    {
+      "trigger": "rain",
+      "action": "report_only",
+      "when": "the surface reads wet at any point",
+      "until": "the driver acknowledges",
+      "note": "Weather is RANDOM on this round and George cannot see rain - the driver tells him. If it rains the plan is void and saying so is the honest call; inters and wets are allowed."
+    }
+  ],
+  "assumptions": [
+    "Race burn 7.7-7.8 L/lap [MEASURED, s127 4 Sep race, 20 laps, fuel x3] - the plan's stint fuel (85.4 / 69.4 L) prices 7.7 L/lap.",
+    "Refuel 1.003 L/s and dead time 7.0 s [MEASURED 4 Sep]; pit loss ex-fuel ~20 s [PROVISIONAL, straddle-affected lap rows] - measure in practice with (in-lap + out-lap) - 2 x clean lap.",
+    "Wear RR 0.0570/lap at x2 [MEASURED s118 laps 2-9, 3 Sep] - through-origin 0.0636, FL 0.0275. Tyres are taken at the stop.",
+    "Standing start; lap 1 excluded from burn by the app as usual.",
+    "safety_car is deliberately unhandled - no channel, no lobby setting; George reports and decides nothing.",
+    "Multiplier x2 tyre / x3 fuel matches the evidence sessions (event 10, 3-4 Sep); no conversion assumed."
+  ]
+}
