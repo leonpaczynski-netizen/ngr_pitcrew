@@ -3888,6 +3888,7 @@ class PitCrewController(QObject):
 
     def start_race(self) -> bool:
         """Arm the race. Nothing fires until the car actually goes green."""
+        self._pit_loss_recorded = False
         if self.race_screen is None:
             return False
         event = self.active_event()
@@ -4770,6 +4771,7 @@ class PitCrewController(QObject):
             rig = getattr(self, "rig", None)
             if rig is not None and hasattr(rig, "release_notices"):
                 rig.release_notices()
+            self._record_pit_loss()
         replan = None
         if event.kind is EventKind.LAP_COMPLETED:
             replan = self._check_replan(event.data["lap"], against=call)
@@ -6021,6 +6023,41 @@ class PitCrewController(QObject):
             self.store.append_revision(
                 self.race_run_id, outcome.lap,
                 spoken.call() or spoken.reason, payload, accepted=False)
+
+    def _record_pit_loss(self) -> None:
+        """Measure this race's pit loss off its lap rows and store it.
+
+        Once per race, at the flag. `race/pit_loss.py` has the recipe; here
+        only the wiring. Nothing is spoken - it is a number for the next
+        plan, not for the driver at the chequered flag - and a failure is
+        logged, never raised, on the crossing that ends the race.
+        """
+        if getattr(self, "_pit_loss_recorded", False):
+            return
+        self._pit_loss_recorded = True
+        try:
+            from pitcrew.race.pit_loss import best, measure
+
+            event = self.active_event()
+            if event is None or self.session_id is None:
+                return
+            rows = self.store.list_laps(self.session_id)
+            stops = measure(rows, refuel_rate_lps=event.get("refuel_rate_lps"))
+            chosen = best(stops)
+            if chosen is None:
+                log("race").info("pit loss: nothing to measure this race "
+                                 "(%d stops resolvable)", len(stops))
+                return
+            written = self.store.record_measured_pit_loss(
+                event["id"], chosen.ex_fuel_s, method=chosen.method)
+            log("race").info(
+                "pit loss measured at the flag: %.1f s ex-fuel (%.1f s "
+                "total) from the lap-%d stop%s", chosen.ex_fuel_s,
+                chosen.total_s, chosen.stop_lap,
+                "" if written else " - not written")
+        except Exception:                                    # noqa: BLE001
+            log("race").warning("pit loss could not be measured",
+                                exc_info=True)
 
     def _refuel_context(self):
         """What the fill should be sized to, for the race right now.

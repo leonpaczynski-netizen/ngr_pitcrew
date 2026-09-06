@@ -914,6 +914,37 @@ class Store:
                  IDENTITY_OK, _now()))
             return int(cur.lastrowid)
 
+    def record_measured_pit_loss(self, event_id: int, seconds: float, *,
+                                 method: str) -> bool:
+        """Write the pit loss this circuit actually cost, and say it was measured.
+
+        **A measurement replaces the declared constant, and the constant was
+        never his.** `pit_loss_secs` is NOT NULL with the app's own 20 s
+        default and `pit_loss_source` says `declared` whether he typed it or
+        the row was created with it - so unlike the game clock there is no
+        driver's declaration here to protect. What is protected is the
+        record: the previous value and its source go to the log with the
+        method, so a season's constant can be audited back to the stop that
+        set it. Returns whether anything was written.
+        """
+        if seconds is None or seconds <= 0:
+            return False
+        row = self.get_event(event_id)
+        if row is None:
+            return False
+        before = (row["pit_loss_secs"],
+                  row["pit_loss_source"] if "pit_loss_source" in row.keys()
+                  else None)
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE events SET pit_loss_secs = ?, pit_loss_source = "
+                "'measured', updated_at = ? WHERE id = ?",
+                (round(float(seconds), 2), _now(), event_id))
+        log("store").info(
+            "pit loss for event %s measured at %.1f s (was %s, %s): %s",
+            event_id, seconds, before[0], before[1] or "unset", method)
+        return True
+
     def record_measured_clock(self, event_id: int, start_hour: float | None,
                               multiplier: float | None) -> bool:
         """Write back what the game clock turned out to be, if he has not said.
