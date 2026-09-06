@@ -98,3 +98,6 @@ allissues.txt
 _gapbank/
 _glyphwork/
 _bench/
+
+# Firmware build output (scripts/wind-reflash.sh).
+.build/

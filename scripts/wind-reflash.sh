@@ -185,9 +185,19 @@ finish() {
 
 TOTAL_STAGES=5
 
-AVR_HOME="C:/Program Files (x86)/SimHub/_Addons/Arduino/ArduinoIDE/arduino-1.6.13/hardware/tools/avr"
+# **SimHub is uninstalled; its Arduino toolchain is not.** The compiler, the
+# AVR core and avrdude all survived, which is the whole reason this script can
+# build and flash without it. If SimHub's folder is ever deleted for real,
+# point IDE_HOME at any Arduino IDE 1.6-1.8 install and nothing else changes.
+IDE_HOME="C:/Program Files (x86)/SimHub/_Addons/Arduino/ArduinoIDE/arduino-1.6.13"
+AVR_HOME="$IDE_HOME/hardware/tools/avr"
 AVRDUDE="$AVR_HOME/bin/avrdude.exe"
 AVRCONF="$AVR_HOME/etc/avrdude.conf"
+BUILDER="$IDE_HOME/arduino-builder.exe"
+SKETCH="firmware/wind/wind.ino"
+# **Absolute, not relative.** arduino-builder 1.3.21 fails with
+# "can't make ... relative to .build\wind" when handed a relative build path.
+BUILD_DIR="$(pwd)/.build/wind"
 PORT="${WIND_PORT:-COM5}"
 BASELINE="reference/simhub-baseline"
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -207,6 +217,30 @@ read_flash() {
 
 newest_backup() { ls -1t "$BASELINE"/redion-flash-backup-*.hex 2>/dev/null | head -1; }
 
+# build_firmware: compile our sketch to $BUILD_DIR. Output goes to a log
+# rather than the screen, because a clean Arduino build prints nothing worth
+# reading and a failed one prints everything - which is the case where it is
+# shown.
+build_firmware() {
+  mkdir -p "$BUILD_DIR"
+  "$BUILDER" -compile -logger=human \
+    -hardware "$IDE_HOME/hardware" \
+    -tools "$IDE_HOME/hardware/tools/avr" -tools "$IDE_HOME/tools-builder" \
+    -built-in-libraries "$IDE_HOME/libraries" \
+    -fqbn=arduino:avr:uno -build-path "$BUILD_DIR" -warnings=all \
+    "$SKETCH" >"$BUILD_DIR/build.log" 2>&1
+}
+
+# upload_firmware: same two-rate fallback as the read. A clone Uno's
+# bootloader is one or the other and nothing on the board says which.
+upload_firmware() {
+  "$AVRDUDE" -C "$AVRCONF" -c arduino -p m328p -P "$PORT" -b 115200 -D \
+      -U "flash:w:$1:i" && return 0
+  say "115200 did not sync; trying 57600 (older bootloader)."
+  "$AVRDUDE" -C "$AVRCONF" -c arduino -p m328p -P "$PORT" -b 57600 -D \
+      -U "flash:w:$1:i"
+}
+
 # ── restore mode: --restore puts the saved image back and exits ────────────
 if [[ "${1:-}" == "--restore" ]]; then
   # Not `banner`: that one counts stages and talks about a browser, and this
@@ -222,31 +256,37 @@ if [[ "${1:-}" == "--restore" ]]; then
     exit 1
   fi
   say "Restoring: $have"
-  say "Close Pit Crew and SimHub first - two programmes must not hold $PORT."
+  say "Close Pit Crew first - it holds $PORT continuously."
   confirm "Write that image back to the board on $PORT?" || exit 0
   if "$AVRDUDE" -C "$AVRCONF" -c arduino -p m328p -P "$PORT" -b 115200 -D \
         -U "flash:w:$have:i"; then
     say "Restored. The board is back to how it was before the reflash."
   else
-    say "Write failed. Try -b 57600 by hand, or reflash from SimHub"
-    say "(shield count 1, PWM fans 0, frequency 1200)."
+    say "Write failed. The board may be half-written. Try again; if it will"
+    say "not sync at either rate, unplug the USB, plug it back in, and run"
+    say "--restore once more before doing anything else with the rig."
     exit 1
   fi
   exit 0
 fi
 
-banner "Wind sim reflash: 1200 Hz -> 1900 Hz"
-say "There is no browser in this one. It drives avrdude for the backup, then"
-say "tells you what to change in SimHub's setup tool, then leaves you a"
-say "one-command way back."
+banner "Wind sim: flash Pit Crew's own firmware"
+say "There is no browser in this one, and no SimHub either. It takes a"
+say "verified backup, compiles firmware/wind/wind.ino with the toolchain"
+say "SimHub left behind, uploads it, and leaves you a one-command way back."
+say ""
+say "What changes on the board: the shield's PWM chop goes from 1221 Hz to"
+say "1526 Hz, which is the fastest the PCA9685 can be made to run. Nothing"
+say "else - the wire protocol, the four channels, the version letter, the"
+say "unique id and the 1 s deadman are all byte-identical to what is on"
+say "there now."
 say ""
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
 stage "Free the port"
 say "Two programmes must not both hold $PORT, and avrdude needs it alone."
-step "Quit Pit Crew if it is running."
-step "Quit SimHub, or untick its output for this device."
-pause "Both closed?"
+step "Quit Pit Crew if it is running - it holds $PORT continuously."
+pause "Closed?"
 if [[ ! -x "$AVRDUDE" ]]; then
   say "avrdude is not at the expected path:"
   say "  $AVRDUDE"
@@ -258,10 +298,24 @@ say "avrdude found."
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
 stage "Back up the flash - this is the rollback"
-say "Nothing else in this procedure is reversible without this file, and"
-say "there is no backup on disk today: the command was written down on"
-say "3 Sep and never run."
+say "Nothing else in this procedure is reversible without this file."
 say ""
+existing="$(newest_backup || true)"
+if [[ -n "$existing" ]]; then
+  say "There is already a backup on disk:"
+  say "  $existing  ($(wc -c < "$existing" | tr -d ' ') bytes)"
+  say ""
+  say "That one was taken from this board and verified by a second read. It"
+  say "is a rollback to the SimHub firmware, which is what you want here -"
+  say "taking another now would only capture the same image again."
+  if confirm "Reuse it and skip the read?"; then
+    BACKUP="$existing"
+    say "Reusing $BACKUP."
+    _SKIP_BACKUP=1
+  fi
+fi
+
+if [[ -z "${_SKIP_BACKUP:-}" ]]; then
 say "Reading the board resets it. Measured on this rig 15 Aug: the fans do"
 say "not spin during a reset. Have the PSU on and the fans clear anyway."
 confirm "Read the flash from $PORT now?" || { say "Stopped. Nothing changed."; exit 0; }
@@ -291,27 +345,54 @@ else
   say "Re-run this stage before going any further."
   exit 1
 fi
+fi
 
 # ── 3 ─────────────────────────────────────────────────────────────────────
-stage "Change the shield frequency in SimHub"
-say "Your fans are TWO-WIRE, so the 25 kHz PWM-fan conversion in sections 3-4"
-say "of the reference doc does not apply - there is no control wire to drive."
-say "The change that does apply is one number."
+stage "Build our firmware and upload it"
+say "SimHub is not involved. firmware/wind/wind.ino is ours - the one feature"
+say "this board actually used, written against the protocol pitcrew/rig/arq.py"
+say "already speaks. SimHub's compiler is still on disk and is what builds it."
 say ""
-step "Start SimHub. Left menu: Arduino. Open 'Arduino setup tool'."
-step "Choose Single Arduino. Board: Uno. Port: $PORT."
-step "Leave every feature exactly as it is. Change ONLY:"
-say "      SHAKEIT Adafruit Motorshield V2"
-say "      -> motor shield PWM frequency:  1200  ->  1900"
-step "Keep the device name 'Redion Wind Sim'. A new unique id is fine;"
-say "      Pit Crew does not read it."
-step "Upload to Arduino. Watch the compile, then the upload."
-step "When it finishes, SimHub's Arduino page should still show 4 motors."
-say "      If it shows 0, the shield count was changed by mistake - set it"
-say "      back to 1 and upload again."
-pause "Upload finished?"
-step "Quit SimHub, or untick its output for this device."
-pause "SimHub closed?"
+if [[ ! -x "$BUILDER" ]]; then
+  say "arduino-builder is not at:"
+  say "  $BUILDER"
+  say "Point IDE_HOME at an Arduino IDE install. Nothing has been written."
+  exit 1
+fi
+say "Compiling $SKETCH ..."
+if ! build_firmware; then
+  say "The build FAILED. Nothing has been written to the board."
+  say ""
+  tail -20 "$BUILD_DIR/build.log" 2>/dev/null | while IFS= read -r line; do
+    say "  $line"
+  done
+  exit 1
+fi
+HEX="$BUILD_DIR/wind.ino.hex"
+if [[ ! -s "$HEX" ]]; then
+  say "The build reported success but produced no hex. Nothing written."
+  exit 1
+fi
+"$AVR_HOME/bin/avr-size.exe" -C --mcu=atmega328p "$BUILD_DIR/wind.ino.elf" \
+  2>/dev/null | sed -n '4p;7p' | while IFS= read -r line; do say "  $line"; done
+say ""
+say "Built clean. The board keeps its name, its unique id, its four channels"
+say "and its deadman; only the chop frequency moves."
+confirm "Upload it to the board on $PORT now?" || {
+  say "Stopped. The board is untouched and the build is in $BUILD_DIR."
+  exit 0
+}
+if ! upload_firmware "$HEX"; then
+  say ""
+  say "The upload FAILED. The board may be half-written - do not leave it"
+  say "like this. Put the original back now:"
+  say ""
+  say "    scripts\\wind-reflash.cmd --restore"
+  exit 1
+fi
+say ""
+say "Uploaded."
+say "The board reboots into the new firmware on its own."
 
 # ── 4 ─────────────────────────────────────────────────────────────────────
 stage "Test it on the bench, before the car"
