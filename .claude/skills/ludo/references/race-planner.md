@@ -114,6 +114,64 @@ a trigger, an action, and a limit:
 > **IF** an incident costs more than *n* seconds **THEN** re-cost the remaining
 > stints; do not re-plan the whole race.
 
+### The write call — both doors validate, and a plan with no playbook is refused
+
+**Since 7 Sep 2026 `write_strategy` refuses a plan that carries no `playbook`
+list.** An empty list is accepted and means "no adaptations"; absent is
+refused, because absent is the driver assuming a playbook exists. Every entry
+is validated — trigger in `TRIGGERS`, action in `ACTIONS`, a non-empty `when` —
+and the stored row carries the certificate's `warnings` and `unchecked`.
+
+```python
+from pitcrew.mcp import server          # the tools are plain functions too
+import json
+
+payload = {
+  "author": "ludo",
+  "stops": 1, "pit_laps": [11], "laps": 20,
+  "stints": [
+    {"laps": 11, "compound": "RS", "fuel_l": 85.4, "start_lap": 1,  "tyres": True},
+    {"laps": 9,  "compound": "RS", "fuel_l": 69.4, "start_lap": 12, "tyres": True},
+  ],
+  "binding_constraint": "fuel",
+  "notes": ["one line per assumption, with its source class"],
+  "playbook": [
+    {"trigger": "fuel_short",  "action": "short_shift",
+     "when": "the tank misses the stop or the flag by more than 0.5 lap",
+     "until": "the projection reaches the target with 1 L in hand"},
+    {"trigger": "stop_missed", "action": "recost_to_flag",
+     "when": "lap 12 has been completed without a stop",
+     "until": "the stop is taken"},
+    {"trigger": "incident",    "action": "report_only",
+     "when": "more than 8 seconds lost", "until": "the lap is complete"},
+    {"trigger": "rain",        "action": "report_only",
+     "when": "the surface reads wet", "until": "the driver acknowledges"},
+  ],
+  "assumptions": ["burn 7.7 L/lap [MEASURED s127]", "refuel 1.003 L/s [MEASURED 4 Sep]"],
+}
+print(server.write_strategy(event_id, json.dumps(payload), label="ludo plan"))
+```
+
+The reply says `approved` (it certified and is armed for the next launch or
+the next time the Race screen is shown), or `written: false` with `problems`.
+`unhandled` lists the triggers with no entry — George reports those and
+decides nothing, and the driver should hear that list in his brief.
+
+The CLI is the same door with a file:
+
+```bash
+python -m pitcrew.strategy.handover --event 10 --file plan.json
+```
+
+It stores a **candidate** and the driver approves it on the Strategy screen
+(or `store.approve_strategy(id)` from a script, journalled with
+`note_engineer_write`). Either way a running app picks the approval up within
+15 s or when the Race screen is next shown.
+
+**A stint carries `tyres: true|false`.** That is the decision the box call
+speaks — "No tyres." or "RS on." — and the board shows. Omit it and George
+names the compound as he always did, which under a helmet reads as "fit RS".
+
 Anything outside the playbook is George reporting, not deciding. **He may always
 say "the plan no longer fits and I cannot fix it from here"** — that is a useful
 call and it is honest.

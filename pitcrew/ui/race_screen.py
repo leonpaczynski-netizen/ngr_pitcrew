@@ -142,11 +142,22 @@ class RaceScreen(QWidget):
     # Answering a re-plan offer without the microphone.
     replan_accepted = pyqtSignal()
     replan_declined = pyqtSignal()
+    # **Raised each time the screen comes into view**, so the controller can
+    # re-read the approved plan. A plan approved from outside the app - Ludo
+    # over MCP, the CLI - while the app was running never reached this
+    # screen: the picker was greyed at launch and only the two in-app approve
+    # paths refreshed it, so the Deep Forest race sim armed with no plan two
+    # minutes after one was approved.
+    shown = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._armed = False
         self._build()
+
+    def showEvent(self, event) -> None:                  # noqa: N802 - Qt
+        super().showEvent(event)
+        self.shown.emit()
 
     def _build(self) -> None:
         page = QVBoxLayout(self)

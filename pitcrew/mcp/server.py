@@ -342,6 +342,17 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
 
     Never undone. It may already be armed and partly executed; a plan is
     replaced by writing a better one.
+
+    **A plan carries a playbook or it is refused.** This door used to store
+    the payload as written - no `Handover.validate()`, so a plan with no
+    playbook armed George on his defaults and a plan with a mistyped or
+    forbidden action would have armed too. Deep Forest (strategy 27) and
+    Daytona (17) both ran that way. The playbook is the `playbook` list beside
+    the plan, as `references/race-planner.md` shows under "The write call";
+    an EMPTY list is accepted and means "no adaptations", because a race can
+    honestly be run to a plan with none - what is refused is the list being
+    absent, which is the driver assuming a playbook exists. Every entry is
+    validated (trigger, action, `when`) before anything is stored.
     """
     store = _store()
     try:
@@ -351,9 +362,31 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
     try:
         from pitcrew.strategy.certify import certify_for_event
         from pitcrew.strategy.execution import stamp
+        from pitcrew.strategy.handover import from_dict
 
-        payload = stamp(store, event_id, payload)
-        certificate = certify_for_event(store, event_id, payload)
+        section = (payload.get("handover")
+                   if isinstance(payload.get("handover"), dict) else payload)
+        if not isinstance(section, dict) or "playbook" not in section:
+            return _dump({
+                "written": False,
+                "error": ("no playbook: a plan needs a `playbook` list beside "
+                          "it (empty means 'no adaptations'). The recipe is "
+                          ".claude/skills/ludo/references/race-planner.md, "
+                          "'The write call'."),
+            })
+        handover = from_dict(payload)
+        problems = handover.validate()
+        if problems:
+            return _dump({"written": False, "error": "playbook refused",
+                          "problems": problems})
+
+        stamped = stamp(store, event_id, handover.plan)
+        certificate = certify_for_event(store, event_id, stamped)
+        payload = handover.as_stored(stamped)
+        payload["handover"]["certificate"] = {
+            "warnings": list(certificate.warnings),
+            "unchecked": list(certificate.unchecked),
+        }
         strategy_id = store.save_strategy(
             event_id, payload, label=label or "written by the race engineer",
             evidence={"certified": certificate.certified,
@@ -376,6 +409,7 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
             "refusals": certificate.refusals,
             "warnings": certificate.warnings,
             "unchecked": certificate.unchecked,
+            "unhandled": handover.unhandled(),
             "verdict": certificate.describe(),
             "note": ("approved and ready to arm." if certificate.certified else
                      "NOT approved: it did not certify, so the car cannot "

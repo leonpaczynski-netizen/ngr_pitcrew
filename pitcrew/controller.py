@@ -1076,6 +1076,7 @@ class PitCrewController(QObject):
                 self.approve_stored_strategy)
         if self.race_screen is not None:
             self.race_screen.start_requested.connect(self.start_race)
+            self.race_screen.shown.connect(self.refresh_plan)
             self.race_screen.replan_accepted.connect(
                 lambda: self._resolve_replan(accepted=True))
             self.race_screen.replan_declined.connect(
@@ -1111,6 +1112,18 @@ class PitCrewController(QObject):
         self._health = QTimer(self)
         self._health.setInterval(1000)
         self._health.timeout.connect(self._report_health)
+
+        # **A plan approved from outside reaches a running app.** The Race
+        # screen is refreshed when it is shown (`RaceScreen.shown`) and, in
+        # between, this watch compares the approved plan's id against the one
+        # last shown every 15 s and refreshes on a change. One indexed query;
+        # nothing while a race is running, because the coordinator armed
+        # from what it armed from.
+        self._seen_plan_id: int | None = None
+        self._plan_watch = QTimer(self)
+        self._plan_watch.setInterval(15_000)
+        self._plan_watch.timeout.connect(self._poll_plan)
+        self._plan_watch.start()
 
         self.refresh_catalogs()
         # **Scheduled, not called.** See `_first_paint_work`: this is ~130 ms
@@ -1385,6 +1398,45 @@ class PitCrewController(QObject):
                     "borrowing the ABS-on scale - it will read LOW confidence "
                     "until the event declares one")
         return event
+
+    def refresh_plan(self) -> None:
+        """Re-read the approved plan for the active event onto the screens.
+
+        Strategy 21 was approved at 14:29:34 on 6 Sep 2026 through
+        `write_strategy`; the race sim armed at 14:32:00 with
+        `strategy_id NULL`, because nothing between `load_active_event` and
+        the two in-app approve buttons ever re-read the table. Called when the
+        Race screen is shown and by `_poll_plan`.
+        """
+        if self.race is not None and getattr(self.race, "running", False):
+            return
+        event = self.active_event()
+        if event is None:
+            return
+        self._refresh_race_options(event)
+        try:
+            self._show_loaded_plans(event["id"])
+        except Exception:                                    # noqa: BLE001
+            log("pitcrew").warning("could not refresh the loaded plans",
+                                   exc_info=True)
+        approved = self.store.get_approved_strategy(event["id"])
+        self._seen_plan_id = (approved.get("id") if isinstance(approved, dict)
+                              else None)
+
+    def _poll_plan(self) -> None:
+        """Refresh only when the approved plan's id has moved."""
+        if self.race is not None and getattr(self.race, "running", False):
+            return
+        try:
+            event = self.active_event()
+            if event is None:
+                return
+            approved = self.store.get_approved_strategy(event["id"])
+        except Exception:                                    # noqa: BLE001
+            return
+        current = approved.get("id") if isinstance(approved, dict) else None
+        if current != self._seen_plan_id:
+            self.refresh_plan()
 
     def _refresh_race_options(self, event) -> None:
         """Say whether there is a plan for the Strategy choice to be about.
