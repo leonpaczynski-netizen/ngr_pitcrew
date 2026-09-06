@@ -531,7 +531,7 @@ def test_a_normal_fill_is_still_a_number_of_litres():
     state = RaceState(lap=5, laps_total=20, fuel_l=40.0, fuel_per_lap_l=5.0,
                       stint_ends_on_lap=10, next_stint_laps=10,
                       fuel_capacity_l=100.0)
-    assert _fuel_instruction(state) == "Fuel to 55 litres."
+    assert _fuel_instruction(state) == "Fuel to 55 litres - the next 10-lap stint."
 
 
 def test_the_shortfall_is_the_call_when_the_clamp_binds():
@@ -559,7 +559,7 @@ def test_an_unknown_capacity_does_not_invent_a_clamp():
     """No capacity is not a 0 L tank. The old behaviour stands."""
     state = RaceState(lap=5, laps_total=60, fuel_l=40.0, fuel_per_lap_l=10.0,
                       stint_ends_on_lap=10, fuel_capacity_l=None)
-    assert _fuel_instruction(state) == "Fuel to 510 litres."
+    assert _fuel_instruction(state) == "Fuel to 510 litres - 50 laps to the flag."
 
 
 def test_no_box_now_call_ever_asks_for_more_than_the_tank():
@@ -594,7 +594,7 @@ def test_the_stop_fills_for_the_next_stint_not_for_the_rest_of_the_race():
     state = RaceState(lap=10, laps_total=30, fuel_l=1.0, fuel_per_lap_l=3.4,
                       stint_ends_on_lap=10, next_stint_laps=10,
                       fuel_capacity_l=100.0)
-    assert _fuel_instruction(state) == "Fuel to 38 litres."
+    assert _fuel_instruction(state) == "Fuel to 38 litres - the next 10-lap stint."
 
 
 def test_under_plan_means_under_the_plan_not_under_todays_evidence():
@@ -700,7 +700,7 @@ def test_the_fill_uses_the_races_own_burn_and_not_the_planned_litres():
     state = RaceState(lap=10, laps_total=30, fuel_l=1.0, fuel_per_lap_l=4.6,
                       stint_ends_on_lap=10, next_stint_laps=10,
                       fuel_capacity_l=100.0)
-    assert _fuel_instruction(state) == "Fuel to 51 litres."
+    assert _fuel_instruction(state) == "Fuel to 51 litres - the next 10-lap stint."
 
 
 def test_the_plan_carries_the_next_stints_length_into_the_call():

@@ -70,7 +70,7 @@ from pitcrew.store import catalogs
 from pitcrew.store.db import Store
 from pitcrew.store.identity import IDENTITY_OK
 from pitcrew.race.calls import (STATUS, STATUS_EVERY_LAPS, STAY_OUT,
-                               fuel_in_hand, fuel_target_l, fuel_to_flag_l)
+                               fuel_in_hand, fuel_target_l, fuel_target_basis, fuel_to_flag_l)
 from pitcrew.race.coordinator import (PlanContext, RaceCoordinator,
                                       context_from_stored)
 from pitcrew.race.expectations import PRACTICE
@@ -5936,7 +5936,7 @@ class PitCrewController(QObject):
         # box - see `calls.fuel_to_flag_l`. It is None whenever staying out is
         # not a live option, and the watch says nothing about it then.
         return (fuel_target_l(race.state), race.state.fuel_per_lap_l,
-                fuel_to_flag_l(race.state))
+                fuel_to_flag_l(race.state), fuel_target_basis(race.state))
 
     def _voice_refuel(self, call) -> None:
         """Say it, show it, and file it with the rest of the race's calls."""

@@ -1449,6 +1449,56 @@ def _laps_after_this_stop(state: RaceState) -> int | None:
     return max(0, remaining - 1) if state.in_pit else remaining
 
 
+def _laps_the_fill_covers(state: RaceState) -> tuple[int | None, str | None]:
+    """How many laps the fill has to cover, and which bound said so.
+
+    **The last stop is sized by the flag. An intermediate stop is sized by the
+    plan's next stint.** Those are the only two answers, and the plan's stint
+    length never wins at a last stop in either direction:
+
+    * A stop taken LATE - Deep Forest, 6 Sep 2026, lap 13 against a plan that
+      said 11 - has fewer laps left than the stint says. The old rule took the
+      larger of the two, so the 10-lap stint sized a 7-lap run home: 76 L
+      called, 55-63 needed, 19.7 L over the line, 9.9 s parked at 2 L/s, and
+      P2 lost by 8 s. The plan's stint was already stale the moment the stop
+      moved.
+    * A stop taken EARLY has MORE laps left than the stint says, and a fill
+      to the stint would send him out to run dry. The old rule did get this
+      direction right, which is why its comment defended only that case.
+
+    Both are one rule: with no further stop planned, the laps still to run
+    once the car leaves the box are the whole answer. `further_stop_planned`
+    is None where nobody said (a state built by hand) and the plan's stint is
+    then taken at its word, as before.
+
+    The second value names the bound so the spoken figure can carry it - "7
+    laps to the flag" and "the next 9-lap stint" are different claims and the
+    driver has to be able to tell which one he is hearing (CLAUDE.md rule 12).
+    """
+    remaining = _laps_after_this_stop(state)
+    if state.next_stint_laps is not None:
+        if state.further_stop_planned is False and remaining is not None:
+            return remaining, f"{remaining} laps to the flag"
+        stint = state.next_stint_laps
+        return stint, f"the next {stint}-lap stint"
+    if state.stint_ends_on_lap is not None:
+        laps = (state.laps_total or 0) - state.stint_ends_on_lap
+        return laps, f"{laps} laps to the flag"
+    if remaining is None:
+        return None, None
+    return remaining, f"{remaining} laps to the flag"
+
+
+def fuel_target_basis(state: RaceState) -> str | None:
+    """The bound behind `fuel_target_l`, in words, or None where there is no
+    figure. Said with the litres, in the box call and again with the hose in,
+    so the two sentences cannot name the same number for different reasons."""
+    if not state.fuel_per_lap_l or state.laps_remaining() is None:
+        return None
+    _laps, basis = _laps_the_fill_covers(state)
+    return basis
+
+
 def fuel_target_l(state: RaceState) -> float | None:
     """What the tank should read at pit exit, or None if nothing can size it.
 
@@ -1464,16 +1514,9 @@ def fuel_target_l(state: RaceState) -> float | None:
     """
     if not state.fuel_per_lap_l or state.laps_remaining() is None:
         return None
-    if state.next_stint_laps is not None:
-        after_stop = state.next_stint_laps
-        remaining = _laps_after_this_stop(state)
-        if (state.further_stop_planned is False and remaining is not None
-                and remaining > after_stop):
-            after_stop = remaining
-    elif state.stint_ends_on_lap is not None:
-        after_stop = (state.laps_total or 0) - state.stint_ends_on_lap
-    else:
-        after_stop = state.laps_remaining()
+    after_stop, _basis = _laps_the_fill_covers(state)
+    if after_stop is None:
+        return None
     margin_l, _ = fuel_margin_l(after_stop, state.fuel_per_lap_l,
                                 sd_l=state.fuel_sd_l,
                                 timed=state.race_minutes is not None,
@@ -1579,7 +1622,14 @@ def _fuel_instruction(state: RaceState) -> str:
     # so rounding 50.4 down to 50 quietly spends 0.4 L of a margin that is now
     # measured in tenths rather than in whole laps. Up costs at most a litre -
     # one second at Watkins' rate - and down can cost the race.
-    return f"Fuel to {math.ceil(litres):.0f} litres."
+    #
+    # **And the bound travels with the number.** "Fuel to 76" sized by a
+    # 10-lap stint and "Fuel to 63" sized by 7 laps to the flag are different
+    # instructions; without the clause the driver cannot tell a stale plan
+    # from the race (rule 12).
+    basis = fuel_target_basis(state)
+    clause = f" - {basis}." if basis else "."
+    return f"Fuel to {math.ceil(litres):.0f} litres{clause}"
 
 
 # **`fuel_map_for` was here and has been deleted, deliberately.**

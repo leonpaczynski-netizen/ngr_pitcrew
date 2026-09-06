@@ -1292,7 +1292,7 @@ def test_a_stale_plan_does_not_size_a_fill_below_the_race():
                       stint_ends_on_lap=7, next_stint_laps=3,
                       further_stop_planned=False, fuel_capacity_l=100.0)
     said = _fuel_instruction(state)
-    assert said == "Fuel to 62 litres."               # (8+1) x 6.79, rounded up
+    assert said == "Fuel to 62 litres - 8 laps to the flag."  # (8+1) x 6.79, rounded up; sized by the flag, and it says so
 
 
 def test_a_hand_built_state_keeps_the_stints_own_figure():

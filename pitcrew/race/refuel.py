@@ -125,7 +125,8 @@ class RefuelWatch:
     def note(self, fuel_l: float | None, *, speed_kph: float | None,
              target_l: float | None,
              fuel_per_lap_l: float | None = None,
-             to_flag_l: float | None = None) -> RefuelCall | None:
+             to_flag_l: float | None = None,
+             basis: str | None = None) -> RefuelCall | None:
         """One frame. Returns what to say, or None - which is almost always.
 
         `target_l` is what the tank should read at pit exit, recomputed by the
@@ -182,8 +183,15 @@ class RefuelWatch:
                     RELEASE, "Go.",
                     f"{fuel_l:.0f} litres aboard - that already covers it."
                     + _to_flag_clause(to_flag_l, target))
+            # **The bound, not just the count.** "10 laps at this race's
+            # burn" was said at Deep Forest with 7 to go - the count was the
+            # plan's stint and nothing said so. The basis names which bound
+            # produced the figure; the lap count is derived from it and is
+            # kept for the case where no basis was handed over.
             return RefuelCall(TARGET, f"Fuel to {_ceil_l(target)} litres.",
-                              _laps_reason(target, fuel_per_lap_l)
+                              (f"{basis[0].upper() + basis[1:]}, at this "
+                               f"race's burn." if basis
+                               else _laps_reason(target, fuel_per_lap_l))
                               + _to_flag_clause(to_flag_l, target))
 
         if not self._said_release and fuel_l >= target - RELEASE_EPSILON_L:
@@ -231,8 +239,9 @@ class RefuelAdviser:
     qualifying coach: the controller builds it with a `speak` callable and
     hands it over, and the frame path calls one method and knows nothing else.
 
-    `context` returns `(target_l, fuel_per_lap_l, to_flag_l)` for the race
-    right now, or None where nothing can size a stop. It is called **only when the car is
+    `context` returns `(target_l, fuel_per_lap_l, to_flag_l, basis)` for the
+    race right now - `basis` being the bound that sized the target, in words -
+    or None where nothing can size a stop. It is called **only when the car is
     slow enough to be in a pit box**, because it re-derives the fill from the
     race's own burn and that is not free sixty times a second for an hour.
     """
@@ -248,14 +257,17 @@ class RefuelAdviser:
 
     def note_frame(self, fuel_l: float | None,
                    speed_kph: float | None) -> None:
-        target = fuel_per_lap = to_flag = None
+        target = fuel_per_lap = to_flag = basis = None
         if speed_kph is not None and speed_kph <= FILL_MAX_KPH:
             found = self._context()
             if found is not None:
-                target, fuel_per_lap, to_flag = found
+                # Three values from an older context, four from the
+                # controller's: the fourth is the bound behind the figure.
+                target, fuel_per_lap, to_flag = found[:3]
+                basis = found[3] if len(found) > 3 else None
         call = self.watch.note(fuel_l, speed_kph=speed_kph, target_l=target,
                                fuel_per_lap_l=fuel_per_lap,
-                               to_flag_l=to_flag)
+                               to_flag_l=to_flag, basis=basis)
         if call is not None:
             self._speak(call)
 
