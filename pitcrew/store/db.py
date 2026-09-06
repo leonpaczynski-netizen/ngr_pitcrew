@@ -914,6 +914,31 @@ class Store:
                  IDENTITY_OK, _now()))
             return int(cur.lastrowid)
 
+    def resolve_stop_tyres(self, session_id: int, around_lap: int | None,
+                           changed: bool) -> int | None:
+        """Write what the race learned about a stop's tyres onto its pit lap.
+
+        The session filed `NULL` because its detector did not see a swap;
+        the gauge or the driver settled it later. The pit lap row is the one
+        flagged `is_pit_lap` at `around_lap` or the lap after - the line is
+        crossed before the box at some circuits and after it at others, so
+        the completed count at pit exit is one of the two. Returns the lap
+        written, or None where no pit lap row was found.
+        """
+        if around_lap is None:
+            return None
+        with self._write() as conn:
+            row = conn.execute(
+                "SELECT lap_num FROM laps WHERE session_id = ? AND is_pit_lap = 1 "
+                "AND lap_num IN (?, ?) ORDER BY lap_num LIMIT 1",
+                (session_id, around_lap, around_lap + 1)).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE laps SET tyres_changed = ? WHERE session_id = ? "
+                "AND lap_num = ?", (1 if changed else 0, session_id, row[0]))
+            return int(row[0])
+
     def record_measured_pit_loss(self, event_id: int, seconds: float, *,
                                  method: str) -> bool:
         """Write the pit loss this circuit actually cost, and say it was measured.

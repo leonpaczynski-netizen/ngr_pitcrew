@@ -723,6 +723,20 @@ class RaceState:
     # for the log and the audit ("gauge: fresh set" / "gauge: same set").
     unconfirmed_stop_lap: int | None = None
     tyre_change_resolution: str | None = None
+    # **The worst corner as the gauge last read it BEFORE the stop.** Every
+    # reading while unconfirmed is judged against this and never against
+    # the previous unresolved reading - a partial drop appended to the old
+    # history moved the baseline to itself, and the next reading then read
+    # "same set" against a set that had just fallen by thirty points (rule
+    # 10: a baseline that cannot be retired is a latch).
+    unconfirmed_before: float | None = None
+    # Readings taken while unconfirmed, held back from the history until the
+    # question is settled: `(lap, wear)` pairs.
+    parked_wear: list = field(default_factory=list)
+    # The stop lap a resolution belongs to, for the controller to write
+    # `laps.tyres_changed` back; None until a resolution has been reached
+    # and then cleared once written.
+    tyre_change_write_back: tuple | None = None
     # --- tyre temperature, per-lap frame means fed by the coordinator ---
     # The measured working window per axle, (floor, ceiling) in degC, from
     # this event's own practice laps. None where nobody has measured one -
@@ -1016,7 +1030,11 @@ class RaceState:
             return
         if self.wear_history and self.wear_history[-1][0] >= lap:
             return
-        self._resolve_tyre_change(lap, present)
+        if self.tyre_change_unconfirmed:
+            # Judged, and either settled or parked - never appended to the
+            # old set's history while the question is open.
+            self._resolve_tyre_change(lap, present)
+            return
         self.wear_history.append((lap, present))
 
     def _resolve_tyre_change(self, lap: int, present: dict) -> None:
@@ -1032,31 +1050,100 @@ class RaceState:
         off the wear call, and the resolution is logged so the audit can see
         which instrument answered.
         """
-        if not self.tyre_change_unconfirmed or not self.wear_history:
+        before = self.unconfirmed_before
+        if before is None:
+            # No reading before the stop to judge against: the gauge cannot
+            # settle this one. The stop's own detector already said nothing;
+            # the driver's word can (`note_tyres_word`).
+            self.parked_wear.append((lap, present))
             return
-        _last_lap, last = self.wear_history[-1]
-        before = max(last.values())
         now = max(present.values())
         stop_lap = self.unconfirmed_stop_lap
-        if now <= GAUGE_FRESH_SET_MAX and before - now >= GAUGE_FRESH_SET_DROP:
-            self.laps_since_stop = (max(0, lap - stop_lap)
-                                    if stop_lap is not None else 0)
-            self.wear_history = []
-            self.temp_history = []
-            self.tyre_change_resolution = "gauge: fresh set"
-        elif now >= before - GAUGE_SAME_SET_SLACK:
-            self.tyre_change_resolution = "gauge: same set"
-        else:
-            # Neither shape - a partial drop. Say nothing yet; the next
-            # reading may settle it, and a guess here is the thing this
-            # exists to remove.
+        # **A fresh set needs two readings, not one.** An all-four-corners
+        # 0.000 misread is a documented failure of the gauge locator, and
+        # `coherent()` upstream accepts it as a fresh set - so a single
+        # reading near zero must not wipe the history. Two consecutive
+        # readings under the gauge's own fresh-set ceiling, both well below
+        # the pre-stop worst and the second no lower than the first, is a
+        # set that has gone on. One definition of "fresh" - the gauge's
+        # `FRESH_SET_MAX` - not a second threshold pair here.
+        looks_fresh = (now <= GAUGE_FRESH_SET_MAX
+                       and before - now >= GAUGE_FRESH_SET_DROP)
+        previous = self.parked_wear[-1] if self.parked_wear else None
+        if looks_fresh and previous is not None:
+            earlier = max(previous[1].values())
+            if (earlier <= GAUGE_FRESH_SET_MAX
+                    and now >= earlier - GAUGE_SAME_SET_SLACK):
+                self.laps_since_stop = (max(0, lap - stop_lap)
+                                        if stop_lap is not None else 0)
+                # The new set's history is the parked readings that were on
+                # it - those under the ceiling - and this one.
+                self.wear_history = [(l, w) for l, w in self.parked_wear
+                                     if max(w.values()) <= GAUGE_FRESH_SET_MAX]
+                self.wear_history.append((lap, present))
+                self.temp_history = []
+                self._settle_tyre_change("gauge: fresh set", before, now, True)
+                return
+        if now >= before - GAUGE_SAME_SET_SLACK and not looks_fresh:
+            # The series carries on from where it was: the old set.
+            self.wear_history.extend(self.parked_wear)
+            self.wear_history.append((lap, present))
+            self._settle_tyre_change("gauge: same set", before, now, False)
             return
+        # Neither shape yet: a first near-zero reading, or a partial drop.
+        # Parked, and the next reading is judged against the SAME pre-stop
+        # baseline, never against this one.
+        self.parked_wear.append((lap, present))
+
+    def _settle_tyre_change(self, how: str, before: float, now: float,
+                            changed: bool) -> None:
+        stop_lap = self.unconfirmed_stop_lap
+        self.tyre_change_resolution = how
         self.tyre_change_unconfirmed = False
         self.unconfirmed_stop_lap = None
+        self.unconfirmed_before = None
+        self.parked_wear = []
+        self.tyre_change_write_back = (stop_lap, changed, how)
         log("race").info(
             "tyre change at the lap-%s stop resolved by the %s (worst corner "
             "%.0f%% -> %.0f%%)", stop_lap if stop_lap is not None else "last",
-            self.tyre_change_resolution, before * 100, now * 100)
+            how, before * 100, now * 100)
+
+    def note_tyres_word(self, changed: bool, lap: int | None = None) -> None:
+        """The driver said it: "new tyres" or "no tyres". Primary evidence.
+
+        Settles an unconfirmed stop outright, and disagrees out loud with a
+        gauge that had already settled it the other way - the disagreement
+        is the finding (CLAUDE.md 4.1), never averaged.
+        """
+        how = "driver: " + ("new tyres" if changed else "no tyres")
+        stop_lap = self.unconfirmed_stop_lap
+        if not self.tyre_change_unconfirmed:
+            prior = self.tyre_change_resolution
+            if prior and prior.startswith("gauge") and (
+                    ("fresh" in prior) != changed):
+                log("race").warning(
+                    "the driver says %s at the last stop; the gauge had "
+                    "settled it as %s - his word stands, the disagreement "
+                    "is recorded", how, prior)
+            else:
+                return
+            stop_lap = None
+        if changed:
+            self.laps_since_stop = (max(0, (lap or self.lap) - stop_lap)
+                                    if stop_lap is not None else 0)
+            self.wear_history = [(l, w) for l, w in self.parked_wear]
+            self.temp_history = []
+        else:
+            self.wear_history.extend(self.parked_wear)
+        self.tyre_change_resolution = how
+        self.tyre_change_unconfirmed = False
+        self.unconfirmed_stop_lap = None
+        self.unconfirmed_before = None
+        self.parked_wear = []
+        self.tyre_change_write_back = (stop_lap, changed, how)
+        log("race").info("tyre change at the lap-%s stop resolved by the %s",
+                         stop_lap if stop_lap is not None else "last", how)
 
     def note_temps(self, lap: int, front_c: float, rear_c: float) -> None:
         """One completed lap's measured axle means, in order driven."""
@@ -1956,14 +2043,6 @@ def _fuel(state: RaceState) -> Call | None:
         # Only worth saying once the stint is half run. At the start of a
         # stint there is always surplus - the tank was just filled - and
         # "you can push" on lap one is noise the driver learns to ignore.
-        #
-        # **And not twice in one lap.** The heartbeat already carries the
-        # same figure as "N spare to the flag"; at Deep Forest the two were
-        # spoken two seconds apart on three laps. If the heartbeat has spoken
-        # this lap the number has been said.
-        if state.last_said_lap == state.lap and state.last_said_kind in (
-                STATUS, FUEL_LONG):
-            return None
         return Call(
             FUEL_LONG, state.lap,
             "You can push.",
@@ -2181,6 +2260,14 @@ class WearView:
 
 def _wear_laps_left(state: RaceState) -> WearView | None:
     """How much stint is left, from the gauge if it read and the briefing if not."""
+    # **Nothing through an unconfirmed stop.** The history is the OLD set's
+    # until the gauge or the driver says which set is on, and a projection
+    # from it - "Box this lap. FR at 42 percent, measured." on the out-lap of
+    # a fresh set - is the Deep Forest failure with the word "measured"
+    # attached. Silence here is the honest answer for a lap or two; the
+    # heartbeat still asks for the gauge.
+    if state.tyre_change_unconfirmed:
+        return None
     rate, source = _wear_rate(state)
     if rate is None:
         return None
@@ -2918,8 +3005,11 @@ GAUGE_STALE_LAPS = 5
 # set at 60% that reads 40% is a gauge artefact, not new rubber. Deep Forest,
 # 6 Sep 2026: 0.42 before the stop, 0.00 after. The same-set test is the
 # series carrying on within a little slack for the gauge's own resolution.
-GAUGE_FRESH_SET_MAX = 0.10
-GAUGE_FRESH_SET_DROP = 0.15
+# `telemetry/hud.FRESH_SET_MAX` is 0.15 - one definition of "fresh", not
+# two (rule 13); it is restated here rather than imported because `hud`
+# pulls in the screen-capture stack and this module runs at every crossing.
+GAUGE_FRESH_SET_MAX = 0.15
+GAUGE_FRESH_SET_DROP = 0.10
 GAUGE_SAME_SET_SLACK = 0.03
 GAUGE_ASK = "gauge-ask"
 
@@ -3020,6 +3110,8 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
         state.laps_since_stop = 0
         state.tyre_change_unconfirmed = False
         state.unconfirmed_stop_lap = None
+        state.unconfirmed_before = None
+        state.parked_wear = []
         state.tyre_change_resolution = "session: swap seen"
         state.temp_history = []
         # **A rate fitted across a stop describes neither set.** The gauge
@@ -3031,3 +3123,6 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
         state.tyre_change_unconfirmed = True
         state.unconfirmed_stop_lap = state.lap
         state.tyre_change_resolution = None
+        state.unconfirmed_before = (max(state.wear_history[-1][1].values())
+                                    if state.wear_history else None)
+        state.parked_wear = []

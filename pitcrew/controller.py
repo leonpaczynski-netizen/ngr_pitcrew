@@ -2334,6 +2334,9 @@ class PitCrewController(QObject):
             race_laps=None if timed else declared,
             race_minutes=(float(declared) if declared else None) if timed
             else event.get("race_minutes"),
+            laps_estimate=(sum(int(s.get("laps") or 0) for s in stints
+                               if isinstance(s, dict)) or None) if timed
+            else None,
             stops=(len(stints) - 1) if stints else None,
             compounds=compounds,
             # **Only if it can actually work this session.** Switched on and
@@ -4697,6 +4700,11 @@ class PitCrewController(QObject):
         Idempotent: `race_run_id` is cleared, so a second crossing after the
         flag does nothing.
         """
+        # A race ended without a flag still ends: whatever the rig held
+        # back is said now rather than carried into the next race's flag.
+        rig = getattr(self, "rig", None)
+        if rig is not None and hasattr(rig, "release_notices"):
+            rig.release_notices()
         if self.race is None or self.race_run_id is None:
             return
         if not self.race.state.finished:
@@ -4758,6 +4766,7 @@ class PitCrewController(QObject):
         # expect. Filed after the coordinator instead, it would be a lap
         # further behind again and every projection would be one lap stale.
         if event.kind is EventKind.LAP_COMPLETED:
+            self._write_back_tyre_resolution()
             # Both or neither. A reading whose lap could not be identified is
             # dropped rather than filed against lap 0, which would anchor every
             # fitted rate to a point the tyre was never at.
@@ -5589,11 +5598,26 @@ class PitCrewController(QObject):
         """
         from pitcrew.engineer.intents import (
             REPORT_INCIDENT,
+            REPORT_NEW_TYRES,
+            REPORT_NO_TYRES,
             REPORT_OVERSTEER,
             REPORT_TRAFFIC,
             REPORT_UNDERSTEER,
         )
         from pitcrew.race import driver_report
+
+        if intent in (REPORT_NEW_TYRES, REPORT_NO_TYRES):
+            # **The driver's word on the stop is primary evidence.** It
+            # settles an unconfirmed change outright and is logged against a
+            # gauge that had settled it the other way. Not a lap report:
+            # nothing is excluded and nothing is written to the report
+            # table - the race carries it.
+            if self.race is not None:
+                self.race.note_tyres_word(intent == REPORT_NEW_TYRES)
+            log("race").info("driver reports %s at the last stop (%r)",
+                             "new tyres" if intent == REPORT_NEW_TYRES
+                             else "no tyres", heard)
+            return
 
         kinds = {REPORT_UNDERSTEER: driver_report.UNDERSTEER,
                  REPORT_OVERSTEER: driver_report.OVERSTEER,
@@ -5671,6 +5695,14 @@ class PitCrewController(QObject):
                 and not state.only_the_heartbeat_this_lap()):
             return
         fuel_laps, fuel_ref = self._laps_of_fuel_in_hand(state)
+        # **The heartbeat already said the fuel this lap.** Its "N spare to
+        # the flag" and this line's "N laps of fuel in hand to the flag" are
+        # the same number in two forms of words, and at Deep Forest they
+        # were spoken two seconds apart on three laps. When the heartbeat
+        # has taken this crossing the straight carries everything but the
+        # fuel figure.
+        if state.only_the_heartbeat_this_lap():
+            fuel_laps, fuel_ref = None, fuel_ref
         call = self._colour.data_line(
             lap=state.lap,
             fuel_laps_in_hand=fuel_laps,
@@ -6040,6 +6072,27 @@ class PitCrewController(QObject):
             self.store.append_revision(
                 self.race_run_id, outcome.lap,
                 spoken.call() or spoken.reason, payload, accepted=False)
+
+    def _write_back_tyre_resolution(self) -> None:
+        """A stop the session could not read, settled since by the gauge or
+        the driver, is written onto the pit lap's row - so the archive says
+        what the race learned rather than what the detector saw."""
+        if self.race is None or self.session_id is None:
+            return
+        pending = getattr(self.race.state, "tyre_change_write_back", None)
+        if pending is None:
+            return
+        self.race.state.tyre_change_write_back = None
+        stop_lap, changed, how = pending
+        try:
+            written = self.store.resolve_stop_tyres(
+                self.session_id, stop_lap, changed)
+            log("race").info("laps.tyres_changed written as %s on lap %s "
+                             "(%s)%s", int(changed), written, how,
+                             "" if written is not None else " - no pit lap row")
+        except Exception:                                    # noqa: BLE001
+            log("race").warning("could not write the tyre resolution back",
+                                exc_info=True)
 
     def _record_pit_loss(self) -> None:
         """Measure this race's pit loss off its lap rows and store it.

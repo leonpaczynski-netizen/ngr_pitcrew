@@ -87,8 +87,13 @@ REPORT_INCIDENT = "report-incident"
 # **So is traffic**, for the same reason and with more force: he cannot drive
 # his own line behind another car, so the lap measures the car in front.
 REPORT_TRAFFIC = "report-traffic"
+# **What went on at the stop, from the only instrument that always knows.**
+# The swap detector missed the Deep Forest change and the gauge needs two
+# readings to settle it; he knows the moment he leaves the box.
+REPORT_NEW_TYRES = "report-new-tyres"
+REPORT_NO_TYRES = "report-no-tyres"
 REPORTS = (REPORT_UNDERSTEER, REPORT_OVERSTEER, REPORT_INCIDENT,
-           REPORT_TRAFFIC)
+           REPORT_TRAFFIC, REPORT_NEW_TYRES, REPORT_NO_TYRES)
 
 UNKNOWN = "unknown"
 
@@ -326,6 +331,12 @@ PHRASES: dict[str, tuple[str, ...]] = {
                        "it nearly went round", "i caught a slide",
                        "i almost spun it", "it's snapping on me",
                        "the rear won't stay put"),
+    REPORT_NEW_TYRES: ("new tyres", "took tyres", "fresh tyres",
+                       "changed tyres", "i took tyres", "new set",
+                       "fresh set on", "tyres changed"),
+    REPORT_NO_TYRES: ("no tyres", "fuel only", "kept the tyres",
+                      "same tyres", "didn't take tyres", "no new tyres",
+                      "stayed on the same set"),
     REPORT_INCIDENT: ("i went off", "went off", "i had a moment",
                       "had a moment", "i spun", "spun it", "off track",
                       "i went wide", "had contact", "i got hit",
@@ -440,6 +451,8 @@ def match_intent(heard: str) -> str:
 _REPORT_REPLY = {
     REPORT_UNDERSTEER: "Copy, understeer noted.",
     REPORT_OVERSTEER: "Copy, oversteer noted.",
+    REPORT_NEW_TYRES: "Copy, new tyres.",
+    REPORT_NO_TYRES: "Copy, no tyres.",
 }
 
 

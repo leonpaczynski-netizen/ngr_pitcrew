@@ -467,6 +467,10 @@ class RaceCoordinator:
         if following is None:
             self.state.stint_ends_on_lap = None
 
+    def note_tyres_word(self, changed: bool) -> None:
+        """The driver said "new tyres" or "no tyres" on the radio."""
+        self.state.note_tyres_word(changed, lap=self.state.lap)
+
     def note_driving(self, lap_num: int, read) -> None:
         """One lap's driving read off its frames, from the controller.
 
@@ -735,7 +739,14 @@ class RaceCoordinator:
         # nothing. Where it is None the fill falls back to CLAUDE.md's flat
         # lap, which is the right answer for a burn nobody has measured the
         # spread of - it is only the wrong answer once the spread is known.
-        measured_sd = self.expect.race_fuel_sd_l()
+        # **The stint's own scatter once it can speak, the race's until
+        # then** - the same terms as the rate. A whole-race sd across a stint
+        # boundary contains the STEP between stints (7.32 -> 7.8-8.1 at Deep
+        # Forest), which this codebase's own rule says is not scatter; a
+        # margin sized on it buys fuel against a fault that does not exist.
+        measured_sd = (self.expect.stint_fuel_sd_l()
+                       if self.expect.stint_fuel_per_lap_l() is not None
+                       else self.expect.race_fuel_sd_l())
         if measured_sd is not None:
             self.state.fuel_sd_l = measured_sd
 
@@ -1605,7 +1616,9 @@ class RaceCoordinator:
         burn on any lap at all has a CV of 10.4%, the whole spread coming from
         incident laps and laps he was deliberately saving on.
         """
-        green = self.expect.race_fuel_per_lap_l()
+        # The burn the race is being run on - this stint's once it can speak
+        # (0.9), so the re-planner and the fill read one number, not two.
+        green = self.expect.current_fuel_per_lap_l()
         if green is None or self.expect.green_laps() < self.BURN_LAPS_NEEDED:
             return None
         return green

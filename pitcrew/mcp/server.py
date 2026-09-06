@@ -367,6 +367,10 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
         section = (payload.get("handover")
                    if isinstance(payload.get("handover"), dict) else payload)
         if not isinstance(section, dict) or "playbook" not in section:
+            store.note_engineer_write(
+                "strategy", target_id=None, event_id=event_id,
+                author="race engineer (MCP)",
+                summary="refused: no playbook", after={"label": label})
             return _dump({
                 "written": False,
                 "error": ("no playbook: a plan needs a `playbook` list beside "
@@ -377,6 +381,13 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
         handover = from_dict(payload)
         problems = handover.validate()
         if problems:
+            # A refusal leaves a trace: a plan that could not be loaded is
+            # as much a fact about the weekend as one that was.
+            store.note_engineer_write(
+                "strategy", target_id=None, event_id=event_id,
+                author="race engineer (MCP)",
+                summary="refused: " + "; ".join(problems)[:200],
+                after={"label": label, "problems": problems})
             return _dump({"written": False, "error": "playbook refused",
                           "problems": problems})
 

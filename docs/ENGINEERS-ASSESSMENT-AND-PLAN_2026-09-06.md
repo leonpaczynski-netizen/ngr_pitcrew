@@ -446,6 +446,76 @@ clean.
 
 ---
 
+## 9a. Execution record — 7 Sep 2026
+
+**Phase −1: complete, critic agreed after two corrections.** Seven commits on
+the night's tree (suite exit 0 first); `HudSession.armed()` replaces the
+brief's non-existent attribute; strategy **29** approved for event 10 with a
+five-entry playbook through `accept()`; knowledge row for Daytona (refuel
+1.003 L/s, RS 0.0570/lap s118, rivals); Huracán shift table at Daytona for
+gears 1–3 off s127 (4–6 silent); GR3 dossier and the spoken stop rule in
+`brain/_inbox/setups/2026-09-07-huracan-daytona-BRIEF.md`; event 10 matched to
+the hub on rain and compounds; `MEMORY.md` under limit. The critic corrected
+three rival counts and two playbook notes, and found the pit-loss recipe and
+`lost_the_gauge()` dead code — both taken into Phase 0.
+
+**Phase 0: all fourteen rows landed**, one commit per row, each with tests on
+the seam it fixes, suite exit 0 at every checkpoint:
+
+| row | commit | note |
+|---|---|---|
+| 0.4 | `1f84ec1` | live file migrated by opening it; `tools/schema_audit.py` |
+| 0.1 | `bd074e8` → `d40a5b4` → `8fd9af9` | the critic's blocker: at Daytona and Spa the line is crossed in the lane BEFORE the fill, so "in_pit → one lap off" under-fuelled tonight's plan by a lap; `crossed_in_box` fixes it and the box call and hose-in figure now count the same laps ("after the box" / "to the flag") |
+| 0.2 | `7ae1bb2` | `Handover.ACTIONS` deliberately NOT extended (an action no trigger fires is dead vocabulary); the decision lives on the stint, not in a knowledge field |
+| 0.3 | `ee0c917` | tri-state resolved by the gauge; **damage and hygrometer readers deferred** — no captured frame of a damaged or wet state to calibrate against |
+| 0.5 | `0f8ba61` | recipe in `race-planner.md`; an empty playbook is accepted, an absent one refused |
+| 0.6 | `420fa48` | the box-call "Copy?" deferred: "copy that" already accepts a re-plan |
+| 0.7 | `420fa48` | position hold 8 s; league line once; fuel-long not after the heartbeat; "Fuel needs a stop"; rejoin conditional; rig faults held to the flag |
+| 0.8 | `cb4d271` | stops off the clock; certifier refuses a plan that outruns it |
+| 0.9 | `cb4d271` | the stint's burn once it has three clean laps |
+| 0.10 | `08d9df5` | multiplier stamped on wear rates and checked; `tyre_models` columns deferred (read by nothing in `race/`) |
+| 0.13 | `ad616eb` | measured at the flag from lap rows, `source='measured'` |
+| 0.14 | `c5516dd` | `power_limit_bhp` / `weight_limit_kg` from the hub |
+| 0.0 | `8fd9af9` | the harness replays the box off the pit lane's frames; gaps still cannot be replayed (S8) |
+| 0.11, 0.12 | `34fcec9` | Suzuka quali plan; run-plan template |
+
+**Corrected in this phase:** the plan's Phase −1 said the fill logic was "not
+in the car tomorrow"; it is (0.1 and its two corrections landed before the
+race). The memory `reference-crossing-in-the-box` records the lesson.
+
+**Second critic pass on Phase 0 (0.3, 0.5–0.9) — one blocker, four majors,
+all answered:**
+- a red test from 0.7's conditional rejoin call, fixed to the new wording;
+- 0.3: the wear projection is now silent through an unconfirmed stop (it could
+  have said "Box this lap. FR at 42 percent, measured." off the old set on the
+  out-lap); the resolver judges every reading against the pre-stop baseline it
+  now holds, parks unresolved readings instead of appending them, needs **two**
+  consecutive readings for a fresh set (an all-zero locator misread is on file)
+  and uses the gauge's own `FRESH_SET_MAX`; the driver's word ("new tyres" /
+  "no tyres") is a report intent that settles it outright and overrules a gauge
+  verdict aloud; the resolution is written back onto the pit lap's row;
+- 0.7: the fuel-repeat guard was dead (the crossing's lap number advances
+  before `next_call`) and aimed at the wrong pair — removed; the straight-line
+  colour call now drops the fuel figure when the heartbeat took this crossing,
+  which is the pair that repeated; rig notices are released on `stop_race`;
+- 0.8: the brief says the same "About N laps on the clock" the green will, and
+  the line is built from fragments in the pack; 0.9: the stint's own scatter
+  sizes the fill and the re-planner reads the same burn as the fill; 0.5:
+  refusals are journalled.
+
+**Struck from the rows, with the reason:** 0.3's damage-red and hygrometer
+readers — there is no captured frame of a damaged or wet state to calibrate
+against, and a reader with no calibration frame is the fabricated-zero defect
+in a new shape; they return as a Phase 1 item once one race has been driven
+wet or damaged with the recording on. 0.6's box-call "Copy?" — "copy that"
+already accepts a re-plan, and a confirmation word that can be misheard as one
+is worse than none until the PTT round trip is proven live (A5). 0.7's "one
+lap" position hold is eight seconds: a battle that has not settled in a
+straight is one he is in, not one he needs told about. 0.9's "whole-race
+median kept for the flag projection only" was not implemented: the stint's
+burn is the best predictor of the laps ahead, flag included, and the race
+median survives in the export and the audit line.
+
 ## 9. Critic record
 
 **Pass 1 (6 Sep, late).** Twenty-six claims spot-checked: 21 confirmed, 2 wrong

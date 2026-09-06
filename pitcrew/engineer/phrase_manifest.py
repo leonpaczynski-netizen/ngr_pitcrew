@@ -534,8 +534,15 @@ def spoken_openers() -> tuple[str, ...]:
         "and not a number.",
         "I can't see kerbs or offs on this stream.",
         "I can't see other cars - position only.",
-        # The register suffix on a suggestion - "You can push ... Suggestion."
+        # The register suffixes - "You can push ... Suggestion." and a
+        # LOW-confidence call's "Unconfirmed."
         "Suggestion.",
+        "Unconfirmed.",
+        # A timed race's green - "About 20 laps on the clock." - is split on
+        # its one number by `_split_on_number`, so only the two fragments
+        # either side of it are rendered, not one clip per lap count.
+        "About",
+        "laps on the clock.",
         "No plan loaded - I'll call fuel and nothing else.",
         "I won't give you a lap count until I can stand behind one.",
         "I've lost the tyre gauge. Read it to me when you get a straight.",

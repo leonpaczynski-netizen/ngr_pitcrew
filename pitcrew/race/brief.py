@@ -42,6 +42,9 @@ class Instruments:
     #: Lap count for a lap race; None for a timed race.
     race_laps: int | None = None
     race_minutes: float | None = None
+    # The plan's estimate of a timed race's distance, said as one. None
+    # where no plan carries one.
+    laps_estimate: int | None = None
     #: Stops the plan makes, and the compounds in order, where it has them.
     stops: int | None = None
     compounds: tuple[str, ...] = ()
@@ -99,7 +102,14 @@ def brief(instruments: Instruments) -> list[str]:
                       else f", {instruments.stops} stop"
                            f"{'' if instruments.stops == 1 else 's'}")
         lines.append(shape + " - this one runs to the clock.")
-        lines.append("I won't give you a lap count until I can stand behind one.")
+        if instruments.laps_estimate:
+            # The same estimate the green will say, said the same way; the
+            # brief used to promise no count and the green then gave one.
+            lines.append(f"About {instruments.laps_estimate} laps on the "
+                         f"clock - I'll firm it up as we go.")
+        else:
+            lines.append("I won't give you a lap count until I can stand "
+                         "behind one.")
     elif not instruments.has_plan:
         lines.append("No plan loaded - I'll call fuel and nothing else.")
 

@@ -458,7 +458,10 @@ def test_a_stop_now_that_would_drop_us_behind_is_said():
     # and `FUEL_SHORT` rightly wins the crossing. The point is that the rejoin
     # is OFFERED, and with the fill priced rather than the stint's load.
     call = next(c for c in candidates(state) if c.kind == "rejoin")
-    assert "Chook comes out in front" in call.call
+    # Lap 8 with the stop planned for lap 10: not due, so the arithmetic is
+    # said as the conditional it is - "Box now" is reserved for a stop that
+    # is (7 Sep 2026, noise cut 0.7).
+    assert call.call == "A stop now puts you behind Chook."
     # 60 L at 1 L/s + a 17.6 s lane + the 7.5 s dead time, because the source
     # says this loss was measured here. `strategy/model.stop_overhead_s`
     # carries the evidence: Watkins 15.7 measured + 7.5 = 23.2 against a

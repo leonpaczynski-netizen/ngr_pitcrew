@@ -487,6 +487,16 @@ class ExpectationTracker:
             return None
         return round(sum(loads) / len(loads), 2)
 
+    def stint_fuel_sd_l(self) -> float | None:
+        """Lap-to-lap scatter on this stint's green burn, or None before
+        `STINT_BURN_LAPS`. Never across a stint boundary - the step between
+        stints is a change, not scatter."""
+        clean = [used for _, used, _, _ in self._clean_this_stint()
+                 if used > 0]
+        if len(clean) < STINT_BURN_LAPS:
+            return None
+        return stdev(clean)
+
     def current_fuel_per_lap_l(self) -> float | None:
         """The burn to size the next laps on: the stint's once it can speak,
         the race's until then."""

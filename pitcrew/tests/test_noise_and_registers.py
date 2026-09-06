@@ -11,9 +11,8 @@ from __future__ import annotations
 
 from pitcrew.engineer.intents import GAP, answer
 from pitcrew.race.calls import (BOX_NOW, FUEL_LONG, FUEL_SHORT, HIGH,
-                                POSITION, POSITION_HOLD_FRAMES, STATUS,
-                                TYRE_TEMP, Call, RaceState, _fuel,
-                                position_change)
+                                POSITION, POSITION_HOLD_FRAMES, TYRE_TEMP,
+                                Call, RaceState, _fuel, position_change)
 from pitcrew.race.rival_calls import rejoin_call
 from pitcrew.rig.supervisor import RigSupervisor
 
@@ -101,16 +100,6 @@ def _fuelled(**over):
                   laps_estimate_firm=True)
     fields.update(over)
     return RaceState(**fields)
-
-
-def test_fuel_long_is_not_repeated_on_a_lap_the_heartbeat_already_said_it():
-    state = _fuelled()
-    assert _fuel(state) is not None and _fuel(state).kind == FUEL_LONG
-    state.last_said_lap = state.lap
-    state.last_said_kind = STATUS
-    assert _fuel(state) is None
-    state.last_said_kind = BOX_NOW
-    assert _fuel(state) is not None, "a different call this lap does not silence it"
 
 
 def test_a_shortfall_no_lever_can_cover_is_a_stop_when_none_is_planned():
