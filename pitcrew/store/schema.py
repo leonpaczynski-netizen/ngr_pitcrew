@@ -945,9 +945,25 @@ CREATE TABLE IF NOT EXISTS series_teammates (
 # sqlite does in place and which cannot fail destructively - the new column
 # reads null on every existing row, which is exactly what it means.
 #
-# Only nullable columns with no default belong here. Anything that needs a
-# back-fill, a type change or a drop needs a real numbered migration instead.
+# Nullable columns with no default belong here, and so does a NOT NULL column
+# whose DDL carries a constant DEFAULT - sqlite accepts that in ADD COLUMN and
+# back-fills it in place. Anything that needs a computed back-fill, a type
+# change or a drop needs a real numbered migration instead.
+#
+# **A column is added in two places or it is not added.** `CREATE TABLE IF NOT
+# EXISTS` is a no-op on a table that already exists, so a column that reaches
+# the DDL above and not this table reaches a FRESH database and never a real
+# one - and every test builds a fresh one, so the suite stays green while the
+# live file rejects every INSERT. `rival_stops.compound_reads` did exactly
+# that from commit 7ce870d until 6 Sep 2026: seven rival stops recognised on
+# race night, seven `OperationalError`s, zero rows for every race ever run.
+# `tests/test_schema_drift.py` now diffs the DDL against the live file.
 ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    # The stop's own evidence count for the compound disc, beside `reads` for
+    # the fuel figure. Added to the DDL at v12+ without an entry here.
+    "rival_stops": (
+        ("compound_reads", "INTEGER NOT NULL DEFAULT 0"),
+    ),
     # The name off the leaderboard. `traffic` shipped without it because the
     # position was thought to be identity enough, and it is not: the car that
     # was P6 on lap 14 can be P8 by lap 18, so "the same car for four laps"
