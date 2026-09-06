@@ -57,6 +57,18 @@ from pitcrew.analysis import thresholds
 # circuit and well outside the spread of a consistent stint.
 TIME_LOSS_S = 3.0
 
+# **The bar for reporting an unexplained loss, as a FRACTION of the lap.**
+#
+# Absolute seconds are the wrong unit here and the first attempt used them:
+# 6 s is 5% of a 110 s Monza lap and 13% of a 51 s Red Bull Ring lap, and
+# those are not the same claim. Traffic and a lift live in the low single
+# percent; session 93 lap 3 lost 13.5%, with a minimum speed of 33.8 km/h
+# against 89 on every other lap of its run.
+#
+# Ten percent, and it is a REPORTING bar rather than an exclusion one - see
+# `unexplained_losses`.
+UNEXPLAINED_FRACTION = 0.10
+
 # The car has effectively stopped. The slowest corner on any circuit in the
 # capture set is around 60 km/h and the tenth-percentile lap minimum is 30, so
 # this sits in an empty band rather than at the edge of one.
@@ -96,6 +108,21 @@ SPIN_MIN_S = 0.08
 CRAWL = "crawl"          # the car came to a stop mid-lap
 OFF_TRACK = "off-track"  # a long spell with two wheels or more off the road
 SPIN = "spin"            # rotation at a speed that is not a direction change
+# **Time lost and nothing on file explains it.**
+#
+# Found on session 93 lap 3, 6 Sep 2026: 6.9 s off its own run's median with
+# a minimum speed of 33.8 km/h against 89 on every clean lap of that run, all
+# four wheels on tarmac throughout, and `crawl_s`, `off_track_s` and `spin_s`
+# all 0.0. The time-loss gate opened - the detector KNEW the lap was anomalous
+# - then found no corroboration and dropped it, so it was counted as clean and
+# went into every median, every sector spread and every export that session
+# touched. It also drove a 18x sector-spread reading that was very nearly
+# diagnosed as a setup problem.
+#
+# That is absence of evidence rendered as evidence of absence, which is rule 3
+# wearing different clothes. A lap that lost six seconds is not a clean lap
+# because we cannot say why.
+UNEXPLAINED = "unexplained"
 
 REASON_INCIDENT = "incident"
 
@@ -145,6 +172,13 @@ class Incident:
             parts.append("spun")
         if OFF_TRACK in self.signals:
             parts.append(f"{self.evidence.off_track_s:.1f} s off the road")
+        if UNEXPLAINED in self.signals:
+            # Says what is known and what is not, in that order. "Lost time"
+            # is the measurement; "nothing on file explains it" is the gap,
+            # and a reader must not be able to mistake the second for a
+            # diagnosis.
+            return (f"lost {self.lost_s:+.1f} s, and nothing on file explains "
+                    f"it - the frames show no stop, no spin and no excursion")
         return f"{' and '.join(parts)}, {self.lost_s:+.1f} s"
 
     def as_export(self) -> dict:
@@ -316,10 +350,88 @@ def find_incidents(laps, evidence_for) -> dict[int, Incident]:
             evidence = evidence_for(lap)
             signals = evidence.signals
             if not signals:
+                # **Still not an incident, deliberately.** Slow is not the
+                # same as something happening, and the app may not invent a
+                # cause. `unexplained_losses` reports these separately without
+                # changing what counts.
                 continue
             found[lap.lap_num] = Incident(
                 lap_num=lap.lap_num, lost_s=lost_s,
                 signals=signals, evidence=evidence)
+    return found
+
+
+@dataclass(frozen=True)
+class UnexplainedLoss:
+    """A lap that lost real time with nothing on file to explain it.
+
+    **Not an incident, and it must not be turned into one.** `judge` will not
+    have it: slow is not the same as something happening, and the app may not
+    invent a cause. So this changes nothing about what counts - it is a
+    question raised, in the driver's own words: *don't dismiss as data error,
+    ask; the variability of data is data to investigate.*
+    """
+    lap_num: int
+    lost_s: float
+    fraction: float
+    min_speed_kph: float | None = None
+
+    def describe(self) -> str:
+        said = (f"lap {self.lap_num} lost {self.lost_s:.1f} s "
+                f"({self.fraction * 100:.0f}% of the lap) and nothing on file "
+                f"explains it - no stop, no spin, no excursion")
+        if self.min_speed_kph is not None:
+            said += f"; slowest point {self.min_speed_kph:.0f} km/h"
+        return said + ". Traffic, a lift, or a miss by the detector."
+
+
+def unexplained_losses(laps, evidence_for) -> list[UnexplainedLoss]:
+    """Laps that lost time nobody can account for, worth asking about.
+
+    **The gap this closes.** The time-loss gate opens, the frames are looked
+    at, nothing corroborates, and `judge` drops the lap - so it is counted as
+    clean and goes into every median of its run with no trace anywhere that a
+    question was ever raised. Session 93 lap 3 lost 6.9 s of a 51 s lap that
+    way, and it went on to drive an 18x sector-spread reading that was very
+    nearly diagnosed as a setup problem.
+
+    Reported, never excluded. A lap with no frames on file is not here
+    either: "not measured" is not "unexplained", which is a claim about
+    frames that exist and are silent.
+
+    `evidence_for` is injected exactly as `find_incidents` takes it, so both
+    read the same laps through the same accessor. Two ways of asking whether
+    a lap has evidence would eventually disagree, and the disagreement would
+    be that one of them called a lap clean.
+    """
+    from pitcrew.analysis.runs import auto_out_laps, split_runs
+
+    laps = list(laps)
+    out_laps = auto_out_laps(laps)
+    found: list[UnexplainedLoss] = []
+    for run in split_runs(laps):
+        candidates = [lap for lap in run.laps
+                      if not (lap.is_out_lap or lap.is_pit_lap or lap.excluded
+                              or lap.lap_num in out_laps)]
+        times = [lap.lap_time_ms for lap in candidates if lap.lap_time_ms > 0]
+        if len(times) < 3:
+            continue
+        reference = median(times)
+        for lap in candidates:
+            if lap.lap_time_ms <= 0:
+                continue
+            lost_s = (lap.lap_time_ms - reference) / 1000.0
+            fraction = lost_s / (reference / 1000.0)
+            if lost_s < TIME_LOSS_S or fraction < UNEXPLAINED_FRACTION:
+                continue
+            evidence = evidence_for(lap)
+            if evidence is None or evidence.signals:
+                # No frames, or the frames DID explain it - `judge` owns that
+                # lap and has already called it an incident.
+                continue
+            found.append(UnexplainedLoss(
+                lap_num=lap.lap_num, lost_s=lost_s, fraction=fraction,
+                min_speed_kph=getattr(lap, "min_speed_kph", None)))
     return found
 
 
@@ -334,10 +446,15 @@ def thresholds_export() -> dict:
         "incidentCrawlKph": CRAWL_KPH,
         "incidentOffTrackS": OFF_TRACK_MIN_S,
         "incidentSpinYawRadS": SPIN_YAW_RAD_S,
+        "incidentUnexplainedFraction": UNEXPLAINED_FRACTION,
         "incidentRule": (
             "a lap counts as an incident only where it lost time against the "
             "clean median of its own run AND the frames corroborate it. The "
             "surface channel alone does not: a clean lap of Monza spends 1-2 s "
             "with two wheels off tarmac and kerb, and thresholding that flags "
-            "70 laps in 132."),
+            "70 laps in 132. A lap that lost time with its frames on file "
+            "and nothing corroborating is NOT an incident - slow is not the "
+            "same as something happening - but where the loss exceeds "
+            "incidentUnexplainedFraction of the lap it is reported as an "
+            "unexplained loss, which is a question rather than a verdict."),
     }

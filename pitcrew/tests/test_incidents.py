@@ -220,3 +220,74 @@ def test_stored_evidence_keeps_each_columns_own_null():
         crawl_s = off_track_s = spin_s = None
 
     assert stored_or_read(Blank()) == Evidence()
+
+
+# ------------------------------------------- time lost that nothing explains
+
+def _captured(lap):
+    """Evidence where the frames exist, `None` where they never did.
+
+    Deliberately not `judge`'s accessor, which answers `Evidence()` for a lap
+    with no frames - that reads as "measured, and nothing happened", which is
+    right for asking whether a lap is an incident and wrong for asking whether
+    its loss is unexplained. Not measured is not unexplained.
+    """
+    return read_evidence(lap.frames) if lap.frames else None
+
+
+def test_an_unexplained_loss_is_reported_without_becoming_an_incident():
+    """**The gap, found on session 93 lap 3.** The time-loss gate opens, the
+    frames are read, nothing corroborates, and `judge` drops the lap - so it
+    is counted as clean and goes into every median of its run with no trace
+    that a question was ever raised. It went on to drive an 18x sector-spread
+    reading that was very nearly diagnosed as a setup problem.
+
+    Reported, never excluded: slow is not the same as something happening,
+    and `test_losing_time_with_nothing_to_show_for_it_is_not_an_incident`
+    still stands.
+    """
+    from pitcrew.analysis.incidents import unexplained_losses
+
+    laps = a_stint([51_000, 51_000, 57_500, 51_000, 51_000])
+    assert judge(laps) == {}, "it must not have become an incident"
+    found = unexplained_losses(laps, _captured)
+    assert [u.lap_num for u in found] == [3]
+    assert found[0].lost_s > 6.0
+    assert found[0].fraction > 0.10
+    assert "nothing on file explains it" in found[0].describe()
+
+
+def test_a_loss_that_is_small_relative_to_the_lap_is_not_reported():
+    """**Absolute seconds are the wrong unit and the first attempt used
+    them.** Six seconds is 5% of a 110 s Monza lap and 13% of a 51 s Red Bull
+    Ring lap; traffic and a lift live in the low single percent."""
+    from pitcrew.analysis.incidents import unexplained_losses
+
+    long_lap = a_stint([110_000, 110_000, 116_000, 110_000, 110_000])
+    assert unexplained_losses(long_lap, _captured) == []
+
+
+def test_a_lap_with_no_frames_is_not_called_unexplained():
+    """"Not measured" is not "unexplained" - the second is a claim about
+    frames that exist and are silent."""
+    from pitcrew.analysis.incidents import unexplained_losses
+
+    laps = a_stint([51_000, 51_000, 51_000, 58_000, 51_000])
+    laps[3] = a_lap(4, 58_000, None)
+    assert unexplained_losses(laps, _captured) == []
+
+
+def test_a_corroborated_lap_belongs_to_judge_and_is_not_double_reported():
+    """One lap, one owner. A lap the frames DO explain is an incident and
+    must not also appear as a question."""
+    from pitcrew.analysis.incidents import unexplained_losses
+
+    laps = a_stint([51_000, 51_000, 58_000, 51_000, 51_000])
+    # An accessor that says lap 3's frames DO explain it. Given directly
+    # rather than through synthetic frames, because what is under test is the
+    # boundary between the two functions, not the reading of a trace.
+    def explained(lap):
+        return Evidence(crawl_s=4.0) if lap.lap_num == 3 else Evidence()
+
+    assert 3 in find_incidents(laps, explained), "judge should own this lap"
+    assert unexplained_losses(laps, explained) == [], "and own it alone"
