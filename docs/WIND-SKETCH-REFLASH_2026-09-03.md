@@ -90,10 +90,18 @@ you feel. The reflash changes what you feel and nothing in the log.
 > back. The script takes one first, and reads the board **twice** and compares,
 > because a backup nobody has checked is a file rather than a rollback.
 >
-> ```bash
-> bash scripts/wind-reflash.sh            # backup, then the reflash, guided
-> bash scripts/wind-reflash.sh --restore  # put the original image back
+> From PowerShell or cmd:
+>
 > ```
+> scripts\wind-reflash.cmd            backup, then the reflash, guided
+> scripts\wind-reflash.cmd --restore  put the original image back
+> ```
+>
+> **Not `bash scripts/wind-reflash.sh` from PowerShell.** Windows ships its
+> own `bash.exe` in System32 that shims to WSL, and with no distro installed
+> it fails with `execvpe(/bin/bash) failed: No such file or directory` — which
+> reads like the script is missing and is nothing of the kind. The `.cmd`
+> finds Git's bash. From a Git Bash window the `.sh` is fine directly.
 >
 > It refuses to go on if the two reads differ, if the image is under 1 kB, or
 > if avrdude is not where SimHub puts it — and it writes nothing to the board
