@@ -665,7 +665,7 @@ def test_how_are_my_tyres_answers_the_tyres_and_not_the_compound():
                            "lapsToStop": 4})
     assert reply.answered
     assert "RL 36 percent" in reply.text
-    assert "4 laps to the box" in reply.text
+    assert "4 laps to the stop" in reply.text
 
 
 def test_with_no_gauge_it_says_so_rather_than_modelling_one():
@@ -693,8 +693,10 @@ def test_a_real_pace_delta_is_given_with_its_direction():
     from pitcrew.engineer.intents import PACE
     up = answer(PACE, {"paceVsPlanMs": -1200, "paceIsReal": True})
     down = answer(PACE, {"paceVsPlanMs": 900, "paceIsReal": True})
-    assert up.text == "1.2 up on the plan."
-    assert down.text == "0.9 down on the plan."
+    # Row 1.10: `_on_plan` renders the same figure as "Pace 1.2 a lap up."
+    # and this said "1.2 up on the plan", which does not say per-lap at all.
+    assert up.text == "1.2 seconds a lap up on the plan."
+    assert down.text == "0.9 seconds a lap down on the plan."
 
 
 def test_the_vocabulary_is_written_the_way_he_talks():

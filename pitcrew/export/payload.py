@@ -567,14 +567,57 @@ def _validate_plan(strategy: dict) -> list[str]:
     if not isinstance(plan, dict):
         return []
     problems = []
-    stints, laps = plan.get("stintLaps"), plan.get("laps")
-    if isinstance(stints, list) and all(isinstance(n, int) for n in stints):
-        if isinstance(laps, int) and sum(stints) != laps:
+    # **The enclosing gate was the same defect as the one inside it.**
+    # `all(isinstance(n, int) for n in stintLaps)` is `isinstance` on a JSON
+    # number, so one float in that list disabled every check below it -
+    # including the stops problem added for exactly this reason.
+    from pitcrew.strategy.handover import (LAP_CEILING, as_stop_count,
+                                           as_whole_number, short_value)
+
+    def a_lap_count(value):
+        # A negative is not a lap count - `[-5, 25]` summed to 20 and passed
+        # under a message whose own words are "not a list of lap counts".
+        return as_whole_number(value, LAP_CEILING, minimum=0)
+
+    raw_stints, laps = plan.get("stintLaps"), plan.get("laps")
+    stints = None
+    if isinstance(raw_stints, list):
+        read = [a_lap_count(n) for n in raw_stints]
+        # **An EMPTY list is a readable list of no laps.** Guarding on
+        # `raw_stints` put it in neither branch, so the sum, the stops and
+        # the compounds checks all vanished with no problem raised - and a
+        # 20-lap, one-stop, two-compound section with no stints at all
+        # exported clean through the MCP door.
+        if all(n is not None for n in read):
+            stints = read
+        else:
+            problems.append(
+                f"strategy.plan.stintLaps is {short_value(raw_stints)}, "
+                f"which is not a list of lap counts")
+
+    # **The stops field is its own problem, whatever the stints are.** Nested
+    # under the stints, a junk `stintLaps` still silenced it - which is the
+    # half of the previous pass's claim that was not delivered.
+    raw_stops = plan.get("stops")
+    stops = as_stop_count(raw_stops)
+    if raw_stops is not None and stops is None:
+        problems.append(
+            f"strategy.plan.stops is {short_value(raw_stops)}, which is not "
+            f"a stop count")
+    # And so is a lap count that cannot be read: skipping the comparison in
+    # silence is how the stints got here.
+    if laps is not None and a_lap_count(laps) is None:
+        problems.append(
+            f"strategy.plan.laps is {short_value(laps)}, which is not a lap "
+            f"count")
+
+    if stints is not None:
+        if a_lap_count(laps) is not None and sum(stints) != laps:
             problems.append(
                 f"strategy.plan.stintLaps sums to {sum(stints)} against a "
-                f"plan of {laps} laps - the stints and the distance disagree")
-        stops = plan.get("stops")
-        if isinstance(stops, int) and len(stints) != stops + 1:
+                f"plan of {a_lap_count(laps)} laps - the stints and the "
+                f"distance disagree")
+        if stops is not None and len(stints) != stops + 1:
             problems.append(
                 f"strategy.plan has {len(stints)} stints against {stops} "
                 f"stop(s) - a stop separates two stints")

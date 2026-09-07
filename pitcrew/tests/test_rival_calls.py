@@ -152,7 +152,10 @@ def test_before_the_tank_can_reach_the_flag_the_call_is_the_floor():
                     refuel_rate_lps=RATE, capacity_l=100.0, laps_total=20,
                     planned_stop_lap=11)
     assert call is not None
-    assert call.call == "Stay out."
+    # Row 1.10: "Stay out." and the fold's "Staying out? You should make
+    # it." are one syllable apart and mean different things - this is *do
+    # not box yet*, that is *you have driven past the box and it works*.
+    assert call.call == "Don't box yet."
     # NOT "the tank cannot reach the flag": under a helmet those are the words
     # of an emergency and this call means the opposite - too much fuel aboard.
     assert "Too much fuel aboard" in call.reason
@@ -223,7 +226,9 @@ def test_a_car_closer_than_the_stop_is_told_about():
                        refuel_rate_lps=1.0, pit_loss_s=19.5, who="Rocky")
     assert call is not None and call.confidence == HIGH
     assert "comes out in front" in call.call
-    assert "40 seconds back" in call.reason and "costs 80" in call.reason
+    # Row 1.10: both REJOIN branches name the stop's unit the same way.
+    assert "40 seconds back" in call.reason
+    assert "80 second stop" in call.reason
 
 
 def test_coming_out_comfortably_ahead_is_not_worth_saying():

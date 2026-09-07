@@ -49,6 +49,7 @@ from pitcrew.ui.widgets import (
     Measured,
     Plate,
     PlanSpine,
+    render_standing_orders,
     StencilLabel,
 )
 
@@ -230,9 +231,12 @@ class RaceScreen(QWidget):
         # also fires when the app moves it. Without that distinction, forcing
         # the picker to "No plan" while none is approved would read as him
         # having chosen it, and approving one later would never move it back.
-        self.plan_picker.activated.connect(
-            lambda: setattr(self, "_plan_chosen_by_hand", True))
+        self.plan_picker.activated.connect(self._plan_choice_made)
         self._plan_chosen_by_hand = False
+        # What `set_plan` was last handed, so the choice can be re-applied
+        # without going back to the store - and so "Approved plan" restores
+        # the contract "No plan" cleared.
+        self._approved_row: dict | None = None
         header.addWidget(Field("Strategy", self.plan_picker,
                                hint="Fuel calls only without one"),
                          0, Qt.AlignmentFlag.AlignBottom)
@@ -289,7 +293,15 @@ class RaceScreen(QWidget):
         # be, and the readings can have the room back: 68/48 asks 499px
         # against the 501 floor, where 78/56 asks 509 and does not fit.
         self.box_in = BigReading("Box in", size=68, ink=theme.DERIVED)
-        self.fuel_left = BigReading("Fuel in hand", size=48, ink=theme.DERIVED)
+        # **"Laps of fuel", not "Fuel in hand"** (critic on row 1.10). It is
+        # fed `lapsOfFuel` - tank over burn, an absolute - and "in hand" is
+        # the phrase the engineer, the colour line and the push-to-talk
+        # answer all use for the MARGIN with its reference. He would read 8.2
+        # under "Fuel in hand" while the margin was minus 1.8, which is the
+        # failure direction rule 13 exists for. The driver board has always
+        # called this one "laps of fuel".
+        self.fuel_left = BigReading("Laps of fuel", size=48,
+                                    ink=theme.DERIVED)
         self.lap_now = BigReading("Lap", size=48)
         self.position = BigReading("Position", size=48)
         for reading in (self.box_in, self.fuel_left, self.lap_now,
@@ -355,11 +367,68 @@ class RaceScreen(QWidget):
             "you cross the line; everything he says lands here with its "
             "reason and its confidence, including calls you decline.")
         self.log_layout.addWidget(self.log_empty)
+        # **The standing orders, below the calls and above the stretch.**
+        # They belong on this page - `refresh_plan` is already wired to this
+        # screen's `shown` signal and was refreshing a card rendered a screen
+        # away (row 1.7, S12) - and they belong INSIDE the scroller because
+        # the page has TWO pixels of headroom against the 501 the smallest
+        # display gives.
+        #
+        # **499 with `theme.STYLESHEET` applied, which is what the app runs,
+        # and the same 499 offscreen or native.** The "eight pixels" this row
+        # quoted in three commits came from measuring a screen with no
+        # stylesheet on it. Measured a rule at a time: `font-size: 15px`
+        # contributes ZERO (a cause written down in pass 8 and never
+        # checked); what sets the figure is
+        # `QScrollBar::handle:vertical { min-height: 40px }` - drop that one
+        # rule and the page wants 459. Bare, the page is 493 offscreen and
+        # 497 native, so four of those six pixels are the font database that
+        # offscreen Qt does not have, and only two are the sheet.
+        #
+        # Calls insert at index 0, so the contract sits under
+        # them and scrolls away as the race fills the log: before the green
+        # it is the whole of what he sees here, which is the point.
+        self.orders = QWidget()
+        self.orders_layout = QVBoxLayout(self.orders)
+        self.orders_layout.setContentsMargins(0, 0, 0, 0)
+        self.orders_layout.setSpacing(theme.GAP_TIGHT)
+        self.orders.setVisible(False)
+        self.log_layout.addWidget(self.orders)
         self.log_layout.addStretch(1)
         scroller.setWidget(self.log)
 
         plate.body.addWidget(scroller, 1)
         return plate
+
+    def show_standing_orders(self, plan: dict | None,
+                            author: str | None = None) -> None:
+        """What George may do on his own, before the green. Once per plan.
+
+        The words come from `strategy.handover.standing_orders`, which the
+        Strategy page's `LoadedCard` renders too - one contract, one source.
+
+        **The block hides when there is nothing to say** - with no plan, and
+        with an approved row whose `plan_json` is empty, which is the same
+        state read from the store. A heading over nothing would read as the
+        app having lost something.
+
+        A plan with no HANDOVER is a different thing and is not empty: it
+        says George has no rule from the desk, which is the most
+        consequential line on the grid and is true of seven of the ten
+        approved plans on file.
+        """
+        while self.orders_layout.count():
+            item = self.orders_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+        # The heading names the author here and not on the Strategy card,
+        # where `Declared(author)` is already in the header beside the label.
+        shown = render_standing_orders(self.orders_layout, plan,
+                                       author=author, heading=True)
+        self.orders.setVisible(bool(shown))
 
     # ---------------------------------------------------------------- actions
 
@@ -368,6 +437,24 @@ class RaceScreen(QWidget):
 
     def engineer_speaks(self) -> bool:
         return bool(self.engineer_picker.currentData())
+
+    def _plan_choice_made(self) -> None:
+        """**The standing orders follow the driver's own choice.**
+
+        They did not: `set_plan` is their only caller and is driven by
+        `_refresh_race_options` and `_poll_plan`, neither of which reads
+        `use_plan()`. So picking *No plan* left "Standing orders - LUDO" over
+        "George may, on his own" on the grid, while `start_race` arms with
+        `approved = None`, the coordinator's playbook is empty and `_may`
+        refuses every structural action - the driver told a rule is armed
+        when it cannot fire, which is what this block exists to stop.
+        """
+        from pitcrew.strategy.handover import author_of
+
+        self._plan_chosen_by_hand = True
+        plan = (self._approved_row or {}).get("plan") or {}
+        self.show_standing_orders(plan if self.use_plan() else None,
+                                  author=author_of(plan))
 
     def use_plan(self) -> bool:
         return bool(self.plan_picker.currentData())
@@ -397,6 +484,9 @@ class RaceScreen(QWidget):
         `plan_json` the coordinator arms from - so what is on the screen is
         what will be run rather than a second rendering of the same idea.
         """
+        from pitcrew.strategy.handover import author_of, as_stop_count
+
+        self._approved_row = strategy if strategy else None
         if not strategy:
             self.plan_line.setText(
                 "No plan approved — the engineer will call fuel only.")
@@ -405,13 +495,34 @@ class RaceScreen(QWidget):
             # An empty spine draws a bare rule rather than nothing, so the
             # absence of a plan is visible in the place a plan would be.
             self.spine.setPlan([])
+            self.show_standing_orders(None)
             return
         plan = strategy.get("plan") or {}
+        # **The contract, on the page he starts the race from** (row 1.7).
+        # It is filled here rather than by the controller because this is the
+        # method that is HANDED the approved row - by `_refresh_race_options`,
+        # which this screen's own `shown` signal already triggers, and by
+        # `_poll_plan` when the approved id moves. A second call site reading
+        # the store again is a second chance for the orders and the plan line
+        # two inches above them to describe different plans.
+        # **The driver's choice wins over the store.** A plan can be
+        # approved and declined for this race in the same breath, and
+        # `_poll_plan` re-runs this every tick.
+        self.show_standing_orders(plan if self.use_plan() else None,
+                                  author=author_of(plan))
+        # `author_of` returns None for a plan with no handover, and the
+        # heading then carries no attribution: "Standing orders - THE DESK"
+        # over a block whose whole content is that no desk wrote anything is
+        # the same claim the empty-plan guard exists to refuse.
         stints = plan.get("stints") or []
         # The same stints the line below spells out in words, as one object.
         self.spine.setPlan([st.get("laps") for st in stints],
                            [st.get("compound") for st in stints])
-        stops = plan.get("stops")
+        # Through the one expression, so a `1.0` stored by the MCP door -
+        # JSON has no integer type - reads as "1 stop" rather than
+        # "1.0 stop", and a field that is not a count says nothing at all
+        # instead of printing itself.
+        stops = as_stop_count(plan.get("stops"))
         parts: list[str] = []
         if stops is not None:
             parts.append(f"{stops} stop" if stops == 1 else f"{stops} stops")
@@ -518,12 +629,27 @@ class RaceScreen(QWidget):
         self.offer_row.setVisible(False)
 
     def clear_log(self) -> None:
+        """Empty the call log. **The standing orders are not a call.**
+
+        This deleted them. It takes every widget out of `log_layout` and
+        `deleteLater`s anything that is not `log_empty`, and the orders live
+        in that layout now - so arming a race destroyed the block, and every
+        later `set_plan` died on a deleted `QVBoxLayout`, which PyQt turns
+        into an abort. Reachable by returning to the Race page after the
+        race, by `_poll_plan`, and by approving a plan mid-race.
+
+        They also SHOULD survive the arm: the contract is what he reads on
+        the grid, and the green flag is not the moment to take it away.
+        """
+        keep = (self.log_empty, self.orders)
         while self.log_layout.count():
             item = self.log_layout.takeAt(0)
-            if item.widget() and item.widget() is not self.log_empty:
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget is not None and widget not in keep:
+                widget.deleteLater()
         self.log_empty.setVisible(True)
         self.log_layout.addWidget(self.log_empty)
+        self.log_layout.addWidget(self.orders)
         self.log_layout.addStretch(1)
         self.last_call.setText("—")
         self.last_reason.setText("")
@@ -558,11 +684,28 @@ class RaceScreen(QWidget):
         # "box now" and is a different instruction from "you are two laps
         # late". The clamp turned the more urgent of the two into the less
         # urgent one, and nothing downstream could tell them apart.
+        # **The sign comes off `lapsPastBox`, not off `lapsToStop`**, which
+        # is `max(0, ...)` and can never be negative - so this branch was
+        # unreachable and a driver three laps past his box lap read "BOX IN
+        # 0" (the critic on row 1.10).
         to_stop = snapshot.get("lapsToStop")
-        if to_stop is None:
+        past = snapshot.get("lapsPastBox")
+        # **A retired stop can never render as late.** `lapsToStop` is None
+        # once the stop stops being a stop, and that is checked first so the
+        # screen cannot shout OVERDUE at a stop the engineer has cancelled
+        # aloud (the critic on row 1.10).
+        # **The flag first**, the way `driver_view` has always had it.
+        # Post-flag with a stop never taken this read "BOX IN 0" - which the
+        # whole `lapsPastBox` exercise established means "box now" - about a
+        # race that is over.
+        if snapshot.get("finished"):
             self.box_in.setValue(None)
-        elif to_stop < 0:
-            self.box_in.setValue(f"{-int(to_stop)} LATE", ink=theme.WARNING)
+            self.box_in.name.setText("FLAG")
+        elif to_stop is None:
+            self.box_in.setValue(None)
+            self.box_in.name.setText("BOX IN")
+        elif past is not None and past > 0:
+            self.box_in.setValue(f"{int(past)} LATE", ink=theme.WARNING)
             self.box_in.name.setText("OVERDUE")
         else:
             self.box_in.setValue(str(int(to_stop)))

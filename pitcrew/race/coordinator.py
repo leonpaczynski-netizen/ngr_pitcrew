@@ -27,6 +27,7 @@ from pitcrew.race.calls import (
     STAY_OUT,
     Call,
     RaceState,
+    fuel_in_hand,
     _crossing_the_line,
     clear_stint,
     next_call,
@@ -566,7 +567,7 @@ class RaceCoordinator:
             return
         self._saving_change_lap = change.lap
         burn = self.state.fuel_per_lap_l
-        tail = (f" Burn is {burn:.1f} a lap now." if burn else "")
+        tail = (f" Burn is {burn:.1f} litres a lap now." if burn else "")
         if change.what == "lift-and-coast":
             note = (f"You've stopped lift-and-coasting since lap {change.lap} - "
                     f"{change.before:.0f} percent of the lap off the pedals "
@@ -1186,8 +1187,12 @@ class RaceCoordinator:
         if owed is not None:
             # Ahead of any held position call: the first thing he hears on the
             # way back is the account of the moment, not the places it cost.
+            # **"That cost you N seconds" is the INCIDENT call's phrase
+            # for lap time lost** (row 1.10), and this is seconds with a
+            # wheel off the road - a smaller number, on a different clock,
+            # landing first. One spin trips both.
             return Call(POSITION, self.state.lap, "You're back on it.",
-                        f"That moment cost you about {owed:.0f} seconds.")
+                        f"About {owed:.0f} seconds off the road.")
         if call is None:
             return None
         if self.composure.may_volunteer(register_of(call.kind)):
@@ -1411,12 +1416,15 @@ class RaceCoordinator:
         direction: George cannot put him in the pit lane on the strength of a
         file nobody wrote.
         """
-        from pitcrew.strategy.handover import STRUCTURAL_ACTIONS
+        # **`handover.grants` is the expression**, not a second copy of it
+        # here. The standing orders on the Race page tell the driver what
+        # George may do without asking, and they were computed from "is there
+        # an entry" while this was computed from the action - so the screen
+        # said "George falls back to his own" about the two decisions this
+        # refuses him (row 1.7, critic pass 1).
+        from pitcrew.strategy.handover import grants
 
-        if action not in STRUCTURAL_ACTIONS:
-            return True
-        entry = self._playbook.get(trigger)
-        return entry is not None and entry.action == action
+        return grants(self._playbook, trigger, action)
 
     def _pending_stops(self) -> int:
         """Stops still ahead of the stint being run, that will actually happen.
@@ -2061,10 +2069,47 @@ class RaceCoordinator:
             # answers "how long left" from it.
             "lapsEstimateFirm": self.state.laps_estimate_firm,
             "fuelL": self.state.fuel_l,
+            # **Absolute: tank divided by burn.** Not a margin, and the PTT
+            # answer used to say "8.2 laps of fuel" off it while the
+            # volunteered call said "1.9 laps of fuel in hand to the stop"
+            # off `_fuel_gap` - one phrase, two quantities, and the failure
+            # direction that kills a race is hearing the absolute as the
+            # margin (row 1.10, rule 13).
             "lapsOfFuel": self.state.laps_of_fuel(),
+            # The margin and the distance it is a margin TO, from the one
+            # expression that produces both.
+            **dict(zip(("fuelInHand", "fuelReference"),
+                       fuel_in_hand(self.state))),
             "lapsToStop": self.state.laps_to_stop(),
+            # **The sign `laps_to_stop()` throws away when it clamps at
+            # zero.** The Race screen has an OVERDUE branch keyed on a
+            # negative that could never arrive, so a driver three laps past
+            # his box lap read "BOX IN 0" - which its own comment calls a
+            # different instruction from "you are three laps late", and rule
+            # 9 on the highest-consequence number the app emits. The driver
+            # board recovered the sign through `past_box_lap`; the desk
+            # screen had no equivalent (the critic on row 1.10).
+            # **Off `laps_to_stop`'s own retirement, not off the raw
+            # field** (the critic on row 1.10). Read raw, this became the
+            # FIFTH surface counting a stop the engineer had cancelled - and
+            # the loudest: the desk screen showed OVERDUE / "3 LATE" in
+            # warning ink on the lap "You're fuelled to the flag. No more
+            # stops on fuel." went out, and again in the box and after the
+            # flag, where every voice call is silent by design.
+            "lapsPastBox": (
+                self.state.lap - self.state.stint_ends_on_lap
+                if self.state.laps_to_stop() == 0
+                and self.state.past_box_lap
+                and not self.state.in_pit and not self.state.finished
+                and self.state.stint_ends_on_lap is not None else None),
             "nextCompound": self.state.next_compound,
             "inPit": self.state.in_pit,
+            # **The flag, because the box reading has to know about it.**
+            # Post-flag with a stop never taken the Race screen read "BOX IN
+            # 0" - which the whole `lapsPastBox` exercise established means
+            # "box now" - about a race that is over. `driver_view` has
+            # checked its own `finished` since it was written.
+            "finished": self.state.finished,
             # Whether there is an approved plan at all. `lapsToStop` is None
             # both for the last stint of a real plan and for a race armed with
             # no plan, and the two are different answers to "when do I box".

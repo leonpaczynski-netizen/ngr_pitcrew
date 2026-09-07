@@ -223,6 +223,55 @@ def propose_strategy(event_id: int, plan: str, label: str = "") -> str:
         return _dump({"saved": False, "error": f"plan is not JSON: {exc}"})
     try:
         from pitcrew.strategy.certify import certify_for_event
+        from pitcrew.strategy.handover import RESERVED_KEYS, whole_numbers
+
+        # **The other door goes through `from_dict`; this one stored whatever
+        # arrived.** So the two things that door does - reading JSON numbers
+        # as counts, and refusing the keys the app owns - both had a way
+        # round them here, on the tool whose docstring says it takes "the
+        # JSON of a plan". `export` is the one that matters: a desk-supplied
+        # block is preferred verbatim over the section the app builds.
+        if not isinstance(payload, dict):
+            return _dump({"saved": False,
+                          "error": "plan must be a JSON object"})
+        # **Three ownerships in one set, so the answer is per key.**
+        # `export` is the app's own section, and `write_strategy` refuses it
+        # too - so "use the other tool" is wrong advice for it. `handover`,
+        # `author` and `playbook` are the desk's and that tool does take
+        # them. `unhandled` and `certificate` are recomputed by the app and
+        # dropped wherever they arrive, so naming another tool would be
+        # wrong for those as well.
+        TAKEN = ("handover", "author", "playbook")
+        clash = sorted(RESERVED_KEYS & set(payload))
+        if clash:
+            said = []
+            for key in clash:
+                if key in TAKEN:
+                    said.append(f"{key!r} - use write_strategy, which takes "
+                                f"it")
+                elif key == "export":
+                    said.append(f"{key!r} - the app builds that section "
+                                f"itself")
+                else:
+                    said.append(f"{key!r} - the app works that out")
+            return _dump({
+                "saved": False,
+                "error": "the plan carries keys this tool does not store: "
+                         + "; ".join(said)})
+        payload = whole_numbers(payload)
+        # **Stamped, like the other door.** `write_strategy` stamps and this
+        # one did not, so a proposed plan approved in the app armed with no
+        # `start_lap` - every stint then ends at `laps`, two stints share a
+        # box lap, and `_box_now` fires every lap to the flag - no `context`,
+        # so `arm` skips `planned.matches(actual)` and a plan for one circuit
+        # arms at another, and no `expects`, so every per-lap comparison
+        # reports nothing.
+        from pitcrew.strategy.execution import stamp
+
+        try:
+            payload = stamp(store, event_id, payload)
+        except ValueError as exc:
+            return _dump({"saved": False, "error": str(exc)})
 
         certificate = certify_for_event(store, event_id, payload)
         strategy_id = store.save_strategy(

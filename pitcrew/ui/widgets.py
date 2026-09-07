@@ -1752,3 +1752,53 @@ class PlanSpine(QWidget):
 
             driven += laps
             x += width + gap
+
+
+def render_standing_orders(layout, plan: dict | None,
+                           author: str | None = None,
+                           heading: bool = False) -> int:
+    """Add the plan's standing orders to `layout`. Returns widgets added.
+
+    **Two screens say this now** (row 1.7): the Strategy page's `LoadedCard`,
+    where the plan is approved, and the Race page, where the driver is sitting
+    on the grid waiting for the green. The words come from
+    `strategy.handover.standing_orders` and the ink comes from here, so
+    neither screen holds a copy of either - `CLAUDE.md` §1a's rule, applied to
+    the one contract that says what the engineer may do without asking.
+
+    The ink is the register and nothing else: **crayon** where a human
+    declared it (the playbook, the assumptions), **`DERIVED`** where the app
+    certified it, and dim for prose about a gap. `STENCIL_DIM` and not
+    `STRUCK` for that last one, deliberately - struck means removed from the
+    count, and "No rule from the desk on stop missed" is the most
+    consequential thing on the card, not a placeholder.
+    """
+    from pitcrew.strategy.handover import DECLARED, DERIVED, standing_orders
+
+    orders = standing_orders(plan or {})
+    if not orders:
+        return 0
+    added = 0
+    if heading:
+        # **Named only when somebody is named.** `author_of` is None for a
+        # plan with no handover, and "Standing orders - THE DESK" over a
+        # block whose whole content is that no desk wrote anything asserts
+        # the opposite of what it says.
+        layout.addWidget(StencilLabel(
+            f"Standing orders - {author.upper()}" if author
+            else "Standing orders",
+            size=11, colour=theme.STENCIL_DIM, tracking=14.0))
+        added += 1
+    ink = {DECLARED: theme.CRAYON, DERIVED: theme.DERIVED}
+    for order in orders:
+        if order.heading:
+            layout.addWidget(StencilLabel(order.text, size=11,
+                                          colour=theme.STENCIL_DIM,
+                                          tracking=14.0))
+            added += 1
+            continue
+        layout.addWidget(BodyLabel(
+            order.text, size=13,
+            colour=ink.get(order.register, theme.STENCIL_DIM), wrap=True))
+        added += 1
+    return added

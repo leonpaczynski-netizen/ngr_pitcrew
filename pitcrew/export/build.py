@@ -715,15 +715,49 @@ def _section_from_plan(plan: dict) -> dict:
     if not stints:
         return {}
     pit_laps = plan.get("pit_laps") or []
+    from pitcrew.strategy.handover import (LAP_CEILING, as_stop_count,
+                                           as_whole_number)
+
     return {
         "plan": {
-            "stops": plan.get("stops"),
+            # Normalised, so a plan authored outside the app does not put
+            # `1.0` into a contract whose own example is `1`.
+            #
+            # **A value that cannot be read becomes `null` here**, so the
+            # payload cannot tell "the desk stated no stop count" from "it
+            # stated one that is not a count" - CLAUDE.md §7 asks that every
+            # null be genuinely unmeasured. Bounded rather than fixed:
+            # `certify` refuses such a plan and both approval routes are
+            # certify-gated, so it cannot become the approved plan this
+            # reads. Carried in the plan document.
+            "stops": as_stop_count(plan.get("stops")),
             "laps": sum(int(s.get("laps") or 0) for s in stints) or None,
             "stintLaps": [int(s.get("laps") or 0) for s in stints],
             "compounds": [s.get("compound") for s in stints],
             # Only the first stop travels - `pitLaps` is not in the contract's
             # key allow-list, and `to_json` refuses a payload carrying one.
-            "pitLap": pit_laps[0] if pit_laps else None,
+            #
+            # **Read the same way `stops` is**, two lines up: desk JSON put
+            # `11.0` straight into the contract, `_validate_plan` never looks
+            # at this key, and `race_outcome` rendered "lap 11.0" to the
+            # driver.
+            # `minimum=1`, because a box lap is 1-based - `Plan.pit_laps` is
+            # a stint's `end_lap` and `certify` refuses a 0-lap stint - so a
+            # `pitLap` of 0 is not a box lap the app can produce, and
+            # `race_outcome` asserted "against a planned lap 0" from one.
+            #
+            # **`certify` never reads `pit_laps`**, so the argument two lines
+            # up - that a null here is bounded by the gate - does NOT hold
+            # for this key: an unreadable box lap becomes a null nothing
+            # refused, and `race_outcome` then drops its deviation clause in
+            # silence. Better than exporting `-3`, and carried rather than
+            # claimed closed.
+            #
+            # `isinstance(pit_laps, list)`: `certify` does not check the type
+            # either, so a `pit_laps` of `11` raised `TypeError` and a dict
+            # raised `KeyError`, taking the whole export down.
+            "pitLap": (as_whole_number(pit_laps[0], LAP_CEILING, minimum=1)
+                       if isinstance(pit_laps, list) and pit_laps else None),
         },
         "bindingConstraint": plan.get("binding_constraint"),
         "compoundCrossover": None,
@@ -858,10 +892,23 @@ def _outcome(store, event_id: int, calls: list[dict], section: dict,
     stay_out = next((call["lap"] for call in calls
                      if call.get("kind") == "stay-out"
                      and call.get("accepted")), None)
+    from pitcrew.strategy.handover import (LAP_CEILING, as_stop_count,
+                                           as_whole_number)
+
     text = race_outcome(
         race_laps,
-        planned_stops=plan.get("stops"),
-        planned_pit_laps=[plan["pitLap"]] if plan.get("pitLap") else None,
+        # Through the one expression, like the six others - and here it is
+        # **load-bearing, not belt-and-braces.** `_strategy_section` prefers
+        # the stored `plan["export"]` block and normalises nothing on that
+        # branch, so a desk-supplied block reaches this line verbatim. An
+        # earlier version of this comment said it was normalised upstream on
+        # both branches, which invited the next reader to delete the call.
+        planned_stops=as_stop_count(plan.get("stops")),
+        # `if plan.get("pitLap")` folded a box lap of 0 to None; `is not
+        # None` is the question, and the value is read the way it is written.
+        planned_pit_laps=([lap] if (lap := as_whole_number(
+            plan.get("pitLap"), LAP_CEILING, minimum=1)) is not None
+            else None),
         binding_constraint=section.get("bindingConstraint"),
         declined_calls=declined,
         stay_out_lap=stay_out)

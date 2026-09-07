@@ -9,6 +9,7 @@ fully described is never written down as though it had been.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import sqlite3
 
@@ -48,8 +49,21 @@ COMPLETE = "Michelin Raceway Road Atlanta"
 # configuration, not the hub declining to say.
 INCOMPLETE = "N\u00fcrburgring \u2014 Endurance II"
 
-SOON = "2026-09-07T10:30:00.000+00:00"
-LATER = "2026-09-14T10:30:00.000+00:00"
+# **Relative to the day the test runs, not to the day it was written.**
+# These were two fixed dates in September 2026; the first of them went past
+# and eleven tests failed on a calendar rather than on a change. What the
+# fixtures mean is "the next round" and "the one after", so that is what they
+# say - a week out and a fortnight out, on the same 10:30 UTC the league
+# runs.
+def _round_at(days: int) -> str:
+    when = (datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(days=days)).replace(
+        hour=10, minute=30, second=0, microsecond=0)
+    return when.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
+
+
+SOON = _round_at(7)
+LATER = _round_at(14)
 
 
 @pytest.fixture()

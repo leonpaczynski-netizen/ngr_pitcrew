@@ -54,6 +54,22 @@ class Instruments:
     temp_window: bool = False
     #: The packet format in use carries the per-wheel surface channel.
     surface_channel: bool = True
+    #: Whether the pit wall will watch the leaderboard this race. `None` where
+    #: the app cannot say, which is treated as "it will not" - promising less
+    #: than is there is the safe direction for a brief.
+    sees_rivals: bool | None = None
+
+
+# **One sentence, said from two places.** The brief says it on the grid
+# where the wall will not watch; `controller.start_race` says it late where
+# the wall was going to watch and then failed to start, after this line has
+# already been dropped. Two wordings would be two clips and two claims.
+NO_RIVALS = "I can't see other cars - position only."
+# Said by `controller.start_race` where the wall was going to watch and then
+# failed to start. Here rather than in the controller because this is where
+# the sentence's family lives - and because the opener test that keeps the
+# voice pack honest scans this file and not the controller.
+WALL_DID_NOT_START = "The pit wall did not start."
 
 
 def _compound_phrase(compounds: tuple[str, ...]) -> str:
@@ -131,7 +147,17 @@ def brief(instruments: Instruments) -> list[str]:
         lines.append("I can't see kerbs or offs on this stream.")
 
     # --- and what he cannot, always last
-    lines.append("I can't see other cars - position only.")
+    #
+    # **Unconditional, while the wall was watching** (row 1.10). With the
+    # gauge on and a sampling interval inside five seconds the wall reads the
+    # leaderboard all race, and the engineer then volunteers "Boxhead has
+    # boxed on 40 litres", "He is 8 seconds back", "Faster than Boxhead
+    # through 1 and 2" - having opened the race by promising none of it. This
+    # file's own rule, one line up, is that promising an instrument that is
+    # not there is worse than promising nothing; this was the same failure
+    # running backwards.
+    if not instruments.sees_rivals:
+        lines.append(NO_RIVALS)
     return lines
 
 

@@ -347,7 +347,7 @@ the hub says weather RANDOM with inters and wets allowed.
 | 1.4 | **One remaining-laps expression, one pit-loss policy** across `calls`, `replan`, `rival_calls`, the board | G13, G14 | one function, three callers |
 | 1.5 | **The rail**: `structural_action` set on `stops-off`, the wear "Box this lap", and the stay-out fold; or delete `_within_the_playbook`. Decide. ⟂ And retire `safety_car` from `TRIGGERS` (`strategy/handover.py:43`) — no channel, no lobby setting — so it stops appearing under *unhandled* | G15, §6.1 | one of the two; test proves it; `safety_car` gone from `TRIGGERS` |
 | 1.6 | **Persist what the wall and the trend see**: per-lap gaps, rival positions, sightings, plan-vs-actual snapshot; **a verdict per call** (`race/call_outcome` persisted, driver override recorded) | S8, S10, L11 | tables have rows after a race; export carries them |
-| 1.7 | **Race page absorbs the LoadedCard** (playbook, unhandled triggers, certificate) and `quali_minutes`; then the Strategy page goes | S12 | driver sees the standing orders before the green on the page he uses |
+| 1.7 | ⟂ **Race page absorbs the LoadedCard** (playbook, unhandled triggers, certificate); Strategy leaves the *Race day* rail group. **The Strategy page is KEPT and `quali_minutes` did NOT move** — the driver's call, 7 Sep: the page is where a plan is built, approved and qualifying is planned, all with the headset off, so only the contract needed to reach the grid | S12 | driver sees the standing orders before the green on the page he uses |
 | 1.8 | ⟂ **The driver board, lap by lap**: box countdown; fuel in hand *to the stop* and *to the flag* as two numbers; gap ahead and behind with trend; tyre split (rear–front and RR–RL gaps, the signal measured at r=+0.82 to wear), never raw temps as colour; position; the tyres-at-stop decision; last call and its register | brief "dashboard or voice" | board spec in `ui/driver_view.py` docstring; screenshot from the harness |
 | 1.9 | **Gauge guard symmetric**: a drop to zero on all corners holds for 3 reads like a rise | G20 | no series reset on replay |
 | 1.10 | **Rule 13 pass** on the call inventory | G19 | manifest diff |
@@ -656,9 +656,9 @@ one.
 
 **Struck or deferred, with the reason:** the chase's *"silence announced when
 the wall cannot read it"* is the brief's *"I can't see other cars"* line and
-was not duplicated per lap. 1.6 is half done — the reads persist; verdicts per
-call and the plan-vs-actual snapshot are not yet — and 1.7, 1.8, 1.10 are
-open. Critic 5's open questions, carried: one misidentified board row resets
+was not duplicated per lap. 1.6's verdict per call landed at
+`59a3144`; 1.7 and 1.10 are closed; **1.8 is what is left**, with the
+plan-vs-actual snapshot still outstanding. Critic 5's open questions, carried: one misidentified board row resets
 the held-up window and the sector map (the trend wipes on any subject
 change); two consecutive locator misreads would still cut the gauge series;
 the sector map's offset path (gap ≥ 2 s) has no test.
@@ -760,10 +760,959 @@ driver already short-shifting read as having obeyed; the v17 note in
 `schema.py` had swallowed a v15 paragraph; and the controller half — the
 hand-placed half — had no test at all, which is now five.
 
-**Left in Phase 1:** 1.7 (race page absorbs the loaded card, Strategy page
-goes), 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
-inventory — the "to the stop / to the flag" pair and "Box this lap" from three
-kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic
+### Row 1.10 — the rule-13 pass, and the manifest diff
+
+**The sweep.** 28 call kinds (`REGISTER`, `calls.py:283`), 25 of them ranked in
+`URGENCY`; **51 `Call(...)` sites** — 33 in `calls.py`, 16 in `rival_calls.py`,
+2 in `coordinator.py` — plus 14 further `voice.say` sites in the controller
+feeding `brief`, `colour`, `replan`, `refuel`, `quali_fuel`, `qualifying`,
+`intents` (~40 PTT answers), `gate`, `knowledge` and `debrief`. About **239
+distinct sentence templates**.
+
+**Two would have cost him a race.**
+
+1. **"N laps of fuel" was an absolute when he asked and a margin when the
+   engineer volunteered it.** The PTT answered `lapsOfFuel` — tank over burn —
+   as *"8.2 laps of fuel."*, in the noun phrase `FUEL_LONG`, the colour line
+   and the heartbeat all use for `_fuel_gap`, a margin, with the reference on
+   it. **This is the original rule-13 defect reinstated on the push-to-talk
+   path**, and the failure direction is the one that kills a race: 8.2 heard
+   as a margin with ten to run is believing in slack that is really −1.8. The
+   answer now comes from `fuel_in_hand`, the one expression that produces the
+   figure and its reference together, and says the same words the engineer
+   says. Where nothing frames it, it says *"8.2 laps of fuel in the tank."*
+2. **The chatty tier kept counting down to a stop that had just been
+   cancelled.** `_stops_off` says *"You're fuelled to the flag. No more stops
+   on fuel."* and does not clear `stint_ends_on_lap`; `_box_now` and
+   `_box_soon` go quiet because they gate on `stop_still_needed`, and
+   `colour` speaks on exactly the crossings where they are silent — from the
+   raw field. So the next lap said *"Stop next lap."* in the box vocabulary
+   about a stop that had been called off, and on the same lap he could hear
+   *"Fuel good to the flag."* The controller passes `None` once the stop is
+   retired: the figure now comes from the expression that decided there is a
+   stop (rule 12).
+
+**The manifest diff.** Every wording that moved, and why:
+
+| Site | Was | Is |
+|---|---|---|
+| `intents` FUEL | "8.2 laps of fuel." | "1.9 laps of fuel in hand to the stop." / "8.2 laps of fuel in the tank." |
+| `colour._countdown` | "3 to the stop." / "Stop next lap." | "3 laps to the stop." / "One lap to the stop." |
+| `colour` straight | "3 to the box." | "3 laps to the stop." |
+| `colour` wear | "LR 72." | "LR 72 percent." |
+| `calls._box_soon` | "Box in 2." | "Box in 2 laps." |
+| `calls._box_now` | "…Fuel to 68 litres - 9 laps after the box." | "Fuel is the constraint. Fuel to 68 litres…" |
+| `calls._chase` | "You need 0.7 a lap." | "You need 0.7 seconds a lap." |
+| `calls.stay_out` fold | "Short-shift 450, you're 0.6 short." | "Short-shift 450 rpm, you're 0.6 laps short to the flag." |
+| `calls._incident` | "That cost you 11 seconds." | "That cost you 11 seconds against your pace." |
+| `coordinator` composure | "That moment cost you about 4 seconds." | "About 4 seconds off the road." |
+| `calls._conserve` | "about 0.1 a lap per degree" | "about 0.1 seconds a lap per degree" |
+| `calls._tyre_temp` | "Rears 6 over the fronts." | "Rears 6 degrees over the fronts." |
+| `rival_calls.stay_out` | "Stay out." | "Don't box yet." |
+| `rival_calls.sector_split` | "0.4 a lap through 1 and 2" | "0.4 seconds a lap through 1 and 2" |
+| `rival_calls.rejoin_call` | "Box now and Rocky comes out in front." | "Rocky comes out in front if you box now." |
+| `rival_calls.undercut` | "The tow's 0.3 seconds a lap at the stop against 1.4 seconds a lap lost." | "The tow saves 0.3 seconds of stop time a lap and costs 1.4 seconds of lap time." |
+| `refuel` | "92 to the flag if you stay out." | "92 litres to the flag if you stay out." |
+| `replan` | "Recommend 2 stops." | "Recommend 2 stops from here." |
+| `brief` | "I can't see other cars - position only." always | only where the wall will not watch |
+| `intents` GAP / PACE / `_on_plan` | "closing 0.3 a lap", "0.8 down on the plan", "Pace 0.8 a lap down" | all say "seconds a lap" |
+
+**Why each moved, in one line each:** "a lap" carried seconds in five places
+and litres in two while `tow.py`'s own docstring forbade exactly that; "N
+stops" meant the race's total, this stop's ordinal and the stops remaining;
+"cost you N seconds" was lap time in one place and time-off-road in another,
+and one spin trips both; "N to the flag" was litres in exactly one place and
+laps everywhere else; "Stay out." and "Staying out?" are one syllable apart
+and mean opposite things; and `REJOIN` opened with the box instruction while
+meaning the opposite, which §5.5 calls a hedge behind a flat assertion.
+
+**The pack follows the sentences, and that is what "manifest diff" buys.**
+`phrase_manifest._FUEL_LINE` parsed a fixed tail; it now takes the reference
+from the line, so the PTT answer decomposes into `STOP_FUEL_TAIL` and
+`COLOUR_FUEL_TAIL` — clips the pack **already held** for the volunteered call.
+One sentence, one clip: rule 13 pays the voice pack as well as the driver.
+`test_voice_pack` and `test_phrase_manifest` are the gate, and a sentence that
+moves without reaching the pack is a pause at the moment a call arrives.
+
+**Struck from the audit, with the reason.** `colour._milestone`'s *"5 to go."*
+against the heartbeat's *"5 laps to go."* was reported as a collision and is
+not one: rule 13 forbids one phrase meaning two things, not two phrasings of
+one unambiguous thing — and `test_race_wiring` uses the difference as the
+marker that tells a colour line from an instrument reading. Left alone.
+
+**Carried:** the `UNDERCUT` reason can still stack the fill clause, the tow
+clause and the tyre clause, which is long for §5.5. The driver asked for the
+tow figures in that call by name (7 Sep), so they stay until he says
+otherwise; what changed is that the two seconds figures no longer share a
+phrase. Also carried from the audit: `intents` GAP answers as a two-row table
+(§5.5), and `expectations`' *"3.12 against 3.20"* is two bare litres-per-lap.
+
+**Row 1.10 closed — AGREED at `0015e74`, after four critic passes.** The
+sweep found the two blockers above and fourteen more collisions; the four
+passes then found six more, and **four of those were in my own fixes**, which
+is the part worth keeping:
+
+1. *"Fuel is the constraint."* was reported from `plan_binding_constraint`,
+   which only one of `_stop_needed_on_fuel`'s three branches reads — so with
+   a mandatory stop owed and fuel good to the flag it named fuel. Rule 12, in
+   the commit that cited rule 12. `_why_the_stop_stands` returns the decision
+   and its reason from one expression now.
+2. The prefix was glued in front of `_fuel_instruction`, which can say *"Fuel
+   is fine — the tank covers the next stint."* My fix SUPPRESSED the reason to
+   hide the contradiction, which threw away the branch that kept the stop.
+   **They were never contradictory** — one is against the flag, the other
+   against the next stint, and neither named its reference. Rule 13 again.
+3. `fuel_reaches_flag(state) is not True` folded *"cannot be known"* into
+   *"will not reach"* — a claim about arithmetic nobody had done (rules 3
+   and 5), two lines below the same function refusing to speak an unknown
+   `mandatory_stops_left` as a regulation.
+4. The retirement fix guarded two call sites and left **four** surfaces
+   counting down to a cancelled stop; moving it into `laps_to_stop()` closed
+   those, and the `lapsPastBox` key added in the next commit became a
+   **fifth**. Its own docstring says why: a guard at each consumer is one
+   chance to miss per consumer.
+
+**And twice the test written for a blocker did not reach it** — one asserted
+the absence of a string that no longer existed, one fed `lapsToStop: -2`,
+which the coordinator cannot produce. Both are the impossible-fixture class
+this project keeps finding. Every blocker now has a behavioural test driven
+through a real coordinator or a real screen.
+
+**Carried out of row 1.10, each named rather than quietly dropped:**
+
+- The retirement of a cancelled stop has **no latch**, so a burn median that
+  moves back across the margin makes the countdown vanish and return —
+  rule 10's shape. Bounded today because `drop_stop_granted` is False without
+  an explicit `fuel_long: drop_stop` entry.
+- The `UNDERCUT` reason can still stack the fill clause, the tow clause and
+  the tyre clause, which is long for §5.5. The driver asked for the tow
+  figures in that call by name (7 Sep), so they stay until he says otherwise.
+- `intents` answers GAP as a two-row table (§5.5), and `expectations` says
+  *"3.12 against 3.20"* — two bare litres-per-lap.
+- **Two families live-synthesise today and deserve their own pass**: the
+  whole overdue family (*"N laps overdue."*, and FUEL_SHORT's *"…laps short
+  of the flag on current burn — short-shift and lift if you stay out."*), and
+  the push-to-talk's *"No gap read yet — the wall has nothing this lap."*
+  Each is a pause at the moment a call arrives.
+- For the driver-board session: `ui/driver_view.py:791` captions the
+  countdown *"laps to box"* where everything else now says *to the stop*, and
+  its `None` branch reads *"no plan"*, which is false both on the last stint
+  of a real plan and now on a dropped stop — `DriverState.has_plan` sits
+  right there unread.
+
+### Row 1.7 — the standing orders, and critic pass 1
+
+**AGREED pending: `3558801` + the critic-pass commit.** The playbook, the
+certificate and what George cannot see lived on the Strategy page's
+`LoadedCard` — and `refresh_plan`, which rebuilds that card, is wired to the
+RACE screen's `shown` signal, so arriving on the race page refreshed a
+contract rendered a screen away. The words are in
+`strategy.handover.standing_orders` now and the ink in
+`ui.widgets.render_standing_orders`; both screens render through them.
+
+**The driver's scope call, 7 Sep:** *"drop it from race-day nav, keep the
+page."* The row sent `quali_minutes` to the Race page because the page was
+going to be deleted. It is kept, under a **Plan** group of its own, which is
+where a qualifying session read with the headset off belongs — so
+`quali_minutes` stays put and the row's "then the Strategy page goes" is
+withdrawn rather than silently unmet. The rail group was **split** rather
+than the name moved: `SCREENS` is `NAV_GROUPS` flattened and the rail indexes
+straight into the stack, so relocating would have renumbered the stack build
+order, `LATE_SCREENS` and the shortcuts.
+
+**Three defects found by rendering the real stored plans through it** — not
+by reading the diff — all in one direction, the driver told a rule is armed
+when it cannot fire: a blind trigger was named only when there was *no* rule
+for it (the RBR Short plan has a `rain` entry, so "he cannot see rain" was
+suppressed and the rule listed as a standing order); `safety_car`, retired
+from `TRIGGERS` on 7 Sep, rendered as an ordinary order on a plan that
+predates the retirement, because `PlaybookEntry.validate` runs when a
+handover is *authored* and nothing revalidates a stored one; and
+`standing_orders({})` built the whole contract for a driver with **no plan**.
+The six assumptions stored against the Daytona plan are rendered for the
+first time.
+
+**Critic pass 1 — two blockers, three majors, six minors, all fixed:**
+
+1. **`clear_log()` deleted the block at the arm.** It predates the row, takes
+   every widget out of `log_layout` and `deleteLater`s anything that is not
+   `log_empty` — and the orders live in that layout. `start_race` calls it.
+   Between the arm and the deferred delete the block was out of the layout
+   but still a child of the log holding its last geometry, drawing under the
+   incoming calls; once the delete ran, **every later `set_plan` raised
+   `RuntimeError: wrapped C/C++ object of type QVBoxLayout has been
+   deleted`** — reachable by returning to the Race page after the race, by
+   `_poll_plan`, and by approving a plan mid-race, and PyQt aborts the
+   process after `sys.excepthook`. It is the failure CLAUDE.md §7 records as
+   having cost the suite a quarter of its files for months. `processEvents`
+   does not run a DeferredDelete, which is why the suite was green.
+2. **"George falls back to his own" was false for exactly the two triggers
+   the structural rail gates.** `_may` returns True unconditionally for a
+   free action and refuses a structural one with no entry. Two pairs reach
+   it: `tyre_short → add_stop` and `fuel_long → drop_stop`. `tyre_short`
+   joined `TRIGGERS` on 7 Sep so **no plan on file grants it**, and the
+   approved plan told the driver George would use his judgement on the one
+   decision he is barred from. **This is the identical inversion the commit
+   claimed to be fixing** — the words changed, the failure to separate a free
+   action from a gated one did not. The predicate is `handover.grants` now
+   and `_may` delegates to it, so the sentence comes from the expression that
+   decides the call (rule 12).
+3. `"Standing orders - THE DESK"` was stamped over a block whose whole
+   content is that no desk wrote anything — the row's own third fix,
+   reintroduced by the heading it added.
+4. Three phrasings for one fact (rule 13): the screen, the CLI's *"George
+   will report it and decide nothing"*, and the stored `unhandled` list. The
+   CLI prints the shared sentences now; the stored field is documented as an
+   authoring-time record that nothing reads back.
+5. *"which he cannot see at all — it will never fire"* asserted a cause the
+   code had not determined: `dead` is anything not in `TRIGGERS`, which is a
+   retirement for any reason. Two sentences now.
+6. **The rail has never fitted the smallest display and nothing measured
+   it** — 384 px bare and 510 px with all seven state notes against 501, and
+   this row's new heading took it to 425/551. Nothing clipped because the
+   layout spent the 20 px bottom margin first. It scrolls now, and there is a
+   test.
+7. Minor, each fixed: a blank stored trigger rendered *"The desk left a rule
+   for , which …"*; the height test was a tautology inside a scroller (it
+   asserts the block is in the scroll area too now); `render_standing_orders`
+   returned a count one short of the widgets it added; and the
+   `show_standing_orders` docstring named the wrong condition for an empty
+   block. **One claimed minor was not a defect**: pass 1 said `dead`
+   compared frozen dataclasses by value so a duplicated entry reported a live
+   rule as never firing. It did not — liveness is a function of `trigger`
+   alone, so two equal entries are both live or both dead. The comparison is
+   by identity because that is what the question means, and the commit
+   message for `3cf458c` overstates it.
+
+### Row 1.7, critic pass 2 — three majors, all of them in pass 1's own fixes
+
+1. **The `tyre_short` sentence was false for every stint but the last, on
+   every approved plan on file.** `GATED` stated the gate flat; `calls.py`
+   sets `add_stop` only when `stint_ends_on_lap is None`, which is the last
+   stint — with a stop ahead the same reading brings it forward, which is
+   timing, and timing is free. So on lap 8 of stint 1 at Daytona the driver
+   hears *"Box this lap."*, the instruction the contract had just told him he
+   would not get. And it was **worse than the sentence it replaced**, because
+   `falls_back` now excludes gated triggers, so he got the wrong line instead
+   of the incomplete one. Rule 12 half-applied: the sentence moved onto
+   `grants()` and left the other half of the gate behind. The sentence now
+   carries the condition and quotes the call's own `report_form`.
+2. **`grants` answered the screen and the race differently for one stored
+   plan.** The list branch took the FIRST entry for a trigger; the
+   coordinator's dict comprehension keeps the LAST. On a playbook holding
+   `fuel_long: drop_stop` then `fuel_long: report_only` the screen said
+   George may drop the stop and the race refused it — the exact inversion the
+   single-expression fix existed to remove, reintroduced by it. Reachable:
+   `mcp.propose_strategy` stores a payload without `Handover.validate`, and
+   `certify` never reads the playbook.
+3. **The new rail scroller focused and selected items it did not scroll into
+   view.** `QScrollArea` follows `focusNextPrevChild`, not a direct
+   `setFocus`, so End / Down / Ctrl+7 put the crayon focus bar 71 px below
+   the fold with nothing on screen to say where he was. `ensureWidgetVisible`
+   in both, and the test asserts it rather than a height that can no longer
+   fail.
+
+The CLI re-rendered the handover it was sent rather than the row it stored,
+which dropped every *"Not checked:"* line at the one moment the author could
+still act on it.
+
+**Two claims in this pass were measured on an uncalibrated instrument and are
+retracted below** — the rail's note width and the scrollbar. See pass 3.
+
+### Row 1.7, critic pass 3 — I measured Qt text on a platform with no fonts
+
+**Offscreen Qt has no font database.** `QFontInfo(stencil_font(10)).family()`
+is `''` and `pixelSize` is `-1`, so every glyph gets the same fallback advance
+and `"W" * 12` measures exactly what `"i" * 12` does. Every width in pass 2
+came from that, and two app changes were made on the strength of them:
+
+- **`NOTE_CHARS` 15 → 12 was a regression.** On the machine the app runs on,
+  `Bahnschrift Condensed` resolves and fifteen W's want **102 px** of the 140
+  available; every note on file wants 62–76. Nothing had ever clipped. The
+  shorter count truncated `Ludo 1-stop, RBR Short, 30 Aug` and three sibling
+  plans to the identical string `Ludo 1-stop…` — on the note whose whole job
+  is to say *which plan is armed*. It is a pixel elision now
+  (`QFontMetrics.elidedText` against `NOTE_PX = 134`), because a character
+  count cannot be right in a proportional font.
+- **The 6 px scrollbar rule bought nothing and cost contrast.** `theme.apply`
+  already paints the trough `RUBBER_DEEP`, the handle `TREAD` and a
+  `TREAD_LIGHT` hover, at 12 px. The "14 px unstyled #9f9f9f stripe" was the
+  platform default measured *without the theme loaded*. The local rule halved
+  it, dropped the hover state, and set the handle at **1.57:1** — worse than
+  the 2.04:1 that `app.py` rejects for this same rail twenty lines below.
+  Deleted.
+
+This is `feedback_calibrate_instruments_before_use` on a project that has
+already discarded six derived indices for it, and it is the third pass running
+in which the worst finding was inside the previous pass's own fix.
+
+**Two more, both real:**
+
+3. **The `tyre_short` sentence was wrong a third time.** Pass 2 moved the
+   condition into the words but left it as prose in a constant, and
+   `standing_orders` never evaluated it — so a plan with **no stop in it**
+   (`_recommend` iterates `range(0, max_stops + 1)`) read *"he may bring a
+   planned stop forward"* about a stop that does not exist, and *"on the last
+   stint"* about a gate that bites from the green. `_withheld_sentence(trigger,
+   plan)` reads `stops` now, and the `fuel_long` line is withheld entirely on a
+   no-stop plan because `_stops_off` needs a planned stop to fire at all.
+4. **The AST guard could not see the construction `calls.py` uses.** It walked
+   `keywords` on any node and found the wear-cliff site only because that site
+   spells its rail as `dict(...)`; a dict *literal* splatted as `**rail` — one
+   refactor away — would have left `found` equal to `GATED` and the test green
+   about a call site it never read. It reads both shapes now and asserts that
+   the number of containers it saw equals the number of textual mentions, so
+   it cannot go blind quietly.
+
+Minor: the screen asked `grants` a filtered playbook while the race asks an
+unfiltered one (equal today only because both gated triggers are live —
+retiring one, as happened to `safety_car` on 7 Sep, would have reopened the
+split); the AST test read a CWD-relative path; only one of the two
+`report_form`s was pinned against `calls.py`; and
+`test_the_screen_and_the_race_ask_the_same_gate` hand-wrote the coordinator's
+own dict comprehension instead of building a real coordinator.
+
+**Carried, not fixed:** the briefed wear cliff's reason restates its call
+(*"Tyres past the stint limit. Tyres are past the stint limit on the measured
+rate for this compound…"*) against §5.5's *reason second and short*.
+Pre-existing since `78a728a`, and the contract now quotes that call, so the
+two move together.
+
+### Row 1.7, critic pass 4 — the arithmetic behind pass 3, and three guards that could pass while blind
+
+**Pass 3's change was right and its numbers were wrong.** *"Fifteen W's want
+102 px"* was measured **through `set_note` while `NOTE_CHARS` was still 12**,
+so it truncated first and I measured twelve. With the theme loaded the family
+resolves to Bahnschrift — the app-wide sheet beats `stencil_font`'s Condensed,
+and `note.font()` reports it, so the elision metrics were at least the ones
+the label paints with — and fifteen want **129 px**. The real strategy labels,
+which `nav_state` passes through verbatim, want **169–306 px against a 178 px
+rail**, so long ones elide whatever the constant is. Measured against every
+label on file, the pixel elision is better than or equal to the old character
+count on all of them — `1 stop - box lap 5` survives whole at 94 px where 15
+characters cut it — so the change stands and only the arithmetic is retracted.
+**That the rail cannot show a full strategy label is the rail's width, and is
+carried rather than fixed here.**
+
+1. **`NOTE_PX = 134` was a constant where the widget knows its own width.**
+   The scrollbar takes 12 px when it shows and nothing when it does not, so a
+   constant for the narrow case cut every note 12 px short in the wide one —
+   which is the normal one at his 1600×1000 window. The room is asked of the
+   viewport now.
+2. **The rail test asserted the elider against its own argument.**
+   `set_note` elides *to* `NOTE_PX`, so `sizeHint().width() <= NOTE_PX` is
+   green at 134, at 300 and at 1000. It compares against the viewport less the
+   column margins now — the only number that is not the elider's own input.
+3. **`_stops_planned` read two fields that may both be absent and ignored the
+   one `Handover.validate` requires.** A plan carrying only `stints`
+   certifies and stores, and returned `None` — which the caller rendered as
+   *"he may bring a planned stop forward"* about a plan with no stop in it,
+   the fourth wrong version of that sentence. It reads `len(stints) - 1` now:
+   `Plan.stops`' own definition, present on all 28 stored plans, agreeing with
+   the stored `stops` on every one, and the expression the coordinator arms
+   from. **It also caught the test fixture**, which claimed one stop while
+   holding one stint.
+4. **The AST guard counted containers it could not read.** `containers`
+   incremented before the literal check, so a site naming its action through a
+   module constant, or setting its trigger elsewhere, kept the tally balanced
+   and dropped the pair in silence; and `mentions` was a raw substring count,
+   so a comment failed the test for nothing. Tokenised now, with an explicit
+   `unread` list. Break-tested against five shapes: dict literal splatted as
+   `**rail`, action via a constant, a missing trigger key, plain keywords, and
+   a mention in a comment — the first four go red, the last stays green.
+
+Also: the two withheld sentences had drifted apart (rule 13) — the tyre line
+had dropped *"without a rule from the desk"* while the fuel line kept it — and
+a **granted** `fuel_long: drop_stop` on a plan with no stop is a rule that can
+never fire, which is the same failure as a rule for a trigger he cannot see
+and now says so.
+
+### Row 1.7, critic pass 5 — a confident zero, and three guards with no teeth
+
+1. **`_stops_planned` returned a confident `0` for a plan whose other fields
+   said `1`.** `certify` refuses `stops != len(stints) - 1` but **never checks
+   `pit_laps` against either**, and `validate` requires only `stints` — so a
+   plan listing one box lap and one stint validates, certifies, stores, and
+   printed *"box lap 10"* two inches above *"No stop is planned"* on the grid
+   card. Pass 4 caused it by reading `stints` first and returning it. Three
+   disagreeing fields is a don't-know, and the function's own headline says
+   never 0 for a don't-know. It reports a number only when the readings agree
+   now, and **says the disagreement aloud** (rule 1): *"The plan lists 1
+   stint, names 1 box lap — they disagree, so how many stops it holds is not
+   known."* The `tyre_short` sentence has a third form for the unknown case —
+   the half that is true whatever the count.
+2. **My own MAJOR-5 fix said the same thing three times.** Dropping an
+   unfireable rule out of `live` put it in `dead` (*"George no longer acts on
+   it"* — false, it is a live trigger) and left its trigger uncovered
+   (*"No rule from the desk on fuel long"* — also false, there is one). An
+   entry is in exactly one of three states now: readable and able to fire,
+   readable and unable, unreadable.
+3. **The rail assertion was `_note_room`'s own expression, bit for bit.** The
+   suite was green with `NOTE_MARGINS = 0` while notes ran 41 px past the
+   viewport with horizontal scrolling off. And the first two replacements
+   were the **instrument error a third time**: the label grows with its own
+   content so its width says nothing, and the absolute rail width is a text
+   measurement — offscreen, *"Reference"* alone wants 154 px of the rail's
+   178 (96 on the real font). What no font can change is that eliding a long
+   note must not make the rail want more room than a short one, and that is
+   what it asserts.
+4. **`_note_room()` was 608 at the moment the app calls `set_note`.**
+   `_update_rail` runs from `PitCrewWindow.__init__`, before `show()`, when
+   the scroll area is unlaid and its viewport reports the default 640 — so
+   nothing elided and the first painted frame carried a 307 px note hard-cut
+   inside a 178 px rail. Bounded by the rail's own fixed width now.
+5. **Notes were never re-elided**, so one set while the scrollbar was hidden
+   kept its text and had the last 12 px clipped — reachable by dragging the
+   window toward its own 560 px minimum. The raw text is kept and
+   `resizeEvent` redoes it.
+6. **The AST guard's `containers == uses - 1`** hard-coded "exactly one
+   benign mention" and failed on `return bool(call.structural_action)`, a
+   keyword-only parameter, a second annotated dataclass, and
+   `replace(call, structural_action=None)` — ordinary code, two of which
+   `coordinator.py` already contains. Every occurrence is classified into a
+   named box now, and anything that fits no box is what *gone blind* means.
+   Break-tested both ways in the suite: six innocent shapes stay green, five
+   blind ones go red (dict literal, action via a constant, missing trigger,
+   plain keywords, subscript assignment). The one shape it still cannot see —
+   a positional `Call(...)` — is stated in the docstring rather than claimed
+   away.
+
+Minor: the rule-13 assertion was a bare `count(...) == 2`, which stays green
+if one sentence is emitted twice and the other dropped; it checks each
+sentence now. And `max(60, ...)` in `_note_room` — a floor invented for a
+viewport the widget could not read — is gone with the ceiling that replaced
+the need for it.
+
+### Row 1.7, critic pass 6 — the re-elision missed the path the app uses
+
+1. **`resizeEvent` never fires when the scrollbar appears.** The rail is
+   `setFixedWidth(178)` and its height belongs to the window, so the widget
+   is not resized by the thing that narrows the viewport by 12 px — and that
+   happens part-way through `_update_rail`'s own loop over the screens.
+   Measured on the real platform with the theme at **1600×501, his smallest
+   display**: two notes clipped, `ludo plan - Daytona GR3` with the ellipsis
+   itself half cut — the exact state pass 5's comment claimed to have fixed.
+   An event filter on the viewport now, and the test brings the bar in the
+   way the app does (seven notes at a height where the empty rail fits and
+   the filled one does not) rather than by resizing the rail.
+2. **"The plan lists 3 stintss."** The plural was added twice for `stints`,
+   and both fire for every plan with two or more stints — which is every real
+   one. Pass 5's test used a single-stint plan, the one case where it cannot
+   show.
+3. **`live` was built per-entry while `grants` is last-wins.** A playbook
+   holding `fuel_long: drop_stop` then `fuel_long: report_only` printed both
+   under *George may* while the race honoured only the second: the driver
+   believing a lever is armed when it is not, in the block pass 5 rewrote
+   under the heading *"an entry is in exactly one state"*.
+4. **The AST guard had a false PASS in the idiom `calls.py` itself uses.**
+   `constant()` unwrapped an `IfExp` to its `body` and discarded the `else`,
+   so `structural_action="add_stop" if unplanned else "abandon_plan"` read as
+   one gate and dropped the other in silence — the whole thing the guard
+   exists to prevent. Both branches now, and the break-test covers it.
+5. **The rail assertion was a fallback-font artefact for the third time.**
+   *"Eliding must not make the rail want more room than a short note does"*
+   is **false on the real font** — it held offscreen only because the
+   fallback inflates the nav labels to 178 px and swamps the note. It
+   compares the elided text's own advance against the room the LAYOUT gives
+   it (margins read off the layout, not from `NOTE_MARGINS`), which is true
+   under any font and is not `_note_room`'s expression.
+6. **The action was never checked**, only the trigger — so `fuel long - fuel
+   map`, a standing refusal of the driver's, printed as something George may
+   do alone, and `incident - teleport to pits` **filled the coverage gap** so
+   he was never told he was on his own for an incident. And six ordinary
+   shapes (`getattr`, a comparison, `global`, an import, a `def` of that
+   name, a comprehension key) were falsely accused of blinding the walker.
+
+**And a failure that was not row 1.7's**, found by this pass: eleven tests in
+`test_hub_events.py` went red overnight on `SOON = "2026-09-07T10:30:00"` —
+a hard-coded future date that became the past, so *"the round that is
+coming"* linked nothing. It is `test_hub_calendar.py`'s constant too. Both
+derive from the day the test runs now; bumping them would only reset the
+fuse. CLAUDE.md §7's *"reproduce it with your change reverted"* is exactly
+what this was.
+
+### Row 1.7, critic pass 7 — two sentences that argue with themselves
+
+1. **"The plan lists 1 stint, says 1 stop, names 1 box lap — they disagree."**
+   The readings are compared in STOPS and were printed in each field's own
+   unit, so the numbers on screen were not the numbers compared. Three equal
+   figures and a claim that they conflict reads as the app being broken
+   rather than the plan. Every figure is in stops now — *"its stints imply 0
+   stops, it says 1 stop, its box laps name 1 stop"* — and the test walks all
+   100 combinations asserting no sentence ever prints equal figures.
+2. **The `unrunnable` bucket added in pass 6 was left out of `covered`**, so
+   one block said *"The desk's rule for incident asks for teleport to pits …
+   it will never fire"* and, four lines below, *"No rule from the desk on …
+   incident"*. One trigger, two opposite claims — which the block's own
+   comment already forbids for `stillborn`, and which pass 6's new test
+   **encoded as the desired result** by asserting the two halves separately
+   and never reading them side by side.
+3. **The Race page's headroom is two pixels, not eight.** 493 was measured
+   offscreen; with the real font and the app's own stylesheet the page wants
+   **499** against the 501 cap. The instrument error a third time, in the
+   number this row has quoted in three commits. The orders still cost zero —
+   499 bare and 499 with the longest plan on file — which was the design
+   claim and it holds. **The 8 px of slack in the test assertion does not
+   exist**, and it is recorded there rather than papered over: the equality
+   is the part with teeth and it holds in both.
+
+Minor: *"asks for nothing, which George cannot execute"* for a blank action —
+doing nothing is the one thing that is always executable, and it is also how
+a driver reads `report_only`; it is named as unreadable now, the way a blank
+trigger is. A superseded duplicate vanished silently and is named. *"you have
+refused outright"* put the driver in two roles in one paragraph, where every
+other line is third person. And the pass-6 write-up called the `IfExp` false
+pass *"the idiom `calls.py` itself uses"* — `calls.py`'s conditional is
+`… else None`, for which the old code was already right, so it was hardening
+against a shape one edit away, not a live defect. Corrected in both places.
+
+**Carried, and worth a decision rather than an accident:** strategy 15 renders
+**3,432 characters** of standing orders with one 432-character line, #29
+1,801. It scrolls away once calls arrive and §5.5 binds live calls rather than
+pre-green reading — but there is no cap, and on the 501-px display the block
+is below the fold from the first frame.
+
+### Row 1.7, critic pass 8 — I removed a contradiction by deleting the true half
+
+1. **Pass 7 restored the defect pass 6 had found.** Pass 6: *"`incident -
+   teleport to pits` filled the coverage gap so he was never told he was on
+   his own for an incident."* Pass 7 saw the opposite complaint — one trigger
+   described twice — and fixed it by putting `unrunnable` back into
+   `covered`, which is exactly what pass 6 removed. The driver then read that
+   the desk's rule will never fire, did not find `incident` among the things
+   George decides himself, and would conclude George does nothing on an off —
+   while `_incident` carries no `structural_action` and fires with no
+   playbook at all. **The fix is the merge, not the deletion:** one sentence
+   carries both facts. Trading a visible contradiction for a false silence is
+   the worse of the two errors.
+2. **"Treat it as absent" told the driver to do what the function does not.**
+   A blank action is still cover, so the trigger is struck from the fall-back
+   line — the sentence now says the fall-back itself, like the one above it.
+3. **"Only the last is used"** sat directly above *"…it will never fire"* in
+   five states out of six. *Read*, not *used* — true in all of them.
+4. **The corrected instrument story was wrong in both places.** 493 vs 499 is
+   not the font and not `offscreen`: offscreen **with the stylesheet** reads
+   the same 499 the real platform does, and the 6 px is the app-wide
+   `font-size: 15px` box metric — which `race_screen.py` already documents
+   forty lines above. And the slack was removable: `setStyleSheet(
+   theme.STYLESHEET)` on the screen reproduces the real figure with no
+   process-wide effect. **`test_every_screen_fits_the_smallest_display_he_owns`
+   now measures with the sheet too** — it had 6–8 px of slack on every screen,
+   on the one display that cannot afford any. All seven still fit: the Race
+   page at 499, the rest between 259 and 324.
+5. A test whose docstring required the state its own assertions now forbid,
+   and a figure guard that could not see a sign — `str.isdigit()` is False
+   for `-1`, and a negative `stops` printed *"it says -1 stops"*. A negative
+   is not a count (rule 3): the reading is dropped rather than rendered.
+
+Minor: the middle clause of the disagreement said a bare *"it says"* where
+the other two name their field. And pass 7's write-up claimed the test
+*"walks all 100 combinations asserting no sentence ever prints equal
+figures"* — the assertion is that they are not ALL equal, and 36 of the 84
+sentences legitimately repeat a figure. The claim was wrong, not the test.
+
+### Row 1.7, critic pass 9 — the oscillation, caught
+
+1. **Pass 8's fall-back clause re-said what pass 1 blocked.** Pass 1's second
+   blocker was, in its own words, *"it said George falls back to his own on
+   the two decisions he is barred from"* — and the reasoning is still in the
+   file: *"the gated pairs … drop out here, because saying both about one
+   trigger is saying two things."* Appending the clause unconditionally put
+   it back for `fuel_long` and `tyre_short`, sharpest on a no-stop plan where
+   George's own judgement on tyre-short is nothing at all. It is true for
+   `fuel_short`, `stop_missed` and `incident`, whose calls carry no
+   `structural_action`, and is emitted only there. **This is the ninth pass
+   and the first to catch the fix oscillating rather than merely being
+   wrong.**
+2. **Dropping a negative `stops` deleted the finding.** `{stints: 3,
+   stops: -2}` went back to reporting a confident **2** and *"he may bring a
+   planned stop forward"*, with nothing saying the stored plan carries an
+   impossible figure — pass 5's *"a confident zero"*, back. The wording was
+   the wrong half; *"how many it holds is not known"* was the true half. The
+   reading is kept and rendered as *"its stop count says -2, which is not a
+   count"*.
+3. **The 6 px cause was written down a second time without being measured.**
+   `font-size: 15px` contributes **zero** on both platforms; the figure is
+   set by `QScrollBar::handle:vertical { min-height: 40px }` — drop that one
+   rule and the page wants 459. And bare is 493 offscreen but **497 native**,
+   so four of those pixels really are the font database. What is true and
+   now stated in all three places: **499 with the sheet, offscreen and
+   native alike, against the 501 cap.**
+4. The test written to close the contradiction asserted only `incident` and
+   said nothing about `fuel long`, which appeared twice — the gated trigger
+   was the one left unchecked, which is the same omission it was written to
+   fix.
+
+Minor: a cross-reference to a comment in `race_screen.py` that lives in
+`ui/widgets.py`, and a low-end screen height (259) quoted from offscreen.
+
+### Row 1.7, critic pass 10 — one finding refused, and the asymmetry under it
+
+**The pass's headline is refused, and pass 5 established why.** It reported
+*"No rule from the desk on … fuel long — George falls back to his own"* on a
+0-stop plan as false. It is true: `_past_half_stint` falls back to
+`lap >= laps_total / 2` when there is no stop, so the FUEL_LONG call fires —
+measured, *"You can push."* with `structural_action=None`, so the playbook is
+never consulted. Changing it would be the oscillation this pass was asked to
+look for, with me causing it. **Recorded rather than acted on.**
+
+**The real defect was the asymmetry underneath it**, which the same pass
+reported as a minor: on a 0-stop plan, a plan with NO `fuel_long` rule was
+told George falls back to his own, and one with a GARBAGE rule was told only
+that it will never fire — so adding an unrunnable rule *removed* a true
+statement. The suppression was keyed on *"is this trigger gated"* when it
+means *"will a withheld sentence follow"*, and on a 0-stop plan none does.
+
+**Three tests were blind to that shape.** The file does carry 0-stop
+fixtures — that is how `stillborn` is reached at all — but not in the three
+tests that could have seen this, including the one written in pass 9 to close
+this very contradiction. `test_a_plan_with_no_handover_still_says_george_has_no_rules`
+was green *because* of the leak: it asserted each trigger's words appear
+somewhere, which cannot tell a true sentence from a false one. Both plan
+shapes now, and it asserts the gated pair is never both fallen back on and
+withheld.
+
+Minor: *"one reading cannot disagree with itself"* — a lone corrupt `stops`
+said *"The plan disagrees with itself"*; and the *"which is not a count"*
+clause dangled into the next reading when the negative was not last. Corrupt
+readings are ordered last and the head sentence matches the case.
+
+**And a fourth copy of the disproven `font-size` cause**, in
+`test_impeccable_findings.py`, with figures from the wrong platform. Measured
+natively, bare → styled: Car 247→**265**, Settings 243→265, Event 249→267,
+Strategy 257→279, Reference 267→285, Practice 305→324, **Race 497→499**
+against the 501 cap — so the six that are not the Race page sit between 265
+and 324 styled. Deleting `font-size: 15px` changes nothing on either
+platform. (Car's styled figure was written as its bare one, and the correct
+265–324 spread was deleted for disagreeing with it — pass 11.)
+
+### Row 1.7, critic pass 11 — the asymmetry was half-closed
+
+1. **(A)** Pass 10 gave the `unrunnable` loop a fall-back clause keyed on
+   whether a withheld sentence follows; the **`stillborn` loop beside it
+   never had one**. So on a 0-stop plan whose desk granted
+   `fuel_long: drop_stop` — the grant `GATED` exists to accept, on a shape
+   `_recommend` produces — the driver was told George uses his own judgement
+   with a *garbage* rule and with *no* rule, and told nothing with the real
+   one. Pass 8's first finding, left standing in the sibling loop. All three
+   states say it now.
+2. **The new block-level assertion could not fail.** The two facts are always
+   on different lines, so a per-line check never fires — measured against a
+   mutant restoring pass 1's original blocker, which left the test green. It
+   checks across the block now: for each gated trigger, named in the
+   fall-back list *or* carrying a withheld sentence, never both.
+3. **Both new sentence branches shipped untested** — the corrupt-reading
+   ordering and the single-reading head. The 100-combination sweep seeds
+   `stints` every iteration, so it can never build a one-reading plan.
+4. **The single-reading branch sliced the sentence it had just built**
+   (`split(" says ")`), a phrase only one of the three readings contains — an
+   `IndexError` on the grid for any rewording. Built from the reading now.
+   And the `" - which is not a count"` separator collided with the head's own
+   dash; `(not a count)` instead.
+5. *"Twenty of the twenty-eight plans on file"* matches neither sweep:
+   **24 of 28 rows** carry no handover, and **7 of the 10 approved** — which
+   is the figure that matters, since only an approved plan reaches the grid,
+   and it is the one the line originally had.
+
+### Row 1.7, critic pass 12 — a stop count of `5.0` was dropped
+
+**(A), and pre-existing.** `_stop_readings` and `certify` both gated on
+`isinstance(stops, int)`, so a float or a string vanished from the
+comparison: `_stops_planned` answered a confident **0** off the stints alone,
+`_stop_disagreement` said nothing, and the grid printed *"No stop is planned,
+so he cannot bring one forward…"* over a plan whose own field said five.
+`certify` could not refuse it because **it shares the guard**.
+
+**JSON has no integer type** and `mcp.propose_strategy` stores arbitrary JSON
+from the desk, so `5.0` is what a round-trip produces rather than a hostile
+input. This is pass 5's *"confident zero"* in the one shape eleven sweeps
+never parameterised — every one of them seeded `stops` as a Python `int`.
+`_as_count` reads an integral float as a count now; a field that is there and
+cannot be read at all is named and quoted rather than dropped, and `certify`
+refuses it.
+
+Minor: `_FIELD_NAMES` was a second vocabulary for the three fields, two of
+its three entries unreachable by construction — the lone-reading sentence is
+promoted off the same `_STOP_SAID` map now. The `stillborn` loop's fall-back
+guard had one reachable branch, which is a fact about `_cannot_fire` rather
+than a shortcut, and both now say so where they are. And a **second copy** of
+the stale row list — *"1.7, 1.8, 1.10 are open"* — 758 lines above the one
+pass 11 trimmed, which is §1a's own shape.
+
+### Row 1.7, critic pass 13 — `"stops": null` became a corrupt field
+
+1. **(A), and an oscillation I caused.** Pass 12 keyed the new branch on the
+   KEY (`"stops" in plan`) where both its siblings read the VALUE, and where
+   `certify` — added in the same diff — guards `is not None`. So
+   `"stops": null`, the ordinary JSON for *not stated*, counted as corrupt:
+   `_stops_planned` returned `None` instead of `0`, `_cannot_fire` went
+   False, and a granted `fuel_long: drop_stop` rendered under *George may, on
+   his own* on a plan where `_stops_off` can never fire — **the state pass 11
+   was written to close.** One token.
+2. **`len(parts) > 1` is not "the readings disagree".** An unreadable clause
+   counted as evidence of a conflict, so two fields that agree plus one that
+   cannot be read printed *"The plan disagrees with itself"* over two
+   identical figures. And checking the conflict first then gave a **lone**
+   negative reading the same head. The head is chosen in order now: one
+   clause is never a disagreement; a conflict between readings is; anything
+   else is a field that cannot be read.
+3. **`as_stop_count` was a guard at two consumers.** Four more sites read
+   `plan["stops"]` raw, so a float certified clean by pass 12's new gate then
+   printed **"1.0 stop"** on the Race page, slipped past the export's own
+   stints-vs-stops cross-check (`isinstance(stops, int)`), went into
+   `strategy.plan.stops` as `1.0` against a contract whose example is `1`,
+   and matched an approved plan in the controller only by `==` luck. One
+   expression, read by all six — `feedback_a_guard_at_each_consumer`.
+
+Minor: `1e300` passed `is_integer()` and became a 301-digit number printed
+into a wrapped label on the grid (bounded now); an unreadable field was
+`repr`'d without truncation, so a `stints` given as a dict rendered its whole
+structure into a standing order; and the lone-clause sentence was still
+string surgery on the built clause — it is formatted from the template, with
+an assertion so a reworded template fails loudly instead of silently losing
+its capital.
+
+### Row 1.7, critic pass 14 — the bound guarded the exotic shape and missed the common one
+
+1. **(A)** `isinstance(value, int)` returned *before* `_STOP_CEILING` was
+   consulted, so the bound sat on the float branch alone — and `json.loads`
+   gives a Python `int` for a digit string with no decimal point, which is
+   the likelier shape. **`1001.0` was refused as unreadable and `1001` was
+   read as a count**: two opposite verdicts on the same JSON number, inside
+   the expression this row created so every consumer would agree. Measured, a
+   400-digit int rendered a **2,822 px** order line against a ~733 px plate —
+   more than double the 1,352 px `strategy_screen.py` already records as a
+   defect worth fixing.
+2. **(A)** `any(number < 0)` in the head test was decisive **only** where
+   there was one reading beside an unreadable field — only `stops` can read
+   negative, so with two readings the set-size test has already decided. So
+   the one case it changed was the one the ordering exists to prevent: *"The
+   plan disagrees with itself about stops"* with a single figure in the
+   sentence. Removed; the set size is the whole test.
+3. `certify`'s refusal quoted the same field with a bare `repr` and reaches a
+   driver-facing status label — `_short` is `short_value`, public, and both
+   read it. And `export/payload` treated a value it could not read as a
+   reason to **skip** the stints-vs-stops cross-check rather than as a
+   problem, so `stops: true` — which `isinstance(True, int)` used to
+   catch — silently stopped being checked.
+
+Minor: the comment added in pass 13 said *"a float is what
+`_section_from_plan` emits"*, which the same diff had made false; and one
+last raw read of `plan["stops"]` in `race_outcome`'s caller.
+
+### Row 1.7, critic pass 15 — nothing in (A) survives
+
+The pass's own verdict: *"AGREED on the substance — nothing in (A) survives."*
+It measured the export byte-identical for all ten events with an approved
+plan, every one of the 28 plans' sentences identical, the bucket partition
+unchanged, and all three of pass 14's tests failing against the parent and
+pinned by targeted mutation. What it did find is all (B), and all of it is
+closed here:
+
+1. **The same `isinstance`-on-a-JSON-number gate, one line above the one
+   three passes hardened.** `_validate_plan`'s stops check sat inside
+   `all(isinstance(n, int) for n in stintLaps)`, so **one float in that list
+   silently disabled it** — and the stintLaps-vs-laps check with it. The
+   enclosing gate reads the same way now, and a list that is not lap counts
+   is its own problem rather than a reason to skip everything below it.
+2. **A stop ceiling is not a lap ceiling.** Fixing (1) by reusing
+   `as_stop_count` bounded a lap count at 1,000 — and a 24-hour race at
+   90-second laps is **960**. `as_whole_number(value, ceiling)` takes the
+   bound from the caller; `as_stop_count` is the stop-shaped wrapper.
+3. `build.py`'s comment claimed the value was *"normalised upstream on both
+   branches"*. It is not — `_strategy_section` prefers the stored
+   `plan["export"]` block and normalises nothing on that branch, so the call
+   is load-bearing exactly where it matters, and the comment invited the next
+   reader to delete it.
+
+**Carried:** `_section_from_plan` maps every unreadable `stops` to `null`, so
+the payload cannot tell *"the desk stated no stop count"* from *"it stated one
+that is not a count"* — §7 asks that every null be genuinely unmeasured.
+Bounded rather than fixed: `certify` refuses such a plan and both approval
+routes are certify-gated, so it cannot become the approved plan the export
+reads.
+
+### Row 1.7, critic pass 16 — an empty `stintLaps` skipped every check
+
+1. **(A), introduced by pass 15.** `if raw_stints and all(…)` / `elif
+   raw_stints:` left an **empty list in neither branch**, so the sum, the
+   stops and the compounds checks all vanished with no problem raised — where
+   the version before it reached them, because `all(…)` over an empty list is
+   True. Demonstrated end to end through the MCP door on a DB copy: a 20-lap,
+   one-stop, two-compound section **with no stints at all** exported clean,
+   and §7's *"refuse to export rather than export something wrong"* did not
+   fire. An empty list is a readable list of no laps; the checks below say
+   what is wrong with it.
+2. **The other half of pass 15's claim was not delivered.** The stops
+   readability problem was still nested under the stints, so a `stintLaps`
+   that could not be read took it down too. Both it and an unreadable `laps`
+   are their own problems now, outside that block.
+3. **The same `isinstance`-on-a-JSON-number gate in `certify`**, on stint
+   laps: `{"laps": 10.0}` was refused as *"not a positive whole number"*
+   while `{"stops": 1.0}` on the same plan certified. It failed safe — a
+   refusal, not an accept — but told the driver a plan lacked whole lap
+   counts when it had them.
+4. `abs(value) <= ceiling` made a negative a whole number, so `[-5, 25]`
+   summed to 20 and passed under a message reading *"not a list of lap
+   counts"*. `as_whole_number` takes a `minimum`: `None` for stops, where a
+   negative is deliberately kept and **named** as unusable, and 0 for laps,
+   where it is simply not a lap count.
+5. `pitLap` was the unnormalised sibling of `stops`, two lines under the
+   comment saying why `stops` is normalised — desk JSON put `11.0` into the
+   contract, `_validate_plan` never looks at that key, and `race_outcome`
+   rendered *"lap 11.0"* to the driver. And `if plan.get("pitLap")` folded a
+   box lap of 0 to None.
+
+Minor: pass 15 added a test whose docstring narrated a defect **no commit ever
+contained** — reusing `as_stop_count` for `stintLaps` was the first draft of
+that pass's fix and never shipped. It pins the constant, and now says so.
+
+### Row 1.7, critic pass 17 — the shape, not another site
+
+**The pass's own diagnosis, and it is the right one:** *"each pass normalises
+at ONE site, and the next pass finds the site it did not cover."* Passes 12–16
+taught six readers that `11.0` is eleven; pass 17 found `certify` widened to
+accept `{"laps": 11.0}`, normalising into a **local list** and handing the
+plan on untouched — so `stint_ends_on_lap` became `11.0` and George said
+**"the next 9.0-lap stint"** with the hose in, on the driver view and in the
+rival calls too. `feedback_a_guard_at_each_consumer`, in the gate this time.
+
+So the answer is not a seventh reader:
+
+1. **The plan is read as whole numbers ONCE, at the door.** `from_dict` is
+   where desk JSON becomes a plan and every route to storage goes through it;
+   after that no consumer can see a float and the six readers are
+   belt-and-braces. It **normalises and does not judge** — a value that
+   cannot be read is left exactly as written, because `certify` and
+   `_validate_plan` are the two that refuse and they need what the desk
+   actually sent.
+2. **`export` joins `RESERVED_KEYS`.** It was not on the list, so
+   `_strategy_section` preferred a desk-supplied block **verbatim** over the
+   section the app builds — shipping `1.0`, `[11.0, 9.0]` and `pitLap: 11.0`
+   into the contract on the one branch where every reader this row added is
+   bypassed. Two copies of one set of figures is §1a, and the app's copy is
+   the one with the arithmetic behind it.
+3. **`propose_strategy` was not a door.** `write_race_plan` goes through
+   `from_dict`; this one stored whatever JSON arrived, so both of the above
+   had a way round them on the tool whose docstring says it takes *"the JSON
+   of a plan"*.
+4. A box lap is 1-based — `Plan.pit_laps` is a stint's `end_lap` and
+   `certify` refuses a 0-lap stint — so `minimum=1`, and `race_outcome` can
+   no longer assert *"against a planned lap 0"* from a figure the app cannot
+   produce.
+
+### Row 1.7, critic pass 18 — `start_lap` was the field one to the left
+
+**(A).** `stint_ends_on_lap` is `start_lap + laps - 1`, and `whole_numbers`
+normalised `laps` and left `start_lap` as written — so the sentence that
+motivated the door, *"George said 'the next 9.0-lap stint' with the hose in"*,
+was **still true after the fix**, through the documented desk door on an
+auto-approved plan: *"10.0 laps after the planned box"*, spoken. Enumerating
+one more field would be the same shape a fourth time, so the count-shaped keys
+are **declared** (`PLAN_COUNTS`, `STINT_COUNTS`) and held against what
+`Plan.as_dict` actually emits — a field added to the plan cannot quietly skip
+the door.
+
+**And four of pass 17's six changes were unpinned**, found by mutation over
+600 tests: `minimum=1` on both `pitLap` sites, the `isinstance(pit_laps,
+list)` guard, and both `propose_strategy` guards all survived. The
+`isinstance` one is the costly gap — `certify` never checks that type, so an
+approved plan with `pit_laps: 11` raised `TypeError` and a dict raised
+`KeyError`, taking **the whole export** down rather than one key. All four are
+tested now, the MCP pair against the real stdio door.
+
+### Row 1.7, critic pass 19 — the door was hardened and nobody asked what it stores
+
+1. **(A), pre-existing.** `propose_strategy` **never stamped**.
+   `write_strategy` does; `approve_stored_strategy` only certifies; and
+   `start_race` arms straight off the row. So a proposed plan approved in the
+   app had **no `start_lap`** — every stint then ends at `laps`, because
+   `_apply_stint` reads `start_lap or 1`, so two stints of a three-stint plan
+   share a box lap and `_box_now` fires **every lap to the flag**. That is the
+   nine-box-calls defect `_with_start_laps` exists to prevent. No `context`
+   either, so `arm` skips `planned.matches(actual)` and a plan for one circuit
+   arms at another — §1a's named failure — and no `expects`, so every per-lap
+   comparison reports nothing.
+2. **(A)** A `start_lap` of `1.5` passed both doors *and the gate*: the door
+   reads what it can and passes the rest through by design, and `certify`
+   checked stint `laps` and **never looked at the start**. George said *"Box
+   in 8.5 laps."* `certify` refuses it now, which is where a value the door
+   could not read belongs.
+3. Pass 18's *"all four are tested now"* was true of one site and one guard:
+   the second `pitLap` reading and the `isinstance(payload, dict)` guard both
+   survived mutation. Both pinned — the outcome's reading at the source, said
+   plainly, because `_outcome` takes a store and a behavioural test there
+   would be a fixture pretending to be a database.
+4. The MCP advice was one answer for a set holding **three** ownerships:
+   `write_strategy` refuses `export` too, so routing it there was wrong, and
+   `unhandled`/`certificate` are recomputed wherever they arrive. Per key now.
+   `validate`'s own message still said *"the handover's own — rename it"*
+   about `export`, which is the app's.
+5. `end_lap` was declared in `STINT_COUNTS` and is a `Stint` **property** —
+   never stored, never read off a stored stint, so it was a key that could not
+   be exercised.
+
+Minor, each a claim wider than its code: *"every route to storage goes through
+it"* is false — the app's own optimiser writes `Plan.as_dict` (ints by
+construction) and `save_qualifying_plan` is a different surface, so what is
+true is *"every plan a desk can write"*. *"Rename it"* was lifted from a set
+with one ownership and is wrong for the five keys the handover consumes —
+renaming a `playbook` strips George's bounds; the answer for those is
+`write_strategy`. `export` was **dropped in silence** on the flat shape the
+desk actually writes, so the desk's own arithmetic disappeared with no
+message; it is kept on the plan and refused by name. And the null-is-bounded
+argument quoted for `stops` does not transfer to `pitLap`, because `certify`
+never reads `pit_laps` — carried, and said where it is.
+
+### Row 1.7, critic pass 20 — the deliverable, and where the row actually went
+
+**The last defect in the row's own deliverable, and it is the row's own named
+failure.** `set_plan` is the only caller of `show_standing_orders` and is
+driven by `_refresh_race_options` and `_poll_plan`, neither of which reads
+`use_plan()`. So picking **No plan** left *"Standing orders — LUDO"* over
+*"George may, on his own"* on the grid — while `start_race` passes
+`approved = None`, the coordinator builds its playbook from `{}`, and `_may`
+refuses every structural action. The driver told a rule is armed when it
+cannot fire, one combo box away. Fixed, and the store cannot put it back:
+`_poll_plan` re-runs `set_plan` every tick and the driver's choice wins.
+
+**Where the row went, counted.** Of the findings in passes 12–20, about **8
+are in the deliverable** — all of them in passes 12, 13 and 14 — and about
+**26 are in the strategy-storage and normalisation layer**, which this row
+reached only through the `stops: 5.0` chain that opened in pass 12.
+**Passes 15–19 produced seventeen numbered findings and not one is in the
+deliverable.** That layer is real work and the defects are real — an unstamped
+`propose_strategy` arms a plan with no start laps, and ten stored plans carry
+no `context` — but it is not row 1.7, and it is not converging.
+
+**So the row closes here on its deliverable** — the standing orders, their
+rendering, the Race page block and the nav change, all measured clean against
+every plan on file — **and the storage layer is carried as its own item.**
+
+### Carried out of row 1.7, for a row of its own
+
+- **`approve_stored_strategy` does not stamp.** Fixed at both doors; the
+  consumer that turns a candidate into the armed plan still does not, and
+  `start_race` arms straight off the row. On the live DB **10 stored plans
+  lack `context` and 13 lack `expects`**, and strategy 9 (Spa, approved)
+  certifies clean with neither — so `arm(None, actual)` returns True at any
+  circuit. `feedback_a_guard_at_each_consumer`, one consumer further on.
+- **`stamp`'s `_with_start_laps` silently drops a non-dict stint**, and
+  derives the remaining start laps over the survivors — the opposite of
+  `whole_numbers`' stated rule that what cannot be read is passed through for
+  `certify` to refuse. Now reachable from `propose_strategy` too.
+- **`except ValueError` around `stamp`** returns `int()`'s own message
+  (*"invalid literal for int() with base 10: 'ten'"*) and stores no candidate,
+  where the parent stored one and let `certify` say *"every stint needs a
+  positive whole number of laps"*.
+- **`certify`'s start-lap refusal reports one constraint for three** (rule
+  12): not whole, negative, and past `LAP_CEILING` all say *"needs a whole
+  one"*. Its `minimum=1` is nearly dead, because `_with_start_laps` rewrites a
+  falsy start to the running lap before it is reached.
+- Three guards in that layer survive full-suite mutation, and
+  `Handover.validate`'s new `export` branch is untested.
+
+**Left in Phase 1:** 1.8 (driver board spec and screenshot), plus critic
 5's carried questions (a misidentified board row resets the held-up window;
 two locator misreads still cut the gauge series; the sector map's offset path
 is untested). **Then Phases 2–4.**

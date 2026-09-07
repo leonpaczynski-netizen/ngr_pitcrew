@@ -1064,8 +1064,23 @@ class RaceState:
         run past the box lap *added* to the fuel reported in hand. "You can
         push. 2.9 laps of fuel in hand." was spoken at high confidence with
         0.88 laps aboard.
+
+        **And `None` once the stop stops being a stop.** `_stops_off` says
+        "You're fuelled to the flag. No more stops on fuel." and does not
+        clear `stint_ends_on_lap`, so the countdown carried on - and the
+        first fix guarded the two voice call sites and left four surfaces
+        counting down to a stop that had been called off: the driver board's
+        box panel, the Race screen's BOX IN, and the push-to-talk answers to
+        "when do I box" and "how are my tyres". A guard at each consumer is
+        four chances to miss one; the retirement belongs in the expression
+        they all read (rule 12).
+
+        No recursion: `stop_still_needed` reaches `fuel_reaches_flag`, which
+        reads `laps_remaining` and the burn, never this.
         """
         if self.stint_ends_on_lap is None:
+            return None
+        if not stop_still_needed(self):
             return None
         return max(0, self.stint_ends_on_lap - self.lap)
 
@@ -1570,7 +1585,11 @@ def _chase(state: RaceState) -> Call | None:
     them = state.gap_ahead_name or "the car ahead"
     laps_word = "lap" if laps_left == 1 else "laps"
     call = f"{them} {latest:.1f} ahead, {laps_left} {laps_word} to go."
-    reason = f"You need {need:.1f} a lap."
+    # **"a lap" carries seconds in five places and litres in two** (row
+    # 1.10). Behind the same car the driver can hear "You need 0.7 a lap."
+    # and "The tow saves you 0.7 litres a lap." minutes apart. The unit is
+    # said here, not left to the listener.
+    reason = f"You need {need:.1f} seconds a lap."
     sigma = state.lap_sigma_s
     if sigma:
         reason += (" That's more than your lap-to-lap spread."
@@ -1857,11 +1876,58 @@ def stop_still_needed(state: RaceState) -> bool:
 
 def _stop_needed_on_fuel(state: RaceState) -> bool:
     """`stop_still_needed` on the arithmetic alone, grant or no grant."""
-    if state.mandatory_stops_left is None or state.mandatory_stops_left > 0:
-        return True
+    return _why_the_stop_stands(state) is not None
+
+
+def _why_the_stop_stands(state: RaceState) -> str | None:
+    """What keeps the next stop a stop, in words, or None if nothing does.
+
+    **The decision and its reason out of one expression** (CLAUDE.md rule
+    12). `_box_now` was given a reason built from `plan_binding_constraint`,
+    and only ONE of the three branches below reads that field - so with a
+    mandatory stop owed and fuel good to the flag the driver heard "Box this
+    lap. Fuel is the constraint.", which is the Fuji failure `binding_limit`
+    exists to prevent, reinstated on the voice path.
+
+    **Two of the three do not name a constraint at all, deliberately.** The
+    plan's own word is a pre-race enum that `adopt()` never refreshes, so
+    after a mid-race re-plan it is the old plan's answer; `evidence` - the
+    common case, and the one that matters most - is meaningless said aloud;
+    and `tyre` collides with the gauge's measured "Tyres are the constraint,
+    not fuel." Where the plan is the only thing keeping the stop, the honest
+    reason is that it is the plan.
+    """
+    if state.mandatory_stops_left is None:
+        # **Unknown is not "the regulations require one"** (rule 3). It keeps
+        # the stop, which is the safe decision, and it may not be spoken as a
+        # regulation: nobody told the app there was one.
+        return "On the plan."
+    if state.mandatory_stops_left > 0:
+        return "The regulations need a stop."
     if (state.plan_binding_constraint or "").lower() != "fuel":
-        return True
-    return fuel_reaches_flag(state) is not True
+        return "On the plan."
+    # **"Fuel is the constraint." against WHICH distance** - the question
+    # rule 13 exists for. `_fuel_instruction` can say "Fuel is fine - the
+    # tank covers the next stint." on the same lap, and both are true: the
+    # tank covers this stint and not the race. The first version of this
+    # suppressed the reason to hide the collision, which threw away the
+    # branch that actually kept the stop and left a box call whose whole
+    # stated reason argued against boxing.
+    # **`is not True` folded "cannot be known" into "will not reach"**
+    # (rules 3 and 5, the critic on row 1.10). `fuel_reaches_flag` returns
+    # None with no burn on file, no fuel reading, or no lap count - and a
+    # timed race has no lap count until the clock resolves one - so "Box in
+    # 2 laps. Stop 2. Fuel won't reach the flag." was a claim about
+    # arithmetic nobody had done. Two lines above, this same function
+    # refuses to speak an unknown `mandatory_stops_left` as a regulation;
+    # the care belongs here too.
+    #
+    # The stop is kept either way - `_stop_needed_on_fuel` only asks whether
+    # the reason is non-None - so the unknown costs a sentence, not a stop.
+    reaches = fuel_reaches_flag(state)
+    if reaches is False:
+        return "Fuel won't reach the flag."
+    return "On the plan." if reaches is None else None
 
 
 def _stops_off(state: RaceState) -> Call | None:
@@ -1960,10 +2026,25 @@ def _box_now(state: RaceState) -> Call | None:
             "not granted.",
             severity=float(overdue),
         )
+    # **The routine box call was the only one of four that did not say what
+    # it was boxing him for** (row 1.10, rule 12). The wear cliff says
+    # "Tyres are past the stint limit on the measured rate"; the gauge one
+    # names the corner and the percentage; the undercut names the rival and
+    # the sectors. This one said "Fuel to 68 litres - 9 laps after the box",
+    # which is the fill instruction standing where the reason belongs.
+    #
+    # **From the branch that actually bound it**, not from
+    # `plan_binding_constraint`, which only one of the three branches reads -
+    # and never glued in front of a clause that contradicts it: `fuel` can be
+    # "Fuel is fine - the tank covers the next stint.", and "Fuel is the
+    # constraint. Fuel is fine." was two adjacent sentences making opposite
+    # claims, with §5.5 saying he acts on the front of the reason.
+    said = _why_the_stop_stands(state) or ""
+    reason = " ".join(part for part in (said, fuel) if part) or "On the plan."
     return Call(
         BOX_NOW, state.lap,
         f"Box this lap.{compound}",
-        fuel or "On the plan.",
+        reason,
         severity=float(overdue),
     )
 
@@ -1980,13 +2061,25 @@ def _box_soon(state: RaceState) -> Call | None:
     # pass 6). He has heard "You're fuelled to the flag." from `_stops_off`
     # and is now being told to box anyway; without the clause the two
     # contradict each other, and this is the call that arrives FIRST.
-    reason = f"Stop {state.stint_index + 1}, on the plan."
+    # **The same reason `_box_now` gives, and this call arrives first**
+    # (the critic on row 1.10). It said "Stop 2, on the plan." for a stop
+    # that fuel or the regulations bound - the rule-12 defect one call over,
+    # on the call §5.5's own worked example is shaped like: "Box this lap or
+    # next. Fuel is the constraint - you're 1.2 laps short."
+    stands = _why_the_stop_stands(state)
+    ordinal = f"Stop {state.stint_index + 1}"
+    reason = (f"{ordinal}. {stands}" if stands and stands != "On the plan."
+              else f"{ordinal}, on the plan.")
     if state.drop_stop_granted is False and not _stop_needed_on_fuel(state):
         reason = ("Stop {}, on the plan. Fuel would reach the flag - dropping "
                   "the stop was not granted.".format(state.stint_index + 1))
     return Call(
         BOX_SOON, state.lap,
-        f"Box in {to_stop}." if to_stop > 1 else "Box next lap.",
+        # **The unit, because the PTT answer has always carried it**
+        # (row 1.10): `intents._laps` renders the same instruction as "Box
+        # in 2 laps." and the volunteered one said "Box in 2." The one he
+        # acts on under a helmet was the bare one.
+        f"Box in {to_stop} laps." if to_stop > 1 else "Box next lap.",
         reason,
         severity=float(-to_stop),
     )
@@ -2315,8 +2408,12 @@ def stay_out_call(state: RaceState) -> Call | None:
         return Call(
             STAY_OUT, state.lap,
             "Staying out? You should make it.",
-            f"Short-shift {int(round(drop / 50.0) * 50)}, "
-            f"you're {abs(gap):.1f} short.",
+            # **Both units, and the distance the margin is short OF**
+            # (row 1.10). "Short-shift 450, you're 0.6 short." puts rpm and
+            # laps in one sentence with neither named - and its own sibling
+            # nine lines down has always said "0.4 laps short to the flag".
+            f"Short-shift {int(round(drop / 50.0) * 50)} rpm, "
+            f"you're {abs(gap):.1f} laps short to the flag.",
             short_shift_drop_rpm=drop)
     if gap < STAY_OUT_GAP_UNMEASURED:
         return None
@@ -2506,7 +2603,11 @@ def _incident(state: RaceState) -> Call | None:
     return Call(
         INCIDENT, state.lap,
         f"Lap {lap} is out.",
-        f"That cost you {cost_ms / 1000:.0f} seconds.",
+        # **"cost you N seconds" is lap time here and time-off-road in
+        # `composure`** (row 1.10). One spin trips both, and the off-road
+        # figure - which systematically understates the loss - lands first.
+        # This one names the lap it is measured against.
+        f"That cost you {cost_ms / 1000:.0f} seconds against your pace.",
         HIGH,
         severity=cost_ms / 1000.0)
 
@@ -2955,11 +3056,13 @@ def _conserve(state: RaceState, front: float, rear: float) -> Call | None:
     if gap < threshold or front < floor:
         return None
     slope = state.temp_gap_s_per_c
-    worth = (f" - about {slope:.1f} a lap per degree on your own laps here"
-             if slope else "")
+    worth = (f" - about {slope:.1f} seconds a lap per degree on your own "
+             f"laps here" if slope else "")
     return Call(
         TYRE_TEMP, state.lap, "Ease the traction out of the slow corners.",
-        f"Rears {gap:.0f} over the fronts{worth}.",
+        # Degrees, because "Rears 6 over the fronts" is a bare number in a
+        # call whose siblings quote seconds and percentages (row 1.10).
+        f"Rears {gap:.0f} degrees over the fronts{worth}.",
         MEDIUM, tag="conserve")
 
 

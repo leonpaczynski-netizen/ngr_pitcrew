@@ -145,8 +145,18 @@ def a_hub(tmp_path, *, rounds=(), lobby=GR3, registered=True, cars=(),
 
 
 NOW = datetime.datetime(2026, 9, 5, 9, 0)
-SOON = "2026-09-07T10:30:00.000+00:00"
-LATER = "2026-09-14T10:30:00.000+00:00"
+# Relative to the day the test runs. The sibling constants in
+# `test_hub_events` were fixed dates, went past, and took eleven tests red on
+# a day nobody touched them.
+def _round_at(days: int) -> str:
+    when = (datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(days=days)).replace(
+        hour=10, minute=30, second=0, microsecond=0)
+    return when.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
+
+
+SOON = _round_at(7)
+LATER = _round_at(14)
 PAST = "2026-08-31T10:30:00.000+00:00"
 
 

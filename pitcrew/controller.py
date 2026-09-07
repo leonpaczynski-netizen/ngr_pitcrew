@@ -70,7 +70,8 @@ from pitcrew.store import catalogs
 from pitcrew.store.db import Store
 from pitcrew.store.identity import IDENTITY_OK
 from pitcrew.race.calls import (STATUS, STATUS_EVERY_LAPS, STAY_OUT,
-                               fuel_in_hand, fuel_target_l, fuel_target_basis, fuel_to_flag_l)
+                               fuel_in_hand, fuel_target_l, fuel_target_basis,
+                               fuel_to_flag_l, stop_still_needed)
 from pitcrew.race.coordinator import (PlanContext, RaceCoordinator,
                                       context_from_stored)
 from pitcrew.race.expectations import PRACTICE
@@ -2375,6 +2376,10 @@ class PitCrewController(QObject):
             # promised nothing every race (Deep Forest, 6 Sep 2026: "No tyre
             # gauge this race" against 19 of 20 laps read).
             wear_gauge=self.hud.armed(),
+            # Asked before the wall is built - `_start_pit_wall` runs after
+            # the brief is spoken - so it is the CONDITION that is read, not
+            # the object (row 1.10).
+            sees_rivals=self._wall_cannot_watch() is None,
             temp_window=measured_temp_window(self.store, event["id"]) is not None,
             # The `A` format carries no per-wheel surface, so nothing can
             # see a kerb or an off. Read off the last packet rather than a
@@ -3591,7 +3596,16 @@ class PitCrewController(QObject):
             lap_time_ms=lap.lap_time_ms,
             laps_remaining=state.laps_remaining(),
             laps_total=state.laps_total,
-            stint_ends_on_lap=state.stint_ends_on_lap,
+            # **None once the stop is off** (row 1.10). `_stops_off` says
+            # "You're fuelled to the flag. No more stops on fuel." and does
+            # not clear `stint_ends_on_lap`; `_box_now` and `_box_soon` go
+            # quiet because they gate on `stop_still_needed`, and the chatty
+            # tier - which speaks on exactly the crossings where they are
+            # silent - went on saying "Stop next lap." and "3 laps to the
+            # stop." in the box vocabulary. Rule 12: the figure comes from
+            # the expression that decided there is a stop.
+            stint_ends_on_lap=(state.stint_ends_on_lap
+                               if stop_still_needed(state) else None),
             # Measured from the race in progress, never inherited - so it is
             # None until enough clean laps exist, and the consistency call
             # stays silent rather than inventing a band.
@@ -4063,8 +4077,13 @@ class PitCrewController(QObject):
             # plans now share a stop count on different rubber, and matching
             # on stops alone would re-select whichever came first - silently
             # putting the car on a compound he did not approve.
+            from pitcrew.strategy.handover import as_stop_count
+
             stored = approved["plan"]
-            want_stops = stored.get("stops")
+            # Through the one expression: matched raw, a stored `1.0` found
+            # its plan only by `==` luck and any other shape silently
+            # selected none.
+            want_stops = as_stop_count(stored.get("stops"))
             want_compounds = [s.get("compound")
                               for s in stored.get("stints") or []]
             approved_index = next(
@@ -4533,6 +4552,21 @@ class PitCrewController(QObject):
         # moment that is certainly before anybody stops.
         self._start_pit_wall()
 
+        # **What the wall actually did, after it tried.** `_say_brief` runs
+        # before `_start_pit_wall`, and the wall can still fail inside its own
+        # `try` and leave `_pit_wall` None - after the brief has already
+        # dropped the "I can't see other cars" line. Over-promising is the
+        # direction `brief.py` calls worse than promising nothing, so the line
+        # is said late rather than never (critic on row 1.10).
+        if self._wall_cannot_watch() is None and self._pit_wall is None:
+            log("pitcrew").warning(
+                "pit-wall: the brief said the wall would watch and it did not "
+                "start - saying so.")
+            if self._engineer_speaks:
+                from pitcrew.race.brief import (NO_RIVALS,
+                                                WALL_DID_NOT_START)
+
+                self.voice.say(f"{WALL_DID_NOT_START} {NO_RIVALS}")
         how = "Rehearsal armed" if rehearsal else "Armed"
         parts = [
             "running to the approved plan" if plan else
@@ -4552,6 +4586,33 @@ class PitCrewController(QObject):
         return True
 
     # ---------------------------------------------------------- the pit wall
+
+    def _wall_cannot_watch(self) -> str | None:
+        """Why the pit wall will not watch this race, or None if it will.
+
+        **One expression, because the brief promises what this decides**
+        (row 1.10). The brief said "I can't see other cars - position only."
+        unconditionally, and then the engineer volunteered "Boxhead has boxed
+        on 40 litres" and "Faster than Boxhead through 1 and 2" - having
+        opened the race by denying the instrument that produced them.
+
+        **`_start_pit_wall` calls this rather than restating it** (critic on
+        row 1.10). The first version was a hand-copied second copy of the
+        wall's three refusals, which is CLAUDE.md §1a's defect - two copies
+        of one fact become two facts - and the only test on it was a grep for
+        the name. The wall logs the reason this returns.
+        """
+        if self.hud is None:
+            return "there is no capture source"
+        if not self.settings.hud_wear_enabled:
+            return ("the tyre gauge is off, and the wall sees only the frames "
+                    "it grabs")
+        interval = float(self.settings.hud_sample_interval_s or 0.0)
+        if interval <= 0 or interval > 5.0:
+            return (f"the gauge samples "
+                    f"{'only at each crossing' if interval <= 0 else f'every {interval:g}s'}"
+                    f", which is too slow to catch a pit stop")
+        return None
 
     def _start_pit_wall(self) -> None:
         """Watch the leaderboard for the rest of this race.
@@ -4583,19 +4644,9 @@ class PitCrewController(QObject):
         # stop needs - so every stop is discarded and the driver is told
         # nothing, which is indistinguishable from a race in which nobody
         # pitted.
-        if not self.settings.hud_wear_enabled:
-            log("pitcrew").warning(
-                "pit-wall: not watching - the tyre gauge is off, and the wall "
-                "sees only the frames it grabs.")
-            return
-        interval = float(self.settings.hud_sample_interval_s or 0.0)
-        if interval <= 0 or interval > 5.0:
-            log("pitcrew").warning(
-                "pit-wall: not watching - the gauge samples %s, which is too "
-                "slow to catch a pit stop. Set a sampling interval of a "
-                "second or two.",
-                "only at each crossing" if interval <= 0
-                else f"every {interval:g}s")
+        refused = self._wall_cannot_watch()
+        if refused is not None:
+            log("pitcrew").warning("pit-wall: not watching - %s.", refused)
             return
         try:
             from pitcrew.race.pit_wall import PitWall
@@ -6310,7 +6361,9 @@ class PitCrewController(QObject):
             # is fresher than a stored lap in any case.
             wear_worst=self._live_worst_wear()[0],
             wear_corner=self._live_worst_wear()[1],
-            stint_ends_on_lap=state.stint_ends_on_lap)
+            # See `_voice_colour`: a retired stop is not counted down to.
+            stint_ends_on_lap=(state.stint_ends_on_lap
+                               if stop_still_needed(state) else None))
         if call is None:
             return
         spoken = call.spoken()

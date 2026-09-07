@@ -10,12 +10,15 @@ import time
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPainter, QShortcut
+from PyQt6.QtCore import QEvent, Qt, QTimer
+from PyQt6.QtGui import (QColor, QFontMetrics, QIcon, QKeySequence,
+                         QPainter, QShortcut)
 from PyQt6.QtWidgets import (
     QApplication,
+    QFrame,
     QHBoxLayout,
     QMainWindow,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -55,10 +58,21 @@ MIN_WINDOW = (900, 560)
 # the driver to paste, and take a setup sheet back - and that whole transport
 # is gone: the tune builder holds the car and issues changes directly. What
 # the app still owes him is what it measured, which is Practice and Race.
+# **Strategy is not a race-day screen** (row 1.7). It is where a plan is
+# built, approved and qualifying is planned - all of it read with the headset
+# off - and the one thing on it the driver needed on the grid, the standing
+# orders, is on the Race page now. Leaving it under *Race day* offered him a
+# page to go and read at the moment he should be on the page he starts from.
+#
+# Split rather than relocated, deliberately: `SCREENS` is this flattened and
+# the rail indexes straight into the stack, so moving the NAME would renumber
+# the stack's build order, `LATE_SCREENS` and the shortcuts. This leaves the
+# flattened order identical and changes only what the rail says.
 NAV_GROUPS = (
     ("Prepare", ("Event", "Car")),
     ("Learn", ("Practice",)),
-    ("Race day", ("Strategy", "Race")),
+    ("Plan", ("Strategy",)),
+    ("Race day", ("Race",)),
     ("", ("Reference", "Settings")),
 )
 SCREENS = tuple(name for _heading, names in NAV_GROUPS for name in names)
@@ -512,15 +526,28 @@ class NavItem(StencilLabel):
 class NavRail(QWidget):
     """Screen selection, lettered like a rack tag and grouped by job.
 
-    Eight equal peers in one list misrepresented the work. Two loops run
-    through this app - prepare the car and learn from it (Event, Car,
-    Practice, Engineer), and race it (Strategy, Race) - and the rail showed
-    them as siblings of each other and of Reference and Settings, in an order
-    that put Engineer, the last step of the first loop, after Race.
+    Seven equal peers in one list misrepresented the work. Two loops run
+    through this app - prepare the car and learn from it, and race it - and
+    the rail showed them as siblings of each other and of Reference and
+    Settings, in an order that put the last step of the first loop after the
+    race.
 
-    Grouping rather than restructuring: the same eight screens, with the two
+    Grouping rather than restructuring: the same seven screens, with the
     loops named and ruled apart, so the rail describes the work instead of
     listing it.
+
+    **Four named groups since row 1.7**, because planning is its own step: it
+    happens after the practice it rests on and before the race, and it is the
+    last thing done with the headset off. Strategy left *Race day* with it -
+    the standing orders are on the Race page now, so there is nothing on that
+    screen he needs with a helmet on.
+
+    **It scrolls, as of that row.** Bare it wants 425 px; with all seven
+    state notes showing, 551; and the smallest display he owns gives 501.
+    Nothing was clipped, because the layout spent the bottom margin first,
+    but that is a budget rather than a fix and how many notes show is set by
+    `nav_state` rather than by the layout. The rail is the one surface used
+    on every visit and Settings is the last item on it.
     """
 
     def __init__(self, stack: QStackedWidget, groups,
@@ -535,8 +562,35 @@ class NavRail(QWidget):
         self._stack = stack
         self._labels: list[StencilLabel] = []
         self._notes: list[StencilLabel] = []
+        # What `set_note` was given, before elision, so a resize can redo it.
+        self._note_text: list[str] = []
 
-        column = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroller.setStyleSheet("background: transparent;")
+        inner = QWidget()
+        outer.addWidget(scroller)
+        # Held because `focus_item` and `select` have to scroll to what they
+        # just moved to: `QScrollArea` follows `focusNextPrevChild` and NOT a
+        # direct `setFocus`, so End, Down and Ctrl+7 all put the crayon focus
+        # bar 71 px below the fold with nothing on screen to say where he is.
+        self._scroller = scroller
+        scroller.viewport().installEventFilter(self)
+        # **No local scrollbar rule.** One was added here on the strength
+        # of an unstyled #9f9f9f stripe and a 14 px width - both measured
+        # with `theme.apply` NOT loaded. The app-wide sheet already paints
+        # the trough RUBBER_DEEP, the handle TREAD and a TREAD_LIGHT hover,
+        # at 12 px. The local rule halved it to 6 px with no hover state and
+        # a 1.57:1 handle, which is worse than the 2.04:1 this file rejects
+        # for this rail twenty lines below.
+
+        column = QVBoxLayout(inner)
         column.setContentsMargins(20, 26, 12, 20)
         column.setSpacing(4)
         column.addWidget(StencilLabel("Pit Crew", size=16, colour=theme.CRAYON,
@@ -575,14 +629,43 @@ class NavRail(QWidget):
 
                 self._labels.append(label)
                 self._notes.append(note)
+                self._note_text.append("")
                 index += 1
 
         column.addStretch(1)
+        scroller.setWidget(inner)
         self.select(0)
 
-    # What fits on one line in the rail at this size, tracked. A note that
-    # clips is worse than a shorter one: "NOTHING ASKED YE" reads as a bug.
-    NOTE_CHARS = 15
+    # The column's own left and right margins. Everything else about the
+    # room a note has is asked of the widget, not held here - the scrollbar
+    # takes 12 px when it shows and nothing when it does not, and a constant
+    # for the narrow case cut every note 12 px short in the wide one, which
+    # is the normal one at his 1600x1000 window.
+    NOTE_MARGINS = 32
+
+    # **This was a character count, and a character count cannot be right in
+    # a proportional font.** 15 was picked by eye; 12 was then "measured"
+    # offscreen, where Qt has no font database and `"W" * 12` and `"i" * 12`
+    # measure the same - and that cut `1 stop - box lap 5` in half. Against
+    # every strategy label on file, eliding by pixel is better than or equal
+    # to the old count on all of them.
+    #
+    # It still elides: `nav_state` passes a strategy label through verbatim
+    # and they run to 306 px against a 178 px rail. That is the rail's width,
+    # not this function's - carried, not fixed here.
+    def _note_room(self) -> int:
+        """The pixels a note has, now.
+
+        **Bounded by the rail's own fixed width.** `_update_rail` runs from
+        `PitCrewWindow.__init__`, before `show()`, when the scroll area is
+        unlaid and its viewport reports the default 640 - so this returned
+        608, nothing elided, and the driver's first painted frame carried a
+        307 px note hard-cut inside a 178 px rail with the horizontal bar
+        off. A ceiling costs nothing and cannot be wrong before layout.
+        """
+        ceiling = self.width() - self.NOTE_MARGINS
+        return min(self._scroller.viewport().width() - self.NOTE_MARGINS,
+                   ceiling)
 
     def focus_item(self, index: int) -> None:
         """Move focus along the rail, wrapping. Skips what is not built."""
@@ -597,16 +680,52 @@ class NavRail(QWidget):
         while index not in usable:
             index = (index + 1) % len(self._labels)
         self._labels[index].setFocus(Qt.FocusReason.TabFocusReason)
+        self._scroller.ensureWidgetVisible(self._labels[index])
 
     def set_note(self, index: int, text: str) -> None:
         """A one-line state under a rail item, or "" to clear it."""
         if not 0 <= index < len(self._notes):
             return
-        if len(text) > self.NOTE_CHARS:
-            text = text[:self.NOTE_CHARS - 1].rstrip() + "…"
+        # **The raw text is kept, because the room moves.** The scrollbar
+        # takes 12 px when it appears, and dragging the window toward its own
+        # 560 px minimum brings it in - so a note elided while the bar was
+        # hidden kept its old width and had the last 12 px clipped by the
+        # inner widget, with the horizontal bar off, until something happened
+        # to set it again.
+        self._note_text[index] = text
+        self._elide_note(index)
+
+    def _elide_note(self, index: int) -> None:
         note = self._notes[index]
-        note.setText(text)
-        note.setVisible(bool(text))
+        # `note.font()` carries the app-wide sheet's family, so these metrics
+        # are the ones the label paints with - measured, not assumed.
+        note.setText(QFontMetrics(note.font()).elidedText(
+            self._note_text[index], Qt.TextElideMode.ElideRight,
+            self._note_room()))
+        note.setVisible(bool(self._note_text[index]))
+
+    def resizeEvent(self, event) -> None:            # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._elide_notes()
+
+    def eventFilter(self, watched, event):           # noqa: N802 - Qt naming
+        """Re-elide when the VIEWPORT changes, which the rail never does.
+
+        The rail is `setFixedWidth(178)` and its height belongs to the
+        window, so `resizeEvent` does not fire when the vertical scrollbar
+        appears - and the bar is what takes the 12 px, part-way through
+        `_update_rail`'s own loop over the screens. Measured at 1600x501,
+        his smallest display: two notes were left with the width they had
+        before the bar came in, clipped with the horizontal bar off.
+        """
+        if watched is self._scroller.viewport() and \
+                event.type() == QEvent.Type.Resize:
+            self._elide_notes()
+        return super().eventFilter(watched, event)
+
+    def _elide_notes(self) -> None:
+        for index in range(len(self._notes)):
+            self._elide_note(index)
 
     def select(self, index: int) -> None:
         if index >= self._stack.count():
@@ -618,6 +737,8 @@ class NavRail(QWidget):
         if self._builder is not None:
             self._builder(index)
         self._stack.setCurrentIndex(index)
+        if 0 <= index < len(self._labels):
+            self._scroller.ensureWidgetVisible(self._labels[index])
         for position, label in enumerate(self._labels):
             if position >= self._stack.count():
                 label.setStyleSheet(

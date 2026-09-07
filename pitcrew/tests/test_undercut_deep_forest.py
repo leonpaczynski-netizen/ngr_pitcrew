@@ -191,8 +191,9 @@ def test_the_engineer_notices_where_he_has_us():
     # lap is not chained to the next, so they come in a touch under the
     # 0.4 built in; the sentence and the sign are what the driver hears.
     import re
-    found = re.search(r"Over (\d+) laps: ([\d.]+) a lap through 1 and 2, "
-                      r"([\d.]+) back in 3\.", said.reason)
+    found = re.search(r"Over (\d+) laps: ([\d.]+) seconds a lap through "
+                      r"1 and 2, ([\d.]+) seconds a lap back in 3\.",
+                      said.reason)
     assert found, said.reason
     assert abs(float(found.group(2)) - 0.4) < 0.15
     assert abs(float(found.group(3)) - 0.4) < 0.15
@@ -339,7 +340,7 @@ def test_the_tow_is_priced_at_the_pump_and_found_not_worth_it():
     # standing time and the lap time are two quantities the driver has to
     # compare, and only one of them used to say what it was per.
     assert said.call.startswith("The tow saves you 0.6 litres a lap - "
-                                "0.3 seconds a lap at the stop.")
+                                "0.3 seconds a lap at the pump.")
     # **Not "losing N seconds a lap to Boxhead"** - `closing_call` owns that
     # sentence for the GAP growing, and this is his lap time in the wake
     # against clear air. Rule 13, found by critic pass 7.
@@ -350,8 +351,20 @@ def test_the_tow_is_priced_at_the_pump_and_found_not_worth_it():
     trade = race.state.tow_trade
     assert trade is not None and trade.worth_it is False
     undercut = next(c for c in calls[7] if c.kind == UNDERCUT)
-    assert ("The tow's 0.3 seconds a lap at the stop against 1.4 seconds a "
-            "lap lost.") in undercut.reason
+    # Row 1.10: both halves said "seconds a lap" for two quantities -
+    # standing time saved at the pump per towed lap, against lap time given
+    # away on the road. The driver asked for this trade by name, so the
+    # figures stay; each one says which clock it is on.
+    # The critic on row 1.10: "costs 1.4 seconds of lap time" reads as a
+    # total, and it is per lap - over a ten-lap tow that is 1.4 s against 14,
+    # understating in the direction that makes the tow look free. Both keep
+    # the rate, and "at the pump" / "on the road" is `tow.sentence`'s own
+    # vocabulary, so one pair of numbers has one pair of words.
+    # `tow.sentence`'s own words, sign guard included: `losing_s_per_lap` is
+    # signed, and "-0.3 seconds a lap" was spoken aloud while the tow call
+    # about the same trade said "you're no slower".
+    assert ("The tow saves 0.3 seconds a lap at the pump against 1.4 seconds "
+            "a lap slower behind him.") in undercut.reason
 
 
 def test_a_tow_that_pays_means_no_undercut():
@@ -416,7 +429,7 @@ def test_a_tow_that_costs_fuel_is_priced_as_a_cost():
     assert made.worth_it is False
     call, _ = made.sentence("Boxhead")
     assert call == ("The tow costs you 0.8 litres a lap - 0.4 seconds a lap "
-                    "at the stop. Behind Boxhead you're 0.2 seconds a lap "
+                    "at the pump. Behind Boxhead you're 0.2 seconds a lap "
                     "slower. Not worth it.")
 
 
@@ -432,7 +445,7 @@ def test_a_tow_that_costs_fuel_and_no_time_still_says_get_out():
                     reference="the plan")
     assert made.worth_it is False
     assert made.sentence("Boxhead")[0] == (
-        "The tow costs you 0.8 litres a lap - 0.4 seconds a lap at the stop. "
+        "The tow costs you 0.8 litres a lap - 0.4 seconds a lap at the pump. "
         "Behind Boxhead you're no slower. Not worth it.")
 
 

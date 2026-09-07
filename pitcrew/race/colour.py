@@ -292,11 +292,18 @@ class ColourCalls:
                  f"{fuel_reference}.", ""))
         if wear_worst is not None:
             where = f"{wear_corner.upper()} " if wear_corner else "Worst tyre "
-            options.append((f"{where}{wear_worst * 100:.0f}.", ""))
+            # **"LR 72." against the PTT's "LR 72 percent."** (row 1.10),
+            # and 72 is a plausible temperature.
+            options.append((f"{where}{wear_worst * 100:.0f} percent.", ""))
         if stint_ends_on_lap is not None and stint_ends_on_lap > lap:
+            # **One noun and one unit** (row 1.10). The straight said "3 to
+            # the box." and the countdown "3 to the stop." for one quantity,
+            # both bare, both in the chatty tier - and "3" beside a wear
+            # percentage and a fuel margin is three bare numbers a lap.
             to_box = stint_ends_on_lap - lap
             options.append((
-                f"{to_box} to the box.", "" if to_box != 1 else "Box next lap."))
+                f"{to_box} laps to the stop." if to_box != 1
+                else "One lap to the stop.", ""))
         if lap_time_ms and self._best_ms and lap_time_ms > self._best_ms:
             off = (lap_time_ms - self._best_ms) / 1000.0
             if off >= 0.05:
@@ -393,8 +400,8 @@ class ColourCalls:
         if not 1 <= to_go <= COUNTDOWN_FROM_LAPS:
             return None
         return ColourCall(STINT_COUNTDOWN,
-                          f"{to_go} to the stop." if to_go > 1
-                          else "Stop next lap.", "")
+                          f"{to_go} laps to the stop." if to_go > 1
+                          else "One lap to the stop.", "")
 
     def _milestone(self, lap: int, laps_remaining: int | None,
                    laps_total: int | None) -> ColourCall | None:

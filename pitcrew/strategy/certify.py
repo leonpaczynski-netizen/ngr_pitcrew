@@ -110,9 +110,30 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     if not stints:
         return Certificate(["the plan names no stints"])
 
-    laps = [s.get("laps") for s in stints]
-    if any(not isinstance(n, int) or n <= 0 for n in laps):
+    # **The same `isinstance`-on-a-JSON-number gate.** `{"laps": 10.0}` was
+    # refused as "not a whole number of laps" while `{"stops": 1.0}` on the
+    # same plan certified - two opposite verdicts on the same JSON number,
+    # one file over from where that was fixed. It fails safe (a refusal, not
+    # an accept), and it told the driver a plan lacked whole lap counts when
+    # it had them.
+    from pitcrew.strategy.handover import LAP_CEILING, as_whole_number
+
+    laps = [as_whole_number(s.get("laps"), LAP_CEILING, minimum=0)
+            for s in stints]
+    if any(n is None or n <= 0 for n in laps):
         refusals.append("every stint needs a positive whole number of laps")
+        return Certificate(refusals)
+
+    # **And its start lap, which nothing checked.** `stint_ends_on_lap` is
+    # `start_lap + laps - 1`, so a `start_lap` of 1.5 passed both doors and
+    # this gate and George said "Box in 8.5 laps." The door reads it as a
+    # count where it can; a value it could not read reaches here unchanged,
+    # and this is the place that refuses.
+    starts = [as_whole_number(s.get("start_lap"), LAP_CEILING, minimum=1)
+              for s in stints if s.get("start_lap") is not None]
+    if any(n is None for n in starts):
+        refusals.append(
+            "every stint that names a start lap needs a whole one")
         return Certificate(refusals)
 
     # ------------------------------------------------------------- the tank
@@ -218,8 +239,22 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
                 f"pace and wear are assumed rather than taken")
 
     # ------------------------------------------------------------- the stops
-    stops = plan.get("stops")
-    if isinstance(stops, int) and stops != len(stints) - 1:
+    # **An integral float is a stop count.** JSON has no integer type and
+    # `mcp.propose_strategy` stores arbitrary JSON, so `5.0` is what a
+    # round-trip produces - and `isinstance(stops, int)` dropped it, so this
+    # refusal could not fire and the Race page then said "No stop is planned"
+    # over a plan whose own field said five (row 1.7, critic pass 12).
+    from pitcrew.strategy.handover import as_stop_count, short_value
+
+    stops = as_stop_count(plan.get("stops"))
+    if plan.get("stops") is not None and stops is None:
+        # Truncated by the same expression the standing orders use: this
+        # refusal reaches a driver-facing status label, and a 400-digit
+        # figure or a whole stint structure would go into it whole.
+        refusals.append(
+            f"the plan's stops field is {short_value(plan['stops'])}, which "
+            f"is not a stop count")
+    elif stops is not None and stops != len(stints) - 1:
         refusals.append(
             f"the plan says {stops} stop{'' if stops == 1 else 's'} but has "
             f"{len(stints)} stints")

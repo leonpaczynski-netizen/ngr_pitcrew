@@ -85,7 +85,18 @@ STOP_FUEL_TAIL = "laps of fuel in hand to the stop."
 # `answer()` produces this shape for the fuel question. Parsed rather than
 # re-formatted, so the fragments are derived from what the function actually
 # returned; `test_every_fuel_line_decomposes` fails loudly if the shape moves.
-_FUEL_LINE = re.compile(r"^(\d+)\.(\d) laps of fuel\.$")
+#
+# **The tail is no longer a constant, and that is rule 13 paying the pack**
+# (row 1.10). The answer said "4.5 laps of fuel." - an absolute, in the noun
+# phrase the volunteered call uses for a MARGIN - and now says the same words
+# the engineer says: "1.9 laps of fuel in hand to the stop." So it decomposes
+# into `STOP_FUEL_TAIL` and `COLOUR_FUEL_TAIL`, which the pack already holds
+# for the volunteered line, and the only new clip is the one the answer falls
+# back to when there is no reference to be a margin to.
+_FUEL_LINE = re.compile(r"^(\d+)\.(\d) (laps of fuel[^.]*\.)$")
+# What the answer says when no stop and no flag can frame the figure: the
+# absolute, said as one so it cannot be heard as a margin.
+TANK_FUEL_TAIL = "laps of fuel in the tank."
 
 # `calls.position_line`'s two-number form. Given its own shape for the same
 # reason the fuel line has one: `_split_on_number` peels a single number and
@@ -277,19 +288,21 @@ def fuel_fragments() -> tuple[str, ...]:
     the fuel one is the most repeated of them, and it shares this family's
     number words, so one tail clip covers it.
     """
-    return (POINT, _fuel_tail(), COLOUR_FUEL_TAIL, STOP_FUEL_TAIL)
+    return (POINT, _fuel_tail(), COLOUR_FUEL_TAIL, STOP_FUEL_TAIL,
+            TANK_FUEL_TAIL)
 
 
 @lru_cache(maxsize=1)
 def _fuel_tail() -> str:
     """The invariant part of the fuel line, taken from the line itself."""
-    sample = _text(FUEL, {"lapsOfFuel": 4.5})
+    sample = _text(FUEL, {"fuelInHand": 4.5, "fuelReference": "to the stop"})
     match = _FUEL_LINE.match(sample)
     if match is None:
         raise ValueError(
-            f"the fuel answer no longer looks like '<n>.<n> laps of fuel.': "
-            f"{sample!r} - the manifest cannot decompose it")
-    return sample[match.end(2):].lstrip()
+            f"the fuel answer no longer looks like "
+            f"'<n>.<n> laps of fuel in hand <reference>.': {sample!r} - the "
+            f"manifest cannot decompose it")
+    return match.group(3)
 
 
 @lru_cache(maxsize=1)
@@ -446,6 +459,48 @@ def _call_states() -> list:
         _quiet(lap=5, laps_total=20, position=4,              # timed: "about"
                race_minutes=45.0),
         _quiet(lap=5, laps_total=20, race_minutes=45.0),
+        # **Box now, once per branch of `_why_the_stop_stands`** (the
+        # critic on row 1.10). The box call gained its reason from the
+        # branch that kept the stop, and two of the three - "The regulations
+        # need a stop." and "Fuel won't reach the flag." - were spoken at
+        # racing speed with no clip behind them. `test_phrase_manifest`
+        # checks that a declared opener still exists in its module and never
+        # the reverse, so nothing caught it.
+        _state(lap=6, laps_total=20, stint_ends_on_lap=6,
+               mandatory_stops_left=1),
+        _state(lap=6, laps_total=40, stint_ends_on_lap=6, fuel_l=40.0,
+               fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+               plan_binding_constraint="fuel", mandatory_stops_left=0),
+        # **The ungranted drop, which is the DEFAULT branch**: with no
+        # playbook granting `fuel_long: drop_stop`, this is what a
+        # fuel-covered race says at the box lap. `stops_off_said` is
+        # required or `STOPS_OFF` outranks the box call and the state
+        # renders nothing at all.
+        _state(lap=10, laps_total=20, stint_ends_on_lap=10, fuel_l=60.0,
+               fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+               plan_binding_constraint="fuel", mandatory_stops_left=0,
+               drop_stop_granted=False, stops_off_said=True),
+        _state(lap=8, laps_total=20, stint_ends_on_lap=10, fuel_l=60.0,
+               fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+               plan_binding_constraint="fuel", mandatory_stops_left=0,
+               drop_stop_granted=False, stops_off_said=True),
+        # **And every stop number, because the ordinal renders whole.** The
+        # plain box-soon is already swept over `range(MAX_STOPS)` for exactly
+        # that reason; this branch was pinned at stop 1, so "Stop 2, on the
+        # plan. Fuel would reach the flag - dropping the stop was not
+        # granted." would have fallen through to live synthesis.
+        *[_state(lap=8, laps_total=20, stint_ends_on_lap=10, fuel_l=60.0,
+                 fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+                 plan_binding_constraint="fuel", mandatory_stops_left=0,
+                 drop_stop_granted=False, stops_off_said=True,
+                 stint_index=index)
+          for index in range(1, MAX_STOPS)],
+        # Box soon carries the same reason two laps earlier.
+        _state(lap=5, laps_total=20, stint_ends_on_lap=6,
+               mandatory_stops_left=1),
+        _state(lap=5, laps_total=40, stint_ends_on_lap=6, fuel_l=40.0,
+               fuel_per_lap_l=3.0, plan_binding_constraint="fuel",
+               mandatory_stops_left=0),
         # Box now: on the plan, to a fuel figure, and clamped to the tank.
         _state(lap=6, stint_ends_on_lap=6),
         _state(lap=6, laps_total=20, stint_ends_on_lap=6,
@@ -510,7 +565,9 @@ def spoken_openers() -> tuple[str, ...]:
         "That's the best lap of the race.",
         "That's the tidiest run of the race.",
         "Halfway.",
-        "Stop next lap.",
+        # Row 1.10: the countdown said "Stop next lap." - the box call's own
+        # words, from the commentary tier. It describes now.
+        "One lap to the stop.",
         "Tyre gauge when you get a straight.",
         # engineer/intents.py - acknowledge, never analyse
         "Copy, noted with the temperatures.",
@@ -521,6 +578,9 @@ def spoken_openers() -> tuple[str, ...]:
         "No tyre gauge - read it to me.",
         "No pace reference yet.",
         "Pace is inside the noise - nothing to call.",
+        # controller.start_race - said late where the wall was going to watch
+        # and then failed to start, after the brief dropped its own line.
+        "The pit wall did not start.",
         # race/brief.py - the arming brief. Spoken on the grid rather than at
         # racing speed, so latency matters less here than anywhere - but these
         # are the lines that define what every later silence means, and a
