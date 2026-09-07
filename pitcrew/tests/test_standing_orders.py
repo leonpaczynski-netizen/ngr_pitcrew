@@ -1509,3 +1509,58 @@ def test_a_stops_value_that_is_not_a_count_is_a_problem_not_a_skip():
 
     # And a plain, correct one is silent.
     assert _validate_plan({"plan": {"stintLaps": [15, 5], "stops": 1}}) == []
+
+
+def test_a_lap_count_is_not_bounded_by_the_stop_ceiling():
+    """Reusing `as_stop_count` for `stintLaps` bounded a lap count at 1000,
+    and a 24-hour race at 90-second laps is 960 - close enough that it is a
+    category error rather than a margin."""
+    from pitcrew.export.payload import _validate_plan
+    from pitcrew.strategy.handover import (LAP_CEILING, as_stop_count,
+                                           as_whole_number)
+
+    assert as_stop_count(1001) is None
+    assert as_whole_number(1001, LAP_CEILING) == 1001
+    assert as_whole_number(LAP_CEILING + 1, LAP_CEILING) is None
+
+    # A real endurance distance passes every check.
+    assert _validate_plan({"plan": {"stintLaps": [480, 480], "laps": 960,
+                                    "stops": 1}}) == []
+
+
+def test_one_float_in_stintlaps_no_longer_disables_every_check():
+    """The stops problem added for JSON floats was enclosed by
+    `all(isinstance(n, int) for n in stintLaps)` - the same `isinstance` on a
+    JSON number, one line above it - so one float silently disabled it and
+    the stintLaps-vs-laps check with it."""
+    from pitcrew.export.payload import _validate_plan
+
+    said = _validate_plan({"plan": {"stintLaps": [15.0, 5.0], "laps": 20,
+                                    "stops": True}})
+    assert any("not a stop count" in line for line in said), said
+
+    # Floats that read cleanly are read, not refused.
+    assert _validate_plan({"plan": {"stintLaps": [15.0, 5.0], "laps": 20.0,
+                                    "stops": 1.0}}) == []
+
+    # And a list that is not lap counts is its own problem.
+    junk = _validate_plan({"plan": {"stintLaps": ["a"], "stops": 1}})
+    assert any("not a list of lap counts" in line for line in junk), junk
+
+
+def test_the_refusal_and_the_order_quote_a_value_the_same_way():
+    """`certify`'s refusal reaches a driver-facing status label and quoted the
+    field with a bare `repr`; the standing order truncated. One expression."""
+    from pitcrew.strategy.certify import certify
+    from pitcrew.strategy.handover import short_value
+
+    from .test_certify import inputs, plan, stint
+
+    huge = 10 ** 400
+    got = certify({**plan(stint(10), stint(10, "RM")), "stops": huge},
+                  inputs())
+    assert not got.certified
+    said = [r for r in got.refusals if "not a stop count" in r]
+    assert said, got.refusals
+    assert short_value(huge) in said[0], said
+    assert len(said[0]) < 120, len(said[0])

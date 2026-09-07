@@ -721,6 +721,14 @@ def _section_from_plan(plan: dict) -> dict:
         "plan": {
             # Normalised, so a plan authored outside the app does not put
             # `1.0` into a contract whose own example is `1`.
+            #
+            # **A value that cannot be read becomes `null` here**, so the
+            # payload cannot tell "the desk stated no stop count" from "it
+            # stated one that is not a count" - CLAUDE.md §7 asks that every
+            # null be genuinely unmeasured. Bounded rather than fixed:
+            # `certify` refuses such a plan and both approval routes are
+            # certify-gated, so it cannot become the approved plan this
+            # reads. Carried in the plan document.
             "stops": as_stop_count(plan.get("stops")),
             "laps": sum(int(s.get("laps") or 0) for s in stints) or None,
             "stintLaps": [int(s.get("laps") or 0) for s in stints],
@@ -866,10 +874,12 @@ def _outcome(store, event_id: int, calls: list[dict], section: dict,
 
     text = race_outcome(
         race_laps,
-        # Through the one expression, like the six others. This one reads
-        # the export block rather than the stored plan, so it is normalised
-        # upstream on both branches - routed anyway, because "already
-        # normalised somewhere else" is how the other five got missed.
+        # Through the one expression, like the six others - and here it is
+        # **load-bearing, not belt-and-braces.** `_strategy_section` prefers
+        # the stored `plan["export"]` block and normalises nothing on that
+        # branch, so a desk-supplied block reaches this line verbatim. An
+        # earlier version of this comment said it was normalised upstream on
+        # both branches, which invited the next reader to delete the call.
         planned_stops=as_stop_count(plan.get("stops")),
         planned_pit_laps=[plan["pitLap"]] if plan.get("pitLap") else None,
         binding_constraint=section.get("bindingConstraint"),

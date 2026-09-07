@@ -1500,6 +1500,38 @@ Minor: the comment added in pass 13 said *"a float is what
 `_section_from_plan` emits"*, which the same diff had made false; and one
 last raw read of `plan["stops"]` in `race_outcome`'s caller.
 
+### Row 1.7, critic pass 15 — nothing in (A) survives
+
+The pass's own verdict: *"AGREED on the substance — nothing in (A) survives."*
+It measured the export byte-identical for all ten events with an approved
+plan, every one of the 28 plans' sentences identical, the bucket partition
+unchanged, and all three of pass 14's tests failing against the parent and
+pinned by targeted mutation. What it did find is all (B), and all of it is
+closed here:
+
+1. **The same `isinstance`-on-a-JSON-number gate, one line above the one
+   three passes hardened.** `_validate_plan`'s stops check sat inside
+   `all(isinstance(n, int) for n in stintLaps)`, so **one float in that list
+   silently disabled it** — and the stintLaps-vs-laps check with it. The
+   enclosing gate reads the same way now, and a list that is not lap counts
+   is its own problem rather than a reason to skip everything below it.
+2. **A stop ceiling is not a lap ceiling.** Fixing (1) by reusing
+   `as_stop_count` bounded a lap count at 1,000 — and a 24-hour race at
+   90-second laps is **960**. `as_whole_number(value, ceiling)` takes the
+   bound from the caller; `as_stop_count` is the stop-shaped wrapper.
+3. `build.py`'s comment claimed the value was *"normalised upstream on both
+   branches"*. It is not — `_strategy_section` prefers the stored
+   `plan["export"]` block and normalises nothing on that branch, so the call
+   is load-bearing exactly where it matters, and the comment invited the next
+   reader to delete it.
+
+**Carried:** `_section_from_plan` maps every unreadable `stops` to `null`, so
+the payload cannot tell *"the desk stated no stop count"* from *"it stated one
+that is not a count"* — §7 asks that every null be genuinely unmeasured.
+Bounded rather than fixed: `certify` refuses such a plan and both approval
+routes are certify-gated, so it cannot become the approved plan the export
+reads.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), plus critic
 5's carried questions (a misidentified board row resets the held-up window;
 two locator misreads still cut the gauge series; the sector map's offset path

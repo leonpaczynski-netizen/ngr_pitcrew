@@ -567,9 +567,28 @@ def _validate_plan(strategy: dict) -> list[str]:
     if not isinstance(plan, dict):
         return []
     problems = []
-    stints, laps = plan.get("stintLaps"), plan.get("laps")
-    if isinstance(stints, list) and all(isinstance(n, int) for n in stints):
-        if isinstance(laps, int) and sum(stints) != laps:
+    # **The enclosing gate was the same defect as the one inside it.**
+    # `all(isinstance(n, int) for n in stintLaps)` is `isinstance` on a JSON
+    # number, so one float in that list disabled every check below it -
+    # including the stops problem added for exactly this reason.
+    from pitcrew.strategy.handover import (LAP_CEILING, as_stop_count,
+                                           as_whole_number, short_value)
+
+    def a_lap_count(value):
+        return as_whole_number(value, LAP_CEILING)
+
+    raw_stints, laps = plan.get("stintLaps"), plan.get("laps")
+    stints = None
+    if isinstance(raw_stints, list):
+        read = [a_lap_count(n) for n in raw_stints]
+        if raw_stints and all(n is not None for n in read):
+            stints = read
+        elif raw_stints:
+            problems.append(
+                f"strategy.plan.stintLaps is {short_value(raw_stints)}, "
+                f"which is not a list of lap counts")
+    if stints is not None:
+        if a_lap_count(laps) is not None and sum(stints) != laps:
             problems.append(
                 f"strategy.plan.stintLaps sums to {sum(stints)} against a "
                 f"plan of {laps} laps - the stints and the distance disagree")
@@ -577,8 +596,6 @@ def _validate_plan(strategy: dict) -> list[str]:
         # a plan authored outside the app reaches `_section_from_plan`
         # carrying whatever JSON the desk wrote - which is why that function
         # normalises now, and why this one must not assume it did.
-        from pitcrew.strategy.handover import as_stop_count, short_value
-
         raw = plan.get("stops")
         stops = as_stop_count(raw)
         if raw is not None and stops is None:

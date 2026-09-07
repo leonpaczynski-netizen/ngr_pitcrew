@@ -159,6 +159,33 @@ _STOP_SAID = {"stints": "its stints imply {n}",
 # as unreadable instead of rendered as a 301-digit number on the grid.
 _STOP_CEILING = 1000
 
+# Laps are not stops. A 24-hour race at 90-second laps is 960, so the stop
+# ceiling is not a margin for a lap count - it is a category error.
+LAP_CEILING = 100_000
+
+
+def as_whole_number(value, ceiling: int) -> int | None:
+    """A stored field read as a whole number no larger than `ceiling`.
+
+    The bound is the caller's, because a stop count and a lap count are not
+    the same quantity and one ceiling for both would refuse a real endurance
+    distance to catch a corrupt stop field.
+    """
+    if isinstance(value, bool):
+        return None
+    # `inf` and `nan` fail `is_integer()`. Everything else that survives is
+    # bounded HERE, on both paths: the ceiling used to sit on the float
+    # branch alone, after `isinstance(value, int)` had already returned - so
+    # `1001.0` was refused and `1001` was read as a count, two opposite
+    # verdicts on the same JSON number. `json.loads` gives an `int` for a
+    # digit string with no decimal point, which is the likelier shape, and a
+    # 400-digit one rendered a 2,822 px line against a 733 px plate.
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int) and abs(value) <= ceiling:
+        return value
+    return None
+
 
 def as_stop_count(value) -> int | None:
     """A stop count off a stored field, or None when it cannot be read as one.
@@ -175,20 +202,7 @@ def as_stop_count(value) -> int | None:
     `isinstance(value, int)` dropped it, which let `_stops_planned` answer a
     confident 0 off the stints alone while the plan's own field said 5.
     """
-    if isinstance(value, bool):
-        return None
-    # `inf` and `nan` fail `is_integer()`. Everything else that survives is
-    # bounded HERE, on both paths: the ceiling used to sit on the float
-    # branch alone, after `isinstance(value, int)` had already returned - so
-    # `1001.0` was refused and `1001` was read as a count, two opposite
-    # verdicts on the same JSON number. `json.loads` gives an `int` for a
-    # digit string with no decimal point, which is the likelier shape, and a
-    # 400-digit one rendered a 2,822 px line against a 733 px plate.
-    if isinstance(value, float) and value.is_integer():
-        value = int(value)
-    if isinstance(value, int) and abs(value) <= _STOP_CEILING:
-        return value
-    return None
+    return as_whole_number(value, _STOP_CEILING)
 
 
 def _stop_readings(plan: dict) -> tuple[dict[str, int], list[str]]:
@@ -335,7 +349,8 @@ def _stop_disagreement(plan: dict) -> str | None:
     name = (list(readings) + unreadable)[0]
     template = said[name]
     assert template.startswith("its "), template
-    number = readings.get(name, short_value(plan.get(name)))
+    number = (readings[name] if name in readings
+              else short_value(plan.get(name)))
     return ("The plan's " + template[len("its "):].format(n=number)
             + ", which is not a count. How many stops it holds is not known.")
 
