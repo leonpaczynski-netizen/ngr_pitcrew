@@ -5675,10 +5675,12 @@ class PitCrewController(QObject):
         over the measured stint it reached +4.0.
 
         Both are whole-lap means from one `SplitHistory`, which is reset at
-        every session boundary (CLAUDE.md rule 11), so the board cannot judge
-        a race's fresh tyres against practice's worn ones. The lap count comes
-        back with them because an aggregate carries its sample count (rule 4)
-        and a split from two laps is not the claim a split from eight is.
+        every session boundary **and at every pit exit** (CLAUDE.md rule 11),
+        so the board can neither judge a race's fresh tyres against practice's
+        worn ones nor fit a trend through two sets of rubber. The lap count
+        comes back with them because an aggregate carries its sample count
+        (rule 4) and a split from two laps is not the claim a split from eight
+        is.
 
         **Positive only for the rear pair, signed for the axle**, and the
         difference is not an inconsistency - see `SplitHistory.axle_split_now`.
@@ -5758,6 +5760,11 @@ class PitCrewController(QObject):
 
             self._board_call = BoardCall(text=text, mark=mark, lap=lap)
         except Exception as exc:                            # noqa: BLE001
+            # **Cleared, not left standing.** Returning here would leave the
+            # PREVIOUS call on the board, with its own lap number, presented
+            # as the last thing George said - rule 11's shape exactly, and
+            # worse than a blank line because a blank line is honest.
+            self._board_call = None
             log("ui").warning(
                 "the board could not hold the last call: %s: %s",
                 type(exc).__name__, exc)

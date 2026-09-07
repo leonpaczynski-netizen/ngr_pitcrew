@@ -91,7 +91,7 @@ def test_the_flag_figure_no_longer_forgets_the_litres_the_stop_adds():
     to_flag, why, rests_on = fuel_in_hand_to_flag(state)
     assert why is None
     assert to_flag is not None and to_flag > 0, to_flag
-    assert rests_on == "on a full tank at the stop"
+    assert rests_on == "on the plan's fill"
     # And the old arithmetic, reproduced here, is what it is NOT.
     old = state.fuel_l / state.fuel_per_lap_l - state.laps_remaining()
     assert to_flag != pytest.approx(old)
@@ -106,36 +106,62 @@ def test_the_two_numbers_are_different_questions_and_say_so():
     to_flag, _, _ = fuel_in_hand_to_flag(state)
     # 84 / 4.19 = 20.0 laps aboard, 9 laps to the box.
     assert to_stop == pytest.approx(11.0, abs=0.1)
-    # 100 / 4.19 = 23.9 laps in the tank, 9 laps after the box.
-    assert to_flag == pytest.approx(14.9, abs=0.1)
+    # **The surplus regime, and it is the honest one.** 84 L is more than
+    # this stop needs: he reaches the box with 46.3 L against a fill sized at
+    # 41.9, and the pump cannot take fuel out, so he leaves with what he
+    # arrived with and finishes 2.0 laps to the good.
+    assert to_flag == pytest.approx(2.0, abs=0.1)
 
 
-def test_the_flag_figure_moves_for_the_burn_and_not_for_the_tank():
-    """**The defect the critic found in the first version of this figure.**
+def test_the_flag_figure_is_still_while_the_plan_works_and_moves_when_not():
+    """**Both critic passes hit this figure, from opposite sides.**
 
-    It sized the fill George would call for and measured that against the
-    flag - arithmetically true and useless, because `fuel_margin_l` sizes the
-    margin as a multiple of the burn, so `fill / burn - laps` collapsed to the
-    constant `FUEL_MARGIN_LAPS`. It read 1.0 at 45, 60, 84 and 95 litres
-    aboard and at every burn from 4.0 to 7.0: a block captioned "in hand"
-    beside one that moves, which could not move. An instrument reading our
-    own switch back to us.
+    Pass one: it read a flat 1.0 at 45, 60, 84 and 95 litres aboard, so it
+    could not move with the tank - an instrument reading our own switch back
+    to us. Pass two, after it was replaced with the tank against the run
+    home: it read 14.9 where the plan will actually leave 1.0, fourteen laps
+    of daylight beside a stop figure of 6.1, and it stepped 17.8 laps across
+    one crossing.
 
-    What it reads now is the tank against the run home, and that is invariant
-    to the fuel he is carrying **for a stated reason** - a stop refills, so
-    what he has now cannot decide the run home - while moving with the burn,
-    which is the thing that actually changes the answer.
+    It is the plan's fill again, and its sub-line says so. Sitting still IS
+    the answer while the plan is working: a stop refills, so what he carries
+    before it does not decide the run home. It is not a constant - with a
+    measured burn scatter the margin is sized on that scatter - and it moves
+    with a stop that slips, with a tank that cannot hold the fill, and with
+    an arrival that already carries more than the plan wants.
     """
-    at_45 = fuel_in_hand_to_flag(_race(fuel_l=45.0))[0]
-    at_95 = fuel_in_hand_to_flag(_race(fuel_l=95.0))[0]
-    assert at_45 == at_95
+    # No measured scatter: the plan's flat lap, the same at any tank that
+    # still reaches the box. That is the plan working, not a dead needle.
+    assert fuel_in_hand_to_flag(_race(fuel_l=45.0))[0] == \
+        fuel_in_hand_to_flag(_race(fuel_l=60.0))[0] == \
+        pytest.approx(1.0, abs=0.05)
+    # A measured scatter sizes a smaller margin, and the figure follows it.
+    assert fuel_in_hand_to_flag(_race(fuel_l=45.0, fuel_sd_l=0.15))[0] < \
+        fuel_in_hand_to_flag(_race(fuel_l=45.0))[0]
+    # And arriving with more than the plan wants is a real surplus: the pump
+    # cannot take fuel out.
+    assert fuel_in_hand_to_flag(_race(fuel_l=95.0, lap=9))[0] > 5.0
+    # It is not the tank aboard divided by anything: a car that arrives with
+    # LESS than the fill wants gets the fill, not its own tank.
+    assert fuel_in_hand_to_flag(_race(fuel_l=45.0))[0] < \
+        fuel_in_hand_to_flag(_race(fuel_l=95.0, lap=9))[0]
 
-    slow = fuel_in_hand_to_flag(_race(fuel_per_lap_l=4.0))[0]
-    thirsty = fuel_in_hand_to_flag(_race(fuel_per_lap_l=7.0))[0]
-    assert thirsty < slow, (slow, thirsty)
-    # And it moves when the stop slips, which lengthens the run home.
-    later = fuel_in_hand_to_flag(_race(stint_ends_on_lap=14))[0]
-    assert later > fuel_in_hand_to_flag(_race())[0]
+
+def test_the_flag_figure_keeps_the_timed_race_hedge():
+    """A timed race's distance is an OUTPUT of the plan, and `fuel_margin_l`
+    prices that: while the lap count is not firm it carries a whole lap.
+    Computing the figure without going through it dropped the hedge silently,
+    and he would stay out on a margin sized for a race whose length was still
+    moving."""
+    # 45 L aboard, so the fill binds rather than the tank he arrives with -
+    # a surplus arrival carries its own fuel past any margin the plan sizes.
+    firm = fuel_in_hand_to_flag(_race(
+        fuel_l=45.0, race_minutes=50.0, fuel_sd_l=0.15,
+        laps_estimate_firm=True))[0]
+    loose = fuel_in_hand_to_flag(_race(
+        fuel_l=45.0, race_minutes=50.0, fuel_sd_l=0.15,
+        laps_estimate_firm=False))[0]
+    assert loose > firm
 
 
 def test_no_tank_size_refuses_rather_than_becoming_an_infinite_tank():
@@ -180,7 +206,7 @@ def test_past_the_box_lap_the_flag_figure_is_the_tank_alone():
     assert fuel_frame(state)[1] == TO_THE_FLAG
     to_stop, why = fuel_in_hand_to_stop(state)
     assert to_stop is None
-    assert why == "past the box lap - the tank is the whole supply"
+    assert why == "past the box lap"
     assert fuel_in_hand_to_flag(state)[0] == fuel_in_hand(state)[0]
     assert fuel_in_hand_to_flag(state)[2] == "on the fuel aboard"
 
@@ -192,7 +218,7 @@ def test_a_tank_that_does_not_reach_the_box_refuses_rather_than_clamps():
     state = _race(fuel_l=8.0)
     to_flag, why, _ = fuel_in_hand_to_flag(state)
     assert to_flag is None
-    assert why == "this tank does not reach the box"
+    assert why == "you don't reach the box"
     # The stop figure still answers, and its answer is the bad news: nine
     # laps to the box on 1.9 laps of fuel.
     to_stop, _ = fuel_in_hand_to_stop(state)
@@ -208,7 +234,8 @@ def test_a_fill_the_tank_cannot_hold_makes_the_figure_negative():
                   stint_ends_on_lap=10)
     to_flag, why, _ = fuel_in_hand_to_flag(state)
     assert why is None
-    # 30 L at 4.19 covers 7.2 laps; ten remain after the box.
+    # 30 L at 4.19 covers 7.2 laps; ten remain after the box, so the fill the
+    # plan wants does not fit and the shortfall is the finding.
     assert to_flag is not None and to_flag < 0, to_flag
 
 
@@ -216,11 +243,11 @@ def test_another_stop_after_this_one_is_refused_not_guessed():
     """The laps after the NEXT stop ride on a fill nothing has sized, so a
     figure here would be a claim about a stop the app has not costed."""
     state = _race(further_stop_planned=True)
-    assert fuel_in_hand_to_flag(state)[1] == "another stop after this one"
+    assert fuel_in_hand_to_flag(state)[1] == "a stop after this one"
     # And unknown refuses for the same reason: `further_stop_planned` is None
     # where nobody said, and an unknown is not a no.
     assert fuel_in_hand_to_flag(_race(further_stop_planned=None))[1] == \
-        "another stop after this one"
+        "a stop after this one"
 
 
 def test_a_missing_input_is_named_rather_than_pooled():
@@ -230,15 +257,14 @@ def test_a_missing_input_is_named_rather_than_pooled():
         "no burn measured yet"
     assert fuel_in_hand_to_flag(_race(fuel_l=None))[1] == "no fuel reading"
     assert fuel_in_hand_to_flag(_race(laps_total=None))[1] == \
-        "the race length is not known"
+        "race length unknown"
 
 
 def test_a_stop_at_or_past_the_flag_is_refused():
     """A plan whose box lap is the last lap leaves no laps for the fill to
     cover, and dividing by that produces a figure about nothing."""
     state = _race(stint_ends_on_lap=20)
-    assert fuel_in_hand_to_flag(state)[1] == \
-        "the plan's stop is at or past the flag"
+    assert fuel_in_hand_to_flag(state)[1] == "stop is past the flag"
 
 
 # --------------------------------------------- the mark, spoken and printed
@@ -488,9 +514,9 @@ def test_the_flag_block_names_the_supply_it_was_measured_on(qt_app):
     view = DriverView()
     view.update_state(DriverState(fuel_to_stop=6.1, laps_of_fuel=9.1,
                                   fuel_to_flag=14.9, burn_l=4.19,
-                                  fuel_to_flag_on="on a full tank at the stop"))
+                                  fuel_to_flag_on="on the plan's fill"))
     assert "9.1 laps aboard" in view.stop_stat.sub.text()
-    assert "on a full tank at the stop" in view.flag_stat.sub.text()
+    assert "on the plan's fill" in view.flag_stat.sub.text()
     assert "4.19 L/lap" in view.flag_stat.sub.text()
     # **The live litres are NOT here.** Both figures come off the tank as it
     # read at the last crossing; `packet.fuel_level` beside them put three
@@ -501,31 +527,93 @@ def test_the_flag_block_names_the_supply_it_was_measured_on(qt_app):
     assert "38.1" not in view.stop_stat.sub.text()
 
 
-def test_a_long_call_is_elided_with_an_ellipsis_and_does_not_grow_the_board(
-        qt_app):
-    """**The real overdue-box sentence is 126 characters.** Unbounded, the
-    label asked for 3,744 px and took the board's layout minimum to 4,117 -
-    not a monitor he owns - and clipped flat with no ellipsis, so the half he
-    lost was the reason, with nothing saying anything had been cut.
+# The real overdue-box sentence `_box_now` builds, 126 characters of it.
+OVERDUE_CALL = ("Box this lap. RM on. 3 laps overdue. You're 1.4 laps short "
+                "of the flag on current burn - short-shift and lift if you "
+                "stay out.")
+
+
+def test_a_long_call_keeps_the_direction_and_still_ends_in_an_ellipsis(qt_app):
+    """**Unbounded, the label asked for 3,744 px** and took the board's layout
+    minimum to 4,117 - not a monitor he owns - and clipped flat with no
+    ellipsis, so the half he lost was the reason.
+
+    **Bounded to ONE line it was worse.** 1,560 px holds about 59 characters,
+    which rendered *"You're 1.4 laps ..."* - and "1.4 laps" with the direction
+    cut off reads as 1.4 laps IN HAND when what it said was 1.4 short. Two
+    lines hold the whole of every call the engineer makes today, and anything
+    longer still ends in an ellipsis rather than stopping dead.
     """
     from pitcrew.ui.driver_view import BoardCall, DriverState, DriverView
 
     view = DriverView()
-    view.resize(2160, 1040)
+    view.resize(2480, 1050)
     view.show()
     qt_app.processEvents()
-    empty = view.layout().minimumSize().width()
-
-    long = ("Box this lap. RM on. 3 laps overdue. You're 1.4 laps short of "
-            "the flag on current burn - short-shift and lift if you stay out.")
     view.update_state(DriverState(last_call=BoardCall(
-        text=long, mark=MARK_INSTRUCTION, lap=14)))
+        text=OVERDUE_CALL, mark=MARK_INSTRUCTION, lap=14)))
     qt_app.processEvents()
     drawn = view.last_call.line.text()
-    assert drawn != long
     assert drawn.startswith("L14  Box this lap.")
-    assert drawn.endswith("…")
-    assert view.layout().minimumSize().width() == empty
+    # The words that carry the direction survive.
+    assert "short of the flag" in drawn
+    # And a sentence three times longer than anything George says is cut,
+    # visibly.
+    view.update_state(DriverState(last_call=BoardCall(
+        text=OVERDUE_CALL * 3, mark=MARK_INSTRUCTION, lap=14)))
+    qt_app.processEvents()
+    assert view.last_call.line.text().endswith("…")
+    view.hide()
+
+
+def test_the_board_fits_his_monitor_in_the_widest_state_it_can_be_given(
+        qt_app):
+    """**2560 x 1080, and the window is frameless with no resize handle.**
+
+    Qt answers a layout minimum bigger than the screen by growing the window
+    off it rather than by dropping anything, so a board that does not fit
+    loses its right-hand end - POSITION and the edge of the BEHIND gap - with
+    nothing on the screen saying it has.
+
+    **The previous guard compared a long call against a BLANK board**, so it
+    could never see this: the growth came from a 46-character refusal reason
+    under a fuel figure, which set that block's minimum at over 1,400 px. This
+    measures against the real panel, over every refusal string the two fuel
+    figures can produce, the longest gap sentences, and a call three times
+    longer than any the engineer makes.
+    """
+    from pitcrew.race import calls as C
+    from pitcrew.ui.driver_view import (BoardCall, DriverState, DriverView,
+                                        GapView)
+
+    reasons = [C.NO_STOP_TO_COME, C.PAST_THE_BOX_LAP, C.NO_BURN_YET,
+               C.NO_FUEL_READING, C.NO_RACE_LENGTH, C.NOT_REACHING_THE_BOX,
+               C.STOP_PAST_THE_FLAG, C.ANOTHER_STOP_AFTER, C.NO_CAPACITY]
+    view = DriverView()
+    view.resize(2480, 1050)
+    view.show()
+    qt_app.processEvents()
+    widest = 0
+    for reason in reasons:
+        view.update_state(DriverState(
+            fuel_to_stop_why=reason, fuel_to_flag_why=reason,
+            fuel_to_flag_on=C.ON_THE_PLANS_FILL,
+            laps_to_box=3, box_on_lap=12, tyres_at_stop=True, compound="RS",
+            position=12, field_size=24,
+            axle_split_c=12.2, axle_split_rate=1.4, rear_pair_hotter="rr",
+            rear_pair_split_c=4.0, rear_pair_rate=1.4, split_laps=8,
+            ahead=GapView(seconds=12.4,
+                          note="he is catching 0.6 s a lap - Boxhead",
+                          urgent=True),
+            behind=GapView(seconds=4.8,
+                           note="pulling away 0.9 s a lap - Rocky", good=True),
+            last_call=BoardCall(text=OVERDUE_CALL * 3,
+                                mark=MARK_UNCONFIRMED, lap=14)))
+        qt_app.processEvents()
+        size = view.layout().minimumSize()
+        widest = max(widest, size.width())
+        assert size.height() <= 1080, (reason, size.height())
+    assert widest <= 2560, widest
     view.hide()
 
 

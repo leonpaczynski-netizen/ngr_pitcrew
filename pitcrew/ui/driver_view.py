@@ -876,16 +876,25 @@ class _LastCall(QWidget):
     """
 
     TEXT_PX = 26
-    # **The sentence is elided to this and never wider.** Without a bound the
-    # label asks for its whole natural width and Qt hands that straight to
-    # the window's layout minimum: the real overdue-box call - *"Box this
+    # **The sentence is bounded to this and never wider.** Without a bound
+    # the label asks for its whole natural width and Qt hands that straight
+    # to the window's layout minimum: the real overdue-box call - *"Box this
     # lap. RM on. 3 laps overdue. You're 1.4 laps short of the flag on
     # current burn - short-shift and lift if you stay out."* - wants 3,744 px
     # and took the board's minimum to 4,117, which is not a monitor he owns.
     # It was also clipped flat with no ellipsis, so the half he lost was the
-    # reason - the half rule 13 is about - with nothing on the screen saying
-    # anything had been cut.
+    # reason - the half rule 13 is about - with nothing saying anything had
+    # been cut.
     MAX_WIDTH = 1560
+    # **Two lines, not one, and that is the difference between a cut and a
+    # misreading.** At one line this bound holds about 59 characters, so that
+    # same call rendered *"…You’re 1.4 laps …"* - and "1.4 laps" with
+    # the direction cut off reads naturally as 1.4 laps IN HAND when what it
+    # said was 1.4 short. Two lines hold about 118, which is the whole of
+    # every call the engineer makes today. The height is reserved either way,
+    # so nothing shifts under him when a long one arrives, and anything that
+    # still will not fit ends in an ellipsis rather than stopping dead.
+    LINES = 2
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -897,6 +906,8 @@ class _LastCall(QWidget):
             f"font-family:{NUMBER_FACE};font-size:{self.TEXT_PX}px;"
             f"color:{INK_DIM};background:transparent;")
         self.line.setMaximumWidth(self.MAX_WIDTH)
+        self.line.setWordWrap(True)
+        self.line.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.mark = QLabel("")
         self.mark.setStyleSheet(self._mark_css(INK_DIM))
         row.addStretch(1)
@@ -905,7 +916,7 @@ class _LastCall(QWidget):
         row.addStretch(1)
         # Reserved, so a call arriving mid-race does not shift the whole
         # board under him while he is looking at it.
-        self.setFixedHeight(self.TEXT_PX + 14)
+        self.setFixedHeight(self.TEXT_PX * self.LINES + 18)
         # The unelided sentence, kept so a resize can re-elide from the
         # original rather than from an already-shortened copy.
         self._text = ""
@@ -923,13 +934,17 @@ class _LastCall(QWidget):
 
         # **The room the row actually has, not the label's own width.** A
         # label that has never been laid out reports Qt's default 100 px,
-        # which elides every call to a bare ellipsis - so the widest bound is
-        # used until the row has a real width to answer with.
+        # which would elide every call to a bare ellipsis - so the widest
+        # bound is used until the row has a real width to answer with.
         room = self.width() - self.mark.sizeHint().width() - 60
         width = min(room if room > 200 else self.MAX_WIDTH, self.MAX_WIDTH)
         metrics = QFontMetrics(self.line.font())
+        # Elided against the room TWO wrapped lines have. Qt wraps at word
+        # boundaries and this measures a single run, so it is an
+        # approximation - a generous one, which is the right direction: what
+        # it lets through wraps, and what it cuts still ends in an ellipsis.
         self.line.setText(metrics.elidedText(
-            self._text, Qt.TextElideMode.ElideRight, width))
+            self._text, Qt.TextElideMode.ElideRight, width * self.LINES))
 
     def resizeEvent(self, event) -> None:              # noqa: N802 - Qt naming
         super().resizeEvent(event)
@@ -1003,8 +1018,12 @@ class DriverWindow(QWidget):
         page.addWidget(self.view)
         # **Sized to what the instrument actually needs.** This asked for
         # 1280x480 and never got it: the laid-out minimum measured on this
-        # rig is **2004 x 1001** at these type sizes, so Qt grew the window on
-        # show and the number here described nothing. It is not a free choice
+        # rig is **2457 x 1031** with the widest state the board can be given
+        # - long gap notes on both neighbours, the longest refusal on both
+        # fuel blocks, and a 126-character call - so Qt grew the window on
+        # show and the number here described nothing. An earlier version of
+        # this comment said 2004 x 1001, which was the BLANK board's minimum,
+        # i.e. the same defect again in the fix for it. It is not a free choice
         # - the ranks are set by how far away he is and how long a glance is,
         # and the panel is 2560x1080 - so the honest thing is to open at a
         # size the content fits in.
@@ -1014,7 +1033,7 @@ class DriverWindow(QWidget):
         # frameless window has no resize handle, so being grown is the better
         # of the two failures: clipped, he would be reading a board with a
         # number missing and no way to know which.
-        self.resize(2040, 1030)
+        self.resize(2480, 1050)
         self._drag_from = None
         # Called when the window goes away by any route, so whoever is
         # pushing state into it can stop. Without it the controller went on

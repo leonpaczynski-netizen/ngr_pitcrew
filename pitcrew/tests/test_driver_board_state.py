@@ -1080,7 +1080,7 @@ def test_the_two_fuel_figures_reach_the_board_from_the_calls_module():
     # **And the reference travels with the figure**, out of the same
     # expression, so the caption cannot drift from the branch that produced
     # the number (rule 13).
-    assert got.fuel_to_flag_on == "on a full tank at the stop"
+    assert got.fuel_to_flag_on == "on the plan's fill"
 
 
 def test_a_fuel_figure_that_cannot_be_made_carries_its_reason():

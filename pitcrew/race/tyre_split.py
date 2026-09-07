@@ -127,17 +127,24 @@ class SplitHistory:
         middle of it, so a fit across the stop describes two sets of rubber
         as though they were one. Driven through a realistic stint - the old
         set ramping +6 to +20 degC and a fresh one restarting at +3 and
-        opening at +1 a lap - the board drew *"REAR OVER FRONT · 8 laps ·
-        settling 2.0/lap"* for six consecutive laps while the gap was in
-        fact opening. The sample count is a lie in the same breath: half
-        those laps were a different tyre.
+        opening at +1 a lap - the board draws *"REAR OVER FRONT ·
+        settling"* on **four consecutive laps** after the stop, at 1.6, 2.0,
+        2.0 and 1.5 degC a lap, while the gap is in fact opening at 1.0. The
+        sample count is a lie in the same breath: half those laps are a
+        different tyre. (An earlier version of this paragraph said six laps;
+        it is four, measured.)
 
         **At every stop, whether or not a set went on.** The tri-state tyre
         detector can say "cannot tell", and an unknown is not a no
-        (CLAUDE.md 4.3); and even a fuel-only stop parks a stationary car
-        for half a minute, so the laps either side of it are not one series
-        whatever came off. Losing history costs the trend five laps of
-        silence, which is honest. Keeping it costs a brake-balance decision.
+        (CLAUDE.md 4.3); and a fuel-only stop still parks the car for half a
+        minute, so the laps either side are not one series whatever came off.
+
+        ⚠️ It fires on anything the session state calls a pit exit, which
+        includes a drive-through penalty - nothing changed, nothing cooled,
+        and eight laps of trend go for nothing. That errs towards silence,
+        which is the safe direction here: a trend the board does not claim
+        costs him five laps of a reading, and a wrong one costs him a
+        brake-balance decision.
         """
         self.laps.clear()
 

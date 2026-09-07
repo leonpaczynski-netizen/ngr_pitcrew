@@ -81,8 +81,10 @@ def sample_board() -> DriverState:
 
     So the tyre splits are run through the real `SplitHistory` and the two
     fuel figures through the real `race/calls.py`, off one `RaceState`. The
-    race is the 20-lap Daytona event: burn 4.19 L/lap, a 100 L tank, the stop
-    on lap 11 and no stop after it, eight laps completed. The gaps and the
+    race is the 20-lap Daytona event: burn 4.19 L/lap, a 100 L tank, eight
+    laps completed and the stop on app-lap 11 - which is HUD lap 12, and the
+    board draws the HUD one, so "plan: lap 12" beside a countdown of 3 from a
+    driver on HUD lap 9 is the two agreeing rather than disagreeing. The gaps and the
     last call are the Deep Forest reconstruction that
     `test_undercut_deep_forest.py` is written against - those two are
     presentation, and there is no expression behind them to disagree with.
@@ -238,7 +240,7 @@ def build_driver_board() -> DriverView:
     1.8 asks for a screenshot.
 
     **Not inside the preview's shell**, and not for tidiness: the board's own
-    layout minimum measures 2004x1001 at the type sizes the ranks are built
+    layout minimum measures up to 2457x1031 at the type sizes the ranks are built
     from, which is wider than the shell's whole client area. Putting it in
     the stack would either clip it or silently drag the shell to a size no
     other screen is designed for, and a harness that shows you a distorted
