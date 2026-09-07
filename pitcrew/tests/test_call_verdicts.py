@@ -114,6 +114,18 @@ def test_the_disposition_of_an_instruction_comes_from_the_verdict():
     assert _disposition(rev(CANNOT_TELL), {11}) == ("unanswered", None)
     # No verdict at all - a row from before 1.9 - is the only fall-through.
     assert _disposition(rev(), {11}) == ("taken", None)
+    # **And a short-shift call is an instruction too** (critic pass 8, third
+    # round). `outcome_for` judges it against `laps.short_shift_rpm`, and
+    # `_INSTRUCTION_KINDS` holds only the two box kinds, so one judged
+    # `not-acted` was exported "informational": said, never asked.
+    short = {"lap_num": 10, "accepted": 0, "verdict": NOT_ACTED,
+             "plan": {"kind": FUEL_SHORT}}
+    assert _disposition(short, set()) == ("not-taken", None)
+    # A statement keeps its own disposition: `acted`/`not-acted` arise for
+    # nothing but the two kinds the feed can answer.
+    said = {"lap_num": 10, "accepted": 0, "verdict": CANNOT_TELL,
+            "plan": {"kind": TYRE_TEMP}}
+    assert _disposition(said, set()) == ("informational", None)
 
 
 def test_the_verdict_is_on_the_row_and_in_the_export(tmp_path):
@@ -231,9 +243,10 @@ def _stub(laps, filed, *, fail_on=()):
     return controller
 
 
-def _row(lap_num, *, pit=False, excluded=0):
+def _row(lap_num, *, pit=False, reason=None):
+    """One `laps` row as `list_laps` returns it - `SELECT *` into a dict."""
     return {"lap_num": lap_num, "is_pit_lap": pit, "short_shift_rpm": None,
-            "excluded": excluded}
+            "excluded": 1 if reason else 0, "exclusion_reason": reason}
 
 
 def test_a_verdict_is_written_before_the_call_is_dropped():
@@ -255,24 +268,47 @@ def test_a_verdict_is_written_before_the_call_is_dropped():
     assert [rid for rid, *_ in controller.store.written] == [2, 1]
 
 
-def test_a_struck_lap_is_not_evidence_that_the_window_was_driven():
-    """Critic pass 8, second round. Moving the judging past the fragment
-    check stopped the phantom row's OWN crossing from judging - and the next
-    crossing judged with the phantom still in `list_laps`, which is
-    `SELECT *`. Box call on lap 12, laps 12 and 13 driven, a phantom 14: the
-    window read as full and "no stop on laps 12-14" was written and settled
-    about a stop he made on the next lap he actually drove."""
+def test_a_lap_that_was_never_driven_does_not_fill_the_window():
+    """Critic pass 8, second round. A phantom row - "two laps driven, three
+    recorded", observed twice - is struck as a fragment but stays in
+    `list_laps`, which is `SELECT *`, and `outcome_for` counts ROWS. So the
+    window filled on a lap he never drove and "no stop on laps 12-14" was
+    written and settled.
+
+    **What happens now is a refusal, and the reason is worth stating.** A
+    phantom CONSUMES its lap number (`session_state` numbers from the length
+    of the list, and `laps` is `UNIQUE(session_id, lap_num)`), so the next
+    lap he really drives is 15 and the call's window - which is lap numbers,
+    12 to 14 - can never fill. `cannot-tell` is the honest answer and it is
+    a strict improvement on the false `not-acted` it replaces; the true
+    `acted` is lost with it, and that is the price of a stolen number."""
     box = Call(BOX_NOW, 12, "Box this lap.", "")
-    laps = [_row(12), _row(13), _row(14, excluded=1)]
+    laps = [_row(12), _row(13), _row(14, reason="fragment")]
     controller = _stub(laps, {1: (box, None)})
     controller._judge_filed_calls()
     assert controller.store.written == [], "nothing to say yet"
     assert set(controller._filed_calls) == {1}, "and it stays open"
-    # The lap he actually drove, and it is the stop.
-    controller.store._laps = laps + [_row(14, pit=True)]
+    # The next lap he really drives is 15, and it is the stop.
+    controller.store._laps = laps + [_row(15, pit=True)]
+    controller._judge_filed_calls()
+    assert controller.store.written == [], "the window still cannot fill"
+    controller._judge_filed_calls(final=True)
+    assert [v for _, v, _ in controller.store.written] == [CANNOT_TELL]
+
+
+def test_a_lap_he_drove_and_struck_still_fills_the_window():
+    """Critic pass 8, third round. Of the 39 excluded laps on file two are
+    fragments and thirty-seven are laps he DROVE - struck by hand, an
+    incident, traffic, a crash. Filtering on `excluded` turned "no stop on
+    laps 12-14" into "the window it named was never fully driven" about a
+    window he had fully driven: rule 12, the reason reported was not the one
+    that bound the answer."""
+    box = Call(BOX_NOW, 12, "Box this lap.", "")
+    laps = [_row(12), _row(13, reason="incident"), _row(14)]
+    controller = _stub(laps, {1: (box, None)})
     controller._judge_filed_calls()
     assert [(v, d) for _, v, d in controller.store.written] == [
-        (ACTED, "pitted on lap 14, 2 lap(s) after the call")]
+        (NOT_ACTED, "no stop on laps 12-14")]
 
 
 def test_calls_from_another_session_are_dropped_not_judged():

@@ -3712,19 +3712,26 @@ class PitCrewController(QObject):
         from pitcrew.race.call_outcome import judge
 
         try:
-            # **A struck lap is not evidence that the window was
-            # driven** (critic pass 8, second round). Moving this past the
-            # fragment check stopped the phantom row's OWN crossing from
-            # judging, and the next crossing judged with the phantom still
-            # in `list_laps` - which is `SELECT *` and carries excluded rows
-            # - so a box call's three-lap window filled on a lap he never
-            # drove and "no stop on laps 12-14" was written and settled on a
-            # lap 12 stop he made the following crossing. `outcome_for`
-            # counts ROWS, so the filtering has to happen here. Pit and out
-            # laps are FLAGGED rather than excluded, so nothing real goes.
+            # **A lap that was never DRIVEN is not evidence that the
+            # window was driven - and only a fragment is that lap.** Moving
+            # this past the fragment check stopped the phantom row's own
+            # crossing from judging, and the next crossing judged with the
+            # phantom still in `list_laps`, which is `SELECT *` and carries
+            # excluded rows; `outcome_for` counts ROWS, so the filtering has
+            # to happen here.
+            #
+            # **On the reason, not on `excluded`** (critic pass 8, third
+            # round). Of the 39 excluded laps on file two are fragments and
+            # thirty-seven are laps he drove - struck by hand, an incident,
+            # traffic, a crash. Filtering all of them turned "no stop on
+            # laps 12-14" into "the window it named was never fully driven"
+            # on a window he had fully driven, which is rule 12 in its own
+            # small way: the reason reported was not the one that bound the
+            # answer. Pit and out laps are flagged rather than excluded, so
+            # they were never in question.
             laps = [SimpleNamespace(**row)
                     for row in self.store.list_laps(self.session_id)
-                    if not row["excluded"]]
+                    if row.get("exclusion_reason") != "fragment"]
             settled = judge(((rid, call) for rid, (call, _) in filed.items()),
                             laps, final=final)
         except Exception:                                    # noqa: BLE001

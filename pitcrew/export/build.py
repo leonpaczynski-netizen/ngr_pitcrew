@@ -886,7 +886,10 @@ _INSTRUCTION_KINDS = frozenset({"box-now", "box-soon"})
 # "box next lap" obeyed is a pit lap on the very next crossing; two covers the
 # in-lap arriving a lap later than the call named, which is the normal case
 # for "box in 2".
-_INSTRUCTION_WINDOW_LAPS = 2
+#
+# **Imported rather than restated**: `call_outcome` judges the same window
+# live, and two constants for one window drift (critic pass 8).
+from pitcrew.race.call_outcome import BOX_WINDOW_LAPS as _INSTRUCTION_WINDOW_LAPS  # noqa: E402,E501
 
 DISPOSITION_INFORMATIONAL = "informational"
 DISPOSITION_TAKEN = "taken"
@@ -920,27 +923,25 @@ def _disposition(revision: dict, pit_laps: set[int]) -> tuple[str, bool | None]:
         # `accepted=False` because the column has no third state, and that
         # false is the absence of a question rather than a refusal.
         return DISPOSITION_INFORMATIONAL, None
+    # **A verdict the race actually reached outranks the kind table**
+    # (critic pass 8, third round). `outcome_for` judges a short-shift call
+    # too - `laps.short_shift_rpm` records whether the beep was moved - and
+    # `_INSTRUCTION_KINDS` holds only the two box kinds, so a short-shift
+    # call judged `not-acted` was exported `informational`: said, never
+    # asked. §10 says the two fields agree for an instruction, and that is
+    # the only other kind that can be one. `acted`/`not-acted` arise for
+    # nothing else, so this cannot capture a statement.
+    verdict = revision.get("verdict")
+    if verdict == OUTCOME_ACTED:
+        return DISPOSITION_TAKEN, None
+    if verdict == OUTCOME_NOT_ACTED:
+        return DISPOSITION_NOT_TAKEN, None
     if plan.get("kind") in _INSTRUCTION_KINDS:
         # **Derived, and from the laps rather than from an answer.** An
         # instruction is not offered and is never answered; what says whether
         # it was followed is whether a pit lap turned up. Stated here rather
-        # than inferred by a reader.
-        # **The live verdict first, where the race wrote one** (critic
-        # pass 8, rule 13). `verdict` and `disposition` were about to answer
-        # the same question two ways: this derivation pools `pit_laps` over
-        # EVERY race session of the event, rehearsals included, while the
-        # verdict is judged live against the laps of the session the call was
-        # actually made in. An event with a rehearsal could ship
-        # `disposition: taken` beside `verdict: not-acted` in one object,
-        # with the contract telling the reader to read `disposition`.
-        # `cannot-tell` falls through: the window was never driven, and
-        # "not-taken" is a claim about the driver that the laps do not
-        # support - the pit-lap derivation is the weaker answer that remains.
-        verdict = revision.get("verdict")
-        if verdict == OUTCOME_ACTED:
-            return DISPOSITION_TAKEN, None
-        if verdict == OUTCOME_NOT_ACTED:
-            return DISPOSITION_NOT_TAKEN, None
+        # than inferred by a reader - and reached only where the race wrote
+        # no verdict, which since 1.9 means a row from before it.
         if verdict:
             # **`cannot-tell` means the window was never fully driven in
             # that race**, so the same session cannot have supplied a stop

@@ -736,10 +736,11 @@ the only feedback channel on the strategy engine saying nothing at all.
 | `disposition` | Meaning |
 |---|---|
 | `informational` | Said, never asked. `accepted` is null and means nothing here |
-| `taken` / `not-taken` | An instruction, and whether a pit lap followed it within two laps. **Derived from the laps, not from an answer** — an instruction is never offered and never answered. Where the race wrote a `verdict`, these come from it |
+| `taken` / `not-taken` | An instruction, and whether it was followed — a pit lap within two laps of a box call, or the beep actually moved after a short-shift one. **Derived from the laps, not from an answer**: an instruction is never offered and never answered. Where the race wrote a `verdict` these come from it, whatever the kind |
 | `unanswered` | An instruction whose window the race never finished driving — the flag came first. `verdict` is `cannot-tell` and `verdictDetail` says why. **Not `not-taken`**, which is a claim about the driver the laps do not support. Added in 1.9 |
 | `accepted` / `kept` / `expired` / `superseded` | A re-plan offer and how it left the desk. `accepted` is a real boolean for these |
 | `declined` | A record from before the marker existed, where the stored boolean was all there was |
+| `driver stayed out` | The stay-out fold: the driver voted by staying out, laps past his stop, and the call adopted what he was already doing. `accepted` is true, and it is the one call recorded accepted without a question having been asked |
 
 **`verdict` is what the driver then did, judged live against the laps as they
 came in** — the other half of the record, and absent from every export written
