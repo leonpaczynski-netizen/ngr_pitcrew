@@ -43,27 +43,32 @@ def test_judge_returns_only_what_can_be_settled_unless_final():
     assert keys == [1, 2]
 
 
-def test_a_short_shift_call_waits_for_the_next_lap():
-    call = Call(FUEL_SHORT, 6, "Short-shift.", "", short_shift_drop_rpm=400.0)
-    laps = [SimpleNamespace(lap_num=6, is_pit_lap=False, short_shift_rpm=None)]
-    assert outcome_for(call, laps).settled is False
-    laps.append(SimpleNamespace(lap_num=7, is_pit_lap=False,
-                                short_shift_rpm=400.0))
-    assert outcome_for(call, laps).verdict == ACTED
+def test_a_short_shift_call_is_a_closed_loop_and_says_so():
+    """Critic pass 8, fourth round, and it took four rounds to see.
 
-
-def test_a_short_shift_call_is_not_answered_by_the_lap_it_was_made_on():
-    """Critic pass 8: `_laps_after` includes the call's own lap, so a driver
-    already short-shifting when the call came read "acted - short-shifting
-    recorded on lap 6" about the lap the instruction was given ON."""
+    `laps.short_shift_rpm` looked like the response and is the INSTRUCTION -
+    `analysis/driving.py` says so in its first line, "records the APP's
+    switch and nothing else". The app sets the beep when it makes the call,
+    every frame of the next lap writes the drop back onto the lap, and
+    judging on that field asks whether the app did what the app did. A driver
+    who ignored the instruction completely and shifted at the limiter all lap
+    read ACTED - and, once `disposition` was wired to the verdict, `taken` as
+    well, in the field the contract tells a consumer to prefer.
+    """
     call = Call(FUEL_SHORT, 6, "Short-shift.", "", short_shift_drop_rpm=400.0)
-    laps = [SimpleNamespace(lap_num=6, is_pit_lap=False,
+    # The beep engaged for the whole of the next lap - which says nothing
+    # about the driver, and used to read ACTED.
+    laps = [SimpleNamespace(lap_num=6, is_pit_lap=False, short_shift_rpm=None),
+            SimpleNamespace(lap_num=7, is_pit_lap=False,
                             short_shift_rpm=400.0)]
-    assert outcome_for(call, laps).settled is False
-    laps.append(SimpleNamespace(lap_num=7, is_pit_lap=False,
-                                short_shift_rpm=None))
     outcome = outcome_for(call, laps)
-    assert outcome.verdict == NOT_ACTED and outcome.settled
+    assert outcome.verdict == CANNOT_TELL and outcome.settled
+    assert "the app's own switch" in outcome.detail
+    assert "upshift_rpm" in outcome.detail, "and it names what would answer it"
+    # And the same answer whatever the field says, because the field is not
+    # about him: no further lap changes it, so it is settled at once.
+    laps[1].short_shift_rpm = None
+    assert outcome_for(call, laps).verdict == CANNOT_TELL
 
 
 def test_the_verdict_reaches_the_payload_and_not_only_the_entry(tmp_path):
@@ -114,18 +119,21 @@ def test_the_disposition_of_an_instruction_comes_from_the_verdict():
     assert _disposition(rev(CANNOT_TELL), {11}) == ("unanswered", None)
     # No verdict at all - a row from before 1.9 - is the only fall-through.
     assert _disposition(rev(), {11}) == ("taken", None)
-    # **And a short-shift call is an instruction too** (critic pass 8, third
-    # round). `outcome_for` judges it against `laps.short_shift_rpm`, and
-    # `_INSTRUCTION_KINDS` holds only the two box kinds, so one judged
-    # `not-acted` was exported "informational": said, never asked.
-    short = {"lap_num": 10, "accepted": 0, "verdict": NOT_ACTED,
+    # **`acted`/`not-acted` arise for a box call and nothing else** (critic
+    # pass 8, fourth round), so the verdict check sits back inside the
+    # instruction branch and the precedence of every other one is unchanged.
+    # A short-shift call is `cannot-tell` - the field it was judged on is
+    # the app's own switch - and keeps the disposition it always had.
+    short = {"lap_num": 10, "accepted": 0, "verdict": CANNOT_TELL,
              "plan": {"kind": FUEL_SHORT}}
-    assert _disposition(short, set()) == ("not-taken", None)
-    # A statement keeps its own disposition: `acted`/`not-acted` arise for
-    # nothing but the two kinds the feed can answer.
+    assert _disposition(short, set()) == ("informational", None)
     said = {"lap_num": 10, "accepted": 0, "verdict": CANNOT_TELL,
             "plan": {"kind": TYRE_TEMP}}
     assert _disposition(said, set()) == ("informational", None)
+    # An offer's own resolution still wins, whatever the verdict says.
+    fold = {"lap_num": 10, "accepted": 1, "verdict": CANNOT_TELL,
+            "plan": {"kind": BOX_NOW, "resolution": "driver stayed out"}}
+    assert _disposition(fold, set()) == ("driver stayed out", True)
 
 
 def test_the_verdict_is_on_the_row_and_in_the_export(tmp_path):

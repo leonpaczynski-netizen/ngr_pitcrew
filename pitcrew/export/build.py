@@ -923,20 +923,17 @@ def _disposition(revision: dict, pit_laps: set[int]) -> tuple[str, bool | None]:
         # `accepted=False` because the column has no third state, and that
         # false is the absence of a question rather than a refusal.
         return DISPOSITION_INFORMATIONAL, None
-    # **A verdict the race actually reached outranks the kind table**
-    # (critic pass 8, third round). `outcome_for` judges a short-shift call
-    # too - `laps.short_shift_rpm` records whether the beep was moved - and
-    # `_INSTRUCTION_KINDS` holds only the two box kinds, so a short-shift
-    # call judged `not-acted` was exported `informational`: said, never
-    # asked. §10 says the two fields agree for an instruction, and that is
-    # the only other kind that can be one. `acted`/`not-acted` arise for
-    # nothing else, so this cannot capture a statement.
+    # **Inside the branch, not above it** (critic pass 8, fourth round).
+    # Lifting it out was for the short-shift call, which `outcome_for` no
+    # longer judges at all - the field it judged on is the app's own switch -
+    # so `acted`/`not-acted` arise for the two box kinds and nothing else,
+    # and the precedence of every other branch is left exactly as it was.
     verdict = revision.get("verdict")
-    if verdict == OUTCOME_ACTED:
-        return DISPOSITION_TAKEN, None
-    if verdict == OUTCOME_NOT_ACTED:
-        return DISPOSITION_NOT_TAKEN, None
     if plan.get("kind") in _INSTRUCTION_KINDS:
+        if verdict == OUTCOME_ACTED:
+            return DISPOSITION_TAKEN, None
+        if verdict == OUTCOME_NOT_ACTED:
+            return DISPOSITION_NOT_TAKEN, None
         # **Derived, and from the laps rather than from an answer.** An
         # instruction is not offered and is never answered; what says whether
         # it was followed is whether a pit lap turned up. Stated here rather

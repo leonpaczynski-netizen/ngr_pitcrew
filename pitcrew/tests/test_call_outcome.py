@@ -83,16 +83,22 @@ def test_box_soon_is_judged_the_same_way_as_box_now():
 
 # ------------------------------------------------------- the short-shift
 
-def test_a_short_shift_is_answerable_because_the_beep_records_it():
+def test_a_short_shift_is_not_answerable_the_beep_is_the_instruction():
+    """**This file used to assert the opposite**, and it was a closed loop
+    (critic pass 8, 8 Sep 2026). `laps.short_shift_rpm` is the APP's switch -
+    `analysis/driving.py` says so in its first line - so the app set the beep
+    when it made the call, every frame of the next lap wrote the drop back
+    onto the lap, and judging on it asked whether the app did what the app
+    did. A driver who ignored the call and shifted at the limiter all lap
+    read ACTED. What would answer it is `laps.upshift_rpm`, measured off the
+    frames, and it has no calibrated threshold."""
     call = a_call(kind=TYRE_TEMP, lap=8, short_shift_drop_rpm=450.0)
     outcome = outcome_for(call, a_race(20, short_shift_on=9))
-    assert outcome.verdict == ACTED
-    assert "lap 9" in outcome.detail
-
-
-def test_a_short_shift_nobody_took_is_recorded_as_such():
-    call = a_call(kind=TYRE_TEMP, lap=8, short_shift_drop_rpm=450.0)
-    assert outcome_for(call, a_race(20)).verdict == NOT_ACTED
+    assert outcome.verdict == CANNOT_TELL and outcome.settled
+    assert "the app's own switch" in outcome.detail
+    # And the same where the beep was never engaged: the field is not about
+    # him either way, so neither reading is evidence about the driver.
+    assert outcome_for(call, a_race(20)).verdict == CANNOT_TELL
 
 
 # ------------------------------------------- everything the feed cannot see

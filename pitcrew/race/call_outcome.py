@@ -7,7 +7,7 @@ both evidence about the model, and they are the two that most need telling
 apart, because this driver has overruled the engineer and been right four
 sessions running.
 
-### Only two kinds can be answered, and the rest say so
+### One kind can be answered, and the rest say so
 
 The app may only report an outcome it can measure:
 
@@ -15,9 +15,26 @@ The app may only report an outcome it can measure:
   fact. The window is the call's own lap and the two after it, because
   *"box this lap or next"* is the instruction and a stop three laps later is
   a different decision rather than a late compliance.
-* **Short-shift calls** — `laps.short_shift_rpm` records whether the beep was
-  actually moved on a lap, so the instruction and the response are both on
-  file.
+
+**And short-shift calls were the second one, until they were not — which took
+four critic rounds to see.** `laps.short_shift_rpm` looked like the response and is the
+INSTRUCTION: `analysis/driving.py` says so in its first line — *"records the
+APP's switch and nothing else"* — and the loop is closed end to end. The app
+sets the beep when it makes the call (`controller._show_call` →
+`bridge.set_short_shift`), every frame of the next lap writes the drop back
+onto the lap (`controller:735`), and judging the call on that field asks
+whether the app did what the app did. A driver who ignored the instruction
+completely and shifted at the limiter all lap read `ACTED`, and after the
+disposition was wired to the verdict he read `taken` as well — in the field
+the contract tells a consumer to prefer. `expectations.saving_response`
+answers the same question from the BURN and could say *"that hasn't saved"*
+in the same race: two mechanisms, one question, opposite answers (rule 13).
+
+So a short-shift call is `CANNOT_TELL` too, and its detail says which
+instrument would answer it: `laps.upshift_rpm`, measured off the frames,
+against the laps before the call. That is not wired here because the
+threshold has never been calibrated, and this project has six derived indices
+built and discarded for being shipped before they were.
 
 Everything else is `CANNOT_TELL`, **named rather than omitted**. A fuel-map
 change, a brake-balance click and a lift-and-coast are not in any packet GT7
@@ -50,7 +67,8 @@ BOX_WINDOW_LAPS = 2
 
 BOX_KINDS = frozenset({BOX_NOW, BOX_SOON})
 # The short-shift instruction rides on `Call.short_shift_drop_rpm` rather than
-# on a kind of its own, so it is recognised by the field being set.
+# on a kind of its own, so it is recognised by the field being set. It is
+# recognised in order to REFUSE it - see the docstring.
 SHORT_SHIFT_FIELD = "short_shift_drop_rpm"
 
 
@@ -117,22 +135,16 @@ def outcome_for(call, laps) -> Outcome:
                        f"no stop on laps {lap_num}-{lap_num + BOX_WINDOW_LAPS}")
 
     if getattr(call, SHORT_SHIFT_FIELD, None):
-        # **The NEXT lap, not this one** (critic pass 8). `_laps_after`
-        # includes the call's own lap, so a driver already short-shifting
-        # when the call came made it read "acted - short-shifting recorded on
-        # lap 12" about the lap the instruction was given ON. The instruction
-        # is about the lap ahead and so is the evidence for it.
-        window = [lap for lap in _laps_after(lap_num, laps, 1)
-                  if lap.lap_num > lap_num]
-        if not window:
-            return Outcome(CANNOT_TELL, "the lap after the call has not been "
-                                        "driven", settled=False)
-        moved = [lap for lap in window
-                 if (getattr(lap, "short_shift_rpm", None) or 0) > 0]
-        if moved:
-            return Outcome(ACTED,
-                           f"short-shifting recorded on lap {moved[0].lap_num}")
-        return Outcome(NOT_ACTED, "no short-shift recorded on the next lap")
+        # See the module docstring: this was judged on `short_shift_rpm`,
+        # which is the app's own switch, so the answer was always the
+        # instruction reflected back. Settled, because no further lap
+        # changes it - what changes it is a calibrated read of
+        # `laps.upshift_rpm`, and there is not one.
+        return Outcome(
+            CANNOT_TELL,
+            "nothing on file reads whether he short-shifted - "
+            "`laps.short_shift_rpm` is the app's own switch, and "
+            "`laps.upshift_rpm` has no calibrated threshold to judge against")
 
     return Outcome(
         CANNOT_TELL,
