@@ -289,7 +289,15 @@ class RaceScreen(QWidget):
         # be, and the readings can have the room back: 68/48 asks 499px
         # against the 501 floor, where 78/56 asks 509 and does not fit.
         self.box_in = BigReading("Box in", size=68, ink=theme.DERIVED)
-        self.fuel_left = BigReading("Fuel in hand", size=48, ink=theme.DERIVED)
+        # **"Laps of fuel", not "Fuel in hand"** (critic on row 1.10). It is
+        # fed `lapsOfFuel` - tank over burn, an absolute - and "in hand" is
+        # the phrase the engineer, the colour line and the push-to-talk
+        # answer all use for the MARGIN with its reference. He would read 8.2
+        # under "Fuel in hand" while the margin was minus 1.8, which is the
+        # failure direction rule 13 exists for. The driver board has always
+        # called this one "laps of fuel".
+        self.fuel_left = BigReading("Laps of fuel", size=48,
+                                    ink=theme.DERIVED)
         self.lap_now = BigReading("Lap", size=48)
         self.position = BigReading("Position", size=48)
         for reading in (self.box_in, self.fuel_left, self.lap_now,

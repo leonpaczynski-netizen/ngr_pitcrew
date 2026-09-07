@@ -19,7 +19,7 @@ def test_the_call_prices_it_in_seconds():
                           fuel_weight_s_per_l_per_lap=0.003)
     said = got.call()
     assert said.startswith("Qualifying fuel: 20 litres.")
-    assert "6.00 a lap" in said
+    assert "6.00 litres a lap" in said
     assert "s a lap against a full tank" in said
 
 

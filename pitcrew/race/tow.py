@@ -138,7 +138,7 @@ class TowTrade:
             # unpriced branch says the litres too: gating the whole thing on
             # a refuel rate left the same absence on that path, while the
             # positive side has always quoted litres without one.
-            priced = (f"{-self.saving_s_per_lap:.1f} seconds a lap at the stop"
+            priced = (f"{-self.saving_s_per_lap:.1f} seconds a lap at the pump"
                       if self.saving_s_per_lap is not None
                       else "no refuel rate on file to price it")
             call = (f"The tow costs you {-self.saving_l_per_lap:.1f} litres a "
@@ -151,7 +151,7 @@ class TowTrade:
         else:
             call = (f"The tow saves you {self.saving_l_per_lap:.1f} litres a "
                     f"lap - {self.saving_s_per_lap:.1f} seconds a lap at the "
-                    f"stop. {lost}")
+                    f"pump. {lost}")
         verdict = self.worth_it
         if verdict is True:
             call += " Worth it - stay in it."

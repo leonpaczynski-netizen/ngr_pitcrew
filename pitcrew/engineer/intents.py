@@ -668,7 +668,9 @@ def answer(intent: str, snapshot: dict, *,
         said = f"{where}{worst * 100:.0f} percent."
         stint = snapshot.get("lapsToStop")
         if stint is not None and stint > 0:
-            said += f" {_laps(stint)} to the box."
+            # One noun for one quantity (row 1.10): the colour tier and
+            # `_box_soon` both say "to the stop".
+            said += f" {_laps(stint)} to the stop."
         return Answer(said, intent)
 
     if intent == PACE:

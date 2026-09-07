@@ -692,7 +692,7 @@ def sector_split_call(state) -> Call | None:
         reason = (f"Over {laps} laps: {sum(-g.mean_s for g in gains):.1f} "
                   f"seconds a lap through "
                   f"{_sector_names(g.index for g in gains)}, "
-                  f"{sum(l.mean_s for l in losses):.1f} back in "
+                  f"{sum(l.mean_s for l in losses):.1f} seconds a lap back in "
                   f"{_sector_names(l.index for l in losses)}.")
     elif gains:
         call = f"Faster than {them} through {_sector_names(g.index for g in gains)}."
@@ -952,19 +952,25 @@ def undercut_call(state) -> Call | None:
         # **Both halves said "seconds a lap" and they are two quantities**
         # (row 1.10): standing time saved at the pump per towed lap, against
         # lap time given away on the road. The driver asked for this trade by
-        # name, so the figures stay - what changes is that each one says
-        # which clock it is on.
+        # name, so the figures stay - what changes is that each says WHERE.
+        #
+        # **And both keep the rate** (critic on row 1.10). "costs 1.4 seconds
+        # of lap time" reads as a total; it is per lap, and over a ten-lap
+        # tow that is 1.4 s against 14 - understating in the direction that
+        # makes the tow look free, which is the decision the sentence exists
+        # to inform. `tow.sentence` says "at the pump" too, so there is one
+        # vocabulary for one pair of numbers.
         saved = trade.saving_s_per_lap
         lost = trade.losing_s_per_lap
         if saved is not None and saved > 0:
-            tow = (f" The tow saves {saved:.1f} seconds of stop time a lap "
-                   f"and costs {lost:.1f} seconds of lap time.")
+            tow = (f" The tow's {saved:.1f} seconds a lap at the pump against "
+                   f"{lost:.1f} seconds a lap on the road.")
         elif saved is not None and saved < 0:
-            tow = (f" The tow costs {-saved:.1f} seconds of stop time a lap "
-                   f"and {lost:.1f} seconds of lap time.")
+            tow = (f" The tow costs {-saved:.1f} seconds a lap at the pump and "
+                   f"{lost:.1f} seconds a lap on the road.")
         else:
-            tow = (f" No fuel saving in the tow, and {lost:.1f} seconds of "
-                   f"lap time gone.")
+            tow = (f" No fuel saving in the tow, and {lost:.1f} seconds a lap "
+                   f"on the road.")
     reason = (f"Undercut on {them}: you're held up, and faster through "
               f"{_sector_names(g.index for g in gains)}. The fill costs the "
               f"same now as on lap {state.stint_ends_on_lap}.{tow}{tyres}")

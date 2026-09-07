@@ -665,7 +665,7 @@ def test_how_are_my_tyres_answers_the_tyres_and_not_the_compound():
                            "lapsToStop": 4})
     assert reply.answered
     assert "RL 36 percent" in reply.text
-    assert "4 laps to the box" in reply.text
+    assert "4 laps to the stop" in reply.text
 
 
 def test_with_no_gauge_it_says_so_rather_than_modelling_one():

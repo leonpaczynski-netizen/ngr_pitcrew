@@ -4537,6 +4537,19 @@ class PitCrewController(QObject):
         # moment that is certainly before anybody stops.
         self._start_pit_wall()
 
+        # **What the wall actually did, after it tried.** `_say_brief` runs
+        # before `_start_pit_wall`, and the wall can still fail inside its own
+        # `try` and leave `_pit_wall` None - after the brief has already
+        # dropped the "I can't see other cars" line. Over-promising is the
+        # direction `brief.py` calls worse than promising nothing, so the line
+        # is said late rather than never (critic on row 1.10).
+        if self._wall_cannot_watch() is None and self._pit_wall is None:
+            log("pitcrew").warning(
+                "pit-wall: the brief said the wall would watch and it did not "
+                "start - saying so.")
+            if self._engineer_speaks:
+                self.voice.say("The pit wall did not start - "
+                               "I can't see other cars, position only.")
         how = "Rehearsal armed" if rehearsal else "Armed"
         parts = [
             "running to the approved plan" if plan else
@@ -4565,8 +4578,12 @@ class PitCrewController(QObject):
         unconditionally, and then the engineer volunteered "Boxhead has boxed
         on 40 litres" and "Faster than Boxhead through 1 and 2" - having
         opened the race by denying the instrument that produced them.
-        `_start_pit_wall` refuses on exactly these three, loudly; this is the
-        same three, askable before the wall is built.
+
+        **`_start_pit_wall` calls this rather than restating it** (critic on
+        row 1.10). The first version was a hand-copied second copy of the
+        wall's three refusals, which is CLAUDE.md §1a's defect - two copies
+        of one fact become two facts - and the only test on it was a grep for
+        the name. The wall logs the reason this returns.
         """
         if self.hud is None:
             return "there is no capture source"
@@ -4610,19 +4627,9 @@ class PitCrewController(QObject):
         # stop needs - so every stop is discarded and the driver is told
         # nothing, which is indistinguishable from a race in which nobody
         # pitted.
-        if not self.settings.hud_wear_enabled:
-            log("pitcrew").warning(
-                "pit-wall: not watching - the tyre gauge is off, and the wall "
-                "sees only the frames it grabs.")
-            return
-        interval = float(self.settings.hud_sample_interval_s or 0.0)
-        if interval <= 0 or interval > 5.0:
-            log("pitcrew").warning(
-                "pit-wall: not watching - the gauge samples %s, which is too "
-                "slow to catch a pit stop. Set a sampling interval of a "
-                "second or two.",
-                "only at each crossing" if interval <= 0
-                else f"every {interval:g}s")
+        refused = self._wall_cannot_watch()
+        if refused is not None:
+            log("pitcrew").warning("pit-wall: not watching - %s.", refused)
             return
         try:
             from pitcrew.race.pit_wall import PitWall

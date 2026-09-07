@@ -68,7 +68,7 @@ class QualifyingFuel:
         litres = f"{self.litres:.0f}" if self.litres >= 10 else f"{self.litres:.1f}"
         head = f"Qualifying fuel: {litres} litres."
         why = (f"{self.laps_covered:g} laps at {self.burn_per_lap_l:.2f} "
-               f"a lap, plus {MARGIN_L:g} spare.")
+               f"litres a lap, plus {MARGIN_L:g} litres spare.")
         if self.saving_s_per_lap is None or self.capacity_l is None:
             return f"{head} {why}"
         worth = (f"About {self.saving_s_per_lap:.2f} s a lap against a full "

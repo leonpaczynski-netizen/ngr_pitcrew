@@ -1024,8 +1024,23 @@ class RaceState:
         run past the box lap *added* to the fuel reported in hand. "You can
         push. 2.9 laps of fuel in hand." was spoken at high confidence with
         0.88 laps aboard.
+
+        **And `None` once the stop stops being a stop.** `_stops_off` says
+        "You're fuelled to the flag. No more stops on fuel." and does not
+        clear `stint_ends_on_lap`, so the countdown carried on - and the
+        first fix guarded the two voice call sites and left four surfaces
+        counting down to a stop that had been called off: the driver board's
+        box panel, the Race screen's BOX IN, and the push-to-talk answers to
+        "when do I box" and "how are my tyres". A guard at each consumer is
+        four chances to miss one; the retirement belongs in the expression
+        they all read (rule 12).
+
+        No recursion: `stop_still_needed` reaches `fuel_reaches_flag`, which
+        reads `laps_remaining` and the burn, never this.
         """
         if self.stint_ends_on_lap is None:
+            return None
+        if not stop_still_needed(self):
             return None
         return max(0, self.stint_ends_on_lap - self.lap)
 
@@ -1809,11 +1824,38 @@ def stop_still_needed(state: RaceState) -> bool:
 
 def _stop_needed_on_fuel(state: RaceState) -> bool:
     """`stop_still_needed` on the arithmetic alone, grant or no grant."""
-    if state.mandatory_stops_left is None or state.mandatory_stops_left > 0:
-        return True
+    return _why_the_stop_stands(state) is not None
+
+
+def _why_the_stop_stands(state: RaceState) -> str | None:
+    """What keeps the next stop a stop, in words, or None if nothing does.
+
+    **The decision and its reason out of one expression** (CLAUDE.md rule
+    12). `_box_now` was given a reason built from `plan_binding_constraint`,
+    and only ONE of the three branches below reads that field - so with a
+    mandatory stop owed and fuel good to the flag the driver heard "Box this
+    lap. Fuel is the constraint.", which is the Fuji failure `binding_limit`
+    exists to prevent, reinstated on the voice path.
+
+    **Two of the three do not name a constraint at all, deliberately.** The
+    plan's own word is a pre-race enum that `adopt()` never refreshes, so
+    after a mid-race re-plan it is the old plan's answer; `evidence` - the
+    common case, and the one that matters most - is meaningless said aloud;
+    and `tyre` collides with the gauge's measured "Tyres are the constraint,
+    not fuel." Where the plan is the only thing keeping the stop, the honest
+    reason is that it is the plan.
+    """
+    if state.mandatory_stops_left is None:
+        # **Unknown is not "the regulations require one"** (rule 3). It keeps
+        # the stop, which is the safe decision, and it may not be spoken as a
+        # regulation: nobody told the app there was one.
+        return "On the plan."
+    if state.mandatory_stops_left > 0:
+        return "The regulations need a stop."
     if (state.plan_binding_constraint or "").lower() != "fuel":
-        return True
-    return fuel_reaches_flag(state) is not True
+        return "On the plan."
+    return ("Fuel is the constraint."
+            if fuel_reaches_flag(state) is not True else None)
 
 
 def _stops_off(state: RaceState) -> Call | None:
@@ -1917,14 +1959,18 @@ def _box_now(state: RaceState) -> Call | None:
     # "Tyres are past the stint limit on the measured rate"; the gauge one
     # names the corner and the percentage; the undercut names the rival and
     # the sectors. This one said "Fuel to 68 litres - 9 laps after the box",
-    # which is the fill instruction standing where the reason belongs - and
-    # the decision came from `stop_still_needed`, which turns on
-    # `plan_binding_constraint`. §5.5's own worked example is "Box this lap
-    # or next. Fuel is the constraint - you're 1.2 laps short."
-    bound = (state.plan_binding_constraint or "").strip().lower()
-    said = (f"{bound.capitalize()} is the constraint." if bound
-            and bound not in ("unknown",) else "")
-    reason = f"{said} {fuel}".strip() if fuel else (said or "On the plan.")
+    # which is the fill instruction standing where the reason belongs.
+    #
+    # **From the branch that actually bound it**, not from
+    # `plan_binding_constraint`, which only one of the three branches reads -
+    # and never glued in front of a clause that contradicts it: `fuel` can be
+    # "Fuel is fine - the tank covers the next stint.", and "Fuel is the
+    # constraint. Fuel is fine." was two adjacent sentences making opposite
+    # claims, with §5.5 saying he acts on the front of the reason.
+    said = _why_the_stop_stands(state) or ""
+    if said.startswith("Fuel") and (fuel or "").startswith("Fuel is fine"):
+        said = ""
+    reason = " ".join(part for part in (said, fuel) if part) or "On the plan."
     return Call(
         BOX_NOW, state.lap,
         f"Box this lap.{compound}",

@@ -24,7 +24,10 @@ def _short_on_fuel() -> RaceState:
     """Lap 8 of 20, boxing on 11, 30 L aboard against 5 L a lap."""
     return RaceState(lap=8, laps_total=20, stint_ends_on_lap=11,
                      fuel_l=30.0, fuel_per_lap_l=5.0,
-                     plan_binding_constraint="fuel")
+                     plan_binding_constraint="fuel",
+                     # The regulations are satisfied, so the fuel branch is
+                     # the one that keeps the stop - which is the point.
+                     mandatory_stops_left=0)
 
 
 def test_the_fuel_answer_names_the_same_reference_the_call_does():
@@ -61,27 +64,55 @@ def test_an_absolute_is_said_as_one_where_nothing_frames_it():
 
 # ------------------------------------------------------------ blocker two
 
-def test_the_chatty_tier_stops_counting_down_to_a_cancelled_stop():
-    """**The engineer cancels the stop and the commentary reinstates it.**
+def _fuelled_to_the_flag() -> RaceState:
+    """Lap 8 of 20 with a fuel-bound stop planned at 11 and 60 L aboard
+    against 3 L a lap: `_stops_off` has just said the stop is off."""
+    return RaceState(lap=8, laps_total=20, stint_ends_on_lap=11,
+                     fuel_l=60.0, fuel_per_lap_l=3.0,
+                     plan_binding_constraint="fuel", mandatory_stops_left=0)
+
+
+def test_a_cancelled_stop_stops_being_counted_down_everywhere_at_once():
+    """**The first fix guarded two call sites and left four surfaces
+    counting.**
 
     `_stops_off` says *"You're fuelled to the flag. No more stops on fuel."*
     and does not clear `stint_ends_on_lap`; `_box_now` and `_box_soon` go
-    quiet because they gate on `stop_still_needed`. The colour tier speaks on
-    exactly the crossings where they are silent, and it counted from the raw
-    field - so the next lap said *"Stop next lap."* in the box vocabulary,
-    about a stop that had just been called off.
+    quiet because they gate on `stop_still_needed`. Everything else read the
+    raw field: the driver board's box panel showed **3 · plan: lap 11** and
+    went red inside two laps, the Race screen showed **BOX IN 3**, and the
+    push-to-talk answered *"Box in 3 laps."* and *"LR 72 percent. 3 laps to
+    the stop."* - all for a stop that had been called off.
 
-    The controller is where the two meet, so the fix is there: the figure
-    comes from the expression that decided there is a stop (rule 12).
+    A guard at each consumer is four chances to miss one, and the first
+    attempt missed all four. The retirement belongs in the expression they
+    all read (rule 12) - and the only test on it was a grep of the source,
+    which is why nothing noticed.
     """
-    import pathlib
+    from pitcrew.race.calls import stop_still_needed
 
-    source = (pathlib.Path(__file__).resolve().parents[1] / "controller.py"
-              ).read_text(encoding="utf-8")
-    # Both colour call sites, and neither passes the raw field.
-    assert source.count("if stop_still_needed(state) else None") == 2
-    assert "stint_ends_on_lap=state.stint_ends_on_lap," not in source
-    assert "stint_ends_on_lap=state.stint_ends_on_lap)" not in source
+    state = _fuelled_to_the_flag()
+    assert stop_still_needed(state) is False, "the stop is off"
+    assert state.laps_to_stop() is None, "so nothing counts down to it"
+    # And it comes back the moment the stop does.
+    state.fuel_l = 6.0
+    assert stop_still_needed(state) is True
+    assert state.laps_to_stop() == 3
+
+
+def test_every_surface_reads_the_one_expression():
+    """The four that were missed, each traced to `laps_to_stop`."""
+    from pitcrew.engineer.intents import BOX_WHEN, TYRES, answer
+
+    state = _fuelled_to_the_flag()
+    snapshot = {"lapsToStop": state.laps_to_stop(), "hasPlan": True,
+                "wearWorst": 0.72, "wearCorner": "lr"}
+    # The push-to-talk, both answers that carried the countdown.
+    assert answer(BOX_WHEN, snapshot).text == "No stop planned. Running to the flag."
+    assert answer(TYRES, snapshot).text == "LR 72 percent."
+    # The Race screen and the driver board both read `lapsToStop` /
+    # `laps_to_stop()` and render nothing where it is None.
+    assert snapshot["lapsToStop"] is None
 
 
 def test_the_countdown_describes_rather_than_instructing():
@@ -151,3 +182,76 @@ def test_the_brief_reads_the_condition_the_wall_actually_starts_on():
               ).read_text(encoding="utf-8")
     assert "def _wall_cannot_watch(self)" in source
     assert "sees_rivals=self._wall_cannot_watch() is None," in source
+
+
+# ------------------------------- the reason comes from the branch that bound
+
+def test_the_reason_names_the_branch_that_kept_the_stop():
+    """Rule 12, and the first attempt got it wrong. `_stop_needed_on_fuel`
+    returns True on three disjoint grounds and only one reads
+    `plan_binding_constraint` - so with a mandatory stop owed and fuel good
+    to the flag the driver heard *"Box this lap. Fuel is the constraint."*,
+    which is the Fuji failure `binding_limit` exists to prevent, reinstated
+    on the voice path."""
+    from pitcrew.race.calls import _why_the_stop_stands
+
+    state = _fuelled_to_the_flag()
+    assert _why_the_stop_stands(state) is None, "nothing keeps it"
+
+    state.mandatory_stops_left = 1
+    assert _why_the_stop_stands(state) == "The regulations need a stop."
+
+    # The plan's own word is a pre-race enum `adopt()` never refreshes, and
+    # `evidence` - the case that matters most - is meaningless said aloud.
+    state.mandatory_stops_left = 0
+    state.plan_binding_constraint = "evidence"
+    assert _why_the_stop_stands(state) == "On the plan."
+    state.plan_binding_constraint = "tyre"
+    assert _why_the_stop_stands(state) == "On the plan.", \
+        "and it may not collide with the gauge's measured tyre call"
+
+    state.plan_binding_constraint = "fuel"
+    state.fuel_l = 6.0
+    assert _why_the_stop_stands(state) == "Fuel is the constraint."
+
+
+def test_unknown_regulations_are_not_spoken_as_a_regulation():
+    """CLAUDE.md rule 3. `mandatory_stops_left is None` keeps the stop - the
+    safe decision - and says nothing about regulations, because nobody told
+    the app there were any."""
+    from pitcrew.race.calls import _why_the_stop_stands
+
+    state = _fuelled_to_the_flag()
+    state.mandatory_stops_left = None
+    assert _why_the_stop_stands(state) == "On the plan."
+
+
+def test_the_box_call_never_contradicts_itself_in_two_sentences():
+    """The prefix was glued in front of `_fuel_instruction`, which can be
+    "Fuel is fine - the tank covers the next stint." - two adjacent
+    sentences making opposite claims, with §5.5 saying he acts on the front
+    of the reason."""
+    state = _fuelled_to_the_flag()
+    state.mandatory_stops_left = 1        # the regulations keep the stop
+    state.lap = 11
+    call = _box_now(state)
+    assert call is not None
+    assert not ("is the constraint" in call.reason
+                and "Fuel is fine" in call.reason)
+
+
+# ------------------------------------------------ one pair of numbers, one pair of words
+
+def test_the_tow_says_where_each_figure_is_measured_and_keeps_its_rate():
+    """The first fix distinguished the two "seconds a lap" figures and
+    dropped the rate from one of them: "costs 1.4 seconds of lap time" reads
+    as a total, and over a ten-lap tow that is 1.4 s against 14 - understating
+    in the direction that makes the tow look free."""
+    from pitcrew.race.tow import TowTrade
+
+    made = TowTrade(laps_held=5, saving_l_per_lap=0.6, saving_s_per_lap=0.3,
+                    losing_s_per_lap=1.4, reference="the plan")
+    spoken, _ = made.sentence("Boxhead")
+    assert "0.3 seconds a lap at the pump" in spoken
+    assert "1.4 seconds a lap slower" in spoken
+    assert "at the stop" not in spoken, "one vocabulary for one pair"

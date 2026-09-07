@@ -567,7 +567,7 @@ class RaceCoordinator:
             return
         self._saving_change_lap = change.lap
         burn = self.state.fuel_per_lap_l
-        tail = (f" Burn is {burn:.1f} a lap now." if burn else "")
+        tail = (f" Burn is {burn:.1f} litres a lap now." if burn else "")
         if change.what == "lift-and-coast":
             note = (f"You've stopped lift-and-coasting since lap {change.lap} - "
                     f"{change.before:.0f} percent of the lap off the pedals "
