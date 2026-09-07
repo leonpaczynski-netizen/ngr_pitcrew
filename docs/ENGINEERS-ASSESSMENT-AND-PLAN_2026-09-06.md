@@ -1311,6 +1311,42 @@ the other two name their field. And pass 7's write-up claimed the test
 figures"* — the assertion is that they are not ALL equal, and 36 of the 84
 sentences legitimately repeat a figure. The claim was wrong, not the test.
 
+### Row 1.7, critic pass 9 — the oscillation, caught
+
+1. **Pass 8's fall-back clause re-said what pass 1 blocked.** Pass 1's second
+   blocker was, in its own words, *"it said George falls back to his own on
+   the two decisions he is barred from"* — and the reasoning is still in the
+   file: *"the gated pairs … drop out here, because saying both about one
+   trigger is saying two things."* Appending the clause unconditionally put
+   it back for `fuel_long` and `tyre_short`, sharpest on a no-stop plan where
+   George's own judgement on tyre-short is nothing at all. It is true for
+   `fuel_short`, `stop_missed` and `incident`, whose calls carry no
+   `structural_action`, and is emitted only there. **This is the ninth pass
+   and the first to catch the fix oscillating rather than merely being
+   wrong.**
+2. **Dropping a negative `stops` deleted the finding.** `{stints: 3,
+   stops: -2}` went back to reporting a confident **2** and *"he may bring a
+   planned stop forward"*, with nothing saying the stored plan carries an
+   impossible figure — pass 5's *"a confident zero"*, back. The wording was
+   the wrong half; *"how many it holds is not known"* was the true half. The
+   reading is kept and rendered as *"its stop count says -2, which is not a
+   count"*.
+3. **The 6 px cause was written down a second time without being measured.**
+   `font-size: 15px` contributes **zero** on both platforms; the figure is
+   set by `QScrollBar::handle:vertical { min-height: 40px }` — drop that one
+   rule and the page wants 459. And bare is 493 offscreen but **497 native**,
+   so four of those pixels really are the font database. What is true and
+   now stated in all three places: **499 with the sheet, offscreen and
+   native alike, against the 501 cap.**
+4. The test written to close the contradiction asserted only `incident` and
+   said nothing about `fuel long`, which appeared twice — the gated trigger
+   was the one left unchecked, which is the same omission it was written to
+   fix.
+
+Minor: a cross-reference to a comment in `race_screen.py` that lives in
+`ui/widgets.py`, and a low-end screen height (259) quoted from offscreen
+where the real spread is 265–324.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three
 kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic

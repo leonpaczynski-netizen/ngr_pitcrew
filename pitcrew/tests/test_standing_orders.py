@@ -191,9 +191,11 @@ def test_the_orders_cost_the_race_page_no_height(qt_app):
 
     **Measured with `theme.STYLESHEET` on the screen, which is what the app
     runs.** Without it the page reports 493 and the assertion carries 8 px of
-    slack that does not exist; with it, 499 against the 501 cap. The 6 px is
-    the app-wide `font-size: 15px` box metric, not a font - offscreen with
-    the sheet reads the same 499 as the real platform does.
+    slack that does not exist; with it, 499 against the 501 cap - the same
+    499 offscreen and native. Measured a rule at a time, the figure is set by
+    `QScrollBar::handle:vertical { min-height: 40px }` (drop it and the page
+    wants 459); `font-size: 15px` contributes zero, which is a cause written
+    down in an earlier pass and never checked.
 
     **The height assertion alone has no teeth** - inside a scroller it cannot
     fail, whatever the content - so the structural fact is asserted too. A
@@ -1079,6 +1081,21 @@ def test_the_disagreement_reads_as_english():
         assert said is not None and expected in said, said
         assert "stintss" not in said
 
+    # **A negative is kept as an unusable reading, not dropped.** Dropping
+    # it let `_stops_planned` answer a confident count again: `{stints: 3,
+    # stops: -2}` reported 2 and the card said "he may bring a planned stop
+    # forward", with nothing anywhere saying the stored plan carries an
+    # impossible figure. The wording was the wrong half of that sentence;
+    # "how many it holds is not known" was the true half.
+    from pitcrew.strategy.handover import _stops_planned
+
+    bad = {"stints": [{"laps": 5}] * 3, "stops": -2}
+    assert _stops_planned(bad) is None
+    said = _stop_disagreement(bad)
+    assert said is not None and "its stop count says -2, which is not a count"         in said, said
+    assert "he may bring a planned stop forward" not in lines(
+        {**bad, "handover": {"playbook": []}})
+
     one = _stop_disagreement({"stints": [{"laps": 5}], "pit_laps": [1]})
     assert "its stints imply 0 stops" in one and "name 1 stop" in one
     none = _stop_disagreement({"stints": [{"laps": 5}] * 5, "pit_laps": []})
@@ -1100,9 +1117,16 @@ def test_the_disagreement_reads_as_english():
                 said = _stop_disagreement(plan)
                 if said is None:
                     continue
-                figures = [int(w) for w in said.replace(".", " ").split()
-                           if w.lstrip("-").isdigit()]
-                assert all(f >= 0 for f in figures), (plan, said)
+                words = said.replace(".", " ").replace(",", " ").split()
+                figures = [int(w) for w in words if w.lstrip("-").isdigit()]
+                # **A negative is printed on purpose and must say so.**
+                # Dropping the reading instead let `_stops_planned` answer a
+                # confident count again - `{stints: 3, stops: -2}` reported
+                # 2 - with nothing telling the driver the stored plan
+                # carries an impossible figure.
+                if any(f < 0 for f in figures):
+                    assert "which is not a count" in said, (plan, said)
+                    continue
                 assert len(set(figures)) > 1, (plan, said)
 
 
@@ -1159,3 +1183,13 @@ def test_an_action_george_cannot_run_is_not_a_standing_order():
     gap = said.split("No rule from the desk on")
     assert len(gap) == 1 or "incident" not in gap[1], said
     assert said.count("incident") == 1, said
+
+    # **And the gated trigger is the one that was left unchecked.** This
+    # asserted only `incident` while `fuel long` appeared twice - once
+    # promising he falls back to his own and once, four lines below, saying
+    # what he may not do without a rule. That is pass 1's second blocker,
+    # and the test written to close the contradiction never looked at it.
+    assert "fuel long" in said
+    fell_back = [line for line in said.split(" | ")
+                 if "fuel long" in line and "falls back to his own" in line]
+    assert not fell_back, fell_back

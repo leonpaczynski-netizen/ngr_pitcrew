@@ -163,12 +163,13 @@ def _stop_readings(plan: dict) -> dict[str, int]:
         # there is no stint after this one.
         readings["stints"] = len(stints) - 1
     stops = plan.get("stops")
-    # **A negative stop count is not a count** (rule 3): it printed "it says
-    # -1 stops" beside two real figures, and the guard that checks the
-    # figures differ could not see the sign. Left out, so the reading is
-    # missing rather than nonsense - and if it was the only other field,
-    # nothing disagrees and no sentence is built.
-    if isinstance(stops, int) and not isinstance(stops, bool) and stops >= 0:
+    # **A negative stop count is kept as an unusable reading, not dropped.**
+    # Dropping it made `_stops_planned` answer a confident count again -
+    # `{stints: 3, stops: -2}` reported 2 and the card said "he may bring a
+    # planned stop forward" - with nothing anywhere saying the stored plan
+    # carries an impossible figure. Rule 3 asks for `None` and for the
+    # disagreement to be said, not for the corrupt reading to vanish.
+    if isinstance(stops, int) and not isinstance(stops, bool):
         readings["stops"] = stops
     laps = plan.get("pit_laps")
     if isinstance(laps, list):
@@ -187,14 +188,18 @@ def _stops_planned(plan: dict) -> int | None:
     *"No stop is planned"*. Where two readings disagree, the disagreement is
     the finding (rule 1) - `_stop_disagreement` says it aloud.
     """
-    values = set(_stop_readings(plan).values())
+    readings = _stop_readings(plan)
+    if any(number < 0 for number in readings.values()):
+        return None            # a negative is not a count
+    values = set(readings.values())
     return values.pop() if len(values) == 1 else None
 
 
 def _stop_disagreement(plan: dict) -> str | None:
     """The plan's own fields, quoted, when they do not agree about stops."""
     readings = _stop_readings(plan)
-    if len(set(readings.values())) < 2:
+    if len(set(readings.values())) < 2 \
+            and not any(number < 0 for number in readings.values()):
         return None
     # **Every figure in STOPS, which is the unit they are compared in.**
     # The `stints` reading is `len(stints) - 1` and the sentence printed it
@@ -208,9 +213,14 @@ def _stop_disagreement(plan: dict) -> str | None:
     said = {"stints": "its stints imply {n}",
             "stops": "its stop count says {n}",
             "pit_laps": "its box laps name {n}"}
-    parts = [said[name].format(n=number) + (" stop" if number == 1
-                                            else " stops")
-             for name, number in readings.items()]
+    parts = []
+    for name, number in readings.items():
+        if number < 0:
+            parts.append(said[name].format(n=number) + ", which is not a "
+                                                       "count")
+            continue
+        parts.append(said[name].format(n=number)
+                     + (" stop" if number == 1 else " stops"))
     return ("The plan disagrees with itself about stops - "
             + ", ".join(parts) + ". How many it holds is not known.")
 
@@ -612,8 +622,17 @@ def standing_orders(stored: dict) -> list[Order]:
         out.append(Order(
             f"The desk's rule for {entry.trigger.replace('_', ' ')} cannot "
             f"fire on this plan - there is no stop to drop.", GAP))
+    # **The clause is true only where the trigger is not gated.** For
+    # `fuel_long` and `tyre_short` a withheld sentence is printed a few lines
+    # below saying what George may NOT do - "and George falls back to his
+    # own" beside it is pass 1's second blocker said again. Those two are the
+    # only structural pairs, and an unrunnable rule can never be the granted
+    # action, so a withheld sentence always follows.
+    gated_names = {trigger for trigger, _action in GATED}
     for entry in unrunnable:
         trigger = entry.trigger.replace("_", " ")
+        falls_back = ("" if entry.trigger in gated_names
+                      else ", and George falls back to his own")
         if not entry.action.strip():
             # **Not "asks for nothing, which George cannot execute"** - doing
             # nothing is the one thing that is always executable, and it is
@@ -623,7 +642,7 @@ def standing_orders(stored: dict) -> list[Order]:
             # from the fall-back line and the sentence has to say so itself.
             out.append(Order(
                 f"The desk's rule for {trigger} names no action and cannot "
-                f"be read - George falls back to his own.", GAP))
+                f"be read{falls_back}.", GAP))
             continue
         # Third person throughout, like every other line here: the block is
         # read on the grid and "you have refused" put the driver in two roles
@@ -634,8 +653,7 @@ def standing_orders(stored: dict) -> list[Order]:
             f"{entry.action.replace('_', ' ')}, which "
             + ("the driver has refused outright" if refused
                else "George cannot execute")
-            + " - it will never fire, and George falls back to his own.",
-            GAP))
+            + f" - it will never fire{falls_back}.", GAP))
 
     withheld = []
     for trigger, action in GATED:
