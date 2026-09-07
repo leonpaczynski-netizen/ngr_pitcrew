@@ -11,7 +11,8 @@ import time
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPainter, QShortcut
+from PyQt6.QtGui import (QColor, QFontMetrics, QIcon, QKeySequence,
+                         QPainter, QShortcut)
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -578,19 +579,13 @@ class NavRail(QWidget):
         # direct `setFocus`, so End, Down and Ctrl+7 all put the crayon focus
         # bar 71 px below the fold with nothing on screen to say where he is.
         self._scroller = scroller
-        # **A narrow, themed bar.** The default takes 14 px off a rail that
-        # is `setFixedWidth(178)` with horizontal scrolling forced off, so
-        # those pixels are clipped rather than reachable - and it painted an
-        # unstyled #9f9f9f stripe down a RUBBER_DEEP rail.
-        scroller.verticalScrollBar().setStyleSheet(
-            f"QScrollBar:vertical {{ background: transparent; width: 6px; "
-            f"margin: 0; }}"
-            f"QScrollBar::handle:vertical {{ background: {theme.TREAD}; "
-            f"min-height: 24px; border-radius: 3px; }}"
-            f"QScrollBar::add-line:vertical, "
-            f"QScrollBar::sub-line:vertical {{ height: 0; }}"
-            f"QScrollBar::add-page:vertical, "
-            f"QScrollBar::sub-page:vertical {{ background: transparent; }}")
+        # **No local scrollbar rule.** One was added here on the strength
+        # of an unstyled #9f9f9f stripe and a 14 px width - both measured
+        # with `theme.apply` NOT loaded. The app-wide sheet already paints
+        # the trough RUBBER_DEEP, the handle TREAD and a TREAD_LIGHT hover,
+        # at 12 px. The local rule halved it to 6 px with no hover state and
+        # a 1.57:1 handle, which is worse than the 2.04:1 this file rejects
+        # for this rail twenty lines below.
 
         column = QVBoxLayout(inner)
         column.setContentsMargins(20, 26, 12, 20)
@@ -637,16 +632,20 @@ class NavRail(QWidget):
         scroller.setWidget(inner)
         self.select(0)
 
-    # What fits on one line in the rail at this size, tracked. A note that
-    # clips is worse than a shorter one: "NOTHING ASKED YE" reads as a bug.
+    # What fits on one line in the rail, in PIXELS. A note that clips is
+    # worse than a shorter one: "NOTHING ASKED YE" reads as a bug.
     #
-    # **Measured, 7 Sep 2026, and 15 never fitted.** The column has 140 px
-    # between its margins inside the scroller; at the widest character 15
-    # wants 162 px, 13 wants 141, and 12 wants 130. So `3 x RM, 2 stops` and
-    # `Ludo 1-stop, R…` were clipped by the widget on the surface used every
-    # visit - the failure this constant exists to prevent, in the constant
-    # itself.
-    NOTE_CHARS = 12
+    # **It was a character count, and a character count cannot be right in a
+    # proportional font.** 15 was picked by eye; 12 was then "measured" to 130
+    # px against 140 available - offscreen, where Qt has no font database, so
+    # every glyph gets an identical fallback advance and `"W" * 12` and
+    # `"i" * 12` measure the same. On the real font (Bahnschrift Condensed)
+    # fifteen W's want 102 px and every note on file wants 62-76, so nothing
+    # ever clipped and the shorter count truncated four stored Ludo plans to
+    # the same `Ludo 1-stop...` on the note that says which plan is armed.
+    #
+    # 178 rail, less the column's 20 and 12 margins and the 12 px scrollbar.
+    NOTE_PX = 134
 
     def focus_item(self, index: int) -> None:
         """Move focus along the rail, wrapping. Skips what is not built."""
@@ -667,10 +666,9 @@ class NavRail(QWidget):
         """A one-line state under a rail item, or "" to clear it."""
         if not 0 <= index < len(self._notes):
             return
-        if len(text) > self.NOTE_CHARS:
-            text = text[:self.NOTE_CHARS - 1].rstrip() + "…"
         note = self._notes[index]
-        note.setText(text)
+        note.setText(QFontMetrics(note.font()).elidedText(
+            text, Qt.TextElideMode.ElideRight, self.NOTE_PX))
         note.setVisible(bool(text))
 
     def select(self, index: int) -> None:

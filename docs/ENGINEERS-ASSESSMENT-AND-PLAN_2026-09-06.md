@@ -1012,15 +1012,71 @@ first time.
    in both, and the test asserts it rather than a height that can no longer
    fail.
 
-And the rail's `NOTE_CHARS = 15` **never fitted**: 140 px between the column
-margins, 162 px wanted at the widest character, so `3 x RM, 2 stops` was
-clipped by the widget on the surface used every visit — the failure the
-constant exists to prevent, in the constant itself. Measured to 12. The
-scrollbar is 6 px and themed; the default took 14 px off a rail with
-horizontal scrolling forced off, so those pixels were unreachable rather than
-scrollable. The CLI re-rendered the handover it was sent rather than the row
-it stored, which dropped every *"Not checked:"* line at the one moment the
-author could still act on it.
+The CLI re-rendered the handover it was sent rather than the row it stored,
+which dropped every *"Not checked:"* line at the one moment the author could
+still act on it.
+
+**Two claims in this pass were measured on an uncalibrated instrument and are
+retracted below** — the rail's note width and the scrollbar. See pass 3.
+
+### Row 1.7, critic pass 3 — I measured Qt text on a platform with no fonts
+
+**Offscreen Qt has no font database.** `QFontInfo(stencil_font(10)).family()`
+is `''` and `pixelSize` is `-1`, so every glyph gets the same fallback advance
+and `"W" * 12` measures exactly what `"i" * 12` does. Every width in pass 2
+came from that, and two app changes were made on the strength of them:
+
+- **`NOTE_CHARS` 15 → 12 was a regression.** On the machine the app runs on,
+  `Bahnschrift Condensed` resolves and fifteen W's want **102 px** of the 140
+  available; every note on file wants 62–76. Nothing had ever clipped. The
+  shorter count truncated `Ludo 1-stop, RBR Short, 30 Aug` and three sibling
+  plans to the identical string `Ludo 1-stop…` — on the note whose whole job
+  is to say *which plan is armed*. It is a pixel elision now
+  (`QFontMetrics.elidedText` against `NOTE_PX = 134`), because a character
+  count cannot be right in a proportional font.
+- **The 6 px scrollbar rule bought nothing and cost contrast.** `theme.apply`
+  already paints the trough `RUBBER_DEEP`, the handle `TREAD` and a
+  `TREAD_LIGHT` hover, at 12 px. The "14 px unstyled #9f9f9f stripe" was the
+  platform default measured *without the theme loaded*. The local rule halved
+  it, dropped the hover state, and set the handle at **1.57:1** — worse than
+  the 2.04:1 that `app.py` rejects for this same rail twenty lines below.
+  Deleted.
+
+This is `feedback_calibrate_instruments_before_use` on a project that has
+already discarded six derived indices for it, and it is the third pass running
+in which the worst finding was inside the previous pass's own fix.
+
+**Two more, both real:**
+
+3. **The `tyre_short` sentence was wrong a third time.** Pass 2 moved the
+   condition into the words but left it as prose in a constant, and
+   `standing_orders` never evaluated it — so a plan with **no stop in it**
+   (`_recommend` iterates `range(0, max_stops + 1)`) read *"he may bring a
+   planned stop forward"* about a stop that does not exist, and *"on the last
+   stint"* about a gate that bites from the green. `_withheld_sentence(trigger,
+   plan)` reads `stops` now, and the `fuel_long` line is withheld entirely on a
+   no-stop plan because `_stops_off` needs a planned stop to fire at all.
+4. **The AST guard could not see the construction `calls.py` uses.** It walked
+   `keywords` on any node and found the wear-cliff site only because that site
+   spells its rail as `dict(...)`; a dict *literal* splatted as `**rail` — one
+   refactor away — would have left `found` equal to `GATED` and the test green
+   about a call site it never read. It reads both shapes now and asserts that
+   the number of containers it saw equals the number of textual mentions, so
+   it cannot go blind quietly.
+
+Minor: the screen asked `grants` a filtered playbook while the race asks an
+unfiltered one (equal today only because both gated triggers are live —
+retiring one, as happened to `safety_car` on 7 Sep, would have reopened the
+split); the AST test read a CWD-relative path; only one of the two
+`report_form`s was pinned against `calls.py`; and
+`test_the_screen_and_the_race_ask_the_same_gate` hand-wrote the coordinator's
+own dict comprehension instead of building a real coordinator.
+
+**Carried, not fixed:** the briefed wear cliff's reason restates its call
+(*"Tyres past the stint limit. Tyres are past the stint limit on the measured
+rate for this compound…"*) against §5.5's *reason second and short*.
+Pre-existing since `78a728a`, and the contract now quotes that call, so the
+two move together.
 
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three

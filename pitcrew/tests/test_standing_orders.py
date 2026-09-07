@@ -331,9 +331,20 @@ def test_the_tyre_short_sentence_is_true_of_the_stint_it_is_about():
 
     said = lines(a_plan())
     assert "may bring a planned stop forward" in said, said
-    assert "on the last stint he cannot ADD one" in said
+    assert "not add one after the last" in said
     # The contract quotes the call, so the two cannot drift apart.
     assert withheld.call in said
+
+    # **And the condition is evaluated, not narrated.** A plan with no stop
+    # has none to bring forward, and the gate bites from the green.
+    no_stop = lines(a_plan())
+    assert "bring a planned stop forward" in no_stop
+    none_planned = lines({"stints": [{"laps": 20}], "stops": 0,
+                          "handover": {"playbook": []}})
+    assert "No stop is planned, so he cannot bring one forward" in none_planned
+    assert "bring a planned stop forward" not in none_planned, none_planned
+    # And no line about dropping a stop that does not exist.
+    assert "cannot drop a stop" not in none_planned
 
 
 def test_he_is_told_what_he_cannot_do_without_a_rule(qt_app):
@@ -347,8 +358,7 @@ def test_he_is_told_what_he_cannot_do_without_a_rule(qt_app):
     would use his judgement on the one decision he is barred from.
     """
     text = lines(a_plan())
-    assert "on the last stint he cannot ADD one without a rule from the desk" \
-        in text, text
+    assert "not add one after the last" in text, text
     assert "On fuel long he cannot drop a stop without a rule from the desk" \
         in text
     # And never both sentences about one trigger.
@@ -365,12 +375,12 @@ def test_a_granted_structural_action_is_not_reported_as_withheld():
         PlaybookEntry(trigger="fuel_long", action="drop_stop",
                       when="1.5 laps in hand", until="the flag")])
     said = lines(granted)
-    assert "cannot ADD one" not in said, said
+    assert "not add one after the last" not in said, said
     assert "cannot drop a stop" not in said
     assert "tyre short - add stop" in said
     # The same two sentences DO appear with nothing granted.
     bare = lines(a_plan())
-    assert "cannot ADD one" in bare
+    assert "not add one after the last" in bare
     assert "cannot drop a stop" in bare
 
 
@@ -407,17 +417,24 @@ def test_the_screen_and_the_race_ask_the_same_gate():
          PlaybookEntry(trigger="fuel_long", action="report_only",
                        when="1.5 in hand", until="the flag")],
     )
+    from pitcrew.strategy.handover import _withheld_sentence
+
     for book in books:
         plan = a_plan(playbook=book)
         stored = playbook_of(plan)
-        coordinator = RaceCoordinator.__new__(RaceCoordinator)
-        coordinator._playbook = {e.trigger: e for e in stored}
+        # **The real coordinator, so its own comprehension is under test.**
+        # Hand-writing `{e.trigger: e for e in stored}` here re-implemented
+        # the line it was meant to compare against, so a change of direction
+        # in `coordinator.py` would have left this green.
+        coordinator = RaceCoordinator(plan)
         said = lines(plan)
-        for trigger, action, sentence in GATED:
+        for trigger, action in GATED:
             withheld = not coordinator._may(trigger, action)
             assert grants(stored, trigger, action) is not withheld, \
                 (book, trigger)
-            assert (sentence in said) is withheld, (book, trigger, said)
+            sentence = _withheld_sentence(trigger, plan)
+            assert (sentence is not None and sentence in said) is withheld, \
+                (book, trigger, said)
 
 
 def test_a_retirement_is_not_reported_as_blindness():
@@ -536,15 +553,49 @@ def test_the_rail_fits_the_smallest_display_he_owns(qt_app):
     qt_app.processEvents()
     assert not last.visibleRegion().isEmpty(), "selected off-screen"
 
-    # The note the rail actually sets must fit the width it actually has.
-    rail.set_note(0, "W" * NavRail.NOTE_CHARS)
-    room = (rail._scroller.viewport().width()
-            - rail._notes[0].parentWidget().layout().contentsMargins().left()
-            - rail._notes[0].parentWidget().layout().contentsMargins().right())
-    assert rail._notes[0].sizeHint().width() <= room, (
-        f"NOTE_CHARS={NavRail.NOTE_CHARS} wants "
-        f"{rail._notes[0].sizeHint().width()}px of {room}; a note that clips "
-        f"is worse than a shorter one")
+    # **The note elides in PIXELS.** It was a character count, and the count
+    # was set from a width measured offscreen - where Qt has no font database
+    # and every glyph gets the same fallback advance, so `"W" * n` and
+    # `"i" * n` measure alike. That is why this asserts the widget's own
+    # elision rather than a number: it is true under either font.
+    for note in ("Ludo 1-stop, RBR Short, 30 Aug", "3 x RM, 2 stops"):
+        rail.set_note(0, note)
+        assert rail._notes[0].sizeHint().width() <= NavRail.NOTE_PX, note
+    # **This half needs a real font, and saying so IS the finding.**
+    # Offscreen Qt has no font database: `QFontInfo(...).pixelSize()` is -1,
+    # every glyph gets the same fallback advance, and no string over twelve
+    # characters fits 134 px - so under the CI font "3 x RM, 2 stops" is
+    # genuinely too wide and there is no string that can tell a pixel elision
+    # from a character count. A test that asserted it anyway would be
+    # asserting the artefact that caused the defect.
+    from PyQt6.QtGui import QFontInfo
+
+    if QFontInfo(rail._notes[0].font()).pixelSize() > 0:
+        rail.set_note(0, "3 x RM, 2 stops")
+        assert rail._notes[0].text() == "3 x RM, 2 stops", (
+            "a note that fits must not be cut: it was truncated to "
+            "'3 x RM, 2 s…' on the strength of an offscreen measurement")
+
+
+def test_the_contract_quotes_the_calls_it_is_about():
+    """Both `report_form`s, not one. The `tyre_short` half is pinned by the
+    test above; nothing held `"You're fuelled to the flag."` against
+    `calls.py`, so the contract could have drifted from the call it quotes on
+    the half that has been right all along."""
+    from pitcrew.race.calls import RaceState, _stops_off
+
+    state = RaceState()
+    state.lap, state.laps_total = 8, 20
+    state.stint_ends_on_lap = 10
+    state.fuel_l, state.fuel_per_lap_l = 60.0, 3.0
+    # The stop must have stopped being needed on fuel, or the call is silent:
+    # no regulation owes one, fuel is what the plan was capped by, and the
+    # tank covers the twelve laps left.
+    state.mandatory_stops_left = 0
+    state.plan_binding_constraint = "fuel"
+    call = _stops_off(state)
+    assert call is not None and call.structural_action == "drop_stop"
+    assert call.report_form in lines(a_plan()), call.report_form
 
 
 def test_gated_names_every_structural_call_site():
@@ -562,33 +613,57 @@ def test_gated_names_every_structural_call_site():
     import ast
     import pathlib
 
+    import pitcrew.race.calls as calls_module
     from pitcrew.strategy.handover import GATED
 
-    tree = ast.parse(pathlib.Path(
-        "pitcrew/race/calls.py").read_text(encoding="utf-8"))
-    found = set()
-    for node in ast.walk(tree):
-        keywords = getattr(node, "keywords", None)
-        if not keywords:
-            continue
-        named = {k.arg: k.value for k in keywords if k.arg}
-        if "structural_action" not in named or "trigger" not in named:
-            continue
-        trigger = named["trigger"]
-        action = named["structural_action"]
-        # `structural_action="add_stop" if unplanned else None` - the action
-        # is the branch that is not None, and the condition is what the
-        # sentence has to carry.
-        if isinstance(action, ast.IfExp):
-            action = action.body
-        if isinstance(trigger, ast.Constant) and isinstance(action,
-                                                            ast.Constant):
-            found.add((trigger.value, action.value))
+    source = pathlib.Path(calls_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
 
-    assert found == {(t, a) for t, a, _sentence in GATED}, (
-        f"calls.py gates {found}; GATED names "
-        f"{{(t, a) for t, a, _ in GATED}} - a pair in one and not the other "
-        f"is a decision the standing orders are silent about")
+    def constant(node):
+        # `structural_action="add_stop" if unplanned else None` - the action
+        # is the branch that is not None; the CONDITION is what
+        # `_withheld_sentence` has to evaluate.
+        if isinstance(node, ast.IfExp):
+            node = node.body
+        return node.value if isinstance(node, ast.Constant) else None
+
+    found, containers = set(), 0
+    for node in ast.walk(tree):
+        # Two shapes, because `calls.py` uses one of them: keyword arguments
+        # on a call - including `dict(structural_action=..., trigger=...)`
+        # later splatted as `**rail` - and a dict literal.
+        if isinstance(node, ast.Dict):
+            pairs = {k.value: v for k, v in zip(node.keys, node.values)
+                     if isinstance(k, ast.Constant)}
+        else:
+            pairs = {k.arg: k.value
+                     for k in getattr(node, "keywords", None) or ()
+                     if k.arg}
+        if "structural_action" not in pairs:
+            continue
+        containers += 1
+        trigger = constant(pairs.get("trigger"))
+        action = constant(pairs["structural_action"])
+        if trigger is not None and action is not None:
+            found.add((trigger, action))
+
+    # **The walker must not be able to go blind quietly.** It reads two AST
+    # shapes; a third - a subscript assignment, a variable, a helper - would
+    # leave `found` equal to `GATED` and the test green about a call site it
+    # never saw. So every textual mention has to be accounted for by a
+    # container the walker actually read.
+    mentions = (source.count("structural_action=")
+                + source.count('"structural_action"')
+                + source.count("'structural_action'"))
+    assert containers == mentions, (
+        f"{mentions} mentions of structural_action in calls.py but the "
+        f"walker read {containers} - it is written in a shape this test "
+        f"cannot see, so it is not guarding anything")
+
+    assert found == set(GATED), (
+        f"calls.py gates {found}; GATED names {set(GATED)} - a pair in one "
+        f"and not the other is a decision the standing orders are silent "
+        f"about")
 
 
 def test_the_loader_prints_the_checks_that_could_not_run(store, event_id,

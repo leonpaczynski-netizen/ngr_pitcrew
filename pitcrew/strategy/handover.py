@@ -140,15 +140,46 @@ def grants(entries, trigger: str, action: str) -> bool:
 #
 # The words after the dash are the call's own `report_form`, quoted, so the
 # contract and the call say the same thing (rule 13).
-GATED = (
-    ("tyre_short", "add_stop",
-     'On tyre short he may bring a planned stop forward on his own, but on '
-     'the last stint he cannot ADD one without a rule from the desk - he '
-     'says "Tyres past the stint limit." and you decide.'),
-    ("fuel_long", "drop_stop",
-     'On fuel long he cannot drop a stop without a rule from the desk - he '
-     'says "You\'re fuelled to the flag." and the stops stay in the plan.'),
-)
+GATED = (("tyre_short", "add_stop"), ("fuel_long", "drop_stop"))
+
+
+def _stops_planned(plan: dict) -> int | None:
+    """How many stops the plan holds, or None. **Never 0 for "don't know".**"""
+    stops = plan.get("stops")
+    if isinstance(stops, int) and not isinstance(stops, bool):
+        return stops
+    laps = plan.get("pit_laps")
+    return len(laps) if isinstance(laps, list) else None
+
+
+def _withheld_sentence(trigger: str, plan: dict) -> str | None:
+    """What George will not do on this trigger, for THIS plan.
+
+    **The condition has to be evaluated, not narrated.** The first version of
+    this stated the `add_stop` gate flat and was false for every stint but the
+    last; the second carried the condition as prose in a constant and was
+    false again on a plan with no stop in it, where "he may bring a planned
+    stop forward" names a stop that does not exist and "on the last stint"
+    reads as a late-race restriction on a gate that bites from the green.
+    """
+    stops = _stops_planned(plan)
+    if trigger == "tyre_short":
+        if stops == 0:
+            return ('No stop is planned, so he cannot bring one forward: on '
+                    'tyre short he says "Tyres past the stint limit." and you '
+                    'decide.')
+        return ('On tyre short he may bring a planned stop forward, but not '
+                'add one after the last - then he says "Tyres past the stint '
+                'limit." and you decide.')
+    if trigger == "fuel_long":
+        if stops == 0:
+            # `_stops_off` needs a planned stop, so the call cannot fire and
+            # the line would be about a decision nobody faces.
+            return None
+        return ('On fuel long he cannot drop a stop without a rule from the '
+                'desk - he says "You\'re fuelled to the flag." and the stops '
+                'stay in the plan.')
+    return None
 
 # Names the stored payload owns. A plan carrying one of these is refused
 # rather than merged - see `Handover.as_stored`.
@@ -419,8 +450,18 @@ def standing_orders(stored: dict) -> list[Order]:
     # race runs on: a structural action with no entry is refused, and the
     # driver has to know which decisions that removes from George rather than
     # being told he will use his judgement on all of them.
-    withheld = [(trigger, sentence) for trigger, action, sentence in GATED
-                if not grants(live, trigger, action)]
+    # **`named`, not `live`** - the coordinator builds its book from every
+    # stored entry, and asking the gate a different set here is the same
+    # screen-vs-race split this function exists to close. Equal today only
+    # because both gated triggers happen to be live; retiring one - which is
+    # what happened to `safety_car` on 7 Sep - would have reopened it.
+    withheld = []
+    for trigger, action in GATED:
+        if grants(named, trigger, action):
+            continue
+        sentence = _withheld_sentence(trigger, plan)
+        if sentence is not None:
+            withheld.append((trigger, sentence))
     for _trigger, sentence in withheld:
         out.append(Order(sentence, GAP))
 
