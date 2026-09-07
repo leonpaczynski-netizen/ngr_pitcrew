@@ -302,6 +302,21 @@ class ExpectationTracker:
         or of burn - the crawl is in both."""
         self._penalised.add(int(lap_num))
 
+    def forget_penalty(self, lap_num: int) -> None:
+        """Put a lap back: what was read as a penalty was the road.
+
+        **CLAUDE.md rule 10 - a rule that refuses a reading must be able to
+        refuse its own baseline.** The penalty detector's one systematic
+        false positive is a corner the auto-segment model does not contain:
+        the brake for it is at speed, going straight and outside every
+        window, so it reads as a penalty on EVERY lap. The controller
+        recognises that shape (two consecutive laps at the same place is the
+        road, not a penalty served twice running) and calls this to hand the
+        first lap back, because that lap was struck on a reading that has
+        since been withdrawn. Silent where the lap was never struck.
+        """
+        self._penalised.discard(int(lap_num))
+
     # ------------------------------------------------- did the saving work
 
     def saving_response(self, instructed_at_lap: int, *,

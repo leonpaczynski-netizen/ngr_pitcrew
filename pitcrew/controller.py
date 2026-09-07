@@ -3004,6 +3004,30 @@ class PitCrewController(QObject):
             served = (read_penalties(rows, FRAME_FIELDS, corners)
                       if corners is not None else None)
             if served is not None:
+                # **The places the road explains are struck before anything
+                # else sees them** (critic pass 6). Two consecutive laps at
+                # one place is a corner the auto-segment model is missing,
+                # not a penalty served twice running - and left alone it
+                # would flag, exclude and SPEAK on every lap of the race.
+                # `give_back` is the lap the ledger has just changed its mind
+                # about; it goes back into the pace and burn populations.
+                served, give_back = self._road_not_penalty().filter(
+                    lap.lap_num, served)
+                for handed_back in give_back:
+                    log("session").info(
+                        "lap %s: what was read as a penalty is flagged again "
+                        "on lap %s at the same place - that is a corner the "
+                        "model is missing, not a penalty. Lap %s goes back "
+                        "into the pace.", handed_back, lap.lap_num,
+                        handed_back)
+                    if self.race is not None and getattr(
+                            self.race, "running", False):
+                        try:
+                            self.race.forget_penalty(handed_back)
+                        except Exception:                    # noqa: BLE001
+                            log("race").warning(
+                                "penalty not withdrawn from the race",
+                                exc_info=True)
                 lost = sum(p.lost_s for p in served) if served else None
                 frames = replace(frames, penalties_served=len(served),
                                  penalty_lost_s=lost)
@@ -3571,6 +3595,53 @@ class PitCrewController(QObject):
         self.store.exclude_lap(
             lap_id, "struck by hand" if row.excluded else None)
 
+    def _road_not_penalty(self):
+        """This session's ledger of places the road explains, not a penalty.
+
+        `analysis.penalties.RoadNotPenalty`, one per session. Keyed on the
+        session id beside `_corner_windows_cache` and for the same reason -
+        CLAUDE.md rule 11: a place retired in last night's practice is not
+        retired in tonight's race, and a place retired in the race must not
+        be carried into the next session's practice either.
+        """
+        from pitcrew.analysis.penalties import RoadNotPenalty
+
+        cached = getattr(self, "_road_not_penalty_cache", None)
+        if cached is None or cached[0] != self.session_id:
+            cached = (self.session_id, RoadNotPenalty())
+            self._road_not_penalty_cache = cached
+        return cached[1]
+
+    def _penalties_are_readable(self) -> str | None:
+        """Why the penalty detector must not run here, or None to run it.
+
+        **Every frame it was calibrated on is dry** (critic pass 6). In the
+        wet the driver brakes earlier for a corner the model does contain,
+        which begins the brake outside `APPROACH_M` and reads as a penalty
+        served on a straight - and the app cannot tell that it is raining:
+        the hygrometer reader was struck in Phase 0 for having no calibration
+        frame, and nothing has replaced it. What the app does have is the
+        event's own record of the conditions, and where that does not say
+        plainly "dry" the honest reading is that there is none.
+
+        So the lap's `penalties_served` stays `None` - not `0` (rule 3) - and
+        the reason is logged once a session rather than a false "no penalties
+        served" written onto every lap of a wet race.
+        """
+        event = self.active_event()
+        if event is None:
+            return "no event on the session"
+        try:
+            weather = (event["weather"] or "").strip().lower()
+            rain = event["rain_possible"]
+        except Exception:                                    # noqa: BLE001
+            return "the event's weather could not be read"
+        if weather != "dry":
+            return f"the event's weather is '{weather or 'unrecorded'}', not dry"
+        if rain:
+            return "rain is possible at this event"
+        return None
+
     def _corner_windows(self):
         """The circuit's corners as the penalty detector wants them, or None.
 
@@ -3579,6 +3650,9 @@ class PitCrewController(QObject):
         detector is not run at all rather than run against nothing. Cached
         against the session id, like `_sector_model`, for the same rule-11
         reason.
+
+        **The same `None` where the session may be wet** - see
+        `_penalties_are_readable`, which carries the argument.
         """
         if self.session_id is None:
             return None
@@ -3586,16 +3660,21 @@ class PitCrewController(QObject):
         if cached is not None and cached[0] == self.session_id:
             return cached[1]
         windows = None
-        try:
-            key = circuit_key_for(self.active_event())
-            model = self.store.get_corner_model(key) if key else None
-            if model is not None:
-                windows = [{"start_m": c.start_m, "end_m": c.end_m}
-                           for c in model.corners]
-        except Exception:                                    # noqa: BLE001
-            log("session").warning("corner model not readable - penalties "
-                                   "will not be looked for", exc_info=True)
-            windows = None
+        refused = self._penalties_are_readable()
+        if refused is not None:
+            log("session").info("penalties will not be read this session: %s",
+                                refused)
+        else:
+            try:
+                key = circuit_key_for(self.active_event())
+                model = self.store.get_corner_model(key) if key else None
+                if model is not None:
+                    windows = [{"start_m": c.start_m, "end_m": c.end_m}
+                               for c in model.corners]
+            except Exception:                                # noqa: BLE001
+                log("session").warning("corner model not readable - penalties "
+                                       "will not be looked for", exc_info=True)
+                windows = None
         self._corner_windows_cache = (self.session_id, windows)
         return windows
 

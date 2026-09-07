@@ -208,6 +208,26 @@ def test_a_withheld_drop_keeps_the_stop_in_the_plan():
     assert stop_still_needed(granted.state) is False
 
 
+def test_box_soon_says_why_too():
+    """Critic pass 6, minor: `_box_soon` arrives BEFORE `_box_now` and had
+    no clause saying why he is being boxed after "You're fuelled to the
+    flag." - so the contradiction reached him first and unexplained."""
+    from pitcrew.race.calls import BOX_SOON, _box_soon
+
+    race = _fuelled_to_the_flag(a_plan())
+    assert race.state.drop_stop_granted is False
+    call = _box_soon(race.state)                 # lap 8, box on 10
+    assert call is not None and call.kind == BOX_SOON
+    assert call.call == "Box in 2."
+    assert "dropping the stop was not granted" in call.reason
+
+    granted = _fuelled_to_the_flag(a_plan([an_entry(trigger="fuel_long",
+                                                    action="drop_stop",
+                                                    when="over a lap")]))
+    # Granted, the stop is gone and there is nothing to box for.
+    assert _box_soon(granted.state) is None
+
+
 def test_stops_off_granted_keeps_the_instruction():
     from pitcrew.race.calls import _stops_off
 

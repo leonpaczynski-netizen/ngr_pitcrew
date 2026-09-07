@@ -222,6 +222,14 @@ class RaceCoordinator:
             refuel_rate_lps = knowledge.refuel_l_per_s
         self.pit_loss_s = pit_loss_s
         self._burns: list[float] = []
+        # **The wall's `lap_now()` key -> the lap it was actually driving.**
+        # Filled at each crossing by `_on_lap`, read by `_weigh_the_tow`, and
+        # by nothing else. See the note there: the offset is not a constant,
+        # so it is recorded rather than assumed. The coordinator is built once
+        # per race (`controller._start_race`) and emptied again on every
+        # `arm`, which is CLAUDE.md rule 11 for it: a key left from a previous
+        # attempt would pair this race's gap with a lap that is not in it.
+        self._lap_of_read_key: dict[int, int] = {}
         # **Laps completed after arming but before the green was detected.**
         # `session_state` emits LAP_COMPLETED from `ON_TRACK` onward, so these
         # arrive here and used to be dropped on the floor by the RUNNING gate.
@@ -322,8 +330,10 @@ class RaceCoordinator:
         """Ready the race. Returns False, with a reason, if the plan does not fit."""
         self.refusal = None
         # A re-arm starts the count again: laps from a previous attempt are
-        # not this race's.
+        # not this race's - and neither are the keys the wall filed its gaps
+        # under while they were being driven.
         self._pre_green_laps = []
+        self._lap_of_read_key = {}
         if planned is not None and actual is not None:
             ok, why = planned.matches(actual)
             if not ok:
@@ -501,6 +511,22 @@ class RaceCoordinator:
         self.expect.note_penalty(lap_num)
         self.state.penalty_note = (int(lap_num), lost_s)
 
+    def forget_penalty(self, lap_num: int) -> None:
+        """Withdraw a penalty read: the place turned out to be the road.
+
+        The controller calls this when the same stretch of road is flagged on
+        two consecutive laps, which a served penalty is not and a corner
+        missing from the model is. The lap goes back into the pace and burn
+        populations, and an unspoken note about it is dropped - a call
+        already made cannot be unmade, which is why it went out at LOW.
+        """
+        if not self.running:
+            return
+        self.expect.forget_penalty(lap_num)
+        note = self.state.penalty_note
+        if note is not None and note[0] == int(lap_num):
+            self.state.penalty_note = None
+
     def note_driving(self, lap_num: int, read) -> None:
         """One lap's driving read off its frames, from the controller.
 
@@ -673,6 +699,20 @@ class RaceCoordinator:
 
     def _on_lap(self, event, packet) -> Call | None:
         lap = event.data["lap"]
+        # **Which lap the wall's gap readings belong to, settled here and
+        # nowhere else** (critic pass 6). The pit wall files every gap under
+        # `lap_now()` - laps COMPLETED - so a gap read while lap N was being
+        # driven carries the key N-1, while `laps_by_number()` keys lap N's
+        # own time and burn under N. Paired naively the tow trade compared
+        # this lap's gap with the PREVIOUS lap's laptime and litres, which is
+        # the one pairing the whole calculation is about.
+        #
+        # A constant offset of one would be wrong too: `lap_now()` carries
+        # `laps_missed()`, so a crossing lost in the pit lane shifts the keys
+        # for the rest of the race and a fixed shift drifts from there on.
+        # Read here, before `state.lap` moves, it is not an offset at all -
+        # it is the counter's actual value while the lap was being driven.
+        self._lap_of_read_key[int(self.state.lap_now())] = int(lap.lap_num)
         self.state.lap = lap.lap_num
         # **The offset between the two lap counters, learned once, here.**
         # At a crossing the relationship is exact; mid-lap GT7 is already
@@ -936,6 +976,15 @@ class RaceCoordinator:
         Every crossing, so the verdict the driver hears is the one the laps
         just driven support. None where fewer than three laps were held up,
         or nothing can stand as the clear-air reference.
+
+        **The two sides are keyed differently and are re-keyed here** (critic
+        pass 6). The trend holds `lap_now()` - laps COMPLETED at the instant
+        the board was read - and `laps_by_number()` holds the lap's own
+        number, so a gap read on lap 7 was being compared with lap 6's time
+        and litres. `_lap_of_read_key` is written at each crossing from the
+        counter's real value, so this is a lookup and not an assumed offset;
+        a read whose lap never completed simply has no entry and drops out,
+        which is rule 3 rather than a guess.
         """
         from pitcrew.race import tow
 
@@ -944,9 +993,17 @@ class RaceCoordinator:
         if not seen:
             self.state.tow_trade = None
             return
+        by_lap = {}
+        for key, gap in seen.items():
+            lap = self._lap_of_read_key.get(int(key))
+            if lap is not None:
+                by_lap[lap] = gap
+        if not by_lap:
+            self.state.tow_trade = None
+            return
         try:
             self.state.tow_trade = tow.trade(
-                seen, self.expect.laps_by_number(),
+                by_lap, self.expect.laps_by_number(),
                 refuel_rate_lps=self.state.refuel_rate_lps,
                 planned_fuel_per_lap_l=self.planned_fuel_per_lap_l,
                 planned_lap_time_ms=self.planned_lap_time_ms)

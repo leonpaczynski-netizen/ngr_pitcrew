@@ -1506,7 +1506,22 @@ def _chase(state: RaceState) -> Call | None:
 
 
 def _penalty(state: RaceState) -> Call | None:
-    """A penalty served on the lap just run, with its derived cost."""
+    """A penalty served on the lap just run, with its derived cost.
+
+    **LOW, always, and it will never be anything else** (critic pass 6).
+    Nothing here reads a penalty. `analysis/penalties.py` reads a hard brake
+    at speed, going straight, outside every corner in the model - and an
+    avoidance stab behind a spinning car is that shape, and so is a wet brake
+    taken early for a corner the model does say is there. The HUD's own
+    penalty indicator is not read and has no calibration frame. So this goes
+    out at LOW and `spoken()` puts "Unconfirmed." on the end, which is a word
+    the driver can act on; said as a flat fact it is CLAUDE.md rule 5 exactly
+    - something derived, presented as measured.
+
+    **The lap leaving the pace population is NOT hedged, and does not need
+    to be.** Whatever caused a full-brake-to-a-crawl on a straight, the lap
+    is not evidence of this car's pace or burn. Only the NAME is uncertain.
+    """
     note = state.penalty_note
     if note is None or state.in_pit or state.finished:
         return None
@@ -1517,7 +1532,8 @@ def _penalty(state: RaceState) -> Call | None:
     cost = (f" About {lost:.1f} seconds." if lost is not None and lost > 0
             else "")
     return Call(PENALTY, state.lap, f"Penalty served.{cost}",
-                f"Lap {lap} is out of the pace.", MEDIUM, tag=tag)
+                f"Read off the brake trace, not the HUD. "
+                f"Lap {lap} is out of the pace.", LOW, tag=tag)
 
 
 def _saving_change(state: RaceState) -> Call | None:
@@ -1874,10 +1890,18 @@ def _box_soon(state: RaceState) -> Call | None:
         return None
     if not 1 <= to_stop <= 2 or _crossing_the_line(state):
         return None
+    # **The same clause `_box_now` carries, and for the same reason** (critic
+    # pass 6). He has heard "You're fuelled to the flag." from `_stops_off`
+    # and is now being told to box anyway; without the clause the two
+    # contradict each other, and this is the call that arrives FIRST.
+    reason = f"Stop {state.stint_index + 1}, on the plan."
+    if state.drop_stop_granted is False and not _stop_needed_on_fuel(state):
+        reason = ("Stop {}, on the plan. Fuel would reach the flag - dropping "
+                  "the stop was not granted.".format(state.stint_index + 1))
     return Call(
         BOX_SOON, state.lap,
         f"Box in {to_stop}." if to_stop > 1 else "Box next lap.",
-        f"Stop {state.stint_index + 1}, on the plan.",
+        reason,
         severity=float(-to_stop),
     )
 

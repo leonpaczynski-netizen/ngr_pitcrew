@@ -690,6 +690,27 @@ def sector_split_call(state) -> Call | None:
     return Call(SECTOR_SPLIT, state.lap, call, reason, MEDIUM, tag=tag)
 
 
+def _a_fill_is_still_to_come(state) -> bool:
+    """Whether a litre saved now still buys standing time at a pump.
+
+    **The whole value of the tow's fuel saving is the fill it shortens**, and
+    `race/tow.py` says so in its own second paragraph: *"After the stop a
+    saved litre is worth nothing at all: the fill is already in."* So the
+    trade is only sayable while a fill remains.
+
+    Two things have to hold, and they are different claims. A stop has to be
+    left in the plan - `stint_ends_on_lap` is `None` on the last stint,
+    which is exactly "no stop at the end of this one". And the stop has to
+    still be a stop: `stop_still_needed` is the one expression this codebase
+    uses for that, grant and arithmetic together (rule 12).
+    """
+    if state.finished:
+        return False
+    if state.stint_ends_on_lap is None:
+        return False
+    return stop_still_needed(state)
+
+
 def tow_trade_call(state) -> Call | None:
     """What sitting in his wake is worth, and what it costs. Once a stint.
 
@@ -698,8 +719,19 @@ def tow_trade_call(state) -> Call | None:
     A fact with a verdict in it, because the arithmetic has one answer: a
     litre saved before the stop is worth its standing time at the pump, and
     a second given away in his wake is gone. See `race/tow.py`.
+
+    **Silent once the last fill is in** (critic pass 6). `clear_stint` empties
+    `said` at PIT_EXIT and `_weigh_the_tow` remakes the trade at every
+    crossing, so a new car ahead after the last stop was hearing *"Worth it -
+    stay in it"* about a saving `tow.py` itself prices at nothing. The lap
+    time he is giving away is still real and is still spoken - by `CHASE` and
+    `CLOSING`, whose whole subject it is - but the fuel half of this trade has
+    no buyer left, and a verdict struck from half an argument is worse under a
+    helmet than no verdict at all.
     """
     if state.in_pit or state.finished:
+        return None
+    if not _a_fill_is_still_to_come(state):
         return None
     trade = getattr(state, "tow_trade", None)
     if trade is None:
@@ -775,6 +807,10 @@ def undercut_call(state) -> Call | None:
         return None                     # only the last stop fills to the flag
     if not stop_still_needed(state):
         return None
+    # **Read only below the three guards above**, which between them are
+    # `_a_fill_is_still_to_come` and then some: a stop ahead, it is the last
+    # one, and it is still a stop. So `worth_it` is never consulted here
+    # after the fill is in, which is the window in which it means anything.
     trade = getattr(state, "tow_trade", None)
     if trade is not None and trade.worth_it is True:
         return None                     # the tow pays: stay in it

@@ -9,7 +9,8 @@ test because it needs the live file; this file holds the shape of it.
 """
 from __future__ import annotations
 
-from pitcrew.analysis.penalties import (APPROACH_M, MAX_LAT_G, read_rows)
+from pitcrew.analysis.penalties import (APPROACH_M, MAX_LAT_G, RoadNotPenalty,
+                                        read_rows)
 
 # Daytona's model: T5 (the Bus Stop) starts at 3,775.8 m.
 CORNERS = [{"id": "T1", "start_m": 394.8, "end_m": 496.9},
@@ -92,3 +93,54 @@ def test_no_corner_model_is_still_readable_but_the_tool_refuses():
     reads it, and `tools/find_penalties.py` refuses to run without one."""
     served = read_rows(_lap(brakes=[(5200.0, 0.9, 195.0)]), [])
     assert len(served) == 1
+
+
+# ------------------------ a corner the model is missing (critic pass 6)
+
+def _found(at_m):
+    from pitcrew.analysis.penalties import Penalty
+
+    return [Penalty(at_m=at_m, brake_s=0.9, speed_from_kph=250.0,
+                    speed_to_kph=190.0, lost_s=1.5)]
+
+
+def test_two_consecutive_laps_at_one_place_is_the_road():
+    """A corner missing from an auto-segment model brakes on every lap. The
+    second consecutive lap retires the place and hands the first one back -
+    a guard that could not retire its own reference is CLAUDE.md rule 10."""
+    ledger = RoadNotPenalty()
+    kept, back = ledger.filter(4, _found(5200.0))
+    assert len(kept) == 1 and back == []
+    kept, back = ledger.filter(5, _found(5210.0))
+    assert kept == [] and back == [4], "lap 4 goes back into the pace"
+    # And it stays retired for the rest of the session.
+    for lap in range(6, 12):
+        assert ledger.filter(lap, _found(5205.0)) == ([], [])
+    assert ledger.retired() == (5200.0,)
+
+
+def test_two_penalties_a_session_at_one_place_are_both_kept():
+    """Daytona, 4 Sep: sessions 121, 124 and 125 each carry two at 5,200 m,
+    on laps 3 and 6, 2 and 6, and 6 and 8. Never consecutive - because a
+    penalty is served on a lap and a corner is there on all of them."""
+    for first, second in ((3, 6), (2, 6), (6, 8)):
+        ledger = RoadNotPenalty()
+        assert len(ledger.filter(first, _found(5198.0))[0]) == 1
+        kept, back = ledger.filter(second, _found(5213.0))
+        assert len(kept) == 1 and back == []
+
+
+def test_a_penalty_somewhere_else_is_its_own_place():
+    """Two different stretches of road do not retire each other."""
+    ledger = RoadNotPenalty()
+    assert len(ledger.filter(4, _found(5200.0))[0]) == 1
+    kept, back = ledger.filter(5, _found(1200.0))
+    assert len(kept) == 1 and back == []
+    assert ledger.retired() == ()
+
+
+def test_nothing_found_is_nothing_retired():
+    ledger = RoadNotPenalty()
+    assert ledger.filter(4, []) == ([], [])
+    assert ledger.filter(5, None) == ([], [])
+    assert ledger.retired() == ()

@@ -144,6 +144,15 @@ def _drive(race, upto: int, *, gaps_from: int = 2, real_burn: bool = False):
     fuel at the line less the last), so the burn scatter is measured as it
     was live; otherwise every lap burns the round 7.4 L.
 
+    **The trend is keyed the way the wall keys it** (critic pass 6): the pit
+    wall files a reading under `lap_now()` - laps COMPLETED - so a gap read
+    while lap N is being driven carries N-1, and the figure kept for the lap
+    is the LAST read, because the live trend overwrites within the lap.
+    `tools/replay_race_calls.py` feeds the stored reads back the same way.
+    Keyed on the lap itself with the FIRST read this drove a convention no
+    race has ever produced, and the off-by-one it was hiding lived in
+    `_weigh_the_tow` for a whole batch.
+
     Returns every call the engineer made, keyed by the lap it landed on.
     """
     trend = GapTrend(side="ahead")
@@ -154,7 +163,7 @@ def _drive(race, upto: int, *, gaps_from: int = 2, real_burn: bool = False):
             break
         if lap >= gaps_from:
             samples = _held_up_lap(1.0)
-            trend.note(lap, samples[0][1], subject=P2)
+            trend.note(lap - 1, samples[-1][1], subject=P2)
             race.note_gaps(ahead=trend, ahead_name=P2, ahead_samples=samples)
         used = (last_fuel - fuel_end) if real_burn and not pit else BURN_L
         last_fuel = fuel_end
@@ -266,7 +275,7 @@ def test_without_a_sector_where_we_gain_there_is_no_undercut():
     for lap, ms, fuel_end, position, pit in RACE[:8]:
         if lap >= 2:
             samples = _held_up_lap(1.0, s12_gain=0.0, s3_loss=0.0)
-            trend.note(lap, 1.0, subject=P2)
+            trend.note(lap - 1, 1.0, subject=P2)
             race.note_gaps(ahead=trend, ahead_name=P2, ahead_samples=samples)
         call = race.handle(_lap_event(lap, ms, fuel_end, position, pit))
         assert call is None or call.kind != UNDERCUT
@@ -366,6 +375,70 @@ def test_a_wash_is_said_as_one():
                     losing_s_per_lap=0.9, reference="the plan")
     assert made.worth_it is None
     assert made.sentence()[0].endswith("About a wash.")
+
+
+def test_the_gap_is_paired_with_the_lap_it_was_read_on():
+    """Critic pass 6, and it was wrong live rather than here.
+
+    The wall files a reading under `lap_now()` - laps COMPLETED - so a gap
+    read while lap N is being driven carries N-1, while `laps_by_number()`
+    keys lap N's own time and litres under N. Taken at face value the trade
+    weighed this lap's gap against the PREVIOUS lap's burn, which is the one
+    pairing the whole calculation is.
+
+    Driven so the two answers differ: held up on laps 2, 3 and 4 and clear
+    from 5. Re-keyed the wall's way that is three held laps and a trade.
+    Face value, it is laps 1, 2 and 3 - and lap 1 is not evidence after a
+    standing start, so two laps, below `MIN_HELD_LAPS`, and no trade at all.
+    """
+    race = _race()
+    trend = GapTrend(side="ahead")
+    for lap, ms, fuel_end, position, pit in RACE[:6]:
+        trend.note(lap - 1, 1.0 if lap <= 4 else 9.0, subject=P2)
+        race.note_gaps(ahead=trend, ahead_name=P2)
+        race.handle(_lap_event(lap, ms, fuel_end, position, pit))
+    assert race._lap_of_read_key == {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6}
+    trade = race.state.tow_trade
+    assert trade is not None, "the wall's own keys read as two held laps"
+    assert trade.laps_held == 3
+
+
+def test_the_tow_is_not_priced_once_the_last_fill_is_in():
+    """Critic pass 6: *"Worth it - stay in it"* about a saving already spent.
+
+    The lap-13 stop is the last one, and `race/tow.py` says a litre saved
+    after it is worth nothing at all - the fill is in. `clear_stint` empties
+    `said` at PIT_EXIT, so the first crossing out of the box was free to say
+    the trade again about whoever is ahead now, with a verdict computed
+    entirely from the half of the argument that has stopped existing.
+    """
+    race = _race(planned_burn=10.0, planned_ms=88_000)   # a tow that "pays"
+    trend = GapTrend(side="ahead")
+    after_the_stop = []
+    for lap, ms, fuel_end, position, pit in RACE[:16]:
+        trend.note(lap - 1, 1.0, subject=P2)
+        race.note_gaps(ahead=trend, ahead_name=P2)
+        if pit:
+            race.handle(SessionEvent(EventKind.PIT_ENTRY, {"fuel": fuel_end}))
+        call = race.handle(_lap_event(lap, ms, fuel_end, position, pit))
+        if pit:
+            race.handle(SessionEvent(EventKind.PIT_EXIT, {
+                "fuel_added": 70.0, "tyres_changed": True}))
+        if call is not None:
+            race.state.record(call)
+        if lap >= 13 and call is not None:
+            after_the_stop.append(call)
+    from pitcrew.race.rival_calls import tow_trade_call
+
+    assert race.state.stint_ends_on_lap is None, "the last stint is running"
+    assert race.state.tow_trade is not None, "the trade is still computable"
+    assert race.state.tow_trade.worth_it is True, "and it still says stay in"
+    # The builder itself, so the test does not rest on the ranking: with the
+    # trade computable and saying "stay in it", the call is still refused.
+    race.state.said = set()
+    race.state.said_tags = set()
+    assert tow_trade_call(race.state) is None
+    assert not [c for c in after_the_stop if c.kind == TOW_TRADE]
 
 
 def test_a_tyre_that_will_not_reach_the_flag_refuses():

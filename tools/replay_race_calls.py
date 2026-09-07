@@ -227,11 +227,18 @@ def main() -> int:
             # **Stored under laps COMPLETED**, so the reads taken while lap
             # N was being driven carry N-1 - and the trend's figure for the
             # lap is the LAST read, as the live wall overwrites per lap.
-            reads = reads_by_lap.get(row["lap_num"] - 1) or []
+            #
+            # **`lap_now()`, not `lap_num - 1`.** The counter the wall files
+            # under carries `laps_missed()`, so a crossing lost in the pit
+            # lane shifts every key after it and a fixed subtraction drifts
+            # from there to the flag. Read off the coordinator before the
+            # crossing is handed to it, this is the value the wall would have
+            # been using. The coordinator re-keys it back the same way.
+            key = race.state.lap_now()
+            reads = reads_by_lap.get(int(key)) or []
             if reads:
                 subject = reads[-1]["subject"]
-                trend.note(row["lap_num"] - 1, reads[-1]["gap_s"],
-                           subject=subject)
+                trend.note(int(key), reads[-1]["gap_s"], subject=subject)
                 race.note_gaps(
                     ahead=trend, ahead_name=subject,
                     ahead_samples=[(r["track_m"], r["gap_s"]) for r in reads
