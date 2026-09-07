@@ -403,19 +403,11 @@ def test_the_gap_is_paired_with_the_lap_it_was_read_on():
     assert trade.laps_held == 3
 
 
-def test_the_tow_is_not_priced_once_the_last_fill_is_in():
-    """Critic pass 6: *"Worth it - stay in it"* about a saving already spent.
-
-    The lap-13 stop is the last one, and `race/tow.py` says a litre saved
-    after it is worth nothing at all - the fill is in. `clear_stint` empties
-    `said` at PIT_EXIT, so the first crossing out of the box was free to say
-    the trade again about whoever is ahead now, with a verdict computed
-    entirely from the half of the argument that has stopped existing.
-    """
-    race = _race(planned_burn=10.0, planned_ms=88_000)   # a tow that "pays"
+def _through_the_stop(race, upto=16):
+    """Drive the race past the lap-13 stop, held up behind P2 throughout."""
     trend = GapTrend(side="ahead")
-    after_the_stop = []
-    for lap, ms, fuel_end, position, pit in RACE[:16]:
+    made = {}
+    for lap, ms, fuel_end, position, pit in RACE[:upto]:
         trend.note(lap - 1, 1.0, subject=P2)
         race.note_gaps(ahead=trend, ahead_name=P2)
         if pit:
@@ -426,19 +418,66 @@ def test_the_tow_is_not_priced_once_the_last_fill_is_in():
                 "fuel_added": 70.0, "tyres_changed": True}))
         if call is not None:
             race.state.record(call)
-        if lap >= 13 and call is not None:
-            after_the_stop.append(call)
+            made.setdefault(lap, []).append(call)
+    return made
+
+
+def test_the_tow_verdict_is_not_repeated_once_the_last_fill_is_in():
+    """Critic pass 6: *"Worth it - stay in it"* about a saving already spent.
+
+    The lap-13 stop is the last one, and `race/tow.py` says a litre saved
+    after it is worth nothing at all - the fill is in. `clear_stint` empties
+    `said` at PIT_EXIT, so the first crossing out of the box was free to say
+    the trade again about whoever is ahead now, with a verdict computed
+    entirely from the half of the argument that has stopped existing.
+
+    What he hears instead is the thing that CHANGED (critic pass 7): the
+    reason he was given for sitting there is gone. Once, with no verdict.
+    """
     from pitcrew.race.rival_calls import tow_trade_call
 
+    race = _race(planned_burn=10.0, planned_ms=88_000)   # a tow that "pays"
+    made = _through_the_stop(race)
     assert race.state.stint_ends_on_lap is None, "the last stint is running"
     assert race.state.tow_trade is not None, "the trade is still computable"
     assert race.state.tow_trade.worth_it is True, "and it still says stay in"
-    # The builder itself, so the test does not rest on the ranking: with the
-    # trade computable and saying "stay in it", the call is still refused.
-    race.state.said = set()
-    race.state.said_tags = set()
+    assert race.state.tow_said_worth_it is True, "and he was told so"
+
+    after = [c for laps, calls in made.items() if laps >= 13 for c in calls
+             if c.kind == TOW_TRADE]
+    assert len(after) == 1, "once, not once a lap"
+    assert after[0].tag == "tow-spent"
+    assert after[0].call.startswith("No fuel left to save in the tow - "
+                                    "the fill's in.")
+    assert "Worth it" not in after[0].call and "worth it" not in after[0].call
+    # And it does not come round again on the next crossing.
     assert tow_trade_call(race.state) is None
-    assert not [c for c in after_the_stop if c.kind == TOW_TRADE]
+
+
+def test_a_driver_told_the_tow_was_not_worth_it_is_not_told_again():
+    """He already got out, or chose not to. Saying it a second time after
+    the stop is the same words for a different claim - rule 13."""
+    race = _race()                       # Deep Forest: not worth it
+    made = _through_the_stop(race)
+    before = [c for laps, calls in made.items() if laps < 13 for c in calls
+              if c.kind == TOW_TRADE]
+    assert before and before[0].call.endswith("Not worth it.")
+    assert race.state.tow_said_worth_it is False
+    assert not [c for laps, calls in made.items() if laps >= 13
+                for c in calls if c.kind == TOW_TRADE]
+
+
+def test_a_tow_never_spoken_about_is_not_summed_up_after_the_stop():
+    """Nothing was ever said about the tow, so there is nothing that has
+    stopped being true. `tow_said` is what separates that from a wash."""
+    from pitcrew.race.rival_calls import tow_trade_call
+
+    race = _race(planned_burn=10.0, planned_ms=88_000)
+    _through_the_stop(race)
+    race.state.said_tags = set()
+    race.state.tow_said = False
+    race.state.tow_said_worth_it = None
+    assert tow_trade_call(race.state) is None
 
 
 def test_a_tyre_that_will_not_reach_the_flag_refuses():

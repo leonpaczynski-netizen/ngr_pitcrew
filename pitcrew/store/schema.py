@@ -1171,9 +1171,23 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # 2026, plan 1.11). Six laps of the 4 Sep Daytona runs braked to a
         # crawl at 5,200 m on the banking and went into the pace population
         # as driven. `penalties_served` is a count - 0 is a lap looked at
-        # and clean, NULL a lap with no frames; `penalty_lost_s` is the
-        # derived cost, NULL where nothing was served. See
-        # `analysis/penalties.py`.
+        # and clean; `penalty_lost_s` is the derived cost, NULL where
+        # nothing was served. See `analysis/penalties.py`.
+        #
+        # **NULL means the detector did not look, and it has four reasons**
+        # (7 Sep 2026, critic pass 7 - it used to list one): the lap has no
+        # frames; the circuit has no corner model, without which every brake
+        # on a straight is a candidate; the event's record declares wet
+        # conditions, which the detector has no calibration frame for; or the
+        # lap is a pit lap, an out lap or lap one, where a car leaving the
+        # box brakes to a crawl for reasons that are not a penalty. It is
+        # NULL and never 0 in all four - a zero here is the positive claim
+        # "looked at and clean" (CLAUDE.md rule 3).
+        #
+        # A count written here can also be WITHDRAWN afterwards, by
+        # `set_lap_penalties`: the same brake on four consecutive laps is a
+        # corner the auto-segment model is missing, and the laps it struck go
+        # back to 0 rather than staying as a reading the app has retracted.
         ("penalties_served", "INTEGER"),
         ("penalty_lost_s", "REAL"),
         # **How far the shift beep was dropped while this lap was driven, in

@@ -712,6 +712,13 @@ class RaceCoordinator:
         # for the rest of the race and a fixed shift drifts from there on.
         # Read here, before `state.lap` moves, it is not an offset at all -
         # it is the counter's actual value while the lap was being driven.
+        #
+        # **Key 0 covers everything before the first crossing**, formation lap
+        # included, because `_on_lap` does not run before the green and
+        # `state.lap` stays 0 through it. `GapTrend.note` keeps only the last
+        # reading per key, so the figure filed under 0 is the newest one -
+        # which after a rolling start is a lap-one read and not a formation
+        # gap, unless the board went unreadable for the whole of lap one.
         self._lap_of_read_key[int(self.state.lap_now())] = int(lap.lap_num)
         self.state.lap = lap.lap_num
         # **The offset between the two lap counters, learned once, here.**

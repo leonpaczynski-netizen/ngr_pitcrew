@@ -720,28 +720,63 @@ def tow_trade_call(state) -> Call | None:
     litre saved before the stop is worth its standing time at the pump, and
     a second given away in his wake is gone. See `race/tow.py`.
 
-    **Silent once the last fill is in** (critic pass 6). `clear_stint` empties
-    `said` at PIT_EXIT and `_weigh_the_tow` remakes the trade at every
-    crossing, so a new car ahead after the last stop was hearing *"Worth it -
-    stay in it"* about a saving `tow.py` itself prices at nothing. The lap
-    time he is giving away is still real and is still spoken - by `CHASE` and
-    `CLOSING`, whose whole subject it is - but the fuel half of this trade has
-    no buyer left, and a verdict struck from half an argument is worse under a
-    helmet than no verdict at all.
+    **The verdict is silent once the last fill is in** (critic pass 6).
+    `clear_stint` empties `said` at PIT_EXIT and `_weigh_the_tow` remakes the
+    trade at every crossing, so a new car ahead after the last stop was
+    hearing *"Worth it - stay in it"* about a saving `tow.py` itself prices at
+    nothing. A verdict struck from half an argument is worse under a helmet
+    than no verdict at all.
+
+    **But he is not left with nothing** (critic pass 7, and it checked).
+    `CHASE` needs `laps_left <= CHASE_LAPS` and speaks a different quantity -
+    the gap and the delta needed - and `closing_call` needs a rate outside
+    `TREND_WORTH_SAYING_S`, which a driver sitting at a steady gap in a wake
+    is by definition inside. So neither says anything about the second a lap
+    he is giving away, and an earlier draft of this docstring claimed they
+    did. What is said instead, once, is the thing that actually CHANGED at
+    the stop: a driver who was told to stay in the tow is still in it for a
+    reason that no longer exists.
     """
     if state.in_pit or state.finished:
         return None
-    if not _a_fill_is_still_to_come(state):
-        return None
+    them = state.gap_ahead_name or "the car ahead"
     trade = getattr(state, "tow_trade", None)
+    if not _a_fill_is_still_to_come(state):
+        return _tow_is_spent(state, them, trade)
     if trade is None:
         return None
-    them = state.gap_ahead_name or "the car ahead"
     tag = f"{TOW_TRADE}:{them}"
     if tag in state.said_tags:
         return None
     call, reason = trade.sentence(them)
     return Call(TOW_TRADE, state.lap, call, reason, MEDIUM, tag=tag)
+
+
+def _tow_is_spent(state, them: str, trade) -> Call | None:
+    """The one thing left to say about a tow once the fill is in. Once.
+
+    Said only where he was TOLD to stay in it - if the verdict he heard was
+    "Not worth it" he already knows, and repeating it after the stop is the
+    same call twice in one race with a different meaning, which is rule 13.
+    A wash counts as "told to stay in it": nothing said get out.
+
+    The tag carries no driver name and the whole race is its scope. This is
+    not a fact about a rival, it is a fact about our own fuel, and it is true
+    exactly once - `clear_stint` must not let it round again.
+    """
+    if not state.tow_said or state.tow_said_worth_it is False or trade is None:
+        return None
+    tag = "tow-spent"
+    if tag in state.said_tags:
+        return None
+    lost = getattr(trade, "losing_s_per_lap", None)
+    if lost is None or lost <= 0:
+        return None
+    return Call(TOW_TRADE, state.lap,
+                f"No fuel left to save in the tow - the fill's in. "
+                f"You're losing {lost:.1f} seconds a lap to {them}.",
+                "The saving was worth its standing time at the pump, and "
+                "there is no pump left.", MEDIUM, tag=tag)
 
 
 def _held_up(trend, lap: int) -> bool:
@@ -835,9 +870,16 @@ def undercut_call(state) -> Call | None:
         tyres = " Tyre life to the flag unchecked."
     tow = ""
     if trade is not None and trade.worth_it is False:
-        tow = (f" The tow's {max(0.0, trade.saving_s_per_lap):.1f} seconds at "
-               f"the stop against {trade.losing_s_per_lap:.1f} seconds a lap "
-               f"lost.")
+        # **`max(0.0, ...)` here was CLAUDE.md rule 9** (critic pass 7): a
+        # saving that came out negative is the tow COSTING fuel, and printing
+        # it as "0.0 seconds at the stop" is a measurement clamped into a
+        # confident wrong number. Say what it is instead.
+        saved = trade.saving_s_per_lap
+        tow = ((f" The tow's {saved:.1f} seconds at the stop against "
+                f"{trade.losing_s_per_lap:.1f} seconds a lap lost.")
+               if saved is not None and saved > 0 else
+               (f" No fuel saving in the tow, and "
+                f"{trade.losing_s_per_lap:.1f} seconds a lap lost."))
     reason = (f"Undercut on {them}: you're held up, and faster through "
               f"{_sector_names(g.index for g in gains)}. The fill costs the "
               f"same now as on lap {state.stint_ends_on_lap}.{tow}{tyres}")

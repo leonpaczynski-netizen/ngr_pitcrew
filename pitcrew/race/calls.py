@@ -697,6 +697,16 @@ class RaceState:
     # remade by the coordinator on every crossing from this race's own laps
     # and the wall's gaps. None until three laps have been held up.
     tow_trade: object = None
+    # **The verdict he was last told the tow carried**, set in `record()` so
+    # that only a call actually spoken sets it. It survives the stop on
+    # purpose: once the last fill is in, a driver who was told "Worth it -
+    # stay in it" is still sitting in a wake for a reason that has stopped
+    # existing, and saying so once is the last thing worth saying about it.
+    tow_said_worth_it: bool | None = None
+    # Whether a `TOW_TRADE` verdict has ever been SPOKEN this race. Separate
+    # from the verdict above because that is tri-state: a wash reads None,
+    # which is not the same claim as "he has never been told about the tow".
+    tow_said: bool = False
     # `(lap, seconds lost)` of a penalty served on the lap just completed,
     # from the controller's read of the frames; cleared once said.
     penalty_note: tuple | None = None
@@ -1340,6 +1350,15 @@ class RaceState:
             self.stops_off_said = True
         if call.kind == CHASE:
             self.chase_said_lap = call.lap
+        if call.kind == TOW_TRADE:
+            # What he was actually told, not what the trade currently says -
+            # `tow_trade` is remade every crossing and the sentence he is
+            # living by is the one that was spoken.
+            if call.tag != "tow-spent":
+                trade = getattr(self, "tow_trade", None)
+                self.tow_said = True
+                self.tow_said_worth_it = (getattr(trade, "worth_it", None)
+                                          if trade is not None else None)
         if call.kind == INCIDENT:
             self.incident_lap = None
             self.incident_cost_ms = None
@@ -1508,15 +1527,24 @@ def _chase(state: RaceState) -> Call | None:
 def _penalty(state: RaceState) -> Call | None:
     """A penalty served on the lap just run, with its derived cost.
 
-    **LOW, always, and it will never be anything else** (critic pass 6).
-    Nothing here reads a penalty. `analysis/penalties.py` reads a hard brake
-    at speed, going straight, outside every corner in the model - and an
-    avoidance stab behind a spinning car is that shape, and so is a wet brake
-    taken early for a corner the model does say is there. The HUD's own
-    penalty indicator is not read and has no calibration frame. So this goes
-    out at LOW and `spoken()` puts "Unconfirmed." on the end, which is a word
-    the driver can act on; said as a flat fact it is CLAUDE.md rule 5 exactly
-    - something derived, presented as measured.
+    **"Possible", and LOW, and it will never be anything else** (critic
+    passes 6 and 7). Nothing here reads a penalty. `analysis/penalties.py`
+    reads a hard brake at speed, going straight, outside every corner in the
+    model - and an avoidance stab behind a spinning car is that shape, and so
+    is a wet brake taken early for a corner the model does say is there. The
+    HUD's own penalty indicator is not read and has no calibration frame.
+
+    So two things carry the doubt, and they are in the order he hears them.
+    The first word does: **"Penalty served." puts the flat assertion in the
+    two words that land at speed**, and a hedge twelve words later is not
+    where a driver takes it from. Then LOW, so `spoken()` ends it
+    "Unconfirmed." - CLAUDE.md §5.5's own word, "a word the driver can act
+    on". Said as a bare fact it is rule 5 exactly: something derived,
+    presented as measured.
+
+    **The reason stays short.** §5.5 wants the instruction, then the reason,
+    and one thing at a time; how the reading was taken is a note for the log
+    and the export, not a clause under a helmet.
 
     **The lap leaving the pace population is NOT hedged, and does not need
     to be.** Whatever caused a full-brake-to-a-crawl on a straight, the lap
@@ -1531,8 +1559,7 @@ def _penalty(state: RaceState) -> Call | None:
         return None
     cost = (f" About {lost:.1f} seconds." if lost is not None and lost > 0
             else "")
-    return Call(PENALTY, state.lap, f"Penalty served.{cost}",
-                f"Read off the brake trace, not the HUD. "
+    return Call(PENALTY, state.lap, f"Possible penalty served.{cost}",
                 f"Lap {lap} is out of the pace.", LOW, tag=tag)
 
 

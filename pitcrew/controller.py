@@ -3001,25 +3001,31 @@ class PitCrewController(QObject):
             # braked for. Six Daytona laps carried one unflagged (plan 1.11).
             from pitcrew.analysis.penalties import read_columns as read_penalties
             corners = self._corner_windows()
+            # **Not a pit lap, not an out lap, and not lap one** (critic pass
+            # 7 found this in the archive, and neither critic predicted it):
+            # more than twenty of the flags on file are lap one of a practice
+            # session - four on one Monza lap, five on one Spa lap - because a
+            # car leaving the box brakes to a crawl for reasons that are not a
+            # penalty. `is_out_lap` is not yet corrected here (that is
+            # `flag_opening_lap`, further down), which is why lap one is
+            # excluded by number as well as by flag. The cost is a penalty
+            # served on lap one of a race, and there is no instance on file.
+            skip = (bool(lap.is_pit_lap) or bool(lap.is_out_lap)
+                    or lap.lap_num <= 1)
             served = (read_penalties(rows, FRAME_FIELDS, corners)
-                      if corners is not None else None)
+                      if corners is not None and not skip else None)
             if served is not None:
                 # **The places the road explains are struck before anything
-                # else sees them** (critic pass 6). Two consecutive laps at
-                # one place is a corner the auto-segment model is missing,
-                # not a penalty served twice running - and left alone it
-                # would flag, exclude and SPEAK on every lap of the race.
-                # `give_back` is the lap the ledger has just changed its mind
-                # about; it goes back into the pace and burn populations.
-                served, give_back = self._road_not_penalty().filter(
-                    lap.lap_num, served)
-                for handed_back in give_back:
-                    log("session").info(
-                        "lap %s: what was read as a penalty is flagged again "
-                        "on lap %s at the same place - that is a corner the "
-                        "model is missing, not a penalty. Lap %s goes back "
-                        "into the pace.", handed_back, lap.lap_num,
-                        handed_back)
+                # else sees them.** The same brake on four consecutive laps
+                # is a corner the auto-segment model is missing, not a
+                # penalty served four times running - and left alone it would
+                # flag, exclude and SPEAK on every lap of the race.
+                verdict = self._road_not_penalty().filter(lap.lap_num, served)
+                for note in verdict.notes:
+                    # The accepts as well as the refusals - CLAUDE.md rule 10.
+                    log("session").info("penalties: %s", note)
+                served = list(verdict.kept)
+                for handed_back in verdict.give_back:
                     if self.race is not None and getattr(
                             self.race, "running", False):
                         try:
@@ -3028,6 +3034,16 @@ class PitCrewController(QObject):
                             log("race").warning(
                                 "penalty not withdrawn from the race",
                                 exc_info=True)
+                    # **And the stored row, or the withdrawal reaches memory
+                    # and nothing else** - every offline tool and the export
+                    # would still read a count the app had retracted.
+                    try:
+                        self.store.set_lap_penalties(
+                            self.session_id, handed_back, 0, None)
+                    except Exception:                        # noqa: BLE001
+                        log("session").warning(
+                            "lap %s: the withdrawn penalty could not be "
+                            "cleared from its row", handed_back, exc_info=True)
                 lost = sum(p.lost_s for p in served) if served else None
                 frames = replace(frames, penalties_served=len(served),
                                  penalty_lost_s=lost)
@@ -3620,26 +3636,34 @@ class PitCrewController(QObject):
         which begins the brake outside `APPROACH_M` and reads as a penalty
         served on a straight - and the app cannot tell that it is raining:
         the hygrometer reader was struck in Phase 0 for having no calibration
-        frame, and nothing has replaced it. What the app does have is the
-        event's own record of the conditions, and where that does not say
-        plainly "dry" the honest reading is that there is none.
+        frame, and nothing has replaced it. So where the event's record
+        DECLARES wet conditions the detector stands down, and the lap's
+        `penalties_served` stays `None` - not `0` (rule 3).
 
-        So the lap's `penalties_served` stays `None` - not `0` (rule 3) - and
-        the reason is logged once a session rather than a false "no penalties
-        served" written onto every lap of a wet race.
+        **A possibility is not a reading, and this refuses only the
+        declaration** (critic pass 7). Seven of the eleven events on file are
+        `changeable` under a `Random` rule, and event 10 is one of them - the
+        Daytona round whose practice sessions carry every verified penalty
+        the detector has ever been checked against, all of them driven dry.
+        A first version of this refused on `rain_possible` too, which would
+        have deleted the feature at every circuit where it has been shown to
+        work: it turned "I cannot rule rain out" into "no penalties served",
+        which is the fabricated value with the sign flipped. A race that does
+        turn wet gets hedged readings - the call says "Possible penalty" and
+        goes out LOW - rather than silence.
         """
+        from pitcrew.analysis.penalties import WET_WORDS
+
         event = self.active_event()
         if event is None:
             return "no event on the session"
         try:
             weather = (event["weather"] or "").strip().lower()
-            rain = event["rain_possible"]
         except Exception:                                    # noqa: BLE001
             return "the event's weather could not be read"
-        if weather != "dry":
-            return f"the event's weather is '{weather or 'unrecorded'}', not dry"
-        if rain:
-            return "rain is possible at this event"
+        if any(word in weather for word in WET_WORDS):
+            return (f"the event's weather is '{weather}', and every frame the "
+                    f"detector was calibrated on is dry")
         return None
 
     def _corner_windows(self):

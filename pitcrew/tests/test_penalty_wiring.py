@@ -78,21 +78,24 @@ def test_a_served_penalty_is_said_once_with_its_derived_cost():
     state = RaceState(lap=6, laps_total=20, penalty_note=(6, 1.52))
     call = _penalty(state)
     assert call is not None and call.kind == PENALTY
-    assert call.call == "Penalty served. About 1.5 seconds."
-    assert call.reason == ("Read off the brake trace, not the HUD. "
-                           "Lap 6 is out of the pace.")
+    assert call.call == "Possible penalty served. About 1.5 seconds."
+    assert call.reason == "Lap 6 is out of the pace."
     state.record(call)
     assert _penalty(state) is None
 
 
 def test_the_penalty_is_never_spoken_as_a_fact():
-    """Critic pass 6. Nothing reads a penalty - the brake trace is read, and
-    an avoidance stab is the same shape. LOW, so `spoken()` hedges it."""
+    """Critic passes 6 and 7. Nothing reads a penalty - the brake trace is
+    read, and an avoidance stab is the same shape. The doubt goes in the
+    FIRST word, where it lands at speed, and again at the end as the
+    register word §5.5 gives the driver."""
     from pitcrew.race.calls import LOW
 
     call = _penalty(RaceState(lap=6, laps_total=20, penalty_note=(6, 0.31)))
     assert call.confidence == LOW
-    assert call.spoken().endswith("Unconfirmed.")
+    assert call.call.startswith("Possible penalty")
+    assert call.spoken() == ("Possible penalty served. About 0.3 seconds. "
+                             "Lap 6 is out of the pace. Unconfirmed.")
 
 
 def test_the_coordinator_takes_the_penalty_into_the_race():
@@ -151,21 +154,30 @@ def _readable(event):
     return PitCrewController._penalties_are_readable(_Stub(event))
 
 
-def test_penalties_are_read_at_a_dry_fixed_event():
+def test_penalties_are_read_where_nothing_declares_wet():
     assert _readable({"weather": "dry", "rain_possible": 0}) is None
     assert _readable({"weather": "Dry", "rain_possible": None}) is None
 
 
-def test_a_session_that_may_be_wet_is_refused_with_its_reason():
+def test_a_possibility_of_rain_does_not_silence_the_detector():
+    """Critic pass 7. Seven of the eleven events on file are
+    `changeable`/`Random`, INCLUDING event 10 - the Daytona round whose
+    practice carries every verified penalty the detector has been checked
+    against, all driven dry. Refusing on the possibility would delete the
+    feature at every circuit where it has been shown to work, and turn "I
+    cannot rule rain out" into "no penalties served"."""
+    assert _readable({"weather": "changeable", "rain_possible": 1}) is None
+    assert _readable({"weather": "changeable", "rain_possible": 0}) is None
+
+
+def test_a_declared_wet_session_is_refused_with_its_reason():
     """Critic pass 6: in the wet the brake for a corner the model DOES
     contain starts outside `APPROACH_M` and reads as a penalty on a
-    straight. Every frame the detector was calibrated on is dry and the app
-    cannot read that it is raining - the hygrometer reader was struck for
-    exactly that. So the lap gets `None`, not a zero."""
-    assert "not dry" in _readable({"weather": "changeable",
-                                   "rain_possible": 0})
-    assert "rain is possible" in _readable({"weather": "dry",
-                                            "rain_possible": 1})
+    straight. Every frame the detector was calibrated on is dry. Where the
+    record DECLARES wet the lap gets `None`, not a zero."""
+    for weather in ("wet", "Heavy rain", "damp", "thunderstorm"):
+        refused = _readable({"weather": weather, "rain_possible": 0})
+        assert refused is not None and "calibrated on is dry" in refused
     assert _readable(None) is not None
     assert _readable({}) is not None, "an event that cannot say is a refusal"
 
@@ -179,9 +191,58 @@ def test_the_ledger_and_the_refusal_have_production_callers():
               ).read_text(encoding="utf-8")
     assert "self._road_not_penalty().filter(" in source
     assert "self.race.forget_penalty(handed_back)" in source
+    assert "self.store.set_lap_penalties(" in source
     start = source.index("    def _corner_windows(self)")
     end = source.index("\n    def ", start + 10)
     assert "self._penalties_are_readable()" in source[start:end]
+
+
+def test_a_pit_lap_an_out_lap_and_lap_one_are_not_read():
+    """Critic pass 7 found this in the archive: more than twenty flags on
+    file are lap one of a practice session - four on one Monza lap, five on
+    one Spa lap - because a car leaving the box brakes to a crawl for
+    reasons that are not a penalty. Sessions 83, 91 and 102 carry
+    `is_out_lap = 1` on that lap; session 88's does not and is 9% slower
+    than lap 2, which is why lap one is excluded by number as well."""
+    import pathlib
+
+    source = (pathlib.Path(__file__).resolve().parents[1] / "controller.py"
+              ).read_text(encoding="utf-8")
+    assert ("skip = (bool(lap.is_pit_lap) or bool(lap.is_out_lap)\n"
+            "                    or lap.lap_num <= 1)") in source
+    assert "if corners is not None and not skip else None" in source
+
+
+def test_a_withdrawn_count_can_be_written_back_to_the_row(tmp_path):
+    """Critic pass 7 M4: the hand-back reached the pace population in
+    memory and nothing else, so the stored row kept a count the app had
+    retracted and every offline tool still read it."""
+    from pitcrew.store.db import Store
+    from pitcrew.telemetry.recorder import LapFrames
+
+    store = Store(tmp_path / "p.db")
+    try:
+        event = store.create_event(
+            name="withdrawal", track="Daytona", layout="Road Course",
+            car_id=1, car_name="x", race_type="laps", race_laps=20)
+        session = store.start_session(event, "practice")
+        store.add_lap(session, _lap(4),
+                      frames=LapFrames(frame_count=0, sample_hz=60.0,
+                                       blob=b"", penalties_served=1,
+                                       penalty_lost_s=1.5))
+        row = store._query(
+            "SELECT penalties_served, penalty_lost_s FROM laps "
+            "WHERE session_id = ? AND lap_num = 4", (session,))[0]
+        assert (row["penalties_served"], row["penalty_lost_s"]) == (1, 1.5)
+        assert store.set_lap_penalties(session, 4, 0, None) == 1
+        row = store._query(
+            "SELECT penalties_served, penalty_lost_s FROM laps "
+            "WHERE session_id = ? AND lap_num = 4", (session,))[0]
+        assert row["penalties_served"] == 0
+        assert row["penalty_lost_s"] is None
+        assert store.set_lap_penalties(session, 99, 0, None) == 0
+    finally:
+        store.close()
 
 
 # ----------------------------------------------------------- the row

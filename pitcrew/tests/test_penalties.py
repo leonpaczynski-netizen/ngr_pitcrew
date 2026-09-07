@@ -10,7 +10,7 @@ test because it needs the live file; this file holds the shape of it.
 from __future__ import annotations
 
 from pitcrew.analysis.penalties import (APPROACH_M, MAX_LAT_G, RoadNotPenalty,
-                                        read_rows)
+                                        Verdict, read_rows)
 
 # Daytona's model: T5 (the Bus Stop) starts at 3,775.8 m.
 CORNERS = [{"id": "T1", "start_m": 394.8, "end_m": 496.9},
@@ -104,43 +104,93 @@ def _found(at_m):
                     speed_to_kph=190.0, lost_s=1.5)]
 
 
-def test_two_consecutive_laps_at_one_place_is_the_road():
+def test_a_place_braked_on_every_lap_is_the_road():
     """A corner missing from an auto-segment model brakes on every lap. The
-    second consecutive lap retires the place and hands the first one back -
-    a guard that could not retire its own reference is CLAUDE.md rule 10."""
+    fourth consecutive lap retires it and hands the first three back - a
+    guard that could not retire its own reading is CLAUDE.md rule 10."""
     ledger = RoadNotPenalty()
-    kept, back = ledger.filter(4, _found(5200.0))
-    assert len(kept) == 1 and back == []
-    kept, back = ledger.filter(5, _found(5210.0))
-    assert kept == [] and back == [4], "lap 4 goes back into the pace"
-    # And it stays retired for the rest of the session.
-    for lap in range(6, 12):
-        assert ledger.filter(lap, _found(5205.0)) == ([], [])
+    for lap in (4, 5, 6):
+        verdict = ledger.filter(lap, _found(5200.0 + lap))
+        assert len(verdict.kept) == 1 and verdict.give_back == ()
+    verdict = ledger.filter(7, _found(5210.0))
+    assert verdict.kept == ()
+    assert verdict.give_back == (4, 5, 6), "the run goes back into the pace"
+    assert ledger.retired() == (5204.0,)
+    assert any("corner the model is missing" in note
+               for note in verdict.notes)
+    # And it stays retired while it keeps being braked.
+    for lap in range(8, 12):
+        assert ledger.filter(lap, _found(5205.0)).kept == ()
+
+
+def test_the_retirement_can_itself_be_retired():
+    """Rule 10, both halves: a place that then runs four laps with nothing
+    flagged is not braked every lap, so it was never a corner."""
+    ledger = RoadNotPenalty()
+    for lap in (1, 2, 3, 4):
+        ledger.filter(lap, _found(5200.0))
     assert ledger.retired() == (5200.0,)
+    for lap in (5, 6, 7):
+        assert ledger.filter(lap, []).kept == ()
+        assert ledger.retired() == (5200.0,), "three clean laps is not four"
+    verdict = ledger.filter(8, [])
+    assert ledger.retired() == ()
+    assert any("it is not a corner" in note for note in verdict.notes)
+    assert len(ledger.filter(9, _found(5200.0)).kept) == 1
 
 
 def test_two_penalties_a_session_at_one_place_are_both_kept():
     """Daytona, 4 Sep: sessions 121, 124 and 125 each carry two at 5,200 m,
-    on laps 3 and 6, 2 and 6, and 6 and 8. Never consecutive - because a
-    penalty is served on a lap and a corner is there on all of them."""
-    for first, second in ((3, 6), (2, 6), (6, 8)):
+    on laps 3 and 6, 2 and 6, and 6 and 8 - and session 114 carries two on
+    laps 5 and 6, CONSECUTIVELY. That pair is why the run is four and not
+    two: a penalty is served on a lap and a corner is there on all of them,
+    but two in a row is a thing this driver has actually done."""
+    for laps in ((3, 6), (2, 6), (6, 8), (5, 6)):
         ledger = RoadNotPenalty()
-        assert len(ledger.filter(first, _found(5198.0))[0]) == 1
-        kept, back = ledger.filter(second, _found(5213.0))
-        assert len(kept) == 1 and back == []
+        for lap in laps:
+            verdict = ledger.filter(lap, _found(5198.0 + lap))
+            assert len(verdict.kept) == 1 and verdict.give_back == ()
+
+
+def test_the_daytona_race_that_alternated_is_all_kept():
+    """Session 118, 3 Sep: flagged on laps 2, 4, 6, 8 and 10 of ten. The
+    frames say the odd laps carry no brake at all through 5,100-5,400 m at a
+    flat 269 km/h, so it is not a corner - and the run never reaches two."""
+    ledger = RoadNotPenalty()
+    kept = 0
+    for lap in range(1, 11):
+        kept += len(ledger.filter(lap, _found(5215.0) if lap % 2 == 0
+                                  else []).kept)
+    assert kept == 5
+    assert ledger.retired() == ()
 
 
 def test_a_penalty_somewhere_else_is_its_own_place():
     """Two different stretches of road do not retire each other."""
     ledger = RoadNotPenalty()
-    assert len(ledger.filter(4, _found(5200.0))[0]) == 1
-    kept, back = ledger.filter(5, _found(1200.0))
-    assert len(kept) == 1 and back == []
+    assert len(ledger.filter(4, _found(5200.0)).kept) == 1
+    verdict = ledger.filter(5, _found(1200.0))
+    assert len(verdict.kept) == 1 and verdict.give_back == ()
+    assert ledger.retired() == ()
+
+
+def test_a_lap_that_could_not_be_looked_at_breaks_the_run():
+    """`None` is a lap with no frames, or a pit lap, or one the detector
+    stood down on. It is not evidence that the place was braked, so it
+    cannot complete a run - the same argument `GapTrend._window` makes about
+    fitting a line through a hole in the readings, and the safe direction:
+    a hole delays a retirement, it never causes one."""
+    ledger = RoadNotPenalty()
+    for lap in (1, 2, 3):
+        ledger.filter(lap, _found(5200.0))
+    assert ledger.filter(4, None) == Verdict((), (), ())
+    assert ledger.retired() == (), "an unlooked-at lap did not extend the run"
+    verdict = ledger.filter(5, _found(5200.0))
+    assert len(verdict.kept) == 1, "and it did not complete the run either"
     assert ledger.retired() == ()
 
 
 def test_nothing_found_is_nothing_retired():
     ledger = RoadNotPenalty()
-    assert ledger.filter(4, []) == ([], [])
-    assert ledger.filter(5, None) == ([], [])
+    assert ledger.filter(4, []) == Verdict((), (), ())
     assert ledger.retired() == ()

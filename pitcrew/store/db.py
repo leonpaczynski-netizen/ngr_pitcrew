@@ -1826,6 +1826,30 @@ class Store:
         with self._write() as conn:
             conn.execute("UPDATE laps SET fuel_map = ? WHERE id = ?", (fuel_map, lap_id))
 
+    def set_lap_penalties(self, session_id: int, lap_num: int,
+                          served: int | None, lost_s: float | None) -> int:
+        """Write a lap's penalty count and derived cost. Returns rows changed.
+
+        **This exists to WITHDRAW a reading, not only to write one.** The
+        detector's one systematic false positive is a corner the auto-segment
+        model does not contain: the brake for it is at speed, going straight
+        and outside every window, so it reads as a penalty on every lap.
+        `analysis.penalties.RoadNotPenalty` recognises that after four
+        consecutive laps and hands the earlier ones back - and until this
+        method existed the hand-back reached the pace population in memory
+        and nothing else, so the stored rows kept a count the app had
+        retracted and every offline tool and export still read it.
+
+        `served=0` is "looked at and clean"; `None` is "not looked at". See
+        the column note in `store/schema.py`.
+        """
+        with self._write() as conn:
+            cursor = conn.execute(
+                "UPDATE laps SET penalties_served = ?, penalty_lost_s = ? "
+                "WHERE session_id = ? AND lap_num = ?",
+                (served, lost_s, session_id, lap_num))
+            return cursor.rowcount
+
     def exclude_lap(self, lap_id: int, reason: str | None) -> None:
         """Exclude a lap from the counted set, or re-include it with reason=None."""
         with self._write() as conn:
