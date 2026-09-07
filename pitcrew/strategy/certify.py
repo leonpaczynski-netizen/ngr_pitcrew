@@ -218,8 +218,19 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
                 f"pace and wear are assumed rather than taken")
 
     # ------------------------------------------------------------- the stops
-    stops = plan.get("stops")
-    if isinstance(stops, int) and stops != len(stints) - 1:
+    # **An integral float is a stop count.** JSON has no integer type and
+    # `mcp.propose_strategy` stores arbitrary JSON, so `5.0` is what a
+    # round-trip produces - and `isinstance(stops, int)` dropped it, so this
+    # refusal could not fire and the Race page then said "No stop is planned"
+    # over a plan whose own field said five (row 1.7, critic pass 12).
+    from pitcrew.strategy.handover import _as_count
+
+    stops = _as_count(plan.get("stops"))
+    if plan.get("stops") is not None and stops is None:
+        refusals.append(
+            f"the plan's stops field is {plan['stops']!r}, which is not a "
+            f"stop count")
+    elif stops is not None and stops != len(stints) - 1:
         refusals.append(
             f"the plan says {stops} stop{'' if stops == 1 else 's'} but has "
             f"{len(stints)} stints")

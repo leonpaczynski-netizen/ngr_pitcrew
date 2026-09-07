@@ -656,9 +656,9 @@ one.
 
 **Struck or deferred, with the reason:** the chase's *"silence announced when
 the wall cannot read it"* is the brief's *"I can't see other cars"* line and
-was not duplicated per lap. 1.6 is half done — the reads persist; verdicts per
-call and the plan-vs-actual snapshot are not yet — and 1.7, 1.8, 1.10 are
-open. Critic 5's open questions, carried: one misidentified board row resets
+was not duplicated per lap. 1.6's verdict per call landed at
+`59a3144`; 1.7 and 1.10 are closed; **1.8 is what is left**, with the
+plan-vs-actual snapshot still outstanding. Critic 5's open questions, carried: one misidentified board row resets
 the held-up window and the sector map (the trend wipes on any subject
 change); two consecutive locator misreads would still cut the gauge series;
 the sector map's offset path (gap ≥ 2 s) has no test.
@@ -1413,6 +1413,31 @@ platform. (Car's styled figure was written as its bare one, and the correct
    **24 of 28 rows** carry no handover, and **7 of the 10 approved** — which
    is the figure that matters, since only an approved plan reaches the grid,
    and it is the one the line originally had.
+
+### Row 1.7, critic pass 12 — a stop count of `5.0` was dropped
+
+**(A), and pre-existing.** `_stop_readings` and `certify` both gated on
+`isinstance(stops, int)`, so a float or a string vanished from the
+comparison: `_stops_planned` answered a confident **0** off the stints alone,
+`_stop_disagreement` said nothing, and the grid printed *"No stop is planned,
+so he cannot bring one forward…"* over a plan whose own field said five.
+`certify` could not refuse it because **it shares the guard**.
+
+**JSON has no integer type** and `mcp.propose_strategy` stores arbitrary JSON
+from the desk, so `5.0` is what a round-trip produces rather than a hostile
+input. This is pass 5's *"confident zero"* in the one shape eleven sweeps
+never parameterised — every one of them seeded `stops` as a Python `int`.
+`_as_count` reads an integral float as a count now; a field that is there and
+cannot be read at all is named and quoted rather than dropped, and `certify`
+refuses it.
+
+Minor: `_FIELD_NAMES` was a second vocabulary for the three fields, two of
+its three entries unreachable by construction — the lone-reading sentence is
+promoted off the same `_STOP_SAID` map now. The `stillborn` loop's fall-back
+guard had one reachable branch, which is a fact about `_cannot_fire` rather
+than a shortcut, and both now say so where they are. And a **second copy** of
+the stale row list — *"1.7, 1.8, 1.10 are open"* — 758 lines above the one
+pass 11 trimmed, which is §1a's own shape.
 
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), plus critic
 5's carried questions (a misidentified board row resets the held-up window;

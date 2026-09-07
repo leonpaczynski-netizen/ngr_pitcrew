@@ -1262,7 +1262,8 @@ def test_a_corrupt_reading_is_placed_and_named():
     alone = _stop_disagreement({"stops": -1})
     assert alone is not None
     assert "disagrees with itself" not in alone, alone
-    assert "The plan's stop count reads -1, which is not a count" in alone
+    assert alone.startswith(
+        "The plan's stop count says -1, which is not a count"), alone
     assert "How many stops it holds is not known" in alone
 
     # Both branches end the same way about the same fact.
@@ -1291,3 +1292,63 @@ def test_a_granted_rule_the_plan_cannot_fire_still_says_the_fall_back():
                            "when": "a", "until": "b"}]):
         said = fuel_long_lines(playbook)
         assert any("falls back to his own" in line for line in said), said
+
+
+def test_a_stop_count_that_is_not_an_int_is_still_read():
+    """**`{"stops": 5.0}` was dropped and the grid said "No stop is planned".**
+
+    `_stop_readings` and `certify` both gated on `isinstance(stops, int)`, so
+    a float vanished from the comparison: `_stops_planned` answered a
+    confident 0 off the stints alone, the disagreement said nothing, and
+    `certify` could not refuse it because it shares the guard. JSON has no
+    integer type and `mcp.propose_strategy` stores arbitrary JSON, so `5.0`
+    is what a round-trip produces rather than a hostile input.
+
+    Eleven critic passes swept this function and every one seeded `stops` as
+    a Python `int`.
+    """
+    from pitcrew.strategy.handover import _as_count, _stops_planned
+
+    assert _as_count(5.0) == 5 and _as_count(5) == 5
+    assert _as_count(True) is None, "a bool is not a stop count"
+    assert _as_count(5.5) is None and _as_count("5") is None
+
+    # An integral float agrees with the stints and is simply read.
+    assert _stops_planned({"stints": [{}, {}], "stops": 1.0}) == 1
+
+    # And one that disagrees is a disagreement, not a silence.
+    bad = {"stints": [{"laps": 20}], "stops": 5.0}
+    assert _stops_planned(bad) is None
+    said = lines({**bad, "handover": {"playbook": []}})
+    assert "its stop count says 5 stops" in said, said
+    assert "No stop is planned" not in said
+
+    # A field that is there and cannot be read at all is named and quoted.
+    for plan in ({"stints": [{"laps": 20}], "stops": "5"},
+                 {"stints": [{"laps": 20}], "pit_laps": "10"}):
+        assert _stops_planned(plan) is None
+        text = lines({**plan, "handover": {"playbook": []}})
+        assert "(not a count)" in text, text
+        assert "No stop is planned" not in text
+
+
+def test_certify_refuses_a_stops_field_it_cannot_read():
+    """The gate shares the guard, so it could not refuse what the screen
+    could not read - the two were blind together. A plan of two stints
+    saying `{"stops": 5.0}` certified clean."""
+    from pitcrew.strategy.certify import certify
+
+    from .test_certify import inputs, plan, stint
+
+    good = plan(stint(10), stint(10, "RM"))
+    assert certify({**good, "stops": 1.0}, inputs()).certified
+
+    wrong = certify({**good, "stops": 5.0}, inputs())
+    assert not wrong.certified
+    assert any("5 stops" in r and "2 stints" in r for r in wrong.refusals), \
+        wrong.refusals
+
+    unreadable = certify({**good, "stops": "1"}, inputs())
+    assert not unreadable.certified
+    assert any("not a stop count" in r for r in unreadable.refusals), \
+        unreadable.refusals

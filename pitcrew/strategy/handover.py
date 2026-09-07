@@ -147,39 +147,71 @@ def grants(entries, trigger: str, action: str) -> bool:
 GATED = (("tyre_short", "add_stop"), ("fuel_long", "drop_stop"))
 
 
-# What each stop reading is called, for the sentence that names one alone.
-_FIELD_NAMES = {"stints": "stint list", "stops": "stop count",
-                "pit_laps": "box lap list"}
+# How each stop reading is said. One vocabulary, because a second one for
+# the same three fields can only ever drift out of step with this.
+_STOP_SAID = {"stints": "its stints imply {n}",
+              "stops": "its stop count says {n}",
+              "pit_laps": "its box laps name {n}"}
 
 
-def _stop_readings(plan: dict) -> dict[str, int]:
+def _as_count(value) -> int | None:
+    """A stop count off a stored field, or None when it cannot be read as one.
+
+    **An integral float is a count.** JSON has no integer type and
+    `mcp.propose_strategy` stores arbitrary JSON, so `5.0` is what a
+    round-trip produces rather than a hostile input - and gating on
+    `isinstance(value, int)` dropped it, which let `_stops_planned` answer a
+    confident 0 off the stints alone while the plan's own field said 5.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _stop_readings(plan: dict) -> tuple[dict[str, int], list[str]]:
     """Every field of the plan that says how many stops it holds.
 
     Three of them, and no gate makes all three agree. `Handover.validate`
     requires only `stints`; `certify` refuses `stops != len(stints) - 1` but
     **never checks `pit_laps` against either**, so a plan listing one box lap
     and one stint validates, certifies and stores.
+
+    Returns the readings it could take and the names of the fields that are
+    THERE and unreadable - which is a finding, not an absence.
     """
     readings: dict[str, int] = {}
+    unreadable: list[str] = []
     stints = plan.get("stints")
     if isinstance(stints, list) and stints:
         # `Plan.stops`' own definition, and the expression the coordinator
         # arms from: `_apply_stint` sets `stint_ends_on_lap = None` when
         # there is no stint after this one.
         readings["stints"] = len(stints) - 1
-    stops = plan.get("stops")
+    elif stints is not None:
+        unreadable.append("stints")
     # **A negative stop count is kept as an unusable reading, not dropped.**
     # Dropping it made `_stops_planned` answer a confident count again -
     # `{stints: 3, stops: -2}` reported 2 and the card said "he may bring a
     # planned stop forward" - with nothing anywhere saying the stored plan
     # carries an impossible figure. Rule 3 asks for `None` and for the
-    # disagreement to be said, not for the corrupt reading to vanish.
-    if isinstance(stops, int) and not isinstance(stops, bool):
-        readings["stops"] = stops
+    # disagreement to be said, not for the corrupt reading to vanish. A field
+    # of the wrong TYPE is the same thing one step earlier.
+    if "stops" in plan:
+        count = _as_count(plan.get("stops"))
+        if count is None:
+            unreadable.append("stops")
+        else:
+            readings["stops"] = count
     laps = plan.get("pit_laps")
     if isinstance(laps, list):
         readings["pit_laps"] = len(laps)
-    return readings
+    elif laps is not None:
+        unreadable.append("pit_laps")
+    return readings, unreadable
 
 
 def _stops_planned(plan: dict) -> int | None:
@@ -193,17 +225,17 @@ def _stops_planned(plan: dict) -> int | None:
     *"No stop is planned"*. Where two readings disagree, the disagreement is
     the finding (rule 1) - `_stop_disagreement` says it aloud.
     """
-    readings = _stop_readings(plan)
-    if any(number < 0 for number in readings.values()):
-        return None            # a negative is not a count
+    readings, unreadable = _stop_readings(plan)
+    if unreadable or any(number < 0 for number in readings.values()):
+        return None            # a negative, or a field of the wrong type
     values = set(readings.values())
     return values.pop() if len(values) == 1 else None
 
 
 def _stop_disagreement(plan: dict) -> str | None:
     """The plan's own fields, quoted, when they do not agree about stops."""
-    readings = _stop_readings(plan)
-    if len(set(readings.values())) < 2 \
+    readings, unreadable = _stop_readings(plan)
+    if len(set(readings.values())) < 2 and not unreadable \
             and not any(number < 0 for number in readings.values()):
         return None
     # **Every figure in STOPS, which is the unit they are compared in.**
@@ -215,9 +247,7 @@ def _stop_disagreement(plan: dict) -> str | None:
     # on screen were not the numbers compared.
     # Each clause names the field it came from - the middle one said a bare
     # "it says", so the driver could not tell which of three was the odd one.
-    said = {"stints": "its stints imply {n}",
-            "stops": "its stop count says {n}",
-            "pit_laps": "its box laps name {n}"}
+    said = _STOP_SAID
     # **Corrupt readings last, and the clause that describes them is not
     # left dangling into the next one.** "its stop count says -2, which is
     # not a count, its box laps name 1 stop" reads as one sentence about the
@@ -229,21 +259,27 @@ def _stop_disagreement(plan: dict) -> str | None:
              for name, number in good]
     parts += [said[name].format(n=number) + " (not a count)"
               for name, number in bad]
+    # A field that is there and cannot be read at all - a `stops` of "5", a
+    # `pit_laps` that is not a list. Quoted as stored, because the driver is
+    # the only one who can tell the desk what it meant.
+    parts += [said[name].format(n=repr(plan.get(name))) + " (not a count)"
+              for name in unreadable]
     # **Only a real disagreement is called one.** With a single corrupt
     # reading and nothing to compare it against, the plan is not arguing
     # with itself; it is holding a figure that cannot be read.
-    if len(readings) > 1:
+    # **One clause is not a disagreement.** With a single reading there is
+    # nothing to compare it against; the plan is holding a figure that
+    # cannot be read, which is a different thing to say. The lone clause is
+    # promoted to a sentence off the SAME vocabulary - `"its stints imply"`
+    # becomes `"The plan's stints imply"` - rather than sliced back out of
+    # the joined string or written twice in a second dict.
+    if len(parts) > 1:
         return ("The plan disagrees with itself about stops - "
                 + ", ".join(parts)
                 + ". How many stops it holds is not known.")
-    # **Built from the reading, not sliced back out of the sentence.** The
-    # first version split on `" says "`, which only `said["stops"]` contains -
-    # so a second field going negative, or any rewording, was an IndexError
-    # on the grid rather than a wrong sentence. Reachable only as a negative
-    # `stops`, since neither of the other two readings can be negative.
-    name, number = next(iter(readings.items()))
-    return (f"The plan's {_FIELD_NAMES[name]} reads {number}, which is not a "
-            f"count. How many stops it holds is not known.")
+    alone = parts[0].replace("its ", "The plan's ", 1).replace(
+        " (not a count)", ", which is not a count")
+    return alone + ". How many stops it holds is not known."
 
 
 def _cannot_fire(trigger: str, action: str, plan: dict) -> bool:
@@ -256,6 +292,11 @@ def _cannot_fire(trigger: str, action: str, plan: dict) -> bool:
     fire. The wear cliff has no such bound - it can reach the last stint of
     any plan, and on a no-stop plan every stint is the last.
     """
+    # **One pair, and the sentence that reports it depends on that.** A
+    # second would need its reason ("there is no stop to drop") and its
+    # fall-back clause derived rather than written flat, because the clause
+    # is unconditional there only while this condition and
+    # `_withheld_sentence`'s `stops == 0` branch are the same condition.
     return (trigger, action) == ("fuel_long", "drop_stop") \
         and _stops_planned(plan) == 0
 
@@ -640,18 +681,22 @@ def standing_orders(stored: dict) -> list[Order]:
     # unfireable is the same failure as a rule for a trigger he cannot see:
     # the driver believes it is armed. Said once, and not under *George may*.
     for entry in stillborn:
-        # **Same predicate as the loop below.** This one had no fall-back
-        # clause at all, so a granted `fuel_long: drop_stop` on a plan with
-        # no stop said only that it cannot fire - while a garbage rule and no
-        # rule both said George falls back to his own. Three states of one
-        # trigger, two of them saying he decides and the third silent, and
-        # the silent one is what a real desk writes.
-        falls_back = ("" if _withheld_sentence(entry.trigger, plan) is not None
-                      else ", and George falls back to his own")
+        # This loop had no fall-back clause at all, so a granted
+        # `fuel_long: drop_stop` on a plan with no stop said only that it
+        # cannot fire - while a garbage rule and no rule both said George
+        # falls back to his own. Three states of one trigger, two saying he
+        # decides and the third silent, and the silent one is what a real
+        # desk writes.
+        #
+        # **The clause is unconditional here, and that is a fact about
+        # `_cannot_fire`, not a shortcut.** The only pair it answers True for
+        # is `fuel_long: drop_stop` with no stop planned - which is exactly
+        # when `_withheld_sentence` returns None, so asking the predicate
+        # would be asking a question with one answer.
         out.append(Order(
             f"The desk's rule for {entry.trigger.replace('_', ' ')} cannot "
-            f"fire on this plan - there is no stop to drop{falls_back}.",
-            GAP))
+            f"fire on this plan - there is no stop to drop, and George falls "
+            f"back to his own.", GAP))
     # **Suppressed where a WITHHELD SENTENCE will follow, not merely where
     # the trigger is gated.** Saying "George falls back to his own" a few
     # lines above "he cannot drop a stop without a rule from the desk" is
