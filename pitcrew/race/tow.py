@@ -48,9 +48,12 @@ MIN_CLEAR_LAPS = 2
 # Inside this the saving and the loss cannot be told apart.
 WASH_S = 0.3
 # Litres a lap below zero at which the tow is COSTING him fuel by enough to
-# say so with a figure rather than call it "no saving". Two readings of the
-# tank are worth about a litre between them, so anything under this is the
-# reference disagreeing with itself rather than a tow that burns more.
+# say so with a figure rather than call it "no saving". Set from the pump,
+# which is the only place this quantity is ever worth anything: at the 2 L/s
+# a Deep Forest stop runs at, 0.2 L a lap is 0.1 s of standing time, which is
+# the same tenth `_tow_is_spent` floors its own figure at and the smallest
+# number the call's `:.1f` can say. Below it there is a cost and no way to
+# state its size.
 COSTS_FUEL_L = 0.2
 
 BY_CLEAR_LAPS = "your clear-air laps"
@@ -95,8 +98,15 @@ class TowTrade:
         # the answer is get out. The one case that still needs naming is a
         # tow that gives nothing away AND saves something - free, and below
         # `WASH_S` the general form would call that a wash.
-        if gain >= 0 and self.losing_s_per_lap <= 0:
-            return True                 # a free tow: nothing given away
+        # **And the last special case went too** (critic pass 7, fifth
+        # round). `gain >= 0 and losing <= 0 -> True` bypassed `WASH_S`
+        # altogether, so a saving of 0.02 L a lap behind a car he was no
+        # slower than produced *"The tow saves you 0.0 litres a lap - 0.0
+        # seconds at the stop. Worth it - stay in it."* - two zeros and an
+        # order. The general form reaches every case it was there for: where
+        # the free tow saves anything worth saying, `gain - losing` clears
+        # `WASH_S` on its own, and where it does not, "about a wash" is the
+        # honest answer.
         if abs(gain - self.losing_s_per_lap) < WASH_S:
             return None
         return gain > self.losing_s_per_lap
@@ -120,15 +130,19 @@ class TowTrade:
         lost = (f"Behind {them} you're {self.losing_s_per_lap:.1f} seconds a "
                 f"lap slower." if self.losing_s_per_lap > 0
                 else f"Behind {them} you're no slower.")
-        if self.saving_l_per_lap <= -COSTS_FUEL_L and \
-                self.saving_s_per_lap is not None:
+        if self.saving_l_per_lap <= -COSTS_FUEL_L:
             # **A tow that COSTS fuel is a finding with a size, and it was
             # spoken as "No fuel saving in the tow"** - the same sentence a
             # tow that saves nothing at all gets (critic pass 7). Rule 9 in
-            # its own way: a measured negative rendered as an absence.
+            # its own way: a measured negative rendered as an absence. The
+            # unpriced branch says the litres too: gating the whole thing on
+            # a refuel rate left the same absence on that path, while the
+            # positive side has always quoted litres without one.
+            priced = (f"{-self.saving_s_per_lap:.1f} seconds a lap at the stop"
+                      if self.saving_s_per_lap is not None
+                      else "no refuel rate on file to price it")
             call = (f"The tow costs you {-self.saving_l_per_lap:.1f} litres a "
-                    f"lap - {-self.saving_s_per_lap:.1f} seconds at the stop. "
-                    f"{lost}")
+                    f"lap - {priced}. {lost}")
         elif self.saving_l_per_lap <= 0:
             call = f"No fuel saving in the tow. {lost}"
         elif self.saving_s_per_lap is None:
@@ -136,8 +150,8 @@ class TowTrade:
                     f"lap - no refuel rate on file to price it. {lost}")
         else:
             call = (f"The tow saves you {self.saving_l_per_lap:.1f} litres a "
-                    f"lap - {self.saving_s_per_lap:.1f} seconds at the stop. "
-                    f"{lost}")
+                    f"lap - {self.saving_s_per_lap:.1f} seconds a lap at the "
+                    f"stop. {lost}")
         verdict = self.worth_it
         if verdict is True:
             call += " Worth it - stay in it."

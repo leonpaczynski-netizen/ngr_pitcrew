@@ -260,7 +260,9 @@ def test_the_ledger_and_the_refusal_have_production_callers():
     assert "sum(p.lost_s for p in say) if say else None" in source
     assert "speak=bool(say))" in source
     # A partial withdrawal corrects the cost rather than leaving the sum.
-    assert "self.race.note_penalty(gone.lap, gone.lost_s," in source
+    # A partial withdrawal hands the race the SAYABLE cost, not the row's.
+    assert "self.race.note_penalty(gone.lap," in source
+    assert "gone.speak_lost_s," in source
     start = source.index("    def _corner_windows(self)")
     end = source.index("\n    def ", start + 10)
     assert "self._penalties_are_readable()" in source[start:end]

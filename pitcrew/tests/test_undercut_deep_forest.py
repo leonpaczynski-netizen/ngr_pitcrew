@@ -303,14 +303,43 @@ def test_an_unbriefed_tyre_is_said_to_be_unchecked():
 
 # ---------------------------------------------- the second half: the tow
 
+def test_a_trade_with_nothing_on_either_side_is_not_a_finding():
+    """Critic pass 7, fifth round. Both figures inside `WASH_S` is a trade
+    with no terms in it, and it reached him as "The tow saves you 0.0 litres
+    a lap - 0.0 seconds a lap at the stop. About a wash." A REAL wash - a
+    second of saving against a second of loss - still speaks, because that
+    one he can act on by choosing."""
+    from dataclasses import replace as dc_replace
+
+    from pitcrew.race.rival_calls import tow_trade_call
+
+    race = _race()
+    _drive(race, upto=7)
+    race.state.said_tags = set()
+    race.state.tow_trade = dc_replace(race.state.tow_trade,
+                                      saving_l_per_lap=0.04,
+                                      saving_s_per_lap=0.02,
+                                      losing_s_per_lap=0.05)
+    assert tow_trade_call(race.state) is None
+    race.state.tow_trade = dc_replace(race.state.tow_trade,
+                                      saving_l_per_lap=2.0,
+                                      saving_s_per_lap=1.0,
+                                      losing_s_per_lap=0.9)
+    said = tow_trade_call(race.state)
+    assert said is not None and said.call.endswith("About a wash.")
+
+
 def test_the_tow_is_priced_at_the_pump_and_found_not_worth_it():
     race = _race()
     calls = _drive(race, upto=7)
     laps = _kinds(calls, TOW_TRADE)
     assert laps and laps[0] <= 6, "three laps behind him and it is sayable"
     said = next(c for c in calls[laps[0]] if c.kind == TOW_TRADE)
+    # **"a lap" on BOTH seconds figures** (critic pass 7, fifth round): the
+    # standing time and the lap time are two quantities the driver has to
+    # compare, and only one of them used to say what it was per.
     assert said.call.startswith("The tow saves you 0.6 litres a lap - "
-                                "0.3 seconds at the stop.")
+                                "0.3 seconds a lap at the stop.")
     # **Not "losing N seconds a lap to Boxhead"** - `closing_call` owns that
     # sentence for the GAP growing, and this is his lap time in the wake
     # against clear air. Rule 13, found by critic pass 7.
@@ -321,7 +350,8 @@ def test_the_tow_is_priced_at_the_pump_and_found_not_worth_it():
     trade = race.state.tow_trade
     assert trade is not None and trade.worth_it is False
     undercut = next(c for c in calls[7] if c.kind == UNDERCUT)
-    assert "The tow's 0.3 seconds at the stop against 1." in undercut.reason
+    assert ("The tow's 0.3 seconds a lap at the stop against 1.4 seconds a "
+            "lap lost.") in undercut.reason
 
 
 def test_a_tow_that_pays_means_no_undercut():
@@ -385,9 +415,9 @@ def test_a_tow_that_costs_fuel_is_priced_as_a_cost():
                     reference="the plan")
     assert made.worth_it is False
     call, _ = made.sentence("Boxhead")
-    assert call == ("The tow costs you 0.8 litres a lap - 0.4 seconds at the "
-                    "stop. Behind Boxhead you're 0.2 seconds a lap slower. "
-                    "Not worth it.")
+    assert call == ("The tow costs you 0.8 litres a lap - 0.4 seconds a lap "
+                    "at the stop. Behind Boxhead you're 0.2 seconds a lap "
+                    "slower. Not worth it.")
 
 
 def test_a_tow_that_costs_fuel_and_no_time_still_says_get_out():
@@ -402,18 +432,25 @@ def test_a_tow_that_costs_fuel_and_no_time_still_says_get_out():
                     reference="the plan")
     assert made.worth_it is False
     assert made.sentence("Boxhead")[0] == (
-        "The tow costs you 0.8 litres a lap - 0.4 seconds at the stop. "
+        "The tow costs you 0.8 litres a lap - 0.4 seconds a lap at the stop. "
         "Behind Boxhead you're no slower. Not worth it.")
 
 
-def test_a_free_tow_that_saves_anything_is_still_worth_it():
-    """The one case the general comparison needs helping with: nothing given
-    away and something saved, where `WASH_S` would call it a wash."""
+def test_a_free_tow_worth_saying_is_worth_it_and_a_nil_one_is_a_wash():
+    """Critic pass 7, fifth round. The last special case bypassed `WASH_S`,
+    so a saving of 0.02 L a lap behind a car he was no slower than produced
+    "The tow saves you 0.0 litres a lap - 0.0 seconds a lap at the stop.
+    Worth it - stay in it." Two zeros and an order. The general comparison
+    reaches every case the special one was there for."""
     from pitcrew.race.tow import TowTrade
 
-    made = TowTrade(laps_held=3, saving_l_per_lap=0.2, saving_s_per_lap=0.1,
-                    losing_s_per_lap=-0.1, reference="the plan")
-    assert made.worth_it is True
+    def made(saving_s, losing_s):
+        return TowTrade(laps_held=3, saving_l_per_lap=saving_s * 2,
+                        saving_s_per_lap=saving_s, losing_s_per_lap=losing_s,
+                        reference="the plan")
+
+    assert made(0.5, -0.5).worth_it is True, "a free tow worth naming"
+    assert made(0.01, -0.1).worth_it is None, "and one that is not"
 
 
 def test_a_saving_inside_the_reading_error_is_not_called_a_cost():

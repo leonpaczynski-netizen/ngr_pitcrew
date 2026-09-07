@@ -336,6 +336,13 @@ class Withdrawal:
     lap: int
     served: int
     lost_s: float | None
+    # **And the same pair for the readings that are still SAYABLE**, because
+    # the race is told the cost it may speak and the row is told the cost it
+    # records, and those are two different numbers wherever the doubt band
+    # holds one of them back. Handing the row's figure to the race is the
+    # rule-12 defect this file already fixed once, one code path over.
+    speak_served: int = 0
+    speak_lost_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -552,8 +559,11 @@ class RoadNotPenalty:
             gone = [p for place, p in entries if self._is_road(place)]
             self._kept[lap] = standing
             lost = sum(p.lost_s for _, p in standing) if standing else None
-            withdrawn[lap] = Withdrawal(lap=lap, served=len(standing),
-                                        lost_s=lost)
+            say = [p for place, p in standing if not self._in_doubt(place)]
+            withdrawn[lap] = Withdrawal(
+                lap=lap, served=len(standing), lost_s=lost,
+                speak_served=len(say),
+                speak_lost_s=sum(p.lost_s for p in say) if say else None)
             notes.append(
                 f"lap {lap}: {len(gone)} reading(s) withdrawn at "
                 f"{', '.join(f'{p.at_m:.0f} m' for p in gone)} - the place is "

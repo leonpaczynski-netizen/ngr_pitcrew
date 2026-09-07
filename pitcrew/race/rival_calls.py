@@ -617,7 +617,7 @@ def closing_call(trend: GapTrend, *, lap: int, who: str | None = None,
 # trade and the undercut agree about what "held up" is) on this many
 # consecutive laps. A second and a half is a car length or two at racing
 # speed on a 90 s lap - inside it the gap reads as traffic, not as pace.
-from pitcrew.race.tow import HELD_UP_GAP_S  # noqa: E402
+from pitcrew.race.tow import HELD_UP_GAP_S, WASH_S  # noqa: E402
 
 HELD_UP_LAPS = 3
 
@@ -752,6 +752,16 @@ def tow_trade_call(state) -> Call | None:
         return None
     tag = f"{TOW_TRADE}:{them}"
     if tag in state.said_tags:
+        return None
+    # **Nothing on either side is not a finding** (critic pass 7, fifth
+    # round). Both figures inside `WASH_S` is a trade with no terms in it,
+    # and it was reaching him as *"The tow saves you 0.0 litres a lap - 0.0
+    # seconds at the stop. Behind Boxhead you're no slower. About a wash."*
+    # A real wash - `WASH_S` apart with a second of saving against a second
+    # of loss - still speaks, because that one he can act on by choosing.
+    saved = trade.saving_s_per_lap
+    if (saved is not None and abs(saved) < WASH_S
+            and abs(trade.losing_s_per_lap) < WASH_S):
         return None
     call, reason = trade.sentence(them)
     return Call(TOW_TRADE, state.lap, call, reason, MEDIUM, tag=tag)
@@ -922,12 +932,20 @@ def undercut_call(state) -> Call | None:
         # saving that came out negative is the tow COSTING fuel, and printing
         # it as "0.0 seconds at the stop" is a measurement clamped into a
         # confident wrong number. Say what it is instead.
+        # **The third site of the same measurement, and it said the
+        # opposite** (critic pass 7, fifth round): `tow_trade_call` says
+        # "The tow costs you 0.8 litres a lap" and this said "No fuel saving
+        # in the tow" about the same number, minutes apart. Rule 13.
         saved = trade.saving_s_per_lap
-        tow = ((f" The tow's {saved:.1f} seconds at the stop against "
-                f"{trade.losing_s_per_lap:.1f} seconds a lap lost.")
-               if saved is not None and saved > 0 else
-               (f" No fuel saving in the tow, and "
-                f"{trade.losing_s_per_lap:.1f} seconds a lap lost."))
+        if saved is not None and saved > 0:
+            tow = (f" The tow's {saved:.1f} seconds a lap at the stop against "
+                   f"{trade.losing_s_per_lap:.1f} seconds a lap lost.")
+        elif saved is not None and saved < 0:
+            tow = (f" The tow costs you {-saved:.1f} seconds a lap at the stop "
+                   f"and {trade.losing_s_per_lap:.1f} seconds a lap lost.")
+        else:
+            tow = (f" No fuel saving in the tow, and "
+                   f"{trade.losing_s_per_lap:.1f} seconds a lap lost.")
     reason = (f"Undercut on {them}: you're held up, and faster through "
               f"{_sector_names(g.index for g in gains)}. The fill costs the "
               f"same now as on lap {state.stint_ends_on_lap}.{tow}{tyres}")

@@ -3045,7 +3045,13 @@ class PitCrewController(QObject):
                             if gone.served == 0:
                                 self.race.forget_penalty(gone.lap)
                             else:
-                                self.race.note_penalty(gone.lap, gone.lost_s,
+                                # **The SAYABLE cost, not the row's.** A note
+                                # still pending on that lap holds the figure
+                                # that may be spoken, and handing it the sum
+                                # over everything struck is rule 12 one path
+                                # over from where it was just fixed.
+                                self.race.note_penalty(gone.lap,
+                                                       gone.speak_lost_s,
                                                        speak=False)
                         except Exception:                    # noqa: BLE001
                             log("race").warning(
