@@ -147,6 +147,11 @@ def grants(entries, trigger: str, action: str) -> bool:
 GATED = (("tyre_short", "add_stop"), ("fuel_long", "drop_stop"))
 
 
+# What each stop reading is called, for the sentence that names one alone.
+_FIELD_NAMES = {"stints": "stint list", "stops": "stop count",
+                "pit_laps": "box lap list"}
+
+
 def _stop_readings(plan: dict) -> dict[str, int]:
     """Every field of the plan that says how many stops it holds.
 
@@ -222,18 +227,23 @@ def _stop_disagreement(plan: dict) -> str | None:
     parts = [said[name].format(n=number)
              + (" stop" if number == 1 else " stops")
              for name, number in good]
-    parts += [said[name].format(n=number) + " - which is not a count"
+    parts += [said[name].format(n=number) + " (not a count)"
               for name, number in bad]
     # **Only a real disagreement is called one.** With a single corrupt
     # reading and nothing to compare it against, the plan is not arguing
     # with itself; it is holding a figure that cannot be read.
     if len(readings) > 1:
         return ("The plan disagrees with itself about stops - "
-                + ", ".join(parts) + ". How many it holds is not known.")
-    return ("The plan's " + ", ".join(parts).split(" says ")[0].removeprefix(
-        "its ") + " cannot be read: it says "
-        + ", ".join(parts).split(" says ", 1)[1].split(" - ")[0]
-        + ". How many stops it holds is not known.")
+                + ", ".join(parts)
+                + ". How many stops it holds is not known.")
+    # **Built from the reading, not sliced back out of the sentence.** The
+    # first version split on `" says "`, which only `said["stops"]` contains -
+    # so a second field going negative, or any rewording, was an IndexError
+    # on the grid rather than a wrong sentence. Reachable only as a negative
+    # `stops`, since neither of the other two readings can be negative.
+    name, number = next(iter(readings.items()))
+    return (f"The plan's {_FIELD_NAMES[name]} reads {number}, which is not a "
+            f"count. How many stops it holds is not known.")
 
 
 def _cannot_fire(trigger: str, action: str, plan: dict) -> bool:
@@ -630,9 +640,18 @@ def standing_orders(stored: dict) -> list[Order]:
     # unfireable is the same failure as a rule for a trigger he cannot see:
     # the driver believes it is armed. Said once, and not under *George may*.
     for entry in stillborn:
+        # **Same predicate as the loop below.** This one had no fall-back
+        # clause at all, so a granted `fuel_long: drop_stop` on a plan with
+        # no stop said only that it cannot fire - while a garbage rule and no
+        # rule both said George falls back to his own. Three states of one
+        # trigger, two of them saying he decides and the third silent, and
+        # the silent one is what a real desk writes.
+        falls_back = ("" if _withheld_sentence(entry.trigger, plan) is not None
+                      else ", and George falls back to his own")
         out.append(Order(
             f"The desk's rule for {entry.trigger.replace('_', ' ')} cannot "
-            f"fire on this plan - there is no stop to drop.", GAP))
+            f"fire on this plan - there is no stop to drop{falls_back}.",
+            GAP))
     # **Suppressed where a WITHHELD SENTENCE will follow, not merely where
     # the trigger is gated.** Saying "George falls back to his own" a few
     # lines above "he cannot drop a stop without a rule from the desk" is

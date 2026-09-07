@@ -145,12 +145,14 @@ def test_every_screen_fits_the_smallest_display_he_owns(qt_app):
         # less than it will actually take, so this guard had that much slack
         # on the one display that cannot afford any.
         #
-        # Measured natively, bare -> styled: Car 247 -> 247, Settings
+        # Measured natively, bare -> styled: Car 247 -> 265, Settings
         # 243 -> 265, Event 249 -> 267, Strategy 257 -> 279, Reference
         # 267 -> 285, Practice 305 -> 324, **Race 497 -> 499** against a 501
-        # cap. The cost is not a font size - deleting `font-size: 15px` from
-        # the sheet changes nothing on either platform; what moves the Race
-        # page is `QScrollBar::handle:vertical { min-height: 40px }`.
+        # cap - so the six that are not the Race page sit between 265 and
+        # 324 styled. The cost is not a font size: deleting `font-size: 15px`
+        # from the sheet changes nothing on either platform, and what moves
+        # the Race page is
+        # `QScrollBar::handle:vertical { min-height: 40px }`.
         screen.setStyleSheet(theme.STYLESHEET)
         height = screen.minimumSizeHint().height()
         assert height <= 501, (

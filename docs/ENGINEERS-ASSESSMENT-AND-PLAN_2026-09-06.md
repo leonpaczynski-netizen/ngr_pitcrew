@@ -1363,9 +1363,10 @@ that it will never fire — so adding an unrunnable rule *removed* a true
 statement. The suppression was keyed on *"is this trigger gated"* when it
 means *"will a withheld sentence follow"*, and on a 0-stop plan none does.
 
-**Three tests were blind to that shape**, because every fixture in the file
-carries a stop — including the one written in pass 9 to close this very
-contradiction. `test_a_plan_with_no_handover_still_says_george_has_no_rules`
+**Three tests were blind to that shape.** The file does carry 0-stop
+fixtures — that is how `stillborn` is reached at all — but not in the three
+tests that could have seen this, including the one written in pass 9 to close
+this very contradiction. `test_a_plan_with_no_handover_still_says_george_has_no_rules`
 was green *because* of the leak: it asserted each trigger's words appear
 somewhere, which cannot tell a true sentence from a false one. Both plan
 shapes now, and it asserts the gated pair is never both fallen back on and
@@ -1378,14 +1379,42 @@ readings are ordered last and the head sentence matches the case.
 
 **And a fourth copy of the disproven `font-size` cause**, in
 `test_impeccable_findings.py`, with figures from the wrong platform. Measured
-natively, bare → styled: Car 247→247, Settings 243→265, Event 249→267,
+natively, bare → styled: Car 247→**265**, Settings 243→265, Event 249→267,
 Strategy 257→279, Reference 267→285, Practice 305→324, **Race 497→499**
-against the 501 cap. Deleting `font-size: 15px` changes nothing on either
-platform.
+against the 501 cap — so the six that are not the Race page sit between 265
+and 324 styled. Deleting `font-size: 15px` changes nothing on either
+platform. (Car's styled figure was written as its bare one, and the correct
+265–324 spread was deleted for disagreeing with it — pass 11.)
 
-**Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
-inventory — the "to the stop / to the flag" pair and "Box this lap" from three
-kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic
+### Row 1.7, critic pass 11 — the asymmetry was half-closed
+
+1. **(A)** Pass 10 gave the `unrunnable` loop a fall-back clause keyed on
+   whether a withheld sentence follows; the **`stillborn` loop beside it
+   never had one**. So on a 0-stop plan whose desk granted
+   `fuel_long: drop_stop` — the grant `GATED` exists to accept, on a shape
+   `_recommend` produces — the driver was told George uses his own judgement
+   with a *garbage* rule and with *no* rule, and told nothing with the real
+   one. Pass 8's first finding, left standing in the sibling loop. All three
+   states say it now.
+2. **The new block-level assertion could not fail.** The two facts are always
+   on different lines, so a per-line check never fires — measured against a
+   mutant restoring pass 1's original blocker, which left the test green. It
+   checks across the block now: for each gated trigger, named in the
+   fall-back list *or* carrying a withheld sentence, never both.
+3. **Both new sentence branches shipped untested** — the corrupt-reading
+   ordering and the single-reading head. The 100-combination sweep seeds
+   `stints` every iteration, so it can never build a one-reading plan.
+4. **The single-reading branch sliced the sentence it had just built**
+   (`split(" says ")`), a phrase only one of the three readings contains — an
+   `IndexError` on the grid for any rewording. Built from the reading now.
+   And the `" - which is not a count"` separator collided with the head's own
+   dash; `(not a count)` instead.
+5. *"Twenty of the twenty-eight plans on file"* matches neither sweep:
+   **24 of 28 rows** carry no handover, and **7 of the 10 approved** — which
+   is the figure that matters, since only an approved plan reaches the grid,
+   and it is the one the line originally had.
+
+**Left in Phase 1:** 1.8 (driver board spec and screenshot), plus critic
 5's carried questions (a misidentified board row resets the held-up window;
 two locator misreads still cut the gauge series; the sector map's offset path
 is untested). **Then Phases 2–4.**

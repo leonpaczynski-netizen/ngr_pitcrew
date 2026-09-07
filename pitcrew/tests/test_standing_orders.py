@@ -63,7 +63,10 @@ def test_no_plan_says_nothing_at_all():
 def test_a_plan_with_no_handover_still_says_george_has_no_rules():
     """The other side of the same line. A plan IS approved, nobody wrote a
     playbook for it, and that is the most consequential thing on the grid -
-    twenty of the twenty-eight plans on file are in exactly this state.
+    **seven of the ten APPROVED plans on file** are in exactly this state
+    (24 of all 28 rows, but only an approved one reaches the grid). An
+    earlier draft of this line said "twenty of the twenty-eight", which
+    matches neither sweep.
 
     **Both plan shapes**, because the single-stint fixture this used to
     carry is a 0-STOP plan, and every gated sentence branches on the stop
@@ -71,18 +74,29 @@ def test_a_plan_with_no_handover_still_says_george_has_no_rules():
     whichever branch ran, so it could not tell a true sentence from a false
     one - it just needed the words.
     """
+    from pitcrew.strategy.handover import GATED, _withheld_sentence
+
     for stints in ([{"laps": 20}], [{"laps": 10}, {"laps": 10}]):
-        orders = standing_orders({"stints": stints})
+        plan = {"stints": stints}
+        orders = standing_orders(plan)
         text = " | ".join(o.text for o in orders)
         for trigger in TRIGGERS:
             if trigger not in CANNOT_SEE:
                 assert trigger.replace("_", " ") in text, (stints, trigger)
-        # And the gated pair is never both fallen back on and withheld.
-        for line in text.split(" | "):
-            if "falls back to his own" not in line:
-                continue
-            assert "cannot drop a stop" not in line, line
-            assert "cannot add one" not in line, line
+
+        # **Across the block, not within a line.** The two facts are always
+        # on different lines, so a per-line check could never fire - measured
+        # against a mutant restoring pass 1's original blocker, which left
+        # this test green. For each gated trigger: it is named in the
+        # fall-back list, or it carries a withheld sentence, never both.
+        fell_back = [line for line in text.split(" | ")
+                     if line.startswith("No rule from the desk on")]
+        listed = fell_back[0] if fell_back else ""
+        for trigger, _action in GATED:
+            withheld = _withheld_sentence(trigger, plan)
+            in_list = trigger.replace("_", " ") in listed
+            said = withheld is not None and withheld in text
+            assert not (in_list and said), (stints, trigger, text)
 
 
 def test_a_rule_for_something_he_cannot_see_is_not_a_standing_order():
@@ -1105,7 +1119,7 @@ def test_the_disagreement_reads_as_english():
     bad = {"stints": [{"laps": 5}] * 3, "stops": -2}
     assert _stops_planned(bad) is None
     said = _stop_disagreement(bad)
-    assert said is not None and         "its stop count says -2 - which is not a count" in said, said
+    assert said is not None and         "its stop count says -2 (not a count)" in said, said
     assert "he may bring a planned stop forward" not in lines(
         {**bad, "handover": {"playbook": []}})
 
@@ -1138,7 +1152,7 @@ def test_the_disagreement_reads_as_english():
                 # 2 - with nothing telling the driver the stored plan
                 # carries an impossible figure.
                 if any(f < 0 for f in figures):
-                    assert "which is not a count" in said, (plan, said)
+                    assert "(not a count)" in said, (plan, said)
                     continue
                 assert len(set(figures)) > 1, (plan, said)
 
@@ -1225,3 +1239,55 @@ def test_an_action_george_cannot_run_is_not_a_standing_order():
     without = lines({"stints": no_stop["stints"],
                      "handover": {"playbook": []}})
     assert "fuel long" in without.split("No rule from the desk on")[1]
+
+
+def test_a_corrupt_reading_is_placed_and_named():
+    """Both halves of the disagreement wording shipped untested: a mutant
+    that stops ordering the corrupt reading last, and one that removes the
+    single-reading branch, each left every test green.
+
+    The 100-combination sweep cannot reach either - it seeds `stints` on
+    every iteration, so it can never build a plan with one reading."""
+    from pitcrew.strategy.handover import _stop_disagreement
+
+    # Corrupt last, so its clause cannot dangle into the next reading.
+    said = _stop_disagreement({"stints": [{}] * 3, "stops": -2,
+                               "pit_laps": [1]})
+    assert said is not None
+    assert said.index("(not a count)") > said.index("box laps name 1 stop"), \
+        said
+    assert "(not a count), its" not in said
+
+    # One reading cannot disagree with itself.
+    alone = _stop_disagreement({"stops": -1})
+    assert alone is not None
+    assert "disagrees with itself" not in alone, alone
+    assert "The plan's stop count reads -1, which is not a count" in alone
+    assert "How many stops it holds is not known" in alone
+
+    # Both branches end the same way about the same fact.
+    assert said.endswith("How many stops it holds is not known.")
+    assert alone.endswith("How many stops it holds is not known.")
+
+
+def test_a_granted_rule_the_plan_cannot_fire_still_says_the_fall_back():
+    """Three states of one trigger and the third was silent. A 0-stop plan
+    with a GARBAGE `fuel_long` rule and one with NO rule both said George
+    falls back to his own; the one with the desk's real `drop_stop` grant -
+    the grant `GATED` exists to accept - said only that it cannot fire."""
+    stints = [{"laps": 20, "compound": "RM", "start_lap": 1}]
+
+    def fuel_long_lines(playbook):
+        said = lines({"stints": stints, "handover": {"playbook": playbook}})
+        return [line for line in said.split(" | ") if "fuel long" in line]
+
+    granted = fuel_long_lines([
+        {"trigger": "fuel_long", "action": "drop_stop", "when": "a",
+         "until": "b"}])
+    assert len(granted) == 1 and "there is no stop to drop" in granted[0]
+    assert "George falls back to his own" in granted[0], granted
+
+    for playbook in ([], [{"trigger": "fuel_long", "action": "teleport_to_pits",
+                           "when": "a", "until": "b"}]):
+        said = fuel_long_lines(playbook)
+        assert any("falls back to his own" in line for line in said), said
