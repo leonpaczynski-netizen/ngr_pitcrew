@@ -347,7 +347,7 @@ the hub says weather RANDOM with inters and wets allowed.
 | 1.4 | **One remaining-laps expression, one pit-loss policy** across `calls`, `replan`, `rival_calls`, the board | G13, G14 | one function, three callers |
 | 1.5 | **The rail**: `structural_action` set on `stops-off`, the wear "Box this lap", and the stay-out fold; or delete `_within_the_playbook`. Decide. ⟂ And retire `safety_car` from `TRIGGERS` (`strategy/handover.py:43`) — no channel, no lobby setting — so it stops appearing under *unhandled* | G15, §6.1 | one of the two; test proves it; `safety_car` gone from `TRIGGERS` |
 | 1.6 | **Persist what the wall and the trend see**: per-lap gaps, rival positions, sightings, plan-vs-actual snapshot; **a verdict per call** (`race/call_outcome` persisted, driver override recorded) | S8, S10, L11 | tables have rows after a race; export carries them |
-| 1.7 | **Race page absorbs the LoadedCard** (playbook, unhandled triggers, certificate) and `quali_minutes`; then the Strategy page goes | S12 | driver sees the standing orders before the green on the page he uses |
+| 1.7 | ⟂ **Race page absorbs the LoadedCard** (playbook, unhandled triggers, certificate); Strategy leaves the *Race day* rail group. **The Strategy page is KEPT and `quali_minutes` did NOT move** — the driver's call, 7 Sep: the page is where a plan is built, approved and qualifying is planned, all with the headset off, so only the contract needed to reach the grid | S12 | driver sees the standing orders before the green on the page he uses |
 | 1.8 | ⟂ **The driver board, lap by lap**: box countdown; fuel in hand *to the stop* and *to the flag* as two numbers; gap ahead and behind with trend; tyre split (rear–front and RR–RL gaps, the signal measured at r=+0.82 to wear), never raw temps as colour; position; the tyres-at-stop decision; last call and its register | brief "dashboard or voice" | board spec in `ui/driver_view.py` docstring; screenshot from the harness |
 | 1.9 | **Gauge guard symmetric**: a drop to zero on all corners holds for 3 reads like a rise | G20 | no series reset on replay |
 | 1.10 | **Rule 13 pass** on the call inventory | G19 | manifest diff |
@@ -900,8 +900,87 @@ through a real coordinator or a real screen.
   of a real plan and now on a dropped stop — `DriverState.has_plan` sits
   right there unread.
 
-**Left in Phase 1:** 1.7 (race page absorbs the loaded card, Strategy page
-goes), 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
+### Row 1.7 — the standing orders, and critic pass 1
+
+**AGREED pending: `3558801` + the critic-pass commit.** The playbook, the
+certificate and what George cannot see lived on the Strategy page's
+`LoadedCard` — and `refresh_plan`, which rebuilds that card, is wired to the
+RACE screen's `shown` signal, so arriving on the race page refreshed a
+contract rendered a screen away. The words are in
+`strategy.handover.standing_orders` now and the ink in
+`ui.widgets.render_standing_orders`; both screens render through them.
+
+**The driver's scope call, 7 Sep:** *"drop it from race-day nav, keep the
+page."* The row sent `quali_minutes` to the Race page because the page was
+going to be deleted. It is kept, under a **Plan** group of its own, which is
+where a qualifying session read with the headset off belongs — so
+`quali_minutes` stays put and the row's "then the Strategy page goes" is
+withdrawn rather than silently unmet. The rail group was **split** rather
+than the name moved: `SCREENS` is `NAV_GROUPS` flattened and the rail indexes
+straight into the stack, so relocating would have renumbered the stack build
+order, `LATE_SCREENS` and the shortcuts.
+
+**Three defects found by rendering the real stored plans through it** — not
+by reading the diff — all in one direction, the driver told a rule is armed
+when it cannot fire: a blind trigger was named only when there was *no* rule
+for it (the RBR Short plan has a `rain` entry, so "he cannot see rain" was
+suppressed and the rule listed as a standing order); `safety_car`, retired
+from `TRIGGERS` on 7 Sep, rendered as an ordinary order on a plan that
+predates the retirement, because `PlaybookEntry.validate` runs when a
+handover is *authored* and nothing revalidates a stored one; and
+`standing_orders({})` built the whole contract for a driver with **no plan**.
+The six assumptions stored against the Daytona plan are rendered for the
+first time.
+
+**Critic pass 1 — two blockers, three majors, six minors, all fixed:**
+
+1. **`clear_log()` deleted the block at the arm.** It predates the row, takes
+   every widget out of `log_layout` and `deleteLater`s anything that is not
+   `log_empty` — and the orders live in that layout. `start_race` calls it.
+   Between the arm and the deferred delete the block was out of the layout
+   but still a child of the log holding its last geometry, drawing under the
+   incoming calls; once the delete ran, **every later `set_plan` raised
+   `RuntimeError: wrapped C/C++ object of type QVBoxLayout has been
+   deleted`** — reachable by returning to the Race page after the race, by
+   `_poll_plan`, and by approving a plan mid-race, and PyQt aborts the
+   process after `sys.excepthook`. It is the failure CLAUDE.md §7 records as
+   having cost the suite a quarter of its files for months. `processEvents`
+   does not run a DeferredDelete, which is why the suite was green.
+2. **"George falls back to his own" was false for exactly the two triggers
+   the structural rail gates.** `_may` returns True unconditionally for a
+   free action and refuses a structural one with no entry. Two pairs reach
+   it: `tyre_short → add_stop` and `fuel_long → drop_stop`. `tyre_short`
+   joined `TRIGGERS` on 7 Sep so **no plan on file grants it**, and the
+   approved plan told the driver George would use his judgement on the one
+   decision he is barred from. **This is the identical inversion the commit
+   claimed to be fixing** — the words changed, the failure to separate a free
+   action from a gated one did not. The predicate is `handover.grants` now
+   and `_may` delegates to it, so the sentence comes from the expression that
+   decides the call (rule 12).
+3. `"Standing orders - THE DESK"` was stamped over a block whose whole
+   content is that no desk wrote anything — the row's own third fix,
+   reintroduced by the heading it added.
+4. Three phrasings for one fact (rule 13): the screen, the CLI's *"George
+   will report it and decide nothing"*, and the stored `unhandled` list. The
+   CLI prints the shared sentences now; the stored field is documented as an
+   authoring-time record that nothing reads back.
+5. *"which he cannot see at all — it will never fire"* asserted a cause the
+   code had not determined: `dead` is anything not in `TRIGGERS`, which is a
+   retirement for any reason. Two sentences now.
+6. **The rail has never fitted the smallest display and nothing measured
+   it** — 384 px bare and 510 px with all seven state notes against 501, and
+   this row's new heading took it to 425/551. Nothing clipped because the
+   layout spent the 20 px bottom margin first. It scrolls now, and there is a
+   test.
+7. Minor, each fixed: `dead` compared frozen dataclasses **by value**, so a
+   duplicated entry reported a live rule as never firing; a blank stored
+   trigger rendered *"The desk left a rule for , which …"*; the height test
+   was a tautology inside a scroller (it asserts the block is in the scroll
+   area too now); `render_standing_orders` returned a count one short of the
+   widgets it added; and the `show_standing_orders` docstring named the wrong
+   condition for an empty block.
+
+**Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three
 kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic
 5's carried questions (a misidentified board row resets the held-up window;

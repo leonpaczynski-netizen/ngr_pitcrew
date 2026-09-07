@@ -391,12 +391,15 @@ class RaceScreen(QWidget):
         The words come from `strategy.handover.standing_orders`, which the
         Strategy page's `LoadedCard` renders too - one contract, one source.
 
-        **The list is empty only when there is NO PLAN**, and then the block
-        hides: a heading over nothing reads as the app having lost something.
-        A plan with no HANDOVER is a different thing and is not empty - it
-        says George has no rule from the desk on any trigger and falls back
-        to his own, which is the most consequential line on the grid and is
-        true of seven of the ten approved plans on file.
+        **The block hides when there is nothing to say** - with no plan, and
+        with an approved row whose `plan_json` is empty, which is the same
+        state read from the store. A heading over nothing would read as the
+        app having lost something.
+
+        A plan with no HANDOVER is a different thing and is not empty: it
+        says George has no rule from the desk, which is the most
+        consequential line on the grid and is true of seven of the ten
+        approved plans on file.
         """
         while self.orders_layout.count():
             item = self.orders_layout.takeAt(0)
@@ -408,7 +411,7 @@ class RaceScreen(QWidget):
         # The heading names the author here and not on the Strategy card,
         # where `Declared(author)` is already in the header beside the label.
         shown = render_standing_orders(self.orders_layout, plan,
-                                       author=author or "the desk")
+                                       author=author, heading=True)
         self.orders.setVisible(bool(shown))
 
     # ---------------------------------------------------------------- actions
@@ -468,6 +471,10 @@ class RaceScreen(QWidget):
         # the store again is a second chance for the orders and the plan line
         # two inches above them to describe different plans.
         self.show_standing_orders(plan, author=author_of(plan))
+        # `author_of` returns None for a plan with no handover, and the
+        # heading then carries no attribution: "Standing orders - THE DESK"
+        # over a block whose whole content is that no desk wrote anything is
+        # the same claim the empty-plan guard exists to refuse.
         stints = plan.get("stints") or []
         # The same stints the line below spells out in words, as one object.
         self.spine.setPlan([st.get("laps") for st in stints],
@@ -579,12 +586,27 @@ class RaceScreen(QWidget):
         self.offer_row.setVisible(False)
 
     def clear_log(self) -> None:
+        """Empty the call log. **The standing orders are not a call.**
+
+        This deleted them. It takes every widget out of `log_layout` and
+        `deleteLater`s anything that is not `log_empty`, and the orders live
+        in that layout now - so arming a race destroyed the block, and every
+        later `set_plan` died on a deleted `QVBoxLayout`, which PyQt turns
+        into an abort. Reachable by returning to the Race page after the
+        race, by `_poll_plan`, and by approving a plan mid-race.
+
+        They also SHOULD survive the arm: the contract is what he reads on
+        the grid, and the green flag is not the moment to take it away.
+        """
+        keep = (self.log_empty, self.orders)
         while self.log_layout.count():
             item = self.log_layout.takeAt(0)
-            if item.widget() and item.widget() is not self.log_empty:
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget is not None and widget not in keep:
+                widget.deleteLater()
         self.log_empty.setVisible(True)
         self.log_layout.addWidget(self.log_empty)
+        self.log_layout.addWidget(self.orders)
         self.log_layout.addStretch(1)
         self.last_call.setText("—")
         self.last_reason.setText("")

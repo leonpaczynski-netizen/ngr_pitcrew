@@ -14,8 +14,10 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPainter, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
+    QFrame,
     QHBoxLayout,
     QMainWindow,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -523,19 +525,28 @@ class NavItem(StencilLabel):
 class NavRail(QWidget):
     """Screen selection, lettered like a rack tag and grouped by job.
 
-    Eight equal peers in one list misrepresented the work. Two loops run
-    through this app - prepare the car and learn from it (Event, Car,
-    Practice, Engineer), and race it (Strategy, Race) - and the rail showed
-    them as siblings of each other and of Reference and Settings, in an order
-    that put Engineer, the last step of the first loop, after Race.
+    Seven equal peers in one list misrepresented the work. Two loops run
+    through this app - prepare the car and learn from it, and race it - and
+    the rail showed them as siblings of each other and of Reference and
+    Settings, in an order that put the last step of the first loop after the
+    race.
 
-    Grouping rather than restructuring: the same eight screens, with the two
+    Grouping rather than restructuring: the same seven screens, with the
     loops named and ruled apart, so the rail describes the work instead of
     listing it.
 
     **Four named groups since row 1.7**, because planning is its own step: it
     happens after the practice it rests on and before the race, and it is the
-    last thing done with the headset off.
+    last thing done with the headset off. Strategy left *Race day* with it -
+    the standing orders are on the Race page now, so there is nothing on that
+    screen he needs with a helmet on.
+
+    **It scrolls, as of that row.** Bare it wants 425 px; with all seven
+    state notes showing, 551; and the smallest display he owns gives 501.
+    Nothing was clipped, because the layout spent the bottom margin first,
+    but that is a budget rather than a fix and how many notes show is set by
+    `nav_state` rather than by the layout. The rail is the one surface used
+    on every visit and Settings is the last item on it.
     """
 
     def __init__(self, stack: QStackedWidget, groups,
@@ -551,7 +562,19 @@ class NavRail(QWidget):
         self._labels: list[StencilLabel] = []
         self._notes: list[StencilLabel] = []
 
-        column = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroller.setStyleSheet("background: transparent;")
+        inner = QWidget()
+        outer.addWidget(scroller)
+
+        column = QVBoxLayout(inner)
         column.setContentsMargins(20, 26, 12, 20)
         column.setSpacing(4)
         column.addWidget(StencilLabel("Pit Crew", size=16, colour=theme.CRAYON,
@@ -593,6 +616,7 @@ class NavRail(QWidget):
                 index += 1
 
         column.addStretch(1)
+        scroller.setWidget(inner)
         self.select(0)
 
     # What fits on one line in the rail at this size, tracked. A note that

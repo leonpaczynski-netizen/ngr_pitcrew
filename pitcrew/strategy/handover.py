@@ -94,6 +94,41 @@ STRUCTURAL_ACTIONS = frozenset({
 # playbook that contained either would be executed. See `brain/driver.md`.
 FORBIDDEN_ACTIONS = ("fuel_map", "brake_bias_forward")
 
+
+def grants(entries, trigger: str, action: str) -> bool:
+    """Whether a playbook lets George take this action on this trigger.
+
+    **The gate the race actually runs on**, and the gate the standing orders
+    are written from - one expression, because they were two and disagreed.
+    `RaceCoordinator._may` delegates here; `standing_orders` asks it before it
+    tells the driver what George will do without asking. A screen that decides
+    that from "is there an entry" instead of from this says the opposite of
+    the truth for exactly the pairs in `GATED`, which is what it did.
+
+    Takes the playbook as a dict keyed by trigger (the coordinator's) or as a
+    list of entries (a stored plan's).
+    """
+    if action not in STRUCTURAL_ACTIONS:
+        return True
+    entry = (entries.get(trigger) if isinstance(entries, dict)
+             else next((e for e in entries if e.trigger == trigger), None))
+    return entry is not None and entry.action == action
+
+
+# **The structural decisions a trigger can reach, and what George does
+# instead when the desk did not grant one.** Both pairs are real call sites -
+# `calls.py:2720` (`add_stop`, the wear cliff with no stop planned) and
+# `calls.py:1906` (`drop_stop`) - and both fall back to the call's
+# `report_form`, so the driver hears the reading and decides the shape.
+# Anything not listed here is free: `_may` never consults the playbook for it
+# and an author who forgot an entry cannot silence it.
+GATED = (
+    ("tyre_short", "add_stop", "add a stop",
+     "he reports the reading and the stop stays out of the plan"),
+    ("fuel_long", "drop_stop", "drop a stop",
+     "he says you are fuelled to the flag and the stops stay in the plan"),
+)
+
 # Names the stored payload owns. A plan carrying one of these is refused
 # rather than merged - see `Handover.as_stored`.
 RESERVED_KEYS = frozenset(("handover", "author", "playbook", "unhandled",
@@ -196,6 +231,13 @@ class Handover:
             "author": self.author,
             "playbook": [e.as_dict() for e in self.playbook],
             "assumptions": list(self.assumptions),
+            # **A record of the moment, and nothing reads it back.** It
+            # is `unhandled()` as it stood when the plan was written, so a
+            # trigger retired or added since makes it disagree with today -
+            # `[]` on strategies 15 and 16, `['safety_car']` on 29, while
+            # `standing_orders` recomputes and says "tyre short". Every
+            # surface the driver or the tune builder sees recomputes;
+            # this is here for the audit, which asks what was known then.
             "unhandled": self.unhandled(),
         }
 
@@ -287,9 +329,17 @@ def standing_orders(stored: dict) -> list[Order]:
     # handover is AUTHORED and nothing revalidates a stored one, so the check
     # has to be here, at the point the driver reads it.
     entries = playbook_of(plan)
-    live = [e for e in entries
+    # **An entry with no trigger is unreadable, not a rule about nothing.**
+    # `playbook_of` defaults every field to `""`, and this function exists
+    # because stored rows escape validation - so the blank case has to be
+    # named rather than rendered as "The desk left a rule for , which ...".
+    blank = [e for e in entries if not e.trigger.strip()]
+    named = [e for e in entries if e.trigger.strip()]
+    live = [e for e in named
             if e.trigger in TRIGGERS and e.trigger not in CANNOT_SEE]
-    dead = [e for e in entries if e not in live]
+    # Compared by identity, not by value: two byte-identical entries are two
+    # rows, and `e not in live` would have dropped the second of them.
+    dead = [e for e in named if not any(e is kept for kept in live)]
     if live:
         out.append(Order("George may, on his own", GAP, heading=True))
         for entry in live:
@@ -307,32 +357,62 @@ def standing_orders(stored: dict) -> list[Order]:
     unhandled = [t for t in TRIGGERS if t not in covered]
     no_rule = [t for t in unhandled if t not in CANNOT_SEE]
 
-    # **Two sentences, because they ask different things of the driver.** One
-    # says there is nothing there. The other says there is something there
-    # that will not work, which is the more urgent of the two and was the one
-    # the card fell silent on.
-    ruled = sorted({e.trigger for e in dead})
-    unruled = [t for t in CANNOT_SEE if t not in {e.trigger for e in dead}]
+    # **Three sentences, because a driver would act differently on each.**
+    # Nothing there; something there that cannot fire; something there whose
+    # cause is a retirement rather than a missing channel. The first two were
+    # one sentence and it asserted a cause the code had not determined:
+    # `dead` is anything not in `TRIGGERS`, which is a retirement for ANY
+    # reason, and "he cannot see it at all" is only true of `CANNOT_SEE`
+    # (rules 5 and 12).
+    blind_ruled = sorted({e.trigger for e in dead if e.trigger in CANNOT_SEE})
+    gone_ruled = sorted({e.trigger for e in dead
+                         if e.trigger not in CANNOT_SEE})
+    unruled = [t for t in CANNOT_SEE if t not in blind_ruled]
     if unruled:
         out.append(Order(
             "He cannot see " + ", ".join(t.replace("_", " ") for t in unruled)
             + " at all - tell him.", GAP))
-    if ruled:
+    if blind_ruled:
         out.append(Order(
             "The desk left a rule for "
-            + ", ".join(t.replace("_", " ") for t in ruled)
+            + ", ".join(t.replace("_", " ") for t in blind_ruled)
             + ", which he cannot see at all - it will never fire. Tell him.",
             GAP))
-    if no_rule:
-        # **"No rule from the desk", not "he will do nothing".** The card said
-        # the second and it was false in the direction that matters:
-        # `stop_still_needed` and `stay_out_call` decide fuel and a missed
-        # stop with or without a playbook, so a driver told George would stay
-        # out of it would have been told the opposite of the truth on the one
-        # screen where he is reading the contract.
+    if gone_ruled:
+        out.append(Order(
+            "The desk left a rule for "
+            + ", ".join(t.replace("_", " ") for t in gone_ruled)
+            + ", which George no longer acts on - it will never fire.", GAP))
+    if blank:
+        out.append(Order(
+            f"{len(blank)} playbook "
+            + ("entry names" if len(blank) == 1 else "entries name")
+            + " no trigger and cannot be read - treat the desk's rules as "
+              "incomplete.", GAP))
+
+    # **What he does NOT fall back to his own on.** `grants` is the gate the
+    # race runs on: a structural action with no entry is refused, and the
+    # driver has to know which decisions that removes from George rather than
+    # being told he will use his judgement on all of them.
+    withheld = [(trigger, cannot, instead)
+                for trigger, action, cannot, instead in GATED
+                if not grants(live, trigger, action)]
+    for trigger, cannot, instead in withheld:
+        out.append(Order(
+            f"On {trigger.replace('_', ' ')} he cannot {cannot} without a "
+            f"rule from the desk - {instead}.", GAP))
+
+    # **"No rule from the desk", not "he will do nothing".** The card said the
+    # second and it was false in the direction that matters: `stop_still_
+    # needed` and `stay_out_call` decide fuel and a missed stop with or
+    # without a playbook. The gated pairs are named above and drop out here,
+    # because saying both about one trigger is saying two things.
+    gated_triggers = {trigger for trigger, _c, _i in withheld}
+    falls_back = [t for t in no_rule if t not in gated_triggers]
+    if falls_back:
         out.append(Order(
             "No rule from the desk on "
-            + ", ".join(t.replace("_", " ") for t in no_rule)
+            + ", ".join(t.replace("_", " ") for t in falls_back)
             + " - George falls back to his own.", GAP))
 
     # **The assumptions the plan rests on, which nothing rendered.** Six of
@@ -478,9 +558,13 @@ def main(argv: list[str] | None = None) -> int:
           "certifies it again against the evidence of the day.")
     for warning in problems:
         print(f"  warning: {warning}")
-    for trigger in handover.unhandled():
-        print(f"  no playbook entry for {trigger} - George will report it "
-              f"and decide nothing")
+    # **The same sentences the two screens show.** These were a third
+    # wording of one fact - "George will report it and decide nothing" - and
+    # it was the wording the screens were changed away from for being false
+    # on the free triggers (rule 13).
+    for order in standing_orders(handover.as_stored(handover.plan)):
+        if order.register == GAP and not order.heading:
+            print(f"  {order.text}")
     return 0
 
 

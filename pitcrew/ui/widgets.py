@@ -1755,8 +1755,9 @@ class PlanSpine(QWidget):
 
 
 def render_standing_orders(layout, plan: dict | None,
-                           author: str | None = None) -> int:
-    """Add the plan's standing orders to `layout`. Returns how many lines.
+                           author: str | None = None,
+                           heading: bool = False) -> int:
+    """Add the plan's standing orders to `layout`. Returns widgets added.
 
     **Two screens say this now** (row 1.7): the Strategy page's `LoadedCard`,
     where the plan is approved, and the Race page, where the driver is sitting
@@ -1777,18 +1778,27 @@ def render_standing_orders(layout, plan: dict | None,
     orders = standing_orders(plan or {})
     if not orders:
         return 0
-    if author is not None:
-        layout.addWidget(StencilLabel(f"Standing orders - {author.upper()}",
-                                      size=11, colour=theme.STENCIL_DIM,
-                                      tracking=14.0))
+    added = 0
+    if heading:
+        # **Named only when somebody is named.** `author_of` is None for a
+        # plan with no handover, and "Standing orders - THE DESK" over a
+        # block whose whole content is that no desk wrote anything asserts
+        # the opposite of what it says.
+        layout.addWidget(StencilLabel(
+            f"Standing orders - {author.upper()}" if author
+            else "Standing orders",
+            size=11, colour=theme.STENCIL_DIM, tracking=14.0))
+        added += 1
     ink = {DECLARED: theme.CRAYON, DERIVED: theme.DERIVED}
     for order in orders:
         if order.heading:
             layout.addWidget(StencilLabel(order.text, size=11,
                                           colour=theme.STENCIL_DIM,
                                           tracking=14.0))
+            added += 1
             continue
         layout.addWidget(BodyLabel(
             order.text, size=13,
             colour=ink.get(order.register, theme.STENCIL_DIM), wrap=True))
-    return len(orders)
+        added += 1
+    return added

@@ -1416,12 +1416,15 @@ class RaceCoordinator:
         direction: George cannot put him in the pit lane on the strength of a
         file nobody wrote.
         """
-        from pitcrew.strategy.handover import STRUCTURAL_ACTIONS
+        # **`handover.grants` is the expression**, not a second copy of it
+        # here. The standing orders on the Race page tell the driver what
+        # George may do without asking, and they were computed from "is there
+        # an entry" while this was computed from the action - so the screen
+        # said "George falls back to his own" about the two decisions this
+        # refuses him (row 1.7, critic pass 1).
+        from pitcrew.strategy.handover import grants
 
-        if action not in STRUCTURAL_ACTIONS:
-            return True
-        entry = self._playbook.get(trigger)
-        return entry is not None and entry.action == action
+        return grants(self._playbook, trigger, action)
 
     def _pending_stops(self) -> int:
         """Stops still ahead of the stint being run, that will actually happen.
