@@ -119,6 +119,28 @@ class SplitHistory:
         """Forget everything. Called when a session opens, not at app exit."""
         self.laps.clear()
 
+    def new_stint(self) -> None:
+        """Forget everything, at a pit stop.
+
+        **The session reset is not enough, and the axle block is what made
+        that matter.** The window is eight laps and a stop lands in the
+        middle of it, so a fit across the stop describes two sets of rubber
+        as though they were one. Driven through a realistic stint - the old
+        set ramping +6 to +20 degC and a fresh one restarting at +3 and
+        opening at +1 a lap - the board drew *"REAR OVER FRONT · 8 laps ·
+        settling 2.0/lap"* for six consecutive laps while the gap was in
+        fact opening. The sample count is a lie in the same breath: half
+        those laps were a different tyre.
+
+        **At every stop, whether or not a set went on.** The tri-state tyre
+        detector can say "cannot tell", and an unknown is not a no
+        (CLAUDE.md 4.3); and even a fuel-only stop parks a stationary car
+        for half a minute, so the laps either side of it are not one series
+        whatever came off. Losing history costs the trend five laps of
+        silence, which is honest. Keeping it costs a brake-balance decision.
+        """
+        self.laps.clear()
+
     def note_lap(self, temps: dict[str, float | None] | None) -> None:
         """Take one whole-lap sample: the four corner means at a crossing.
 

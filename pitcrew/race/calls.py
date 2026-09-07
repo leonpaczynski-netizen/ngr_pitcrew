@@ -2100,32 +2100,14 @@ def fuel_target_l(state: RaceState) -> float | None:
     after_stop, _basis = _laps_the_fill_covers(state)
     if after_stop is None:
         return None
-    return _fill_to_cover(state, after_stop)
-
-
-def _fill_to_cover(state: RaceState, laps: int) -> float | None:
-    """The tank reading at pit exit that covers `laps` and its margin.
-
-    **The one place this arithmetic lives.** `fuel_target_l` sizes the stop in
-    hand with it; the driver board sizes a stop that is still laps away with
-    it, because a board figure computed a second way is the drift rule 12 is
-    about - and this app has already told the driver two different numbers
-    about one stop.
-
-    Unclamped by the tank, exactly as `fill_for_l` is: a requirement larger
-    than the tank is returned honestly so the caller can refuse it or say the
-    shortfall. Clamping once made an impossible plan look cheap.
-    """
-    if not state.fuel_per_lap_l:
-        return None
-    margin_l, _ = fuel_margin_l(laps, state.fuel_per_lap_l,
+    margin_l, _ = fuel_margin_l(after_stop, state.fuel_per_lap_l,
                                 sd_l=state.fuel_sd_l,
                                 timed=state.race_minutes is not None,
                                 lap_count_firm=state.laps_estimate_firm)
     # Solved, not multiplied: the fuel is its own weight, so a smaller fill
     # burns less and permits a smaller fill again. Identical to the old
     # product when `fuel_reference_load_l` is None.
-    return fill_for_l(state.fuel_per_lap_l, laps,
+    return fill_for_l(state.fuel_per_lap_l, after_stop,
                       reference_load_l=state.fuel_reference_load_l,
                       buffer_l=(margin_l or 0.0),
                       capacity_l=state.fuel_capacity_l)
@@ -3218,6 +3200,13 @@ NO_RACE_LENGTH = "the race length is not known"
 NOT_REACHING_THE_BOX = "this tank does not reach the box"
 STOP_PAST_THE_FLAG = "the plan's stop is at or past the flag"
 ANOTHER_STOP_AFTER = "another stop after this one"
+NO_CAPACITY = "no tank size read"
+# The reference the flag figure rests on, said under it so it cannot be read
+# as a sibling of the live number beside it (rule 13). A stop refills, so what
+# he is carrying now does not decide the run home; the tank's size does.
+ON_A_FULL_TANK = "on a full tank at the stop"
+# And on the other side of the last stop, where there is nothing left to add.
+ON_THE_TANK_ABOARD = "on the fuel aboard"
 
 
 def _why_no_fuel_figure(state: RaceState) -> str:
@@ -3258,8 +3247,16 @@ def fuel_in_hand_to_stop(state: RaceState) -> tuple[float | None, str | None]:
     return round(gap, 1), None
 
 
-def fuel_in_hand_to_flag(state: RaceState) -> tuple[float | None, str | None]:
-    """`(laps spare at the chequer, or None and why not)`.
+def fuel_in_hand_to_flag(
+        state: RaceState) -> tuple[float | None, str | None, str]:
+    """`(laps spare at the chequer, why there is none, what it rests on)`.
+
+    **All three out of one expression**, so no caller can take the figure
+    without the reference it was measured against. That is `fuel_in_hand`'s
+    own shape and it is here for the same reason: this number means two
+    different supplies on the two sides of the last stop, and a caption that
+    could drift from the branch that produced it is rule 13 waiting to
+    happen.
 
     **One question, asked the same way whatever the race has left in it:** how
     many laps of fuel will be aboard when he takes the flag, counting every
@@ -3269,19 +3266,39 @@ def fuel_in_hand_to_flag(state: RaceState) -> tuple[float | None, str | None]:
     come the fill it will take is part of the supply, and leaving it out is
     the -7.1 above.
 
-    **Three terms, and each is a fact rather than a clamp:**
+    **With a stop still to come the supply is the TANK, not the plan's fill,
+    and the first version of this got that wrong in a way worth recording.**
+    It sized the fill George would call for and measured that against the
+    flag - which is arithmetically true and useless, because
+    `fuel_margin_l` sizes the margin as a multiple of the burn, so
+    `fill / burn - laps` collapses to the constant `FUEL_MARGIN_LAPS` for
+    every state where he arrives with less than the target. Driven over the
+    Daytona race shape it read **1.0 at 45, 60, 84 and 95 litres aboard and
+    at burns from 4.0 to 7.0** - a block captioned "in hand" beside one that
+    moves, which cannot move. That is an instrument reading our own switch
+    back to us, and this project has shipped one of those before.
 
-    * what the tank holds when he arrives at the box - and if that is
-      negative he does not arrive, so the answer is `None` and says so.
-      CLAUDE.md rule 9: a negative reading is a reading whose reference is
-      wrong, not a zero;
-    * the fill George will call for, from `_fill_to_cover`, the same
-      expression `fuel_target_l` uses at the stop itself;
-    * the tank's own capacity. The pump cannot take fuel out, so the car
-      leaves with at least what arrived; it cannot put more in than the tank
-      holds, so a fill nobody can take is the shortfall that makes this
-      figure go negative. **That negative is the finding** - it is the app
-      saying a one-stop plan does not reach - and it is not clamped away.
+    So the term that binds is **the tank**: a stop refills, so what he is
+    carrying now cannot decide the run home, and the question that is still
+    open is whether the run home FITS. `capacity / burn - laps after the box`
+    answers it, and:
+
+    * it moves for the two reasons it should - a burn that drifts, and a stop
+      that slips - and for no others;
+    * **its negative is the finding**, and the finding is "one stop does not
+      do this race". Never clamped away;
+    * it is `None`, with a reason, where the capacity is unknown or zero.
+      That is the whole expression here, not a refinement of it, so a missing
+      capacity cannot quietly become an infinite tank (rule 3). GT7 reports
+      0 L for an electric car and that is a real value, not an error
+      (CLAUDE.md 3.4) - it still cannot answer this question.
+
+    **It names its reference in the caption** - a full tank at the stop - so
+    it cannot be read as a sibling of the live figure beside it (rule 13).
+
+    Still refused where he does not reach the box at all: a fill he never
+    takes is not a supply, and the negative arrival is a reading whose
+    reference is wrong rather than a zero (rule 9).
 
     **Refused, not guessed, where a further stop is planned.** The laps after
     the *next* stop are covered by a fill nothing has sized, so a figure here
@@ -3293,35 +3310,31 @@ def fuel_in_hand_to_flag(state: RaceState) -> tuple[float | None, str | None]:
         # and `fuel_in_hand` is already measuring it against the flag.
         gap, reference = fuel_in_hand(state)
         if gap is None:
-            return None, _why_no_fuel_figure(state)
+            return None, _why_no_fuel_figure(state), ON_THE_TANK_ABOARD
         # Belt and braces on rule 13: this branch may only answer while the
         # voice's own frame is the flag, and `_stop_is_the_frame` is False
         # here, so it is - but a future edit to `fuel_frame` must not be able
         # to quietly relabel this number.
         if reference != TO_THE_FLAG:                    # pragma: no cover
-            return None, NO_STOP_TO_COME
-        return gap, None
+            return None, NO_STOP_TO_COME, ON_THE_TANK_ABOARD
+        return gap, None, ON_THE_TANK_ABOARD
     if state.further_stop_planned is not False:
-        return None, ANOTHER_STOP_AFTER
+        return None, ANOTHER_STOP_AFTER, ON_A_FULL_TANK
     burn = state.fuel_per_lap_l
     if not burn or state.fuel_l is None or state.laps_remaining() is None:
-        return None, _why_no_fuel_figure(state)
+        return None, _why_no_fuel_figure(state), ON_A_FULL_TANK
+    capacity = state.fuel_capacity_l
+    if not capacity or capacity <= 0:
+        return None, NO_CAPACITY, ON_A_FULL_TANK
     remaining = state.laps_remaining()
     to_stop = state.laps_to_stop()
     after_box = remaining - to_stop
     if after_box <= 0:
-        return None, STOP_PAST_THE_FLAG
+        return None, STOP_PAST_THE_FLAG, ON_A_FULL_TANK
     at_box_l = state.fuel_l - to_stop * burn
     if at_box_l < 0:
-        return None, NOT_REACHING_THE_BOX
-    fill_to = _fill_to_cover(state, after_box)
-    if fill_to is None:
-        return None, NO_BURN_YET
-    leaves_with_l = max(at_box_l, fill_to)
-    capacity = state.fuel_capacity_l
-    if capacity and leaves_with_l > capacity:
-        leaves_with_l = capacity
-    return round(leaves_with_l / burn - after_box, 1), None
+        return None, NOT_REACHING_THE_BOX, ON_A_FULL_TANK
+    return round(capacity / burn - after_box, 1), None, ON_A_FULL_TANK
 
 
 # Past this fraction of a timed race, he wants the laps as well as the clock.

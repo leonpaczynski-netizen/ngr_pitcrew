@@ -141,6 +141,16 @@ From `RaceState.laps_to_stop()`, which clamps at zero, so `laps_past_box`
 carries the sign the clamp throws away: "NOW / box this lap" and "NOW / 2 past
 the box lap" are different news. Urgent inside two laps.
 
+**The caption names the lap in GT7's numbering and counts the same way the
+figure above it does** - `lap_on_screen() + laps_to_stop()`. Both halves of
+that were wrong. It was the app's lap count, which is one behind the HUD at
+every crossing and further behind after a crossing lost in the pit lane (Road
+Atlanta: +1 on lap 1, +2 by lap 20); and the offset has to be `to_stop`
+exactly, because that is the convention the rest of the app executes -
+`_box_now` fires at `to_stop == 0` saying *"Box this lap"*, so at zero the lap
+in progress IS the box lap. Get either wrong and a big "2" sits over a caption
+naming a lap his HUD reaches in one, and he has to work out which lied.
+
 --- rank 2 · fuel in hand, TWO numbers, each naming its own distance ----------
 
 **This is the item that has already gone wrong once and the shape of the
@@ -156,16 +166,29 @@ So the board carries both, and:
 
 * **IN HAND TO THE STOP** is `calls.fuel_in_hand_to_stop` - literally the
   expression the voice speaks as *"N laps of fuel in hand to the stop"*, so
-  the ear and the eye cannot be given different numbers. A dash whenever
-  there is no stop still to come, saying which of the reasons it is.
-* **IN HAND TO THE FLAG** is `calls.fuel_in_hand_to_flag`, and it **counts
-  the fill still to come.** Three terms, each a fact and not a clamp: what
-  the tank holds when he arrives at the box (negative means he does not
-  arrive, and then the answer is a dash saying so - rule 9); the fill George
-  will call for, from the same expression `fuel_target_l` uses at the stop
-  itself; and the tank's capacity, because a fill nobody can take is the
-  shortfall that makes this figure go negative. **That negative is the
-  finding** and it is never clamped away.
+  the ear and the eye cannot be given different numbers. It is the live one:
+  it moves with the tank and with the burn. A dash whenever there is no stop
+  still to come, saying which of the reasons it is.
+* **IN HAND TO THE FLAG** is `calls.fuel_in_hand_to_flag`. With no stop left
+  it is the same expression again, now measured against the flag. **With a
+  stop still to come it is measured on a full tank at the pump, and its
+  sub-line says so in those words.** A stop refills, so what he is carrying
+  now cannot decide the run home; what can is whether the run home FITS in
+  the tank, and `capacity / burn - laps after the box` is that. It moves for
+  the two reasons it should - a burn that drifts, a stop that slips - and
+  **its negative is the finding: one stop does not do this race.** Never
+  clamped away. A dash, with its reason, where the capacity is unknown or
+  zero: that term is the whole expression, so a missing tank size must not
+  become an infinite one (rule 3).
+
+  ⚠️ **The first version of this sized the fill George would call for and
+  measured THAT against the flag.** Arithmetically true and useless:
+  `fuel_margin_l` sizes the margin as a multiple of the burn, so the figure
+  collapsed to the constant `FUEL_MARGIN_LAPS`. Driven over the Daytona race
+  shape it read **1.0 at 45, 60, 84 and 95 litres aboard, and at every burn
+  from 4.0 to 7.0** - a block captioned "in hand" beside one that moves,
+  which could not move. An instrument reading our own switch back to us, and
+  this project has shipped one of those before. Caught by the critic.
 
 Both refuse rather than guess where a further stop follows this one: the laps
 after the *next* stop ride on a fill nothing has sized.
@@ -177,7 +200,11 @@ alarm that fires every race. Below zero it does not reach, and that is red.
 
 The laps the tank alone covers - the old single "laps of fuel" figure - is now
 the caption under the stop number, in the words `N laps aboard`. One big
-number per question; the supply is its reason, not a third question.
+number per question; the supply is its reason, not a third question. **The
+live litres are on the box panel and nowhere else**: both figures here are
+computed from the tank as it read at the last crossing, and printing
+`packet.fuel_level` beside them put three readings of one tank on the screen
+with none of them reconciling.
 
 --- rank 2 · position ---------------------------------------------------------
 
@@ -199,17 +226,33 @@ a faster refresh makes the display worse. Coloured only against wear onset
 (RS 88 / RM 90 / RH 93 degC) and against a corner sitting 10 degC above its
 pair.
 
-⚠️ **What the onset colour rests on, stated because it is thin.** The source
-is one measurement by someone else - GT7 1.55, one car, one track, 4x wear,
-n=1 - and 1.71 rewrote the tyre slip model, so by the programme's own
-re-measurement rule it is suspect until re-measured here. Its own author
-concedes the endogeneity and does not say which aggregate (hottest wheel,
-axle mean, four-wheel mean) the number is about, and this driver's axles live
-8-11 degC apart. Empirically it has never fired on his lap means: his RR
-per-lap median peaked at 79.6 degC against a warn line at 83. **It is kept
-because it claims a WEAR threshold and not a grip window** - the thing this
-file exists to refuse - and it is flagged here so the next person to look at
-it does not have to re-derive that it is thin.
+⚠️ **This IS raw temperature drawn as colour, and row 1.8's spec line says
+"never raw temps as colour". It is kept deliberately and here is the whole
+case, so the next person does not have to re-derive it.**
+
+Kept, because what it colours against is a WEAR-onset threshold and not a
+grip window - the thing this file exists to refuse - it is imported from one
+sourced constant rather than restated, it has nine tests, and removing it is
+not on this row's list of what was missing. Row 1.8's phrase is about the
+tyre-split item below: the split is the signal, and no colour SCALE is
+invented over absolute temperature anywhere on this board.
+
+Thin, and in five specific ways. The source is one measurement by someone
+else - GT7 1.55, one car (Gr.3 911), one track (Northern Isle), 4x wear,
+n=1. 1.71 rewrote the tyre slip model, so by the programme's own
+re-measurement rule the figure is suspect until re-measured here. Its own
+author concedes the endogeneity. It does not say which aggregate - hottest
+wheel, axle mean, four-wheel mean - the 88 is about, and this driver's axles
+live 8-11 degC apart, which is wider than the gap between the RS and RH
+thresholds. And on his own archive only 29 of 3,129 rear-axle observations
+reach 88 at all.
+
+⚠️ **Whether it fires on what the board actually draws is NOT known.** His RR
+per-lap MEDIAN peaked at 79.6 degC against a warn line at 83 - but this
+display is fed a **3-second mean**, which is neither a lap median nor a raw
+frame, and raw RR frames reach p99 102.6. Nobody has measured how often a
+3-second window crosses 83. Do not repeat "it has never fired" as though it
+had been checked on this aggregate; it has not.
 
 --- rank 3 · the two tyre splits ----------------------------------------------
 
@@ -443,6 +486,13 @@ class DriverState:
     fuel_to_stop_why: str | None = None
     fuel_to_flag: float | None = None
     fuel_to_flag_why: str | None = None
+    # **What the flag figure rests on, in words, from the same expression
+    # that produced it.** It is a different supply on the two sides of the
+    # last stop - the tank aboard, or a full tank at the pump - and without
+    # this the two fuel blocks would sit side by side under near-identical
+    # captions with nothing saying that one of them cannot move with the
+    # tank. That is rule 13.
+    fuel_to_flag_on: str | None = None
 
     # ---- the last thing said, and how it was meant.
     last_call: "BoardCall | None" = None
@@ -826,6 +876,16 @@ class _LastCall(QWidget):
     """
 
     TEXT_PX = 26
+    # **The sentence is elided to this and never wider.** Without a bound the
+    # label asks for its whole natural width and Qt hands that straight to
+    # the window's layout minimum: the real overdue-box call - *"Box this
+    # lap. RM on. 3 laps overdue. You're 1.4 laps short of the flag on
+    # current burn - short-shift and lift if you stay out."* - wants 3,744 px
+    # and took the board's minimum to 4,117, which is not a monitor he owns.
+    # It was also clipped flat with no ellipsis, so the half he lost was the
+    # reason - the half rule 13 is about - with nothing on the screen saying
+    # anything had been cut.
+    MAX_WIDTH = 1560
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -836,6 +896,7 @@ class _LastCall(QWidget):
         self.line.setStyleSheet(
             f"font-family:{NUMBER_FACE};font-size:{self.TEXT_PX}px;"
             f"color:{INK_DIM};background:transparent;")
+        self.line.setMaximumWidth(self.MAX_WIDTH)
         self.mark = QLabel("")
         self.mark.setStyleSheet(self._mark_css(INK_DIM))
         row.addStretch(1)
@@ -845,6 +906,34 @@ class _LastCall(QWidget):
         # Reserved, so a call arriving mid-race does not shift the whole
         # board under him while he is looking at it.
         self.setFixedHeight(self.TEXT_PX + 14)
+        # The unelided sentence, kept so a resize can re-elide from the
+        # original rather than from an already-shortened copy.
+        self._text = ""
+
+    def _elide(self) -> None:
+        """Fit the sentence to the width, with an ellipsis where it is cut.
+
+        **Elided from the right, so the instruction survives.** §5.5 puts the
+        instruction first and the reason second, which makes the tail the
+        right half to lose - but only visibly. An ellipsis is the difference
+        between a driver who knows there was more and one who acts on half a
+        sentence believing it was the whole one.
+        """
+        from PyQt6.QtGui import QFontMetrics
+
+        # **The room the row actually has, not the label's own width.** A
+        # label that has never been laid out reports Qt's default 100 px,
+        # which elides every call to a bare ellipsis - so the widest bound is
+        # used until the row has a real width to answer with.
+        room = self.width() - self.mark.sizeHint().width() - 60
+        width = min(room if room > 200 else self.MAX_WIDTH, self.MAX_WIDTH)
+        metrics = QFontMetrics(self.line.font())
+        self.line.setText(metrics.elidedText(
+            self._text, Qt.TextElideMode.ElideRight, width))
+
+    def resizeEvent(self, event) -> None:              # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._elide()
 
     def _mark_css(self, ink: str) -> str:
         return (f"font-family:{LABEL_FACE};font-size:{self.TEXT_PX - 6}px;"
@@ -858,11 +947,13 @@ class _LastCall(QWidget):
             # planning around it. Nothing has been said yet is the ordinary
             # state of the first two laps of every race and it needs no
             # explaining.
+            self._text = ""
             self.line.setText("")
             self.mark.setText("")
             return
         where = f"L{call.lap}  " if call.lap is not None else ""
-        self.line.setText(f"{where}{call.text}")
+        self._text = f"{where}{call.text}"
+        self._elide()
         self.mark.setText(call.mark.upper())
         # **Only "unconfirmed" gets an ink of its own.** It is the one mark
         # that says the engineer may be wrong, and it is the one he needs to
@@ -911,14 +1002,19 @@ class DriverWindow(QWidget):
         self.view = DriverView()
         page.addWidget(self.view)
         # **Sized to what the instrument actually needs.** This asked for
-        # 1280x480 and never got it: the layout's own minimum is about
-        # 1920x1010 at these type sizes, so Qt grew the window on show and
-        # the number here described nothing. It is not a free choice - the
-        # ranks are set by how far away he is and how long a glance is, and
-        # the panel is 2560x1080 - so the honest thing is to open at a size
-        # the content fits in. Overridden by `restore_geometry` wherever he
-        # has dragged it before.
-        self.resize(1960, 1020)
+        # 1280x480 and never got it: the laid-out minimum measured on this
+        # rig is **2004 x 1001** at these type sizes, so Qt grew the window on
+        # show and the number here described nothing. It is not a free choice
+        # - the ranks are set by how far away he is and how long a glance is,
+        # and the panel is 2560x1080 - so the honest thing is to open at a
+        # size the content fits in.
+        #
+        # Overridden by `restore_geometry` wherever he has dragged it before,
+        # and Qt will still grow a saved geometry smaller than the minimum. A
+        # frameless window has no resize handle, so being grown is the better
+        # of the two failures: clipped, he would be reading a board with a
+        # number missing and no way to know which.
+        self.resize(2040, 1030)
         self._drag_from = None
         # Called when the window goes away by any route, so whoever is
         # pushing state into it can stop. Without it the controller went on
@@ -1446,11 +1542,20 @@ class DriverView(QWidget):
         will not carry a spare lap of fuel in a lap race, so 0.2 laps in hand
         is on plan and an alarm at 1.0 would fire in every race he drives.
         Below zero it does not reach, and that is worth an ink.
+
+        **Each sub-line names the supply its own figure was measured on**, and
+        neither borrows the other's. The stop figure is the tank he is
+        carrying, in laps. The flag figure, while a stop is still to come, is
+        a full tank at the pump - it cannot move with what he is carrying now,
+        because a stop refills, and a caption that let it be read as a
+        sibling of the live number beside it is exactly rule 13.
+
+        **The live litres are not here.** `state.fuel_l` is the packet in
+        hand and both figures are computed from the tank as it read at the
+        last crossing, so printing the live number beside them put three
+        readings of one tank on the screen, none reconciling with the others.
+        The litres live on the box panel, where the stop is priced off them.
         """
-        # The tank's own supply, in laps, as the reason under the stop
-        # figure. It was the board's headline number and it is not a
-        # question - "9.1 laps aboard" is what makes "1.9 in hand to the
-        # stop" true, and one big number per question is the rule.
         aboard = (None if state.laps_of_fuel is None
                   else f"{state.laps_of_fuel:.1f} laps aboard")
         if state.fuel_to_stop is None:
@@ -1461,18 +1566,16 @@ class DriverView(QWidget):
                 f"{state.fuel_to_stop:.1f}", aboard or "",
                 urgent=state.fuel_to_stop < 0)
 
-        litres = []
-        if state.fuel_l is not None:
-            litres.append(f"{state.fuel_l:.1f} L")
+        rests_on = state.fuel_to_flag_on or ""
         if state.burn_l is not None:
-            litres.append(f"{state.burn_l:.2f} L/lap")
+            burn = f"{state.burn_l:.2f} L/lap"
+            rests_on = f"{rests_on} · {burn}" if rests_on else burn
         if state.fuel_to_flag is None:
             self.flag_stat.show_value(
-                "--", state.fuel_to_flag_why or " · ".join(litres)
-                or "not measured")
+                "--", state.fuel_to_flag_why or rests_on or "not measured")
         else:
             self.flag_stat.show_value(
-                f"{state.fuel_to_flag:.1f}", " · ".join(litres),
+                f"{state.fuel_to_flag:.1f}", rests_on,
                 urgent=state.fuel_to_flag < 0)
 
     def _show_splits(self, state: DriverState) -> None:

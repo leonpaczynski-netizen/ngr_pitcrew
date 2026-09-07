@@ -124,7 +124,11 @@ class _State:
         return max(0, self.laps_total - (self.lap + self.laps_missed()))
 
     def lap_on_screen(self):
-        if self.screen_lap is not None:
+        # **`> 0` as well, exactly as the real one has it.** A stub that
+        # dropped that guard would let a zero screen lap through where
+        # production falls back to the arithmetic, which is a fake of the
+        # wrong shape testing itself.
+        if self.screen_lap is not None and self.screen_lap > 0:
             return self.screen_lap
         return self.lap + self.laps_missed() + 1
 
@@ -237,7 +241,11 @@ def test_on_track_it_shows_the_set_he_is_on_not_the_one_going_on():
     assert got.in_box is False
     assert got.compound == "RM"
     assert got.laps_to_box == 3.0
-    assert got.box_on_lap == 15
+    # Twelve laps completed, so he is driving HUD lap 13 and boxes on 16: the
+    # caption counts the same way the figure beside it does. This pinned the
+    # app's own lap count, which is one behind his screen - see
+    # `test_the_box_lap_is_the_number_on_his_hud_not_the_apps_count`.
+    assert got.box_on_lap == 16
 
 
 def test_on_track_none_of_the_box_figures_are_set():
@@ -986,14 +994,19 @@ def test_the_box_lap_is_the_number_on_his_hud_not_the_apps_count():
     stub = _Stub()
     stub.race.state.lap = 8
     stub.race.state._to_stop = 3
-    # No crossing lost: the lap in progress is 9, so he boxes at the end of
-    # screen lap 11.
-    assert _state_for(stub).box_on_lap == 11
+    # **The countdown and the caption count the same way.** He is driving HUD
+    # lap 9 with three laps to go, so the caption names lap 12 - and the
+    # offset is `to_stop` exactly because that is what the rest of the app
+    # executes: `_box_now` fires at `to_stop == 0` saying "Box this lap", so
+    # at zero the lap in progress IS the box lap.
+    got = _state_for(stub)
+    assert got.laps_to_box == 3.0
+    assert got.box_on_lap == 12
 
     # Two crossings lost in the pit lane. The app still counts 8, GT7 counts
-    # 10, and the box lap on his screen is 13.
+    # 10, he is driving HUD lap 11, and the box lap on his screen is 14.
     stub.race.state.laps_dropped = 2
-    assert _state_for(stub).box_on_lap == 13
+    assert _state_for(stub).box_on_lap == 14
 
 
 def test_the_position_and_the_field_reach_the_board():
@@ -1059,10 +1072,15 @@ def test_the_two_fuel_figures_reach_the_board_from_the_calls_module():
     state.stint_ends_on_lap = 11
     state.further_stop_planned = False
     state.mandatory_stops_left = 1
+    state.fuel_capacity_l = 100.0
     got = _state_for(stub)
     assert got.fuel_to_stop is not None and got.fuel_to_stop_why is None
     assert got.fuel_to_flag is not None and got.fuel_to_flag_why is None
     assert got.fuel_to_flag > 0
+    # **And the reference travels with the figure**, out of the same
+    # expression, so the caption cannot drift from the branch that produced
+    # the number (rule 13).
+    assert got.fuel_to_flag_on == "on a full tank at the stop"
 
 
 def test_a_fuel_figure_that_cannot_be_made_carries_its_reason():
@@ -1071,6 +1089,7 @@ def test_a_fuel_figure_that_cannot_be_made_carries_its_reason():
     got = _state_for(_Stub())
     assert got.fuel_to_stop is None and got.fuel_to_stop_why
     assert got.fuel_to_flag is None and got.fuel_to_flag_why
+    assert got.fuel_to_flag_on
 
 
 def test_the_last_call_is_none_until_something_is_said():
@@ -1122,3 +1141,36 @@ def test_the_flag_keeps_the_result_and_the_tyres_and_drops_the_plan():
     assert got.axle_split_c == pytest.approx(10.0)
     assert got.laps_to_box is None
     assert got.fuel_to_stop is None and got.fuel_to_flag is None
+
+
+def test_the_flag_keeps_the_compound_and_the_corner_annotations():
+    """The set he took the flag on is where the debrief starts. Dropping the
+    compound turns every corner white and takes the per-corner split
+    annotations with it, at the moment he finally has time to read them."""
+    from pitcrew.race.tyre_split import SplitHistory
+
+    history = SplitHistory()
+    for lap in range(6):
+        history.note_lap({"fl": 62.0, "fr": 62.0,
+                          "rl": 70.0, "rr": 70.0 + 2.0 * lap})
+    stub = _Stub(splits=history)
+    stub.race.state.finished = True
+    stub.race.state.tyre_compound = "RS"
+    got = _state_for(stub)
+    assert got.compound == "RS"
+    assert got.split_rates.get("rr") is not None
+
+
+def test_a_pit_stop_empties_the_split_history():
+    """CLAUDE.md rule 11 in its stint-sized form. The window is eight laps and
+    a stop lands in the middle of it, so a fit across one describes two sets of
+    rubber as though they were a series - and the board draws the axle gap on
+    every lap now, not only past ten degrees. `SplitHistory.new_stint` has a
+    caller, which is the half of rule 11 that has been missing before."""
+    import inspect
+
+    from pitcrew.controller import PitCrewController
+
+    source = inspect.getsource(PitCrewController._on_race_event)
+    assert "self._splits.new_stint()" in source
+    assert "EventKind.PIT_EXIT" in source

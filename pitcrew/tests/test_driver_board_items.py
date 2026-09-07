@@ -1,4 +1,4 @@
-"""Phase 1 row 1.8 - the five things the driver board could not say.
+"""Phase 1 row 1.8 - the six things the driver board could not say.
 
 **Every test here is written against a state the board could mislead him
 with**, not against a happy path: two fuel numbers that could be the same
@@ -84,13 +84,14 @@ def test_the_flag_figure_no_longer_forgets_the_litres_the_stop_adds():
     subtracted the laps to the FLAG, with no term for the fill.
 
     84 L at 4.19 is 20.0 laps against 18 remaining, so the tank alone is
-    already ahead - and once the stop's fill is counted the figure is the
-    plan's own margin, comfortably positive. It is emphatically not -7.
+    already ahead - and once the refill is counted the figure is comfortably
+    positive. It is emphatically not -7.
     """
     state = _race()
-    to_flag, why = fuel_in_hand_to_flag(state)
+    to_flag, why, rests_on = fuel_in_hand_to_flag(state)
     assert why is None
     assert to_flag is not None and to_flag > 0, to_flag
+    assert rests_on == "on a full tank at the stop"
     # And the old arithmetic, reproduced here, is what it is NOT.
     old = state.fuel_l / state.fuel_per_lap_l - state.laps_remaining()
     assert to_flag != pytest.approx(old)
@@ -98,14 +99,55 @@ def test_the_flag_figure_no_longer_forgets_the_litres_the_stop_adds():
 
 def test_the_two_numbers_are_different_questions_and_say_so():
     """A stop nine laps away and a flag eighteen laps away are not one
-    number. The stop figure is the tank against the box; the flag figure
-    counts the fill."""
+    number. The stop figure is the tank he is carrying against the box; the
+    flag figure is a full tank at the pump against the run home."""
     state = _race()
     to_stop, _ = fuel_in_hand_to_stop(state)
-    to_flag, _ = fuel_in_hand_to_flag(state)
+    to_flag, _, _ = fuel_in_hand_to_flag(state)
     # 84 / 4.19 = 20.0 laps aboard, 9 laps to the box.
     assert to_stop == pytest.approx(11.0, abs=0.1)
-    assert to_flag != to_stop
+    # 100 / 4.19 = 23.9 laps in the tank, 9 laps after the box.
+    assert to_flag == pytest.approx(14.9, abs=0.1)
+
+
+def test_the_flag_figure_moves_for_the_burn_and_not_for_the_tank():
+    """**The defect the critic found in the first version of this figure.**
+
+    It sized the fill George would call for and measured that against the
+    flag - arithmetically true and useless, because `fuel_margin_l` sizes the
+    margin as a multiple of the burn, so `fill / burn - laps` collapsed to the
+    constant `FUEL_MARGIN_LAPS`. It read 1.0 at 45, 60, 84 and 95 litres
+    aboard and at every burn from 4.0 to 7.0: a block captioned "in hand"
+    beside one that moves, which could not move. An instrument reading our
+    own switch back to us.
+
+    What it reads now is the tank against the run home, and that is invariant
+    to the fuel he is carrying **for a stated reason** - a stop refills, so
+    what he has now cannot decide the run home - while moving with the burn,
+    which is the thing that actually changes the answer.
+    """
+    at_45 = fuel_in_hand_to_flag(_race(fuel_l=45.0))[0]
+    at_95 = fuel_in_hand_to_flag(_race(fuel_l=95.0))[0]
+    assert at_45 == at_95
+
+    slow = fuel_in_hand_to_flag(_race(fuel_per_lap_l=4.0))[0]
+    thirsty = fuel_in_hand_to_flag(_race(fuel_per_lap_l=7.0))[0]
+    assert thirsty < slow, (slow, thirsty)
+    # And it moves when the stop slips, which lengthens the run home.
+    later = fuel_in_hand_to_flag(_race(stint_ends_on_lap=14))[0]
+    assert later > fuel_in_hand_to_flag(_race())[0]
+
+
+def test_no_tank_size_refuses_rather_than_becoming_an_infinite_tank():
+    """**Rule 3, and it is the whole expression here rather than a term in
+    it.** `fuel_capacity_l` is None until a packet sets it, and GT7 reports
+    0 L for an electric car - a real value, not an error (CLAUDE.md 3.4).
+    Skipping the cap on either turns "the plan does not reach" into a
+    comfortable positive."""
+    for capacity in (None, 0.0):
+        got, why, _ = fuel_in_hand_to_flag(_race(fuel_capacity_l=capacity))
+        assert got is None, capacity
+        assert why == "no tank size read"
 
 
 def test_the_stop_figure_is_the_expression_the_voice_speaks():
@@ -125,7 +167,7 @@ def test_with_no_stop_left_the_flag_figure_is_the_one_the_voice_speaks():
     state = _race(stint_ends_on_lap=None)
     spoken, reference = fuel_in_hand(state)
     assert reference == TO_THE_FLAG
-    assert fuel_in_hand_to_flag(state) == (spoken, None)
+    assert fuel_in_hand_to_flag(state) == (spoken, None, "on the fuel aboard")
     assert fuel_in_hand_to_stop(state) == (None, "no stop still to come")
 
 
@@ -140,6 +182,7 @@ def test_past_the_box_lap_the_flag_figure_is_the_tank_alone():
     assert to_stop is None
     assert why == "past the box lap - the tank is the whole supply"
     assert fuel_in_hand_to_flag(state)[0] == fuel_in_hand(state)[0]
+    assert fuel_in_hand_to_flag(state)[2] == "on the fuel aboard"
 
 
 def test_a_tank_that_does_not_reach_the_box_refuses_rather_than_clamps():
@@ -147,7 +190,7 @@ def test_a_tank_that_does_not_reach_the_box_refuses_rather_than_clamps():
     wrong, not a tank with nothing in it, and a flag figure computed from it
     would be a confident wrong answer about a race he never gets to."""
     state = _race(fuel_l=8.0)
-    to_flag, why = fuel_in_hand_to_flag(state)
+    to_flag, why, _ = fuel_in_hand_to_flag(state)
     assert to_flag is None
     assert why == "this tank does not reach the box"
     # The stop figure still answers, and its answer is the bad news: nine
@@ -163,8 +206,9 @@ def test_a_fill_the_tank_cannot_hold_makes_the_figure_negative():
     nobody can take."""
     state = _race(fuel_capacity_l=30.0, fuel_l=25.0, lap=9,
                   stint_ends_on_lap=10)
-    to_flag, why = fuel_in_hand_to_flag(state)
+    to_flag, why, _ = fuel_in_hand_to_flag(state)
     assert why is None
+    # 30 L at 4.19 covers 7.2 laps; ten remain after the box.
     assert to_flag is not None and to_flag < 0, to_flag
 
 
@@ -172,7 +216,7 @@ def test_another_stop_after_this_one_is_refused_not_guessed():
     """The laps after the NEXT stop ride on a fill nothing has sized, so a
     figure here would be a claim about a stop the app has not costed."""
     state = _race(further_stop_planned=True)
-    assert fuel_in_hand_to_flag(state) == (None, "another stop after this one")
+    assert fuel_in_hand_to_flag(state)[1] == "another stop after this one"
     # And unknown refuses for the same reason: `further_stop_planned` is None
     # where nobody said, and an unknown is not a no.
     assert fuel_in_hand_to_flag(_race(further_stop_planned=None))[1] == \
@@ -267,16 +311,49 @@ def test_the_axle_trend_needs_five_laps_and_has_to_clear_the_floor():
     as "settling"."""
     creeping = SplitHistory()
     for lap in range(6):
-        # 0.2 degC a lap: real, and under RATE_WORTH_SAYING_C.
+        # One rear moving 0.2 degC a lap moves the AXLE gap 0.1 - real, and
+        # well under RATE_WORTH_SAYING_C.
         creeping.note_lap(_lap(70.0, 70.0, 75.0 + 0.2 * lap, 75.0))
     rate, laps = creeping.axle_rate()
     assert rate is None and laps == 6
 
     running = SplitHistory()
     for lap in range(6):
+        # One rear at 3.0 a lap is 1.5 on the axle gap, which clears it.
         running.note_lap(_lap(70.0, 70.0, 75.0 + 3.0 * lap, 75.0))
     rate, laps = running.axle_rate()
-    assert rate is not None and rate > 0 and laps == 6
+    assert rate == pytest.approx(1.5) and laps == 6
+
+
+def test_a_trend_may_not_be_fitted_across_a_pit_stop():
+    """**The window is eight laps and a stop lands in the middle of it.**
+
+    Driven with the old set opening +6 to +20 degC and a fresh one restarting
+    at +3 and opening at +1 a lap, the fit ran through both and drew
+    *"settling 2.0/lap"* for six consecutive laps while the gap was in fact
+    opening - with a sample count of "8 laps", half of which were a different
+    tyre. §5.5's worked example makes that a brake-balance decision.
+
+    `new_stint` is called at every PIT_EXIT, whether or not a set went on: the
+    tyre detector is a tri-state and an unknown is not a no, and a stationary
+    car cools whatever came off it.
+    """
+    history = SplitHistory()
+    for lap in range(8):
+        history.note_lap(_lap(70.0, 70.0, 76.0 + 2.0 * lap, 76.0 + 2.0 * lap))
+    old_rate, _ = history.axle_rate()
+    assert old_rate is not None and old_rate > 0
+
+    history.new_stint()
+    assert history.axle_split_now() is None
+    assert history.axle_rate() == (None, 0)
+
+    # The fresh set opens at 1.0 degC a lap - under the floor - and the board
+    # claims no direction rather than the old set's 2.0 in the wrong one.
+    for lap in range(4):
+        history.note_lap(_lap(70.0, 70.0, 73.0 + lap, 73.0 + lap))
+    rate, laps = history.axle_rate()
+    assert rate is None and laps == 4
 
 
 def test_a_lap_missing_a_corner_is_dropped_from_the_axle_series_too():
@@ -400,3 +477,91 @@ def test_the_tyre_decision_reaches_him_before_he_is_stationary(qt_app):
     view.update_state(DriverState(laps_to_box=4, box_on_lap=11,
                                   tyres_at_stop=None, compound="RS"))
     assert view.box_stat.sub.text() == "plan: lap 11"
+
+
+def test_the_flag_block_names_the_supply_it_was_measured_on(qt_app):
+    """**Rule 13, and the reason there is a caption at all.** Two blocks under
+    near-identical headings, one that moves with the tank and one that cannot,
+    is unreadable unless the second says what it rests on."""
+    from pitcrew.ui.driver_view import DriverState, DriverView
+
+    view = DriverView()
+    view.update_state(DriverState(fuel_to_stop=6.1, laps_of_fuel=9.1,
+                                  fuel_to_flag=14.9, burn_l=4.19,
+                                  fuel_to_flag_on="on a full tank at the stop"))
+    assert "9.1 laps aboard" in view.stop_stat.sub.text()
+    assert "on a full tank at the stop" in view.flag_stat.sub.text()
+    assert "4.19 L/lap" in view.flag_stat.sub.text()
+    # **The live litres are NOT here.** Both figures come off the tank as it
+    # read at the last crossing; `packet.fuel_level` beside them put three
+    # readings of one tank on the screen, none reconciling.
+    view.update_state(DriverState(fuel_to_stop=6.1, fuel_to_flag=14.9,
+                                  fuel_l=38.1, burn_l=4.19))
+    assert "38.1" not in view.flag_stat.sub.text()
+    assert "38.1" not in view.stop_stat.sub.text()
+
+
+def test_a_long_call_is_elided_with_an_ellipsis_and_does_not_grow_the_board(
+        qt_app):
+    """**The real overdue-box sentence is 126 characters.** Unbounded, the
+    label asked for 3,744 px and took the board's layout minimum to 4,117 -
+    not a monitor he owns - and clipped flat with no ellipsis, so the half he
+    lost was the reason, with nothing saying anything had been cut.
+    """
+    from pitcrew.ui.driver_view import BoardCall, DriverState, DriverView
+
+    view = DriverView()
+    view.resize(2160, 1040)
+    view.show()
+    qt_app.processEvents()
+    empty = view.layout().minimumSize().width()
+
+    long = ("Box this lap. RM on. 3 laps overdue. You're 1.4 laps short of "
+            "the flag on current burn - short-shift and lift if you stay out.")
+    view.update_state(DriverState(last_call=BoardCall(
+        text=long, mark=MARK_INSTRUCTION, lap=14)))
+    qt_app.processEvents()
+    drawn = view.last_call.line.text()
+    assert drawn != long
+    assert drawn.startswith("L14  Box this lap.")
+    assert drawn.endswith("…")
+    assert view.layout().minimumSize().width() == empty
+    view.hide()
+
+
+def test_a_short_call_is_not_elided(qt_app):
+    from pitcrew.ui.driver_view import BoardCall, DriverState, DriverView
+
+    view = DriverView()
+    view.resize(2160, 1040)
+    view.show()
+    qt_app.processEvents()
+    view.update_state(DriverState(last_call=BoardCall(
+        text="Box this lap. Fuel to 63.", mark=MARK_INSTRUCTION, lap=11)))
+    qt_app.processEvents()
+    assert view.last_call.line.text() == "L11  Box this lap. Fuel to 63."
+    view.hide()
+
+
+def test_the_preview_sample_is_produced_by_the_code_it_pictures(qt_app):
+    """**The acceptance artefact may not disagree with the app.** The first
+    version of the sample hand-wrote an axle split of 12.15 beside four corner
+    temperatures whose axle gap is 10.4, and a flag figure the fuel expression
+    does not produce. A screenshot that contradicts the code proves the
+    opposite of what it was taken for."""
+    from pitcrew.race.tyre_split import SplitHistory
+    from pitcrew.ui.preview import SAMPLE_TEMPS, sample_board
+
+    board = sample_board()
+    history = SplitHistory()
+    for temps in SAMPLE_TEMPS:
+        history.note_lap(temps)
+    assert board.axle_split_c == pytest.approx(history.axle_split_now())
+    assert board.temps_c == SAMPLE_TEMPS[-1]
+    # And the axle figure is what those four temperatures make, to the tenth.
+    last = SAMPLE_TEMPS[-1]
+    assert board.axle_split_c == pytest.approx(
+        (last["rl"] + last["rr"]) / 2 - (last["fl"] + last["fr"]) / 2)
+    # The countdown and the lap it names count the same way: the HUD lap he is
+    # on plus the laps to the box.
+    assert board.box_on_lap == 9 + int(board.laps_to_box)

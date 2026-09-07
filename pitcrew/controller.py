@@ -5156,6 +5156,13 @@ class PitCrewController(QObject):
                 # prompt are news again, and the consistency window must not
                 # straddle a pit stop.
                 self._colour.new_stint()
+            # **And the tyre splits, for the same reason and a sharper one.**
+            # The window is eight laps, so a fit across a stop describes two
+            # sets of rubber as one and carries a sample count that is a lie
+            # about half of them. See `SplitHistory.new_stint`, and note the
+            # board now draws the axle gap on every lap rather than only past
+            # ten degrees, so the wrong answer is in front of him.
+            self._splits.new_stint()
         # **Before `handle`, so the call sees this lap's gauge.** The reading
         # lags its own lap by one - the sampler is asked at the crossing and
         # answers a moment later on its worker - so what lands here is the
@@ -5507,8 +5514,15 @@ class PitCrewController(QObject):
             # not.** Position at the chequer is the one number he wants and
             # there is no next stop to describe, so the fuel and box figures
             # stay blank while these carry on.
+            #
+            # **The compound and the per-corner rates come with them**, or
+            # the whole tyre block goes white and loses its annotations at
+            # the moment he finally has time to read it - the set he took the
+            # flag on is exactly what the debrief starts from.
             return DriverState(
                 temps_c=self._board_temps(), finished=True,
+                compound=getattr(state, "tyre_compound", None),
+                split_rates=self._split_rates(),
                 position=getattr(state, "position", None),
                 field_size=getattr(state, "field_size", None),
                 last_call=self._board_call, **self._board_splits())
@@ -5539,15 +5553,23 @@ class PitCrewController(QObject):
             # box panel can say "NO TYRES" rather than the compound's name.
             tyres_at_stop=getattr(state, "next_tyres", None),
             laps_to_box=None if to_stop is None else float(max(0, to_stop)),
-            # **The lap number GT7 is showing him, not the app's count.**
-            # They are one apart at every crossing and further apart after a
+            # **The lap number GT7 is showing him, and it counts the same way
+            # the countdown beside it does.**
+            #
+            # Two things were wrong. It was the app's lap count, which is one
+            # behind the HUD at every crossing and further behind after a
             # crossing lost in the pit lane - Road Atlanta ran +1 on lap 1 and
-            # +2 by lap 20 - and `RaceState.lap_on_screen` settles it in as
+            # +2 by lap 20 - and `RaceState.lap_on_screen` settles that in as
             # many words: the number he is given has to match the number he
-            # can see, and under a helmet the screen wins. This was the app's
-            # count, so the board named a box lap his HUD would never read.
+            # can see, because under a helmet the screen wins. And the offset
+            # has to be `to_stop` exactly, because that is the convention the
+            # rest of the app executes: `_box_now` fires at `to_stop == 0`
+            # saying *"Box this lap"*, so the lap in progress IS the box lap
+            # at zero, and `_box_soon` says *"Box in 2"* at two. Anything else
+            # puts a big "2" over a caption naming a lap his HUD reaches in
+            # one, and he has to do arithmetic to find out which lied.
             box_on_lap=(None if to_stop is None
-                        else state.lap_on_screen() + max(0, to_stop) - 1),
+                        else state.lap_on_screen() + max(0, to_stop)),
             laps_of_fuel=state.laps_of_fuel(),
             fuel_l=fuel_l,
             burn_l=state.fuel_per_lap_l,
@@ -5696,9 +5718,15 @@ class PitCrewController(QObject):
                                         fuel_in_hand_to_stop)
 
         to_stop, stop_why = fuel_in_hand_to_stop(state)
-        to_flag, flag_why = fuel_in_hand_to_flag(state)
+        # **The reference travels with the figure**, out of one expression.
+        # It means two different supplies on the two sides of the last stop -
+        # the tank aboard, or a full tank at the pump - and a caption that
+        # could drift from the branch that produced the number is rule 13
+        # waiting to happen.
+        to_flag, flag_why, flag_on = fuel_in_hand_to_flag(state)
         return {"fuel_to_stop": to_stop, "fuel_to_stop_why": stop_why,
-                "fuel_to_flag": to_flag, "fuel_to_flag_why": flag_why}
+                "fuel_to_flag": to_flag, "fuel_to_flag_why": flag_why,
+                "fuel_to_flag_on": flag_on}
 
     def _note_board_call(self, text: str, mark: str, lap: int | None) -> None:
         """Hold the last thing said, for the board's top line.
@@ -5718,10 +5746,21 @@ class PitCrewController(QObject):
         `RaceState.lap_on_screen`. `Call.lap` is laps completed and the two
         are at least one apart, so printing `Call.lap` would label the
         sentence with a lap he never saw.
-        """
-        from pitcrew.ui.driver_view import BoardCall
 
-        self._board_call = BoardCall(text=text, mark=mark, lap=lap)
+        **Guarded, because it sits upstream of the voice.** A deferred import
+        or a dataclass construction that raised here would take the spoken
+        call with it, and a board is an output: `_push_driver_board` is
+        already built so that a display fault cannot cost him the race it is
+        describing, and this path has to hold the same line.
+        """
+        try:
+            from pitcrew.ui.driver_view import BoardCall
+
+            self._board_call = BoardCall(text=text, mark=mark, lap=lap)
+        except Exception as exc:                            # noqa: BLE001
+            log("ui").warning(
+                "the board could not hold the last call: %s: %s",
+                type(exc).__name__, exc)
 
     def _screen_lap(self) -> int | None:
         """The lap number on his HUD right now, or None before a race."""
@@ -5730,7 +5769,13 @@ class PitCrewController(QObject):
             return None
         try:
             return state.lap_on_screen()
-        except Exception:                                   # noqa: BLE001
+        except Exception as exc:                            # noqa: BLE001
+            # **Logged, not just swallowed.** Every other rescue on this
+            # screen says what went wrong; a silent one turns a fault in the
+            # lap counter into a last-call line that is permanently missing
+            # its lap, with nothing anywhere to say why.
+            log("ui").warning("the board could not read the lap on screen: "
+                              "%s: %s", type(exc).__name__, exc)
             return None
 
     def _split_rates(self) -> dict[str, float]:

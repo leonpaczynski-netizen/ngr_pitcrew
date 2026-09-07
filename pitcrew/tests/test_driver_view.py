@@ -144,16 +144,18 @@ def test_it_shows_what_it_is_given(qt_app):
         temps_c=_temps(fl=84.0, fr=79.0, rl=91.0, rr=77.0), compound="RS",
         laps_to_box=4, box_on_lap=14, laps_of_fuel=5.2, fuel_l=38.1,
         burn_l=7.29, fuel_to_stop=1.9, fuel_to_flag=0.3,
+        fuel_to_flag_on="on a full tank at the stop",
         position=6, field_size=12))
     assert view.tyres["rl"].value.text() == "91"
     assert view.tyres["rr"].value.text() == "77"
     assert view.box_stat.value.text() == "4"
     assert view.stop_stat.value.text() == "1.9"
     assert view.flag_stat.value.text() == "0.3"
-    # The tank's own supply is the reason under the stop figure, not a third
-    # question in its own block.
+    # Each figure's sub-line names the supply it was measured on, and neither
+    # borrows the other's - the stop number is the tank he is carrying, the
+    # flag number a full tank at the pump.
     assert "5.2 laps aboard" in view.stop_stat.sub.text()
-    assert "38.1 L" in view.flag_stat.sub.text()
+    assert "on a full tank at the stop" in view.flag_stat.sub.text()
     assert "7.29 L/lap" in view.flag_stat.sub.text()
     assert view.position_stat.value.text() == "P6"
     assert view.position_stat.sub.text() == "of 12"
