@@ -1692,7 +1692,89 @@ def test_a_desk_supplied_export_block_is_the_apps_own_key():
                                  "export": {"plan": {"stops": 1.0}}}})
     assert any("'export'" in problem for problem in nested.validate()),         nested.validate()
 
-    # At the top level it never reaches the plan at all.
+    # And the flat shape - which is what the desk actually writes - keeps
+    # it on the plan so `validate` refuses it BY NAME. Stripped, the desk's
+    # own arithmetic disappeared with no message at all.
     flat = from_dict({"stints": [{"laps": 11}],
                       "export": {"plan": {"stops": 1.0}}})
-    assert "export" not in flat.plan
+    assert any("'export'" in problem for problem in flat.validate()), \
+        flat.validate()
+
+    # The section the tune builder reads is the one the APP builds, whose
+    # counts came through the door.
+    from pitcrew.export.build import _section_from_plan
+
+    section = _section_from_plan(from_dict({
+        "stints": [{"laps": 11.0, "compound": "RS", "start_lap": 1.0},
+                   {"laps": 9.0, "compound": "RS", "start_lap": 12.0}],
+        "stops": 1.0, "pit_laps": [11.0]}).plan)
+    assert section["plan"]["stops"] == 1
+    assert section["plan"]["stintLaps"] == [11, 9]
+    assert section["plan"]["pitLap"] == 11
+    assert not any(isinstance(n, float)
+                   for n in section["plan"]["stintLaps"]
+                   + [section["plan"]["stops"], section["plan"]["pitLap"]])
+
+
+def test_the_door_reads_every_count_a_plan_carries():
+    """**`start_lap` was the field one to the left.**
+
+    `stint_ends_on_lap` is `start_lap + laps - 1`, and the first version of
+    `whole_numbers` normalised `laps` and left `start_lap` as written - so
+    the very sentence that motivated the door, George saying "the next
+    9.0-lap stint", survived it: "10.0 laps after the planned box", spoken.
+
+    Enumerating one more field by hand would be the same shape a fourth
+    time, so the count keys are declared - and held here against what
+    `Plan.as_dict` actually emits, so a field added to the plan cannot
+    quietly skip the door.
+    """
+    from pitcrew.strategy.handover import (PLAN_COUNTS, STINT_COUNTS,
+                                           from_dict)
+
+    plan = from_dict({
+        "stints": [{"laps": 10.0, "compound": "RS", "start_lap": 1.0},
+                   {"laps": 10.0, "compound": "RS", "start_lap": 11.0}],
+        "stops": 1.0, "pit_laps": [10.0], "laps": 20.0}).plan
+    for stint in plan["stints"]:
+        for key in ("laps", "start_lap"):
+            assert isinstance(stint[key], int), (key, stint[key])
+    assert not isinstance(plan["stops"], float)
+    assert not isinstance(plan["laps"], float)
+    assert plan["pit_laps"] == [10]
+
+    # The expression the coordinator uses, off the stored plan.
+    first = plan["stints"][0]
+    ends = first["start_lap"] + first["laps"] - 1
+    assert ends == 10 and isinstance(ends, int)
+
+    # **Every count `Plan.as_dict` emits is declared.** A new one has to be
+    # classified here or this fails, rather than silently bypassing the door.
+    from pitcrew.strategy.model import Plan, Stint
+
+    emitted = Plan(stints=[Stint(laps=10, compound="RS", fuel_l=60.0,
+                                 start_lap=1)],
+                   total_time_s=0.0, binding_constraint="fuel").as_dict()
+    counts = {"stops", "laps"} | set(PLAN_COUNTS)
+    not_a_count = {"pit_laps", "stints", "total_time_s",
+                   "binding_constraint", "notes"}
+    assert set(emitted) <= counts | not_a_count, sorted(set(emitted))
+    stint_keys = set(emitted["stints"][0])
+    assert stint_keys <= set(STINT_COUNTS) | {"compound", "fuel_l"}, \
+        sorted(stint_keys)
+
+
+def test_a_pit_laps_that_is_not_a_list_does_not_take_the_export_down():
+    """`certify` never checks the type, so an approved plan with
+    `pit_laps: 11` raised `TypeError` and a dict raised `KeyError` - taking
+    the whole export with it, not just the key."""
+    from pitcrew.export.build import _section_from_plan
+
+    stints = [{"laps": 15, "compound": "RM"}]
+    for junk in (11, {"a": 1}, "eleven"):
+        section = _section_from_plan({"stints": stints, "pit_laps": junk})
+        assert section["plan"]["pitLap"] is None, junk
+
+    # A box lap is 1-based, so 0 is not one and does not travel.
+    zero = _section_from_plan({"stints": stints, "pit_laps": [0]})
+    assert zero["plan"]["pitLap"] is None

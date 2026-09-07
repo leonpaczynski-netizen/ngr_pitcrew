@@ -140,6 +140,72 @@ def test_a_proposed_plan_is_saved_unapproved(seeded):
         store.close()
 
 
+def test_a_proposed_plan_is_read_as_whole_numbers(seeded):
+    """**This tool stored whatever JSON arrived.** `write_strategy` goes
+    through `from_dict`, which reads a plan's counts once - JSON has no
+    integer type, so a desk writing `11` may send `11.0`, and six readers had
+    been taught that one at a time while the plan kept the float. George then
+    said "the next 9.0-lap stint" with the hose in.
+    """
+    from pitcrew.store.db import Store
+
+    db, event_id = seeded
+    got = call("propose_strategy",
+               {"event_id": event_id,
+                "plan": json.dumps({
+                    "stints": [{"laps": 10.0, "compound": "RS",
+                                "start_lap": 1.0},
+                               {"laps": 10.0, "compound": "RS",
+                                "start_lap": 11.0}],
+                    "stops": 1.0, "pit_laps": [10.0]})},
+               db=db)
+    assert got["saved"] is True
+
+    store = Store(db)
+    try:
+        row = next(r for r in store.list_strategies(event_id)
+                   if r["id"] == got["strategyId"])
+    finally:
+        store.close()
+    plan = row["plan"]
+    assert plan["stops"] == 1 and not isinstance(plan["stops"], float)
+    assert plan["pit_laps"] == [10]
+    for stint in plan["stints"]:
+        for key in ("laps", "start_lap"):
+            assert isinstance(stint[key], int), (key, stint[key])
+    # The expression the coordinator arms from.
+    first = plan["stints"][0]
+    assert isinstance(first["start_lap"] + first["laps"] - 1, int)
+
+
+def test_a_proposed_plan_carrying_the_apps_own_keys_is_refused(seeded):
+    """`export` is the section the app builds and `_strategy_section` prefers
+    a stored one verbatim, so a desk-supplied block shipped its own figures
+    into the contract. The desk's own keys are refused too - with the tool
+    that takes them, because renaming a `playbook` would strip George's
+    bounds rather than fix anything."""
+    db, event_id = seeded
+    for key in ("export", "handover", "playbook"):
+        got = call("propose_strategy",
+                   {"event_id": event_id,
+                    "plan": json.dumps({"stints": [{"laps": 10}], key: {}})},
+                   db=db)
+        assert got["saved"] is False, (key, got)
+        assert key in got["error"], got
+    said = call("propose_strategy",
+                {"event_id": event_id,
+                 "plan": json.dumps({"stints": [{"laps": 10}],
+                                     "playbook": []})},
+                db=db)
+    assert "write_strategy" in said["error"], said
+    only_export = call("propose_strategy",
+                       {"event_id": event_id,
+                        "plan": json.dumps({"stints": [{"laps": 10}],
+                                            "export": {}})},
+                       db=db)
+    assert "rename it" in only_export["error"], only_export
+
+
 def test_a_plan_that_is_not_json_is_refused_rather_than_stored(seeded):
     db, event_id = seeded
     got = call("propose_strategy", {"event_id": event_id, "plan": "{nope"},

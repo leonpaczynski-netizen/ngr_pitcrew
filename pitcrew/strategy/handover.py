@@ -852,6 +852,18 @@ def standing_orders(stored: dict) -> list[Order]:
     return out
 
 
+# **The count-shaped keys, declared rather than enumerated at the call
+# site.** `start_lap` was left out of the first version of `whole_numbers` and
+# `stint_ends_on_lap` is `start_lap + laps - 1`, so the very symptom that
+# motivated the door - George saying "the next 9.0-lap stint" - survived it.
+# Adding one more field by hand would be the same shape a fourth time;
+# `test_the_door_reads_every_count_a_plan_carries` holds these against what
+# `Plan.as_dict` emits.
+PLAN_COUNTS = {"stops": (_STOP_CEILING, None), "laps": (LAP_CEILING, 0)}
+STINT_COUNTS = {"laps": (LAP_CEILING, 0), "start_lap": (LAP_CEILING, 1),
+                "end_lap": (LAP_CEILING, 1)}
+
+
 def whole_numbers(plan: dict) -> dict:
     """The plan with its counts read as whole numbers. **Once, at the door.**
 
@@ -865,23 +877,32 @@ def whole_numbers(plan: dict) -> dict:
     function normalises, it does not judge. `certify` and `_validate_plan`
     are the two that refuse, and they need to see what the desk actually
     wrote.
+
+    **Called by the two desk doors, not by every writer.** `from_dict` (so
+    `write_strategy` and the CLI) and `mcp.propose_strategy`. The app's own
+    optimiser writes `Plan.as_dict`, whose counts are `int` by construction,
+    and `save_qualifying_plan` is a different surface. "No consumer can see a
+    float" is true of a plan that came through a door, which is every plan a
+    desk can write.
     """
     def read(value, ceiling, minimum):
         got = as_whole_number(value, ceiling, minimum=minimum)
         return value if got is None else got
 
     out = dict(plan)
-    if "stops" in out:
-        out["stops"] = read(out["stops"], _STOP_CEILING, None)
-    if "laps" in out:
-        out["laps"] = read(out["laps"], LAP_CEILING, 0)
+    for key, (ceiling, minimum) in PLAN_COUNTS.items():
+        if key in out:
+            out[key] = read(out[key], ceiling, minimum)
     if isinstance(out.get("pit_laps"), list):
         out["pit_laps"] = [read(lap, LAP_CEILING, 1)
                            for lap in out["pit_laps"]]
     if isinstance(out.get("stints"), list):
         out["stints"] = [
-            {**stint, "laps": read(stint.get("laps"), LAP_CEILING, 0)}
-            if isinstance(stint, dict) and "laps" in stint else stint
+            {**stint,
+             **{key: read(stint[key], ceiling, minimum)
+                for key, (ceiling, minimum) in STINT_COUNTS.items()
+                if key in stint}}
+            if isinstance(stint, dict) else stint
             for stint in out["stints"]]
     return out
 
@@ -905,8 +926,14 @@ def from_dict(payload: dict) -> Handover:
                for e in (section.get("playbook") or [])]
     plan = payload.get("plan")
     if not isinstance(plan, dict):
+        # **The flat shape is what the desk actually writes**, and the
+        # reserved names are stripped from it rather than refused - which is
+        # right for the five the handover consumes, because they belong
+        # beside the plan. `export` is the exception: nothing reads it back,
+        # so the desk's own arithmetic disappeared with no message on the
+        # common path. Kept on the plan so `validate` refuses it by name.
         plan = {k: v for k, v in payload.items()
-                if k not in RESERVED_KEYS and k != "plan"}
+                if (k not in RESERVED_KEYS or k == "export") and k != "plan"}
     return Handover(plan=whole_numbers(plan), playbook=entries,
                     author=section.get("author") or "ludo",
                     assumptions=list(section.get("assumptions") or []))

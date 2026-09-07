@@ -745,6 +745,17 @@ def _section_from_plan(plan: dict) -> dict:
             # a stint's `end_lap` and `certify` refuses a 0-lap stint - so a
             # `pitLap` of 0 is not a box lap the app can produce, and
             # `race_outcome` asserted "against a planned lap 0" from one.
+            #
+            # **`certify` never reads `pit_laps`**, so the argument two lines
+            # up - that a null here is bounded by the gate - does NOT hold
+            # for this key: an unreadable box lap becomes a null nothing
+            # refused, and `race_outcome` then drops its deviation clause in
+            # silence. Better than exporting `-3`, and carried rather than
+            # claimed closed.
+            #
+            # `isinstance(pit_laps, list)`: `certify` does not check the type
+            # either, so a `pit_laps` of `11` raised `TypeError` and a dict
+            # raised `KeyError`, taking the whole export down.
             "pitLap": (as_whole_number(pit_laps[0], LAP_CEILING, minimum=1)
                        if isinstance(pit_laps, list) and pit_laps else None),
         },

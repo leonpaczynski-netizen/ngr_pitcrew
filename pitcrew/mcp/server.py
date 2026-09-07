@@ -234,13 +234,21 @@ def propose_strategy(event_id: int, plan: str, label: str = "") -> str:
         if not isinstance(payload, dict):
             return _dump({"saved": False,
                           "error": "plan must be a JSON object"})
+        # **Two ownerships in one set, so two answers.** `export` is the
+        # app's own section and renaming it is right; `handover`, `author`,
+        # `playbook`, `unhandled` and `certificate` are the desk's, and
+        # renaming those would strip George's bounds or lose who wrote the
+        # plan - the tool that takes them is `write_strategy`.
         clash = sorted(RESERVED_KEYS & set(payload))
         if clash:
+            desk = [k for k in clash if k != "export"]
+            advice = ("use write_strategy, which takes them" if desk
+                      else "rename it - the app builds that section itself")
             return _dump({
                 "saved": False,
-                "error": f"the plan carries {', '.join(repr(k) for k in clash)}"
-                         f", which the app owns - rename it, because storing "
-                         f"both would silently keep one"})
+                "error": f"the plan carries "
+                         f"{', '.join(repr(k) for k in clash)}, which this "
+                         f"tool does not store: {advice}"})
         payload = whole_numbers(payload)
 
         certificate = certify_for_event(store, event_id, payload)

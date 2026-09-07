@@ -1601,6 +1601,38 @@ So the answer is not a seventh reader:
    no longer assert *"against a planned lap 0"* from a figure the app cannot
    produce.
 
+### Row 1.7, critic pass 18 — `start_lap` was the field one to the left
+
+**(A).** `stint_ends_on_lap` is `start_lap + laps - 1`, and `whole_numbers`
+normalised `laps` and left `start_lap` as written — so the sentence that
+motivated the door, *"George said 'the next 9.0-lap stint' with the hose in"*,
+was **still true after the fix**, through the documented desk door on an
+auto-approved plan: *"10.0 laps after the planned box"*, spoken. Enumerating
+one more field would be the same shape a fourth time, so the count-shaped keys
+are **declared** (`PLAN_COUNTS`, `STINT_COUNTS`) and held against what
+`Plan.as_dict` actually emits — a field added to the plan cannot quietly skip
+the door.
+
+**And four of pass 17's six changes were unpinned**, found by mutation over
+600 tests: `minimum=1` on both `pitLap` sites, the `isinstance(pit_laps,
+list)` guard, and both `propose_strategy` guards all survived. The
+`isinstance` one is the costly gap — `certify` never checks that type, so an
+approved plan with `pit_laps: 11` raised `TypeError` and a dict raised
+`KeyError`, taking **the whole export** down rather than one key. All four are
+tested now, the MCP pair against the real stdio door.
+
+Minor, each a claim wider than its code: *"every route to storage goes through
+it"* is false — the app's own optimiser writes `Plan.as_dict` (ints by
+construction) and `save_qualifying_plan` is a different surface, so what is
+true is *"every plan a desk can write"*. *"Rename it"* was lifted from a set
+with one ownership and is wrong for the five keys the handover consumes —
+renaming a `playbook` strips George's bounds; the answer for those is
+`write_strategy`. `export` was **dropped in silence** on the flat shape the
+desk actually writes, so the desk's own arithmetic disappeared with no
+message; it is kept on the plan and refused by name. And the null-is-bounded
+argument quoted for `stops` does not transfer to `pitLap`, because `certify`
+never reads `pit_laps` — carried, and said where it is.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), plus critic
 5's carried questions (a misidentified board row resets the held-up window;
 two locator misreads still cut the gauge series; the sector map's offset path
