@@ -223,9 +223,9 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     # round-trip produces - and `isinstance(stops, int)` dropped it, so this
     # refusal could not fire and the Race page then said "No stop is planned"
     # over a plan whose own field said five (row 1.7, critic pass 12).
-    from pitcrew.strategy.handover import _as_count
+    from pitcrew.strategy.handover import as_stop_count
 
-    stops = _as_count(plan.get("stops"))
+    stops = as_stop_count(plan.get("stops"))
     if plan.get("stops") is not None and stops is None:
         refusals.append(
             f"the plan's stops field is {plan['stops']!r}, which is not a "

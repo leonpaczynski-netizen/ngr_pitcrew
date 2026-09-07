@@ -1307,11 +1307,11 @@ def test_a_stop_count_that_is_not_an_int_is_still_read():
     Eleven critic passes swept this function and every one seeded `stops` as
     a Python `int`.
     """
-    from pitcrew.strategy.handover import _as_count, _stops_planned
+    from pitcrew.strategy.handover import as_stop_count, _stops_planned
 
-    assert _as_count(5.0) == 5 and _as_count(5) == 5
-    assert _as_count(True) is None, "a bool is not a stop count"
-    assert _as_count(5.5) is None and _as_count("5") is None
+    assert as_stop_count(5.0) == 5 and as_stop_count(5) == 5
+    assert as_stop_count(True) is None, "a bool is not a stop count"
+    assert as_stop_count(5.5) is None and as_stop_count("5") is None
 
     # An integral float agrees with the stints and is simply read.
     assert _stops_planned({"stints": [{}, {}], "stops": 1.0}) == 1
@@ -1352,3 +1352,91 @@ def test_certify_refuses_a_stops_field_it_cannot_read():
     assert not unreadable.certified
     assert any("not a stop count" in r for r in unreadable.refusals), \
         unreadable.refusals
+
+
+def test_a_null_stops_field_reads_as_not_stated():
+    """**`"stops": null` is the ordinary JSON for "not stated", and keying on
+    the KEY made it a corrupt field.**
+
+    The two branches either side read the VALUE - a null `stints` or
+    `pit_laps` is absent - and `certify` guards `is not None`. Keyed on
+    presence, `_stops_planned` returned None instead of 0, `_cannot_fire`
+    went False, and a granted `fuel_long: drop_stop` rendered under *George
+    may, on his own* on a plan where `_stops_off` can never fire: the state
+    an earlier pass was written to close, re-opened for every plan whose
+    `stops` is null.
+    """
+    from pitcrew.strategy.handover import (_stop_disagreement,
+                                           _stops_planned)
+
+    plan = {"stints": [{"laps": 20, "compound": "RM", "start_lap": 1}],
+            "stops": None}
+    assert _stops_planned(plan) == 0
+    assert _stop_disagreement(plan) is None
+
+    said = lines({**plan, "handover": {"playbook": [
+        {"trigger": "fuel_long", "action": "drop_stop", "when": "a",
+         "until": "b"}]}})
+    assert "cannot fire on this plan - there is no stop to drop" in said, said
+    assert "fuel long - drop stop" not in said
+
+    # And a null in either sibling still reads as absent, as it always did.
+    assert _stops_planned({"stints": [{}, {}], "pit_laps": None}) == 1
+
+
+def test_the_head_names_what_was_actually_found():
+    """An unreadable clause is not evidence of a conflict, and one clause is
+    never a disagreement. Both halves were wrong once: counting clauses gave
+    "The plan disagrees with itself" over two figures that agree, and
+    checking the conflict first gave a lone negative reading the same head.
+    """
+    from pitcrew.strategy.handover import _stop_disagreement as says
+
+    # Readable fields agree; one field cannot be read at all.
+    agree = says({"stints": [{}, {}], "stops": 1, "pit_laps": "10"})
+    assert agree is not None
+    assert agree.startswith("The plan's stop figures cannot all be read"), \
+        agree
+    assert "disagrees with itself" not in agree
+
+    # Readable fields really do disagree.
+    conflict = says({"stints": [{}, {}], "stops": 2})
+    assert conflict is not None
+    assert conflict.startswith("The plan disagrees with itself"), conflict
+
+    # A single clause is neither.
+    for lone in ({"stops": "5"}, {"stints": {"a": 1}}):
+        said = says(lone)
+        assert said is not None and said.startswith("The plan's "), said
+        assert "disagrees with itself" not in said
+        assert "cannot all be read" not in said
+
+    # A negative reading beside a real one IS a disagreement.
+    negative = says({"stints": [{}], "stops": -1})
+    assert negative is not None
+    assert negative.startswith("The plan disagrees with itself"), negative
+
+
+def test_every_reader_of_stops_goes_through_one_expression(qt_app):
+    """**A float certified clean then printed "1.0 stop" on the Race page**
+    and slipped past the export's own stints-vs-stops cross-check, which only
+    looked at `int`. `as_stop_count` was a guard at two consumers while four
+    more did their own arithmetic on the stored value.
+    """
+    from pitcrew.export.build import _section_from_plan
+    from pitcrew.ui.race_screen import RaceScreen
+
+    screen = RaceScreen()
+    screen.set_plan({"label": "Ludo", "plan": {
+        "stints": [{"laps": 15, "compound": "RM", "start_lap": 1},
+                   {"laps": 5, "compound": "RM", "start_lap": 16}],
+        "stops": 1.0, "pit_laps": [15], "binding_constraint": "fuel"}})
+    assert "1 stop" in screen.plan_line.text(), screen.plan_line.text()
+    assert "1.0" not in screen.plan_line.text()
+
+    section = _section_from_plan({
+        "stints": [{"laps": 15, "compound": "RM"},
+                   {"laps": 5, "compound": "RM"}],
+        "stops": 1.0})
+    assert section["plan"]["stops"] == 1, section["plan"]
+    assert not isinstance(section["plan"]["stops"], float)

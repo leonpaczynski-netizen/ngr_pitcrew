@@ -154,8 +154,20 @@ _STOP_SAID = {"stints": "its stints imply {n}",
               "pit_laps": "its box laps name {n}"}
 
 
-def _as_count(value) -> int | None:
+# No race has ever run more than a handful of stops, and a figure past this
+# is a corrupt field rather than a plan. Bounded so a stray `1e300` is named
+# as unreadable instead of rendered as a 301-digit number on the grid.
+_STOP_CEILING = 1000
+
+
+def as_stop_count(value) -> int | None:
     """A stop count off a stored field, or None when it cannot be read as one.
+
+    **Public, because six places read `plan["stops"]` and four of them used
+    to do their own arithmetic on it.** A float certified clean by `certify`
+    then printed "1.0 stop" on the Race page and slipped past the export's
+    stints-vs-stops cross-check, which only looked at `int`. One expression,
+    read by every consumer.
 
     **An integral float is a count.** JSON has no integer type and
     `mcp.propose_strategy` stores arbitrary JSON, so `5.0` is what a
@@ -167,7 +179,10 @@ def _as_count(value) -> int | None:
         return None
     if isinstance(value, int):
         return value
-    if isinstance(value, float) and value.is_integer():
+    if isinstance(value, float) and value.is_integer() \
+            and abs(value) <= _STOP_CEILING:
+        # `inf` and `nan` fail `is_integer()`; `1e300` does not, and became a
+        # 301-digit integer printed in full into a wrapped label on the grid.
         return int(value)
     return None
 
@@ -200,8 +215,14 @@ def _stop_readings(plan: dict) -> tuple[dict[str, int], list[str]]:
     # carries an impossible figure. Rule 3 asks for `None` and for the
     # disagreement to be said, not for the corrupt reading to vanish. A field
     # of the wrong TYPE is the same thing one step earlier.
-    if "stops" in plan:
-        count = _as_count(plan.get("stops"))
+    # **`is not None`, like the two branches either side.** Keyed on the
+    # KEY, a `"stops": null` - the ordinary JSON for "not stated" - counted
+    # as a corrupt field, so `_stops_planned` returned None instead of 0,
+    # `_cannot_fire` went False, and a granted `fuel_long: drop_stop`
+    # rendered under *George may* on a plan where `_stops_off` can never
+    # fire. That is the state pass 11 was written to close.
+    if plan.get("stops") is not None:
+        count = as_stop_count(plan.get("stops"))
         if count is None:
             unreadable.append("stops")
         else:
@@ -230,6 +251,11 @@ def _stops_planned(plan: dict) -> int | None:
         return None            # a negative, or a field of the wrong type
     values = set(readings.values())
     return values.pop() if len(values) == 1 else None
+
+
+def _short(text: str, limit: int = 40) -> str:
+    """A stored value quoted back to the driver, cut to one line's worth."""
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "\u2026"
 
 
 def _stop_disagreement(plan: dict) -> str | None:
@@ -262,8 +288,10 @@ def _stop_disagreement(plan: dict) -> str | None:
     # A field that is there and cannot be read at all - a `stops` of "5", a
     # `pit_laps` that is not a list. Quoted as stored, because the driver is
     # the only one who can tell the desk what it meant.
-    parts += [said[name].format(n=repr(plan.get(name))) + " (not a count)"
-              for name in unreadable]
+    # Truncated: a `stints` given as a dict renders its whole structure into
+    # a standing order otherwise, and `Handover.validate` passes that shape.
+    parts += [said[name].format(n=_short(repr(plan.get(name))))
+              + " (not a count)" for name in unreadable]
     # **Only a real disagreement is called one.** With a single corrupt
     # reading and nothing to compare it against, the plan is not arguing
     # with itself; it is holding a figure that cannot be read.
@@ -273,13 +301,29 @@ def _stop_disagreement(plan: dict) -> str | None:
     # promoted to a sentence off the SAME vocabulary - `"its stints imply"`
     # becomes `"The plan's stints imply"` - rather than sliced back out of
     # the joined string or written twice in a second dict.
+    # **The head names what was actually found, in this order: one clause is
+    # never a disagreement; a conflict between readings is; anything else is
+    # a field that cannot be read.** Both halves of that were wrong once -
+    # `len(parts) > 1` counted an unreadable clause as evidence of a
+    # conflict, and checking the conflict first gave a lone negative reading
+    # the "disagrees with itself" head (rule 12: the head has to name the
+    # constraint the expression produced).
     if len(parts) > 1:
-        return ("The plan disagrees with itself about stops - "
-                + ", ".join(parts)
-                + ". How many stops it holds is not known.")
-    alone = parts[0].replace("its ", "The plan's ", 1).replace(
-        " (not a count)", ", which is not a count")
-    return alone + ". How many stops it holds is not known."
+        conflict = (len(set(readings.values())) > 1
+                    or any(number < 0 for number in readings.values()))
+        head = ("The plan disagrees with itself about stops - " if conflict
+                else "The plan's stop figures cannot all be read - ")
+        return head + ", ".join(parts) + \
+            ". How many stops it holds is not known."
+    # Promoted off the template, not off the joined clause: `_STOP_SAID`'s
+    # entries all begin "its ", and asserting that here means a reworded
+    # template fails loudly rather than silently losing its capital.
+    name = (list(readings) + unreadable)[0]
+    template = said[name]
+    assert template.startswith("its "), template
+    number = readings.get(name, _short(repr(plan.get(name))))
+    return ("The plan's " + template[len("its "):].format(n=number)
+            + ", which is not a count. How many stops it holds is not known.")
 
 
 def _cannot_fire(trigger: str, action: str, plan: dict) -> bool:

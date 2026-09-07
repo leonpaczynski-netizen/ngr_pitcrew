@@ -1439,6 +1439,39 @@ than a shortcut, and both now say so where they are. And a **second copy** of
 the stale row list — *"1.7, 1.8, 1.10 are open"* — 758 lines above the one
 pass 11 trimmed, which is §1a's own shape.
 
+### Row 1.7, critic pass 13 — `"stops": null` became a corrupt field
+
+1. **(A), and an oscillation I caused.** Pass 12 keyed the new branch on the
+   KEY (`"stops" in plan`) where both its siblings read the VALUE, and where
+   `certify` — added in the same diff — guards `is not None`. So
+   `"stops": null`, the ordinary JSON for *not stated*, counted as corrupt:
+   `_stops_planned` returned `None` instead of `0`, `_cannot_fire` went
+   False, and a granted `fuel_long: drop_stop` rendered under *George may, on
+   his own* on a plan where `_stops_off` can never fire — **the state pass 11
+   was written to close.** One token.
+2. **`len(parts) > 1` is not "the readings disagree".** An unreadable clause
+   counted as evidence of a conflict, so two fields that agree plus one that
+   cannot be read printed *"The plan disagrees with itself"* over two
+   identical figures. And checking the conflict first then gave a **lone**
+   negative reading the same head. The head is chosen in order now: one
+   clause is never a disagreement; a conflict between readings is; anything
+   else is a field that cannot be read.
+3. **`as_stop_count` was a guard at two consumers.** Four more sites read
+   `plan["stops"]` raw, so a float certified clean by pass 12's new gate then
+   printed **"1.0 stop"** on the Race page, slipped past the export's own
+   stints-vs-stops cross-check (`isinstance(stops, int)`), went into
+   `strategy.plan.stops` as `1.0` against a contract whose example is `1`,
+   and matched an approved plan in the controller only by `==` luck. One
+   expression, read by all six — `feedback_a_guard_at_each_consumer`.
+
+Minor: `1e300` passed `is_integer()` and became a 301-digit number printed
+into a wrapped label on the grid (bounded now); an unreadable field was
+`repr`'d without truncation, so a `stints` given as a dict rendered its whole
+structure into a standing order; and the lone-clause sentence was still
+string surgery on the built clause — it is formatted from the template, with
+an assertion so a reworded template fails loudly instead of silently losing
+its capital.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), plus critic
 5's carried questions (a misidentified board row resets the held-up window;
 two locator misreads still cut the gauge series; the sector map's offset path

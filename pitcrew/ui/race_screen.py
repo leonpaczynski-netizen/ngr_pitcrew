@@ -463,7 +463,7 @@ class RaceScreen(QWidget):
         `plan_json` the coordinator arms from - so what is on the screen is
         what will be run rather than a second rendering of the same idea.
         """
-        from pitcrew.strategy.handover import author_of
+        from pitcrew.strategy.handover import author_of, as_stop_count
 
         if not strategy:
             self.plan_line.setText(
@@ -492,7 +492,11 @@ class RaceScreen(QWidget):
         # The same stints the line below spells out in words, as one object.
         self.spine.setPlan([st.get("laps") for st in stints],
                            [st.get("compound") for st in stints])
-        stops = plan.get("stops")
+        # Through the one expression, so a `1.0` stored by the MCP door -
+        # JSON has no integer type - reads as "1 stop" rather than
+        # "1.0 stop", and a field that is not a count says nothing at all
+        # instead of printing itself.
+        stops = as_stop_count(plan.get("stops"))
         parts: list[str] = []
         if stops is not None:
             parts.append(f"{stops} stop" if stops == 1 else f"{stops} stops")

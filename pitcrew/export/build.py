@@ -715,9 +715,13 @@ def _section_from_plan(plan: dict) -> dict:
     if not stints:
         return {}
     pit_laps = plan.get("pit_laps") or []
+    from pitcrew.strategy.handover import as_stop_count
+
     return {
         "plan": {
-            "stops": plan.get("stops"),
+            # Normalised, so a plan authored outside the app does not put
+            # `1.0` into a contract whose own example is `1`.
+            "stops": as_stop_count(plan.get("stops")),
             "laps": sum(int(s.get("laps") or 0) for s in stints) or None,
             "stintLaps": [int(s.get("laps") or 0) for s in stints],
             "compounds": [s.get("compound") for s in stints],

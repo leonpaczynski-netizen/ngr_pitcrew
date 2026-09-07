@@ -4072,8 +4072,13 @@ class PitCrewController(QObject):
             # plans now share a stop count on different rubber, and matching
             # on stops alone would re-select whichever came first - silently
             # putting the car on a compound he did not approve.
+            from pitcrew.strategy.handover import as_stop_count
+
             stored = approved["plan"]
-            want_stops = stored.get("stops")
+            # Through the one expression: matched raw, a stored `1.0` found
+            # its plan only by `==` luck and any other shape silently
+            # selected none.
+            want_stops = as_stop_count(stored.get("stops"))
             want_compounds = [s.get("compound")
                               for s in stored.get("stints") or []]
             approved_index = next(
