@@ -497,9 +497,13 @@ class Handover:
         # and a handover's is a list of prose, and a reader taking the wrong
         # one gets no warning at all.
         for key in sorted(RESERVED_KEYS & set(self.plan or ())):
+            # `export` is the APP's section, not the handover's, and the
+            # answer for it is not "rename it" - the app builds one.
+            owner = ("the app builds that section itself" if key == "export"
+                     else "it is the handover's own - rename it")
             problems.append(
-                f"the plan carries {key!r}, which is the handover's own - "
-                f"rename it, because storing both would silently keep one")
+                f"the plan carries {key!r}: {owner}, because storing both "
+                f"would silently keep one")
         seen = set()
         for entry in self.playbook:
             problems.extend(entry.validate())
@@ -860,8 +864,9 @@ def standing_orders(stored: dict) -> list[Order]:
 # `test_the_door_reads_every_count_a_plan_carries` holds these against what
 # `Plan.as_dict` emits.
 PLAN_COUNTS = {"stops": (_STOP_CEILING, None), "laps": (LAP_CEILING, 0)}
-STINT_COUNTS = {"laps": (LAP_CEILING, 0), "start_lap": (LAP_CEILING, 1),
-                "end_lap": (LAP_CEILING, 1)}
+# `end_lap` is a `Stint` PROPERTY, never stored and never read off a stored
+# stint, so declaring it here was a key that could not be exercised.
+STINT_COUNTS = {"laps": (LAP_CEILING, 0), "start_lap": (LAP_CEILING, 1)}
 
 
 def whole_numbers(plan: dict) -> dict:
@@ -881,9 +886,12 @@ def whole_numbers(plan: dict) -> dict:
     **Called by the two desk doors, not by every writer.** `from_dict` (so
     `write_strategy` and the CLI) and `mcp.propose_strategy`. The app's own
     optimiser writes `Plan.as_dict`, whose counts are `int` by construction,
-    and `save_qualifying_plan` is a different surface. "No consumer can see a
-    float" is true of a plan that came through a door, which is every plan a
-    desk can write.
+    and `save_qualifying_plan` is a different surface.
+
+    **So the guarantee is "read where it can be read", not "no consumer sees
+    a float".** A value this cannot read is passed through untouched by
+    design, and `certify` is what refuses it - including `start_lap`, which
+    was checked by neither for a while and reached a spoken call as `1.5`.
     """
     def read(value, ceiling, minimum):
         got = as_whole_number(value, ceiling, minimum=minimum)

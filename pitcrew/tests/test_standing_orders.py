@@ -1778,3 +1778,26 @@ def test_a_pit_laps_that_is_not_a_list_does_not_take_the_export_down():
     # A box lap is 1-based, so 0 is not one and does not travel.
     zero = _section_from_plan({"stints": stints, "pit_laps": [0]})
     assert zero["plan"]["pitLap"] is None
+
+
+def test_both_box_lap_readings_use_the_same_bound():
+    """**Two sites read `pitLap` and only one was pinned** - flipping the
+    outcome's `minimum=1` to `0` left the whole suite green.
+
+    Asserted off the source, and said plainly: `_outcome` takes a store and
+    reads the race laps, so exercising it needs a seeded database, and a
+    behavioural test here would be a fixture pretending to be one. What can
+    be held cheaply is that the two readings agree - a box lap is 1-based,
+    `Plan.pit_laps` is a stint's `end_lap`, and `certify` refuses a 0-lap
+    stint, so a `pitLap` of 0 is not one the app can produce and
+    `race_outcome` asserted "against a planned lap 0" from it.
+    """
+    import pathlib as _pathlib
+
+    import pitcrew.export.build as build
+
+    source = _pathlib.Path(build.__file__).read_text(encoding="utf-8")
+    readings = [line for line in source.splitlines()
+                if "LAP_CEILING" in line and "minimum=" in line]
+    assert len(readings) == 2, readings
+    assert all("minimum=1" in line for line in readings), readings

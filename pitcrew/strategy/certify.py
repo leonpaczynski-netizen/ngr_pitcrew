@@ -124,6 +124,18 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
         refusals.append("every stint needs a positive whole number of laps")
         return Certificate(refusals)
 
+    # **And its start lap, which nothing checked.** `stint_ends_on_lap` is
+    # `start_lap + laps - 1`, so a `start_lap` of 1.5 passed both doors and
+    # this gate and George said "Box in 8.5 laps." The door reads it as a
+    # count where it can; a value it could not read reaches here unchanged,
+    # and this is the place that refuses.
+    starts = [as_whole_number(s.get("start_lap"), LAP_CEILING, minimum=1)
+              for s in stints if s.get("start_lap") is not None]
+    if any(n is None for n in starts):
+        refusals.append(
+            "every stint that names a start lap needs a whole one")
+        return Certificate(refusals)
+
     # ------------------------------------------------------------- the tank
     capacity = inputs.fuel_capacity_l
     if capacity is None:

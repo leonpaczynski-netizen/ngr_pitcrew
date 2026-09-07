@@ -1621,6 +1621,37 @@ approved plan with `pit_laps: 11` raised `TypeError` and a dict raised
 `KeyError`, taking **the whole export** down rather than one key. All four are
 tested now, the MCP pair against the real stdio door.
 
+### Row 1.7, critic pass 19 — the door was hardened and nobody asked what it stores
+
+1. **(A), pre-existing.** `propose_strategy` **never stamped**.
+   `write_strategy` does; `approve_stored_strategy` only certifies; and
+   `start_race` arms straight off the row. So a proposed plan approved in the
+   app had **no `start_lap`** — every stint then ends at `laps`, because
+   `_apply_stint` reads `start_lap or 1`, so two stints of a three-stint plan
+   share a box lap and `_box_now` fires **every lap to the flag**. That is the
+   nine-box-calls defect `_with_start_laps` exists to prevent. No `context`
+   either, so `arm` skips `planned.matches(actual)` and a plan for one circuit
+   arms at another — §1a's named failure — and no `expects`, so every per-lap
+   comparison reports nothing.
+2. **(A)** A `start_lap` of `1.5` passed both doors *and the gate*: the door
+   reads what it can and passes the rest through by design, and `certify`
+   checked stint `laps` and **never looked at the start**. George said *"Box
+   in 8.5 laps."* `certify` refuses it now, which is where a value the door
+   could not read belongs.
+3. Pass 18's *"all four are tested now"* was true of one site and one guard:
+   the second `pitLap` reading and the `isinstance(payload, dict)` guard both
+   survived mutation. Both pinned — the outcome's reading at the source, said
+   plainly, because `_outcome` takes a store and a behavioural test there
+   would be a fixture pretending to be a database.
+4. The MCP advice was one answer for a set holding **three** ownerships:
+   `write_strategy` refuses `export` too, so routing it there was wrong, and
+   `unhandled`/`certificate` are recomputed wherever they arrive. Per key now.
+   `validate`'s own message still said *"the handover's own — rename it"*
+   about `export`, which is the app's.
+5. `end_lap` was declared in `STINT_COUNTS` and is a `Stint` **property** —
+   never stored, never read off a stored stint, so it was a key that could not
+   be exercised.
+
 Minor, each a claim wider than its code: *"every route to storage goes through
 it"* is false — the app's own optimiser writes `Plan.as_dict` (ints by
 construction) and `save_qualifying_plan` is a different surface, so what is
