@@ -710,14 +710,55 @@ does not need, then the fold) — the driver should be shown that choice;
 `_offset_bins` is dead live and would clamp rather than wrap if wired; CHASE
 plus CLOSING can speak about the same car four laps in five.
 
-**Parked, ready to apply — `docs/pending/`:** the other half of 1.6, a verdict
-per call. `apply_p1_verdicts.py` is the edit script (run from the repo root:
-`python docs/pending/apply_p1_verdicts.py`), `test_call_verdicts.py` its test
-(move back to `pitcrew/tests/` after applying). It gives `call_outcome.judge`,
-`race_revisions.verdict/verdict_detail` (v17), `board_positions`, the
-controller judging every filed call at each crossing and at the flag,
-`CallRow.set_outcome` finally called, and the export carrying the verdict.
-Not applied because critic 6 was mid-run on the tree.
+**1.6's other half — APPLIED 8 Sep 2026, `59a3144` and its critic fixes.**
+It was parked in `docs/pending/` and both files there are now gone: the edit
+script is spent and the test is in the suite. See "Critic pass 8" below for
+what it took.
+
+### Critic pass 8 — 8 Sep 2026, on 1.6's other half
+
+**NOT AGREED on `59a3144`, two blockers, and the provenance was the story.**
+Most of that commit came from a one-shot edit script written on 7 Sep and
+**never run**. Its `controller.py` anchor did not match the file at all — it
+was written from a condensed reading and omitted a comment block — so the
+script applied four files and stopped. Every other anchor in it was equally
+unchecked, and the critic was told to assume so. It found:
+
+1. **The export field could not reach a file.** `_calls_made` carried
+   `verdict`; the section builder projects `callsMade[]` through a fixed key
+   list that did not include it, and nothing noticed because `kind` is
+   dropped the same way. Worse, widening that list alone would have made
+   `_validate_known_keys` **refuse the whole payload** — the field was
+   undeclared in `payload.KNOWN_KEYS` and in the contract — so a half-done
+   job costs the driver the export, not the field. Three places, and the
+   format is now `gt7-pitcrew/1.9` with a §16 entry.
+2. **`_filed_calls` outlived the race.** `stop_race` never cleared it and
+   `_judge_filed_calls` runs at every crossing of every session kind, so a
+   race whose flag was never detected — the Fuji failure, on file — left box
+   calls held, and the first PRACTICE crossing afterwards judged them against
+   practice laps and wrote *"not-acted"* onto a race call. CLAUDE.md rule 11,
+   and the named remedy (a reset with a caller) existed only on the arming
+   side. `_filed_session` is the guard, `__init__` builds both, and Stop
+   settles what is open with `final=True` before the session id goes.
+
+**Majors, each a real defect:** the verdict was popped from the dict BEFORE
+the write, so a locked database — this app writes from the wear sampler, the
+pit wall and the video path — lost that call's verdict for good and aborted
+the rest of the loop into a log line naming none of them. The judging ran
+before the fragment check, so the phantom row (*"two laps driven, three
+recorded"*, observed twice) filled a box call's window one crossing early and
+wrote *"no stop on laps 12-14"* about a lap 14 he had not driven. The
+position-call path filed nothing, so `verdict = NULL` meant three unrelated
+things. And `verdict` and `disposition` answered the same question two ways
+in one object — `disposition` pools pit laps over every race session of the
+event including rehearsals — so it is derived from the verdict now (rule 13),
+falling back to its own derivation only on `cannot-tell`.
+
+**Minors:** a board row filed under lap 0 where the crossing had no lap
+number (rule 3); the short-shift window counted the call's own lap, so a
+driver already short-shifting read as having obeyed; the v17 note in
+`schema.py` had swallowed a v15 paragraph; and the controller half — the
+hand-placed half — had no test at all, which is now five.
 
 **Left in Phase 1:** 1.7 (race page absorbs the loaded card, Strategy page
 goes), 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call

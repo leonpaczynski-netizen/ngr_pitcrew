@@ -129,6 +129,14 @@ def test_the_run_is_closed_at_the_flag_and_not_at_shutdown(store, monkeypatch):
     closed: list[int] = []
 
     controller = PitCrewController.__new__(PitCrewController)
+    # **A `__new__` stub declares what the methods under test read.** The
+    # flag now settles every call still open before the run is closed, and
+    # PyQt raises on ordinary attribute access on an instance whose
+    # `__init__` never ran - so the three the judging reads are set here
+    # rather than reached for through `__dict__` in production code.
+    controller._filed_calls = {}
+    controller._filed_session = None
+    controller.session_id = None
     controller.race = a_race()
     controller.race.state.finished = True
     controller.race.state.lap = 20
@@ -147,6 +155,14 @@ def test_closing_out_is_idempotent():
 
     closed: list[int] = []
     controller = PitCrewController.__new__(PitCrewController)
+    # **A `__new__` stub declares what the methods under test read.** The
+    # flag now settles every call still open before the run is closed, and
+    # PyQt raises on ordinary attribute access on an instance whose
+    # `__init__` never ran - so the three the judging reads are set here
+    # rather than reached for through `__dict__` in production code.
+    controller._filed_calls = {}
+    controller._filed_session = None
+    controller.session_id = None
     controller.race = a_race()
     controller.race.state.finished = True
     controller.race.state.lap = 20
@@ -186,6 +202,14 @@ def test_a_ledger_failure_never_reaches_the_driver():
         raise RuntimeError("disk full")
 
     controller = PitCrewController.__new__(PitCrewController)
+    # **A `__new__` stub declares what the methods under test read.** The
+    # flag now settles every call still open before the run is closed, and
+    # PyQt raises on ordinary attribute access on an instance whose
+    # `__init__` never ran - so the three the judging reads are set here
+    # rather than reached for through `__dict__` in production code.
+    controller._filed_calls = {}
+    controller._filed_session = None
+    controller.session_id = None
     controller.race = a_race()
     controller.race.state.finished = True
     controller.race.state.lap = 20

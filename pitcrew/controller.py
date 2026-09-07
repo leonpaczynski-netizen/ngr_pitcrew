@@ -1052,6 +1052,14 @@ class PitCrewController(QObject):
         self.session_id: int | None = None
         self._parse_errors = 0
         self._store_errors = 0
+        # **The calls filed and not yet judged, and the session they belong
+        # to.** Built here rather than reached through `self.__dict__` at
+        # three call sites: an attribute that only exists once a race has
+        # started is one every reader has to guess about, and the guessing is
+        # what let it outlive its session (critic pass 8). `start_race` and
+        # `stop_race` are the two callers that reset it.
+        self._filed_calls: dict = {}
+        self._filed_session: int | None = None
 
         # Set once, so an attach that runs twice does not connect twice.
         self._settings_wired = False
@@ -2888,13 +2896,19 @@ class PitCrewController(QObject):
                 # gaps (assessment S8: the 6 Sep race cannot be); handed to
                 # the sector map so "where he has you" is computable live.
                 samples = wall.take_samples()
-                try:
-                    self.store.record_board_positions(
-                        self.session_id, getattr(lap, "lap_num", 0) or 0,
-                        wall.positions())
-                except Exception:
-                    log("race").exception("the board positions could not "
-                                          "be filed")
+                # **A crossing with no lap number files nothing** (critic
+                # pass 8). `or 0` put every rival's place under lap 0, which
+                # sorts first and reads as the grid - a fabricated value where
+                # rule 3 asks for an absence. Eleven lines above, the same
+                # object is passed to `_close_the_ruler_lap` as `None`.
+                board_lap = getattr(lap, "lap_num", None)
+                if board_lap:
+                    try:
+                        self.store.record_board_positions(
+                            self.session_id, int(board_lap), wall.positions())
+                    except Exception:
+                        log("race").exception("the board positions could not "
+                                              "be filed")
                 try:
                     # Filed under the driver's NAME, not the roster's
                     # cluster id, which is a number nothing outside this
@@ -3153,7 +3167,6 @@ class PitCrewController(QObject):
                 "flag set" if verdict.is_out_lap else "flag unchanged")
         try:
             lap_id = self.store.add_lap(self.session_id, lap, frames=frames)
-            self._judge_filed_calls()
         except sqlite3.Error:
             # A lap that cannot be stored is the one failure the driver must
             # not have to read a log to discover: he is in the car, watching
@@ -3177,6 +3190,16 @@ class PitCrewController(QObject):
             # **And it stops here.** The rack is his count of what he drove;
             # a lap that never crossed the line does not belong on it.
             return
+
+        # **The filed calls are judged HERE, past the fragment check** (critic
+        # pass 8). Judged immediately after `add_lap` they were judged against
+        # a lap population that still contained the phantom row - "two laps
+        # driven, three recorded", observed twice and documented above - and
+        # `outcome_for` counts ROWS, so a box call's three-lap window filled
+        # one crossing early. The verdict written was "no stop on laps 12-14"
+        # on a lap 14 he had not driven yet, and it is written once: the
+        # debrief would record a call he obeyed as one he ignored.
+        self._judge_filed_calls()
 
         # **The lap he said to throw away.** Set by a driver report during the
         # lap; consumed here, on the first lap to land after it. It runs after
@@ -3669,8 +3692,19 @@ class PitCrewController(QObject):
         Never into the caller: a verdict that cannot be written is a log
         line, not a crossing lost.
         """
-        filed = self.__dict__.get("_filed_calls")
+        filed = self._filed_calls
         if not filed or self.session_id is None:
+            return
+        if self._filed_session != self.session_id:
+            # Calls from a race that never took its flag, and a different
+            # session is now running. They are not judged against its laps;
+            # they are dropped, with a line saying so, because a verdict is
+            # about the race it was made in (rule 11).
+            log("race").info(
+                "%d call(s) filed in session %s are dropped unjudged - "
+                "session %s is running now", len(filed),
+                self._filed_session, self.session_id)
+            filed.clear()
             return
         from types import SimpleNamespace
 
@@ -3681,19 +3715,36 @@ class PitCrewController(QObject):
                     for row in self.store.list_laps(self.session_id)]
             settled = judge(((rid, call) for rid, (call, _) in filed.items()),
                             laps, final=final)
-            for rid, outcome in settled:
-                call, row = filed.pop(rid)
-                self.store.set_revision_verdict(rid, outcome.verdict,
-                                                outcome.detail)
-                if row is not None:
-                    try:
-                        row.set_outcome(outcome.verdict, outcome.detail)
-                    except RuntimeError:
-                        pass            # the row is gone with its screen
-                log("race").info("call on lap %s judged %s: %s", call.lap,
-                                 outcome.verdict, outcome.detail)
         except Exception:                                    # noqa: BLE001
             log("race").exception("the filed calls could not be judged")
+            return
+        for rid, outcome in settled:
+            call, row = filed[rid]
+            # **Written first, dropped second, and one call's failure does
+            # not take the others with it** (critic pass 8). Popped before
+            # the write, a locked database - this app writes from the wear
+            # sampler, the pit wall and the video path - lost that call's
+            # verdict for good and aborted the rest of the loop into a log
+            # line that named none of them.
+            try:
+                self.store.set_revision_verdict(rid, outcome.verdict,
+                                                outcome.detail)
+            except Exception:                                # noqa: BLE001
+                log("race").exception(
+                    "the verdict on the call from lap %s could not be "
+                    "written - it stays filed for the next crossing",
+                    call.lap)
+                continue
+            filed.pop(rid, None)
+            log("race").info("call on lap %s judged %s: %s", call.lap,
+                             outcome.verdict, outcome.detail)
+            if row is not None:
+                try:
+                    row.set_outcome(outcome.verdict, outcome.detail)
+                except RuntimeError:
+                    pass                # the row is gone with its screen
+                except Exception:                            # noqa: BLE001
+                    log("race").exception("the verdict could not be shown")
 
     def _road_not_penalty(self):
         """This session's ledger of places the road explains, not a penalty.
@@ -4368,8 +4419,17 @@ class PitCrewController(QObject):
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
         # The calls filed this race and not yet judged: revision id -> (call,
-        # the log row to write the verdict onto). Rule 11: this race's.
+        # the log row to write the verdict onto), and the session they belong
+        # to. **CLAUDE.md rule 11, and the session id is the whole guard**
+        # (critic pass 8): `stop_race` did not clear this, and
+        # `_judge_filed_calls` runs at every crossing of every session kind -
+        # so a race whose flag was never detected (the Fuji failure, on file)
+        # left box calls held, and the first practice crossing afterwards
+        # judged them against PRACTICE laps and wrote "not-acted" onto a race
+        # call. A reset with no caller is the defect this project keeps
+        # finding; this one has two, and refuses besides.
         self._filed_calls = {}
+        self._filed_session = self.session_id
 
         # **The race is the session most worth having on video, and it was the
         # only kind that never was.** `_start_video` had one call site, in
@@ -4907,6 +4967,16 @@ class PitCrewController(QObject):
         rig = self.__dict__.get("rig")
         if rig is not None and hasattr(rig, "release_notices"):
             rig.release_notices()
+        # **And every call still open is settled, before the session id it is
+        # judged against goes** (critic pass 8). `_judge_filed_calls(final=)`
+        # was reachable only from `_close_out_finished_race`, which returns
+        # early unless the flag was detected - so a race ended with the Stop
+        # button, which is the race class this feature exists for, left every
+        # provisional call NULL forever. `final=True` writes them as they
+        # stand: "the race may have ended on it" is an answer.
+        self._judge_filed_calls(final=True)
+        self._filed_calls = {}
+        self._filed_session = None
         # **First, so the position survives whatever else teardown does.** It
         # is the one piece of state here the driver set by hand, and every
         # line below it can raise.
@@ -5200,8 +5270,7 @@ class PitCrewController(QObject):
             # judge a box call against the laps that follow since 23 Aug;
             # `CallRow.set_outcome` has waited for a caller as long. Judged
             # at each crossing from here on - see `_judge_filed_calls`.
-            filed = self.__dict__.setdefault("_filed_calls", {})
-            filed[revision_id] = (call, row)
+            self._filed_calls[revision_id] = (call, row)
 
     # ------------------------------------------------------------------- ptt
 
@@ -6061,14 +6130,22 @@ class PitCrewController(QObject):
         if self._engineer_speaks:
             self.voice.say(call.spoken())
             self.ptt.last_call = call.spoken()
+        row = None
         if self.race_screen is not None:
-            self.race_screen.show_call(call)
+            row = self.race_screen.show_call(call)
         if self.race_run_id is not None:
-            self.store.append_revision(
+            # **Filed for its verdict like every other call** (critic pass 8).
+            # Discarding the id here left this path's rows at `verdict = NULL`
+            # for the life of the race, so NULL meant three unrelated things -
+            # recorded before v17, filed and never settled, and never filed at
+            # all - and nothing distinguished them for a reader. Its verdict
+            # is `cannot-tell` and settled, which is a fact worth writing.
+            revision_id = self.store.append_revision(
                 self.race_run_id, call.lap, call.call,
                 {"call": call.as_export(), "confidence": call.confidence,
                  "kind": call.kind},
                 accepted=False)
+            self._filed_calls.setdefault(revision_id, (call, row))
         # **After the place, and only when the championship actually moved.**
         # Said second because the place is the thing he can see out of the
         # window and the championship is the thing he cannot.

@@ -1,4 +1,4 @@
-"""Building and validating the `gt7-pitcrew/1.8` payload.
+"""Building and validating the `gt7-pitcrew/1.9` payload.
 
 This is the app's most important output. It is pasted into a prompt and read by
 a language model, not parsed by a program — so a malformed payload does not
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from pitcrew.telemetry.packet import STEER_SOURCE, STEERING_FULL_LOCK_RAD
 
-FORMAT = "gt7-pitcrew/1.8"
+FORMAT = "gt7-pitcrew/1.9"
 APP_VERSION = "pitcrew 2.2.0"
 
 SESSION_TYPES = ("practice", "quali", "tt", "race")
@@ -1116,7 +1116,8 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
         "breakEvenSPerLap", "restsOnAssumption", "outsideTyreWindow",
         "verdict", "source"}),
     "strategy.callsMade[]": frozenset({
-        "lap", "call", "reason", "accepted", "disposition", "confidence"}),
+        "lap", "call", "reason", "accepted", "disposition", "confidence",
+        "verdict", "verdictDetail"}),
     "derived": frozenset({
         "thresholds", "steerSource", "steerRotationDeg", "steerRotationSource",
         "bottomingRefMm", "bottomingRefSource", "observedMinHeightMm",

@@ -456,7 +456,7 @@ def test_a_session_that_never_answered_is_not_accused(store: Store):
 
 
 def test_the_export_contract_exposes_no_ids(store: Store):
-    """`gt7-pitcrew/1.8` stands: ids are a storage concern, not a contract one.
+    """`gt7-pitcrew/1.9` stands: ids are a storage concern, not a contract one.
 
     The consumer is a knowledge base reading prose, and `3391` means nothing
     to it. The validator refuses an undefined key at any depth, so adding one
@@ -471,4 +471,4 @@ def test_the_export_contract_exposes_no_ids(store: Store):
         assert '"carId"' not in text
         assert '"layoutId"' not in text
         assert '"carRef"' not in text
-    assert payload.FORMAT == "gt7-pitcrew/1.8"
+    assert payload.FORMAT == "gt7-pitcrew/1.9"

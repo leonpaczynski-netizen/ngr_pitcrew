@@ -704,8 +704,8 @@ calibrate strategy. Its purpose is to make the app's own reasoning auditable.
   },
   "callsMade": [
     { "lap": 4,  "call": "Map 3 down the back straight",     "reason": "1.2 laps short on fuel", "accepted": false, "disposition": "declined", "confidence": "high" },
-    { "lap": 12, "call": "Box this lap. RS.",                "reason": "fuel is the constraint", "accepted": null, "disposition": "taken", "confidence": "high" },
-    { "lap": 20, "call": "Chequered flag. P1.",              "reason": "race complete", "accepted": null, "disposition": "informational", "confidence": "high" }
+    { "lap": 12, "call": "Box this lap. RS.",                "reason": "fuel is the constraint", "accepted": null, "disposition": "taken", "confidence": "high", "verdict": "acted", "verdictDetail": "pitted on lap 12, 0 lap(s) after the call" },
+    { "lap": 20, "call": "Chequered flag. P1.",              "reason": "race complete", "accepted": null, "disposition": "informational", "confidence": "high", "verdict": "cannot-tell", "verdictDetail": "nothing in the feed can confirm a status of this kind - GT7 broadcasts no fuel map, brake balance or driving style" }
   ],
   "outcome": "Stopped lap 11. Fuel to the diamond +1 lap. Tyres had 2 laps left — stint was fuel-limited, not tyre-limited."
 }
@@ -739,6 +739,26 @@ the only feedback channel on the strategy engine saying nothing at all.
 | `taken` / `not-taken` | An instruction, and whether a pit lap followed it within two laps. **Derived from the laps, not from an answer** — an instruction is never offered and never answered |
 | `accepted` / `kept` / `expired` / `superseded` | A re-plan offer and how it left the desk. `accepted` is a real boolean for these |
 | `declined` | A record from before the marker existed, where the stored boolean was all there was |
+
+**`verdict` is what the driver then did, judged live against the laps as they
+came in** — the other half of the record, and absent from every export written
+before `1.9`. Added in 1.9 — see §16.
+
+| `verdict` | Meaning |
+|---|---|
+| `acted` | A stop followed a box call inside its own window, or the beep was actually moved after a short-shift call. `verdictDetail` names the lap |
+| `not-acted` | The window was fully driven and nothing followed. **This is as often a finding about the CALL as about the driver** — at Fuji he ignored two box calls, ran to the flag, finished P5, and the app's own binding-constraint figure was wrong |
+| `cannot-tell` | Nothing in the feed can answer this kind of call, or the race ended before the window was driven. `verdictDetail` says which |
+
+A call carries no `verdict` at all where the race was recorded before `1.9`,
+or where the call was made outside a running race. **Absent is not
+`cannot-tell`**: the first says nobody looked, the second says somebody looked
+and the feed cannot say.
+
+**Where `verdict` and `disposition` are both present for an instruction they
+agree, because `disposition` is derived from the verdict.** They are not two
+opinions: `disposition` falls back to its own pit-lap derivation only for
+`cannot-tell`, where the verdict declines to claim anything.
 
 #### 10.0 A timed race is not a lap race
 
@@ -1092,3 +1112,16 @@ GT7's own settings screen — one place a setup value lives, and it is not here.
 | 3 | **The export no longer refuses on an untrustworthy setup record** | The rank-zero gate existed because an export is where a wrong premise becomes a knowledge base's permanent learning. There is no longer a setup record to distrust, so the gate has nothing to weigh — and `acknowledge_setup_doubt` is gone with it. **The question has not gone away**; it has moved to the side that can actually answer it, which is the one holding the sheet and the screenshot |
 | 4 | **`gearing` keeps every field and several are now always `null`** | `matchesSheet`, `finalGearSheet`, `finalGearVsSheetPct` and `rollingRadiusImpliedM` all compare the fitted box against a stated one, and there is no stated one. They report `null` — *not measured*, which is what the tri-state was built for — rather than being dropped. `fittedRatios`, `limiterRpm` and `gearboxChangedMidSession` are read from the packet and are unaffected. `gearingConstantK` now always falls back to the derived final drive, which reads a few percent high through GT7's unloaded tyre radius; `gearingConstantFinalGearSource` says so, and it always said so |
 | 5 | **`rangeRecord` is untouched, and that is the distinction worth stating** | It looks like a setup section and is not. A range record is the car's own slider limits, read off its settings screen once and never re-entered — it is what makes reasoning in percent of range possible at all, and it outlives every sheet ever run on the car |
+
+### `gt7-pitcrew/1.9`
+
+**The call log has been half a record since it was built.** Every call carries
+what was said, why, and how sure; nothing carried what the driver then did — so
+the one feedback channel on the strategy engine could not tell a call he took
+from one he ignored, which are the two that most need telling apart. This
+driver has overruled the engineer and been right four sessions running.
+
+| # | Change | Reason |
+|---|---|---|
+| 1 | **`strategy.callsMade[]` gains `verdict` and `verdictDetail`** | Only two kinds can be answered from the feed and the rest say so in as many words: a box call against `laps.is_pit_lap`, a short-shift call against `laps.short_shift_rpm`. Everything else is `cannot-tell` **named rather than omitted** — a fuel-map change and a brake-balance click are in no packet GT7 sends, and reporting those as "not acted on" would turn a missing channel into a disobedient driver, which is the exact shape of defect this project keeps finding. Judged as the laps come in rather than at the flag, so the driver sees it on the Race screen two laps after the call |
+| 2 | **`disposition` for an instruction is derived from `verdict` where there is one** | They answered the same question two ways and could disagree in one object: the older derivation pools pit laps over every race session of the event, rehearsals included, while the verdict is judged against the laps of the session the call was made in. Rule 13 — two fields using the same words must mean the same thing |

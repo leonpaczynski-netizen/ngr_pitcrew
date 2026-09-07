@@ -477,7 +477,7 @@ def _fuel_capacity(session) -> tuple[float | None, str]:
 def _build(store, session: dict, laps: list[LapInput], *, notes: str,
            game_version: str | None = None,
            calibrated_at_race_multiplier: bool) -> dict:
-    """Assemble the `gt7-pitcrew/1.8` payload."""
+    """Assemble the `gt7-pitcrew/1.9` payload."""
     event = store.get_event(session["event_id"])
     if event is None:
         raise ValueError("session has no event")
@@ -780,15 +780,22 @@ def _strategy_section(store, event_id: int) -> dict | None:
 
     calls = _calls_made(store, event_id)
     if calls:
-        # The contract defines callsMade[] as lap/call/reason/accepted/
-        # confidence and the validator enforces exactly that, so the internal
-        # bookkeeping keys - `kind` and `resolution` - stay out of the
-        # payload. They exist for the outcome line below, which is where the
-        # audit reads them.
+        # The contract defines callsMade[] and the validator enforces
+        # exactly that list, so the internal bookkeeping keys - `kind` and
+        # `resolution` - stay out of the payload. They exist for the outcome
+        # line below, which is where the audit reads them.
+        #
+        # **`verdict` had to be added HERE as well as to the entry, and it
+        # was not** (critic pass 8): the entry carried it, this projection
+        # dropped it, and nothing noticed because `kind` is dropped the same
+        # way. A field added to `_calls_made` alone reaches no file. It also
+        # needs `payload.KNOWN_KEYS` and EXPORT-CONTRACT §10 - three places,
+        # and the validator REFUSES the whole payload if the first two
+        # disagree, so a half-done job costs the driver the export.
         section["callsMade"] = [
             {key: value for key, value in call.items()
              if key in ("lap", "call", "reason", "accepted", "disposition",
-                        "confidence")}
+                        "confidence", "verdict", "verdictDetail")}
             for call in calls]
 
     outcome = _outcome(store, event_id, calls, section, expects)
@@ -885,6 +892,12 @@ DISPOSITION_INFORMATIONAL = "informational"
 DISPOSITION_TAKEN = "taken"
 DISPOSITION_NOT_TAKEN = "not-taken"
 
+# **The verdict's vocabulary, imported rather than restated.** `disposition`
+# is derived from it where the race wrote one, so the two cannot drift into
+# saying different things about one call (rule 13).
+from pitcrew.race.call_outcome import ACTED as OUTCOME_ACTED  # noqa: E402
+from pitcrew.race.call_outcome import NOT_ACTED as OUTCOME_NOT_ACTED  # noqa: E402
+
 
 def _disposition(revision: dict, pit_laps: set[int]) -> tuple[str, bool | None]:
     """What became of one call, and whether `accepted` means anything for it.
@@ -909,6 +922,22 @@ def _disposition(revision: dict, pit_laps: set[int]) -> tuple[str, bool | None]:
         # instruction is not offered and is never answered; what says whether
         # it was followed is whether a pit lap turned up. Stated here rather
         # than inferred by a reader.
+        # **The live verdict first, where the race wrote one** (critic
+        # pass 8, rule 13). `verdict` and `disposition` were about to answer
+        # the same question two ways: this derivation pools `pit_laps` over
+        # EVERY race session of the event, rehearsals included, while the
+        # verdict is judged live against the laps of the session the call was
+        # actually made in. An event with a rehearsal could ship
+        # `disposition: taken` beside `verdict: not-acted` in one object,
+        # with the contract telling the reader to read `disposition`.
+        # `cannot-tell` falls through: the window was never driven, and
+        # "not-taken" is a claim about the driver that the laps do not
+        # support - the pit-lap derivation is the weaker answer that remains.
+        verdict = revision.get("verdict")
+        if verdict == OUTCOME_ACTED:
+            return DISPOSITION_TAKEN, None
+        if verdict == OUTCOME_NOT_ACTED:
+            return DISPOSITION_NOT_TAKEN, None
         lap = revision["lap_num"]
         if lap is None:
             return DISPOSITION_NOT_TAKEN, None

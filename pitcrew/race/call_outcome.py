@@ -117,13 +117,16 @@ def outcome_for(call, laps) -> Outcome:
                        f"no stop on laps {lap_num}-{lap_num + BOX_WINDOW_LAPS}")
 
     if getattr(call, SHORT_SHIFT_FIELD, None):
-        window = _laps_after(lap_num, laps, 1)
+        # **The NEXT lap, not this one** (critic pass 8). `_laps_after`
+        # includes the call's own lap, so a driver already short-shifting
+        # when the call came made it read "acted - short-shifting recorded on
+        # lap 12" about the lap the instruction was given ON. The instruction
+        # is about the lap ahead and so is the evidence for it.
+        window = [lap for lap in _laps_after(lap_num, laps, 1)
+                  if lap.lap_num > lap_num]
         if not window:
-            return Outcome(CANNOT_TELL, "no lap on file at or after the call",
-                           settled=False)
-        if len(window) < 2:
-            return Outcome(CANNOT_TELL, "the next lap has not been driven",
-                           settled=False)
+            return Outcome(CANNOT_TELL, "the lap after the call has not been "
+                                        "driven", settled=False)
         moved = [lap for lap in window
                  if (getattr(lap, "short_shift_rpm", None) or 0) > 0]
         if moved:

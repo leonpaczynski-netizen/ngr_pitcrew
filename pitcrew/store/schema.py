@@ -99,6 +99,10 @@ Versions, and what upgrading means here:
   asks this of every row on every redraw and cannot answer it from a 400 KB
   compressed buffer.
 
+  A lap whose sectors are refused is left null and **its `sector_model` is left
+  null too**, so a later run tries it again rather than recording a refusal as
+  a settled answer.  `laps` is not rebuilt - `lap_frames` cascades off it.
+
 * **v16** adds `gap_reads`: every gap the pit wall read off the leaderboard,
   with the road position it was read at.  **One brand-new table and nothing
   else**, so like v6 and v12 there is no migration function.  It exists
@@ -111,10 +115,6 @@ Versions, and what upgrading means here:
   leaderboard at each of our crossings - and two `ADDED_COLUMNS` on
   `race_revisions` for the verdict on each call.  The table is new, so no
   migration function; the columns are additive.
-
-  A lap whose sectors are refused is left null and **its `sector_model` is left
-  null too**, so a later run tries it again rather than recording a refusal as
-  a settled answer.  `laps` is not rebuilt - `lap_frames` cascades off it.
 
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
