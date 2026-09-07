@@ -5552,6 +5552,11 @@ class PitCrewController(QObject):
             # The plan's tyre decision for the coming stop, as stated, so the
             # box panel can say "NO TYRES" rather than the compound's name.
             tyres_at_stop=getattr(state, "next_tyres", None),
+            # **And the compound it says to fit, separately from the one on
+            # the car.** `calls._tyre_word` speaks this; the board's
+            # laps-to-box caption was drawing `tyre_compound` instead, so on
+            # a compound-changing stop it named the set coming OFF.
+            next_compound=getattr(state, "next_compound", None),
             laps_to_box=None if to_stop is None else float(max(0, to_stop)),
             # **The lap number GT7 is showing him, and it counts the same way
             # the countdown beside it does.**

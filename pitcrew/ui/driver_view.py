@@ -119,7 +119,7 @@ bottom edge is the shortest eye travel and the lead rank sits there.
     rank 3                  four corner temperatures, then the two tyre splits
     rank 2 (middle)         laps to box | in hand to the stop | in hand to
                             the flag | position
-    rank 1 (bottom, 210px)  gap ahead | gap behind
+    rank 1 (bottom, 180px)  gap ahead | gap behind
 
 --- rank 1 · the two neighbour gaps -------------------------------------------
 
@@ -454,6 +454,15 @@ class DriverState:
     # fuel only, None the plan did not say. Shown in the box panel beside the
     # compound so "RS" cannot be read as "fit RS" when the plan says not to.
     tyres_at_stop: bool | None = None
+    # **The compound the plan says to FIT, which is not `compound`.** On track
+    # `compound` is the set bolted to the car - the only honest answer for the
+    # four corner temperatures - and the laps-to-box caption was rendering it
+    # as the plan's decision. On any compound-changing stop, which is the only
+    # kind where that caption earns its place, the board named the wrong tyre
+    # while the voice said the right one, in the same ten seconds and with no
+    # way for him to ask which (rules 12 and 13). `_tyre_word` reads
+    # `next_compound` and so does this.
+    next_compound: str | None = None
     laps_to_box: float | None = None
     box_on_lap: int | None = None
     laps_of_fuel: float | None = None
@@ -806,14 +815,20 @@ class _Stat(QWidget):
     # room divided by the blocks on it, with the margins and the gaps between
     # them taken off. `test_the_board_fits_his_monitor_in_the_widest_state_it
     # _can_be_given` is what holds the arithmetic to the actual monitor.
-    # Measured at the face the stylesheet resolves to - Cascadia Mono at
-    # 27 px, 27 px a character - so the middle rank's 640 is twenty-three
-    # characters, which is what every reason string there is written to and
-    # what the longest box caption (`plan: lap 12 - no tyres`) needs.
+    # **Two faces, and the numbers are different enough to matter.** On the
+    # rig, Cascadia Mono at 27 px is 16 px a character, so the middle rank's
+    # 640 is forty characters and nothing on the board is elided at all.
+    # Under the offscreen platform the tests run on, the same stylesheet
+    # falls back to a stub metric of 27 px a character - twenty-three - and
+    # the longest strings DO elide. So the bound is set from the harness's
+    # font, which is the pessimistic one, and the driver gets the whole
+    # string. An earlier version of this comment quoted the offscreen figure
+    # as though it were his; it is not, and every character count derived
+    # from it in this file and in the tests was wrong by a factor of 1.7.
     MIDDLE_SUB_W = 640
     GAP_SUB_W = 1100
     SPLIT_SUB_W = 700
-    BOX_SUB_W = 480
+    BOX_SUB_W = 620
 
     def set_sub_width(self, pixels: int) -> None:
         """Cap the reason line, and elide anything past it.
@@ -1046,7 +1061,14 @@ class _LastCall(QWidget):
                 best, lo = trial, mid + 1
             else:
                 hi = mid - 1
-        self.line.setText(best)
+        # **And a width bound on top of the height one.** Qt's word wrap does
+        # not break a token longer than the line, so `heightForWidth` reports
+        # a single line for a 200-character word and the bisection accepts the
+        # lot - 6,060 px of it inside a 1,560 px label, clipped with no
+        # ellipsis. Nothing the engineer says today looks like that; this is
+        # the last hole in the fit and it costs one call to close.
+        self.line.setText(metrics.elidedText(
+            best, Qt.TextElideMode.ElideRight, self.MAX_WIDTH * self.LINES))
 
     def _mark_css(self, ink: str) -> str:
         return (f"font-family:{LABEL_FACE};font-size:{self.TEXT_PX - 6}px;"
@@ -1067,8 +1089,6 @@ class _LastCall(QWidget):
         where = f"L{call.lap}  " if call.lap is not None else ""
         self._text = f"{where}{call.text}"
         self.mark.setText(call.mark.upper())
-        # After the mark, because the mark's width is part of the row and a
-        # fit measured before it lands is measured against the wrong row.
         self._fit(self._text)
         # **Only "unconfirmed" gets an ink of its own.** It is the one mark
         # that says the engineer may be wrong, and it is the one he needs to
@@ -1299,7 +1319,14 @@ class _BoxPanel(QWidget):
             # **The dash says why.** This is the one figure the driver is
             # holding the trigger on, and it was the only one on the panel
             # showing a bare dash with an empty caption under it.
-            reason = ("no fill rate here" if state.fuel_target_l
+            # **`is not None`, not truthiness.** `fuel_target_l` is
+            # deliberately unclamped and returns a real `0.0` where the stop
+            # covers no laps, so the truthy test made RELEASE IN say
+            # "nothing sized it" while FUEL TO one block along drew `0` -
+            # two adjacent blocks contradicting each other about whether the
+            # stop had been sized. CLAUDE.md rule 3, and the same shape as
+            # the capacity hole already fixed in `calls.py`.
+            reason = ("no fill rate here" if state.fuel_target_l is not None
                       else "nothing sized it")
             self.release_stat.show_value("--", reason)
         else:
@@ -1316,7 +1343,13 @@ class _BoxPanel(QWidget):
         else:
             parts = []
             if state.fuel_l is not None:
-                parts.append(f"{state.fuel_l:.0f} L")
+                # **"aboard", not a bare unit.** This block draws a big
+                # target with the tank under it, and `31 L` under `63` does
+                # not say which is which - `aboard` is the word separating
+                # what is in the tank now from what is going in, and the
+                # running board uses `laps aboard` for the same idea. It was
+                # shortened to fit a bound computed from the wrong font.
+                parts.append(f"{state.fuel_l:.0f} aboard")
             # Which rate the seconds beside it were priced at. A rate measured
             # at this pump and one typed on the event page are not the same
             # claim, and the countdown is only as good as whichever it used.
@@ -1665,8 +1698,12 @@ class DriverView(QWidget):
         plan = f"plan: lap {state.box_on_lap}"
         if state.tyres_at_stop is False:
             return f"{plan} · no tyres"
-        if state.tyres_at_stop and state.compound:
-            return f"{plan} · {state.compound.upper()} on"
+        # **`next_compound`, never `compound`.** See the field's own note: on
+        # track the second is the set he is ON, and captioning that as the
+        # plan's decision named the wrong tyre on exactly the stops this
+        # caption exists for.
+        if state.tyres_at_stop and state.next_compound:
+            return f"{plan} · {state.next_compound.upper()} on"
         if state.tyres_at_stop:
             return f"{plan} · new set"
         # None: the plan did not say. Silence, because "fuel only" and "the
@@ -1707,15 +1744,24 @@ class DriverView(QWidget):
                 f"{state.fuel_to_stop:.1f}", aboard or "",
                 urgent=state.fuel_to_stop < 0)
 
-        # **The burn is not on the running board, and the reason is width.**
-        # Four blocks across a 2,560 px panel leave about 580 px each, which
-        # is twenty-one characters; `on the plan's fill · 4.19 L/lap` wants
-        # thirty-one and would have been elided into something he could not
-        # read. The reference is the half that has to survive - it is what
-        # says whether the figure is his to move - and the litres per lap are
-        # in the voice and on the box panel. `9.1 laps aboard` beside the
-        # stop figure already carries the supply in the unit he plans in.
+        # **The reference first, then the burn.** The reference is the half
+        # that has to survive a cut, because it is what says whether the
+        # figure is his to move; the burn is what lets him check it. The
+        # order is the whole design here - `set_sub_width` elides from the
+        # right, so on a face wide enough to need eliding it is the litres
+        # that go, not the words.
+        #
+        # The burn was taken off this line entirely for a while, on the
+        # arithmetic that `on the plan's fill · 4.19 L/lap` wanted
+        # thirty-one characters against a twenty-one character bound. That
+        # was measured on the OFFSCREEN test font at 27 px a character. On
+        # the rig the face is 16 px a character and the whole string is
+        # 496 px against a 640 px bound - it fits with room to spare, and it
+        # was removed for a reason that was not true.
         rests_on = state.fuel_to_flag_on or ""
+        if state.burn_l is not None:
+            burn = f"{state.burn_l:.2f} L/lap"
+            rests_on = f"{rests_on} · {burn}" if rests_on else burn
         if state.fuel_to_flag is None:
             self.flag_stat.show_value(
                 "--", state.fuel_to_flag_why or rests_on or "not measured")

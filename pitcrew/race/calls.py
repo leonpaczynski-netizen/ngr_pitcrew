@@ -3326,6 +3326,21 @@ def fuel_in_hand_to_flag(
     a stop that slips. And it goes **negative when the tank cannot hold the
     fill**, which is the finding: one stop does not do this race.
 
+    **`laps_remaining() - laps_to_stop()`, and the mismatch in it is
+    deliberate.** `laps_remaining()` corrects for `laps_missed()` and
+    `laps_to_stop()` does not, so this is `laps_total - laps_missed -
+    stint_ends_on_lap` rather than `laps_total - stint_ends_on_lap`. That is
+    the right one: `laps_total` is a count of REAL laps
+    (`coordinator.py:1667` builds it from `lap + laps_missed()`), while
+    `stint_ends_on_lap` is compared against `state.lap`, the app's count - so
+    the stop the app will actually call lands at real lap
+    `stint_ends_on_lap + laps_missed()`, and these are the laps that follow
+    it. Rule 12: the figure describes the stop that is going to happen, not
+    the one the plan drew. **That the stop slips a real lap per lost crossing
+    is a defect, and it is not this one** - it is in the plan-to-state seam
+    and belongs to Phase 0. A critic raised this as an off-by-one; it is not,
+    and the reasoning is written down here so it is not raised again.
+
     **The fill is sized for `laps_remaining - laps_to_stop`, and that is NOT
     what `fuel_target_l` passes.** `_laps_the_fill_covers` answers for the
     stop in hand and is only correct at it - at lap 2 of a 20-lap race with

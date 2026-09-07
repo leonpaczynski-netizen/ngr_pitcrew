@@ -1086,10 +1086,20 @@ def test_the_two_fuel_figures_reach_the_board_from_the_calls_module():
 def test_a_fuel_figure_that_cannot_be_made_carries_its_reason():
     """Every dash on this board says why. An empty box he cannot account for
     is one he would stop trusting the rest of the screen over."""
+    from pitcrew.race import calls as C
+
     got = _state_for(_Stub())
-    assert got.fuel_to_stop is None and got.fuel_to_stop_why
-    assert got.fuel_to_flag is None and got.fuel_to_flag_why
-    assert got.fuel_to_flag_on
+    # **Named, not merely non-empty.** A single pooled "no" would pass a
+    # truthiness check, which is exactly what the sibling
+    # `test_a_missing_input_is_named_rather_than_pooled` forbids.
+    assert got.fuel_to_stop is None
+    assert got.fuel_to_stop_why == C.NO_STOP_TO_COME
+    assert got.fuel_to_flag is None
+    # A different reason from the stop figure's, because a different input is
+    # missing: the stub has no stop AND no race length, and the flag figure
+    # gets as far as needing the second.
+    assert got.fuel_to_flag_why == C.NO_RACE_LENGTH
+    assert got.fuel_to_flag_on == C.ON_THE_TANK_ABOARD
 
 
 def test_the_last_call_is_none_until_something_is_said():
@@ -1186,8 +1196,23 @@ def test_a_pit_stop_empties_the_split_history():
         inspect.getsource(PitCrewController._on_race_event)))
 
     def calls_new_stint(node):
-        return any(isinstance(n, ast.Attribute) and n.attr == "new_stint"
-                   for n in ast.walk(node))
+        """A CALL, on `self._splits`, and nothing else.
+
+        The first version matched any attribute named `new_stint` anywhere in
+        the branch - and `self._colour.new_stint()` is two lines above in the
+        same `if`, so deleting the splits reset left it green. That made it
+        WEAKER than the substring search it replaced, which at least required
+        the receiver.
+        """
+        for n in ast.walk(node):
+            if not isinstance(n, ast.Call):
+                continue
+            fn = n.func
+            if (isinstance(fn, ast.Attribute) and fn.attr == "new_stint"
+                    and isinstance(fn.value, ast.Attribute)
+                    and fn.value.attr == "_splits"):
+                return True
+        return False
 
     def tests_pit_exit(node):
         return any(isinstance(n, ast.Attribute) and n.attr == "PIT_EXIT"
@@ -1197,3 +1222,30 @@ def test_a_pit_stop_empties_the_split_history():
                if isinstance(n, ast.If) and tests_pit_exit(n)
                and any(calls_new_stint(b) for b in n.body)]
     assert guarded, "new_stint() is not called under the PIT_EXIT branch"
+
+
+def test_the_box_caption_names_the_set_going_on_not_the_one_coming_off():
+    """**The board and the voice must name the same tyre.**
+
+    `_tyre_word` speaks `next_compound`; the board's laps-to-box caption was
+    drawing `compound`, which on track is the set bolted to the car. On a
+    compound-changing stop - the only kind where a tyre word in that caption
+    is worth anything - he read "RM on" down the straight and heard "RH on"
+    in the same ten seconds, with no way under a helmet to ask which.
+
+    The stub has carried `tyre_compound="RM"` and `next_compound="RH"` since
+    it was written; nothing crossed the seam to notice they differed.
+    """
+    from pitcrew.ui.driver_view import DriverView
+
+    stub = _Stub()
+    stub.race.state.next_tyres = True
+    got = _state_for(stub)
+    # On track the four corners still read the set he is ON.
+    assert got.compound == "RM"
+    # And the caption names the one going on.
+    assert got.next_compound == "RH"
+    view = DriverView()
+    view.update_state(got)
+    assert "RH on" in view.box_stat.sub.text()
+    assert "RM" not in view.box_stat.sub.text()

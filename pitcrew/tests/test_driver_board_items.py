@@ -94,9 +94,23 @@ def test_the_flag_figure_no_longer_forgets_the_litres_the_stop_adds():
     # 84 L reaches the box with more than the fill wants, so the supply that
     # bound it is his own tank and the caption says so.
     assert rests_on == "on the fuel aboard"
-    # And the old arithmetic, reproduced here, is what it is NOT.
-    old = state.fuel_l / state.fuel_per_lap_l - state.laps_remaining()
-    assert to_flag != pytest.approx(old)
+
+    # **And a state where the two expressions genuinely differ**, because in
+    # the surplus branch above they do not: it reduces algebraically to the
+    # old `tank / burn - laps to the flag`, so this test used to pass on
+    # `round(x, 1)` alone (2.0 against 2.048) and would have survived the
+    # whole expression being replaced by the defect it is named for.
+    #
+    # 45 L is 10.7 laps against 18 remaining, so the old expression says
+    # **-7.3** - the shape of the figure spoken at Daytona. The fill is what
+    # makes the honest answer positive.
+    short = _race(fuel_l=45.0)
+    old = short.fuel_l / short.fuel_per_lap_l - short.laps_remaining()
+    assert old == pytest.approx(-7.3, abs=0.1), old
+    got, why, rests_on = fuel_in_hand_to_flag(short)
+    assert why is None
+    assert got == pytest.approx(1.0, abs=0.05), got
+    assert rests_on == "on the plan\'s fill"
 
 
 def test_the_two_numbers_are_different_questions_and_say_so():
@@ -527,9 +541,17 @@ def test_the_tyre_decision_reaches_him_before_he_is_stationary(qt_app):
     view.update_state(DriverState(laps_to_box=4, box_on_lap=11,
                                   tyres_at_stop=False, compound="RS"))
     assert view.box_stat.sub.text() == "plan: lap 11 · no tyres"
+    # **The set going ON, not the set he is on**, and the two are given here
+    # as the controller gives them: `compound` is what is bolted to the car,
+    # `next_compound` is the plan's decision. Built with only `compound`,
+    # this test could not see the board naming the wrong tyre on every
+    # compound-changing stop - which is the only kind of stop this caption
+    # earns its place on.
     view.update_state(DriverState(laps_to_box=4, box_on_lap=11,
-                                  tyres_at_stop=True, compound="RS"))
+                                  tyres_at_stop=True, compound="RM",
+                                  next_compound="RS"))
     assert "RS on" in view.box_stat.sub.text()
+    assert "RM" not in view.box_stat.sub.text()
     # **A plan that did not say is silent.** "Fuel only" and "the plan is
     # quiet about it" are different answers and only one is a decision.
     view.update_state(DriverState(laps_to_box=4, box_on_lap=11,
@@ -548,11 +570,8 @@ def test_the_flag_block_names_the_supply_it_was_measured_on(qt_app):
                                   fuel_to_flag=14.9, burn_l=4.19,
                                   fuel_to_flag_on="on the plan's fill"))
     assert "9.1 laps aboard" in view.stop_stat.sub.text()
-    assert "on the plan's fill" in view.flag_stat.sub.text()
-    # **The burn is not on the running board.** Four blocks across 2,560 px
-    # leave twenty-one characters each, and the reference is the half that
-    # has to survive: it says whether the figure is his to move.
-    assert "L/lap" not in view.flag_stat.sub.text()
+    # The reference leads, because it is the half that has to survive a cut.
+    assert view.flag_stat.sub.text().startswith("on the plan's fill")
     # **The live litres are NOT here.** Both figures come off the tank as it
     # read at the last crossing; `packet.fuel_level` beside them put three
     # readings of one tank on the screen, none reconciling.

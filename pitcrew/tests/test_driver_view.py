@@ -6,6 +6,8 @@ and had to rip it out; this is the guard rail against the second time.
 """
 from __future__ import annotations
 
+import os
+
 from pathlib import Path
 
 import pytest
@@ -155,11 +157,10 @@ def test_it_shows_what_it_is_given(qt_app):
     # borrows the other's - the stop number is the tank he is carrying, the
     # flag number a full tank at the pump.
     assert "5.2 laps aboard" in view.stop_stat.sub.text()
-    assert "on the plan's fill" in view.flag_stat.sub.text()
-    # **The burn is not on the running board**, and that is a width decision
-    # made in the open: four blocks across a 2,560 px panel leave twenty-one
-    # characters each, and the reference is the half that has to survive.
-    assert "7.29 L/lap" not in view.flag_stat.sub.text()
+    # **The reference leads and the burn follows**, because `set_sub_width`
+    # elides from the right: on a face wide enough to need a cut it is the
+    # litres that go, not the words that say what the figure rests on.
+    assert view.flag_stat.sub.text().startswith("on the plan's fill")
     assert view.position_stat.value.text() == "P6"
     assert view.position_stat.sub.text() == "of 12"
     assert "RS" in view.tyre_caption.text()
@@ -195,16 +196,21 @@ def test_fuel_in_hand_is_red_below_zero_and_calm_above_it(qt_app):
 def test_a_missing_fuel_figure_carries_the_reason_it_is_missing(qt_app):
     """A dash he can account for is not a fault; one he cannot is a screen he
     stops trusting. `race/calls.py` names which of the reasons it is."""
+    from pitcrew.race import calls as C
+
     view = DriverView()
+    # **The constants, not copies of them.** A renamed constant with a stale
+    # literal here passes, and that has already happened once on this branch:
+    # `fill_rate_note="declared rate"` outlived `_fill_rate` returning it.
     view.update_state(DriverState(
-        fuel_to_stop_why="no stop still to come",
-        fuel_to_flag_why="a stop after this one"))
+        fuel_to_stop_why=C.NO_STOP_TO_COME,
+        fuel_to_flag_why=C.ANOTHER_STOP_AFTER))
     assert view.stop_stat.value.text() == "--"
     # Whole, not elided: every reason string is written to the room its rank
     # has, and an ellipsis where an answer should be is the failure this
     # block exists to avoid.
-    assert view.stop_stat.sub.text() == "no stop still to come"
-    assert view.flag_stat.sub.text() == "a stop after this one"
+    assert view.stop_stat.sub.text() == C.NO_STOP_TO_COME
+    assert view.flag_stat.sub.text() == C.ANOTHER_STOP_AFTER
 
 
 def test_a_position_nobody_read_is_a_dash_and_never_P0(qt_app):
@@ -293,10 +299,16 @@ def test_the_leading_gap_blocks_actually_get_the_leading_size(qt_app):
     view = DriverView()
     assert view.ahead_stat.VALUE_PX == _Stat.GAP_PX
     assert view.behind_stat.VALUE_PX == _Stat.GAP_PX
-    assert view.box_stat.VALUE_PX == _Stat.VALUE_PX
-    assert view.stop_stat.VALUE_PX == _Stat.VALUE_PX
-    assert view.flag_stat.VALUE_PX == _Stat.VALUE_PX
-    assert view.position_stat.VALUE_PX == _Stat.VALUE_PX
+    # **The middle rank is asserted against the LEAD**, not against its own
+    # class attribute. `_Stat.__init__` does `self.VALUE_PX = value_px or
+    # self.VALUE_PX`, so a block built with no `value_px` reads the class
+    # value straight back and `view.box_stat.VALUE_PX == _Stat.VALUE_PX` is
+    # true however the ranks are wired - delete that line from `__init__` and
+    # it stays green.
+    for stat in (view.box_stat, view.stop_stat, view.flag_stat,
+                 view.position_stat):
+        assert stat.VALUE_PX < view.ahead_stat.VALUE_PX
+        assert stat.VALUE_PX > view.axle_stat.VALUE_PX
     # The splits are a rank under the corners they are made of, and a rank
     # under the numbers he plans with.
     assert view.axle_stat.VALUE_PX == _Stat.SPLIT_PX
@@ -308,24 +320,52 @@ def test_the_dashboard_asks_for_faces_that_are_installed(qt_app):
     """It asked for Archivo and JetBrains Mono, neither of which is on the
     rig, so every number was silently drawn in Arial. A system face standing
     in for the display voice is a failure, not a fallback."""
-    import re
-
     from PyQt6.QtGui import QFontDatabase
 
     from pitcrew.ui import driver_view
 
-    source = Path(driver_view.__file__).read_text(encoding="utf-8")
-    # Only what is actually declared as a face. The prose above names the two
-    # that were wrong on purpose, and a test that cannot tell a comment from a
-    # declaration would forbid writing down why.
+    # **The face stacks themselves, not the source text.** This used to scrape
+    # `font-family:` out of the file - and every one of them is an f-string
+    # placeholder, so the set of literal names was EMPTY and the assertion was
+    # vacuous. Setting `theme.DATA_FAMILY = "JetBrains Mono"`, reintroducing
+    # verbatim the defect the docstring above names, left it green. What is
+    # checked now is what the module will actually put into a stylesheet.
+    stacks = (driver_view.NUMBER_FACE, driver_view.LABEL_FACE)
     asked = set()
-    for run in re.findall(r"font-family:([^;\"']+)", source):
+    for stack in stacks:
         asked.update(part.strip().strip("'\"")
-                     for part in run.split(",") if part.strip())
-    literal = {name for name in asked if not name.startswith("{")}
-    installed = set(QFontDatabase.families())
+                     for part in stack.split(",") if part.strip())
+    assert asked, "no faces declared at all - the stacks moved"
+    # **No unresolved placeholders**, which is the shape the vacuous version
+    # had: it scraped `font-family:{NUMBER_FACE}` out of the source and
+    # compared the literal string `{NUMBER_FACE}` against the font database.
+    assert not any("{" in name for name in asked), sorted(asked)
     generic = {"monospace", "sans-serif", "serif"}
-    missing = {name for name in literal
+    # **Two assertions, because only one of them can run under the harness.**
+    #
+    # Always: every stack ends in a generic family, so a face that goes
+    # missing degrades to something rather than to whatever Qt picks.
+    for stack in stacks:
+        assert stack.split(",")[-1].strip() in generic, stack
+
+    # And, only on a real platform: every named face is installed. The suite
+    # runs with `QT_QPA_PLATFORM=offscreen`, where `QFontDatabase` is a stub
+    # that knows none of them - so asserting there would fail on a machine
+    # that has the fonts. Run this file without the offscreen platform to get
+    # the check that matters. It is the reason the skip is not silent.
+    installed = set(QFontDatabase.families())
+    if not installed:
+        # Measured: the real platform lists 324 families here and offscreen
+        # lists ZERO. Gating on the emptiness rather than on the env var,
+        # because the fixture above sets `QT_QPA_PLATFORM` itself and reading
+        # it back would skip on every run including the ones that can check.
+        pytest.skip("the offscreen font database is empty; run this file on "
+                    "the real platform for the check that catches an "
+                    "uninstalled face")
+    # **Every name in a stack, not just the first.** A fallback that is not
+    # installed either is how "a system face standing in for the display
+    # voice" happens quietly.
+    missing = {name for name in asked
                if name not in installed and name not in generic}
     assert not missing, f"declared but not installed: {sorted(missing)}"
 

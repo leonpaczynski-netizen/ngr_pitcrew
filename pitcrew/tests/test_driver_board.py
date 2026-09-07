@@ -220,7 +220,7 @@ def test_a_plan_that_names_no_compound_is_not_no_plan_at_all(app):
     is an honest state - and the board used to report it as having no plan."""
     view = DriverView()
     view.update_state(DriverState(in_box=True, has_plan=True))
-    assert "no compound" in view.box.tyre_stat.sub.text()
+    assert view.box.tyre_stat.sub.text() == "plan: no compound"
     view.update_state(DriverState(in_box=True, has_plan=False))
     assert view.box.tyre_stat.sub.text() == "no plan"
 
@@ -230,7 +230,8 @@ def test_running_off_the_end_of_the_plan_is_not_no_plan_and_not_the_flag(app):
     view.update_state(DriverState(in_box=True, has_plan=True,
                                   past_the_plan=True))
     assert view.box.next_stat.value.text() == "--"
-    assert "past the plan" in view.box.next_stat.sub.text()
+    # Exact: `"past the plan" in x` is also true of `"not past the plan"`.
+    assert view.box.next_stat.sub.text() == "past the plan"
 
 
 def test_a_planned_stint_with_no_stated_length_is_not_past_the_plan(app):
@@ -239,7 +240,7 @@ def test_a_planned_stint_with_no_stated_length_is_not_past_the_plan(app):
     caption, so a stint squarely inside the plan read as being past its end."""
     view = DriverView()
     view.update_state(DriverState(in_box=True, has_plan=True))
-    assert "plan: no length" in view.box.next_stat.sub.text()
+    assert view.box.next_stat.sub.text() == "plan: no length"
 
 
 def test_the_rejoin_caption_does_not_read_as_a_duration(app):

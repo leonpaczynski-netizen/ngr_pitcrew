@@ -266,7 +266,9 @@ def build_driver_board() -> DriverView:
     # the content overflowed downwards, and the artefact came out 1900x1128 -
     # taller than the monitor it is a picture of. `grab()` renders a widget
     # larger than the screen quite happily.
-    minimum = board.layout().minimumSize()
+    # `minimumSizeHint`, which is what Qt enforces - the guard test moved
+    # to it for the same reason, and the two really do differ.
+    minimum = board.minimumSizeHint()
     board.resize(max(BOARD_WINDOW[0], minimum.width()),
                  max(BOARD_WINDOW[1], minimum.height()))
     return board
@@ -287,9 +289,18 @@ def _capture(window: PreviewWindow, board: DriverView, out: Path) -> None:
     # screen, so it is set to the panel's size at the last moment.
     board.resize(*BOARD_WINDOW)
     QApplication.processEvents()
-    board.grab().save(str(out / "driver-board.png"))
-    print(f"wrote {out / 'driver-board.png'} at {BOARD_WINDOW[0]}x"
-          f"{BOARD_WINDOW[1]}")
+    shot = board.grab()
+    shot.save(str(out / "driver-board.png"))
+    # **The size the grab actually came out at, not the one asked for.** They
+    # differ whenever the layout minimum is above `BOARD_WINDOW` - `resize`
+    # cannot go under it - and printing the request made the harness state a
+    # figure it had not achieved, which is how a 1900x1128 artefact went out
+    # once already.
+    print(f"wrote {out / 'driver-board.png'} at "
+          f"{shot.width()}x{shot.height()}")
+    if shot.height() > 1080 or shot.width() > 2560:
+        print("  ** WARNING: this does not fit the 2560x1080 panel it is a "
+              "picture of **")
 
 
 def main() -> int:
