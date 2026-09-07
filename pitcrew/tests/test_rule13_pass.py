@@ -226,18 +226,41 @@ def test_unknown_regulations_are_not_spoken_as_a_regulation():
     assert _why_the_stop_stands(state) == "On the plan."
 
 
-def test_the_box_call_never_contradicts_itself_in_two_sentences():
-    """The prefix was glued in front of `_fuel_instruction`, which can be
-    "Fuel is fine - the tank covers the next stint." - two adjacent
-    sentences making opposite claims, with §5.5 saying he acts on the front
-    of the reason."""
-    state = _fuelled_to_the_flag()
-    state.mandatory_stops_left = 1        # the regulations keep the stop
+def test_the_two_fuel_clauses_each_name_their_reference():
+    """**They were never contradictory** - "Fuel won't reach the flag" is
+    against the flag and "Fuel is fine" is against the next stint, and
+    neither named one. The first fix SUPPRESSED the reason to hide the
+    collision, which threw away the branch that kept the stop and left a box
+    call whose whole stated reason argued against boxing.
+
+    And the test written for that fix set `mandatory_stops_left = 1`, so the
+    reason took the regulation branch and the assertion never touched the
+    case at all - vacuous, then unfalsifiable once the string it looked for
+    stopped existing. This drives the fuel branch."""
+    state = _fuelled_to_the_flag()          # regs satisfied, plan says fuel
     state.lap = 11
+    state.laps_total = 40                   # 40 laps at 3 L: the tank cannot
+    state.next_stint_laps = 8               # but it covers the next stint
+    state.further_stop_planned = True
     call = _box_now(state)
     assert call is not None
-    assert not ("is the constraint" in call.reason
-                and "Fuel is fine" in call.reason)
+    assert "Fuel won't reach the flag." in call.reason
+    assert "the tank covers the next stint" in call.reason,         "both are true, and each says which distance it is about"
+
+
+def test_an_unknown_burn_is_not_spoken_as_a_shortfall():
+    """`fuel_reaches_flag` returns None for "cannot be known" - no burn on
+    file, no fuel reading, and a timed race has no lap count until the clock
+    resolves one. `is not True` folded that into "Fuel won't reach the
+    flag.", a claim about arithmetic nobody had done (rules 3 and 5). The
+    stop is still kept; the unknown costs a sentence, not a stop."""
+    from pitcrew.race.calls import _why_the_stop_stands, stop_still_needed
+
+    state = _fuelled_to_the_flag()
+    state.lap = 11
+    state.fuel_per_lap_l = None             # no burn measured yet
+    assert _why_the_stop_stands(state) == "On the plan."
+    assert stop_still_needed(state) is True, "and the stop stands"
 
 
 # ------------------------------------------------ one pair of numbers, one pair of words

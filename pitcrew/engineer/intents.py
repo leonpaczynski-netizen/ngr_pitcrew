@@ -475,9 +475,13 @@ def _gap_answer(intent: str, snapshot: dict) -> Answer:
     if parts:
         return Answer(" ".join(parts), intent, answered=True)
     if not snapshot.get("wallRunning"):
-        return Answer("No pit wall this session - I can't see other cars. "
-                      "Position and the field I have - ask me for position.",
-                      intent, answered=False)
+        # One sentence for one fact, the same one the brief says and the
+        # arming path says late (row 1.10): two wordings are two clips and
+        # two claims.
+        from pitcrew.race.brief import NO_RIVALS
+
+        return Answer(f"No pit wall this session. {NO_RIVALS} "
+                      f"Ask me for position.", intent, answered=False)
     return Answer("No gap read yet - the wall has nothing this lap. "
                   "Ask again on the next straight.", intent, answered=False)
 

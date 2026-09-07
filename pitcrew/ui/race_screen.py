@@ -572,12 +572,16 @@ class RaceScreen(QWidget):
         # 0" (the critic on row 1.10).
         to_stop = snapshot.get("lapsToStop")
         past = snapshot.get("lapsPastBox")
-        if past is not None and past > 0:
-            self.box_in.setValue(f"{int(past)} LATE", ink=theme.WARNING)
-            self.box_in.name.setText("OVERDUE")
-        elif to_stop is None:
+        # **A retired stop can never render as late.** `lapsToStop` is None
+        # once the stop stops being a stop, and that is checked first so the
+        # screen cannot shout OVERDUE at a stop the engineer has cancelled
+        # aloud (the critic on row 1.10).
+        if to_stop is None:
             self.box_in.setValue(None)
             self.box_in.name.setText("BOX IN")
+        elif past is not None and past > 0:
+            self.box_in.setValue(f"{int(past)} LATE", ink=theme.WARNING)
+            self.box_in.name.setText("OVERDUE")
         else:
             self.box_in.setValue(str(int(to_stop)))
             self.box_in.name.setText("BOX IN")

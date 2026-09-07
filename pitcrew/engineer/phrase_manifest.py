@@ -468,9 +468,26 @@ def _call_states() -> list:
         # the reverse, so nothing caught it.
         _state(lap=6, laps_total=20, stint_ends_on_lap=6,
                mandatory_stops_left=1),
+        # Two numbers in the fill clause, so `race_call_lines` skips this
+        # one whole - the clip it exists for is rendered by the box-soon
+        # fixture below, which has none. Kept because the shape is the one
+        # that would change if the reason moved.
         _state(lap=6, laps_total=40, stint_ends_on_lap=6, fuel_l=40.0,
-               fuel_per_lap_l=3.0, plan_binding_constraint="fuel",
-               mandatory_stops_left=0),
+               fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+               plan_binding_constraint="fuel", mandatory_stops_left=0),
+        # **The ungranted drop, which is the DEFAULT branch**: with no
+        # playbook granting `fuel_long: drop_stop`, this is what a
+        # fuel-covered race says at the box lap. `stops_off_said` is
+        # required or `STOPS_OFF` outranks the box call and the state
+        # renders nothing at all.
+        _state(lap=10, laps_total=20, stint_ends_on_lap=10, fuel_l=60.0,
+               fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+               plan_binding_constraint="fuel", mandatory_stops_left=0,
+               drop_stop_granted=False, stops_off_said=True),
+        _state(lap=8, laps_total=20, stint_ends_on_lap=10, fuel_l=60.0,
+               fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+               plan_binding_constraint="fuel", mandatory_stops_left=0,
+               drop_stop_granted=False, stops_off_said=True),
         # Box soon carries the same reason two laps earlier.
         _state(lap=5, laps_total=20, stint_ends_on_lap=6,
                mandatory_stops_left=1),

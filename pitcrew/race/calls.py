@@ -1861,8 +1861,21 @@ def _why_the_stop_stands(state: RaceState) -> str | None:
     # suppressed the reason to hide the collision, which threw away the
     # branch that actually kept the stop and left a box call whose whole
     # stated reason argued against boxing.
-    return ("Fuel won't reach the flag."
-            if fuel_reaches_flag(state) is not True else None)
+    # **`is not True` folded "cannot be known" into "will not reach"**
+    # (rules 3 and 5, the critic on row 1.10). `fuel_reaches_flag` returns
+    # None with no burn on file, no fuel reading, or no lap count - and a
+    # timed race has no lap count until the clock resolves one - so "Box in
+    # 2 laps. Stop 2. Fuel won't reach the flag." was a claim about
+    # arithmetic nobody had done. Two lines above, this same function
+    # refuses to speak an unknown `mandatory_stops_left` as a regulation;
+    # the care belongs here too.
+    #
+    # The stop is kept either way - `_stop_needed_on_fuel` only asks whether
+    # the reason is non-None - so the unknown costs a sentence, not a stop.
+    reaches = fuel_reaches_flag(state)
+    if reaches is False:
+        return "Fuel won't reach the flag."
+    return "On the plan." if reaches is None else None
 
 
 def _stops_off(state: RaceState) -> Call | None:

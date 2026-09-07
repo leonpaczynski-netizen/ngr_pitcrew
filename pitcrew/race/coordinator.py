@@ -2086,9 +2086,18 @@ class RaceCoordinator:
             # 9 on the highest-consequence number the app emits. The driver
             # board recovered the sign through `past_box_lap`; the desk
             # screen had no equivalent (the critic on row 1.10).
+            # **Off `laps_to_stop`'s own retirement, not off the raw
+            # field** (the critic on row 1.10). Read raw, this became the
+            # FIFTH surface counting a stop the engineer had cancelled - and
+            # the loudest: the desk screen showed OVERDUE / "3 LATE" in
+            # warning ink on the lap "You're fuelled to the flag. No more
+            # stops on fuel." went out, and again in the box and after the
+            # flag, where every voice call is silent by design.
             "lapsPastBox": (
                 self.state.lap - self.state.stint_ends_on_lap
-                if self.state.past_box_lap
+                if self.state.laps_to_stop() == 0
+                and self.state.past_box_lap
+                and not self.state.in_pit and not self.state.finished
                 and self.state.stint_ends_on_lap is not None else None),
             "nextCompound": self.state.next_compound,
             "inPit": self.state.in_pit,
