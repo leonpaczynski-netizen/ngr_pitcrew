@@ -727,8 +727,118 @@ kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic
 two locator misreads still cut the gauge series; the sector map's offset path
 is untested). **Then Phases 2–4.**
 
+### Critic pass 7 — 8 Sep 2026, five rounds on critic 6's three defects
+
+**Commits `abcfe1a` → `f8230ca` → `c534de9` → `580addb` → `6d89827` →
+`d573228`. AGREED at the fifth round.** All three of critic 6's defects and
+the `_box_soon` minor are closed, verified against HEAD rather than against
+the commit messages:
+
+1. **`TOW_TRADE` after the last stop.** `_a_fill_is_still_to_come` gates the
+   verdict on the flag, on `stint_ends_on_lap` and on `stop_still_needed` —
+   the one expression this codebase uses for "is the stop still a stop"
+   (rule 12). What replaced the silence is `_tow_is_spent`: said once, only
+   to a driver who was told in those words to stay in it, and only about the
+   car he was told about. Critic 7 checked and was right that `CHASE` and
+   `CLOSING` do NOT cover the lap time he is giving away — `_chase` needs
+   `laps_left <= CHASE_LAPS` and speaks a different quantity, and
+   `closing_call` needs a rate outside `TREND_WORTH_SAYING_S`, which a
+   driver at a steady gap in a wake is inside by construction.
+2. **The tow pairing off by one.** `_lap_of_read_key[lap_now()] =
+   lap.lap_num`, written at the top of `_on_lap` before `state.lap` moves,
+   so it is the counter's real value rather than an assumed offset — a fixed
+   `−1` drifts after a crossing lost in the pit lane, because `lap_now()`
+   carries `laps_missed()`. A read whose lap never completed drops out
+   (rule 3). `_drive` and `replay_race_calls.py` use the same convention.
+3. **Penalty false positives spoken as fact.** "Possible penalty served" in
+   the first two words, LOW so `spoken()` ends it "Unconfirmed.", and the
+   seconds come from the readings that are sayable.
+
+**The penalty detector was rebuilt three times, and every threshold in it now
+comes off the archive rather than off an argument.** The record of the dead
+ends matters more than the answer:
+
+- *"Refuse auto-segment models"* (critic 6's suggestion) refuses all nine
+  models on file and deletes the feature.
+- *"Two consecutive laps at one place is the road"* deletes a real pair —
+  Daytona session 114, laps 5 and 6.
+- *"Four consecutive laps"* rested on a sweep that silently began at session
+  82. **Yas Marina's 3,470 m is flagged on 10 of 15 laps of the session 44
+  RACE with a run of NINE and is unambiguously a corner** — 13 of the 14
+  looked-at laps brake there, 250 km/h down to 105, in a 1.6 km gap between
+  T4 and T5. No run threshold can work.
+- **What does work: a corner is braked on nearly every lap and a penalty is
+  not.** `braked_at` reads every hard brake with no speed, lateral-g or
+  corner-window filter; `RoadNotPenalty` judges the share of looked-at laps
+  that brake at a place. On file the penalties top out at 56% (Daytona s118,
+  5 of 9) and the corners start at 93% (Yas s44, 13 of 14).
+- **And the biggest false-positive class was in neither critic's list:** of
+  270 flags on file, **141 are lap one of a practice session** — four on one
+  Monza lap, five on one Spa lap. Pit laps, out laps and lap one are not
+  read at all.
+
+**Two bars, because one is not enough.** Leave-one-out over every modelled
+corner says ~28% of them would sit under `BRAKED_SHARE` if they went missing
+— Watkins T2 at 13 of 18 in a race, Spa T1 at 13 of 17. So `BRAKED_SHARE`
+(0.8) withdraws and the new `BRAKED_DOUBT_SHARE` (0.7) only silences: the lap
+still leaves the pace and burn populations, which is safe whatever caused the
+brake, and no sentence is spoken, which is not. On the archive the lower bar
+changes nothing (0.65–0.80 all speak the same 49 readings at penalty places
+and 34 at corners; 0.60 speaks 48). It is set from the RUNNING share, not the
+settled one — Daytona s118 peaks at 3 of 5 on its way to 5 of 9.
+
+**Struck from the previous commit messages, because they were wrong and are
+now cited nowhere else:**
+
+- `580addb` said "no place on file is flagged on every lap" and "the longest
+  run is two". Both false — see Yas s44 above.
+- `6d89827` justified the sayable-cost fix with session 65 laps 2/3/4 and the
+  figures 13.1 s against 2.1 s. **Neither occurs.** Those laps are before
+  `BRAKED_LAPS_NEEDED`, so nothing is in doubt and `speak == kept`; and
+  **there is not one lap on file where `speak` is a proper subset of
+  `kept`** — at 0.70 the doubt band silences nothing in the archive. The fix
+  is right on rule 12 and stays; the evidence beside it was invented.
+- The same commit said a missing corner costs 6–11 s against a real
+  penalty's 1.4–3.5. The corner readings are 6.4–11.6 s (n=33), but the
+  penalty readings run **0.8–10.7 s, median 1.9** (n=47) — 1.4–3.5 is the
+  Daytona banking alone, and RBR s101's three confirmed race penalties are
+  4.1, 4.2 and 5.1. **The derived cost does NOT separate the two
+  populations**, so it is not available as corroboration.
+
+**Also fixed across the five rounds:** a withdrawal recounts the lap rather
+than zeroing it (session 65's laps carry a penalty at one place and a corner
+at another); the withdrawal reaches the stored row through the new
+`Store.set_lap_penalties`, not only the in-memory pace population; "the
+fill's in" is only said where `last_stop_lap` records a stop (it was being
+said to a driver whose stop had been dropped on fuel); `TowTrade.worth_it`
+lost both its special cases — `max(x, 0.0)` was rule 9 and each replacement
+was wrong once; the tow's sentence no longer borrows `closing_call`'s "losing
+N seconds a lap to X", which means the gap growing and not a lap time
+(rule 13); `penalty_note` is cleared at a stop like `incident_lap` beside it;
+and `_box_soon` carries `_box_now`'s "dropping the stop was not granted".
+
+**Carried, with the reason:** `tow_trade_call` is once a RACE per car, not
+once a stint — `clear_stint` does not empty `said_tags`, so a verdict given
+in stint one about a car he is still behind in stint two is not revised. A
+lap is a lap however short it is in the brake share (8 of 654 looked-at laps
+carry under 70% of a circuit's frames). A withdrawal already written is not
+re-instated. `SAME_PLACE_M` at 150 m is wider than the closest corner pair in
+five of nine models, so a penalty within 150 m of a habitual corner brake
+inherits its share and is silenced — no instance on file.
+
+**A process note worth keeping.** Three of the five rounds turned on an
+archive count I had asserted from a sweep narrower than the archive. The
+memory's own lesson — *"replay every circuit shape on file, and let the
+critic build the counter-example"* — was written for exactly this and I broke
+it three times. The rule that came out of it: **quote a count only from a
+sweep whose bounds are in the script, and re-derive it after the code
+changes** — the running share is not the settled share, and 49/34 differed
+from the final-share figures I had first published.
+
 **How to resume:** read §9a from "Fourth critic pass" down, run
-`python -m pytest pitcrew/tests -q` and read the exit line, run
+`python -m pytest pitcrew/tests -p no:cacheprovider` and read pytest's own
+summary line — **do not add a second `-q`**, `pytest.ini` already sets one
+and `-qq` suppresses the summary, leaving only an exit code. Run
 `python tools/wiring_audit.py`, then apply the parked verdict change and put
 it to a critic before anything new. Every batch: build, test, critic, fix,
 commit — in that order.
