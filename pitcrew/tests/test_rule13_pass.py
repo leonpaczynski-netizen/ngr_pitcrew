@@ -14,8 +14,20 @@ moves and does not reach the pack is a pause at the moment a call arrives.
 """
 from __future__ import annotations
 
+import pytest
+
 from pitcrew.race.calls import (BOX_NOW, RaceState, _box_now, fuel_in_hand,
                                 fuel_reference)
+
+
+@pytest.fixture()
+def qt_app():
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
 
 
 # ------------------------------------------------------------ blocker one
@@ -278,3 +290,46 @@ def test_the_tow_says_where_each_figure_is_measured_and_keeps_its_rate():
     assert "0.3 seconds a lap at the pump" in spoken
     assert "1.4 seconds a lap slower" in spoken
     assert "at the stop" not in spoken, "one vocabulary for one pair"
+
+
+# ------------------------------- the fifth surface, which had no test at all
+
+def test_a_retired_stop_is_not_overdue_on_the_snapshot():
+    """`lapsPastBox` was read off the raw field and became the fifth surface
+    counting a cancelled stop - and the loudest, because the desk screen
+    shows it in warning ink. It comes off `laps_to_stop()` now, and the
+    blocker's fix had no test on either half."""
+    from pitcrew.race.coordinator import PlanContext, RaceCoordinator
+    from pitcrew.telemetry.session_state import EventKind, SessionEvent
+
+    race = RaceCoordinator(
+        {"stints": [{"laps": 10, "compound": "RM", "fuel_l": 60.0,
+                     "start_lap": 1},
+                    {"laps": 10, "compound": "RM", "fuel_l": 60.0,
+                     "start_lap": 11}],
+         "stops": 1, "pit_laps": [10], "binding_constraint": "fuel"},
+        fuel_per_lap_l=3.0, mandatory_stops=0)
+    context = PlanContext(car="x", track="Spa", layout=None, race_laps=20)
+    assert race.arm(context, context)
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    state = race.state
+    state.lap, state.fuel_l = 13, 60.0        # three laps past a box lap of 10
+    state.drop_stop_granted = True            # the desk let it go
+
+    assert state.past_box_lap is True, "he is past the box lap"
+    assert state.laps_to_stop() is None, "and the stop is not a stop"
+    assert race.snapshot()["lapsPastBox"] is None,         "so nothing may call him overdue for it"
+
+
+def test_the_race_screen_never_shows_a_retired_stop_as_late(qt_app):
+    """The other half. Before the fix the screen showed OVERDUE / "3 LATE"
+    in warning ink on the lap "You're fuelled to the flag." went out."""
+    from pitcrew.ui.race_screen import RaceScreen
+
+    screen = RaceScreen()
+    screen.show_snapshot({"lap": 13, "lapsToStop": None, "lapsPastBox": 3})
+    assert "LATE" not in screen.box_in.value.text().upper()
+    assert "OVERDUE" not in screen.box_in.name.text().upper()
+    # And the flag is not a countdown either.
+    screen.show_snapshot({"lap": 20, "lapsToStop": 0, "finished": True})
+    assert screen.box_in.name.text().upper() == "FLAG"

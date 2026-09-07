@@ -576,7 +576,14 @@ class RaceScreen(QWidget):
         # once the stop stops being a stop, and that is checked first so the
         # screen cannot shout OVERDUE at a stop the engineer has cancelled
         # aloud (the critic on row 1.10).
-        if to_stop is None:
+        # **The flag first**, the way `driver_view` has always had it.
+        # Post-flag with a stop never taken this read "BOX IN 0" - which the
+        # whole `lapsPastBox` exercise established means "box now" - about a
+        # race that is over.
+        if snapshot.get("finished"):
+            self.box_in.setValue(None)
+            self.box_in.name.setText("FLAG")
+        elif to_stop is None:
             self.box_in.setValue(None)
             self.box_in.name.setText("BOX IN")
         elif past is not None and past > 0:

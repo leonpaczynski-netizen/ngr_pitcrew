@@ -468,10 +468,6 @@ def _call_states() -> list:
         # the reverse, so nothing caught it.
         _state(lap=6, laps_total=20, stint_ends_on_lap=6,
                mandatory_stops_left=1),
-        # Two numbers in the fill clause, so `race_call_lines` skips this
-        # one whole - the clip it exists for is rendered by the box-soon
-        # fixture below, which has none. Kept because the shape is the one
-        # that would change if the reason moved.
         _state(lap=6, laps_total=40, stint_ends_on_lap=6, fuel_l=40.0,
                fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
                plan_binding_constraint="fuel", mandatory_stops_left=0),
@@ -488,6 +484,17 @@ def _call_states() -> list:
                fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
                plan_binding_constraint="fuel", mandatory_stops_left=0,
                drop_stop_granted=False, stops_off_said=True),
+        # **And every stop number, because the ordinal renders whole.** The
+        # plain box-soon is already swept over `range(MAX_STOPS)` for exactly
+        # that reason; this branch was pinned at stop 1, so "Stop 2, on the
+        # plan. Fuel would reach the flag - dropping the stop was not
+        # granted." would have fallen through to live synthesis.
+        *[_state(lap=8, laps_total=20, stint_ends_on_lap=10, fuel_l=60.0,
+                 fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+                 plan_binding_constraint="fuel", mandatory_stops_left=0,
+                 drop_stop_granted=False, stops_off_said=True,
+                 stint_index=index)
+          for index in range(1, MAX_STOPS)],
         # Box soon carries the same reason two laps earlier.
         _state(lap=5, laps_total=20, stint_ends_on_lap=6,
                mandatory_stops_left=1),

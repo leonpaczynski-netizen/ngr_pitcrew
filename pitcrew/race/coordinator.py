@@ -2101,6 +2101,12 @@ class RaceCoordinator:
                 and self.state.stint_ends_on_lap is not None else None),
             "nextCompound": self.state.next_compound,
             "inPit": self.state.in_pit,
+            # **The flag, because the box reading has to know about it.**
+            # Post-flag with a stop never taken the Race screen read "BOX IN
+            # 0" - which the whole `lapsPastBox` exercise established means
+            # "box now" - about a race that is over. `driver_view` has
+            # checked its own `finished` since it was written.
+            "finished": self.state.finished,
             # Whether there is an approved plan at all. `lapsToStop` is None
             # both for the last stint of a real plan and for a race armed with
             # no plan, and the two are different answers to "when do I box".
