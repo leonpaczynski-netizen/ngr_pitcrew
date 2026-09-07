@@ -1801,3 +1801,39 @@ def test_both_box_lap_readings_use_the_same_bound():
                 if "LAP_CEILING" in line and "minimum=" in line]
     assert len(readings) == 2, readings
     assert all("minimum=1" in line for line in readings), readings
+
+
+def test_the_orders_follow_the_drivers_own_choice(qt_app):
+    """**Picking "No plan" left the contract on the screen.**
+
+    `set_plan` is the only caller of `show_standing_orders` and is driven by
+    `_refresh_race_options` and `_poll_plan`, neither of which reads
+    `use_plan()`. So after choosing *No plan* the block still read "Standing
+    orders - LUDO" over "George may, on his own / fuel short - short shift
+    when..." - while `start_race` passes `approved = None`, the coordinator
+    builds its playbook from `{}`, and `_may` refuses every structural
+    action. The driver told a rule is armed when it cannot fire, one combo
+    box away, on the grid: this block's own reason for existing.
+    """
+    screen = RaceScreen()
+    screen.set_plan({"label": "Ludo", "plan": a_plan(playbook=[
+        PlaybookEntry(trigger="fuel_short", action="short_shift",
+                      when="0.5 laps short", until="it clears")])})
+    assert screen.use_plan()
+    assert screen.orders_layout.count()
+
+    screen.plan_picker.setCurrentIndex(screen.plan_picker.findData(False))
+    screen._plan_choice_made()
+    assert not screen.use_plan()
+    assert screen.orders_layout.count() == 0
+    assert not screen.orders.isVisibleTo(screen)
+
+    # **And the store must not put it back.** `_poll_plan` re-runs `set_plan`
+    # every tick; the driver's choice wins.
+    screen.set_plan({"label": "Ludo", "plan": a_plan()})
+    assert screen.orders_layout.count() == 0
+
+    # Choosing the plan again restores the contract it was showing.
+    screen.plan_picker.setCurrentIndex(screen.plan_picker.findData(True))
+    screen._plan_choice_made()
+    assert screen.orders_layout.count()

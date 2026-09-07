@@ -1664,6 +1664,54 @@ message; it is kept on the plan and refused by name. And the null-is-bounded
 argument quoted for `stops` does not transfer to `pitLap`, because `certify`
 never reads `pit_laps` — carried, and said where it is.
 
+### Row 1.7, critic pass 20 — the deliverable, and where the row actually went
+
+**The last defect in the row's own deliverable, and it is the row's own named
+failure.** `set_plan` is the only caller of `show_standing_orders` and is
+driven by `_refresh_race_options` and `_poll_plan`, neither of which reads
+`use_plan()`. So picking **No plan** left *"Standing orders — LUDO"* over
+*"George may, on his own"* on the grid — while `start_race` passes
+`approved = None`, the coordinator builds its playbook from `{}`, and `_may`
+refuses every structural action. The driver told a rule is armed when it
+cannot fire, one combo box away. Fixed, and the store cannot put it back:
+`_poll_plan` re-runs `set_plan` every tick and the driver's choice wins.
+
+**Where the row went, counted.** Of the findings in passes 12–20, about **8
+are in the deliverable** — all of them in passes 12, 13 and 14 — and about
+**26 are in the strategy-storage and normalisation layer**, which this row
+reached only through the `stops: 5.0` chain that opened in pass 12.
+**Passes 15–19 produced seventeen numbered findings and not one is in the
+deliverable.** That layer is real work and the defects are real — an unstamped
+`propose_strategy` arms a plan with no start laps, and ten stored plans carry
+no `context` — but it is not row 1.7, and it is not converging.
+
+**So the row closes here on its deliverable** — the standing orders, their
+rendering, the Race page block and the nav change, all measured clean against
+every plan on file — **and the storage layer is carried as its own item.**
+
+### Carried out of row 1.7, for a row of its own
+
+- **`approve_stored_strategy` does not stamp.** Fixed at both doors; the
+  consumer that turns a candidate into the armed plan still does not, and
+  `start_race` arms straight off the row. On the live DB **10 stored plans
+  lack `context` and 13 lack `expects`**, and strategy 9 (Spa, approved)
+  certifies clean with neither — so `arm(None, actual)` returns True at any
+  circuit. `feedback_a_guard_at_each_consumer`, one consumer further on.
+- **`stamp`'s `_with_start_laps` silently drops a non-dict stint**, and
+  derives the remaining start laps over the survivors — the opposite of
+  `whole_numbers`' stated rule that what cannot be read is passed through for
+  `certify` to refuse. Now reachable from `propose_strategy` too.
+- **`except ValueError` around `stamp`** returns `int()`'s own message
+  (*"invalid literal for int() with base 10: 'ten'"*) and stores no candidate,
+  where the parent stored one and let `certify` say *"every stint needs a
+  positive whole number of laps"*.
+- **`certify`'s start-lap refusal reports one constraint for three** (rule
+  12): not whole, negative, and past `LAP_CEILING` all say *"needs a whole
+  one"*. Its `minimum=1` is nearly dead, because `_with_start_laps` rewrites a
+  falsy start to the running lap before it is reached.
+- Three guards in that layer survive full-suite mutation, and
+  `Handover.validate`'s new `export` branch is untested.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), plus critic
 5's carried questions (a misidentified board row resets the held-up window;
 two locator misreads still cut the gauge series; the sector map's offset path

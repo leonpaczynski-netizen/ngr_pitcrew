@@ -231,9 +231,12 @@ class RaceScreen(QWidget):
         # also fires when the app moves it. Without that distinction, forcing
         # the picker to "No plan" while none is approved would read as him
         # having chosen it, and approving one later would never move it back.
-        self.plan_picker.activated.connect(
-            lambda: setattr(self, "_plan_chosen_by_hand", True))
+        self.plan_picker.activated.connect(self._plan_choice_made)
         self._plan_chosen_by_hand = False
+        # What `set_plan` was last handed, so the choice can be re-applied
+        # without going back to the store - and so "Approved plan" restores
+        # the contract "No plan" cleared.
+        self._approved_row: dict | None = None
         header.addWidget(Field("Strategy", self.plan_picker,
                                hint="Fuel calls only without one"),
                          0, Qt.AlignmentFlag.AlignBottom)
@@ -435,6 +438,24 @@ class RaceScreen(QWidget):
     def engineer_speaks(self) -> bool:
         return bool(self.engineer_picker.currentData())
 
+    def _plan_choice_made(self) -> None:
+        """**The standing orders follow the driver's own choice.**
+
+        They did not: `set_plan` is their only caller and is driven by
+        `_refresh_race_options` and `_poll_plan`, neither of which reads
+        `use_plan()`. So picking *No plan* left "Standing orders - LUDO" over
+        "George may, on his own" on the grid, while `start_race` arms with
+        `approved = None`, the coordinator's playbook is empty and `_may`
+        refuses every structural action - the driver told a rule is armed
+        when it cannot fire, which is what this block exists to stop.
+        """
+        from pitcrew.strategy.handover import author_of
+
+        self._plan_chosen_by_hand = True
+        plan = (self._approved_row or {}).get("plan") or {}
+        self.show_standing_orders(plan if self.use_plan() else None,
+                                  author=author_of(plan))
+
     def use_plan(self) -> bool:
         return bool(self.plan_picker.currentData())
 
@@ -465,6 +486,7 @@ class RaceScreen(QWidget):
         """
         from pitcrew.strategy.handover import author_of, as_stop_count
 
+        self._approved_row = strategy if strategy else None
         if not strategy:
             self.plan_line.setText(
                 "No plan approved — the engineer will call fuel only.")
@@ -483,7 +505,11 @@ class RaceScreen(QWidget):
         # `_poll_plan` when the approved id moves. A second call site reading
         # the store again is a second chance for the orders and the plan line
         # two inches above them to describe different plans.
-        self.show_standing_orders(plan, author=author_of(plan))
+        # **The driver's choice wins over the store.** A plan can be
+        # approved and declined for this race in the same breath, and
+        # `_poll_plan` re-runs this every tick.
+        self.show_standing_orders(plan if self.use_plan() else None,
+                                  author=author_of(plan))
         # `author_of` returns None for a plan with no handover, and the
         # heading then carries no attribution: "Standing orders - THE DESK"
         # over a block whose whole content is that no desk wrote anything is
