@@ -56,9 +56,16 @@ SHORT_SHIFT_FIELD = "short_shift_drop_rpm"
 
 @dataclass(frozen=True)
 class Outcome:
-    """What followed one call, and how that was established."""
+    """What followed one call, and how that was established.
+
+    `settled` says whether this is the final word: a `CANNOT_TELL` because
+    the laps that answer the call have not been driven yet is provisional
+    and is asked again at the next crossing; one because nothing in the
+    feed can ever answer this kind of call is final.
+    """
     verdict: str
     detail: str
+    settled: bool = True
 
     @property
     def known(self) -> bool:
@@ -93,7 +100,7 @@ def outcome_for(call, laps) -> Outcome:
         if not window:
             return Outcome(CANNOT_TELL,
                            "no lap on file at or after the call - the race "
-                           "may have ended on it")
+                           "may have ended on it", settled=False)
         stopped = [lap for lap in window if getattr(lap, "is_pit_lap", False)]
         if stopped:
             return Outcome(
@@ -104,14 +111,19 @@ def outcome_for(call, laps) -> Outcome:
         if len(window) <= BOX_WINDOW_LAPS:
             return Outcome(CANNOT_TELL,
                            f"only {len(window)} lap(s) followed the call, so "
-                           f"the window it named was never fully driven")
+                           f"the window it named was never fully driven",
+                           settled=False)
         return Outcome(NOT_ACTED,
                        f"no stop on laps {lap_num}-{lap_num + BOX_WINDOW_LAPS}")
 
     if getattr(call, SHORT_SHIFT_FIELD, None):
         window = _laps_after(lap_num, laps, 1)
         if not window:
-            return Outcome(CANNOT_TELL, "no lap on file at or after the call")
+            return Outcome(CANNOT_TELL, "no lap on file at or after the call",
+                           settled=False)
+        if len(window) < 2:
+            return Outcome(CANNOT_TELL, "the next lap has not been driven",
+                           settled=False)
         moved = [lap for lap in window
                  if (getattr(lap, "short_shift_rpm", None) or 0) > 0]
         if moved:
@@ -123,6 +135,26 @@ def outcome_for(call, laps) -> Outcome:
         CANNOT_TELL,
         f"nothing in the feed can confirm a {kind or 'call'} of this kind - "
         f"GT7 broadcasts no fuel map, brake balance or driving style")
+
+
+def judge(filed, laps, *, final: bool = False) -> list:
+    """`(key, Outcome)` for every filed call that can be settled now.
+
+    `filed` is an iterable of `(key, call)`. A provisional `CANNOT_TELL` -
+    the window not yet driven - is left for the next crossing, unless
+    `final` (the flag), when it is written as it stands: a call made on the
+    last lap is answered by the race ending, and that is recorded rather
+    than left blank. **Written as the laps come in, not at the flag**, so
+    the driver sees "ACTED - pitted on lap 12" on the Race screen two laps
+    after the call, not after the export.
+    """
+    laps = list(laps)
+    out = []
+    for key, call in filed:
+        outcome = outcome_for(call, laps)
+        if outcome.settled or final:
+            out.append((key, outcome))
+    return out
 
 
 def summarise(calls, laps) -> dict:

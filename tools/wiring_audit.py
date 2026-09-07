@@ -40,7 +40,9 @@ ENTRY_POINTS = {"pitcrew.app", "pitcrew.controller", "pitcrew.mcp.server",
 # thing: named so the report can say "expected" rather than "unwired".
 EXPECTED_EMPTY = {"series_teammates": "written by nothing yet (assessment S3)",
                   "gap_reads": "filled by the pit wall from the next race "
-                               "(added 7 Sep 2026)"}
+                               "(added 7 Sep 2026)",
+                  "board_positions": "filled by the pit wall from the next "
+                                     "race (added 8 Sep 2026)"}
 
 # The names group must not run across lines: `[\w\s,()]+` swallowed every
 # import that followed the first one in a file and reported half the package

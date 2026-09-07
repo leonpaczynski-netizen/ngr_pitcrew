@@ -2889,6 +2889,13 @@ class PitCrewController(QObject):
                 # the sector map so "where he has you" is computable live.
                 samples = wall.take_samples()
                 try:
+                    self.store.record_board_positions(
+                        self.session_id, getattr(lap, "lap_num", 0) or 0,
+                        wall.positions())
+                except Exception:
+                    log("race").exception("the board positions could not "
+                                          "be filed")
+                try:
                     # Filed under the driver's NAME, not the roster's
                     # cluster id, which is a number nothing outside this
                     # process can turn back into a person.
@@ -3146,6 +3153,7 @@ class PitCrewController(QObject):
                 "flag set" if verdict.is_out_lap else "flag unchanged")
         try:
             lap_id = self.store.add_lap(self.session_id, lap, frames=frames)
+            self._judge_filed_calls()
         except sqlite3.Error:
             # A lap that cannot be stored is the one failure the driver must
             # not have to read a log to discover: he is in the car, watching
@@ -3650,6 +3658,42 @@ class PitCrewController(QObject):
                                 row.wear_rl, row.wear_rr)
         self.store.exclude_lap(
             lap_id, "struck by hand" if row.excluded else None)
+
+    def _judge_filed_calls(self, *, final: bool = False) -> None:
+        """Write a verdict onto every filed call the laps can now answer.
+
+        The half of the ledger that was missing (plan 1.6, S10): what was
+        said has been on file since Road Atlanta, what the driver then did
+        never was. Judged against this session's stored laps - the lap just
+        written included - and put on the row and the Race screen together.
+        Never into the caller: a verdict that cannot be written is a log
+        line, not a crossing lost.
+        """
+        filed = self.__dict__.get("_filed_calls")
+        if not filed or self.session_id is None:
+            return
+        from types import SimpleNamespace
+
+        from pitcrew.race.call_outcome import judge
+
+        try:
+            laps = [SimpleNamespace(**row)
+                    for row in self.store.list_laps(self.session_id)]
+            settled = judge(((rid, call) for rid, (call, _) in filed.items()),
+                            laps, final=final)
+            for rid, outcome in settled:
+                call, row = filed.pop(rid)
+                self.store.set_revision_verdict(rid, outcome.verdict,
+                                                outcome.detail)
+                if row is not None:
+                    try:
+                        row.set_outcome(outcome.verdict, outcome.detail)
+                    except RuntimeError:
+                        pass            # the row is gone with its screen
+                log("race").info("call on lap %s judged %s: %s", call.lap,
+                                 outcome.verdict, outcome.detail)
+        except Exception:                                    # noqa: BLE001
+            log("race").exception("the filed calls could not be judged")
 
     def _road_not_penalty(self):
         """This session's ledger of places the road explains, not a penalty.
@@ -4323,6 +4367,9 @@ class PitCrewController(QObject):
         self._tell_settings_about_the_session()
         self.race_run_id = self.store.start_race_run(
             event["id"], approved["id"] if approved else None, self.session_id)
+        # The calls filed this race and not yet judged: revision id -> (call,
+        # the log row to write the verdict onto). Rule 11: this race's.
+        self._filed_calls = {}
 
         # **The race is the session most worth having on video, and it was the
         # only kind that never was.** `_start_video` had one call site, in
@@ -4951,6 +4998,10 @@ class PitCrewController(QObject):
         if not self.race.state.finished:
             return
         run_id, self.race_run_id = self.race_run_id, None
+        # The flag settles every call still open: a box call made on the
+        # last lap is answered by the race ending, and that is written down
+        # rather than left blank.
+        self._judge_filed_calls(final=True)
         try:
             self.store.finish_race_run(run_id)
         except Exception as exc:                            # noqa: BLE001
@@ -5114,8 +5165,9 @@ class PitCrewController(QObject):
         if self._engineer_speaks and replan is None:
             self.voice.say(call.spoken())
             self.ptt.last_call = call.spoken()
+        row = None
         if self.race_screen is not None:
-            self.race_screen.show_call(call)
+            row = self.race_screen.show_call(call)
         if self.race_run_id is not None:
             # Every call is recorded, accepted or not: a plan offered and
             # ignored is evidence about the model, and dropping it would make
@@ -5141,9 +5193,15 @@ class PitCrewController(QObject):
                 # `PlanRegister._blocked_by_the_driver`.
                 self._replans.note_driver_shape(
                     self.race.stops_planned(), lap=call.lap)
-            self.store.append_revision(
+            revision_id = self.store.append_revision(
                 self.race_run_id, call.lap, call.call, payload,
                 accepted=accepted)
+            # **Held for its verdict.** `race/call_outcome` has known how to
+            # judge a box call against the laps that follow since 23 Aug;
+            # `CallRow.set_outcome` has waited for a caller as long. Judged
+            # at each crossing from here on - see `_judge_filed_calls`.
+            filed = self.__dict__.setdefault("_filed_calls", {})
+            filed[revision_id] = (call, row)
 
     # ------------------------------------------------------------------- ptt
 

@@ -958,6 +958,12 @@ def _calls_made(store, event_id: int) -> list[dict]:
             # refusal from a question the driver never answered.
             if revision["plan"].get("resolution"):
                 entry["resolution"] = revision["plan"]["resolution"]
+            # **What the driver then did**, judged as the laps came in
+            # (`race/call_outcome`, written by the controller). Absent where
+            # the race was recorded before verdicts were kept.
+            if revision.get("verdict"):
+                entry["verdict"] = revision["verdict"]
+                entry["verdictDetail"] = revision.get("verdict_detail")
             calls.append(entry)
     return calls
 

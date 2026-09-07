@@ -107,6 +107,11 @@ Versions, and what upgrading means here:
   kept none.  A gap with no track position cannot be binned into sectors
   afterwards, and the position cannot be recovered - the frame is gone.
 
+* **v17** adds `board_positions` - where every named car was on the
+  leaderboard at each of our crossings - and two `ADDED_COLUMNS` on
+  `race_revisions` for the verdict on each call.  The table is new, so no
+  migration function; the columns are additive.
+
   A lap whose sectors are refused is left null and **its `sector_model` is left
   null too**, so a later run tries it again rather than recording a refusal as
   a settled answer.  `laps` is not rebuilt - `lap_frames` cascades off it.
@@ -122,7 +127,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -951,6 +956,21 @@ CREATE TABLE IF NOT EXISTS gap_reads (
 
 CREATE INDEX IF NOT EXISTS idx_gap_reads_session ON gap_reads(session_id, lap);
 
+-- Board position per named driver at each of OUR crossings, as the wall read
+-- it. A car off the board (below the top eight, or pitting) has no row for
+-- that lap - absence, never a position of 0.
+CREATE TABLE IF NOT EXISTS board_positions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    lap         INTEGER NOT NULL,        -- OUR lap just completed
+    driver      TEXT    NOT NULL,
+    position    INTEGER NOT NULL,
+    recorded_at TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_board_positions_session
+    ON board_positions(session_id, lap);
+
 CREATE TABLE IF NOT EXISTS series_teammates (
     -- One team mate per series. **A row, not a flag on the driver**: being
     -- somebody's team mate is a fact about a pairing, and the boolean it
@@ -988,6 +1008,14 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     # the fuel figure. Added to the DDL at v12+ without an entry here.
     "rival_stops": (
         ("compound_reads", "INTEGER NOT NULL DEFAULT 0"),
+    ),
+    # **What became of the call** (7 Sep 2026, plan 1.6): `race/call_outcome`
+    # judged against the laps that followed, written as they came in. NULL
+    # is "not yet judged"; `cannot-tell` is a judgement that nothing in the
+    # feed can answer this kind, and the detail says so.
+    "race_revisions": (
+        ("verdict", "TEXT"),
+        ("verdict_detail", "TEXT"),
     ),
     # The name off the leaderboard. `traffic` shipped without it because the
     # position was thought to be identity enough, and it is not: the car that

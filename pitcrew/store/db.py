@@ -1570,6 +1570,35 @@ class Store:
         sql += " ORDER BY at_s, id"
         return [dict(r) for r in self._query(sql, params)]
 
+    def record_board_positions(self, session_id: int | None, lap: int,
+                               positions: dict) -> int:
+        """File where every named car was on the board at this crossing."""
+        if session_id is None or not positions:
+            return 0
+        rows = [(session_id, int(lap), str(driver), int(place), _now())
+                for driver, place in positions.items()
+                if driver is not None and place is not None]
+        if not rows:
+            return 0
+        with self._write() as conn:
+            conn.executemany(
+                "INSERT INTO board_positions (session_id, lap, driver, "
+                "position, recorded_at) VALUES (?, ?, ?, ?, ?)", rows)
+        return len(rows)
+
+    def board_positions(self, session_id: int) -> list[dict]:
+        return [dict(r) for r in self._query(
+            "SELECT lap, driver, position FROM board_positions "
+            "WHERE session_id = ? ORDER BY lap, position, id", (session_id,))]
+
+    def set_revision_verdict(self, revision_id: int, verdict: str,
+                             detail: str) -> None:
+        """What became of one filed call, judged against the laps after it."""
+        with self._write() as conn:
+            conn.execute(
+                "UPDATE race_revisions SET verdict = ?, verdict_detail = ? "
+                "WHERE id = ?", (verdict, detail, int(revision_id)))
+
     def rename_driver(self, old: str, new: str) -> int:
         """Give a driver his real name, and carry his stops across with him.
 

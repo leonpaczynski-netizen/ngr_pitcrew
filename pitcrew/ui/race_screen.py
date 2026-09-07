@@ -466,14 +466,18 @@ class RaceScreen(QWidget):
             f"color: {theme.WARNING if warn else theme.STENCIL_DIM};"
             f"background: transparent;")
 
-    def show_call(self, call) -> None:
+    def show_call(self, call):
+        """Put the call on the log. Returns its row, so the verdict can be
+        written onto it when the laps that answer it have been driven."""
         self.last_call.setText(call.call)
         self.last_call.setStyleSheet(
             f"color: {CONFIDENCE_INK.get(call.confidence, theme.STENCIL)};"
             f"background: transparent;")
         self.last_reason.setText(call.reason)
         self.log_empty.setVisible(False)
-        self.log_layout.insertWidget(0, CallRow(call))
+        row = CallRow(call)
+        self.log_layout.insertWidget(0, row)
+        return row
 
     def show_exchange(self, heard: str, said: str) -> None:
         """What the driver asked, and what came back."""
