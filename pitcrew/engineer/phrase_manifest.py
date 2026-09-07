@@ -459,6 +459,24 @@ def _call_states() -> list:
         _quiet(lap=5, laps_total=20, position=4,              # timed: "about"
                race_minutes=45.0),
         _quiet(lap=5, laps_total=20, race_minutes=45.0),
+        # **Box now, once per branch of `_why_the_stop_stands`** (the
+        # critic on row 1.10). The box call gained its reason from the
+        # branch that kept the stop, and two of the three - "The regulations
+        # need a stop." and "Fuel won't reach the flag." - were spoken at
+        # racing speed with no clip behind them. `test_phrase_manifest`
+        # checks that a declared opener still exists in its module and never
+        # the reverse, so nothing caught it.
+        _state(lap=6, laps_total=20, stint_ends_on_lap=6,
+               mandatory_stops_left=1),
+        _state(lap=6, laps_total=40, stint_ends_on_lap=6, fuel_l=40.0,
+               fuel_per_lap_l=3.0, plan_binding_constraint="fuel",
+               mandatory_stops_left=0),
+        # Box soon carries the same reason two laps earlier.
+        _state(lap=5, laps_total=20, stint_ends_on_lap=6,
+               mandatory_stops_left=1),
+        _state(lap=5, laps_total=40, stint_ends_on_lap=6, fuel_l=40.0,
+               fuel_per_lap_l=3.0, plan_binding_constraint="fuel",
+               mandatory_stops_left=0),
         # Box now: on the plan, to a fuel figure, and clamped to the tank.
         _state(lap=6, stint_ends_on_lap=6),
         _state(lap=6, laps_total=20, stint_ends_on_lap=6,
@@ -536,6 +554,9 @@ def spoken_openers() -> tuple[str, ...]:
         "No tyre gauge - read it to me.",
         "No pace reference yet.",
         "Pace is inside the noise - nothing to call.",
+        # controller.start_race - said late where the wall was going to watch
+        # and then failed to start, after the brief dropped its own line.
+        "The pit wall did not start.",
         # race/brief.py - the arming brief. Spoken on the grid rather than at
         # racing speed, so latency matters less here than anywhere - but these
         # are the lines that define what every later silence means, and a

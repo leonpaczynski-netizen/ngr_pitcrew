@@ -360,8 +360,11 @@ def test_the_tow_is_priced_at_the_pump_and_found_not_worth_it():
     # understating in the direction that makes the tow look free. Both keep
     # the rate, and "at the pump" / "on the road" is `tow.sentence`'s own
     # vocabulary, so one pair of numbers has one pair of words.
-    assert ("The tow's 0.3 seconds a lap at the pump against 1.4 seconds a "
-            "lap on the road.") in undercut.reason
+    # `tow.sentence`'s own words, sign guard included: `losing_s_per_lap` is
+    # signed, and "-0.3 seconds a lap" was spoken aloud while the tow call
+    # about the same trade said "you're no slower".
+    assert ("The tow saves 0.3 seconds a lap at the pump against 1.4 seconds "
+            "a lap slower behind him.") in undercut.reason
 
 
 def test_a_tow_that_pays_means_no_undercut():

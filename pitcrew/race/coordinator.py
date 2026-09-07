@@ -2078,6 +2078,18 @@ class RaceCoordinator:
             **dict(zip(("fuelInHand", "fuelReference"),
                        fuel_in_hand(self.state))),
             "lapsToStop": self.state.laps_to_stop(),
+            # **The sign `laps_to_stop()` throws away when it clamps at
+            # zero.** The Race screen has an OVERDUE branch keyed on a
+            # negative that could never arrive, so a driver three laps past
+            # his box lap read "BOX IN 0" - which its own comment calls a
+            # different instruction from "you are three laps late", and rule
+            # 9 on the highest-consequence number the app emits. The driver
+            # board recovered the sign through `past_box_lap`; the desk
+            # screen had no equivalent (the critic on row 1.10).
+            "lapsPastBox": (
+                self.state.lap - self.state.stint_ends_on_lap
+                if self.state.past_box_lap
+                and self.state.stint_ends_on_lap is not None else None),
             "nextCompound": self.state.next_compound,
             "inPit": self.state.in_pit,
             # Whether there is an approved plan at all. `lapsToStop` is None

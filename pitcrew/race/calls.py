@@ -1854,7 +1854,14 @@ def _why_the_stop_stands(state: RaceState) -> str | None:
         return "The regulations need a stop."
     if (state.plan_binding_constraint or "").lower() != "fuel":
         return "On the plan."
-    return ("Fuel is the constraint."
+    # **"Fuel is the constraint." against WHICH distance** - the question
+    # rule 13 exists for. `_fuel_instruction` can say "Fuel is fine - the
+    # tank covers the next stint." on the same lap, and both are true: the
+    # tank covers this stint and not the race. The first version of this
+    # suppressed the reason to hide the collision, which threw away the
+    # branch that actually kept the stop and left a box call whose whole
+    # stated reason argued against boxing.
+    return ("Fuel won't reach the flag."
             if fuel_reaches_flag(state) is not True else None)
 
 
@@ -1968,8 +1975,6 @@ def _box_now(state: RaceState) -> Call | None:
     # constraint. Fuel is fine." was two adjacent sentences making opposite
     # claims, with §5.5 saying he acts on the front of the reason.
     said = _why_the_stop_stands(state) or ""
-    if said.startswith("Fuel") and (fuel or "").startswith("Fuel is fine"):
-        said = ""
     reason = " ".join(part for part in (said, fuel) if part) or "On the plan."
     return Call(
         BOX_NOW, state.lap,
@@ -1991,7 +1996,15 @@ def _box_soon(state: RaceState) -> Call | None:
     # pass 6). He has heard "You're fuelled to the flag." from `_stops_off`
     # and is now being told to box anyway; without the clause the two
     # contradict each other, and this is the call that arrives FIRST.
-    reason = f"Stop {state.stint_index + 1}, on the plan."
+    # **The same reason `_box_now` gives, and this call arrives first**
+    # (the critic on row 1.10). It said "Stop 2, on the plan." for a stop
+    # that fuel or the regulations bound - the rule-12 defect one call over,
+    # on the call §5.5's own worked example is shaped like: "Box this lap or
+    # next. Fuel is the constraint - you're 1.2 laps short."
+    stands = _why_the_stop_stands(state)
+    ordinal = f"Stop {state.stint_index + 1}"
+    reason = (f"{ordinal}. {stands}" if stands and stands != "On the plan."
+              else f"{ordinal}, on the plan.")
     if state.drop_stop_granted is False and not _stop_needed_on_fuel(state):
         reason = ("Stop {}, on the plan. Fuel would reach the flag - dropping "
                   "the stop was not granted.".format(state.stint_index + 1))

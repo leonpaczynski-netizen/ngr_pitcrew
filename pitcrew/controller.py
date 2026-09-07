@@ -4548,8 +4548,10 @@ class PitCrewController(QObject):
                 "pit-wall: the brief said the wall would watch and it did not "
                 "start - saying so.")
             if self._engineer_speaks:
-                self.voice.say("The pit wall did not start - "
-                               "I can't see other cars, position only.")
+                from pitcrew.race.brief import (NO_RIVALS,
+                                                WALL_DID_NOT_START)
+
+                self.voice.say(f"{WALL_DID_NOT_START} {NO_RIVALS}")
         how = "Rehearsal armed" if rehearsal else "Armed"
         parts = [
             "running to the approved plan" if plan else

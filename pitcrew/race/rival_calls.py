@@ -960,17 +960,24 @@ def undercut_call(state) -> Call | None:
         # makes the tow look free, which is the decision the sentence exists
         # to inform. `tow.sentence` says "at the pump" too, so there is one
         # vocabulary for one pair of numbers.
+        # **`tow.sentence`'s own words, including its sign guard** (the
+        # critic on row 1.10). `losing_s_per_lap` is signed and can be
+        # negative - he is quicker in the wake - and `tow.py` says "you're no
+        # slower" there. This clause said "-0.3 seconds a lap", a negative
+        # spoken aloud, while the tow call about the same trade said the
+        # opposite: the rule-13 pair the rewrite claimed to close.
         saved = trade.saving_s_per_lap
         lost = trade.losing_s_per_lap
+        behind = (f"{lost:.1f} seconds a lap slower behind him" if lost > 0
+                  else "no slower behind him")
         if saved is not None and saved > 0:
-            tow = (f" The tow's {saved:.1f} seconds a lap at the pump against "
-                   f"{lost:.1f} seconds a lap on the road.")
+            tow = (f" The tow saves {saved:.1f} seconds a lap at the pump "
+                   f"against {behind}.")
         elif saved is not None and saved < 0:
-            tow = (f" The tow costs {-saved:.1f} seconds a lap at the pump and "
-                   f"{lost:.1f} seconds a lap on the road.")
+            tow = (f" The tow costs {-saved:.1f} seconds a lap at the pump, "
+                   f"and {behind}.")
         else:
-            tow = (f" No fuel saving in the tow, and {lost:.1f} seconds a lap "
-                   f"on the road.")
+            tow = f" No fuel saving in the tow, and {behind}."
     reason = (f"Undercut on {them}: you're held up, and faster through "
               f"{_sector_names(g.index for g in gains)}. The fill costs the "
               f"same now as on lap {state.stint_ends_on_lap}.{tow}{tyres}")

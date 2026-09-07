@@ -140,7 +140,7 @@ def test_the_routine_box_call_says_what_it_is_boxing_him_for():
     state.lap = 11                                    # the box lap
     call = _box_now(state)
     assert call is not None and call.kind == BOX_NOW
-    assert call.reason.startswith("Fuel is the constraint.")
+    assert call.reason.startswith("Fuel won't reach the flag.")
 
 
 def test_a_plan_that_names_no_constraint_does_not_invent_one():
@@ -212,7 +212,7 @@ def test_the_reason_names_the_branch_that_kept_the_stop():
 
     state.plan_binding_constraint = "fuel"
     state.fuel_l = 6.0
-    assert _why_the_stop_stands(state) == "Fuel is the constraint."
+    assert _why_the_stop_stands(state) == "Fuel won't reach the flag."
 
 
 def test_unknown_regulations_are_not_spoken_as_a_regulation():

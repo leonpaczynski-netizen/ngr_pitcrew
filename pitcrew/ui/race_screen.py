@@ -566,12 +566,18 @@ class RaceScreen(QWidget):
         # "box now" and is a different instruction from "you are two laps
         # late". The clamp turned the more urgent of the two into the less
         # urgent one, and nothing downstream could tell them apart.
+        # **The sign comes off `lapsPastBox`, not off `lapsToStop`**, which
+        # is `max(0, ...)` and can never be negative - so this branch was
+        # unreachable and a driver three laps past his box lap read "BOX IN
+        # 0" (the critic on row 1.10).
         to_stop = snapshot.get("lapsToStop")
-        if to_stop is None:
-            self.box_in.setValue(None)
-        elif to_stop < 0:
-            self.box_in.setValue(f"{-int(to_stop)} LATE", ink=theme.WARNING)
+        past = snapshot.get("lapsPastBox")
+        if past is not None and past > 0:
+            self.box_in.setValue(f"{int(past)} LATE", ink=theme.WARNING)
             self.box_in.name.setText("OVERDUE")
+        elif to_stop is None:
+            self.box_in.setValue(None)
+            self.box_in.name.setText("BOX IN")
         else:
             self.box_in.setValue(str(int(to_stop)))
             self.box_in.name.setText("BOX IN")

@@ -242,14 +242,25 @@ def test_an_overdue_stop_says_overdue_rather_than_zero(qt_app):
     """CLAUDE.md rule 9 on the highest-consequence number the app emits: it
     was `max(0, to_stop)`, so a plan he was two laps past reported as `0` -
     'box now', which is a different instruction from 'you are two laps
-    late'."""
+    late'.
+
+    **And the fixture was one the app cannot produce** (the critic on row
+    1.10): it fed `lapsToStop: -2`, while `RaceState.laps_to_stop()` is
+    `max(0, ...)` and never returns a negative - so the branch under test was
+    unreachable in a real race and a driver three laps past his box lap read
+    "BOX IN 0" all the way to the flag. The sign travels on `lapsPastBox`
+    now, the way the driver board has always had it."""
     from pitcrew.ui.race_screen import RaceScreen
 
     screen = RaceScreen()
-    screen.show_snapshot({"lap": 15, "lapsToStop": -2})
+    screen.show_snapshot({"lap": 15, "lapsToStop": 0, "lapsPastBox": 2})
     assert "2" in screen.box_in.value.text()
     assert screen.box_in.value.text() != "0"
     assert "OVERDUE" in screen.box_in.name.text().upper()
+    # And the ordinary case still reads as a countdown.
+    screen.show_snapshot({"lap": 9, "lapsToStop": 3})
+    assert screen.box_in.value.text() == "3"
+    assert "BOX IN" in screen.box_in.name.text().upper()
 
 
 def test_the_fresh_set_picker_fits_its_longest_state(qt_app):
