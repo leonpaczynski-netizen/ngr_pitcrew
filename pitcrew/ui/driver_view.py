@@ -34,11 +34,25 @@ which is where this one started.
 
 **Nobody has ever published an optimal tyre-temperature window for GT7**, and
 this app once carried a fabricated four-zone one with a cold side that had to
-be ripped out (`store/tyres.py`). Measured here on 277 clean laps, minimum
-corner speed against tyre temperature has slopes of the OPPOSITE SIGN at Monza
-and Spa with R^2 under 0.2 - because temperature is endogenous. It is a
-consequence of how hard the tyre is being worked, not an input to grip. More
-laps cannot fix that; it needs temperature varied independently of driving.
+be ripped out (`store/tyres.py`). Temperature is endogenous: it is a
+consequence of how hard the tyre is being worked, not an input to grip.
+
+**That conclusion stands and the evidence under it has changed.** This file
+used to say minimum corner speed against tyre temperature had "slopes of the
+OPPOSITE SIGN at Monza and Spa with R^2 under 0.2". **It does not.** Those
+were per-corner OLS fits on 8-11 laps; specified properly - corner x stint
+fixed effects, `lap_in_stint` held, standard errors clustered by lap - both
+slopes are negative and neither is significant (Monza -0.809, t -1.57; Spa
+-0.227, t -0.29), and the two circuits differed by car, compound, wear
+multiplier and race format as well, so the sign disagreement was the
+instrument rather than the physics. What replaced it measures the mechanism
+directly (4 Sep 2026, 48 Daytona laps): rear slip against rear temperature
+inside a cell of the same 100 m, gear, speed band and throttle band gives
++0.002772 per degC, 18 of 22 cells positive against a permutation null of
+47.0% - and **lagging the temperature by one second collapses the slope
+146-fold and the positive share to exactly 50.0%.** Slip heats the tyre; the
+tyre does not lose grip because it is hot. More laps still cannot fix it; it
+needs temperature varied independently of driving.
 
 So there are exactly two things a colour here is allowed to mean:
 
@@ -86,6 +100,180 @@ format carries wear at all. The rejoin position is the weakest of the five: it
 is read off the game's own gap boxes, which have never once returned a number
 in a real race (`race/gaps.py`), so it shows a dash far more readily than a
 place.
+
+================================================================================
+THE BOARD SPEC - what is on it, in rank order, and what each item may claim
+================================================================================
+
+Written 8 Sep 2026 for Phase 1 row 1.8. **He races in a wheel and sometimes a
+PSVR2 headset.** This is a second monitor he glances at down a straight, so
+every item below is a number or a word - never a table, never a colour scale,
+and never a figure whose units he has to work out. The screenshot the row asks
+for comes from `python -m pitcrew.ui.preview --shot out/`, which renders the
+board from a synthetic `DriverState` with no PS5 and no database attached.
+
+**Rank, bottom-anchored, because he glances UP from the game below.** The
+bottom edge is the shortest eye travel and the lead rank sits there.
+
+    rank 4 (top, dimmest)   the last call and its mark
+    rank 3                  four corner temperatures, then the two tyre splits
+    rank 2 (middle)         laps to box | in hand to the stop | in hand to
+                            the flag | position
+    rank 1 (bottom, 210px)  gap ahead | gap behind
+
+--- rank 1 · the two neighbour gaps -------------------------------------------
+
+Unchanged and still the lead, on his own revision of the brief: on a straight
+the car ahead and the car behind are what he can act on within seconds. Ahead
+on the left, behind on the right, because that is where the cars are. Each
+side gets a sentence only true of that side and **no signed rate reaches the
+screen** - "the gap is closing" means we are catching him on one side and he
+is catching us on the other, and those demand opposite driving (rule 13).
+Three states: it favours you, it favours him, or nobody can tell yet.
+
+⚠️ **`gap_reads` and `board_positions` are 0 rows on file as of 8 Sep 2026.**
+Every gap item is a dash until a race runs with the repaired locator, so the
+dash says "no gap read" rather than sitting blank.
+
+--- rank 2 · laps to box ------------------------------------------------------
+
+From `RaceState.laps_to_stop()`, which clamps at zero, so `laps_past_box`
+carries the sign the clamp throws away: "NOW / box this lap" and "NOW / 2 past
+the box lap" are different news. Urgent inside two laps.
+
+--- rank 2 · fuel in hand, TWO numbers, each naming its own distance ----------
+
+**This is the item that has already gone wrong once and the shape of the
+failure is why both numbers are labelled in words.** Session 127, Daytona,
+4 Sep 2026, lap 2: *"-7.1 laps of fuel in hand to the flag"* spoken with
+**84.0 L aboard and the planned stop nine laps away**, twenty-six seconds
+after *"1.9 spare to the stop"*. Two numbers, both introduced as spare or in
+hand, nine laps apart, inside half a minute. The model was never wrong: the
+old expression divided the tank by the burn and subtracted the laps to the
+FLAG, **with no term for the litres the stop would add.**
+
+So the board carries both, and:
+
+* **IN HAND TO THE STOP** is `calls.fuel_in_hand_to_stop` - literally the
+  expression the voice speaks as *"N laps of fuel in hand to the stop"*, so
+  the ear and the eye cannot be given different numbers. A dash whenever
+  there is no stop still to come, saying which of the reasons it is.
+* **IN HAND TO THE FLAG** is `calls.fuel_in_hand_to_flag`, and it **counts
+  the fill still to come.** Three terms, each a fact and not a clamp: what
+  the tank holds when he arrives at the box (negative means he does not
+  arrive, and then the answer is a dash saying so - rule 9); the fill George
+  will call for, from the same expression `fuel_target_l` uses at the stop
+  itself; and the tank's capacity, because a fill nobody can take is the
+  shortfall that makes this figure go negative. **That negative is the
+  finding** and it is never clamped away.
+
+Both refuse rather than guess where a further stop follows this one: the laps
+after the *next* stop ride on a fill nothing has sized.
+
+**Neither is urgent above zero, and there is no invented margin threshold.**
+The driver's own standing rule is that he will not carry a spare lap of fuel
+in a lap race, so a figure of 0.2 is on plan and colouring it would be an
+alarm that fires every race. Below zero it does not reach, and that is red.
+
+The laps the tank alone covers - the old single "laps of fuel" figure - is now
+the caption under the stop number, in the words `N laps aboard`. One big
+number per question; the supply is its reason, not a third question.
+
+--- rank 2 · position ---------------------------------------------------------
+
+`P6` with `of 12` under it, from `RaceState.position` / `field_size` (874 of
+874 laps on file carry a position). **It is on the board against this file's
+own founding rule** - "this shows only what the game does not", and GT7 does
+show position - so it is deliberately at the middle rank and not the lead. It
+earns its place because it is the frame every strategy call is about
+("you inherit P2", the rejoin seat in the box panel), the field size is not
+something GT7 puts in front of him, and the game's own leaderboard is
+truncated to the top eight.
+
+--- rank 3 · the four corner temperatures -------------------------------------
+
+His first request, twice repeated, and the game gives him no number at all.
+Fed a **3-second mean, never a raw frame**: RR raw frames span 64.4-186.1 degC
+where RR per-lap medians span 69.4-79.6, so the noise is 11.9x the signal and
+a faster refresh makes the display worse. Coloured only against wear onset
+(RS 88 / RM 90 / RH 93 degC) and against a corner sitting 10 degC above its
+pair.
+
+⚠️ **What the onset colour rests on, stated because it is thin.** The source
+is one measurement by someone else - GT7 1.55, one car, one track, 4x wear,
+n=1 - and 1.71 rewrote the tyre slip model, so by the programme's own
+re-measurement rule it is suspect until re-measured here. Its own author
+concedes the endogeneity and does not say which aggregate (hottest wheel,
+axle mean, four-wheel mean) the number is about, and this driver's axles live
+8-11 degC apart. Empirically it has never fired on his lap means: his RR
+per-lap median peaked at 79.6 degC against a warn line at 83. **It is kept
+because it claims a WEAR threshold and not a grip window** - the thing this
+file exists to refuse - and it is flagged here so the next person to look at
+it does not have to re-derive that it is thin.
+
+--- rank 3 · the two tyre splits ----------------------------------------------
+
+**The reading on this car with evidence behind it, and until now the board
+could not show one of them at all.** `race/tyre_split.PAIRS` is left-right
+only, so the axle gap - the stronger of the two - had no implementation, and
+the RR-RL gap only appeared as a per-corner figure once it passed 10 degC,
+which on the measured stint it never did (it reached +4.0).
+
+Two items, per lap, never per frame:
+
+* **rear minus front**, drawn as a positive figure with the direction in
+  words - `REAR OVER FRONT` or `FRONT OVER REAR`. The sign is a finding both
+  ways, which is why `tyre_split.axle_split_now` returns it signed: rears
+  hotter is a rear-limited car and fronts hotter is a front-limited one, and
+  CLAUDE.md 5.5's worked example - *"Brake balance one click rearward. Fronts
+  are going first."* - is the second of those. A number whose sign he has to
+  decode under a helmet is what rule 13 is about, so the board never shows
+  the sign.
+* **the rear pair**, `RR OVER RL` or `RL OVER RR`, from `split_now`.
+
+Each carries its lap count (rule 4) and, where five laps and the instrument
+allow, `WIDENING` or `SETTLING` - the same two words the per-corner figure
+uses. Silence where the trend is inside the floor: **no rate is not a rate of
+zero.**
+
+⚠️ **What the r=+0.82 behind these is, exactly.** Daytona session 118, 3 Sep
+2026, 71,449 frames: across the FOUR CORNERS OF THE CAR, per-lap mean
+temperature against measured per-lap wear rate (FL 62.5 degC / 0.0275 per lap
+… RR 75.7 / 0.0570). **n=4, and it is an association** - both quantities are
+driven by load. It is not "temperature predicts wear" and it is not a grip
+claim. What it buys is that the gap is a finer instrument than the wear gauge
+for the same thing: the gauge quantises at 2.8-3.3% of tyre life per pixel and
+the gap moves continuously. The trend floor `RATE_WORTH_SAYING_C` = 1.25
+degC/lap is **derived, not measured**, and the board says `derived` beside it.
+
+--- rank 4 · the last call and its mark ---------------------------------------
+
+One dim line across the top: the lap, the sentence he heard, and the one word
+that says how it was meant - `INSTRUCTION`, `SUGGESTION`, `UNCONFIRMED`, or
+for the re-planner `OFFER` and `REPORT`. It answers "what did George just
+say?" for a driver who missed it under a helmet, which is the one thing a
+screen can do that a voice cannot.
+
+**The word comes from `Call.mark()`, which is the same expression
+`Call.spoken()` builds its suffix from** (rule 12). An instruction carries no
+spoken suffix because §5.5 wants one thing at a time in the ear; on a screen
+there is no cost to naming it, and a driver who cannot tell an order from an
+offer will end up treating every line as one or the other.
+
+⚠️ **Not `PitCrewController.last_call`**, which is assigned in three places,
+read by nothing, never initialised, and not set on the ordinary call path.
+The board is fed by `_board_call`, which is cleared at race start and at race
+stop - CLAUDE.md rule 11: state that outlives a session gets read as if it
+belongs to this one, and a reset with no caller is the shape of that defect
+rather than the fix for it.
+
+--- the box state · the tyres-at-stop decision --------------------------------
+
+`state.next_tyres` was rendered only inside `_BoxPanel`, so he learned the
+plan's tyre decision when he was already stationary. It now rides on the
+laps-to-box caption as well - `plan: lap 14 · RS on` or `plan: lap 14 · no
+tyres` - so the decision arrives while there is still something he can do
+about it.
 """
 from __future__ import annotations
 
@@ -107,6 +295,12 @@ from PyQt6.QtWidgets import (
 # The one measured figure, from `store.tyres.WEAR_ONSET_C`. Imported rather
 # than restated: two copies of a threshold drift, and this one is sourced.
 from pitcrew.store.tyres import WEAR_ONSET_C
+# The one vocabulary for how a call was meant, shared with `Call.spoken()` so
+# the word on the screen and the word in his ear are one decision (rule 12).
+from pitcrew.race.calls import MARK_UNCONFIRMED
+# The trend floor, imported rather than restated: it is derived, its
+# arithmetic is documented where it is defined, and two copies would drift.
+from pitcrew.race.tyre_split import RATE_WORTH_SAYING_C
 from pitcrew.ui import theme
 
 # How far below onset still counts as approaching it.
@@ -175,6 +369,23 @@ class GapView:
 
 
 @dataclass(frozen=True)
+class BoardCall:
+    """The last thing the engineer said, as the board prints it.
+
+    `mark` is one of `calls.MARK_*` and comes from `Call.mark()`, the same
+    expression `Call.spoken()` builds its spoken suffix from - so the word on
+    the screen and the word in his ear are one decision (CLAUDE.md rule 12).
+
+    `lap` may be None: the re-planner speaks off a lap the state has, but a
+    call built by hand need not carry one, and lap 0 is not a substitute for
+    "no lap" (rule 3).
+    """
+    text: str
+    mark: str
+    lap: int | None = None
+
+
+@dataclass(frozen=True)
 class DriverState:
     """Everything the instrument shows. `None` is missing and shows as a dash.
 
@@ -198,6 +409,43 @@ class DriverState:
     laps_of_fuel: float | None = None
     fuel_l: float | None = None
     burn_l: float | None = None
+
+    # ---- the two tyre splits, per lap, both from `race/tyre_split.py`.
+    # **Signed**, rear minus front: rears hotter and fronts hotter are
+    # different diagnoses and the board words the direction rather than
+    # showing him a sign to decode. None before any whole lap is sampled.
+    axle_split_c: float | None = None
+    # degC per lap, only where five laps say so and the movement clears the
+    # derived floor. Absent is absent - it is NOT a rate of zero.
+    axle_split_rate: float | None = None
+    # Which of the two rear tyres is the hotter, and by how much. Positive
+    # only, with the corner named, because a left and a right tyre are
+    # interchangeable and "4 degrees cooler" is the same finding said about
+    # the wrong one.
+    rear_pair_hotter: str | None = None
+    rear_pair_split_c: float | None = None
+    rear_pair_rate: float | None = None
+    # Laps behind both splits. Rule 4: an aggregate carries its sample count,
+    # and a split from two laps and one from eight are not the same claim.
+    split_laps: int = 0
+
+    # ---- where he is. On the board because every strategy call is framed in
+    # it, and at the middle rank rather than the lead because GT7 does show
+    # him a position - see the spec above.
+    position: int | None = None
+    field_size: int | None = None
+
+    # ---- fuel in hand, as two numbers that each name their own distance.
+    # `*_why` is the reason the figure is missing, shown under the dash;
+    # None when there IS a figure. See the spec above for the -7.1 this
+    # shape exists to prevent.
+    fuel_to_stop: float | None = None
+    fuel_to_stop_why: str | None = None
+    fuel_to_flag: float | None = None
+    fuel_to_flag_why: str | None = None
+
+    # ---- the last thing said, and how it was meant.
+    last_call: "BoardCall | None" = None
 
     # ---- the box. All None on track, and `in_box` is what switches the
     # screen rather than any of them being set: a stop with no plan behind it
@@ -467,6 +715,12 @@ class _Stat(QWidget):
     VALUE_PX = 120
     CAPTION_PX = 21
     SUB_PX = 27
+    # **The tyre splits, one rank under the corner temperatures.** They are
+    # the reading with evidence behind them and the corners are the reading
+    # he asked for, and that tension is resolved by size rather than by
+    # dropping either: the corners stay the subject of that block and the
+    # splits sit under them, clearly a figure rather than a caption.
+    SPLIT_PX = 58
     # **The gap to a neighbour leads this display**, on the driver's own
     # revision of the brief after seeing the corners lead: on a straight, the
     # car ahead and the car behind are what he can act on right now, and the
@@ -497,6 +751,125 @@ class _Stat(QWidget):
             f"font-family:{NUMBER_FACE};font-size:{self.SUB_PX}px;"
             f"color:{ink if (urgent or good) else INK_DIM};"
             f"background:transparent;")
+
+    def set_label(self, label: str) -> None:
+        """Rename the block.
+
+        **Only the splits use this, and only to name a direction.** A caption
+        that changes is a caption he has to read, so the rest of the board's
+        are fixed at construction; the axle split has no fixed name because
+        "rear over front" and "front over rear" are opposite diagnoses of one
+        measurement and the board says which rather than showing a sign.
+        """
+        self.caption.setText(label.upper())
+
+
+# **The words for a split's direction, and why they are words.** The figure is
+# always drawn positive: a driver reading a minus sign at 200 km/h has to
+# decide what it was a minus of, and rule 13 exists because he could not ask.
+REAR_OVER_FRONT = "rear over front"
+FRONT_OVER_REAR = "front over rear"
+AXLES_LEVEL = "axles level"
+
+# The two trend words, shared verbatim with the per-corner figure above. One
+# vocabulary for one thing (rule 13): a split that is opening and one that has
+# settled are the same number and opposite news.
+WIDENING = "widening"
+SETTLING = "settling"
+
+
+def axle_words(split_c: float | None) -> tuple[float | None, str]:
+    """`(the figure to draw, the direction in words)` for the axle split.
+
+    The figure comes back as a magnitude and the direction as a phrase, so
+    nothing downstream has to interpret a sign. `None` in, `(None, "")` out -
+    a missing split is a dash, never a zero.
+    """
+    if split_c is None:
+        return None, ""
+    if split_c > 0:
+        return split_c, REAR_OVER_FRONT
+    if split_c < 0:
+        return -split_c, FRONT_OVER_REAR
+    return 0.0, AXLES_LEVEL
+
+
+def trend_word(split_c: float | None, rate: float | None) -> str:
+    """`widening`, `settling`, or "" where nothing may be claimed.
+
+    **Judged against the gap the board is naming, not against the raw sign.**
+    The axle rate is the slope of rear-minus-front, so a front-limited car
+    with the fronts pulling further ahead has a NEGATIVE rate and a widening
+    gap. Reading the raw sign would have told him the front-over-rear split
+    was settling at the exact moment it was running away.
+
+    Empty where there is no rate at all: five laps have not been sampled, or
+    the movement is inside the derived floor. **No rate is not a rate of
+    zero**, and "settling" would be a claim.
+    """
+    if rate is None or split_c is None or split_c == 0:
+        return ""
+    return WIDENING if (rate > 0) == (split_c > 0) else SETTLING
+
+
+class _LastCall(QWidget):
+    """One dim line: the lap, what was said, and how it was meant.
+
+    **The one thing a screen does that a voice cannot** - it is still there
+    thirty seconds later. He is in a helmet with a wheel in his hands; a call
+    he half-heard is a call he cannot ask about, and the alternative to
+    reading it here is acting on a guess.
+
+    Deliberately the quietest thing on the board. It is a record, not an
+    instruction: the instruction was the voice, and a sentence competing with
+    the numbers for the same glance would cost him the numbers.
+    """
+
+    TEXT_PX = 26
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(18)
+        self.line = QLabel("")
+        self.line.setStyleSheet(
+            f"font-family:{NUMBER_FACE};font-size:{self.TEXT_PX}px;"
+            f"color:{INK_DIM};background:transparent;")
+        self.mark = QLabel("")
+        self.mark.setStyleSheet(self._mark_css(INK_DIM))
+        row.addStretch(1)
+        row.addWidget(self.line)
+        row.addWidget(self.mark)
+        row.addStretch(1)
+        # Reserved, so a call arriving mid-race does not shift the whole
+        # board under him while he is looking at it.
+        self.setFixedHeight(self.TEXT_PX + 14)
+
+    def _mark_css(self, ink: str) -> str:
+        return (f"font-family:{LABEL_FACE};font-size:{self.TEXT_PX - 6}px;"
+                f"font-weight:600;letter-spacing:5px;color:{ink};"
+                f"background:transparent;")
+
+    def show_call(self, call: "BoardCall | None") -> None:
+        if call is None:
+            # **Blank, not a dash.** Every other empty box on this board says
+            # why it is empty, because he is holding a trigger on it or
+            # planning around it. Nothing has been said yet is the ordinary
+            # state of the first two laps of every race and it needs no
+            # explaining.
+            self.line.setText("")
+            self.mark.setText("")
+            return
+        where = f"L{call.lap}  " if call.lap is not None else ""
+        self.line.setText(f"{where}{call.text}")
+        self.mark.setText(call.mark.upper())
+        # **Only "unconfirmed" gets an ink of its own.** It is the one mark
+        # that says the engineer may be wrong, and it is the one he needs to
+        # see without reading the word. Marking a suggestion in warning ink
+        # would put a colour on advice that is perfectly sound.
+        self.mark.setStyleSheet(
+            self._mark_css(NEAR if call.mark == MARK_UNCONFIRMED else INK_DIM))
 
 
 class DriverWindow(QWidget):
@@ -537,7 +910,15 @@ class DriverWindow(QWidget):
         page.setSpacing(0)
         self.view = DriverView()
         page.addWidget(self.view)
-        self.resize(1280, 480)
+        # **Sized to what the instrument actually needs.** This asked for
+        # 1280x480 and never got it: the layout's own minimum is about
+        # 1920x1010 at these type sizes, so Qt grew the window on show and
+        # the number here described nothing. It is not a free choice - the
+        # ranks are set by how far away he is and how long a glance is, and
+        # the panel is 2560x1080 - so the honest thing is to open at a size
+        # the content fits in. Overridden by `restore_geometry` wherever he
+        # has dragged it before.
+        self.resize(1960, 1020)
         self._drag_from = None
         # Called when the window goes away by any route, so whoever is
         # pushing state into it can stop. Without it the controller went on
@@ -780,16 +1161,27 @@ class DriverView(QWidget):
         super().__init__(parent)
         self.setStyleSheet(f"background:{GROUND};")
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(40, 20, 40, 34)
+        outer.setContentsMargins(40, 12, 40, 24)
         # **Bottom-anchored.** He glances UP from the game screen below, so the
         # bottom edge of this display is the shortest eye travel.
         outer.addStretch(1)
 
-        row = QHBoxLayout()
-        row.setSpacing(70)
+        middle = QHBoxLayout()
+        middle.setSpacing(70)
+        lead = QHBoxLayout()
+        lead.setSpacing(70)
 
         self.box_stat = _Stat("laps to box")
-        self.fuel_stat = _Stat("laps of fuel")
+        # **Two fuel numbers, each naming its own distance in its caption.**
+        # One expression each, both from `race/calls.py`, so neither can drift
+        # from what the voice says about the same stop. See the spec at the
+        # top of this file for the -7.1 that makes this two blocks and not
+        # one.
+        self.stop_stat = _Stat("in hand to the stop")
+        self.flag_stat = _Stat("in hand to the flag")
+        # Middle rank, not the lead: GT7 does show him a position, and this
+        # file's founding rule is that the board shows what the game does not.
+        self.position_stat = _Stat("position")
         # **At the ends, and in the order the cars are in.** Ahead on the
         # left, behind on the right, so which block is which needs no reading -
         # it is where the car is. That is what keeps this from being the
@@ -797,6 +1189,7 @@ class DriverView(QWidget):
         # paired mnemonic rather than two more things in a list.
         self.ahead_stat = _Stat("ahead", value_px=_Stat.GAP_PX)
         self.behind_stat = _Stat("behind", value_px=_Stat.GAP_PX)
+        self.last_call = _LastCall()
 
         tyres = QWidget()
         grid = QGridLayout(tyres)
@@ -819,6 +1212,43 @@ class DriverView(QWidget):
             f"letter-spacing:7px;color:{INK_DIM};background:transparent;")
         grid.addWidget(self.tyre_caption, 2, 0, 1, 2)
 
+        # **The two splits, under the corners they are made of.** These are
+        # the readings with evidence behind them - see the spec at the top of
+        # this file for what that evidence is and what it is not - and until
+        # now the board could show neither: the axle gap had no
+        # implementation at all, and the rear pair only surfaced as a
+        # per-corner figure once it passed 10 degC, which on the measured
+        # stint it never did.
+        self.axle_stat = _Stat("", value_px=_Stat.SPLIT_PX)
+        self.rear_pair_stat = _Stat("", value_px=_Stat.SPLIT_PX)
+        # **The floor is named on the board, not only in the file.** It is
+        # derived rather than measured (CLAUDE.md rule 5) and the trend words
+        # above it fall silent below it, so a driver who sees no trend can
+        # tell "nothing to say" from "broken".
+        self.split_caption = QLabel(
+            "TYRE SPLIT °C  ·  TREND DERIVED, "
+            f"{RATE_WORTH_SAYING_C:.2f} °C/LAP FLOOR")
+        self.split_caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.split_caption.setStyleSheet(
+            f"font-family:{LABEL_FACE};font-size:17px;font-weight:600;"
+            f"letter-spacing:4px;color:{INK_DIM};background:transparent;")
+        # **Beside the corner grid, not under it, and the reason is the
+        # monitor.** He is on a 2560x1080 panel and this instrument already
+        # came close to filling its height; a fourth full-width rank pushed
+        # the layout's own minimum past 1080, and Qt answers that by growing
+        # the window off the screen rather than by dropping anything. The
+        # room on an ultrawide is horizontal, and a corner's gaps beside the
+        # corners is where a reader looks for them anyway.
+        split_block = QWidget()
+        split_column = QVBoxLayout(split_block)
+        split_column.setContentsMargins(0, 0, 0, 0)
+        split_column.setSpacing(10)
+        split_column.addStretch(1)
+        split_column.addWidget(self.axle_stat)
+        split_column.addWidget(self.rear_pair_stat)
+        split_column.addWidget(self.split_caption)
+        split_column.addStretch(1)
+
         # **The gaps lead and they sit at the bottom.** This file's layout
         # rule is that he glances UP from the game screen below, so the bottom
         # edge is the shortest eye travel and content is anchored there - and
@@ -837,24 +1267,51 @@ class DriverView(QWidget):
         # rank - and the caption is the part that says which number this is.
         # Sitting them on one baseline lets the value heights differ, which
         # is the whole point of ranking them.
-        for stat in (self.ahead_stat, self.box_stat,
-                     self.fuel_stat, self.behind_stat):
-            row.addStretch(1)
-            row.addWidget(stat, 0, Qt.AlignmentFlag.AlignBottom)
-        row.addStretch(1)
+        #
+        # **Two rows now, not one.** Six blocks on one line makes six items of
+        # equal weight, which is the failure this file's rank exists to
+        # prevent. The neighbours keep the bottom edge on their own; the four
+        # numbers he plans with take the rank above them.
+        for stat in (self.box_stat, self.stop_stat,
+                     self.flag_stat, self.position_stat):
+            middle.addStretch(1)
+            middle.addWidget(stat, 0, Qt.AlignmentFlag.AlignBottom)
+        middle.addStretch(1)
+        for stat in (self.ahead_stat, self.behind_stat):
+            lead.addStretch(1)
+            lead.addWidget(stat, 0, Qt.AlignmentFlag.AlignBottom)
+        lead.addStretch(1)
 
         stacked = QVBoxLayout()
         stacked.setContentsMargins(0, 0, 0, 0)
-        stacked.setSpacing(30)
+        stacked.setSpacing(16)
 
+        # Top of the panel and the quietest thing on it: a record of what was
+        # said, not a thing to act on.
+        stacked.addWidget(self.last_call)
+
+        # **Neither block may expand into the other's room.** Both default to
+        # growing, so the corner grid drifted a couple of hundred pixels away
+        # from the splits it is made of and the pair stopped reading as one
+        # block. Held to their own widths, with the stretches outside them.
+        tyres.setSizePolicy(QSizePolicy.Policy.Maximum,
+                            QSizePolicy.Policy.Preferred)
+        split_block.setSizePolicy(QSizePolicy.Policy.Maximum,
+                                  QSizePolicy.Policy.Preferred)
         centred = QHBoxLayout()
+        centred.setSpacing(70)
         centred.addStretch(1)
         centred.addWidget(tyres)
+        centred.addWidget(split_block)
         centred.addStretch(1)
         stacked.addLayout(centred)
 
+        middle_row = QWidget()
+        middle_row.setLayout(middle)
+        stacked.addWidget(middle_row)
+
         leading = QWidget()
-        leading.setLayout(row)
+        leading.setLayout(lead)
         stacked.addWidget(leading)
 
         # **The two states are two widgets, swapped, not one relabelled.**
@@ -916,6 +1373,8 @@ class DriverView(QWidget):
         self.tyre_caption.setText(
             "TYRE SURFACE °C" if not state.compound
             else f"TYRE SURFACE °C · {state.compound.upper()}")
+        self._show_splits(state)
+        self.last_call.show_call(state.last_call)
 
         if state.finished:
             self.box_stat.show_value("FLAG", "race over")
@@ -934,22 +1393,135 @@ class DriverView(QWidget):
         else:
             self.box_stat.show_value(
                 f"{state.laps_to_box:.0f}",
-                f"plan: lap {state.box_on_lap}" if state.box_on_lap else "",
+                self._box_caption(state),
                 # **Urgent inside two laps**, which is where the number stops
                 # being background and starts being a thing to act on.
                 urgent=state.laps_to_box <= 2)
 
         self._show_gap(self.ahead_stat, state.ahead)
         self._show_gap(self.behind_stat, state.behind)
+        self._show_fuel(state)
 
-        if state.laps_of_fuel is None:
-            self.fuel_stat.show_value("--", "not measured")
+        if state.position is None:
+            # **A dash, not a zero.** `RaceState.position` is None until the
+            # first packet is decoded and after a read the locator refused;
+            # P0 is not a place anyone finished in.
+            self.position_stat.show_value("--", "not read yet")
         else:
-            parts = []
-            if state.fuel_l is not None:
-                parts.append(f"{state.fuel_l:.1f} L")
-            if state.burn_l is not None:
-                parts.append(f"{state.burn_l:.2f} L/lap")
-            self.fuel_stat.show_value(
-                f"{state.laps_of_fuel:.1f}", " · ".join(parts),
-                urgent=state.laps_of_fuel <= 2.0)
+            # `P6` and `of 12` rather than the spoken `position_line`'s
+            # "P6 of 12." - the same two numbers, laid out for an eye instead
+            # of an ear.
+            self.position_stat.show_value(
+                f"P{state.position}",
+                f"of {state.field_size}" if state.field_size else "")
+
+    @staticmethod
+    def _box_caption(state: DriverState) -> str:
+        """What sits under the laps-to-box figure: the lap, and the decision.
+
+        **The tyre decision moved here from the box panel**, where he could
+        only read it once he was stationary and it was already being executed.
+        "RS on" and "no tyres" ask for different in-laps and different brake
+        balance, and the plan has said which since before the green.
+        """
+        if not state.box_on_lap:
+            return ""
+        plan = f"plan: lap {state.box_on_lap}"
+        if state.tyres_at_stop is False:
+            return f"{plan} · no tyres"
+        if state.tyres_at_stop and state.compound:
+            return f"{plan} · {state.compound.upper()} on"
+        if state.tyres_at_stop:
+            return f"{plan} · new set"
+        # None: the plan did not say. Silence, because "fuel only" and "the
+        # plan is quiet about it" are different answers and only one of them
+        # is a decision he can act on.
+        return plan
+
+    def _show_fuel(self, state: DriverState) -> None:
+        """The two in-hand figures, each against the distance it names.
+
+        **Neither is urgent above zero.** There is no invented margin
+        threshold on this board: the driver's own standing rule is that he
+        will not carry a spare lap of fuel in a lap race, so 0.2 laps in hand
+        is on plan and an alarm at 1.0 would fire in every race he drives.
+        Below zero it does not reach, and that is worth an ink.
+        """
+        # The tank's own supply, in laps, as the reason under the stop
+        # figure. It was the board's headline number and it is not a
+        # question - "9.1 laps aboard" is what makes "1.9 in hand to the
+        # stop" true, and one big number per question is the rule.
+        aboard = (None if state.laps_of_fuel is None
+                  else f"{state.laps_of_fuel:.1f} laps aboard")
+        if state.fuel_to_stop is None:
+            self.stop_stat.show_value("--", state.fuel_to_stop_why or aboard
+                                      or "not measured")
+        else:
+            self.stop_stat.show_value(
+                f"{state.fuel_to_stop:.1f}", aboard or "",
+                urgent=state.fuel_to_stop < 0)
+
+        litres = []
+        if state.fuel_l is not None:
+            litres.append(f"{state.fuel_l:.1f} L")
+        if state.burn_l is not None:
+            litres.append(f"{state.burn_l:.2f} L/lap")
+        if state.fuel_to_flag is None:
+            self.flag_stat.show_value(
+                "--", state.fuel_to_flag_why or " · ".join(litres)
+                or "not measured")
+        else:
+            self.flag_stat.show_value(
+                f"{state.fuel_to_flag:.1f}", " · ".join(litres),
+                urgent=state.fuel_to_flag < 0)
+
+    def _show_splits(self, state: DriverState) -> None:
+        """The axle gap and the rear pair, per lap, with their lap count.
+
+        **The figure is drawn positive and the direction is a caption.** A
+        minus sign on a glance instrument is a thing to decode; `REAR OVER
+        FRONT` and `FRONT OVER REAR` are two different diagnoses said in
+        words, which is what rule 13 asks for.
+        """
+        laps = ("no laps yet" if not state.split_laps else
+                "1 lap" if state.split_laps == 1 else
+                f"{state.split_laps} laps")
+        figure, direction = axle_words(state.axle_split_c)
+        if figure is None:
+            self.axle_stat.set_label("rear v front")
+            self.axle_stat.show_value("--", laps)
+        else:
+            self.axle_stat.set_label(direction)
+            self.axle_stat.show_value(
+                f"{figure:.1f}",
+                self._split_sub(laps, trend_word(state.axle_split_c,
+                                                 state.axle_split_rate),
+                                state.axle_split_rate))
+
+        hotter = state.rear_pair_hotter
+        if hotter is None or state.rear_pair_split_c is None:
+            self.rear_pair_stat.set_label("rr v rl")
+            self.rear_pair_stat.show_value("--", laps)
+            return
+        cooler = PAIRS[hotter]
+        self.rear_pair_stat.set_label(f"{hotter} over {cooler}")
+        self.rear_pair_stat.show_value(
+            f"{state.rear_pair_split_c:.1f}",
+            # The pair figure is positive by construction, so its trend word
+            # is read straight off the sign of the rate.
+            self._split_sub(laps, trend_word(state.rear_pair_split_c,
+                                             state.rear_pair_rate),
+                            state.rear_pair_rate))
+
+    @staticmethod
+    def _split_sub(laps: str, word: str, rate: float | None) -> str:
+        """`6 laps · widening 1.4/lap`, or just the lap count.
+
+        Silent about the direction where there is no rate: five laps have not
+        been sampled, or the movement is inside the derived floor. **No rate
+        is not a rate of zero** and "settling" would be a claim - see
+        `race/tyre_split.py`, which owns the arithmetic and the threshold.
+        """
+        if not word or rate is None:
+            return laps
+        return f"{laps} · {word} {abs(rate):.1f}/lap"

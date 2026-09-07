@@ -3,10 +3,36 @@
 **The split is the reading on this car with evidence behind it.** An absolute
 tyre temperature is endogenous - a consequence of how hard the tyre is being
 worked rather than an input to grip - and no optimal window has ever been
-published for GT7; measured here, minimum corner speed against temperature has
-slopes of OPPOSITE SIGN at Monza and Spa with R² under 0.2. The splits do not
-have that problem. Measured across the archive, the rear-front and RR-RL gaps
-are monotone and match the measured wear map at **r=+0.82**.
+published for GT7.
+
+**The endogeneity is measured, and the evidence for it is not what this file
+used to cite.** The old sentence here said minimum corner speed against
+temperature had "slopes of OPPOSITE SIGN at Monza and Spa with R² under 0.2".
+That was per-corner OLS on 8-11 laps and it did not survive a proper
+specification: with corner x stint fixed effects, `lap_in_stint` held and
+standard errors clustered by lap, **both slopes are negative and neither is
+significant** - Monza -0.809 (t -1.57), Spa -0.227 (t -0.29). The comparison
+was confounded five ways over as well (two circuits, two cars, two compounds,
+a 4x wear multiplier, two formats). What replaced it is a direct measurement,
+4 Sep 2026, 48 Daytona laps: rear slip against rear temperature within a cell
+of the same 100 m, gear, speed band and throttle band gives +0.002772 per °C,
+18 of 22 cells positive against a permutation null of 47.0% - and **lagging
+the temperature by one second collapses the slope by a factor of 146 and the
+positive share to exactly 50.0%.** Slip heats the tyre; the tyre does not lose
+grip because it is hot. The conclusion is unchanged and is now demonstrated
+rather than argued.
+
+**The splits do not have that problem, and this is exactly what they have.**
+Measured 3 Sep 2026, v1.71, Huracán GT3, Daytona session 118, 71,449 frames:
+the rear-front gap runs +2.90 °C on lap 1 to +12.65 on lap 10 and the RR-RL
+gap +0.10 to +4.00, both monotone. Across the four corners of the car, per-lap
+mean temperature against measured per-lap wear rate comes out at **r=+0.82**
+(FL 62.5 °C / 0.0275 per lap … RR 75.7 °C / 0.0570). ⚠️ **n=4, and it is an
+association**: both quantities are driven by load. It is not a claim that
+temperature predicts wear, and it is not a grip claim of any kind. What it
+buys is that the gap is a **finer instrument than the wear gauge for the same
+thing** - the gauge quantises at 2.8-3.3% of tyre life per pixel and the gap
+moves continuously.
 
 So the dashboard already showed the split as a figure. What it could not say
 was whether that figure was growing or shrinking, which is the difference
@@ -119,6 +145,28 @@ class SplitHistory:
         gap = last[corner] - last[PAIRS[corner]]
         return gap if gap > 0 else None
 
+    def axle_split_now(self) -> float | None:
+        """The last lap's **rear axle mean minus front axle mean**, signed.
+
+        **Signed, where `split_now` is not, and that is not an inconsistency.**
+        A left tyre and a right tyre are interchangeable, so "13 °C cooler" is
+        the same finding said about the wrong corner and only the hotter side
+        is worth reporting. A front axle and a rear axle are not
+        interchangeable: rears hotter is a rear-limited car and fronts hotter
+        is a front-limited one, and those ask for opposite changes - CLAUDE.md
+        §5.5's own worked example is *"Brake balance one click rearward.
+        Fronts are going first."* Both directions are findings, so the sign
+        travels here and the caller says which axle it is in words. A number
+        whose sign the driver has to decode is exactly what rule 13 is about.
+
+        `None` before any whole lap has been sampled. Never a zero.
+        """
+        if not self.laps:
+            return None
+        last = self.laps[-1]
+        return ((last["rl"] + last["rr"]) / 2.0
+                - (last["fl"] + last["fr"]) / 2.0)
+
     def rate(self, corner: str) -> tuple[float | None, int]:
         """`(°C per lap, laps behind it)` for this corner's split.
 
@@ -127,10 +175,31 @@ class SplitHistory:
         and the caller must not render it as one. The lap count comes back
         either way so a caller can say how much is behind the answer.
         """
+        return self._trend([lap[corner] - lap[PAIRS[corner]]
+                            for lap in self.laps])
+
+    def axle_rate(self) -> tuple[float | None, int]:
+        """`(°C per lap, laps behind it)` for the rear-front split.
+
+        **Judged against the same floor as a corner pair, deliberately.** An
+        axle mean averages two corners, so if the two corners' noise were
+        independent the axle gap's floor would fall by √2 and this threshold
+        would be too strict by that much. It is not known to be independent -
+        both corners of an axle see the same load transfer, the same kerb and
+        the same air - so the reduction cannot be claimed, and the
+        same-corner floor is the conservative bound. One threshold, stated,
+        rather than two that drift: `RATE_WORTH_SAYING_C` is derived and not
+        measured, and it is labelled that way wherever it is shown.
+        """
+        return self._trend([((lap["rl"] + lap["rr"]) / 2.0
+                             - (lap["fl"] + lap["fr"]) / 2.0)
+                            for lap in self.laps])
+
+    def _trend(self, series: list[float]) -> tuple[float | None, int]:
+        """The least-squares slope of one series, or None inside the floor."""
         count = len(self.laps)
         if count < MIN_LAPS_FOR_TREND:
             return None, count
-        series = [lap[corner] - lap[PAIRS[corner]] for lap in self.laps]
         n = len(series)
         mean_x = (n - 1) / 2.0
         mean_y = sum(series) / n

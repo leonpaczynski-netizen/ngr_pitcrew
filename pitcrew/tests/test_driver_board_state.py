@@ -80,11 +80,53 @@ class _State:
     finished: bool = False
     _to_stop: int | None = 3
 
+    # **What the two fuel figures read, added 8 Sep 2026.** The board no
+    # longer computes a fuel number of its own - it asks `race/calls.py`,
+    # which is the whole point of the change: a board expression once said
+    # "-7.1 laps of fuel in hand to the flag" with 84 L aboard. Those
+    # functions read a real race state, so the stub carries the fields they
+    # read, with the same defaults and the same meanings production has.
+    # Every one of them is `None` or the neutral value here, so an existing
+    # test that says nothing about fuel gets a dash and its reason rather
+    # than a number nobody set up.
+    laps_total: int | None = None
+    laps_after_stops: int | None = None
+    laps_dropped: int = 0
+    laps_dropped_seen: int = 0
+    crossed_in_box: bool = False
+    next_stint_laps: int | None = None
+    further_stop_planned: bool | None = None
+    drop_stop_granted: bool | None = None
+    mandatory_stops_left: int | None = None
+    plan_binding_constraint: str | None = None
+    fuel_capacity_l: float | None = 100.0
+    fuel_sd_l: float | None = None
+    fuel_reference_load_l: float | None = None
+    race_minutes: float | None = None
+    laps_estimate_firm: bool = False
+    # The lap GT7 is showing him. `lap` counts what is behind him and these
+    # are at least one apart - see `RaceState.lap_on_screen`, and the board's
+    # `box_on_lap`, which used the wrong one.
+    screen_lap: int | None = None
+
     def laps_to_stop(self):
         return self._to_stop
 
     def laps_of_fuel(self):
         return 9.1
+
+    def laps_missed(self):
+        return max(0, self.laps_dropped, self.laps_dropped_seen)
+
+    def laps_remaining(self):
+        if self.laps_total is None:
+            return None
+        return max(0, self.laps_total - (self.lap + self.laps_missed()))
+
+    def lap_on_screen(self):
+        if self.screen_lap is not None:
+            return self.screen_lap
+        return self.lap + self.laps_missed() + 1
 
 
 @dataclass
@@ -143,6 +185,8 @@ class _Stub:
 
     _someone_set = PitCrewController._someone_set
     _split_rates = PitCrewController._split_rates
+    _board_splits = PitCrewController._board_splits
+    _board_fuel = PitCrewController._board_fuel
 
     def __init__(self, *, race=None, bridge=None, target=74.0, event=None,
                  splits=None):
@@ -152,6 +196,12 @@ class _Stub:
         from pitcrew.race.tyre_split import SplitHistory
 
         self._splits = splits if splits is not None else SplitHistory()
+        # **Built in `__init__`, exactly as the controller builds it.** A
+        # board fed a call from a race that is over is CLAUDE.md rule 11, and
+        # the named remedy for that rule is a reset that has a caller - so a
+        # stub that conjured the attribute on first read would be testing a
+        # shape production does not have.
+        self._board_call = None
         self.race = race if race is not None else _Race()
         self.bridge = bridge if bridge is not None else _Bridge()
         self._target = target
@@ -922,3 +972,153 @@ def test_the_failure_counts_belong_to_one_race():
     PitCrewController._open_driver_board(app)
     assert app._board_failures == 0
     assert app._board_failures_total == 0
+
+
+# ------------------------------------- row 1.8: what the board could not say
+
+def test_the_box_lap_is_the_number_on_his_hud_not_the_apps_count():
+    """**They are at least one apart, and further after a lost crossing.**
+    `state.lap` counts what is behind him; GT7 shows the lap in progress. Road
+    Atlanta ran +1 on lap 1 and +2 by lap 20, so a board saying "plan: lap 11"
+    named a lap his screen would never read. `RaceState.lap_on_screen` settles
+    it: under a helmet the screen wins.
+    """
+    stub = _Stub()
+    stub.race.state.lap = 8
+    stub.race.state._to_stop = 3
+    # No crossing lost: the lap in progress is 9, so he boxes at the end of
+    # screen lap 11.
+    assert _state_for(stub).box_on_lap == 11
+
+    # Two crossings lost in the pit lane. The app still counts 8, GT7 counts
+    # 10, and the box lap on his screen is 13.
+    stub.race.state.laps_dropped = 2
+    assert _state_for(stub).box_on_lap == 13
+
+
+def test_the_position_and_the_field_reach_the_board():
+    """`P8` and `P8 of 9` are different pieces of news, and the second is the
+    one he can act on. `cars_in_race` decodes and nothing read it."""
+    stub = _Stub()
+    stub.race.state.position = 3
+    stub.race.state.field_size = 12
+    got = _state_for(stub)
+    assert got.position == 3 and got.field_size == 12
+
+
+def test_a_position_nobody_read_arrives_as_none_and_never_as_zero():
+    """Rule 3: a zero that means "not measured" gets read as a real value,
+    and P0 is not a place anyone finished in."""
+    stub = _Stub()
+    stub.race.state.position = None
+    stub.race.state.field_size = None
+    got = _state_for(stub)
+    assert got.position is None and got.field_size is None
+
+
+def test_both_tyre_splits_reach_the_board_with_their_lap_count():
+    """The axle gap had no implementation at all before row 1.8 - the module's
+    `PAIRS` is left-right only - and the rear pair was invisible in practice,
+    because the board only drew a per-corner figure past 10 degC and the
+    measured stint reached +4.0."""
+    from pitcrew.race.tyre_split import SplitHistory
+
+    history = SplitHistory()
+    for lap in range(6):
+        history.note_lap({"fl": 62.0, "fr": 62.0,
+                          "rl": 70.0, "rr": 70.0 + 2.0 * lap})
+    stub = _Stub(splits=history)
+    got = _state_for(stub)
+    # Rears run 70.0 and 80.0 on the last lap: axle mean 75.0 against 62.0.
+    assert got.axle_split_c == pytest.approx(13.0)
+    assert got.split_laps == 6
+    assert got.rear_pair_hotter == "rr"
+    assert got.rear_pair_split_c == pytest.approx(10.0)
+    assert got.rear_pair_rate is not None and got.rear_pair_rate > 0
+
+
+def test_a_split_with_nothing_behind_it_is_absent_rather_than_zero():
+    """A missing key is no claim and a zero is "it has settled"; those are
+    different things to tell a driver about a tyre."""
+    got = _state_for(_Stub())
+    assert got.axle_split_c is None
+    assert got.axle_split_rate is None
+    assert got.rear_pair_hotter is None
+    assert got.split_laps == 0
+
+
+def test_the_two_fuel_figures_reach_the_board_from_the_calls_module():
+    """The board computes no fuel number of its own. It asked for one once
+    and said "-7.1 laps of fuel in hand to the flag" with 84 L aboard."""
+    stub = _Stub()
+    state = stub.race.state
+    state.lap = 2
+    state.laps_total = 20
+    state.fuel_l = 84.0
+    state.fuel_per_lap_l = 4.19
+    state.stint_ends_on_lap = 11
+    state.further_stop_planned = False
+    state.mandatory_stops_left = 1
+    got = _state_for(stub)
+    assert got.fuel_to_stop is not None and got.fuel_to_stop_why is None
+    assert got.fuel_to_flag is not None and got.fuel_to_flag_why is None
+    assert got.fuel_to_flag > 0
+
+
+def test_a_fuel_figure_that_cannot_be_made_carries_its_reason():
+    """Every dash on this board says why. An empty box he cannot account for
+    is one he would stop trusting the rest of the screen over."""
+    got = _state_for(_Stub())
+    assert got.fuel_to_stop is None and got.fuel_to_stop_why
+    assert got.fuel_to_flag is None and got.fuel_to_flag_why
+
+
+def test_the_last_call_is_none_until_something_is_said():
+    """And it is built in `__init__`, not conjured on first read: a reset
+    with no caller is the shape of rule 11's defect, not the fix for it."""
+    stub = _Stub()
+    assert stub._board_call is None
+    assert _state_for(stub).last_call is None
+
+
+def test_the_last_call_carries_its_mark_and_the_lap_on_his_screen():
+    """Rule 12: the printed mark is `Call.mark()`, the same expression
+    `Call.spoken()` builds its suffix from. And the lap is GT7's, because
+    `Call.lap` is laps completed and he never saw that number."""
+    from pitcrew.controller import PitCrewController
+    from pitcrew.race.calls import BOX_NOW, Call
+
+    stub = _Stub()
+    stub.race.state.lap = 10
+    call = Call(BOX_NOW, 10, "Box this lap.", "Fuel to 63.")
+    PitCrewController._note_board_call(
+        stub, call.spoken(), call.mark(),
+        PitCrewController._screen_lap(stub))
+    got = _state_for(stub).last_call
+    assert got.text == "Box this lap. Fuel to 63."
+    assert got.mark == "instruction"
+    assert got.lap == 11
+
+
+def test_the_flag_keeps_the_result_and_the_tyres_and_drops_the_plan():
+    """Position at the chequer is the number he wants; there is no next stop
+    to describe, so the fuel and box figures stay blank."""
+    from pitcrew.controller import PitCrewController
+    from pitcrew.race.tyre_split import SplitHistory
+
+    history = SplitHistory()
+    for _ in range(6):
+        history.note_lap({"fl": 62.0, "fr": 62.0, "rl": 70.0, "rr": 74.0})
+    stub = _Stub(splits=history)
+    stub.race.state.finished = True
+    stub.race.state.position = 2
+    stub.race.state.field_size = 12
+    PitCrewController._note_board_call(stub, "Chequered flag.", "instruction",
+                                       20)
+    got = _state_for(stub)
+    assert got.finished is True
+    assert got.position == 2 and got.field_size == 12
+    assert got.last_call is not None and got.last_call.lap == 20
+    assert got.axle_split_c == pytest.approx(10.0)
+    assert got.laps_to_box is None
+    assert got.fuel_to_stop is None and got.fuel_to_flag is None

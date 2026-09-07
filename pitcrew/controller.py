@@ -1069,6 +1069,11 @@ class PitCrewController(QObject):
         # race judging its fresh tyres against practice's worn ones. Both
         # session-open paths call `new_session` below.
         self._splits = SplitHistory()
+        # **The last thing said, for the driver board's top line.** Built
+        # here so it exists before any race does, cleared at the start and the
+        # end of each one - see `_note_board_call` for why it is not
+        # `self.last_call`.
+        self._board_call = None
 
         self.bridge.lap_completed.connect(self._on_lap_completed)
         self.bridge.debriefed.connect(self._on_debriefed)
@@ -4423,6 +4428,11 @@ class PitCrewController(QObject):
         table = self.store.shift_points_for(event["car_name"] or "", here)
         self.bridge.set_issued_shift_points(table)
         self._splits.new_session()
+        # **Cleared before the board opens, which it does on the grid.**
+        # CLAUDE.md rule 11: anything cached across a session boundary is read
+        # as though it belongs to this one, and the last race's last call
+        # would otherwise be the first thing on the screen at the lights.
+        self._board_call = None
         self.bridge.take_corner_means()
         if table is None:
             self.race_screen.set_status(
@@ -4996,6 +5006,12 @@ class PitCrewController(QObject):
         self._judge_filed_calls(final=True)
         self._filed_calls = {}
         self._filed_session = None
+        # **Both ends, not just the start** (rule 11). `start_race` clears it
+        # too, but a reset that only runs on the way in leaves the sentence
+        # sitting in memory for whatever reads it next - and `stop_race` is
+        # also what `shutdown` calls, so this is where the race's last words
+        # stop being current.
+        self._board_call = None
         # **First, so the position survives whatever else teardown does.** It
         # is the one piece of state here the driver set by hand, and every
         # line below it can raise.
@@ -5251,6 +5267,20 @@ class PitCrewController(QObject):
         if call.kind != STATUS:
             self.bridge.set_short_shift(call.short_shift_drop_rpm)
 
+        # **The board's top line, and it is set whether or not the voice is
+        # on.** With the engineer silent the board is the only channel left,
+        # which is exactly when a driver most needs to be able to read what
+        # was decided. It is NOT set when the re-planner won the lap, because
+        # then the re-planner's own sentence is what he heard and
+        # `_voice_replan` files that instead.
+        #
+        # It reaches the screen on the next 250 ms tick rather than in this
+        # call: `_push_driver_board` has already run for this crossing, and a
+        # second full render to save a quarter of a second he cannot perceive
+        # is not worth the path.
+        if replan is None:
+            self._note_board_call(call.spoken(), call.mark(),
+                                  self._screen_lap())
         if self._engineer_speaks and replan is None:
             self.voice.say(call.spoken())
             self.ptt.last_call = call.spoken()
@@ -5473,7 +5503,15 @@ class PitCrewController(QObject):
         # that is over, ticking four times a second, until he presses Stop.
         # Blank is the honest state: there is no next stop.
         if getattr(state, "finished", False):
-            return DriverState(temps_c=self._board_temps(), finished=True)
+            # **The result and the tyres survive the flag; the plan does
+            # not.** Position at the chequer is the one number he wants and
+            # there is no next stop to describe, so the fuel and box figures
+            # stay blank while these carry on.
+            return DriverState(
+                temps_c=self._board_temps(), finished=True,
+                position=getattr(state, "position", None),
+                field_size=getattr(state, "field_size", None),
+                last_call=self._board_call, **self._board_splits())
         packet = getattr(self.bridge, "last_packet", None)
         # **Live, not per-lap.** `state.fuel_l` is written at a crossing, and
         # in the box there are no crossings - so the countdown and the figure
@@ -5501,11 +5539,24 @@ class PitCrewController(QObject):
             # box panel can say "NO TYRES" rather than the compound's name.
             tyres_at_stop=getattr(state, "next_tyres", None),
             laps_to_box=None if to_stop is None else float(max(0, to_stop)),
-            box_on_lap=None if to_stop is None else state.lap + max(0, to_stop),
+            # **The lap number GT7 is showing him, not the app's count.**
+            # They are one apart at every crossing and further apart after a
+            # crossing lost in the pit lane - Road Atlanta ran +1 on lap 1 and
+            # +2 by lap 20 - and `RaceState.lap_on_screen` settles it in as
+            # many words: the number he is given has to match the number he
+            # can see, and under a helmet the screen wins. This was the app's
+            # count, so the board named a box lap his HUD would never read.
+            box_on_lap=(None if to_stop is None
+                        else state.lap_on_screen() + max(0, to_stop) - 1),
             laps_of_fuel=state.laps_of_fuel(),
             fuel_l=fuel_l,
             burn_l=state.fuel_per_lap_l,
             has_plan=has_plan,
+            position=getattr(state, "position", None),
+            field_size=getattr(state, "field_size", None),
+            last_call=self._board_call,
+            **self._board_splits(),
+            **self._board_fuel(state),
             # **Both neighbours, on the running panel only.** In the box the
             # gap to a car still circulating is not a thing he can act on, and
             # the box panel has five items already.
@@ -5590,6 +5641,97 @@ class PitCrewController(QObject):
         if name:
             note = f"{note} - {name}"
         return GapView(seconds=seconds, note=note, urgent=urgent, good=good)
+
+    def _board_splits(self) -> dict:
+        """The two tyre splits the board draws, per lap, with their lap count.
+
+        **The axle gap is the stronger of the two and had no implementation
+        until now**: `tyre_split.PAIRS` is left-right only, so nothing in the
+        app could produce a rear-minus-front figure. The rear pair could be
+        produced and was invisible in practice - it only surfaced on the board
+        as a per-corner figure once it passed `PAIR_GAP_C` at 10 degC, and
+        over the measured stint it reached +4.0.
+
+        Both are whole-lap means from one `SplitHistory`, which is reset at
+        every session boundary (CLAUDE.md rule 11), so the board cannot judge
+        a race's fresh tyres against practice's worn ones. The lap count comes
+        back with them because an aggregate carries its sample count (rule 4)
+        and a split from two laps is not the claim a split from eight is.
+
+        **Positive only for the rear pair, signed for the axle**, and the
+        difference is not an inconsistency - see `SplitHistory.axle_split_now`.
+        """
+        axle_rate, laps = self._splits.axle_rate()
+        found = {
+            "axle_split_c": self._splits.axle_split_now(),
+            "axle_split_rate": axle_rate,
+            "split_laps": laps,
+            "rear_pair_hotter": None,
+            "rear_pair_split_c": None,
+            "rear_pair_rate": None,
+        }
+        for corner in ("rr", "rl"):
+            gap = self._splits.split_now(corner)
+            if gap is None:
+                # The cooler of the pair, or nothing sampled. `split_now`
+                # answers only for the hotter side, so exactly one of the two
+                # can return a figure and neither does before a lap has run.
+                continue
+            found["rear_pair_hotter"] = corner
+            found["rear_pair_split_c"] = gap
+            found["rear_pair_rate"] = self._splits.rate(corner)[0]
+        return found
+
+    def _board_fuel(self, state) -> dict:
+        """The two in-hand figures and, where there is none, the reason.
+
+        **Both come from `race/calls.py` and neither is computed here.** The
+        board once had a fuel expression of its own and it produced *"-7.1
+        laps of fuel in hand to the flag"* with 84 L aboard and the stop nine
+        laps away, because it measured a tank against a distance no tank was
+        being asked to cover. One expression per question, named in the words
+        the voice already uses (CLAUDE.md rules 12 and 13).
+        """
+        from pitcrew.race.calls import (fuel_in_hand_to_flag,
+                                        fuel_in_hand_to_stop)
+
+        to_stop, stop_why = fuel_in_hand_to_stop(state)
+        to_flag, flag_why = fuel_in_hand_to_flag(state)
+        return {"fuel_to_stop": to_stop, "fuel_to_stop_why": stop_why,
+                "fuel_to_flag": to_flag, "fuel_to_flag_why": flag_why}
+
+    def _note_board_call(self, text: str, mark: str, lap: int | None) -> None:
+        """Hold the last thing said, for the board's top line.
+
+        **Not `self.last_call`**, which is assigned in three places, read by
+        nothing, never initialised, and not set on the ordinary call path at
+        all - a field that looks like this one and answers nothing.
+
+        **Cleared at the start and the end of every race** (rule 11). State
+        that outlives a session gets read as though it belongs to this one,
+        and this app has already spoken a practice gauge reading aloud as a
+        measured race number; a board opening on the grid with the last call
+        of the last race on it is the same defect with a screen instead of a
+        voice.
+
+        The lap is the one **GT7 is showing him**, not the app's count - see
+        `RaceState.lap_on_screen`. `Call.lap` is laps completed and the two
+        are at least one apart, so printing `Call.lap` would label the
+        sentence with a lap he never saw.
+        """
+        from pitcrew.ui.driver_view import BoardCall
+
+        self._board_call = BoardCall(text=text, mark=mark, lap=lap)
+
+    def _screen_lap(self) -> int | None:
+        """The lap number on his HUD right now, or None before a race."""
+        state = getattr(self.race, "state", None) if self.race else None
+        if state is None:
+            return None
+        try:
+            return state.lap_on_screen()
+        except Exception:                                   # noqa: BLE001
+            return None
 
     def _split_rates(self) -> dict[str, float]:
         """Per-corner split rates, only where there is an answer.
@@ -6459,6 +6601,18 @@ class PitCrewController(QObject):
             self.voice.say(text)
         self.last_call = text
         self.ptt.last_call = text
+        # **On the board too, marked for what it is.** A re-plan is the one
+        # moment the shape of the race changes, and leaving the board holding
+        # the previous lap's call there would have it quietly stale at the
+        # highest-consequence moment of the night. An offered re-plan is a
+        # question and is marked `offer`; one that only reports the burn
+        # against the plan is marked `report` - neither is an instruction, and
+        # the board says which rather than letting him assume.
+        from pitcrew.race.calls import MARK_OFFER, MARK_REPORT
+
+        self._note_board_call(
+            text, MARK_OFFER if spoken.offered else MARK_REPORT,
+            self._screen_lap())
         if self.race_screen is not None:
             if spoken.offered:
                 self.race_screen.show_offer(spoken)

@@ -120,7 +120,11 @@ def test_the_widget_survives_having_nothing_at_all(qt_app):
     view = DriverView()
     view.update_state(DriverState())
     assert view.box_stat.value.text() == "--"
-    assert view.fuel_stat.value.text() == "--"
+    assert view.stop_stat.value.text() == "--"
+    assert view.flag_stat.value.text() == "--"
+    assert view.position_stat.value.text() == "--"
+    assert view.axle_stat.value.text() == "--"
+    assert view.rear_pair_stat.value.text() == "--"
     assert all(t.value.text() == "--" for t in view.tyres.values())
 
 
@@ -128,7 +132,8 @@ def test_no_plan_and_no_burn_say_so_rather_than_showing_a_figure(qt_app):
     view = DriverView()
     view.update_state(DriverState(temps_c=_temps()))
     assert "no plan" in view.box_stat.sub.text()
-    assert "not measured" in view.fuel_stat.sub.text()
+    assert "not measured" in view.stop_stat.sub.text()
+    assert "not measured" in view.flag_stat.sub.text()
 
 
 # ------------------------------------------------------------- the numbers
@@ -138,23 +143,72 @@ def test_it_shows_what_it_is_given(qt_app):
     view.update_state(DriverState(
         temps_c=_temps(fl=84.0, fr=79.0, rl=91.0, rr=77.0), compound="RS",
         laps_to_box=4, box_on_lap=14, laps_of_fuel=5.2, fuel_l=38.1,
-        burn_l=7.29))
+        burn_l=7.29, fuel_to_stop=1.9, fuel_to_flag=0.3,
+        position=6, field_size=12))
     assert view.tyres["rl"].value.text() == "91"
     assert view.tyres["rr"].value.text() == "77"
     assert view.box_stat.value.text() == "4"
-    assert view.fuel_stat.value.text() == "5.2"
-    assert "38.1 L" in view.fuel_stat.sub.text()
-    assert "7.29 L/lap" in view.fuel_stat.sub.text()
+    assert view.stop_stat.value.text() == "1.9"
+    assert view.flag_stat.value.text() == "0.3"
+    # The tank's own supply is the reason under the stop figure, not a third
+    # question in its own block.
+    assert "5.2 laps aboard" in view.stop_stat.sub.text()
+    assert "38.1 L" in view.flag_stat.sub.text()
+    assert "7.29 L/lap" in view.flag_stat.sub.text()
+    assert view.position_stat.value.text() == "P6"
+    assert view.position_stat.sub.text() == "of 12"
     assert "RS" in view.tyre_caption.text()
 
 
-def test_fuel_and_box_turn_urgent_only_when_they_are(qt_app):
+def test_the_box_number_turns_urgent_inside_two_laps(qt_app):
     view = DriverView()
-    view.update_state(DriverState(laps_of_fuel=6.0, laps_to_box=8))
-    assert view.fuel_stat._ink != view.box_stat._ink or True
-    calm_fuel = view.fuel_stat._ink
-    view.update_state(DriverState(laps_of_fuel=1.4, laps_to_box=1))
-    assert view.fuel_stat._ink != calm_fuel
+    view.update_state(DriverState(laps_to_box=8))
+    calm = view.box_stat._ink
+    view.update_state(DriverState(laps_to_box=1))
+    assert view.box_stat._ink != calm
+
+
+def test_fuel_in_hand_is_red_below_zero_and_calm_above_it(qt_app):
+    """**No invented margin threshold, in either block.**
+
+    His standing rule is that he will not carry a spare lap of fuel in a lap
+    race, so 0.2 laps in hand is the plan working and an alarm at one lap
+    would fire every race he drives. Below zero it does not reach, and that
+    is the only line either figure draws.
+    """
+    view = DriverView()
+    view.update_state(DriverState(fuel_to_stop=0.2, fuel_to_flag=0.2))
+    calm_stop, calm_flag = view.stop_stat._ink, view.flag_stat._ink
+    view.update_state(DriverState(fuel_to_stop=6.0, fuel_to_flag=6.0))
+    assert view.stop_stat._ink == calm_stop
+    assert view.flag_stat._ink == calm_flag
+    view.update_state(DriverState(fuel_to_stop=-0.4, fuel_to_flag=-1.2))
+    assert view.stop_stat._ink != calm_stop
+    assert view.flag_stat._ink != calm_flag
+
+
+def test_a_missing_fuel_figure_carries_the_reason_it_is_missing(qt_app):
+    """A dash he can account for is not a fault; one he cannot is a screen he
+    stops trusting. `race/calls.py` names which of the reasons it is."""
+    view = DriverView()
+    view.update_state(DriverState(
+        fuel_to_stop_why="no stop still to come",
+        fuel_to_flag_why="another stop after this one"))
+    assert view.stop_stat.value.text() == "--"
+    assert "no stop still to come" in view.stop_stat.sub.text()
+    assert "another stop after this one" in view.flag_stat.sub.text()
+
+
+def test_a_position_nobody_read_is_a_dash_and_never_P0(qt_app):
+    view = DriverView()
+    view.update_state(DriverState())
+    assert view.position_stat.value.text() == "--"
+    assert "not read yet" in view.position_stat.sub.text()
+    # And a field size nobody read leaves the caption empty rather than
+    # claiming a one-car race.
+    view.update_state(DriverState(position=4))
+    assert view.position_stat.value.text() == "P4"
+    assert view.position_stat.sub.text() == ""
 
 
 # ----------------------------------------------- the gap, promoted to a figure
@@ -226,13 +280,20 @@ def test_the_leading_gap_blocks_actually_get_the_leading_size(qt_app):
     """The rank is only real if the widgets are built with it. `_Stat` takes
     its size per instance now, and a default that silently applied to all
     four would leave the constants above describing nothing."""
-    from pitcrew.ui.driver_view import _Stat, DriverView
+    from pitcrew.ui.driver_view import _Stat, _Tyre, DriverView
 
     view = DriverView()
     assert view.ahead_stat.VALUE_PX == _Stat.GAP_PX
     assert view.behind_stat.VALUE_PX == _Stat.GAP_PX
     assert view.box_stat.VALUE_PX == _Stat.VALUE_PX
-    assert view.fuel_stat.VALUE_PX == _Stat.VALUE_PX
+    assert view.stop_stat.VALUE_PX == _Stat.VALUE_PX
+    assert view.flag_stat.VALUE_PX == _Stat.VALUE_PX
+    assert view.position_stat.VALUE_PX == _Stat.VALUE_PX
+    # The splits are a rank under the corners they are made of, and a rank
+    # under the numbers he plans with.
+    assert view.axle_stat.VALUE_PX == _Stat.SPLIT_PX
+    assert view.rear_pair_stat.VALUE_PX == _Stat.SPLIT_PX
+    assert _Tyre.VALUE_PX > _Stat.SPLIT_PX
 
 
 def test_the_dashboard_asks_for_faces_that_are_installed(qt_app):
