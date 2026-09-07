@@ -32,7 +32,7 @@ A local race-engineering companion for GT7. Four jobs, in order of maturity:
    builder holds the car and the gearbox, and the driver confirms what is in it
    against GT7's own settings screen. A value kept in two places becomes two
    values, and on this project it did, twice, on one car.
-3. **Export** a `gt7-pitcrew/1.8` JSON payload the tune builder reads — over
+3. **Export** a `gt7-pitcrew/1.9` JSON payload the tune builder reads — over
    MCP, or pasted.
 4. **Race strategy** — a stint and fuel plan, then talk him through it live and
    adapt as the race unfolds.
@@ -71,7 +71,7 @@ a voice in the driver's ear.
 
 Governing contracts, both at the repo root and both authoritative over any
 plan: **`CLAUDE.md`** (build brief) and **`EXPORT-CONTRACT.md`**
-(`gt7-pitcrew/1.8`).
+(`gt7-pitcrew/1.9`).
 
 Hard facts that bound what is buildable:
 

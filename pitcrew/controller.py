@@ -3705,14 +3705,26 @@ class PitCrewController(QObject):
                 "session %s is running now", len(filed),
                 self._filed_session, self.session_id)
             filed.clear()
+            self._filed_session = None
             return
         from types import SimpleNamespace
 
         from pitcrew.race.call_outcome import judge
 
         try:
+            # **A struck lap is not evidence that the window was
+            # driven** (critic pass 8, second round). Moving this past the
+            # fragment check stopped the phantom row's OWN crossing from
+            # judging, and the next crossing judged with the phantom still
+            # in `list_laps` - which is `SELECT *` and carries excluded rows
+            # - so a box call's three-lap window filled on a lap he never
+            # drove and "no stop on laps 12-14" was written and settled on a
+            # lap 12 stop he made the following crossing. `outcome_for`
+            # counts ROWS, so the filtering has to happen here. Pit and out
+            # laps are FLAGGED rather than excluded, so nothing real goes.
             laps = [SimpleNamespace(**row)
-                    for row in self.store.list_laps(self.session_id)]
+                    for row in self.store.list_laps(self.session_id)
+                    if not row["excluded"]]
             settled = judge(((rid, call) for rid, (call, _) in filed.items()),
                             laps, final=final)
         except Exception:                                    # noqa: BLE001
@@ -6656,6 +6668,18 @@ class PitCrewController(QObject):
         # recording used to leave `ended_at` null, which is exactly what a
         # crash leaves - so a clean exit was indistinguishable from a lost one.
         if self.session_id is not None:
+            # **And every call still open is settled, before the id it is
+            # judged against goes** (critic pass 8, second round). `stop_race`
+            # is a button, and the comment forty lines below says who does not
+            # press it: the ordinary evening is take the flag, watch the
+            # replay, close the window. Where the flag was also missed - the
+            # Fuji failure, on file - every filed call ended NULL forever,
+            # and the contract now tells a reader that an absent verdict
+            # means the call was made outside a running race, which on that
+            # path is false.
+            self._judge_filed_calls(final=True)
+            self._filed_calls = {}
+            self._filed_session = None
             self.store.end_session(self.session_id)
             log("session").info("session %s closed on shutdown",
                                 self.session_id)

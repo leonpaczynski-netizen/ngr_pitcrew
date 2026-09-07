@@ -1,4 +1,4 @@
-# Pit Crew export contract — `gt7-pitcrew/1.8`
+# Pit Crew export contract — `gt7-pitcrew/1.9`
 
 **What this is.** The exact payload Pit Crew emits after a session. The driver copies
 it and pastes it into the **Pit Crew data** box on the Driver Feedback tab of the GT7
@@ -15,7 +15,7 @@ Two consequences, and they drive every decision below:
    setup decision and nothing else.
 
 Supersedes `gt7-pitcrew/1.0`. Changes and their justification are in §15 (through
-1.1) and §16 (1.2 through 1.8). **Every version bump lands with its change table in
+1.1) and §16 (1.2 through 1.9). **Every version bump lands with its change table in
 the same commit** — without one the consumer cannot tell an added field from a
 renamed one, and has to read every unfamiliar field conservatively.
 
@@ -30,7 +30,7 @@ section full of zeros is not.
 
 ```json
 {
-  "format": "gt7-pitcrew/1.8",
+  "format": "gt7-pitcrew/1.9",
   "meta":        { },
   "rangeRecord": { },
   "session":     { },
@@ -736,7 +736,8 @@ the only feedback channel on the strategy engine saying nothing at all.
 | `disposition` | Meaning |
 |---|---|
 | `informational` | Said, never asked. `accepted` is null and means nothing here |
-| `taken` / `not-taken` | An instruction, and whether a pit lap followed it within two laps. **Derived from the laps, not from an answer** — an instruction is never offered and never answered |
+| `taken` / `not-taken` | An instruction, and whether a pit lap followed it within two laps. **Derived from the laps, not from an answer** — an instruction is never offered and never answered. Where the race wrote a `verdict`, these come from it |
+| `unanswered` | An instruction whose window the race never finished driving — the flag came first. `verdict` is `cannot-tell` and `verdictDetail` says why. **Not `not-taken`**, which is a claim about the driver the laps do not support. Added in 1.9 |
 | `accepted` / `kept` / `expired` / `superseded` | A re-plan offer and how it left the desk. `accepted` is a real boolean for these |
 | `declined` | A record from before the marker existed, where the stored boolean was all there was |
 
@@ -757,8 +758,12 @@ and the feed cannot say.
 
 **Where `verdict` and `disposition` are both present for an instruction they
 agree, because `disposition` is derived from the verdict.** They are not two
-opinions: `disposition` falls back to its own pit-lap derivation only for
-`cannot-tell`, where the verdict declines to claim anything.
+opinions. `disposition` falls back to its own pit-lap derivation only where
+there is **no verdict at all** — a row from before `1.9`. A `cannot-tell`
+verdict becomes `unanswered` rather than falling through: the fallback pools
+pit laps over every race session of the event, renumbered continuously across
+runs, so a `taken` from it could only ever come from another run's lap in
+another numbering, and it would contradict the verdict beside it.
 
 #### 10.0 A timed race is not a lap race
 
@@ -1124,4 +1129,5 @@ driver has overruled the engineer and been right four sessions running.
 | # | Change | Reason |
 |---|---|---|
 | 1 | **`strategy.callsMade[]` gains `verdict` and `verdictDetail`** | Only two kinds can be answered from the feed and the rest say so in as many words: a box call against `laps.is_pit_lap`, a short-shift call against `laps.short_shift_rpm`. Everything else is `cannot-tell` **named rather than omitted** — a fuel-map change and a brake-balance click are in no packet GT7 sends, and reporting those as "not acted on" would turn a missing channel into a disobedient driver, which is the exact shape of defect this project keeps finding. Judged as the laps come in rather than at the flag, so the driver sees it on the Race screen two laps after the call |
-| 2 | **`disposition` for an instruction is derived from `verdict` where there is one** | They answered the same question two ways and could disagree in one object: the older derivation pools pit laps over every race session of the event, rehearsals included, while the verdict is judged against the laps of the session the call was made in. Rule 13 — two fields using the same words must mean the same thing |
+| 2 | **`disposition` for an instruction is derived from `verdict` where there is one** | They answered the same question two ways and could disagree in one object: the older derivation pools pit laps over every race session of the event, rehearsals included and renumbered continuously across runs, while the verdict is judged against the laps of the session the call was made in. Rule 13 — two fields using the same words must mean the same thing |
+| 3 | **`disposition` gains `unanswered`** | A box call whose window the race never finished driving. It was falling back to the pooled pit laps and reporting `taken` beside `verdict: cannot-tell` in the same object. A reader must accept the new value; nothing else about the field changes |

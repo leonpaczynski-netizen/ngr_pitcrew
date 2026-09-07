@@ -891,6 +891,9 @@ _INSTRUCTION_WINDOW_LAPS = 2
 DISPOSITION_INFORMATIONAL = "informational"
 DISPOSITION_TAKEN = "taken"
 DISPOSITION_NOT_TAKEN = "not-taken"
+# An instruction the race never finished driving the window of. Not
+# `not-taken`, which is a claim about the driver the laps do not support.
+DISPOSITION_UNANSWERED = "unanswered"
 
 # **The verdict's vocabulary, imported rather than restated.** `disposition`
 # is derived from it where the race wrote one, so the two cannot drift into
@@ -938,6 +941,17 @@ def _disposition(revision: dict, pit_laps: set[int]) -> tuple[str, bool | None]:
             return DISPOSITION_TAKEN, None
         if verdict == OUTCOME_NOT_ACTED:
             return DISPOSITION_NOT_TAKEN, None
+        if verdict:
+            # **`cannot-tell` means the window was never fully driven in
+            # that race**, so the same session cannot have supplied a stop
+            # in it - and the fallback's `pit_laps` are pooled over every
+            # race session of the event, renumbered continuously across
+            # runs, so a `taken` from here could only ever come from another
+            # run's lap in another numbering. It said `taken` beside
+            # `verdict: cannot-tell` in one object (critic pass 8, second
+            # round): rule 13 reappearing one line below where it was fixed.
+            # A row that WAS judged and declined to claim is not overruled.
+            return DISPOSITION_UNANSWERED, None
         lap = revision["lap_num"]
         if lap is None:
             return DISPOSITION_NOT_TAKEN, None

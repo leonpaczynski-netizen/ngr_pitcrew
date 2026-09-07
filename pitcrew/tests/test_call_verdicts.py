@@ -84,15 +84,25 @@ def test_the_verdict_reaches_the_payload_and_not_only_the_entry(tmp_path):
     contract = (pathlib.Path(__file__).resolve().parents[2]
                 / "EXPORT-CONTRACT.md").read_text(encoding="utf-8")
     assert "verdictDetail" in contract
-    assert "gt7-pitcrew/1.9" in contract
+    assert "unanswered" in contract
+    # **The header a consumer reads first, not just the §16 heading.**
+    from pitcrew.export.payload import FORMAT
+
+    assert FORMAT in contract.splitlines()[0]
+    assert f'"format": "{FORMAT}"' in contract
 
 
 def test_the_disposition_of_an_instruction_comes_from_the_verdict():
     """Rule 13, critic pass 8: the two answered the same question two ways -
     the older derivation pools pit laps over EVERY race session of the event,
     rehearsals included, while the verdict is judged against the laps of the
-    session the call was made in. `cannot-tell` falls through, because
-    "not-taken" is a claim the laps do not support."""
+    session the call was made in.
+
+    **And `cannot-tell` does NOT fall through** (critic pass 8, second
+    round). It means the window was never fully driven in that race, so the
+    same session cannot have supplied a stop in it - a `taken` from the
+    fallback could only come from another run's lap, in another numbering,
+    and would contradict the verdict beside it in the same object."""
     from pitcrew.export.build import _disposition
 
     def rev(verdict=None):
@@ -101,9 +111,9 @@ def test_the_disposition_of_an_instruction_comes_from_the_verdict():
 
     assert _disposition(rev(ACTED), set()) == ("taken", None)
     assert _disposition(rev(NOT_ACTED), {11}) == ("not-taken", None)
-    # No verdict, and one from a rehearsal's pit laps: the weaker answer.
+    assert _disposition(rev(CANNOT_TELL), {11}) == ("unanswered", None)
+    # No verdict at all - a row from before 1.9 - is the only fall-through.
     assert _disposition(rev(), {11}) == ("taken", None)
-    assert _disposition(rev(CANNOT_TELL), {11}) == ("taken", None)
 
 
 def test_the_verdict_is_on_the_row_and_in_the_export(tmp_path):
@@ -192,24 +202,104 @@ def test_the_filed_calls_cannot_outlive_their_session():
     assert "self._filed_calls = {}" in source[start:end]
 
 
+class _FakeStore:
+    """Just enough store to drive `_judge_filed_calls`."""
+
+    def __init__(self, laps, *, fail_on=()):
+        self._laps = laps
+        self._fail_on = set(fail_on)
+        self.written = []
+
+    def list_laps(self, session_id):
+        return self._laps
+
+    def set_revision_verdict(self, rid, verdict, detail):
+        if rid in self._fail_on:
+            raise RuntimeError("database is locked")
+        self.written.append((rid, verdict, detail))
+
+
+def _stub(laps, filed, *, fail_on=()):
+    from pitcrew.controller import PitCrewController
+
+    controller = PitCrewController.__new__(PitCrewController)
+    controller.session_id = 5
+    controller._filed_session = 5
+    controller._filed_calls = dict(filed)
+    controller.race_screen = None
+    controller.store = _FakeStore(laps, fail_on=fail_on)
+    return controller
+
+
+def _row(lap_num, *, pit=False, excluded=0):
+    return {"lap_num": lap_num, "is_pit_lap": pit, "short_shift_rpm": None,
+            "excluded": excluded}
+
+
 def test_a_verdict_is_written_before_the_call_is_dropped():
     """Critic pass 8: popped first, a locked database lost that call's
     verdict for good AND aborted the rest of the loop into a log line that
-    named none of them."""
-    source = _controller_source()
-    start = source.index("    def _judge_filed_calls(self")
-    end = source.index("\n    def ", start + 10)
-    body = source[start:end]
-    assert body.index("set_revision_verdict") < body.index("filed.pop(rid")
-    assert "it stays filed for the next crossing" in body
-    # One call's failure does not take the others with it.
-    assert "continue" in body
+    named none of them. Driven, not read off the source."""
+    box = Call(BOX_NOW, 10, "Box this lap.", "")
+    temp = Call(TYRE_TEMP, 10, "Tyres are cold.", "")
+    laps = [_row(n) for n in range(10, 14)]
+    controller = _stub(laps, {1: (box, None), 2: (temp, None)}, fail_on={1})
+    controller._judge_filed_calls()
+    # The one that could not be written is still filed, and the other landed.
+    assert set(controller._filed_calls) == {1}
+    assert [rid for rid, *_ in controller.store.written] == [2]
+    # And it lands on the next crossing, once the database lets it.
+    controller.store._fail_on = set()
+    controller._judge_filed_calls()
+    assert controller._filed_calls == {}
+    assert [rid for rid, *_ in controller.store.written] == [2, 1]
+
+
+def test_a_struck_lap_is_not_evidence_that_the_window_was_driven():
+    """Critic pass 8, second round. Moving the judging past the fragment
+    check stopped the phantom row's OWN crossing from judging - and the next
+    crossing judged with the phantom still in `list_laps`, which is
+    `SELECT *`. Box call on lap 12, laps 12 and 13 driven, a phantom 14: the
+    window read as full and "no stop on laps 12-14" was written and settled
+    about a stop he made on the next lap he actually drove."""
+    box = Call(BOX_NOW, 12, "Box this lap.", "")
+    laps = [_row(12), _row(13), _row(14, excluded=1)]
+    controller = _stub(laps, {1: (box, None)})
+    controller._judge_filed_calls()
+    assert controller.store.written == [], "nothing to say yet"
+    assert set(controller._filed_calls) == {1}, "and it stays open"
+    # The lap he actually drove, and it is the stop.
+    controller.store._laps = laps + [_row(14, pit=True)]
+    controller._judge_filed_calls()
+    assert [(v, d) for _, v, d in controller.store.written] == [
+        (ACTED, "pitted on lap 14, 2 lap(s) after the call")]
+
+
+def test_calls_from_another_session_are_dropped_not_judged():
+    """CLAUDE.md rule 11: a race whose flag was never detected left box calls
+    held, and the first crossing of the next session judged them against ITS
+    laps."""
+    box = Call(BOX_NOW, 10, "Box this lap.", "")
+    controller = _stub([_row(n) for n in range(10, 14)], {1: (box, None)})
+    controller._filed_session = 4                # a previous race
+    controller._judge_filed_calls()
+    assert controller.store.written == []
+    assert controller._filed_calls == {}
+    assert controller._filed_session is None
+
+
+def test_the_flag_settles_what_the_laps_never_answered():
+    box = Call(BOX_NOW, 20, "Box this lap.", "")
+    controller = _stub([_row(20)], {1: (box, None)})
+    controller._judge_filed_calls()
+    assert controller.store.written == []
+    controller._judge_filed_calls(final=True)
+    assert [v for _, v, _ in controller.store.written] == [CANNOT_TELL]
 
 
 def test_the_judging_runs_past_the_fragment_check():
-    """Critic pass 8: judged immediately after `add_lap`, a box call's
-    three-lap window was filled by the phantom row the fragment check is
-    about to strike - "two laps driven, three recorded", observed twice."""
+    """The ordering itself, which the population filter above does not pin:
+    a phantom must not be judged on its own crossing either."""
     source = _controller_source()
     fragment = source.index('self.store.exclude_lap(lap_id, "fragment")')
     judged = source.index("        self._judge_filed_calls()")
