@@ -1272,6 +1272,45 @@ against a shape one edit away, not a live defect. Corrected in both places.
 pre-green reading — but there is no cap, and on the 501-px display the block
 is below the fold from the first frame.
 
+### Row 1.7, critic pass 8 — I removed a contradiction by deleting the true half
+
+1. **Pass 7 restored the defect pass 6 had found.** Pass 6: *"`incident -
+   teleport to pits` filled the coverage gap so he was never told he was on
+   his own for an incident."* Pass 7 saw the opposite complaint — one trigger
+   described twice — and fixed it by putting `unrunnable` back into
+   `covered`, which is exactly what pass 6 removed. The driver then read that
+   the desk's rule will never fire, did not find `incident` among the things
+   George decides himself, and would conclude George does nothing on an off —
+   while `_incident` carries no `structural_action` and fires with no
+   playbook at all. **The fix is the merge, not the deletion:** one sentence
+   carries both facts. Trading a visible contradiction for a false silence is
+   the worse of the two errors.
+2. **"Treat it as absent" told the driver to do what the function does not.**
+   A blank action is still cover, so the trigger is struck from the fall-back
+   line — the sentence now says the fall-back itself, like the one above it.
+3. **"Only the last is used"** sat directly above *"…it will never fire"* in
+   five states out of six. *Read*, not *used* — true in all of them.
+4. **The corrected instrument story was wrong in both places.** 493 vs 499 is
+   not the font and not `offscreen`: offscreen **with the stylesheet** reads
+   the same 499 the real platform does, and the 6 px is the app-wide
+   `font-size: 15px` box metric — which `race_screen.py` already documents
+   forty lines above. And the slack was removable: `setStyleSheet(
+   theme.STYLESHEET)` on the screen reproduces the real figure with no
+   process-wide effect. **`test_every_screen_fits_the_smallest_display_he_owns`
+   now measures with the sheet too** — it had 6–8 px of slack on every screen,
+   on the one display that cannot afford any. All seven still fit: the Race
+   page at 499, the rest between 259 and 324.
+5. A test whose docstring required the state its own assertions now forbid,
+   and a figure guard that could not see a sign — `str.isdigit()` is False
+   for `-1`, and a negative `stops` printed *"it says -1 stops"*. A negative
+   is not a count (rule 3): the reading is dropped rather than rendered.
+
+Minor: the middle clause of the disagreement said a bare *"it says"* where
+the other two name their field. And pass 7's write-up claimed the test
+*"walks all 100 combinations asserting no sentence ever prints equal
+figures"* — the assertion is that they are not ALL equal, and 36 of the 84
+sentences legitimately repeat a figure. The claim was wrong, not the test.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three
 kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic

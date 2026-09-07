@@ -369,11 +369,12 @@ class RaceScreen(QWidget):
         # screen's `shown` signal and was refreshing a card rendered a screen
         # away (row 1.7, S12) - and they belong INSIDE the scroller because
         # the page has TWO pixels of headroom against the 501 the smallest
-        # display gives: 499 measured with the real font and the app's own
-        # stylesheet loaded. (493 and "eight pixels" were measured offscreen,
-        # where Qt has no font database - the third time on this row that a
-        # fallback advance was written down as a fact.) Calls insert at index
-        # 0, so the contract sits under
+        # display gives: 499 with `theme.STYLESHEET` applied, which is what
+        # the app runs. The "eight pixels" this row quoted in three commits
+        # came from measuring a screen with no stylesheet on it (493), and
+        # the 6 px is not a font at all - it is the app-wide `font-size:
+        # 15px` box metric the comment on `StencilLabel` above already
+        # describes. Calls insert at index 0, so the contract sits under
         # them and scrolls away as the race fills the log: before the green
         # it is the whole of what he sees here, which is the point.
         self.orders = QWidget()

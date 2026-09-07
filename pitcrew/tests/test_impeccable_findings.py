@@ -141,6 +141,12 @@ def test_every_screen_fits_the_smallest_display_he_owns(qt_app):
     for screen in (EventScreen(), CarScreen(), PracticeScreen(),
                    StrategyScreen(), RaceScreen(),
                    ReferenceScreen(), settings):
+        # **With the sheet the app runs.** Bare, every screen reports 6-8 px
+        # less than it will actually take - the app-wide `font-size: 15px`
+        # box metric - so this guard had that much slack on the one display
+        # that cannot afford any. The Race page is 493 bare and 499 styled
+        # against a 501 cap; the others sit between 259 and 324.
+        screen.setStyleSheet(theme.STYLESHEET)
         height = screen.minimumSizeHint().height()
         assert height <= 501, (
             f"{type(screen).__name__} demands {height}px of height; the "

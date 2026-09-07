@@ -189,11 +189,11 @@ def test_the_orders_cost_the_race_page_no_height(qt_app):
     display gives, which is why the block lives INSIDE the log's scroll area
     rather than beside it.
 
-    **The number here is offscreen (493) and the real one is 499**, because
-    the suite has no font database and the app's stylesheet forces a wider
-    family than `stencil_font` asks for. So this assertion has 8 px of slack
-    that does not exist and cannot see a regression worth less than that -
-    the equality below is the part with teeth, and it holds in both.
+    **Measured with `theme.STYLESHEET` on the screen, which is what the app
+    runs.** Without it the page reports 493 and the assertion carries 8 px of
+    slack that does not exist; with it, 499 against the 501 cap. The 6 px is
+    the app-wide `font-size: 15px` box metric, not a font - offscreen with
+    the sheet reads the same 499 as the real platform does.
 
     **The height assertion alone has no teeth** - inside a scroller it cannot
     fail, whatever the content - so the structural fact is asserted too. A
@@ -202,7 +202,10 @@ def test_the_orders_cost_the_race_page_no_height(qt_app):
     """
     from PyQt6.QtWidgets import QScrollArea
 
+    from pitcrew.ui import theme
+
     screen = RaceScreen()
+    screen.setStyleSheet(theme.STYLESHEET)
     bare = screen.minimumSizeHint().height()
     screen.set_plan({"label": "Ludo", "plan": a_plan(
         assumptions=["a long line " * 12] * 40)})
@@ -1068,9 +1071,9 @@ def test_the_disagreement_reads_as_english():
     from pitcrew.strategy.handover import _stop_disagreement
 
     for stints, stops, expected in (
-            (3, 1, "its stints imply 2 stops, it says 1 stop"),
-            (2, 0, "its stints imply 1 stop, it says 0 stops"),
-            (5, 1, "its stints imply 4 stops, it says 1 stop")):
+            (3, 1, "its stints imply 2 stops, its stop count says 1 stop"),
+            (2, 0, "its stints imply 1 stop, its stop count says 0 stops"),
+            (5, 1, "its stints imply 4 stops, its stop count says 1 stop")):
         said = _stop_disagreement(
             {"stints": [{"laps": 5}] * stints, "stops": stops})
         assert said is not None and expected in said, said
@@ -1083,8 +1086,11 @@ def test_the_disagreement_reads_as_english():
 
     # **No sentence may print equal figures and call them a disagreement.**
     # Every combination, read for truth rather than for a plural.
+    # `-1` included: it printed "it says -1 stops" beside two real figures,
+    # and `str.isdigit()` is False for "-1" so the guard could not see the
+    # one value class that also makes the sentence nonsense.
     for stints in range(1, 5):
-        for stops in (None, 0, 1, 2, 3):
+        for stops in (None, -1, 0, 1, 2, 3):
             for laps in (None, 0, 1, 2, 3):
                 plan = {"stints": [{"laps": 5}] * stints}
                 if stops is not None:
@@ -1095,7 +1101,8 @@ def test_the_disagreement_reads_as_english():
                 if said is None:
                     continue
                 figures = [int(w) for w in said.replace(".", " ").split()
-                           if w.isdigit()]
+                           if w.lstrip("-").isdigit()]
+                assert all(f >= 0 for f in figures), (plan, said)
                 assert len(set(figures)) > 1, (plan, said)
 
 
@@ -1121,8 +1128,16 @@ def test_an_action_george_cannot_run_is_not_a_standing_order():
     """This function exists because stored rows escape validation, and it
     re-checked the TRIGGER against `TRIGGERS` while printing `fuel long -
     fuel map` - a standing refusal of the driver's - as something George may
-    do alone, and letting `incident - teleport to pits` fill the coverage gap
-    so he was never told he was on his own for an incident."""
+    do alone.
+
+    **And the sentence carries the fall-back itself.** Excluding the trigger
+    from the gap line without saying so left the driver reading that the rule
+    will never fire and not finding the trigger among the things George
+    decides himself - so he would conclude George does nothing on an off,
+    when `_incident` carries no `structural_action` and fires with no
+    playbook at all. Including it in the gap line instead put one trigger in
+    two sentences making opposite claims. One sentence, both facts.
+    """
     plan = a_plan()
     plan["handover"]["playbook"] = [
         {"trigger": "fuel_long", "action": "fuel_map", "when": "a",

@@ -163,7 +163,12 @@ def _stop_readings(plan: dict) -> dict[str, int]:
         # there is no stint after this one.
         readings["stints"] = len(stints) - 1
     stops = plan.get("stops")
-    if isinstance(stops, int) and not isinstance(stops, bool):
+    # **A negative stop count is not a count** (rule 3): it printed "it says
+    # -1 stops" beside two real figures, and the guard that checks the
+    # figures differ could not see the sign. Left out, so the reading is
+    # missing rather than nonsense - and if it was the only other field,
+    # nothing disagrees and no sentence is built.
+    if isinstance(stops, int) and not isinstance(stops, bool) and stops >= 0:
         readings["stops"] = stops
     laps = plan.get("pit_laps")
     if isinstance(laps, list):
@@ -198,8 +203,10 @@ def _stop_disagreement(plan: dict) -> str | None:
     # they disagree"*: three equal figures and a claim that they conflict,
     # which reads as the app being broken rather than the plan. The numbers
     # on screen were not the numbers compared.
+    # Each clause names the field it came from - the middle one said a bare
+    # "it says", so the driver could not tell which of three was the odd one.
     said = {"stints": "its stints imply {n}",
-            "stops": "it says {n}",
+            "stops": "its stop count says {n}",
             "pit_laps": "its box laps name {n}"}
     parts = [said[name].format(n=number) + (" stop" if number == 1
                                             else " stops")
@@ -528,12 +535,16 @@ def standing_orders(stored: dict) -> list[Order]:
     # desk did write one - the gap line would say "no rule from the desk"
     # about a rule it can see three lines below. What that rule cannot do is
     # said once, in its own sentence.
-    # **`unrunnable` counts as cover too.** The comment above is about
-    # exactly this: the gap line would say "No rule from the desk on
-    # incident" three lines below "The desk's rule for incident asks for
-    # teleport to pits" - two sentences, one trigger, opposite claims.
-    # `stillborn` was kept in `readable` for that reason and the new bucket
-    # was not.
+    # **A rule that cannot run counts as cover, and its own sentence carries
+    # the fall-back.** Both halves are needed and each was tried alone: left
+    # OUT of `covered`, the block said "The desk's rule for incident ... will
+    # never fire" and, four lines below, "No rule from the desk on ...
+    # incident" - one trigger, two opposite claims. Put IN without the
+    # fall-back clause, the driver read that the rule will never fire and
+    # found incident missing from the list of things George decides himself,
+    # so he would conclude George does nothing on an off - and George says
+    # "Lap 7 is out. That cost you 12 seconds against your pace." with no
+    # playbook at all, because `_incident` carries no `structural_action`.
     covered = ({entry.trigger for entry in readable}
                | {entry.trigger for entry in unrunnable})
     unhandled = [t for t in TRIGGERS if t not in covered]
@@ -570,10 +581,14 @@ def standing_orders(stored: dict) -> list[Order]:
         # rejects a duplicated trigger, so one here means the row reached
         # storage unvalidated, and the driver is reading a contract with a
         # rule in it that nothing will use.
+        # **"read", not "used".** The surviving entry may itself be one
+        # George cannot execute, cannot see, or the plan cannot fire, and
+        # "only the last is used" then sits directly above the line saying it
+        # will never fire. "Read" is true in every one of those states.
         out.append(Order(
             "The desk wrote more than one rule for "
             + ", ".join(t.replace("_", " ") for t in sorted(set(superseded)))
-            + " - only the last is used.", GAP))
+            + " - only the last is read.", GAP))
     if blank:
         out.append(Order(
             f"{len(blank)} playbook "
@@ -602,11 +617,13 @@ def standing_orders(stored: dict) -> list[Order]:
         if not entry.action.strip():
             # **Not "asks for nothing, which George cannot execute"** - doing
             # nothing is the one thing that is always executable, and it is
-            # also how a driver reads `report_only`. Unreadable, the way a
-            # blank trigger is unreadable.
+            # also how a driver reads `report_only`. Unreadable - and NOT
+            # "treat it as absent", which told him to do what this function
+            # does not: the trigger still counts as covered, so it is struck
+            # from the fall-back line and the sentence has to say so itself.
             out.append(Order(
                 f"The desk's rule for {trigger} names no action and cannot "
-                f"be read - treat it as absent.", GAP))
+                f"be read - George falls back to his own.", GAP))
             continue
         # Third person throughout, like every other line here: the block is
         # read on the grid and "you have refused" put the driver in two roles
@@ -617,7 +634,8 @@ def standing_orders(stored: dict) -> list[Order]:
             f"{entry.action.replace('_', ' ')}, which "
             + ("the driver has refused outright" if refused
                else "George cannot execute")
-            + " - it will never fire.", GAP))
+            + " - it will never fire, and George falls back to his own.",
+            GAP))
 
     withheld = []
     for trigger, action in GATED:
