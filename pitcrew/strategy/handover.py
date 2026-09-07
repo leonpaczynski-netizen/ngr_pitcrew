@@ -140,6 +140,10 @@ def grants(entries, trigger: str, action: str) -> bool:
 #
 # The words after the dash are the call's own `report_form`, quoted, so the
 # contract and the call say the same thing (rule 13).
+#
+# The sentences are built by `_withheld_sentence`, which reads the plan: the
+# `add_stop` gate bites only on the last stint, and saying that flat was
+# wrong for every other stint of every plan on file.
 GATED = (("tyre_short", "add_stop"), ("fuel_long", "drop_stop"))
 
 
@@ -187,22 +191,21 @@ def _stop_disagreement(plan: dict) -> str | None:
     readings = _stop_readings(plan)
     if len(set(readings.values())) < 2:
         return None
-    # **One place adds the plural.** It was added twice for `stints` - once
-    # against the stop count and once against the stint count - so every
-    # plan with two or more stints read "lists 3 stintss". The test that
-    # covered this used a single-stint plan, the one case where it cannot
-    # show.
-    said = {"stints": "lists {n} stint", "stops": "says {n} stop",
-            "pit_laps": "names {n} box lap"}
-    parts = []
-    for name, number in readings.items():
-        # `stints` is stored as a STOP count; the sentence quotes the field
-        # as the plan writes it, which is one more.
-        shown = (number + 1) if name == "stints" else number
-        word = said[name].format(n=shown)
-        parts.append(word if shown == 1 else word + "s")
-    return ("The plan " + ", ".join(parts)
-            + " - they disagree, so how many stops it holds is not known.")
+    # **Every figure in STOPS, which is the unit they are compared in.**
+    # The `stints` reading is `len(stints) - 1` and the sentence printed it
+    # as `+ 1`, the field's own unit - so a plan with one stint, `stops: 1`
+    # and one box lap read *"lists 1 stint, says 1 stop, names 1 box lap -
+    # they disagree"*: three equal figures and a claim that they conflict,
+    # which reads as the app being broken rather than the plan. The numbers
+    # on screen were not the numbers compared.
+    said = {"stints": "its stints imply {n}",
+            "stops": "it says {n}",
+            "pit_laps": "its box laps name {n}"}
+    parts = [said[name].format(n=number) + (" stop" if number == 1
+                                            else " stops")
+             for name, number in readings.items()]
+    return ("The plan disagrees with itself about stops - "
+            + ", ".join(parts) + ". How many it holds is not known.")
 
 
 def _cannot_fire(trigger: str, action: str, plan: dict) -> bool:
@@ -477,7 +480,10 @@ def standing_orders(stored: dict) -> list[Order]:
     # it is not, which is the screen-vs-race split this module exists to
     # close.
     by_trigger: dict[str, PlaybookEntry] = {}
+    superseded: list[str] = []
     for entry in named:
+        if entry.trigger in by_trigger:
+            superseded.append(entry.trigger)
         by_trigger[entry.trigger] = entry
     latest = list(by_trigger.values())
     # **The ACTION is checked too, not only the trigger.** This function
@@ -522,7 +528,14 @@ def standing_orders(stored: dict) -> list[Order]:
     # desk did write one - the gap line would say "no rule from the desk"
     # about a rule it can see three lines below. What that rule cannot do is
     # said once, in its own sentence.
-    covered = {entry.trigger for entry in readable}
+    # **`unrunnable` counts as cover too.** The comment above is about
+    # exactly this: the gap line would say "No rule from the desk on
+    # incident" three lines below "The desk's rule for incident asks for
+    # teleport to pits" - two sentences, one trigger, opposite claims.
+    # `stillborn` was kept in `readable` for that reason and the new bucket
+    # was not.
+    covered = ({entry.trigger for entry in readable}
+               | {entry.trigger for entry in unrunnable})
     unhandled = [t for t in TRIGGERS if t not in covered]
     no_rule = [t for t in unhandled if t not in CANNOT_SEE]
 
@@ -552,6 +565,15 @@ def standing_orders(stored: dict) -> list[Order]:
             "The desk left a rule for "
             + ", ".join(t.replace("_", " ") for t in gone_ruled)
             + ", which George no longer acts on - it will never fire.", GAP))
+    if superseded:
+        # Named rather than dropped, the way a blank entry is: `validate`
+        # rejects a duplicated trigger, so one here means the row reached
+        # storage unvalidated, and the driver is reading a contract with a
+        # rule in it that nothing will use.
+        out.append(Order(
+            "The desk wrote more than one rule for "
+            + ", ".join(t.replace("_", " ") for t in sorted(set(superseded)))
+            + " - only the last is used.", GAP))
     if blank:
         out.append(Order(
             f"{len(blank)} playbook "
@@ -576,11 +598,24 @@ def standing_orders(stored: dict) -> list[Order]:
             f"The desk's rule for {entry.trigger.replace('_', ' ')} cannot "
             f"fire on this plan - there is no stop to drop.", GAP))
     for entry in unrunnable:
-        forbidden = entry.action in FORBIDDEN_ACTIONS
+        trigger = entry.trigger.replace("_", " ")
+        if not entry.action.strip():
+            # **Not "asks for nothing, which George cannot execute"** - doing
+            # nothing is the one thing that is always executable, and it is
+            # also how a driver reads `report_only`. Unreadable, the way a
+            # blank trigger is unreadable.
+            out.append(Order(
+                f"The desk's rule for {trigger} names no action and cannot "
+                f"be read - treat it as absent.", GAP))
+            continue
+        # Third person throughout, like every other line here: the block is
+        # read on the grid and "you have refused" put the driver in two roles
+        # in one paragraph.
+        refused = entry.action in FORBIDDEN_ACTIONS
         out.append(Order(
-            f"The desk's rule for {entry.trigger.replace('_', ' ')} asks for "
-            f"{entry.action.replace('_', ' ') or 'nothing'}, which "
-            + ("you have refused outright" if forbidden
+            f"The desk's rule for {trigger} asks for "
+            f"{entry.action.replace('_', ' ')}, which "
+            + ("the driver has refused outright" if refused
                else "George cannot execute")
             + " - it will never fire.", GAP))
 

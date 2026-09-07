@@ -368,8 +368,12 @@ class RaceScreen(QWidget):
         # They belong on this page - `refresh_plan` is already wired to this
         # screen's `shown` signal and was refreshing a card rendered a screen
         # away (row 1.7, S12) - and they belong INSIDE the scroller because
-        # the page has eight pixels of headroom against the 501 the smallest
-        # display gives. Calls insert at index 0, so the contract sits under
+        # the page has TWO pixels of headroom against the 501 the smallest
+        # display gives: 499 measured with the real font and the app's own
+        # stylesheet loaded. (493 and "eight pixels" were measured offscreen,
+        # where Qt has no font database - the third time on this row that a
+        # fallback advance was written down as a fact.) Calls insert at index
+        # 0, so the contract sits under
         # them and scrolls away as the race fills the log: before the green
         # it is the whole of what he sees here, which is the point.
         self.orders = QWidget()

@@ -185,9 +185,15 @@ def test_the_race_page_hides_the_block_with_no_plan(qt_app):
 
 
 def test_the_orders_cost_the_race_page_no_height(qt_app):
-    """The page has eight pixels of headroom against the 501 the smallest
+    """The page has TWO pixels of headroom against the 501 the smallest
     display gives, which is why the block lives INSIDE the log's scroll area
     rather than beside it.
+
+    **The number here is offscreen (493) and the real one is 499**, because
+    the suite has no font database and the app's stylesheet forces a wider
+    family than `stencil_font` asks for. So this assertion has 8 px of slack
+    that does not exist and cannot see a regression worth less than that -
+    the equality below is the part with teeth, and it holds in both.
 
     **The height assertion alone has no teeth** - inside a scroller it cannot
     fail, whatever the content - so the structural fact is asserted too. A
@@ -716,10 +722,12 @@ def _structural_sites(source: str):
     both of which `coordinator.py` already contains.
 
     **`BOTH` branches of a conditional action are read.** Taking only
-    `IfExp.body` was a false PASS in the idiom `calls.py` itself uses:
-    `structural_action="add_stop" if unplanned else "abandon_plan"` was read
-    as `add_stop` alone and the second gate dropped in silence, which is the
-    whole thing this guard exists to prevent.
+    `IfExp.body` would read
+    `structural_action="add_stop" if unplanned else "abandon_plan"` as
+    `add_stop` alone and drop the second gate in silence. `calls.py`'s own
+    conditional is `"add_stop" if unplanned else None`, for which the body
+    alone was already right - so this is hardening against the shape one edit
+    away, not a defect that was live.
 
     **One shape it still cannot see, stated rather than claimed away**: a
     `Call(...)` built with the field passed POSITIONALLY mentions the name
@@ -1013,8 +1021,14 @@ def test_fields_that_disagree_about_stops_are_not_answered_with_a_number():
     assert _stops_planned(plan) is None, "0 is a claim, and nothing made it"
 
     said = lines(plan)
-    assert "they disagree, so how many stops it holds is not known" in said, \
-        said
+    assert "The plan disagrees with itself about stops" in said, said
+    # **Every figure in the unit they were COMPARED in.** The readings are
+    # stop counts and the sentence printed `stints` in the field's own unit,
+    # so a plan with one stint, `stops: 1` and one box lap read "lists 1
+    # stint, says 1 stop, names 1 box lap - they disagree": three equal
+    # numbers and a claim that they conflict.
+    assert "its stints imply 0 stops" in said
+    assert "its box laps name 1 stop" in said
     # Neither of the two sentences that assume a count.
     assert "No stop is planned" not in said
     assert "may bring a planned stop forward" not in said
@@ -1053,18 +1067,36 @@ def test_the_disagreement_reads_as_english():
     where it cannot show."""
     from pitcrew.strategy.handover import _stop_disagreement
 
-    for stints, stops, expected in ((3, 1, "lists 3 stints, says 1 stop"),
-                                    (2, 0, "lists 2 stints, says 0 stops"),
-                                    (5, 1, "lists 5 stints, says 1 stop")):
+    for stints, stops, expected in (
+            (3, 1, "its stints imply 2 stops, it says 1 stop"),
+            (2, 0, "its stints imply 1 stop, it says 0 stops"),
+            (5, 1, "its stints imply 4 stops, it says 1 stop")):
         said = _stop_disagreement(
             {"stints": [{"laps": 5}] * stints, "stops": stops})
         assert said is not None and expected in said, said
         assert "stintss" not in said
 
     one = _stop_disagreement({"stints": [{"laps": 5}], "pit_laps": [1]})
-    assert "lists 1 stint," in one and "names 1 box lap" in one
+    assert "its stints imply 0 stops" in one and "name 1 stop" in one
     none = _stop_disagreement({"stints": [{"laps": 5}] * 5, "pit_laps": []})
-    assert "names 0 box laps" in none
+    assert "its box laps name 0 stops" in none
+
+    # **No sentence may print equal figures and call them a disagreement.**
+    # Every combination, read for truth rather than for a plural.
+    for stints in range(1, 5):
+        for stops in (None, 0, 1, 2, 3):
+            for laps in (None, 0, 1, 2, 3):
+                plan = {"stints": [{"laps": 5}] * stints}
+                if stops is not None:
+                    plan["stops"] = stops
+                if laps is not None:
+                    plan["pit_laps"] = [1] * laps
+                said = _stop_disagreement(plan)
+                if said is None:
+                    continue
+                figures = [int(w) for w in said.replace(".", " ").split()
+                           if w.isdigit()]
+                assert len(set(figures)) > 1, (plan, said)
 
 
 def test_a_duplicated_trigger_shows_the_rule_the_race_will_use():
@@ -1101,7 +1133,14 @@ def test_an_action_george_cannot_run_is_not_a_standing_order():
 
     assert "fuel long - fuel map" not in said, said
     assert "incident - teleport to pits" not in said
-    assert "you have refused outright" in said
+    assert "the driver has refused outright" in said
     assert "George cannot execute" in said
-    # The gap it used to fill is named again.
-    assert "incident" in said.split("No rule from the desk on")[1]
+
+    # **And never a second sentence contradicting the first.** This used to
+    # assert the two halves separately - "the desk's rule for incident ..."
+    # and `incident` in the no-rule line - which is one trigger and two
+    # opposite claims four lines apart, encoded as the desired result. The
+    # block's own comment already forbids it for the stillborn case.
+    gap = said.split("No rule from the desk on")
+    assert len(gap) == 1 or "incident" not in gap[1], said
+    assert said.count("incident") == 1, said

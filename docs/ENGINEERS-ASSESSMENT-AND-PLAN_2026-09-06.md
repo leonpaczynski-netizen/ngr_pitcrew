@@ -1231,6 +1231,47 @@ derive from the day the test runs now; bumping them would only reset the
 fuse. CLAUDE.md §7's *"reproduce it with your change reverted"* is exactly
 what this was.
 
+### Row 1.7, critic pass 7 — two sentences that argue with themselves
+
+1. **"The plan lists 1 stint, says 1 stop, names 1 box lap — they disagree."**
+   The readings are compared in STOPS and were printed in each field's own
+   unit, so the numbers on screen were not the numbers compared. Three equal
+   figures and a claim that they conflict reads as the app being broken
+   rather than the plan. Every figure is in stops now — *"its stints imply 0
+   stops, it says 1 stop, its box laps name 1 stop"* — and the test walks all
+   100 combinations asserting no sentence ever prints equal figures.
+2. **The `unrunnable` bucket added in pass 6 was left out of `covered`**, so
+   one block said *"The desk's rule for incident asks for teleport to pits …
+   it will never fire"* and, four lines below, *"No rule from the desk on …
+   incident"*. One trigger, two opposite claims — which the block's own
+   comment already forbids for `stillborn`, and which pass 6's new test
+   **encoded as the desired result** by asserting the two halves separately
+   and never reading them side by side.
+3. **The Race page's headroom is two pixels, not eight.** 493 was measured
+   offscreen; with the real font and the app's own stylesheet the page wants
+   **499** against the 501 cap. The instrument error a third time, in the
+   number this row has quoted in three commits. The orders still cost zero —
+   499 bare and 499 with the longest plan on file — which was the design
+   claim and it holds. **The 8 px of slack in the test assertion does not
+   exist**, and it is recorded there rather than papered over: the equality
+   is the part with teeth and it holds in both.
+
+Minor: *"asks for nothing, which George cannot execute"* for a blank action —
+doing nothing is the one thing that is always executable, and it is also how
+a driver reads `report_only`; it is named as unreadable now, the way a blank
+trigger is. A superseded duplicate vanished silently and is named. *"you have
+refused outright"* put the driver in two roles in one paragraph, where every
+other line is third person. And the pass-6 write-up called the `IfExp` false
+pass *"the idiom `calls.py` itself uses"* — `calls.py`'s conditional is
+`… else None`, for which the old code was already right, so it was hardening
+against a shape one edit away, not a live defect. Corrected in both places.
+
+**Carried, and worth a decision rather than an accident:** strategy 15 renders
+**3,432 characters** of standing orders with one 432-character line, #29
+1,801. It scrolls away once calls arrive and §5.5 binds live calls rather than
+pre-green reading — but there is no cap, and on the 501-px display the block
+is below the fold from the first frame.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three
 kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic
