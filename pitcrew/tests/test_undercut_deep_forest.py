@@ -388,16 +388,20 @@ def test_a_tow_that_costs_fuel_is_not_a_wash():
                     "seconds a lap slower. Not worth it.")
 
 
-def test_a_tow_that_costs_fuel_and_no_time_says_it_cannot_tell():
-    """Neither side is a gain and neither is a loss he can act on."""
+def test_a_tow_that_costs_fuel_and_no_time_is_not_called_a_wash():
+    """Neither side is a gain and neither is a loss he can act on - and that
+    is NOT a wash (critic pass 7, third round). A wash is two figures that
+    cancel; this is a tow costing him fuel and returning no lap time, so
+    "About a wash" after "No fuel saving in the tow" contradicts itself."""
     from pitcrew.race.tow import TowTrade
 
     made = TowTrade(laps_held=3, saving_l_per_lap=-0.8,
                     saving_s_per_lap=-0.4, losing_s_per_lap=-0.1,
                     reference="the plan")
     assert made.worth_it is None
-    assert made.sentence("Boxhead")[0].endswith(
-        "Behind Boxhead you're no slower. About a wash.")
+    assert made.sentence("Boxhead")[0] == (
+        "No fuel saving in the tow. Behind Boxhead you're no slower. "
+        "Nothing in it either way for you.")
 
 
 def test_the_tow_call_does_not_borrow_the_closing_calls_sentence():
@@ -559,6 +563,14 @@ def test_the_withdrawal_is_only_about_the_car_he_was_told_about():
     assert tow_trade_call(race.state) is None
     race.state.gap_ahead_name = P2
     assert tow_trade_call(race.state) is not None
+    # **And a verdict given about a car the board could not name says
+    # nothing about any car** (critic pass 7, third round). `gap_ahead_name`
+    # is None whenever the top-8 truncation hides the car ahead, and the
+    # first version of this guard let a None subject match every rival -
+    # which is the failure it was written to close.
+    race.state.said_tags = set()
+    race.state.tow_said_about = None
+    assert tow_trade_call(race.state) is None
 
 
 def test_a_tenth_is_the_floor_on_the_lap_time_it_names():

@@ -8,7 +8,7 @@ Daytona A/B runs of 4 Sep, where six such laps went unflagged.
 
 **It applies the same gates the live app applies** - a wet event stands the
 detector down, a pit lap, an out lap and lap one are not read, and
-`RoadNotPenalty` withdraws a place braked on four consecutive laps. Without
+`RoadNotPenalty` withdraws a place braked on nearly every lap. Without
 them the tool and the app report different things about the same session and
 neither can be checked against the other. `--raw` is the detector alone.
 """
@@ -89,11 +89,13 @@ def main() -> int:
                 print(f"    lap {gone.lap}: WITHDRAWN - {gone.served} "
                       f"still stand(s)")
             standing = verdict.kept if verdict else served
+            sayable = set(verdict.speak) if verdict else set(served)
             by_lap[lap["lap_num"]] = len(standing)
             for p in standing:
                 print(f"  lap {lap['lap_num']:>2}: penalty at {p.at_m:.0f} m - "
                       f"{p.speed_from_kph:.0f} -> {p.speed_to_kph:.0f} km/h over "
-                      f"{p.brake_s:.1f} s, about {p.lost_s:.1f} s lost (derived)")
+                      f"{p.brake_s:.1f} s, about {p.lost_s:.1f} s lost (derived)"
+                      f"{'' if p in sayable else ' [struck from the pace, NOT spoken]'}")
         found = sum(by_lap.values())
         print(f"{found} penalt{'y' if found == 1 else 'ies'} served")
         if not args.raw and ledger.retired():

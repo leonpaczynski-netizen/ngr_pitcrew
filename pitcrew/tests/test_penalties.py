@@ -188,6 +188,46 @@ def test_the_verdict_is_never_latched():
     assert len(ledger.filter(12, _found(5200.0), braked=[5200.0]).kept) == 1
 
 
+def test_a_place_braked_too_often_is_kept_out_of_the_pace_and_not_spoken():
+    """Critic pass 7, third round. Leave-one-out over every modelled corner
+    says about 28% of them would sit under `BRAKED_SHARE` if they went
+    missing - Watkins T2 reads 13 of 18 in the session 49 race. Eight
+    "Possible penalty served. About 4.3 seconds." in a nineteen-lap race is
+    what the lower bar exists to prevent; the lap still leaves the pace,
+    because that is safe under either reading."""
+    # The upper bar is pushed out of the way so the band is unambiguous: a
+    # RUNNING share bounces either side of a fixed line early in a session
+    # (3 laps in 4 reads 100%, 67%, 75%, 80% over its first four), and this
+    # test is about what the band does, not about that noise.
+    ledger = RoadNotPenalty(share=0.95, doubt=0.7)
+    kept = spoken = 0
+    for lap in range(2, 22):
+        braked = lap % 4 != 0
+        verdict = ledger.filter(
+            lap, _found(3500.0) if braked else [],
+            braked=[3500.0] if braked else [])
+        kept += len(verdict.kept)
+        spoken += len(verdict.speak)
+        assert verdict.give_back == (), "75% is not 95%"
+    assert kept == 15, "every one still leaves the pace population"
+    assert spoken == 2, "and only the ones from before it could judge"
+    assert ledger.retired() == (), "75% is not enough to call it a corner"
+
+
+def test_a_real_penalty_place_is_still_sayable():
+    """Daytona session 118's 5 of 9 is the highest share any place the
+    detector has ever flagged as a real penalty reaches - four points under
+    the lower bar, and named in the module docstring as the margin."""
+    ledger = RoadNotPenalty()
+    spoken = 0
+    for lap in range(2, 11):
+        flagged = lap % 2 == 0
+        verdict = ledger.filter(lap, _found(5215.0) if flagged else [],
+                                braked=[5215.0] if flagged else [])
+        spoken += len(verdict.speak)
+    assert spoken == 5
+
+
 def test_a_modelled_corner_braked_every_lap_is_not_called_missing():
     """`retired()` names corners to ADD to the model, so it may only name
     places a flag was raised at - the Bus Stop is braked on every lap and is

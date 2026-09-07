@@ -500,16 +500,31 @@ class RaceCoordinator:
             return
         self.state.note_tyres_word(changed, lap=self.state.lap)
 
-    def note_penalty(self, lap_num: int, lost_s: float | None) -> None:
+    def note_penalty(self, lap_num: int, lost_s: float | None, *,
+                     speak: bool = True) -> None:
         """A track-limit penalty served on this lap, from the controller.
 
         The lap leaves the pace and burn populations, and the crossing says
         so with the derived cost. Guarded like its siblings.
+
+        **`speak=False` strikes the lap and says nothing** (critic pass 7).
+        `analysis/penalties.py` can tell that a brake is not evidence of pace
+        - which is true whatever caused it - without being able to say it was
+        a penalty, and at a place the driver brakes at most laps that is
+        exactly where it stands. Also the shape of a partial withdrawal: the
+        cost of the readings that still stand is corrected here, and a call
+        already made about that lap is tagged and will not be remade.
         """
         if not self.running:
             return
         self.expect.note_penalty(lap_num)
-        self.state.penalty_note = (int(lap_num), lost_s)
+        if speak:
+            self.state.penalty_note = (int(lap_num), lost_s)
+        elif (self.state.penalty_note is not None
+                and self.state.penalty_note[0] == int(lap_num)):
+            # An unspoken note about this lap is corrected rather than left
+            # carrying a cost that has since been withdrawn.
+            self.state.penalty_note = (int(lap_num), lost_s)
 
     def forget_penalty(self, lap_num: int) -> None:
         """Withdraw a penalty read: the place turned out to be the road.

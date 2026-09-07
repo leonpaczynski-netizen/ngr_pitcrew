@@ -1185,9 +1185,12 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # "looked at and clean" (CLAUDE.md rule 3).
         #
         # A count written here can also be WITHDRAWN afterwards, by
-        # `set_lap_penalties`: the same brake on four consecutive laps is a
-        # corner the auto-segment model is missing, and the laps it struck go
-        # back to 0 rather than staying as a reading the app has retracted.
+        # `set_lap_penalties`: a place braked on nearly every lap of the
+        # session is a corner the auto-segment model is missing, and the laps
+        # it struck are RECOUNTED rather than left carrying a reading the app
+        # has retracted. Recounted, not zeroed - a lap can carry a penalty at
+        # one place and a missing corner at another, and zeroing it would
+        # write "looked at and clean" over a reading that still stands.
         ("penalties_served", "INTEGER"),
         ("penalty_lost_s", "REAL"),
         # **How far the shift beep was dropped while this lap was driven, in

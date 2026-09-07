@@ -3401,6 +3401,11 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
     state.incident_lap = None
     state.incident_cost_ms = None
     state.incident_reported = False
+    # **And a penalty read that was never spoken, for the same reason**
+    # (critic pass 7): "lap 12 is out of the pace" said on the way out of the
+    # box is news about a lap two minutes gone, and the lap is already out of
+    # the population whether or not it is announced.
+    state.penalty_note = None
     state.last_stop_lap = state.lap
     state.tyre_change_disagreement = None
     state.stint_before_stop = None

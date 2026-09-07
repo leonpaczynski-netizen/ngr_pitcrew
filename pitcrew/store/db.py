@@ -1834,11 +1834,14 @@ class Store:
         detector's one systematic false positive is a corner the auto-segment
         model does not contain: the brake for it is at speed, going straight
         and outside every window, so it reads as a penalty on every lap.
-        `analysis.penalties.RoadNotPenalty` recognises that after four
-        consecutive laps and hands the earlier ones back - and until this
-        method existed the hand-back reached the pace population in memory
-        and nothing else, so the stored rows kept a count the app had
-        retracted and every offline tool and export still read it.
+        `analysis.penalties.RoadNotPenalty` recognises that from the share
+        of the session's laps that brake there and hands the earlier ones
+        back - and until this method existed the hand-back reached the pace
+        population in memory and nothing else, so the stored rows kept a
+        count the app had retracted and every offline tool and export still
+        read it. `served` is the count that STANDS on the lap afterwards,
+        which is not always zero: a lap can carry a penalty at one place and
+        a missing corner at another.
 
         `served=0` is "looked at and clean"; `None` is "not looked at". See
         the column note in `store/schema.py`.

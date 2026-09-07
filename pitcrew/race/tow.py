@@ -123,6 +123,13 @@ class TowTrade:
             call += " Worth it - stay in it."
         elif verdict is False:
             call += " Not worth it."
+        elif self.saving_l_per_lap <= 0 and self.losing_s_per_lap <= 0:
+            # **Not a wash** (critic pass 7, third round). The wash is two
+            # figures that cancel; this is a tow that costs him fuel and
+            # returns no lap time, which is a finding and the opposite of
+            # "the two sides are level". Saying "About a wash" after "No fuel
+            # saving in the tow" is the sentence contradicting itself.
+            call += " Nothing in it either way for you."
         elif self.saving_s_per_lap is not None:
             call += " About a wash."
         return call, f"Over {self.laps_held} laps, against {self.reference}."

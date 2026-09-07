@@ -54,9 +54,9 @@ do; the numbers here are what it has actually done.
    **What it costs, counted rather than asserted:** 11 race flags on lap one
    are given up. None of them has been confirmed to be a penalty and none was
    examined one by one, so this is a real loss and not a demonstrated
-   nothing. **Out laps cost nothing at all** - there is not one out-lap flag
-   in the archive, in a race or in practice; every race flag the gate removes
-   is on a pit lap.
+   nothing. **Out laps cost nothing at all** - the 16 out-lap flags on file
+   are every one of them ALSO on a pit lap, so the out-lap half of the gate
+   removes nothing the pit-lap half does not.
 2. **An avoidance stab** - lifting hard behind a spinning car on a straight.
    Nothing in the feed distinguishes it, and nothing here pretends to: the
    call says "Possible penalty served", goes out LOW, and `Call.spoken()`
@@ -91,29 +91,66 @@ do; the numbers here are what it has actually done.
      on file is flagged on every lap and that the longest run is two. **Both
      were false**, from a sweep that silently began at session 82: Yas
      Marina's 3,470 m is flagged on 10 of the 15 laps of the session 44 RACE
-     with a run of NINE, and it is beyond doubt a corner - all fifteen laps
+     with a run of NINE, and it is a corner - 13 of the 14 looked-at laps
      brake there at 83-100%, 250 km/h down to about 105. Any run threshold
      long enough to spare it catches nothing at all.
 
-   Counting brakes rather than flags separates the two populations cleanly,
-   because a corner is braked on every lap and a penalty is not:
+   Counting brakes rather than flags separates the two populations that
+   are actually on file. Every place the detector flags with the model
+   intact, by the share of looked-at laps that brake there:
 
-   | place | flagged | braked | laps | share |
-   |---|---|---|---|---|
-   | Yas 3,470 m (s44, race) | 10 | 13 | 14 | 93% - corner |
-   | Yas 3,486 m (s11) | 4 | 6 | 6 | 100% - corner |
-   | Spa 24h 2,281 and 6,582 m (s65) | 5 | 6 | 6 | 100% - corner |
-   | Daytona 5,215 m (s118, race) | 5 | 5 | 9 | 56% - penalty |
-   | Red Bull Ring 1,386 m (s101, race) | 3 | 3 | 15 | 20% - penalty |
-   | Daytona 5,200 m (s125) | 2 | 2 | 12 | 17% - penalty |
-   | Monza 4,461 m (s10) | 2 | 2 | 14 | 14% - penalty |
+   | share | places | what they are |
+   |---|---|---|
+   | 4-56% | 41 | penalties, every one of them |
+   | 57-92% | **0** | - |
+   | 93-100% | 20 | Yas 3,470 m and Spa 24h 2,281 / 6,582 m |
 
-   Nothing on file falls between 56% and 93%, which is where
-   `BRAKED_SHARE` over `BRAKED_LAPS_NEEDED` laps sits. The verdict is
-   **recomputed from the counts on every lap and never latched**, so a place
-   whose share falls back below the bar becomes readable again without a
-   separate un-retirement rule that would need its own threshold - CLAUDE.md
-   rule 10 by construction rather than by a second guard.
+   The worst case in the penalty half is Daytona's session 118 race at 5 of
+   9 laps, 56%; the best in the other half is Yas session 44 at 13 of 14,
+   93%. **`BRAKED_SHARE` sits in that gap and withdraws only the second
+   group.** (Session 44's own share is 13 of 14 and not 15 of 15 - lap 5
+   carries no hard brake there at all. An earlier draft of this note said
+   "all fifteen laps" and was wrong.)
+
+   **That is not the same as saying the rule would catch any missing
+   corner, and it does not** (critic pass 7, third round). Drop each
+   MODELLED corner in turn and ask what share of laps brakes at it: 179
+   corner-sessions raise a flag when their corner is removed, and about 28%
+   of them sit below `BRAKED_SHARE` - a corner braked hard on 7 laps in 10
+   is still a corner. Watkins Glen's T2 reads 13 of 18 in the session 49
+   race; Spa's T1 13 of 17 in session 112. Nothing like those is missing
+   from the models as they stand, but the models are auto-segmented and the
+   next one might be.
+
+   So there are TWO bars, and they do different things:
+
+   * at or above `BRAKED_SHARE` the reading is withdrawn - it is a corner;
+   * at or above `BRAKED_DOUBT_SHARE` it is kept out of the pace and burn
+     populations but **never spoken**. A lap with a full-brake-to-a-crawl
+     in it is not evidence of pace whatever caused it, so the exclusion is
+     safe under either reading - but a sentence is not, and *"Possible
+     penalty served. About 4.3 seconds."* eight times in a nineteen-lap race
+     is what the lower bar exists to prevent.
+
+   **What the lower bar is worth, measured rather than argued.** Driving the
+   real class over the whole archive lap by lap, every bar from 0.60 to 0.80
+   speaks the same 49 readings at penalty places and the same 34 at corners:
+   **on the archive as it stands the lower bar changes nothing at all.** It
+   exists for the 70-79% band the leave-one-out found and the archive has no
+   instance of - Watkins T2, Spa T1 - and it is set at 0.70 rather than lower
+   because a running share is noisier than a settled one: at 0.60, Daytona's
+   session 118 crosses the bar at 3 of 5 laps on its way to a settled 5 of 9,
+   and four real calls go silent for it.
+
+   **What that leaves, named and counted.** Neither bar can judge before
+   `BRAKED_LAPS_NEEDED` laps have been looked at, so the flags of the first
+   laps are spoken whatever they are: over the archive that is **34 calls
+   across fourteen sessions** at places that are corners - one of them in a
+   race (Yas session 44), the rest in practice, where nothing is spoken at
+   all. They are then withdrawn from the row and the pace. And about 15% of
+   corners, if one went missing, would settle under both bars and be spoken
+   for the whole session - hedged, at LOW, with "Possible" and "Unconfirmed",
+   which is the whole reason those words are there.
 
    Refusing every `auto-segment` model instead - critic 6's suggestion -
    would refuse all nine models on file and delete the feature outright.
@@ -150,18 +187,38 @@ SAMPLE_HZ = 60.0
 #
 # **It is WIDER than the gap between some pairs of corners on file** - Road
 # Atlanta's closest pair is 91.7 m apart, Red Bull Ring short's 99.2 m, and
-# Spa's 109.4 m. That is a real cost and it is the acceptable direction: the
-# only thing this constant groups is places to withdraw, so two adjacent
-# corners the model is missing are withdrawn together, which is the right
-# answer for both of them.
+# Spa's 109.4 m. Two costs follow and both are the acceptable direction. Two
+# adjacent corners the model is missing are withdrawn together, which is the
+# right answer for both. And a flag can be grouped with a habitual brake up
+# to 150 m away and inherit its share - so a penalty served 150 m before a
+# corner the driver brakes for every lap is silenced. That band is at most
+# `SAME_PLACE_M - APPROACH_M` of road wherever a corner is braked for early,
+# there is no instance of it in the archive, and the failure it buys is a
+# silence rather than a fabricated sentence.
 SAME_PLACE_M = 150.0
-# Looked-at laps before a place may be judged the road at all, and the share
-# of them that must carry a brake there. Both off the archive - see the
-# module docstring's table. The separation is wide: the missing corners run
-# 93-100% of laps braked and the penalties 14-56%, so 80% over four laps sits
-# in the gap rather than on either population.
+# Looked-at laps before a place may be judged at all, and the two shares of
+# them that must carry a brake there. Off the archive - see the module
+# docstring's tables.
+#
+# `BRAKED_SHARE` withdraws: the places the detector actually flags divide at
+# 56% and 93% with nothing between, so 80% is in the gap.
+#
+# `BRAKED_DOUBT_SHARE` only SILENCES, and is lower because it can afford to
+# be: the exclusion of the lap is safe under either reading and the sentence
+# is not. Leave-one-out says about 28% of modelled corners would sit under
+# 80% if they went missing, and 70% recovers the 70-79% band - Watkins T2 at
+# 13 of 18 and Spa T1 at 13 of 17, both in races.
+#
+# **Set on the RUNNING share, not the final one.** Driving the real class
+# over the whole archive lap by lap, 0.60 through 0.80 all speak the same 49
+# readings at places that are penalties and the same 34 at places that are
+# corners, so nothing on file distinguishes them - but the running share
+# early in a session is noisy, and at 0.60 Daytona's session 118 crosses the
+# bar at 3 of 5 laps while its settled share is 5 of 9. 0.70 clears that by
+# fourteen points and still covers the band the leave-one-out named.
 BRAKED_LAPS_NEEDED = 4
 BRAKED_SHARE = 0.8
+BRAKED_DOUBT_SHARE = 0.7
 # Words in an event's `weather` that DECLARE the session wet, so the detector
 # stands down (item 3 of the docstring). `changeable` is deliberately not one
 # of them: it is a possibility, and seven of the eleven events on file carry
@@ -278,6 +335,14 @@ class Withdrawal:
 class Verdict:
     """One lap's verdict from `RoadNotPenalty`: what to keep and what to say.
 
+    `kept` are the readings that stand on this lap and go in its count.
+    `speak` is the subset clear enough to say out loud - a reading at a
+    place braked on `BRAKED_DOUBT_SHARE` or more of the laps stays in `kept`,
+    because the lap is not evidence of pace whatever caused it, and stays out
+    of `speak`, because a sentence about it would be a fact the counts do not
+    support. Where `speak` is empty nothing is said, and the lap is still
+    struck from the pace and burn populations.
+
     `give_back` are `Withdrawal`s against laps a PREVIOUS call kept - write
     each back to its row, and hand the lap back to the race only where the
     count has fallen to zero. `notes` is every decision this lap in words,
@@ -288,6 +353,7 @@ class Verdict:
     kept: tuple
     give_back: tuple
     notes: tuple[str, ...]
+    speak: tuple = ()
 
 
 def braked_at(frames, *, sample_hz: float = SAMPLE_HZ) -> list[float]:
@@ -339,17 +405,28 @@ class RoadNotPenalty:
 
     A place is the road once `BRAKED_LAPS_NEEDED` laps have been looked at
     and `BRAKED_SHARE` of them braked there. The verdict is **recomputed from
-    the counts on every lap**, so nothing latches: a place whose share falls
-    back below the bar is readable again, and CLAUDE.md rule 10's "a rule
-    that refuses a reading must be able to refuse its own baseline" is
-    satisfied by construction rather than by a second guard.
+    the counts on every lap**, so nothing latches for the laps still to come:
+    a place whose share falls back below the bar is readable again, and
+    CLAUDE.md rule 10's "a rule that refuses a reading must be able to refuse
+    its own baseline" is satisfied by construction rather than by a second
+    guard. **A withdrawal already written is not re-instated** - the readings
+    are dropped from `_kept` when they go, and the log line that reports the
+    withdrawal is the only record of them. That is a one-way step and it is
+    named here because it is the one thing about this class that is.
 
     **What it costs, stated.** Flags at a missing corner before the fourth
     looked-at lap are kept and spoken, at LOW with "Unconfirmed." on the end,
-    and then withdrawn. At Yas Marina's session 44 that is one call; where
-    the place is flagged on the very first laps it can be two or three. There
-    is no way to tell the shape from one lap - a real penalty arrives exactly
-    once too - and refusing every first sighting refuses every real one.
+    and then withdrawn. Driven over the archive that is one call at Yas
+    Marina's session 44, two at session 11, and three at Spa's session 65,
+    where the place is flagged from the first looked-at lap. There is no way
+    to tell the shape from one lap - a real penalty arrives exactly once too
+    - and refusing every first sighting refuses every real one.
+
+    **A lap is a lap however short it is**, which is a known weakness: eight
+    of the 654 looked-at laps on file carry under 70% of a circuit's frames,
+    and in a five-lap session one of those is worth 20% of the share. It has
+    not changed a verdict on file. Named rather than guarded, because the
+    guard would need a lap length this class is not given.
 
     **`filter` must be called for EVERY lap the detector looked at**,
     including laps it found nothing on: those are what the share is counted
@@ -362,10 +439,12 @@ class RoadNotPenalty:
 
     def __init__(self, same_place_m: float = SAME_PLACE_M,
                  laps_needed: int = BRAKED_LAPS_NEEDED,
-                 share: float = BRAKED_SHARE) -> None:
+                 share: float = BRAKED_SHARE,
+                 doubt: float = BRAKED_DOUBT_SHARE) -> None:
         self._same_place_m = float(same_place_m)
         self._laps_needed = int(laps_needed)
         self._share = float(share)
+        self._doubt = float(doubt)
         self._laps_seen = 0
         # place -> how many looked-at laps carried a brake there
         self._braked: dict[float, int] = {}
@@ -385,10 +464,20 @@ class RoadNotPenalty:
         self._braked[at_m] = 0
         return at_m
 
-    def _is_road(self, place: float) -> bool:
+    def _share_at(self, place: float) -> float | None:
+        """Share of looked-at laps that braked here, or None before enough."""
         if self._laps_seen < self._laps_needed:
-            return False
-        return self._braked.get(place, 0) >= self._share * self._laps_seen
+            return None
+        return self._braked.get(place, 0) / self._laps_seen
+
+    def _is_road(self, place: float) -> bool:
+        share = self._share_at(place)
+        return share is not None and share >= self._share
+
+    def _in_doubt(self, place: float) -> bool:
+        """Braked often enough that a sentence about it would be a guess."""
+        share = self._share_at(place)
+        return share is not None and share >= self._doubt
 
     def retired(self) -> tuple[float, ...]:
         """The places a flag was raised at and this session calls corners.
@@ -415,23 +504,33 @@ class RoadNotPenalty:
         for at_m in dict.fromkeys(self._place(float(at)) for at in braked):
             self._braked[at_m] = self._braked.get(at_m, 0) + 1
 
-        kept, notes = [], []
+        kept, speak, notes = [], [], []
         for penalty in found:
             place = self._place(float(penalty.at_m))
             self._flagged.add(place)
+            braked_here = self._braked[place]
             if self._is_road(place):
                 notes.append(
                     f"lap {lap_num}: the brake at {penalty.at_m:.0f} m is at a "
-                    f"place braked on {self._braked[place]} of "
-                    f"{self._laps_seen} laps - that is a corner the model is "
-                    f"missing, not a penalty")
+                    f"place braked on {braked_here} of {self._laps_seen} laps "
+                    f"- that is a corner the model is missing, not a penalty")
                 continue
             kept.append(penalty)
             self._kept.setdefault(lap_num, []).append((place, penalty))
+            if self._in_doubt(place):
+                # Struck from the pace, never said. See `Verdict.speak`.
+                notes.append(
+                    f"lap {lap_num}: the brake at {penalty.at_m:.0f} m is at a "
+                    f"place braked on {braked_here} of {self._laps_seen} laps "
+                    f"- too often to say it is a penalty, and the lap is out "
+                    f"of the pace either way, so it is kept and not spoken")
+                continue
+            speak.append(penalty)
             notes.append(
-                f"lap {lap_num}: penalty at {penalty.at_m:.0f} m kept - braked "
-                f"on {self._braked[place]} of {self._laps_seen} laps, "
-                f"{self._share:.0%} of {self._laps_needed} would be a corner")
+                f"lap {lap_num}: penalty at {penalty.at_m:.0f} m kept and "
+                f"sayable - braked on {braked_here} of {self._laps_seen} laps, "
+                f"{self._doubt:.0%} would be too many to say and "
+                f"{self._share:.0%} would be a corner")
 
         # A place that has JUST become the road takes its earlier flags with
         # it, and each of those laps is recounted rather than zeroed.
@@ -456,4 +555,4 @@ class RoadNotPenalty:
                 f"that lap")
         return Verdict(tuple(kept),
                        tuple(withdrawn[lap] for lap in sorted(withdrawn)),
-                       tuple(notes))
+                       tuple(notes), tuple(speak))

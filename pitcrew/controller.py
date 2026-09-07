@@ -3012,7 +3012,8 @@ class PitCrewController(QObject):
             # served on lap one of a race, and there is no instance on file.
             skip = (bool(lap.is_pit_lap) or bool(lap.is_out_lap)
                     or lap.lap_num <= 1)
-            served = (read_penalties(rows, FRAME_FIELDS, corners)
+            served = (read_penalties(rows, FRAME_FIELDS, corners,
+                                     sample_hz=frames.sample_hz)
                       if corners is not None and not skip else None)
             if served is not None:
                 # **The places the road explains are struck before anything
@@ -3025,7 +3026,8 @@ class PitCrewController(QObject):
                 from pitcrew.analysis.penalties import braked_columns
                 verdict = self._road_not_penalty().filter(
                     lap.lap_num, served,
-                    braked_columns(rows, FRAME_FIELDS) or ())
+                    braked_columns(rows, FRAME_FIELDS,
+                                   sample_hz=frames.sample_hz) or ())
                 for note in verdict.notes:
                     # The accepts as well as the refusals - CLAUDE.md rule 10.
                     log("session").info("penalties: %s", note)
@@ -3034,11 +3036,17 @@ class PitCrewController(QObject):
                     # **The count that stands afterwards, not zero.** A lap
                     # can carry a penalty at one place and a missing corner
                     # at another; the race only takes the lap back when
-                    # nothing is left standing on it.
-                    if (gone.served == 0 and self.race is not None
-                            and getattr(self.race, "running", False)):
+                    # nothing is left standing on it, and where something
+                    # does the COST is corrected instead - or an unspoken
+                    # note goes out carrying the sum of both.
+                    if self.race is not None and getattr(
+                            self.race, "running", False):
                         try:
-                            self.race.forget_penalty(gone.lap)
+                            if gone.served == 0:
+                                self.race.forget_penalty(gone.lap)
+                            else:
+                                self.race.note_penalty(gone.lap, gone.lost_s,
+                                                       speak=False)
                         except Exception:                    # noqa: BLE001
                             log("race").warning(
                                 "penalty not withdrawn from the race",
@@ -3061,7 +3069,11 @@ class PitCrewController(QObject):
                 if served and self.race is not None and getattr(
                         self.race, "running", False):
                     try:
-                        self.race.note_penalty(lap.lap_num, lost)
+                        # **Struck from the pace either way; spoken only
+                        # where the ledger will stand behind the word
+                        # "penalty".** See `Verdict.speak`.
+                        self.race.note_penalty(lap.lap_num, lost,
+                                               speak=bool(verdict.speak))
                     except Exception:                        # noqa: BLE001
                         log("race").warning("penalty not handed to the race",
                                             exc_info=True)

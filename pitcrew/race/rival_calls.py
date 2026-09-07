@@ -712,7 +712,12 @@ def _a_fill_is_still_to_come(state) -> bool:
 
 
 def tow_trade_call(state) -> Call | None:
-    """What sitting in his wake is worth, and what it costs. Once a stint.
+    """What sitting in his wake is worth, and what it costs.
+
+    **Once a race per car ahead**, not once a stint: the tag carries his
+    name and `clear_stint` does not empty `said_tags`. A verdict given in
+    stint one about a car he is still behind in stint two is not revised,
+    which is a limit and not a feature - carried in the plan.
 
     The driver's question, 7 Sep 2026: *"was the fuel saving worth the lost
     lap time or not - that's what George needs to calculate in real time."*
@@ -777,7 +782,13 @@ def _tow_is_spent(state, them: str, trade) -> Call | None:
     """
     if trade is None or state.tow_said_worth_it is not True:
         return None
-    if state.tow_said_about is not None and state.tow_said_about != them:
+    # **`is not None and != them` was the hole this guard was written to
+    # close** (critic pass 7, third round). `gap_ahead_name` is None whenever
+    # the board cannot name the car ahead - the top-8 truncation does that
+    # routinely - so a None subject passed for every rival, which is the
+    # docstring's own example still live. The verdict has to name a car, and
+    # it has to be this one.
+    if state.tow_said_about is None or state.tow_said_about != them:
         return None
     tag = "tow-spent"
     if tag in state.said_tags:

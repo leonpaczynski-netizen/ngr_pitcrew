@@ -113,6 +113,55 @@ def test_the_coordinator_takes_the_penalty_into_the_race():
     assert race.state.penalty_note == (5, 1.5)
 
 
+def test_a_lap_can_be_struck_from_the_pace_without_being_spoken():
+    """Critic pass 7: a place braked on most laps cannot be called a penalty
+    out loud, but a lap with a full-brake-to-a-crawl in it is not evidence of
+    pace whatever caused it. The exclusion is safe; the sentence is not."""
+    race = RaceCoordinator({"stints": [{"laps": 20, "compound": "RM",
+                                        "fuel_l": 60.0, "start_lap": 1}]},
+                           fuel_per_lap_l=3.0)
+    context = PlanContext(car="x", track="Spa", layout=None, race_laps=20)
+    assert race.arm(context, context)
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    for n in range(1, 6):
+        race.handle(SessionEvent(EventKind.LAP_COMPLETED, {"lap": _lap(n)}))
+    before = race.expect.green_laps()
+    race.note_penalty(5, 1.5, speak=False)
+    assert race.expect.green_laps() == before - 1
+    assert race.state.penalty_note is None, "struck, and not a word"
+
+
+def test_a_partial_withdrawal_corrects_an_unspoken_cost():
+    """Critic pass 7: `forget_penalty` fires only at zero, so a lap whose
+    count fell 2 -> 1 kept a note carrying the sum of both - and `_penalty`
+    tags the lap, so it could never be restated."""
+    race = RaceCoordinator({"stints": [{"laps": 20, "compound": "RM",
+                                        "fuel_l": 60.0, "start_lap": 1}]},
+                           fuel_per_lap_l=3.0)
+    context = PlanContext(car="x", track="Spa", layout=None, race_laps=20)
+    assert race.arm(context, context)
+    race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": 20}))
+    for n in range(1, 6):
+        race.handle(SessionEvent(EventKind.LAP_COMPLETED, {"lap": _lap(n)}))
+    race.note_penalty(4, 17.7)                  # 10.96 + 6.74, both places
+    race.note_penalty(4, 6.74, speak=False)     # the corner one withdrawn
+    assert race.state.penalty_note == (4, 6.74)
+    # And a lap that is not the one in hand is not disturbed.
+    race.note_penalty(3, 1.5, speak=False)
+    assert race.state.penalty_note == (4, 6.74)
+
+
+def test_a_penalty_note_does_not_survive_the_stop():
+    """CLAUDE.md rule 11 and `clear_stint`'s own argument for the incident
+    beside it: "lap 12 is out of the pace" on the way out of the box is news
+    about a lap two minutes gone, and the lap is out either way."""
+    from pitcrew.race.calls import RaceState, clear_stint
+
+    state = RaceState(lap=13, penalty_note=(12, 1.5))
+    clear_stint(state, tyres_changed=True)
+    assert state.penalty_note is None
+
+
 def test_a_penalty_read_can_be_withdrawn():
     """Critic pass 6: the place turned out to be a corner the model is
     missing, so the lap it struck goes back into the pace and the note it
@@ -200,6 +249,14 @@ def test_the_ledger_and_the_refusal_have_production_callers():
     assert "self._road_not_penalty().filter(" in source
     assert "self.race.forget_penalty(gone.lap)" in source
     assert "self.store.set_lap_penalties(" in source
+    # **And the brakes reach it.** `filter` without them counts only the
+    # flags, which is the measure the class exists to replace - and every
+    # test would still pass with the argument dropped (critic pass 7).
+    assert "braked_columns(rows, FRAME_FIELDS," in source
+    # The doubt band only silences if `speak` is what decides the call.
+    assert "speak=bool(verdict.speak)" in source
+    # A partial withdrawal corrects the cost rather than leaving the sum.
+    assert "self.race.note_penalty(gone.lap, gone.lost_s," in source
     start = source.index("    def _corner_windows(self)")
     end = source.index("\n    def ", start + 10)
     assert "self._penalties_are_readable()" in source[start:end]

@@ -310,10 +310,13 @@ class ExpectationTracker:
         false positive is a corner the auto-segment model does not contain:
         the brake for it is at speed, going straight and outside every
         window, so it reads as a penalty on EVERY lap. The controller
-        recognises that shape (two consecutive laps at the same place is the
-        road, not a penalty served twice running) and calls this to hand the
-        first lap back, because that lap was struck on a reading that has
-        since been withdrawn. Silent where the lap was never struck.
+        recognises that shape - a place braked on `BRAKED_SHARE` of the
+        session's laps is the road - and calls this to hand a lap back where
+        NOTHING is left standing on it, because that lap was struck on a
+        reading that has
+        since been withdrawn - a place braked on nearly every lap of the
+        session is a corner, and `RoadNotPenalty` carries the measurement.
+        Silent where the lap was never struck.
         """
         self._penalised.discard(int(lap_num))
 
