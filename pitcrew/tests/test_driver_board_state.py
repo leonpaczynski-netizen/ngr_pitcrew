@@ -288,10 +288,18 @@ def test_the_pit_entry_flag_switches_it_too():
     assert _state_for(stub).in_box is True
 
 
-def test_in_the_box_it_shows_the_set_going_on():
+def test_in_the_box_the_set_going_on_is_a_field_of_its_own():
+    """**One field, one meaning.** `compound` used to become `next_compound`
+    on the in-box branch, so the same field carried "the set he is on" and
+    "the set going on" depending on a boolean set in another module - and the
+    board read it both ways in two different places, one of them wrong. The
+    plan's decision has its own field now and `compound` means the rubber
+    under the car wherever it is read."""
     stub = _Stub(bridge=_Bridge(filling=True))
-    assert _state_for(stub).compound == "RH"
-
+    got = _state_for(stub)
+    assert got.in_box is True
+    assert got.compound == "RM"
+    assert got.next_compound == "RH"
 
 def test_the_countdown_is_the_shortfall_over_the_measured_rate():
     """43 litres to take at 1.002 L/s. Nothing here is assumed: the rate is

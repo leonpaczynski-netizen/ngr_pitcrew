@@ -815,16 +815,20 @@ class _Stat(QWidget):
     # room divided by the blocks on it, with the margins and the gaps between
     # them taken off. `test_the_board_fits_his_monitor_in_the_widest_state_it
     # _can_be_given` is what holds the arithmetic to the actual monitor.
-    # **Two faces, and the numbers are different enough to matter.** On the
-    # rig, Cascadia Mono at 27 px is 16 px a character, so the middle rank's
-    # 640 is forty characters and nothing on the board is elided at all.
-    # Under the offscreen platform the tests run on, the same stylesheet
-    # falls back to a stub metric of 27 px a character - twenty-three - and
-    # the longest strings DO elide. So the bound is set from the harness's
-    # font, which is the pessimistic one, and the driver gets the whole
-    # string. An earlier version of this comment quoted the offscreen figure
-    # as though it were his; it is not, and every character count derived
-    # from it in this file and in the tests was wrong by a factor of 1.7.
+    # **Two faces, and the numbers differ by 1.7.** On the rig, Cascadia Mono
+    # at 27 px is 16 px a character, so the middle rank's 640 holds forty and
+    # nothing on the board is elided at all. Under the offscreen platform the
+    # tests run on, the same stylesheet falls back to a stub metric of 27 px
+    # a character - twenty-three - and the longest strings DO elide there.
+    #
+    # **These are not "the panel's room divided by the blocks on it."** They
+    # were described that way and the arithmetic does not hold: four middle
+    # subs at 640 measure 2,792 px offscreen and five box subs at 620 measure
+    # 3,274, both past 2,560. The board fits because the blocks do not all
+    # reach their cap at once - POSITION's sub is `of 12`. What holds the
+    # panel is `test_the_board_fits_his_monitor_on_the_faces_he_actually_has`,
+    # which measures the real faces; these caps stop any ONE reason line
+    # running away.
     MIDDLE_SUB_W = 640
     GAP_SUB_W = 1100
     SPLIT_SUB_W = 700
@@ -1372,10 +1376,26 @@ class _BoxPanel(QWidget):
             # decision, not as a compound - the compound on the car is what
             # stays on it.
             self.tyre_stat.show_value("NO TYRES", "plan · fuel only")
-        elif state.compound:
+        elif state.next_compound:
+            # **`next_compound`, not `compound`.** They are two claims - the
+            # set going on and the set coming off - and this panel wants the
+            # first. It read `compound` and was right only because the
+            # controller overwrote that field with `next_compound` on the
+            # in-box branch, so one field meant two things depending on a
+            # boolean set in another module. That is the defect fixed one
+            # page over in `_box_caption`, not the fix for it.
             self.tyre_stat.show_value(
-                state.compound,
+                state.next_compound,
                 "plan · new set" if state.tyres_at_stop else "plan")
+        elif state.tyres_at_stop:
+            # **A set IS going on and the plan did not name which.** This
+            # rendered a bare dash - on the one panel he reads with his hands
+            # on the MFD, while the same board had said "new set" on the
+            # straight and the voice had said "Tyres on." `handover.validate`
+            # permits `tyres` with no `compound`, so it is plan-reachable, and
+            # a dash where the opposite decision gets the word NO TYRES is how
+            # he takes a fuel-only stop the plan did not ask for.
+            self.tyre_stat.show_value("NEW SET", "plan · set not named")
         elif state.has_plan:
             self.tyre_stat.show_value("--", "plan: no compound")
         else:
@@ -1693,7 +1713,11 @@ class DriverView(QWidget):
         "RS on" and "no tyres" ask for different in-laps and different brake
         balance, and the plan has said which since before the green.
         """
-        if not state.box_on_lap:
+        # `is None`, not truthiness: it is a lap number, and rule 3 is about
+        # a zero that means "not measured" being read as a real value.
+        # Unreachable through the controller - `lap_on_screen()` floors at 1 -
+        # but the shape is the one this board keeps getting caught by.
+        if state.box_on_lap is None:
             return ""
         plan = f"plan: lap {state.box_on_lap}"
         if state.tyres_at_stop is False:
@@ -1763,8 +1787,14 @@ class DriverView(QWidget):
             burn = f"{state.burn_l:.2f} L/lap"
             rests_on = f"{rests_on} · {burn}" if rests_on else burn
         if state.fuel_to_flag is None:
+            # **A dash gets a REASON, never the reference or the burn.**
+            # `on the plan's fill · 4.19 L/lap` under a dash says what the
+            # figure would have rested on, which is not why there isn't one -
+            # and "every dash on this board says why" is the rule the whole
+            # panel is built on. `fuel_in_hand_to_flag` always returns a
+            # `why` beside a None, so this fallback is the belt.
             self.flag_stat.show_value(
-                "--", state.fuel_to_flag_why or rests_on or "not measured")
+                "--", state.fuel_to_flag_why or "not measured")
         else:
             self.flag_stat.show_value(
                 f"{state.fuel_to_flag:.1f}", rests_on,

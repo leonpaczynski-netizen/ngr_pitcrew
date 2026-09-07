@@ -14,6 +14,7 @@ hand to the flag" spoken with 84.0 L aboard and the stop nine laps away.**
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -111,6 +112,14 @@ def test_the_flag_figure_no_longer_forgets_the_litres_the_stop_adds():
     assert why is None
     assert got == pytest.approx(1.0, abs=0.05), got
     assert rests_on == "on the plan\'s fill"
+    # ⚠️ **And that 1.0 is `FUEL_MARGIN_LAPS` exactly**, because `_race()`
+    # measures no burn scatter - so the leg above discriminates the
+    # expressions but lands on the app's own switch. This is the one where
+    # the figure actually moves: a measured scatter sizes the margin on it.
+    measured, why, _ = fuel_in_hand_to_flag(_race(fuel_l=45.0,
+                                                  fuel_sd_l=0.15))
+    assert why is None
+    assert measured == pytest.approx(0.3, abs=0.05), measured
 
 
 def test_the_two_numbers_are_different_questions_and_say_so():
@@ -620,9 +629,19 @@ def test_a_long_call_keeps_the_direction_and_still_ends_in_an_ellipsis(qt_app):
     view.hide()
 
 
-def test_the_board_fits_his_monitor_in_the_widest_state_it_can_be_given(
-        qt_app):
-    """**2560 x 1080, and the window is frameless with no resize handle.**
+# **A growth ceiling in the HARNESS's font, not a claim about his monitor.**
+# The offscreen face is 27 px a character where his is 16, so no absolute
+# figure measured here is a fact about the panel - and forcing the board under
+# 2560 offscreen means shortening strings for a font nobody has, which was
+# done once on this branch and had to be undone. What this number is for is
+# noticing growth: it is a little above where the board sits today, and the
+# panel itself is held by
+# `test_the_board_fits_his_monitor_on_the_faces_he_actually_has`.
+OFFSCREEN_GROWTH_CEILING = 3200
+
+
+def test_the_board_does_not_grow_in_the_widest_state_it_can_be_given(qt_app):
+    """**Every state the board can be given, rendered and measured.**
 
     Qt answers a layout minimum bigger than the screen by growing the window
     off it rather than by dropping anything, so a board that does not fit
@@ -647,12 +666,18 @@ def test_the_board_fits_his_monitor_in_the_widest_state_it_can_be_given(
     sixteen-character rival name on both neighbours, all five box states, and
     a call three times longer than any the engineer makes.
 
-    ⚠️ **It runs offscreen, where the faces are not the rig's.** The same
-    board measures 2410 x 1035 under the offscreen platform and 1154 x 1055
-    with the real Cascadia Mono and stencil faces - wider one way, taller the
-    other - so this bounds what it can measure and the height was checked by
-    hand as well. A change that adds a rank belongs on the real fonts before
-    it is believed.
+    ⚠️ **It runs offscreen, where the faces are not the rig's, and the two
+    differ by a factor of 1.7.** Cascadia Mono at 27 px is 16 px a character
+    natively and 27 px under the offscreen stub, so this measurement is
+    pessimistic in width and optimistic in height - it cannot see a height
+    regression at all (`GAP_PX = 210` puts the board at 1,090 px on the rig,
+    over his panel, and 997 offscreen, with the whole suite green), and its
+    widths are not his. So it asserts a GROWTH ceiling and the monitor is
+    held by `test_the_board_fits_his_monitor_on_the_faces_he_actually_has`.
+
+    No point figures are quoted in this docstring. Two rounds of them were
+    wrong within a commit of being written, the last set by a change in the
+    same commit.
     """
     from pitcrew.race import calls as C
     from pitcrew.ui.driver_view import (BoardCall, DriverState, DriverView,
@@ -680,7 +705,6 @@ def test_the_board_fits_his_monitor_in_the_widest_state_it_can_be_given(
         # first artefact over his panel.
         size = view.minimumSizeHint()
         widest = max(widest, size.width())
-        assert size.height() <= 1080, (what, size.height())
 
     for reason in reasons:
         for rests_on in rests:
@@ -707,20 +731,27 @@ def test_the_board_fits_his_monitor_in_the_widest_state_it_can_be_given(
                                     mark=MARK_UNCONFIRMED, lap=14)),
                 reason)
 
-    # **The box page, which no guard had ever rendered.** All five shapes its
-    # own docstring names, including the two whose captions are longest.
+    # **The box page, COMBINED rather than one shape at a time.** The first
+    # version measured each of the five alone, which is how a fuel-only stop
+    # with a measured rate, 31 L aboard and a rejoin behind a sixteen-
+    # character name - all reachable together - came to measure 3,110 px with
+    # every one of its parts inside the bound. Every shape is now built on
+    # top of the widest common state, not instead of it.
+    widest_box = dict(fuel_target_l=63.0, release_in_s=24.0, fuel_l=31.0,
+                      fill_rate_note="declared", out_position=7,
+                      out_behind=long_name)
     for box in (
-            dict(fuel_target_l=63.0, release_in_s=24.0, fuel_l=31.0,
-                 fill_rate_note="declared rate", has_plan=True,
-                 out_position=7, out_behind=long_name, next_stint_laps=9,
-                 compound="RS", tyres_at_stop=True),
+            dict(has_plan=True, next_stint_laps=9, next_compound="RS",
+                 tyres_at_stop=True),
             dict(has_plan=True),
-            dict(past_the_plan=True),
-            dict(runs_to_flag=True, fuel_target_l=63.0),
-            dict(fuel_target_l=63.0, fuel_l=31.0, tyres_at_stop=False)):
-        measure(DriverState(in_box=True, **box), box)
+            dict(has_plan=True, past_the_plan=True),
+            dict(has_plan=True, runs_to_flag=True),
+            dict(has_plan=True, tyres_at_stop=False),
+            dict(has_plan=True, tyres_at_stop=True),
+            {}):
+        measure(DriverState(in_box=True, **{**widest_box, **box}), box)
 
-    assert widest <= 2560, widest
+    assert widest <= OFFSCREEN_GROWTH_CEILING, widest
     view.hide()
 
 
@@ -760,3 +791,174 @@ def test_the_preview_sample_is_produced_by_the_code_it_pictures(qt_app):
     # The countdown and the lap it names count the same way: the HUD lap he is
     # on plus the laps to the box.
     assert board.box_on_lap == 9 + int(board.laps_to_box)
+
+
+def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
+    """**The guard above cannot see a height regression, and this can.**
+
+    The offscreen font the suite runs on is 27 px a character where the rig's
+    Cascadia Mono is 16 - so every offscreen width is pessimistic and every
+    offscreen HEIGHT is optimistic. `GAP_PX = 210` measures 997 px offscreen
+    and **1,090 on the rig**, over his 1080 panel, with the whole suite green.
+    That is the regression round three found by hand and nothing has held it
+    since.
+
+    So this measures in a subprocess with no `QT_QPA_PLATFORM` forced. It
+    skips where there is no real font database - a headless machine has
+    nothing to measure and saying so is better than asserting the stub.
+    """
+    import json
+    import subprocess
+    import sys
+    import textwrap
+
+    probe = textwrap.dedent("""
+        import json, sys
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtGui import QFontDatabase
+        app = QApplication([])
+        from pitcrew.ui import theme
+        theme.apply(app)
+        if not QFontDatabase.families():
+            print(json.dumps({"skip": "empty font database"})); sys.exit(0)
+        from pitcrew.ui.driver_view import DriverState, DriverView, GapView
+        from pitcrew.race import calls as C
+        view = DriverView()
+        name = "AVeryLongPSNid16"
+        worst = (0, 0)
+        states = []
+        for reason in (C.NO_STOP_TO_COME, C.NOT_REACHING_THE_BOX,
+                       C.STOP_PAST_THE_FLAG, C.ANOTHER_STOP_AFTER):
+            states.append(DriverState(
+                fuel_to_stop_why=reason, fuel_to_flag_why=reason,
+                fuel_to_flag_on=C.ON_THE_PLANS_FILL, burn_l=4.19,
+                laps_to_box=3, box_on_lap=12, tyres_at_stop=False,
+                compound="RS", next_compound="RS", position=12, field_size=24,
+                axle_split_c=12.2, axle_split_rate=1.4, rear_pair_hotter="rr",
+                rear_pair_split_c=4.0, rear_pair_rate=1.4, split_laps=8,
+                ahead=GapView(seconds=12.4,
+                              note=f"he is catching 0.6 s a lap - {name}",
+                              urgent=True),
+                behind=GapView(seconds=4.8,
+                               note=f"pulling away 0.9 s a lap - {name}",
+                               good=True)))
+        common = dict(in_box=True, fuel_target_l=63.0, release_in_s=24.0,
+                      fuel_l=31.0, fill_rate_note="declared", out_position=7,
+                      out_behind=name, has_plan=True)
+        for extra in ({}, {"next_stint_laps": 9, "next_compound": "RS",
+                           "tyres_at_stop": True}, {"runs_to_flag": True},
+                      {"past_the_plan": True}, {"tyres_at_stop": False}):
+            states.append(DriverState(**{**common, **extra}))
+        for state in states:
+            view.update_state(state)
+            app.processEvents()
+            size = view.minimumSizeHint()
+            worst = max(worst, (size.width(), size.height()))
+        print(json.dumps({"w": worst[0], "h": worst[1]}))
+    """)
+    run = subprocess.run([sys.executable, "-c", probe],
+                         capture_output=True, text=True,
+                         cwd=str(Path(__file__).resolve().parents[2]),
+                         env={k: v for k, v in os.environ.items()
+                              if k != "QT_QPA_PLATFORM"})
+    assert run.returncode == 0, run.stderr[-2000:]
+    got = json.loads(run.stdout.strip().splitlines()[-1])
+    if "skip" in got:
+        pytest.skip(f"no real faces to measure: {got['skip']}")
+    # 2560 x 1080, and the window is frameless with no resize handle.
+    assert got["h"] <= 1080, got
+    assert got["w"] <= 2560, got
+
+
+def test_the_burn_stays_on_the_flag_block(qt_app):
+    """**It has been taken off once already, for a reason that was false.**
+
+    The arithmetic said `on the plan's fill · 4.19 L/lap` wanted thirty-one
+    characters against a twenty-one character bound; both figures came off the
+    offscreen test font, and on the rig the string measures 496 px against 640
+    and fits. The two tests that had pinned its ABSENCE were then rewritten to
+    `.startswith("on the plan's fill")`, which is true either way - so it
+    could have gone a third time in silence. The burn is what lets him check
+    the figure; the reference is what says whether it is his to move; the
+    order is what survives a cut.
+    """
+    from pitcrew.ui.driver_view import DriverState, DriverView
+
+    view = DriverView()
+    view.update_state(DriverState(fuel_to_flag=0.3, burn_l=4.19,
+                                  fuel_to_flag_on="on the plan's fill"))
+    # **The string the block was GIVEN**, because whether the tail survives
+    # the elide is a property of the face: on the rig the whole thing fits in
+    # 496 px of a 640 px bound, and under the offscreen test font it does
+    # not. What is asserted here is what the board is asked to say.
+    given = view.flag_stat._sub_text
+    assert given.startswith("on the plan's fill")
+    assert "4.19" in given, given
+    # And the rendered form leads with the reference either way, because
+    # `_resub` elides from the right.
+    assert view.flag_stat.sub.text().startswith("on the plan's fill")
+
+
+def test_a_dash_on_the_flag_block_carries_a_reason_and_not_a_burn(qt_app):
+    """`--` captioned `4.19 L/lap` says what the figure would have rested on,
+    which is not why there is not one. Every dash on this board says why."""
+    from pitcrew.ui.driver_view import DriverState, DriverView
+
+    view = DriverView()
+    view.update_state(DriverState(fuel_to_flag=None, burn_l=4.19,
+                                  fuel_to_flag_on="on the plan's fill"))
+    assert view.flag_stat.value.text() == "--"
+    assert "4.19" not in view.flag_stat.sub.text()
+
+
+def test_a_stop_that_sizes_to_zero_litres_is_not_a_stop_nobody_sized(qt_app):
+    """**Rule 3, on the one number he holds the trigger against.**
+    `fuel_target_l` is deliberately unclamped, so a real `0.0` was read as
+    falsy and RELEASE IN said "nothing sized it" while FUEL TO one block
+    along drew `0`. Two adjacent blocks contradicting each other about
+    whether the stop had been sized."""
+    from pitcrew.ui.driver_view import DriverState, DriverView
+
+    view = DriverView()
+    view.update_state(DriverState(in_box=True, fuel_target_l=0.0,
+                                  release_in_s=None))
+    assert view.box.fuel_stat.value.text() == "0"
+    assert "nothing sized" not in view.box.release_stat.sub.text()
+
+
+def test_the_box_names_the_set_going_on_even_when_the_plan_names_no_compound(
+        qt_app):
+    """**A dash where the opposite decision gets a word.**
+
+    `handover.validate` permits a stint with `tyres` and no `compound`, so
+    `tyres_at_stop=True, next_compound=None` is plan-reachable. The panel
+    rendered it as `--`, on the one screen he reads with his hands on the
+    MFD, while the same board had said "new set" on the straight and
+    `_tyre_word` had said "Tyres on." in his ear. He takes a fuel-only stop
+    the plan did not ask for.
+    """
+    from pitcrew.ui.driver_view import DriverState, DriverView
+
+    view = DriverView()
+    view.update_state(DriverState(in_box=True, has_plan=True,
+                                  tyres_at_stop=True, next_compound=None))
+    assert view.box.tyre_stat.value.text() == "NEW SET"
+    assert "not named" in view.box.tyre_stat.sub.text()
+    # And the opposite decision is still its own word.
+    view.update_state(DriverState(in_box=True, has_plan=True,
+                                  tyres_at_stop=False))
+    assert view.box.tyre_stat.value.text() == "NO TYRES"
+
+
+def test_the_box_tyre_block_names_the_set_going_on_not_the_one_coming_off(
+        qt_app):
+    """The blocker `_box_caption` was fixed for, one page over: this panel was
+    still reading `compound`, and was right only because the controller
+    overwrote that field on the in-box branch."""
+    from pitcrew.ui.driver_view import DriverState, DriverView
+
+    view = DriverView()
+    view.update_state(DriverState(in_box=True, has_plan=True,
+                                  tyres_at_stop=True, compound="RM",
+                                  next_compound="RS"))
+    assert view.box.tyre_stat.value.text() == "RS"

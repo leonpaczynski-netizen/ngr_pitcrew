@@ -3197,8 +3197,10 @@ def fuel_in_hand(state: RaceState) -> tuple[float | None, str]:
 # and four blocks on one row took the board past the 2,560 of his monitor - on
 # a frameless window with no resize handle, which Qt answers by growing it off
 # the screen rather than by dropping anything. Keep them to about twenty
-# characters; the longest here is twenty-one, which is what the middle rank
-# has room for with four blocks across the panel.
+# characters. The longest here is twenty-four, which the middle rank holds
+# with room to spare on the rig - its 640 px is forty characters at Cascadia
+# Mono's real 16 px, not the twenty-three an earlier note claimed off the
+# offscreen test font.
 #
 # **The bound is enforced in the widget, not by this convention.**
 # `_Stat.set_sub_width` elides every reason line to the room its rank has, and
@@ -3335,7 +3337,18 @@ def fuel_in_hand_to_flag(
     `stint_ends_on_lap` is compared against `state.lap`, the app's count - so
     the stop the app will actually call lands at real lap
     `stint_ends_on_lap + laps_missed()`, and these are the laps that follow
-    it. Rule 12: the figure describes the stop that is going to happen, not
+    it.
+
+    ⚠️ **That holds where `laps_total` is real, and it is not always.** Four
+    places write it. Three are real laps; `coordinator.py:2023` writes
+    `_planned_distance()`, built from stint `start_lap`s that `adopt` derives
+    from `self.state.lap + 1` - the APP's count. So in a timed race, between
+    a mid-race re-plan and the next crossing, `laps_total` is in the same
+    space as `stint_ends_on_lap` and the `laps_missed` term is subtracted
+    twice: with one lost crossing the figure is sized for one lap fewer than
+    the run home. The next crossing overwrites it, so the window is short -
+    but it is the window in which he is deciding whether to accept the
+    re-plan, and it is not this expression's to fix. Rule 12: the figure describes the stop that is going to happen, not
     the one the plan drew. **That the stop slips a real lap per lost crossing
     is a defect, and it is not this one** - it is in the plan-to-state seam
     and belongs to Phase 0. A critic raised this as an off-by-one; it is not,

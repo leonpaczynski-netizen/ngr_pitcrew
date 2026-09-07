@@ -103,7 +103,7 @@ def test_the_compound_in_the_box_is_captioned_as_the_plan(app):
     nothing here knows how worn the set coming off is, because no packet
     format carries wear at all."""
     view = DriverView()
-    view.update_state(DriverState(in_box=True, compound="RH"))
+    view.update_state(DriverState(in_box=True, next_compound="RH"))
     assert view.box.tyre_stat.value.text() == "RH"
     assert view.box.tyre_stat.sub.text() == "plan"
 

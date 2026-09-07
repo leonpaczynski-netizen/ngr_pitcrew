@@ -119,12 +119,24 @@ def test_the_box_panel_says_no_tyres_when_the_plan_says_fuel_only():
 
 
 def test_the_box_panel_marks_a_new_set_as_the_decision_it_is():
-    shown = _panel_shows(DriverState(compound="RS", tyres_at_stop=True,
+    # **`next_compound`, which is the set going ON.** `compound` is the
+    # rubber under the car and this panel is about the plan's decision; the
+    # two were one field until a critic found the board naming the set coming
+    # off while the voice named the one going on.
+    shown = _panel_shows(DriverState(next_compound="RS", tyres_at_stop=True,
                                      has_plan=True, in_box=True))
     assert shown == ("RS", "plan · new set")
 
 
 def test_the_box_panel_keeps_the_old_caption_when_the_plan_did_not_say():
-    shown = _panel_shows(DriverState(compound="RS", tyres_at_stop=None,
+    shown = _panel_shows(DriverState(next_compound="RS", tyres_at_stop=None,
                                      has_plan=True, in_box=True))
     assert shown == ("RS", "plan")
+
+
+def test_the_set_on_the_car_is_never_read_as_the_set_going_on():
+    """The blocker itself, at the panel: given only what is bolted on, the
+    box says nothing about a compound rather than naming that one."""
+    shown = _panel_shows(DriverState(compound="RM", tyres_at_stop=True,
+                                     has_plan=True, in_box=True))
+    assert shown[0] != "RM"

@@ -124,7 +124,10 @@ def sample_board() -> DriverState:
         rear_pair_rate=splits.rate("rr")[0], split_laps=laps,
         laps_to_box=float(state.laps_to_stop()),
         box_on_lap=state.lap_on_screen() + state.laps_to_stop(),
-        tyres_at_stop=True, has_plan=True,
+        # **The compound the plan says to FIT.** Without it the artefact
+        # draws `plan: lap 12 · new set` and pictures none of what the last
+        # two rounds were about - the board naming the set coming OFF.
+        tyres_at_stop=True, next_compound="RS", has_plan=True,
         laps_of_fuel=state.laps_of_fuel(), burn_l=state.fuel_per_lap_l,
         fuel_to_stop=to_stop, fuel_to_stop_why=stop_why,
         fuel_to_flag=to_flag, fuel_to_flag_why=flag_why,

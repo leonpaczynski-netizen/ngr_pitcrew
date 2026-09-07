@@ -5544,11 +5544,13 @@ class PitCrewController(QObject):
             # Which way each split is going, for the corners where five laps
             # say so. Absent is absent - see `race/tyre_split.py`.
             split_rates=self._split_rates(),
-            # On track this is the set he is ON; in the box it is the set
-            # going on. Two different claims, and the box panel captions its
-            # own as the plan decision it is.
-            compound=(state.next_compound if in_box
-                      else getattr(state, "tyre_compound", None)),
+            # **Always the set he is ON.** It used to become
+            # `next_compound` on the in-box branch, so one field carried two
+            # different claims depending on a boolean - and the board read it
+            # both ways in two different places. The panels take
+            # `next_compound` for the plan's decision now, so this means one
+            # thing everywhere: the rubber under the car.
+            compound=getattr(state, "tyre_compound", None),
             # The plan's tyre decision for the coming stop, as stated, so the
             # box panel can say "NO TYRES" rather than the compound's name.
             tyres_at_stop=getattr(state, "next_tyres", None),
