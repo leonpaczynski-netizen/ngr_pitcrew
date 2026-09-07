@@ -63,8 +63,15 @@ def test_a_short_shift_call_is_a_closed_loop_and_says_so():
                             short_shift_rpm=400.0)]
     outcome = outcome_for(call, laps)
     assert outcome.verdict == CANNOT_TELL and outcome.settled
-    assert "the app's own switch" in outcome.detail
-    assert "upshift_rpm" in outcome.detail, "and it names what would answer it"
+    # **And the refusal's reason is the one that binds** (critic pass 8,
+    # fifth round). The first version said `laps.upshift_rpm` had "no
+    # calibrated threshold" - and `analysis/driving.saving_change` has one,
+    # runs every lap, and George SPEAKS it: "You've stopped short-shifting
+    # since lap 15 - upshifts at 8298 before, 8694 now." One race, one
+    # question, two mechanisms, opposite claims. What actually binds is the
+    # DIRECTION: only a step upward has ever been calibrated.
+    assert "STOP saving, not start" in outcome.detail
+    assert "`" not in outcome.detail, "the driver reads this off the screen"
     # And the same answer whatever the field says, because the field is not
     # about him: no further lap changes it, so it is settled at once.
     laps[1].short_shift_rpm = None

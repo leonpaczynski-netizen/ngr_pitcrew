@@ -748,16 +748,21 @@ before `1.9`. Added in 1.9 — see §16.
 
 | `verdict` | Meaning |
 |---|---|
-| `acted` | A stop followed a box call inside its own window. `verdictDetail` names the lap |
+| `acted` | A stop followed a box call inside its own window, or none followed a stay-out fold — one instrument, `laps.is_pit_lap`, answering two questions. `verdictDetail` names the lap |
 | `not-acted` | The window was fully driven and nothing followed. **This is as often a finding about the CALL as about the driver** — at Fuji he ignored two box calls, ran to the flag, finished P5, and the app's own binding-constraint figure was wrong |
-| `cannot-tell` | Nothing in the feed can answer this kind of call, or the race ended before the window was driven. `verdictDetail` says which. **A short-shift call is one of these**: `laps.short_shift_rpm` is the app's own switch and not the driver's hand, so judging on it asked whether the app did what the app did |
+| `cannot-tell` | Nothing on file can answer this kind of call, or the race ended before the window was driven. `verdictDetail` says which. **A short-shift call is one of these**: `laps.short_shift_rpm` is the app's own switch and not the driver's hand, so judging on it asked whether the app did what the app did — and `laps.upshift_rpm`, which does read his hand, has only been calibrated on him STOPPING a saving, not starting one |
 
 A call carries no `verdict` at all where the race was recorded before `1.9`,
 or where the call was made outside a running race. **Absent is not
 `cannot-tell`**: the first says nobody looked, the second says somebody looked
 and the feed cannot say.
 
-**Where `verdict` and `disposition` are both present for an instruction they
+**"Instruction" here means a box call, and only a box call.** A short-shift
+call is an instruction the driver hears and is not one for these two fields:
+nothing on file reads whether he took it, so its `verdict` is `cannot-tell`
+and its `disposition` stays `informational`, claiming nothing either way.
+
+**Where `verdict` and `disposition` are both present for a box call they
 agree, because `disposition` is derived from the verdict.** They are not two
 opinions. `disposition` falls back to its own pit-lap derivation only where
 there is **no verdict at all** — a row from before `1.9`. A `cannot-tell`
@@ -1129,6 +1134,6 @@ driver has overruled the engineer and been right four sessions running.
 
 | # | Change | Reason |
 |---|---|---|
-| 1 | **`strategy.callsMade[]` gains `verdict` and `verdictDetail`** | **One kind can be answered from the feed and the rest say so in as many words**: a box call, against `laps.is_pit_lap`. Everything else is `cannot-tell` **named rather than omitted** — a fuel-map change and a brake-balance click are in no packet GT7 sends, and reporting those as "not acted on" would turn a missing channel into a disobedient driver, which is the exact shape of defect this project keeps finding. A short-shift call looked answerable and is not: `laps.short_shift_rpm` is the app's own switch, so the loop closed on itself and a driver who ignored the call read `acted`. Judged as the laps come in rather than at the flag, so the driver sees it on the Race screen two laps after the call |
+| 1 | **`strategy.callsMade[]` gains `verdict` and `verdictDetail`** | **One instrument can answer a call and the rest say so in as many words**: `laps.is_pit_lap`, which answers a box call and, inverted, a stay-out fold. Everything else is `cannot-tell` **named rather than omitted** — a fuel-map change and a brake-balance click are in no packet GT7 sends, and reporting those as "not acted on" would turn a missing channel into a disobedient driver, which is the exact shape of defect this project keeps finding. A short-shift call looked answerable and is not: `laps.short_shift_rpm` is the app's own switch, so the loop closed on itself and a driver who ignored the call read `acted`. Judged as the laps come in rather than at the flag, so the driver sees it on the Race screen two laps after the call |
 | 2 | **`disposition` for an instruction is derived from `verdict` where there is one** | They answered the same question two ways and could disagree in one object: the older derivation pools pit laps over every race session of the event, rehearsals included and renumbered continuously across runs, while the verdict is judged against the laps of the session the call was made in. Rule 13 — two fields using the same words must mean the same thing |
 | 3 | **`disposition` gains `unanswered`** | A box call whose window the race never finished driving. It was falling back to the pooled pit laps and reporting `taken` beside `verdict: cannot-tell` in the same object. A reader must accept the new value; nothing else about the field changes |

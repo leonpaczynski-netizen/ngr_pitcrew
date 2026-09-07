@@ -95,13 +95,30 @@ def test_a_short_shift_is_not_answerable_the_beep_is_the_instruction():
     call = a_call(kind=TYRE_TEMP, lap=8, short_shift_drop_rpm=450.0)
     outcome = outcome_for(call, a_race(20, short_shift_on=9))
     assert outcome.verdict == CANNOT_TELL and outcome.settled
-    assert "the app's own switch" in outcome.detail
+    assert "STOP saving, not start" in outcome.detail
     # And the same where the beep was never engaged: the field is not about
     # him either way, so neither reading is evidence about the driver.
     assert outcome_for(call, a_race(20)).verdict == CANNOT_TELL
 
 
 # ------------------------------------------- everything the feed cannot see
+
+def test_a_stay_out_is_judged_on_the_stop_that_did_not_come():
+    """Critic pass 8, fifth round. A stay-out fold carries
+    `short_shift_drop_rpm`, so it fell into the short-shift branch and was
+    refused for not knowing whether he short-shifted - answering a question
+    the call never asked. What it asked was whether he stayed out, and
+    `laps.is_pit_lap` says so: the box call's instrument, inverted."""
+    from pitcrew.race.calls import STAY_OUT
+
+    call = a_call(kind=STAY_OUT, lap=8, short_shift_drop_rpm=400.0)
+    stayed = outcome_for(call, a_race(20))
+    assert stayed.verdict == ACTED and "stayed out" in stayed.detail
+    boxed = outcome_for(call, a_race(20, pit_on=9))
+    assert boxed.verdict == NOT_ACTED and "boxed on lap 9" in boxed.detail
+    # And it waits for its window like a box call does.
+    assert outcome_for(call, a_race(9)).settled is False
+
 
 def test_a_call_the_feed_cannot_confirm_says_so_rather_than_guessing():
     """**GT7 broadcasts no fuel map, no brake balance and no driving style.**

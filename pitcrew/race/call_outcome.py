@@ -7,17 +7,20 @@ both evidence about the model, and they are the two that most need telling
 apart, because this driver has overruled the engineer and been right four
 sessions running.
 
-### One kind can be answered, and the rest say so
+### One instrument can answer a call, and it answers two questions
 
-The app may only report an outcome it can measure:
+`laps.is_pit_lap` is measured, so whether a stop followed is a fact:
 
-* **Box calls** — `laps.is_pit_lap` is measured, so "did a stop follow" is a
-  fact. The window is the call's own lap and the two after it, because
-  *"box this lap or next"* is the instruction and a stop three laps later is
-  a different decision rather than a late compliance.
+* **Box calls** — did a stop follow. The window is the call's own lap and the
+  two after it, because *"box this lap or next"* is the instruction and a
+  stop three laps later is a different decision rather than a late
+  compliance.
+* **The stay-out fold** — the same reading, inverted. *"Staying out? You
+  should make it."* asks him not to stop, and no stop in the same window is
+  the answer to the question the call actually asked.
 
-**And short-shift calls were the second one, until they were not — which took
-four critic rounds to see.** `laps.short_shift_rpm` looked like the response and is the
+**And short-shift calls looked like a second instrument, until they were not
+— which took four critic rounds to see.** `laps.short_shift_rpm` looked like the response and is the
 INSTRUCTION: `analysis/driving.py` says so in its first line — *"records the
 APP's switch and nothing else"* — and the loop is closed end to end. The app
 sets the beep when it makes the call (`controller._show_call` →
@@ -30,11 +33,23 @@ the contract tells a consumer to prefer. `expectations.saving_response`
 answers the same question from the BURN and could say *"that hasn't saved"*
 in the same race: two mechanisms, one question, opposite answers (rule 13).
 
-So a short-shift call is `CANNOT_TELL` too, and its detail says which
-instrument would answer it: `laps.upshift_rpm`, measured off the frames,
-against the laps before the call. That is not wired here because the
-threshold has never been calibrated, and this project has six derived indices
-built and discarded for being shipped before they were.
+So a short-shift call is `CANNOT_TELL` too — **and the first version of that
+refusal gave a reason the app itself contradicts out loud.** It said
+`laps.upshift_rpm` had "no calibrated threshold to judge against".
+`analysis/driving.saving_change` has one: `UPSHIFT_STEP_RPM`, 250 rpm or two
+of the stint's own standard deviations, whichever is larger, over two laps
+each side. The coordinator runs it every lap and George says the result in
+the driver's ear — *"You've stopped short-shifting since lap 15 - upshifts at
+8298 before, 8694 now."* One race, one question, two mechanisms, opposite
+claims: rule 13, in the commit that cited rule 13 as its reason.
+
+The reason that actually binds is a DIRECTION. `saving_change` finds a step
+within a stint by comparing the last two laps with the median of everything
+before, and it has only ever been calibrated on a step UPWARD - he stopped
+saving, Deep Forest 8298 to 8694. A fall as compliance with one particular
+call is a different measurement, over a window that starts where the call was
+made rather than where the stint did, and nobody has calibrated it. Memory
+`feedback-refutation-carries-a-direction` is this shape exactly.
 
 Everything else is `CANNOT_TELL`, **named rather than omitted**. A fuel-map
 change, a brake-balance click and a lift-and-coast are not in any packet GT7
@@ -55,7 +70,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pitcrew.race.calls import BOX_NOW, BOX_SOON
+from pitcrew.race.calls import BOX_NOW, BOX_SOON, STAY_OUT
 
 ACTED = "acted"
 NOT_ACTED = "not-acted"
@@ -134,22 +149,53 @@ def outcome_for(call, laps) -> Outcome:
         return Outcome(NOT_ACTED,
                        f"no stop on laps {lap_num}-{lap_num + BOX_WINDOW_LAPS}")
 
+    if kind == STAY_OUT:
+        # **The same reading as a box call, inverted** (critic pass 8, fifth
+        # round). A stay-out fold carries `short_shift_drop_rpm`, so it used
+        # to fall into the branch below and be refused for not knowing
+        # whether he short-shifted - answering a question the call did not
+        # ask. What it asked was whether he stayed out, and `is_pit_lap`
+        # says so. Rule 12: the reported reason has to come from the
+        # constraint that bound the answer.
+        window = _laps_after(lap_num, laps, BOX_WINDOW_LAPS)
+        stopped = [lap for lap in window if getattr(lap, "is_pit_lap", False)]
+        if stopped:
+            return Outcome(NOT_ACTED,
+                           f"boxed on lap {stopped[0].lap_num} after all")
+        if len(window) <= BOX_WINDOW_LAPS:
+            return Outcome(CANNOT_TELL,
+                           f"only {len(window)} lap(s) followed the call, so "
+                           f"the window it named was never fully driven",
+                           settled=False)
+        return Outcome(ACTED,
+                       f"stayed out through laps "
+                       f"{lap_num}-{lap_num + BOX_WINDOW_LAPS}")
+
     if getattr(call, SHORT_SHIFT_FIELD, None):
         # See the module docstring: this was judged on `short_shift_rpm`,
         # which is the app's own switch, so the answer was always the
         # instruction reflected back. Settled, because no further lap
-        # changes it - what changes it is a calibrated read of
-        # `laps.upshift_rpm`, and there is not one.
+        # changes it.
+        #
+        # **Plain words, and true ones.** The detail is read aloud off the
+        # Race screen beside "pitted on lap 11"; column names and backticks
+        # belong in the log. And the reason is the DIRECTION, not a missing
+        # instrument - `saving_change` measures a rise off `upshift_rpm`
+        # every lap and George speaks it.
         return Outcome(
             CANNOT_TELL,
-            "nothing on file reads whether he short-shifted - "
-            "`laps.short_shift_rpm` is the app's own switch, and "
-            "`laps.upshift_rpm` has no calibrated threshold to judge against")
+            "whether he short-shifted after this call is not measured - the "
+            "app can see him STOP saving, not start")
 
+    # **Not "driving style"** (critic pass 8, fifth round): the app measures
+    # it off the frames - coast share and upshift rpm, `analysis/driving.py` -
+    # and speaks it, so listing it here made this sentence false on every
+    # other call, including on the saving-change call that is computed from
+    # the very frames it says carry nothing.
     return Outcome(
         CANNOT_TELL,
         f"nothing in the feed can confirm a {kind or 'call'} of this kind - "
-        f"GT7 broadcasts no fuel map, brake balance or driving style")
+        f"GT7 broadcasts no fuel map and no brake balance")
 
 
 def judge(filed, laps, *, final: bool = False) -> list:
