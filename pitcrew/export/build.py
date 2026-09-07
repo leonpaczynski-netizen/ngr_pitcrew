@@ -741,8 +741,12 @@ def _section_from_plan(plan: dict) -> dict:
             # `11.0` straight into the contract, `_validate_plan` never looks
             # at this key, and `race_outcome` rendered "lap 11.0" to the
             # driver.
-            "pitLap": (as_whole_number(pit_laps[0], LAP_CEILING, minimum=0)
-                       if pit_laps else None),
+            # `minimum=1`, because a box lap is 1-based - `Plan.pit_laps` is
+            # a stint's `end_lap` and `certify` refuses a 0-lap stint - so a
+            # `pitLap` of 0 is not a box lap the app can produce, and
+            # `race_outcome` asserted "against a planned lap 0" from one.
+            "pitLap": (as_whole_number(pit_laps[0], LAP_CEILING, minimum=1)
+                       if isinstance(pit_laps, list) and pit_laps else None),
         },
         "bindingConstraint": plan.get("binding_constraint"),
         "compoundCrossover": None,
@@ -892,7 +896,7 @@ def _outcome(store, event_id: int, calls: list[dict], section: dict,
         # `if plan.get("pitLap")` folded a box lap of 0 to None; `is not
         # None` is the question, and the value is read the way it is written.
         planned_pit_laps=([lap] if (lap := as_whole_number(
-            plan.get("pitLap"), LAP_CEILING, minimum=0)) is not None
+            plan.get("pitLap"), LAP_CEILING, minimum=1)) is not None
             else None),
         binding_constraint=section.get("bindingConstraint"),
         declined_calls=declined,

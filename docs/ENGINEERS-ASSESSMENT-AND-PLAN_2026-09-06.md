@@ -1567,6 +1567,40 @@ Minor: pass 15 added a test whose docstring narrated a defect **no commit ever
 contained** — reusing `as_stop_count` for `stintLaps` was the first draft of
 that pass's fix and never shipped. It pins the constant, and now says so.
 
+### Row 1.7, critic pass 17 — the shape, not another site
+
+**The pass's own diagnosis, and it is the right one:** *"each pass normalises
+at ONE site, and the next pass finds the site it did not cover."* Passes 12–16
+taught six readers that `11.0` is eleven; pass 17 found `certify` widened to
+accept `{"laps": 11.0}`, normalising into a **local list** and handing the
+plan on untouched — so `stint_ends_on_lap` became `11.0` and George said
+**"the next 9.0-lap stint"** with the hose in, on the driver view and in the
+rival calls too. `feedback_a_guard_at_each_consumer`, in the gate this time.
+
+So the answer is not a seventh reader:
+
+1. **The plan is read as whole numbers ONCE, at the door.** `from_dict` is
+   where desk JSON becomes a plan and every route to storage goes through it;
+   after that no consumer can see a float and the six readers are
+   belt-and-braces. It **normalises and does not judge** — a value that
+   cannot be read is left exactly as written, because `certify` and
+   `_validate_plan` are the two that refuse and they need what the desk
+   actually sent.
+2. **`export` joins `RESERVED_KEYS`.** It was not on the list, so
+   `_strategy_section` preferred a desk-supplied block **verbatim** over the
+   section the app builds — shipping `1.0`, `[11.0, 9.0]` and `pitLap: 11.0`
+   into the contract on the one branch where every reader this row added is
+   bypassed. Two copies of one set of figures is §1a, and the app's copy is
+   the one with the arithmetic behind it.
+3. **`propose_strategy` was not a door.** `write_race_plan` goes through
+   `from_dict`; this one stored whatever JSON arrived, so both of the above
+   had a way round them on the tool whose docstring says it takes *"the JSON
+   of a plan"*.
+4. A box lap is 1-based — `Plan.pit_laps` is a stint's `end_lap` and
+   `certify` refuses a 0-lap stint — so `minimum=1`, and `race_outcome` can
+   no longer assert *"against a planned lap 0"* from a figure the app cannot
+   produce.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), plus critic
 5's carried questions (a misidentified board row resets the held-up window;
 two locator misreads still cut the gauge series; the sector map's offset path

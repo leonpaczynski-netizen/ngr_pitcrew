@@ -1649,3 +1649,50 @@ def test_the_box_lap_is_read_the_way_the_stop_count_is():
     junk = _section_from_plan({
         "stints": [{"laps": 15, "compound": "RM"}], "pit_laps": ["x"]})
     assert junk["plan"]["pitLap"] is None
+
+
+def test_the_plan_is_read_as_whole_numbers_at_the_door():
+    """**Six readers were taught this one per critic pass, and the plan kept
+    the float.** `certify` accepted `{"laps": 11.0}` into a local list and
+    handed the plan on untouched, so `stint_ends_on_lap` became `11.0` and
+    George said "the next 9.0-lap stint" with the hose in.
+
+    Normalised once, where desk JSON becomes a plan; after that no consumer
+    can see a float, and the six readers are belt-and-braces.
+    """
+    from pitcrew.strategy.handover import from_dict
+
+    plan = from_dict({"stints": [{"laps": 11.0, "compound": "RS"},
+                                 {"laps": 9.0, "compound": "RS"}],
+                      "stops": 1.0, "pit_laps": [11.0]}).plan
+    assert [s["laps"] for s in plan["stints"]] == [11, 9]
+    assert not any(isinstance(s["laps"], float) for s in plan["stints"])
+    assert plan["stops"] == 1 and not isinstance(plan["stops"], float)
+    assert plan["pit_laps"] == [11]
+
+    # **It normalises; it does not judge.** `certify` and `_validate_plan`
+    # are the two that refuse, and they need what the desk actually wrote.
+    left = from_dict({"stints": [{"laps": "x"}], "stops": "5",
+                      "pit_laps": [0]}).plan
+    assert left["stints"][0]["laps"] == "x"
+    assert left["stops"] == "5" and left["pit_laps"] == [0]
+
+
+def test_a_desk_supplied_export_block_is_the_apps_own_key():
+    """`_strategy_section` prefers `plan["export"]` verbatim over the section
+    it builds, so a desk-supplied one shipped `1.0` and `[11.0, 9.0]` into the
+    contract on the branch where every reader this row added is bypassed. Two
+    copies of one set of figures is §1a, and the app's has the arithmetic."""
+    from pitcrew.strategy.handover import RESERVED_KEYS, from_dict
+
+    assert "export" in RESERVED_KEYS
+
+    # Nested under "plan", it is refused by name.
+    nested = from_dict({"plan": {"stints": [{"laps": 11}],
+                                 "export": {"plan": {"stops": 1.0}}}})
+    assert any("'export'" in problem for problem in nested.validate()),         nested.validate()
+
+    # At the top level it never reaches the plan at all.
+    flat = from_dict({"stints": [{"laps": 11}],
+                      "export": {"plan": {"stops": 1.0}}})
+    assert "export" not in flat.plan

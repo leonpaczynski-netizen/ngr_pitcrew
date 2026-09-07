@@ -419,8 +419,13 @@ def _withheld_sentence(trigger: str, plan: dict) -> str | None:
 
 # Names the stored payload owns. A plan carrying one of these is refused
 # rather than merged - see `Handover.as_stored`.
+# **`export` is the app's**, and it was not on this list: `_strategy_section`
+# prefers `plan["export"]` verbatim over the section it builds, so a
+# desk-supplied one shipped `1.0` and `[11.0, 9.0]` into the contract on the
+# branch where every reader this row added is bypassed. Two copies of one set
+# of figures is §1a, and the app's is the one with the arithmetic behind it.
 RESERVED_KEYS = frozenset(("handover", "author", "playbook", "unhandled",
-                           "certificate"))
+                           "certificate", "export"))
 
 
 @dataclass(frozen=True)
@@ -847,12 +852,48 @@ def standing_orders(stored: dict) -> list[Order]:
     return out
 
 
+def whole_numbers(plan: dict) -> dict:
+    """The plan with its counts read as whole numbers. **Once, at the door.**
+
+    JSON has no integer type, so a desk writing `11` may send `11.0` - and
+    six readers were taught that separately, one per critic pass, while the
+    plan itself kept the float. `certify` then accepted `{"laps": 11.0}`,
+    `stint_ends_on_lap` became `11.0`, and George said *"the next 9.0-lap
+    stint"* with the hose in.
+
+    A value that cannot be read as a count is left exactly as it is: this
+    function normalises, it does not judge. `certify` and `_validate_plan`
+    are the two that refuse, and they need to see what the desk actually
+    wrote.
+    """
+    def read(value, ceiling, minimum):
+        got = as_whole_number(value, ceiling, minimum=minimum)
+        return value if got is None else got
+
+    out = dict(plan)
+    if "stops" in out:
+        out["stops"] = read(out["stops"], _STOP_CEILING, None)
+    if "laps" in out:
+        out["laps"] = read(out["laps"], LAP_CEILING, 0)
+    if isinstance(out.get("pit_laps"), list):
+        out["pit_laps"] = [read(lap, LAP_CEILING, 1)
+                           for lap in out["pit_laps"]]
+    if isinstance(out.get("stints"), list):
+        out["stints"] = [
+            {**stint, "laps": read(stint.get("laps"), LAP_CEILING, 0)}
+            if isinstance(stint, dict) and "laps" in stint else stint
+            for stint in out["stints"]]
+    return out
+
+
 def from_dict(payload: dict) -> Handover:
     """Rebuild a handover from the JSON an author writes.
 
     Accepts either shape: the plan at the top with the handover's fields
     beside it, or the plan nested under `"plan"`. Ludo writes the first;
     `as_stored` produces it too, so a stored row round-trips.
+
+    **The counts are read here and nowhere else.** See `whole_numbers`.
     """
     section = payload.get("handover") if isinstance(
         payload.get("handover"), dict) else payload
@@ -866,7 +907,7 @@ def from_dict(payload: dict) -> Handover:
     if not isinstance(plan, dict):
         plan = {k: v for k, v in payload.items()
                 if k not in RESERVED_KEYS and k != "plan"}
-    return Handover(plan=plan, playbook=entries,
+    return Handover(plan=whole_numbers(plan), playbook=entries,
                     author=section.get("author") or "ludo",
                     assumptions=list(section.get("assumptions") or []))
 

@@ -223,6 +223,25 @@ def propose_strategy(event_id: int, plan: str, label: str = "") -> str:
         return _dump({"saved": False, "error": f"plan is not JSON: {exc}"})
     try:
         from pitcrew.strategy.certify import certify_for_event
+        from pitcrew.strategy.handover import RESERVED_KEYS, whole_numbers
+
+        # **The other door goes through `from_dict`; this one stored whatever
+        # arrived.** So the two things that door does - reading JSON numbers
+        # as counts, and refusing the keys the app owns - both had a way
+        # round them here, on the tool whose docstring says it takes "the
+        # JSON of a plan". `export` is the one that matters: a desk-supplied
+        # block is preferred verbatim over the section the app builds.
+        if not isinstance(payload, dict):
+            return _dump({"saved": False,
+                          "error": "plan must be a JSON object"})
+        clash = sorted(RESERVED_KEYS & set(payload))
+        if clash:
+            return _dump({
+                "saved": False,
+                "error": f"the plan carries {', '.join(repr(k) for k in clash)}"
+                         f", which the app owns - rename it, because storing "
+                         f"both would silently keep one"})
+        payload = whole_numbers(payload)
 
         certificate = certify_for_event(store, event_id, payload)
         strategy_id = store.save_strategy(
