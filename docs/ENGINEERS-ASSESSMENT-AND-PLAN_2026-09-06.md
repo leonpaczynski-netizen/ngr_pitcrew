@@ -1078,6 +1078,55 @@ rate for this compound…"*) against §5.5's *reason second and short*.
 Pre-existing since `78a728a`, and the contract now quotes that call, so the
 two move together.
 
+### Row 1.7, critic pass 4 — the arithmetic behind pass 3, and three guards that could pass while blind
+
+**Pass 3's change was right and its numbers were wrong.** *"Fifteen W's want
+102 px"* was measured **through `set_note` while `NOTE_CHARS` was still 12**,
+so it truncated first and I measured twelve. With the theme loaded the family
+resolves to Bahnschrift — the app-wide sheet beats `stencil_font`'s Condensed,
+and `note.font()` reports it, so the elision metrics were at least the ones
+the label paints with — and fifteen want **129 px**. The real strategy labels,
+which `nav_state` passes through verbatim, want **169–306 px against a 178 px
+rail**, so long ones elide whatever the constant is. Measured against every
+label on file, the pixel elision is better than or equal to the old character
+count on all of them — `1 stop - box lap 5` survives whole at 94 px where 15
+characters cut it — so the change stands and only the arithmetic is retracted.
+**That the rail cannot show a full strategy label is the rail's width, and is
+carried rather than fixed here.**
+
+1. **`NOTE_PX = 134` was a constant where the widget knows its own width.**
+   The scrollbar takes 12 px when it shows and nothing when it does not, so a
+   constant for the narrow case cut every note 12 px short in the wide one —
+   which is the normal one at his 1600×1000 window. The room is asked of the
+   viewport now.
+2. **The rail test asserted the elider against its own argument.**
+   `set_note` elides *to* `NOTE_PX`, so `sizeHint().width() <= NOTE_PX` is
+   green at 134, at 300 and at 1000. It compares against the viewport less the
+   column margins now — the only number that is not the elider's own input.
+3. **`_stops_planned` read two fields that may both be absent and ignored the
+   one `Handover.validate` requires.** A plan carrying only `stints`
+   certifies and stores, and returned `None` — which the caller rendered as
+   *"he may bring a planned stop forward"* about a plan with no stop in it,
+   the fourth wrong version of that sentence. It reads `len(stints) - 1` now:
+   `Plan.stops`' own definition, present on all 28 stored plans, agreeing with
+   the stored `stops` on every one, and the expression the coordinator arms
+   from. **It also caught the test fixture**, which claimed one stop while
+   holding one stint.
+4. **The AST guard counted containers it could not read.** `containers`
+   incremented before the literal check, so a site naming its action through a
+   module constant, or setting its trigger elsewhere, kept the tally balanced
+   and dropped the pair in silence; and `mentions` was a raw substring count,
+   so a comment failed the test for nothing. Tokenised now, with an explicit
+   `unread` list. Break-tested against five shapes: dict literal splatted as
+   `**rail`, action via a constant, a missing trigger key, plain keywords, and
+   a mention in a comment — the first four go red, the last stays green.
+
+Also: the two withheld sentences had drifted apart (rule 13) — the tyre line
+had dropped *"without a rule from the desk"* while the fuel line kept it — and
+a **granted** `fuel_long: drop_stop` on a plan with no stop is a rule that can
+never fire, which is the same failure as a rule for a trigger he cannot see
+and now says so.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three
 kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic

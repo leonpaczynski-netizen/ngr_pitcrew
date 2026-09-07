@@ -632,20 +632,25 @@ class NavRail(QWidget):
         scroller.setWidget(inner)
         self.select(0)
 
-    # What fits on one line in the rail, in PIXELS. A note that clips is
-    # worse than a shorter one: "NOTHING ASKED YE" reads as a bug.
+    # The column's own left and right margins. Everything else about the
+    # room a note has is asked of the widget, not held here - the scrollbar
+    # takes 12 px when it shows and nothing when it does not, and a constant
+    # for the narrow case cut every note 12 px short in the wide one, which
+    # is the normal one at his 1600x1000 window.
+    NOTE_MARGINS = 32
+
+    # **This was a character count, and a character count cannot be right in
+    # a proportional font.** 15 was picked by eye; 12 was then "measured"
+    # offscreen, where Qt has no font database and `"W" * 12` and `"i" * 12`
+    # measure the same - and that cut `1 stop - box lap 5` in half. Against
+    # every strategy label on file, eliding by pixel is better than or equal
+    # to the old count on all of them.
     #
-    # **It was a character count, and a character count cannot be right in a
-    # proportional font.** 15 was picked by eye; 12 was then "measured" to 130
-    # px against 140 available - offscreen, where Qt has no font database, so
-    # every glyph gets an identical fallback advance and `"W" * 12` and
-    # `"i" * 12` measure the same. On the real font (Bahnschrift Condensed)
-    # fifteen W's want 102 px and every note on file wants 62-76, so nothing
-    # ever clipped and the shorter count truncated four stored Ludo plans to
-    # the same `Ludo 1-stop...` on the note that says which plan is armed.
-    #
-    # 178 rail, less the column's 20 and 12 margins and the 12 px scrollbar.
-    NOTE_PX = 134
+    # It still elides: `nav_state` passes a strategy label through verbatim
+    # and they run to 306 px against a 178 px rail. That is the rail's width,
+    # not this function's - carried, not fixed here.
+    def _note_room(self) -> int:
+        return max(60, self._scroller.viewport().width() - self.NOTE_MARGINS)
 
     def focus_item(self, index: int) -> None:
         """Move focus along the rail, wrapping. Skips what is not built."""
@@ -667,8 +672,10 @@ class NavRail(QWidget):
         if not 0 <= index < len(self._notes):
             return
         note = self._notes[index]
+        # `note.font()` carries the app-wide sheet's family, so these metrics
+        # are the ones the label paints with - measured, not assumed.
         note.setText(QFontMetrics(note.font()).elidedText(
-            text, Qt.TextElideMode.ElideRight, self.NOTE_PX))
+            text, Qt.TextElideMode.ElideRight, self._note_room()))
         note.setVisible(bool(text))
 
     def select(self, index: int) -> None:

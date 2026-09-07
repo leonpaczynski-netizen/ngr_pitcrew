@@ -144,12 +144,38 @@ GATED = (("tyre_short", "add_stop"), ("fuel_long", "drop_stop"))
 
 
 def _stops_planned(plan: dict) -> int | None:
-    """How many stops the plan holds, or None. **Never 0 for "don't know".**"""
+    """How many stops the plan holds, or None. **Never 0 for "don't know".**
+
+    **Off `stints`, because that is the field a stored plan must have.**
+    `Handover.validate` requires `stints` and neither `stops` nor `pit_laps`,
+    so a plan that certifies and stores can carry only the first - and asking
+    the other two returned None, which the caller then rendered as *"he may
+    bring a planned stop forward"* about a plan with no stop in it. That is
+    `Plan.stops`' own definition (`model.py`), it is present on all 28 stored
+    plans, and it agrees with the stored `stops` on every one of them.
+    """
+    stints = plan.get("stints")
+    if isinstance(stints, list) and stints:
+        return len(stints) - 1
     stops = plan.get("stops")
     if isinstance(stops, int) and not isinstance(stops, bool):
         return stops
     laps = plan.get("pit_laps")
     return len(laps) if isinstance(laps, list) else None
+
+
+def _cannot_fire(trigger: str, action: str, plan: dict) -> bool:
+    """Whether this plan makes a GRANTED structural action unreachable.
+
+    The mirror of `_withheld_sentence`, and the same class as a rule for a
+    trigger George is blind to: `_stops_off` returns None while
+    `stint_ends_on_lap` is None, so `fuel_long: drop_stop` on a plan with no
+    stop in it is a rule the driver believes is armed and which can never
+    fire. The wear cliff has no such bound - it can reach the last stint of
+    any plan, and on a no-stop plan every stint is the last.
+    """
+    return (trigger, action) == ("fuel_long", "drop_stop") \
+        and _stops_planned(plan) == 0
 
 
 def _withheld_sentence(trigger: str, plan: dict) -> str | None:
@@ -168,9 +194,9 @@ def _withheld_sentence(trigger: str, plan: dict) -> str | None:
             return ('No stop is planned, so he cannot bring one forward: on '
                     'tyre short he says "Tyres past the stint limit." and you '
                     'decide.')
-        return ('On tyre short he may bring a planned stop forward, but not '
-                'add one after the last - then he says "Tyres past the stint '
-                'limit." and you decide.')
+        return ('On tyre short he may bring a planned stop forward, but '
+                'cannot add one after the last without a rule from the desk - '
+                'then he says "Tyres past the stint limit." and you decide.')
     if trigger == "fuel_long":
         if stops == 0:
             # `_stops_off` needs a planned stop, so the call cannot fire and
@@ -458,6 +484,13 @@ def standing_orders(stored: dict) -> list[Order]:
     withheld = []
     for trigger, action in GATED:
         if grants(named, trigger, action):
+            # **Granted is not the same as reachable.** A rule the plan makes
+            # unfireable is the same failure as a rule for a trigger he
+            # cannot see: the driver believes it is armed.
+            if _cannot_fire(trigger, action, plan):
+                out.append(Order(
+                    f"The desk's rule for {trigger.replace('_', ' ')} cannot "
+                    f"fire on this plan - there is no stop to drop.", GAP))
             continue
         sentence = _withheld_sentence(trigger, plan)
         if sentence is not None:

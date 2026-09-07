@@ -27,7 +27,12 @@ from .test_controller import qt_app  # noqa: F401
 def a_plan(playbook=(), assumptions=(), certificate=None) -> dict:
     """A stored plan row's `plan_json`, the shape both screens are handed."""
     handover = Handover(
-        plan={"stints": [{"laps": 15, "compound": "RM", "start_lap": 1}],
+        # Two stints for one stop. `_stops_planned` reads `stints`, because
+        # `len(stints) - 1` is `Plan.stops`' own definition and the thing the
+        # coordinator arms from - and this fixture used to say one stop with
+        # one stint, which is a no-stop plan wearing a `stops` key.
+        plan={"stints": [{"laps": 15, "compound": "RM", "start_lap": 1},
+                         {"laps": 5, "compound": "RM", "start_lap": 16}],
               "stops": 1, "pit_laps": [15], "binding_constraint": "fuel"},
         playbook=list(playbook),
         assumptions=list(assumptions))
@@ -553,14 +558,19 @@ def test_the_rail_fits_the_smallest_display_he_owns(qt_app):
     qt_app.processEvents()
     assert not last.visibleRegion().isEmpty(), "selected off-screen"
 
-    # **The note elides in PIXELS.** It was a character count, and the count
-    # was set from a width measured offscreen - where Qt has no font database
-    # and every glyph gets the same fallback advance, so `"W" * n` and
-    # `"i" * n` measure alike. That is why this asserts the widget's own
-    # elision rather than a number: it is true under either font.
-    for note in ("Ludo 1-stop, RBR Short, 30 Aug", "3 x RM, 2 stops"):
+    # **The note elides in PIXELS, against the room the widget HAS.**
+    # Asserting it against `NOTE_PX` was the elider checked against its own
+    # argument - green at 134, at 300 and at 1000. The room is the viewport
+    # less the column margins, which is what actually changes when the
+    # scrollbar appears, and a constant for the narrow case cut every note
+    # short in the wide one.
+    room = rail._scroller.viewport().width() - NavRail.NOTE_MARGINS
+    assert room > 0
+    for note in ("Ludo 1-stop, RBR Short, 30 Aug", "3 x RM, 2 stops",
+                 "ludo plan - Daytona GR3 Rd6, 11+9 with playbook (rev 2)"):
         rail.set_note(0, note)
-        assert rail._notes[0].sizeHint().width() <= NavRail.NOTE_PX, note
+        assert rail._notes[0].sizeHint().width() <= room, (
+            note, rail._notes[0].sizeHint().width(), room)
     # **This half needs a real font, and saying so IS the finding.**
     # Offscreen Qt has no font database: `QFontInfo(...).pixelSize()` is -1,
     # every glyph gets the same fallback advance, and no string over twelve
@@ -610,13 +620,41 @@ def test_gated_names_every_structural_call_site():
     `structural_action` must have its (trigger, action) pair named in
     `GATED`, and every pair in `GATED` must have a call.
     """
-    import ast
     import pathlib
 
     import pitcrew.race.calls as calls_module
     from pitcrew.strategy.handover import GATED
 
     source = pathlib.Path(calls_module.__file__).read_text(encoding="utf-8")
+    found, unread, balanced = _structural_sites(source)
+    assert balanced, (
+        "the uses of structural_action in calls.py do not match the "
+        "containers this walker read - it is written in a shape the walker "
+        "cannot see, so it is not guarding anything")
+    assert not unread, (
+        f"the walker saw {len(unread)} structural_action site(s) it could "
+        f"not read, so their (trigger, action) pair was dropped in silence: "
+        f"{unread}")
+    assert found == set(GATED), (
+        f"calls.py gates {found}; GATED names {set(GATED)} - a pair in one "
+        f"and not the other is a decision the standing orders are silent "
+        f"about")
+
+
+def _structural_sites(source: str):
+    """Every `(trigger, action)` pair `calls.py` gates, off its own AST.
+
+    **Lifted out of its test so the break-test is a test.** Four shapes used
+    to pass while blind: a dict literal splatted as `**rail`, an action named
+    through a module constant, a missing `trigger` key, and plain keyword
+    arguments. Returns `(pairs, unreadable, balanced)` - `balanced` is False
+    when the walker read fewer containers than the source has uses, which is
+    how it says it has gone blind rather than going quiet.
+    """
+    import ast
+    import io
+    import tokenize
+
     tree = ast.parse(source)
 
     def constant(node):
@@ -627,7 +665,7 @@ def test_gated_names_every_structural_call_site():
             node = node.body
         return node.value if isinstance(node, ast.Constant) else None
 
-    found, containers = set(), 0
+    found, containers, unread = set(), 0, []
     for node in ast.walk(tree):
         # Two shapes, because `calls.py` uses one of them: keyword arguments
         # on a call - including `dict(structural_action=..., trigger=...)`
@@ -644,26 +682,26 @@ def test_gated_names_every_structural_call_site():
         containers += 1
         trigger = constant(pairs.get("trigger"))
         action = constant(pairs["structural_action"])
-        if trigger is not None and action is not None:
-            found.add((trigger, action))
+        if trigger is None or action is None:
+            # **Counted but not read is the same as not seen.** `containers`
+            # used to increment here regardless, so a site naming its action
+            # through a constant kept the tally balanced and dropped the pair.
+            unread.append(ast.dump(node)[:120])
+            continue
+        found.add((trigger, action))
 
-    # **The walker must not be able to go blind quietly.** It reads two AST
-    # shapes; a third - a subscript assignment, a variable, a helper - would
-    # leave `found` equal to `GATED` and the test green about a call site it
-    # never saw. So every textual mention has to be accounted for by a
-    # container the walker actually read.
-    mentions = (source.count("structural_action=")
-                + source.count('"structural_action"')
-                + source.count("'structural_action'"))
-    assert containers == mentions, (
-        f"{mentions} mentions of structural_action in calls.py but the "
-        f"walker read {containers} - it is written in a shape this test "
-        f"cannot see, so it is not guarding anything")
-
-    assert found == set(GATED), (
-        f"calls.py gates {found}; GATED names {set(GATED)} - a pair in one "
-        f"and not the other is a decision the standing orders are silent "
-        f"about")
+    # Tokenised, not `str.count`: the raw substring appears in comments and
+    # in prose, so counting text failed on a docstring and passed on a
+    # rename. One use is the dataclass field declaration, not a call site.
+    uses = 0
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.NAME and token.string == "structural_action":
+            uses += 1
+        elif token.type == tokenize.STRING and \
+                token.string.strip("bBrRuUfF") in ('"structural_action"',
+                                                   "'structural_action'"):
+            uses += 1
+    return found, unread, containers == uses - 1
 
 
 def test_the_loader_prints_the_checks_that_could_not_run(store, event_id,
@@ -718,3 +756,87 @@ def test_the_loader_prints_the_checks_that_could_not_run(store, event_id,
     printed = capsys.readouterr().out
     assert "Not checked: the lap count" in printed, printed
     assert "Standing orders" not in printed, "the CLI prints no heading"
+
+
+def test_the_walker_cannot_pass_while_blind():
+    """The break-test, as a test. Four of these five shapes used to leave
+    `found` equal to `GATED` and the guard green about a call site it had
+    never read; the fifth - a mention in a comment - must NOT fail it."""
+    # The shape `calls.py` really uses, as the control: one readable site
+    # plus the dataclass field declaration.
+    control = ('rail = dict(structural_action="add_stop" if u else None,\n'
+               '            trigger="tyre_short")\n'
+               'structural_action: str | None = None\n')
+    found, unread, balanced = _structural_sites(control)
+    assert found == {("tyre_short", "add_stop")} and not unread and balanced
+
+    blind = {
+        "dict literal":
+            'rail = {"structural_action": "abandon_plan", '
+            '"trigger": "incident"}\n',
+        "action via a constant":
+            '_A = "abandon_plan"\n'
+            'r = dict(structural_action=_A, trigger="incident")\n',
+        "no trigger key":
+            'r = dict(structural_action="abandon_plan")\n',
+        "plain keywords":
+            'c = Call(structural_action="abandon_plan", trigger="incident")\n',
+    }
+    for name, source in blind.items():
+        found, unread, balanced = _structural_sites(source + control)
+        caught = (found != {("tyre_short", "add_stop")}) or bool(unread) \
+            or not balanced
+        assert caught, f"{name} passed while blind"
+
+    # And a mention in a comment must not fail it for nothing.
+    found, unread, balanced = _structural_sites(
+        '# structural_action="abandon_plan" would go here\n' + control)
+    assert found == {("tyre_short", "add_stop")} and not unread and balanced
+
+
+def test_a_plan_with_only_stints_is_read_for_its_stops():
+    """**`Handover.validate` requires `stints` and neither `stops` nor
+    `pit_laps`**, so a plan carrying only the first certifies and stores -
+    and `_stops_planned` returned None for it, which rendered as "he may
+    bring a planned stop forward" about a plan with no stop in it."""
+    from pitcrew.strategy.handover import Handover, _stops_planned
+
+    bare = {"stints": [{"laps": 20, "compound": "RM", "start_lap": 1}]}
+    assert Handover(plan=bare).validate() == []
+    assert _stops_planned(bare) == 0
+
+    said = lines({**bare, "handover": {"playbook": []}})
+    assert "No stop is planned, so he cannot bring one forward" in said, said
+    assert "may bring a planned stop forward" not in said
+    assert "the stops stay in the plan" not in said
+
+    # And `len(stints) - 1` agrees with a real plan's own `stops`.
+    assert _stops_planned(a_plan()) == a_plan()["stops"]
+
+
+def test_a_granted_rule_the_plan_cannot_fire_is_named():
+    """The mirror of the withheld sentence, and the same failure as a rule
+    for a trigger he cannot see: `_stops_off` returns None while
+    `stint_ends_on_lap` is None, so `fuel_long: drop_stop` on a plan with no
+    stop is a rule the driver believes is armed."""
+    plan = {"stints": [{"laps": 20, "compound": "RM", "start_lap": 1}],
+            "handover": {"playbook": [
+                {"trigger": "fuel_long", "action": "drop_stop",
+                 "when": "1.5 laps in hand", "until": "the flag"}]}}
+    said = lines(plan)
+    assert "cannot fire on this plan - there is no stop to drop" in said, said
+
+    # With a stop in the plan the same rule is an ordinary standing order.
+    with_a_stop = lines(a_plan(playbook=[
+        PlaybookEntry(trigger="fuel_long", action="drop_stop",
+                      when="1.5 laps in hand", until="the flag")]))
+    assert "cannot fire on this plan" not in with_a_stop
+    assert "fuel long - drop stop" in with_a_stop
+
+
+def test_the_two_withheld_sentences_say_it_the_same_way():
+    """Rule 13. They drifted: the tyre line dropped "without a rule from the
+    desk" while the fuel line kept it, so the driver could not tell that the
+    tyre gate is a permission the desk could grant."""
+    said = lines(a_plan())
+    assert said.count("without a rule from the desk") == 2, said
