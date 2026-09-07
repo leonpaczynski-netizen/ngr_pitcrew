@@ -862,9 +862,15 @@ def _outcome(store, event_id: int, calls: list[dict], section: dict,
     stay_out = next((call["lap"] for call in calls
                      if call.get("kind") == "stay-out"
                      and call.get("accepted")), None)
+    from pitcrew.strategy.handover import as_stop_count
+
     text = race_outcome(
         race_laps,
-        planned_stops=plan.get("stops"),
+        # Through the one expression, like the six others. This one reads
+        # the export block rather than the stored plan, so it is normalised
+        # upstream on both branches - routed anyway, because "already
+        # normalised somewhere else" is how the other five got missed.
+        planned_stops=as_stop_count(plan.get("stops")),
         planned_pit_laps=[plan["pitLap"]] if plan.get("pitLap") else None,
         binding_constraint=section.get("bindingConstraint"),
         declined_calls=declined,

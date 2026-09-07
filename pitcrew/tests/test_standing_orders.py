@@ -1440,3 +1440,72 @@ def test_every_reader_of_stops_goes_through_one_expression(qt_app):
         "stops": 1.0})
     assert section["plan"]["stops"] == 1, section["plan"]
     assert not isinstance(section["plan"]["stops"], float)
+
+
+def test_the_ceiling_bounds_both_number_paths():
+    """**`1001.0` was refused and `1001` was read as a count.**
+
+    `isinstance(value, int)` returned before the ceiling was consulted, so
+    the bound sat on the float branch alone - and `json.loads` gives an
+    `int` for a digit string with no decimal point, which is the likelier
+    shape. Measured: a 400-digit int rendered a 2,822 px order line against
+    a ~733 px plate, more than double the 1,352 px `strategy_screen.py`
+    already records as a defect.
+    """
+    from pitcrew.strategy.handover import _STOP_CEILING, as_stop_count
+
+    assert as_stop_count(_STOP_CEILING) == _STOP_CEILING
+    assert as_stop_count(float(_STOP_CEILING)) == _STOP_CEILING
+    # The same JSON number must get the same verdict either way it is
+    # written - which was the whole defect: 1001.0 refused, 1001 read.
+    assert as_stop_count(_STOP_CEILING + 1) is None
+    assert as_stop_count(float(_STOP_CEILING + 1)) is None
+    assert as_stop_count(10 ** 400) is None, "an int past the ceiling"
+    assert as_stop_count(1e300) is None, "and a float past it"
+
+    # And a figure past it is named, not rendered.
+    said = lines({"stints": [{"laps": 20}], "stops": 10 ** 400,
+                  "handover": {"playbook": []}})
+    assert "(not a count)" in said
+    # Truncated, not printed: the figure is 400 characters and the clause it
+    # lands in is one line of a wrapped label.
+    figure = [line for line in said.split(" | ") if "(not a count)" in line][0]
+    quoted = figure.split("says ")[1].split(" (not a count)")[0]
+    assert len(quoted) <= 40, len(quoted)
+    assert quoted.endswith("…"), quoted
+
+
+def test_only_two_readings_can_disagree():
+    """`any(number < 0)` was decisive only where there was ONE reading beside
+    an unreadable field - and a head asserting the figures conflict, with one
+    figure in the sentence, is what the head-ordering exists to prevent.
+
+    Only `stops` can read negative (`len(stints) - 1` and `len(pit_laps)`
+    cannot), so with two readings a negative one already makes the set
+    bigger and the disjunct changed nothing."""
+    from pitcrew.strategy.handover import _stop_disagreement
+
+    one_figure = _stop_disagreement({"stints": {"a": 1}, "stops": -1})
+    assert one_figure is not None
+    assert "disagrees with itself" not in one_figure, one_figure
+    assert one_figure.startswith("The plan's stop figures cannot all be read")
+
+    two_figures = _stop_disagreement({"stints": [{}], "stops": -1})
+    assert two_figures is not None
+    assert two_figures.startswith("The plan disagrees with itself"), two_figures
+
+
+def test_a_stops_value_that_is_not_a_count_is_a_problem_not_a_skip():
+    """`isinstance(True, int)` is True in Python, so `stops: true` used to be
+    cross-checked against the stints and then silently was not."""
+    from pitcrew.export.payload import _validate_plan
+
+    said = _validate_plan({"plan": {"stintLaps": [15, 5], "stops": True}})
+    assert any("not a stop count" in line for line in said), said
+
+    # A real count is cross-checked as it always was.
+    counted = _validate_plan({"plan": {"stintLaps": [15, 5], "stops": 5}})
+    assert any("2 stints against 5 stop" in line for line in counted), counted
+
+    # And a plain, correct one is silent.
+    assert _validate_plan({"plan": {"stintLaps": [15, 5], "stops": 1}}) == []

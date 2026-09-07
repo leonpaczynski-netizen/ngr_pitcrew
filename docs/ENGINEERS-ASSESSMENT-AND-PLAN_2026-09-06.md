@@ -1472,6 +1472,34 @@ string surgery on the built clause — it is formatted from the template, with
 an assertion so a reworded template fails loudly instead of silently losing
 its capital.
 
+### Row 1.7, critic pass 14 — the bound guarded the exotic shape and missed the common one
+
+1. **(A)** `isinstance(value, int)` returned *before* `_STOP_CEILING` was
+   consulted, so the bound sat on the float branch alone — and `json.loads`
+   gives a Python `int` for a digit string with no decimal point, which is
+   the likelier shape. **`1001.0` was refused as unreadable and `1001` was
+   read as a count**: two opposite verdicts on the same JSON number, inside
+   the expression this row created so every consumer would agree. Measured, a
+   400-digit int rendered a **2,822 px** order line against a ~733 px plate —
+   more than double the 1,352 px `strategy_screen.py` already records as a
+   defect worth fixing.
+2. **(A)** `any(number < 0)` in the head test was decisive **only** where
+   there was one reading beside an unreadable field — only `stops` can read
+   negative, so with two readings the set-size test has already decided. So
+   the one case it changed was the one the ordering exists to prevent: *"The
+   plan disagrees with itself about stops"* with a single figure in the
+   sentence. Removed; the set size is the whole test.
+3. `certify`'s refusal quoted the same field with a bare `repr` and reaches a
+   driver-facing status label — `_short` is `short_value`, public, and both
+   read it. And `export/payload` treated a value it could not read as a
+   reason to **skip** the stints-vs-stops cross-check rather than as a
+   problem, so `stops: true` — which `isinstance(True, int)` used to
+   catch — silently stopped being checked.
+
+Minor: the comment added in pass 13 said *"a float is what
+`_section_from_plan` emits"*, which the same diff had made false; and one
+last raw read of `plan["stops"]` in `race_outcome`'s caller.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), plus critic
 5's carried questions (a misidentified board row resets the held-up window;
 two locator misreads still cut the gauge series; the sector map's offset path

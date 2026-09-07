@@ -177,13 +177,17 @@ def as_stop_count(value) -> int | None:
     """
     if isinstance(value, bool):
         return None
-    if isinstance(value, int):
+    # `inf` and `nan` fail `is_integer()`. Everything else that survives is
+    # bounded HERE, on both paths: the ceiling used to sit on the float
+    # branch alone, after `isinstance(value, int)` had already returned - so
+    # `1001.0` was refused and `1001` was read as a count, two opposite
+    # verdicts on the same JSON number. `json.loads` gives an `int` for a
+    # digit string with no decimal point, which is the likelier shape, and a
+    # 400-digit one rendered a 2,822 px line against a 733 px plate.
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int) and abs(value) <= _STOP_CEILING:
         return value
-    if isinstance(value, float) and value.is_integer() \
-            and abs(value) <= _STOP_CEILING:
-        # `inf` and `nan` fail `is_integer()`; `1e300` does not, and became a
-        # 301-digit integer printed in full into a wrapped label on the grid.
-        return int(value)
     return None
 
 
@@ -253,8 +257,14 @@ def _stops_planned(plan: dict) -> int | None:
     return values.pop() if len(values) == 1 else None
 
 
-def _short(text: str, limit: int = 40) -> str:
-    """A stored value quoted back to the driver, cut to one line's worth."""
+def short_value(value, limit: int = 40) -> str:
+    """A stored value quoted back to the driver, cut to one line's worth.
+
+    **Public, because `certify`'s refusal reaches a status label too** and
+    quoted the same field with a bare `repr` - a 400-digit figure or a whole
+    stint structure would go into it whole.
+    """
+    text = repr(value)
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "\u2026"
 
 
@@ -290,7 +300,7 @@ def _stop_disagreement(plan: dict) -> str | None:
     # the only one who can tell the desk what it meant.
     # Truncated: a `stints` given as a dict renders its whole structure into
     # a standing order otherwise, and `Handover.validate` passes that shape.
-    parts += [said[name].format(n=_short(repr(plan.get(name))))
+    parts += [said[name].format(n=short_value(plan.get(name)))
               + " (not a count)" for name in unreadable]
     # **Only a real disagreement is called one.** With a single corrupt
     # reading and nothing to compare it against, the plan is not arguing
@@ -309,8 +319,12 @@ def _stop_disagreement(plan: dict) -> str | None:
     # the "disagrees with itself" head (rule 12: the head has to name the
     # constraint the expression produced).
     if len(parts) > 1:
-        conflict = (len(set(readings.values())) > 1
-                    or any(number < 0 for number in readings.values()))
+        # **Only the set size.** `any(number < 0)` was decisive only when
+        # there was ONE reading beside an unreadable field - and a head
+        # asserting the figures conflict, with one figure in the sentence,
+        # is the thing this ordering exists to prevent. With two readings a
+        # negative one already makes the set bigger.
+        conflict = len(set(readings.values())) > 1
         head = ("The plan disagrees with itself about stops - " if conflict
                 else "The plan's stop figures cannot all be read - ")
         return head + ", ".join(parts) + \
@@ -321,7 +335,7 @@ def _stop_disagreement(plan: dict) -> str | None:
     name = (list(readings) + unreadable)[0]
     template = said[name]
     assert template.startswith("its "), template
-    number = readings.get(name, _short(repr(plan.get(name))))
+    number = readings.get(name, short_value(plan.get(name)))
     return ("The plan's " + template[len("its "):].format(n=number)
             + ", which is not a count. How many stops it holds is not known.")
 

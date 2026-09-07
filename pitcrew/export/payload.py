@@ -574,12 +574,22 @@ def _validate_plan(strategy: dict) -> list[str]:
                 f"strategy.plan.stintLaps sums to {sum(stints)} against a "
                 f"plan of {laps} laps - the stints and the distance disagree")
         # `isinstance(stops, int)` skipped the whole check on a float, and
-        # a float is what `_section_from_plan` emits for a plan authored
-        # outside the app.
-        from pitcrew.strategy.handover import as_stop_count
+        # a plan authored outside the app reaches `_section_from_plan`
+        # carrying whatever JSON the desk wrote - which is why that function
+        # normalises now, and why this one must not assume it did.
+        from pitcrew.strategy.handover import as_stop_count, short_value
 
-        stops = as_stop_count(plan.get("stops"))
-        if stops is not None and len(stints) != stops + 1:
+        raw = plan.get("stops")
+        stops = as_stop_count(raw)
+        if raw is not None and stops is None:
+            # **A value that is not a count is its own problem, not a reason
+            # to skip the check.** `isinstance(True, int)` is True in Python,
+            # so `stops: true` used to be cross-checked and then silently
+            # was not.
+            problems.append(
+                f"strategy.plan.stops is {short_value(raw)}, which is not a "
+                f"stop count")
+        elif stops is not None and len(stints) != stops + 1:
             problems.append(
                 f"strategy.plan has {len(stints)} stints against {stops} "
                 f"stop(s) - a stop separates two stints")

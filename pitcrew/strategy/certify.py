@@ -223,13 +223,16 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     # round-trip produces - and `isinstance(stops, int)` dropped it, so this
     # refusal could not fire and the Race page then said "No stop is planned"
     # over a plan whose own field said five (row 1.7, critic pass 12).
-    from pitcrew.strategy.handover import as_stop_count
+    from pitcrew.strategy.handover import as_stop_count, short_value
 
     stops = as_stop_count(plan.get("stops"))
     if plan.get("stops") is not None and stops is None:
+        # Truncated by the same expression the standing orders use: this
+        # refusal reaches a driver-facing status label, and a 400-digit
+        # figure or a whole stint structure would go into it whole.
         refusals.append(
-            f"the plan's stops field is {plan['stops']!r}, which is not a "
-            f"stop count")
+            f"the plan's stops field is {short_value(plan['stops'])}, which "
+            f"is not a stop count")
     elif stops is not None and stops != len(stints) - 1:
         refusals.append(
             f"the plan says {stops} stop{'' if stops == 1 else 's'} but has "
