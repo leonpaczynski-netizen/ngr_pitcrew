@@ -54,9 +54,10 @@ do; the numbers here are what it has actually done.
    **What it costs, counted rather than asserted:** 11 race flags on lap one
    are given up. None of them has been confirmed to be a penalty and none was
    examined one by one, so this is a real loss and not a demonstrated
-   nothing. **Out laps cost nothing at all** - the 16 out-lap flags on file
-   are every one of them ALSO on a pit lap, so the out-lap half of the gate
-   removes nothing the pit-lap half does not.
+   nothing. **Out laps cost nothing at all**, and the count says why: 144
+   flags on file sit on a lap carrying `is_out_lap`, and every one of them is
+   also lap one (128) or also a pit lap (16). Flags the out-lap half of the
+   gate removes on its own: **zero**.
 2. **An avoidance stab** - lifting hard behind a spinning car on a straight.
    Nothing in the feed distinguishes it, and nothing here pretends to: the
    call says "Possible penalty served", goes out LOW, and `Call.spoken()`
@@ -96,21 +97,26 @@ do; the numbers here are what it has actually done.
      long enough to spare it catches nothing at all.
 
    Counting brakes rather than flags separates the two populations that
-   are actually on file. Every place the detector flags with the model
-   intact, by the share of looked-at laps that brake there:
+   are actually on file. Take every place the detector flags with the model
+   intact, and read the share of looked-at laps that brake there:
 
-   | share | places | what they are |
-   |---|---|---|
-   | 4-56% | 41 | penalties, every one of them |
-   | 57-92% | **0** | - |
-   | 93-100% | 20 | Yas 3,470 m and Spa 24h 2,281 / 6,582 m |
+   * **the ones that are penalties top out at 56%** - Daytona's session 118
+     race, 5 of 9 - and run down to 4%;
+   * **the ones that are corners start at 93%** - Yas session 44, 13 of 14 -
+     and run to 100%: Yas 3,470 m and Spa 24h's 2,281 and 6,582 m.
 
-   The worst case in the penalty half is Daytona's session 118 race at 5 of
-   9 laps, 56%; the best in the other half is Yas session 44 at 13 of 14,
-   93%. **`BRAKED_SHARE` sits in that gap and withdraws only the second
-   group.** (Session 44's own share is 13 of 14 and not 15 of 15 - lap 5
-   carries no hard brake there at all. An earlier draft of this note said
-   "all fifteen laps" and was wrong.)
+   `BRAKED_SHARE` sits in that gap. **The claim is about places the ledger
+   can JUDGE**, which means `BRAKED_LAPS_NEEDED` looked-at laps or more; two
+   places sit at 2 of 3 (Monza session 6 at 4,464 m, and Yas session 41 at
+   3,498 m, which is the missing corner) and the ledger never reaches a
+   verdict on either, so the bar is untouched by them and a flat "nothing on
+   file falls between" would not be true. Counts of "places" are deliberately
+   not quoted here: the unit is ambiguous between a flag, a place and a
+   place-session, and quoting one of them wrongly is a mistake this file has
+   already made twice.
+
+   (Session 44's own share is 13 of 14 and not 15 of 15 - lap 5 carries no
+   hard brake there at all. An earlier draft said "all fifteen laps".)
 
    **That is not the same as saying the rule would catch any missing
    corner, and it does not** (critic pass 7, third round). Drop each
@@ -133,14 +139,14 @@ do; the numbers here are what it has actually done.
      is what the lower bar exists to prevent.
 
    **What the lower bar is worth, measured rather than argued.** Driving the
-   real class over the whole archive lap by lap, every bar from 0.60 to 0.80
-   speaks the same 49 readings at penalty places and the same 34 at corners:
-   **on the archive as it stands the lower bar changes nothing at all.** It
-   exists for the 70-79% band the leave-one-out found and the archive has no
+   real class over the whole archive lap by lap, 0.65 through 0.80 all speak
+   the same 49 readings at penalty places and the same 34 at corners: **on
+   the archive as it stands the lower bar changes nothing at all.** It exists
+   for the 70-79% band the leave-one-out found and the archive has no
    instance of - Watkins T2, Spa T1 - and it is set at 0.70 rather than lower
-   because a running share is noisier than a settled one: at 0.60, Daytona's
-   session 118 crosses the bar at 3 of 5 laps on its way to a settled 5 of 9,
-   and four real calls go silent for it.
+   because a running share is noisier than a settled one. At 0.60 one real
+   call goes silent: Daytona session 118's lap 6, where the running share
+   peaks at 3 of 5 on its way to a settled 5 of 9.
 
    **What that leaves, named and counted.** Neither bar can judge before
    `BRAKED_LAPS_NEEDED` laps have been looked at, so the flags of the first
@@ -210,12 +216,13 @@ SAME_PLACE_M = 150.0
 # 13 of 18 and Spa T1 at 13 of 17, both in races.
 #
 # **Set on the RUNNING share, not the final one.** Driving the real class
-# over the whole archive lap by lap, 0.60 through 0.80 all speak the same 49
+# over the whole archive lap by lap, 0.65 through 0.80 all speak the same 49
 # readings at places that are penalties and the same 34 at places that are
-# corners, so nothing on file distinguishes them - but the running share
-# early in a session is noisy, and at 0.60 Daytona's session 118 crosses the
-# bar at 3 of 5 laps while its settled share is 5 of 9. 0.70 clears that by
-# fourteen points and still covers the band the leave-one-out named.
+# corners, so nothing on file distinguishes them; 0.60 speaks 48. The running
+# share early in a session is noisy - Daytona's session 118 peaks at 3 of 5
+# laps, 0.600, while its settled share is 5 of 9 - so the margin that matters
+# is against the RUNNING peak, and 0.70 clears that by ten points while still
+# covering the band the leave-one-out named.
 BRAKED_LAPS_NEEDED = 4
 BRAKED_SHARE = 0.8
 BRAKED_DOUBT_SHARE = 0.7

@@ -372,11 +372,12 @@ def test_a_tow_that_saves_nothing_says_so():
     assert made.worth_it is False
 
 
-def test_a_tow_that_costs_fuel_is_not_a_wash():
+def test_a_tow_that_costs_fuel_is_priced_as_a_cost():
     """Critic pass 7: `worth_it` clamped the saving at zero, so a tow
     costing 0.4 s of fuel and 0.2 s of lap time came out inside `WASH_S` and
-    was spoken "About a wash" - in a sentence that had already said there
-    was no fuel saving and that he was slower. CLAUDE.md rule 9."""
+    was spoken "About a wash". CLAUDE.md rule 9 - and the sentence said "No
+    fuel saving in the tow", which is what a tow that saves NOTHING gets, so
+    a measured negative was rendered as an absence in both halves."""
     from pitcrew.race.tow import TowTrade
 
     made = TowTrade(laps_held=3, saving_l_per_lap=-0.8,
@@ -384,24 +385,46 @@ def test_a_tow_that_costs_fuel_is_not_a_wash():
                     reference="the plan")
     assert made.worth_it is False
     call, _ = made.sentence("Boxhead")
-    assert call == ("No fuel saving in the tow. Behind Boxhead you're 0.2 "
-                    "seconds a lap slower. Not worth it.")
+    assert call == ("The tow costs you 0.8 litres a lap - 0.4 seconds at the "
+                    "stop. Behind Boxhead you're 0.2 seconds a lap slower. "
+                    "Not worth it.")
 
 
-def test_a_tow_that_costs_fuel_and_no_time_is_not_called_a_wash():
-    """Neither side is a gain and neither is a loss he can act on - and that
-    is NOT a wash (critic pass 7, third round). A wash is two figures that
-    cancel; this is a tow costing him fuel and returning no lap time, so
-    "About a wash" after "No fuel saving in the tow" contradicts itself."""
+def test_a_tow_that_costs_fuel_and_no_time_still_says_get_out():
+    """Critic pass 7's fourth round. Two special cases were each wrong once
+    around one comparison: `losing <= 0 -> True` called this "worth it", and
+    its replacement called it "nothing in it either way". The arithmetic has
+    an answer - `gain > losing` is False - and it is get out."""
     from pitcrew.race.tow import TowTrade
 
     made = TowTrade(laps_held=3, saving_l_per_lap=-0.8,
                     saving_s_per_lap=-0.4, losing_s_per_lap=-0.1,
                     reference="the plan")
-    assert made.worth_it is None
+    assert made.worth_it is False
     assert made.sentence("Boxhead")[0] == (
-        "No fuel saving in the tow. Behind Boxhead you're no slower. "
-        "Nothing in it either way for you.")
+        "The tow costs you 0.8 litres a lap - 0.4 seconds at the stop. "
+        "Behind Boxhead you're no slower. Not worth it.")
+
+
+def test_a_free_tow_that_saves_anything_is_still_worth_it():
+    """The one case the general comparison needs helping with: nothing given
+    away and something saved, where `WASH_S` would call it a wash."""
+    from pitcrew.race.tow import TowTrade
+
+    made = TowTrade(laps_held=3, saving_l_per_lap=0.2, saving_s_per_lap=0.1,
+                    losing_s_per_lap=-0.1, reference="the plan")
+    assert made.worth_it is True
+
+
+def test_a_saving_inside_the_reading_error_is_not_called_a_cost():
+    """Two tank readings are worth about a litre between them, so a tenth of
+    a litre "against" him is the reference disagreeing with itself."""
+    from pitcrew.race.tow import TowTrade
+
+    made = TowTrade(laps_held=3, saving_l_per_lap=-0.05,
+                    saving_s_per_lap=-0.02, losing_s_per_lap=0.0,
+                    reference="the plan")
+    assert made.sentence("Boxhead")[0].startswith("No fuel saving in the tow.")
 
 
 def test_the_tow_call_does_not_borrow_the_closing_calls_sentence():
@@ -571,6 +594,31 @@ def test_the_withdrawal_is_only_about_the_car_he_was_told_about():
     race.state.said_tags = set()
     race.state.tow_said_about = None
     assert tow_trade_call(race.state) is None
+
+
+def test_the_fill_is_only_called_in_where_a_stop_was_taken():
+    """Critic pass 7, fourth round. `_a_fill_is_still_to_come` also refuses
+    on `stop_still_needed`, which goes false with NO stop taken the moment
+    `_stops_off` fires - so a driver who had just heard "You're fuelled to
+    the flag" was told "the fill's in" about a stop he never made. Under a
+    helmet that reads as the app believing he has pitted."""
+    from pitcrew.race.rival_calls import tow_trade_call
+
+    race = _race(planned_burn=10.0, planned_ms=88_000)
+    _through_the_stop(race)
+    race.state.said_tags = set()
+    said = tow_trade_call(race.state)
+    assert said is not None and "the fill's in" in said.call
+    assert "there is no pump left" in said.reason
+
+    # The same state, but the stop was dropped rather than taken.
+    race.state.said_tags = set()
+    race.state.last_stop_lap = None
+    said = tow_trade_call(race.state)
+    assert said is not None
+    assert "there's no stop to save it for" in said.call
+    assert "the fill's in" not in said.call
+    assert "you are not stopping" in said.reason
 
 
 def test_a_tenth_is_the_floor_on_the_lap_time_it_names():

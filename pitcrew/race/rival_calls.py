@@ -758,7 +758,19 @@ def tow_trade_call(state) -> Call | None:
 
 
 def _tow_is_spent(state, them: str, trade) -> Call | None:
-    """The one thing left to say about a tow once the fill is in. Once.
+    """The one thing left to say about a tow once no fill is coming. Once.
+
+    **"The fill's in" was true in only one of the three ways this is
+    reached** (critic pass 7, fourth round). `_a_fill_is_still_to_come`
+    refuses on the flag, on the last stint, and on `stop_still_needed` -
+    and that last one goes false with NO stop taken whenever `_stops_off`
+    fires. So a driver on a fuel-bound plan who has just heard *"You're
+    fuelled to the flag"* was then told *"the fill's in"* about a stop he
+    never made, which under a helmet reads as the app believing he has
+    pitted. The conclusion was right and the stated fact was false: rule 12,
+    the reason has to come from the branch that produced the decision. It
+    does now - `last_stop_lap` is set by `clear_stint` and is the one record
+    of a stop having actually happened.
 
     **Said only where he was told, in those words, to stay in it** - the
     verdict spoken has to have been `True`, not merely "not False" (critic
@@ -801,11 +813,18 @@ def _tow_is_spent(state, them: str, trade) -> Call | None:
     # time being given away worth a sentence.
     if lost is None or lost < 0.1:
         return None
+    if state.last_stop_lap is not None:
+        why, reason = ("the fill's in",
+                       "The saving was worth its standing time at the pump, "
+                       "and there is no pump left.")
+    else:
+        why, reason = ("there's no stop to save it for",
+                       "The saving was only ever worth its standing time at "
+                       "the pump, and you are not stopping.")
     return Call(TOW_TRADE, state.lap,
-                f"No fuel left to save in the tow - the fill's in. "
+                f"No fuel left to save in the tow - {why}. "
                 f"Behind {them} you're {lost:.1f} seconds a lap slower.",
-                "The saving was worth its standing time at the pump, and "
-                "there is no pump left.", MEDIUM, tag=tag)
+                reason, MEDIUM, tag=tag)
 
 
 def _held_up(trend, lap: int) -> bool:

@@ -47,6 +47,11 @@ MIN_HELD_LAPS = 3
 MIN_CLEAR_LAPS = 2
 # Inside this the saving and the loss cannot be told apart.
 WASH_S = 0.3
+# Litres a lap below zero at which the tow is COSTING him fuel by enough to
+# say so with a figure rather than call it "no saving". Two readings of the
+# tank are worth about a litre between them, so anything under this is the
+# reference disagreeing with itself rather than a tow that burns more.
+COSTS_FUEL_L = 0.2
 
 BY_CLEAR_LAPS = "your clear-air laps"
 BY_THE_PLAN = "the plan"
@@ -80,11 +85,17 @@ class TowTrade:
         if self.saving_s_per_lap is None:
             return None
         gain = self.saving_s_per_lap
-        if gain <= 0 and self.losing_s_per_lap <= 0:
-            # It costs fuel and costs no time. Neither side is a gain and
-            # neither is a loss he can act on: say so rather than pick one.
-            return None
-        if self.losing_s_per_lap <= 0:
+        # **One comparison handles every sign, and the special cases around
+        # it were each wrong once** (critic pass 7). `losing <= 0 -> True`
+        # was written assuming the saving was positive, and with a NEGATIVE
+        # saving it called a tow that costs a litre a lap and returns nothing
+        # "worth it". Its replacement, `gain <= 0 and losing <= 0 -> None`,
+        # said "nothing in it either way" about the same tow, which is a
+        # verdict where the arithmetic has one: `gain > losing` is False and
+        # the answer is get out. The one case that still needs naming is a
+        # tow that gives nothing away AND saves something - free, and below
+        # `WASH_S` the general form would call that a wash.
+        if gain >= 0 and self.losing_s_per_lap <= 0:
             return True                 # a free tow: nothing given away
         if abs(gain - self.losing_s_per_lap) < WASH_S:
             return None
@@ -109,7 +120,16 @@ class TowTrade:
         lost = (f"Behind {them} you're {self.losing_s_per_lap:.1f} seconds a "
                 f"lap slower." if self.losing_s_per_lap > 0
                 else f"Behind {them} you're no slower.")
-        if self.saving_l_per_lap <= 0:
+        if self.saving_l_per_lap <= -COSTS_FUEL_L and \
+                self.saving_s_per_lap is not None:
+            # **A tow that COSTS fuel is a finding with a size, and it was
+            # spoken as "No fuel saving in the tow"** - the same sentence a
+            # tow that saves nothing at all gets (critic pass 7). Rule 9 in
+            # its own way: a measured negative rendered as an absence.
+            call = (f"The tow costs you {-self.saving_l_per_lap:.1f} litres a "
+                    f"lap - {-self.saving_s_per_lap:.1f} seconds at the stop. "
+                    f"{lost}")
+        elif self.saving_l_per_lap <= 0:
             call = f"No fuel saving in the tow. {lost}"
         elif self.saving_s_per_lap is None:
             call = (f"The tow saves you {self.saving_l_per_lap:.1f} litres a "
@@ -123,13 +143,6 @@ class TowTrade:
             call += " Worth it - stay in it."
         elif verdict is False:
             call += " Not worth it."
-        elif self.saving_l_per_lap <= 0 and self.losing_s_per_lap <= 0:
-            # **Not a wash** (critic pass 7, third round). The wash is two
-            # figures that cancel; this is a tow that costs him fuel and
-            # returns no lap time, which is a finding and the opposite of
-            # "the two sides are level". Saying "About a wash" after "No fuel
-            # saving in the tow" is the sentence contradicting itself.
-            call += " Nothing in it either way for you."
         elif self.saving_s_per_lap is not None:
             call += " About a wash."
         return call, f"Over {self.laps_held} laps, against {self.reference}."

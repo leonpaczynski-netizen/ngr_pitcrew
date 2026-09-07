@@ -3071,9 +3071,20 @@ class PitCrewController(QObject):
                     try:
                         # **Struck from the pace either way; spoken only
                         # where the ledger will stand behind the word
-                        # "penalty".** See `Verdict.speak`.
-                        self.race.note_penalty(lap.lap_num, lost,
-                                               speak=bool(verdict.speak))
+                        # "penalty" - and then only for the SECONDS it will
+                        # stand behind.** `Verdict.speak` decided whether to
+                        # speak; the figure has to come out of the same
+                        # expression (CLAUDE.md rule 12), or a silenced
+                        # reading at a missing corner - whose derived cost
+                        # runs 6-11 s on file against a real penalty's 1.4-3.5
+                        # - is added into the number he hears about the one
+                        # reading that is sayable. The row keeps the sum over
+                        # everything struck, because that is what it records.
+                        say = verdict.speak
+                        self.race.note_penalty(
+                            lap.lap_num,
+                            sum(p.lost_s for p in say) if say else None,
+                            speak=bool(say))
                     except Exception:                        # noqa: BLE001
                         log("race").warning("penalty not handed to the race",
                                             exc_info=True)

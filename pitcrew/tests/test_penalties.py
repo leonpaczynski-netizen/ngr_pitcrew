@@ -214,6 +214,33 @@ def test_a_place_braked_too_often_is_kept_out_of_the_pace_and_not_spoken():
     assert ledger.retired() == (), "75% is not enough to call it a corner"
 
 
+def test_the_sayable_cost_is_not_the_kept_cost():
+    """Critic pass 7, fourth round. `speak` decided WHETHER to say it and the
+    seconds came from `kept`, so a silenced reading at a missing corner - the
+    derived cost of those runs 6-11 s on file against a real penalty's
+    1.4-3.5 - was added into the figure he heard about the one reading that
+    was sayable. Rule 12: the figure must come from the deciding expression.
+
+    Session 65's shape: a missing corner at 6,582 m braked three laps in four
+    and a genuine penalty at 2,281 m on one lap only.
+    """
+    from pitcrew.analysis.penalties import Penalty
+
+    ledger = RoadNotPenalty(share=0.95, doubt=0.7)
+    corner, once = 6582.0, 2281.0
+    for lap in range(2, 9):
+        ledger.filter(lap, [Penalty(corner, 1.5, 240.0, 110.0, 11.0)]
+                      if lap % 4 != 0 else [],
+                      braked=[corner] if lap % 4 != 0 else [])
+    verdict = ledger.filter(
+        9, [Penalty(corner, 1.5, 240.0, 110.0, 11.0),
+            Penalty(once, 0.9, 250.0, 190.0, 2.1)],
+        braked=[corner, once])
+    assert len(verdict.kept) == 2, "both leave the pace population"
+    assert [round(p.lost_s, 1) for p in verdict.speak] == [2.1]
+    assert sum(p.lost_s for p in verdict.kept) == 13.1, "6x the sayable one"
+
+
 def test_a_real_penalty_place_is_still_sayable():
     """Daytona session 118's 5 of 9 is the highest share any place the
     detector has ever flagged as a real penalty reaches - four points under

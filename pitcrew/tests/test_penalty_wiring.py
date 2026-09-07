@@ -253,8 +253,12 @@ def test_the_ledger_and_the_refusal_have_production_callers():
     # flags, which is the measure the class exists to replace - and every
     # test would still pass with the argument dropped (critic pass 7).
     assert "braked_columns(rows, FRAME_FIELDS," in source
-    # The doubt band only silences if `speak` is what decides the call.
-    assert "speak=bool(verdict.speak)" in source
+    # The doubt band only silences if `speak` is what decides the call -
+    # AND the seconds spoken come out of the same expression (rule 12), or a
+    # silenced reading's derived cost is added to the sayable one's.
+    assert "say = verdict.speak" in source
+    assert "sum(p.lost_s for p in say) if say else None" in source
+    assert "speak=bool(say))" in source
     # A partial withdrawal corrects the cost rather than leaving the sum.
     assert "self.race.note_penalty(gone.lap, gone.lost_s," in source
     start = source.index("    def _corner_windows(self)")
