@@ -847,6 +847,59 @@ otherwise; what changed is that the two seconds figures no longer share a
 phrase. Also carried from the audit: `intents` GAP answers as a two-row table
 (§5.5), and `expectations`' *"3.12 against 3.20"* is two bare litres-per-lap.
 
+**Row 1.10 closed — AGREED at `0015e74`, after four critic passes.** The
+sweep found the two blockers above and fourteen more collisions; the four
+passes then found six more, and **four of those were in my own fixes**, which
+is the part worth keeping:
+
+1. *"Fuel is the constraint."* was reported from `plan_binding_constraint`,
+   which only one of `_stop_needed_on_fuel`'s three branches reads — so with
+   a mandatory stop owed and fuel good to the flag it named fuel. Rule 12, in
+   the commit that cited rule 12. `_why_the_stop_stands` returns the decision
+   and its reason from one expression now.
+2. The prefix was glued in front of `_fuel_instruction`, which can say *"Fuel
+   is fine — the tank covers the next stint."* My fix SUPPRESSED the reason to
+   hide the contradiction, which threw away the branch that kept the stop.
+   **They were never contradictory** — one is against the flag, the other
+   against the next stint, and neither named its reference. Rule 13 again.
+3. `fuel_reaches_flag(state) is not True` folded *"cannot be known"* into
+   *"will not reach"* — a claim about arithmetic nobody had done (rules 3
+   and 5), two lines below the same function refusing to speak an unknown
+   `mandatory_stops_left` as a regulation.
+4. The retirement fix guarded two call sites and left **four** surfaces
+   counting down to a cancelled stop; moving it into `laps_to_stop()` closed
+   those, and the `lapsPastBox` key added in the next commit became a
+   **fifth**. Its own docstring says why: a guard at each consumer is one
+   chance to miss per consumer.
+
+**And twice the test written for a blocker did not reach it** — one asserted
+the absence of a string that no longer existed, one fed `lapsToStop: -2`,
+which the coordinator cannot produce. Both are the impossible-fixture class
+this project keeps finding. Every blocker now has a behavioural test driven
+through a real coordinator or a real screen.
+
+**Carried out of row 1.10, each named rather than quietly dropped:**
+
+- The retirement of a cancelled stop has **no latch**, so a burn median that
+  moves back across the margin makes the countdown vanish and return —
+  rule 10's shape. Bounded today because `drop_stop_granted` is False without
+  an explicit `fuel_long: drop_stop` entry.
+- The `UNDERCUT` reason can still stack the fill clause, the tow clause and
+  the tyre clause, which is long for §5.5. The driver asked for the tow
+  figures in that call by name (7 Sep), so they stay until he says otherwise.
+- `intents` answers GAP as a two-row table (§5.5), and `expectations` says
+  *"3.12 against 3.20"* — two bare litres-per-lap.
+- **Two families live-synthesise today and deserve their own pass**: the
+  whole overdue family (*"N laps overdue."*, and FUEL_SHORT's *"…laps short
+  of the flag on current burn — short-shift and lift if you stay out."*), and
+  the push-to-talk's *"No gap read yet — the wall has nothing this lap."*
+  Each is a pause at the moment a call arrives.
+- For the driver-board session: `ui/driver_view.py:791` captions the
+  countdown *"laps to box"* where everything else now says *to the stop*, and
+  its `None` branch reads *"no plan"*, which is false both on the last stint
+  of a real plan and now on a dropped stop — `DriverState.has_plan` sits
+  right there unread.
+
 **Left in Phase 1:** 1.7 (race page absorbs the loaded card, Strategy page
 goes), 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three
