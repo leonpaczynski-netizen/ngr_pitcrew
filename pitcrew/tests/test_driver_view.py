@@ -144,7 +144,7 @@ def test_it_shows_what_it_is_given(qt_app):
         temps_c=_temps(fl=84.0, fr=79.0, rl=91.0, rr=77.0), compound="RS",
         laps_to_box=4, box_on_lap=14, laps_of_fuel=5.2, fuel_l=38.1,
         burn_l=7.29, fuel_to_stop=1.9, fuel_to_flag=0.3,
-        fuel_to_flag_on="on a full tank at the stop",
+        fuel_to_flag_on="on the plan's fill",
         position=6, field_size=12))
     assert view.tyres["rl"].value.text() == "91"
     assert view.tyres["rr"].value.text() == "77"
@@ -155,8 +155,11 @@ def test_it_shows_what_it_is_given(qt_app):
     # borrows the other's - the stop number is the tank he is carrying, the
     # flag number a full tank at the pump.
     assert "5.2 laps aboard" in view.stop_stat.sub.text()
-    assert "on a full tank at the stop" in view.flag_stat.sub.text()
-    assert "7.29 L/lap" in view.flag_stat.sub.text()
+    assert "on the plan's fill" in view.flag_stat.sub.text()
+    # **The burn is not on the running board**, and that is a width decision
+    # made in the open: four blocks across a 2,560 px panel leave twenty-one
+    # characters each, and the reference is the half that has to survive.
+    assert "7.29 L/lap" not in view.flag_stat.sub.text()
     assert view.position_stat.value.text() == "P6"
     assert view.position_stat.sub.text() == "of 12"
     assert "RS" in view.tyre_caption.text()
@@ -195,10 +198,13 @@ def test_a_missing_fuel_figure_carries_the_reason_it_is_missing(qt_app):
     view = DriverView()
     view.update_state(DriverState(
         fuel_to_stop_why="no stop still to come",
-        fuel_to_flag_why="another stop after this one"))
+        fuel_to_flag_why="a stop after this one"))
     assert view.stop_stat.value.text() == "--"
-    assert "no stop still to come" in view.stop_stat.sub.text()
-    assert "another stop after this one" in view.flag_stat.sub.text()
+    # Whole, not elided: every reason string is written to the room its rank
+    # has, and an ellipsis where an answer should be is the failure this
+    # block exists to avoid.
+    assert view.stop_stat.sub.text() == "no stop still to come"
+    assert view.flag_stat.sub.text() == "a stop after this one"
 
 
 def test_a_position_nobody_read_is_a_dash_and_never_P0(qt_app):

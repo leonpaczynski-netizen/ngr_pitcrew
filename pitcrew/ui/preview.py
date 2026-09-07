@@ -99,6 +99,12 @@ def sample_board() -> DriverState:
     state.fuel_l = 38.1
     state.fuel_per_lap_l = 4.19
     state.fuel_capacity_l = 100.0
+    # **A measured lap-to-lap burn scatter, because without one the flag
+    # figure is the plan's flat fallback lap** and the acceptance picture for
+    # this row would be a picture of `FUEL_MARGIN_LAPS`. 0.15 L is the figure
+    # the Deep Forest race measured; the margin is then sized on it rather
+    # than on a whole lap.
+    state.fuel_sd_l = 0.15
     state.stint_ends_on_lap = 11
     state.further_stop_planned = False
     state.mandatory_stops_left = 1
@@ -228,7 +234,7 @@ class PreviewWindow(QMainWindow):
         self.setCentralWidget(shell)
 
 
-BOARD_WINDOW = (2160, 1040)
+BOARD_WINDOW = (2480, 1050)
 
 
 def build_driver_board() -> DriverView:
@@ -240,8 +246,8 @@ def build_driver_board() -> DriverView:
     1.8 asks for a screenshot.
 
     **Not inside the preview's shell**, and not for tidiness: the board's own
-    layout minimum measures up to 2457x1031 at the type sizes the ranks are built
-    from, which is wider than the shell's whole client area. Putting it in
+    layout minimum at these type sizes is wider than the shell's whole client
+    area. Putting it in
     the stack would either clip it or silently drag the shell to a size no
     other screen is designed for, and a harness that shows you a distorted
     screen is worse than one that shows you none.
@@ -251,8 +257,18 @@ def build_driver_board() -> DriverView:
     being screenshotted anyway.
     """
     board = DriverView()
-    board.resize(*fit_to_screen(board, *BOARD_WINDOW))
     board.update_state(sample_board())
+    # **Not clamped to this screen, and that is the difference between a
+    # picture of the board and a picture of this laptop.** `fit_to_screen` is
+    # right for the shell, which has to be usable wherever it opens; the board
+    # is built for a 2560x1080 panel and its layout minimum is wider than the
+    # machine these shots are taken on. Clamped, Qt could not honour the width,
+    # the content overflowed downwards, and the artefact came out 1900x1128 -
+    # taller than the monitor it is a picture of. `grab()` renders a widget
+    # larger than the screen quite happily.
+    minimum = board.layout().minimumSize()
+    board.resize(max(BOARD_WINDOW[0], minimum.width()),
+                 max(BOARD_WINDOW[1], minimum.height()))
     return board
 
 
@@ -263,9 +279,17 @@ def _capture(window: PreviewWindow, board: DriverView, out: Path) -> None:
         QApplication.processEvents()
         window.grab().save(str(out / f"{name}.png"))
         print(f"wrote {out / f'{name}.png'}")
+    # **Resized here, immediately before the grab.** The board is wider than
+    # the machine these shots are taken on, so a window manager that has been
+    # given it to show will have clamped and repositioned it - the artefact
+    # came out 2480x1128 that way, taller than the panel it is a picture of.
+    # `grab()` renders the widget at whatever size it is set to, screen or no
+    # screen, so it is set to the panel's size at the last moment.
+    board.resize(*BOARD_WINDOW)
     QApplication.processEvents()
     board.grab().save(str(out / "driver-board.png"))
-    print(f"wrote {out / 'driver-board.png'}")
+    print(f"wrote {out / 'driver-board.png'} at {BOARD_WINDOW[0]}x"
+          f"{BOARD_WINDOW[1]}")
 
 
 def main() -> int:
@@ -275,9 +299,12 @@ def main() -> int:
     window = PreviewWindow()
     window.show()
     board = build_driver_board()
-    board.show()
-
     shot_index = sys.argv.index("--shot") if "--shot" in sys.argv else -1
+    if shot_index < 0:
+        # Only for looking at. On a shot run the board is never handed to the
+        # window manager at all - see `_capture`.
+        board.show()
+
     if shot_index >= 0:
         out = Path(sys.argv[shot_index + 1])
         QTimer.singleShot(400,

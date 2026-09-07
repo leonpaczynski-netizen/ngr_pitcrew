@@ -3193,24 +3193,49 @@ def fuel_in_hand(state: RaceState) -> tuple[float | None, str]:
 # So the flag figure below counts the fill still to come, and it refuses
 # rather than guess wherever it cannot see one.
 # **Every one of these is a sub-line on a glance instrument, so every one is
-# short.** A 46-character reason under a 120px figure sets that block's
-# minimum width at over 1,400 px, and four blocks on one row took the board
-# past the 2,560 of his monitor - on a frameless window with no resize handle,
-# which Qt answers by growing it off the screen rather than by dropping
-# anything. Keep them under about twenty characters.
+# short.** A long reason under a 120px figure sets that block's minimum width,
+# and four blocks on one row took the board past the 2,560 of his monitor - on
+# a frameless window with no resize handle, which Qt answers by growing it off
+# the screen rather than by dropping anything. Keep them to about twenty
+# characters; the longest here is twenty-one, which is what the middle rank
+# has room for with four blocks across the panel.
+#
+# **The bound is enforced in the widget, not by this convention.**
+# `_Stat.set_sub_width` elides every reason line to the room its rank has, and
+# `test_the_board_fits_his_monitor_in_the_widest_state_it_can_be_given` holds
+# the whole board against the real panel. Keeping the strings short is what
+# stops him reading an ellipsis instead of an answer.
 NO_STOP_TO_COME = "no stop still to come"
-PAST_THE_BOX_LAP = "past the box lap"
+# **Not "past the box lap".** The box block one place along says "2 past the
+# box lap" about a different quantity, and one phrase for two things a glance
+# apart is rule 13 with the two ends on the same screen.
+STOP_IS_LATE = "the stop is late"
 NO_BURN_YET = "no burn measured yet"
 NO_FUEL_READING = "no fuel reading"
 NO_RACE_LENGTH = "race length unknown"
-NOT_REACHING_THE_BOX = "you don't reach the box"
+# **It says what does not reach, not who.** "You don't reach the box" reads as
+# a fact about the race; what is true is a fact about this tank at the last
+# crossing on the burn measured so far.
+NOT_REACHING_THE_BOX = "tank short of the box"
+# **Two reasons, because `after_box <= 0` is two situations.** Equal to zero
+# is a stop scheduled for the LAST LAP, which is a real plan; below zero is a
+# stop past the flag, which is not. Saying "past the flag" about the first
+# tells him the plan is broken and he ignores a mandatory stop.
+STOP_ON_THE_LAST_LAP = "stop is the last lap"
 STOP_PAST_THE_FLAG = "stop is past the flag"
 ANOTHER_STOP_AFTER = "a stop after this one"
 NO_CAPACITY = "no tank size read"
-# The reference the flag figure rests on, said under it so it cannot be read
-# as a sibling of the live number beside it (rule 13).
+# **What the flag figure rests on, and it is whichever of the three actually
+# bound the answer** (CLAUDE.md rule 12). The supply is the biggest of what he
+# arrives with and what the plan fills to, capped by the tank, so the caption
+# has to name the one that won - "on the plan's fill" said about a figure that
+# came from the tank he arrived with is a caption that lies exactly where the
+# number moves.
 ON_THE_PLANS_FILL = "on the plan's fill"
-# And on the other side of the last stop, where there is nothing left to add.
+ON_A_FULL_TANK = "on a full tank"
+# And on the other side of the last stop, where there is nothing left to add;
+# also where he arrives carrying more than the fill wants, because the pump
+# cannot take fuel out and his own tank is then the supply.
 ON_THE_TANK_ABOARD = "on the fuel aboard"
 
 
@@ -3244,7 +3269,7 @@ def fuel_in_hand_to_stop(state: RaceState) -> tuple[float | None, str | None]:
     """
     if not _stop_is_the_frame(state):
         if state.past_box_lap:
-            return None, PAST_THE_BOX_LAP
+            return None, STOP_IS_LATE
         return None, NO_STOP_TO_COME
     gap = _fuel_gap(state)
     if gap is None:
@@ -3308,6 +3333,25 @@ def fuel_in_hand_to_flag(
     cannot be, and claiming otherwise was struck from an earlier commit
     message here.
 
+    ⚠️ **So the board and the in-box call can disagree about one stop, and
+    the board is the one that is right.** With `next_stint_laps` set, the
+    board draws 1.0 on the plan's fill while `fuel_target_l` returns a figure
+    that leaves 3.0 over the same nine laps, because that path is sized off
+    the stint list rather than off the laps that follow the planned box.
+    Fixing `_laps_the_fill_covers` away from the box is Phase 0 row 0.1's
+    territory, not this row's, and it is named here so nobody reads the
+    difference as a fault in the board.
+
+    **On the caption, and why it changes with the branch.** Where the plan's
+    fill binds, this figure is the plan's own margin expressed in laps, and
+    it is *supposed* to sit still: a stop refills, so what he carries before
+    it does not decide the run home. Saying `on the plan's fill` is what
+    makes that legible rather than reading as a dead needle - and it must not
+    be said in the two branches where the number came from something else,
+    which was a real defect: at 84 L aboard it read 2.0 `on the plan's fill`
+    when the plan's fill leaves 1.0, so the block moved only where its
+    caption lied.
+
     **Three terms, and the two bounds on them are physical rather than rule-9
     clamps:** what the tank holds when he arrives at the box (negative means
     he does not arrive, so the answer is a dash saying so - a negative
@@ -3357,7 +3401,8 @@ def fuel_in_hand_to_flag(
     to_stop = state.laps_to_stop()
     after_box = remaining - to_stop
     if after_box <= 0:
-        return None, STOP_PAST_THE_FLAG, ON_THE_PLANS_FILL
+        return None, (STOP_ON_THE_LAST_LAP if after_box == 0
+                      else STOP_PAST_THE_FLAG), ON_THE_PLANS_FILL
     at_box_l = state.fuel_l - to_stop * burn
     if at_box_l < 0:
         return None, NOT_REACHING_THE_BOX, ON_THE_PLANS_FILL
@@ -3367,8 +3412,17 @@ def fuel_in_hand_to_flag(
     fill_to = fill_for_l(burn, after_box,
                          reference_load_l=state.fuel_reference_load_l,
                          buffer_l=(margin_l or 0.0), capacity_l=capacity)
-    leaves_with_l = min(capacity, max(at_box_l, fill_to))
-    return round(leaves_with_l / burn - after_box, 1), None, ON_THE_PLANS_FILL
+    # **The caption names whichever bound actually produced the number**
+    # (rule 12). The pump cannot take fuel out, so a car arriving with more
+    # than the fill wants leaves with its own tank and the figure is about
+    # THAT; and a fill the tank cannot hold leaves with the tank full, which
+    # is the branch the negative comes from.
+    leaves_with_l, rests_on = fill_to, ON_THE_PLANS_FILL
+    if at_box_l > leaves_with_l:
+        leaves_with_l, rests_on = at_box_l, ON_THE_TANK_ABOARD
+    if leaves_with_l > capacity:
+        leaves_with_l, rests_on = capacity, ON_A_FULL_TANK
+    return round(leaves_with_l / burn - after_box, 1), None, rests_on
 
 
 # Past this fraction of a timed race, he wants the laps as well as the clock.

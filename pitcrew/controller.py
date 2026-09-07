@@ -5721,10 +5721,11 @@ class PitCrewController(QObject):
 
         to_stop, stop_why = fuel_in_hand_to_stop(state)
         # **The reference travels with the figure**, out of one expression.
-        # It means two different supplies on the two sides of the last stop -
-        # the tank aboard, or a full tank at the pump - and a caption that
-        # could drift from the branch that produced the number is rule 13
-        # waiting to happen.
+        # It names whichever of three supplies actually bound the answer -
+        # the plan's fill, the fuel he arrives with, or a full tank - and a
+        # caption that could drift from the branch that produced the number
+        # is rule 12 waiting to happen. It has been wrong once, in the branch
+        # where the figure moves.
         to_flag, flag_why, flag_on = fuel_in_hand_to_flag(state)
         return {"fuel_to_stop": to_stop, "fuel_to_stop_why": stop_why,
                 "fuel_to_flag": to_flag, "fuel_to_flag_why": flag_why,
@@ -5866,7 +5867,7 @@ class PitCrewController(QObject):
         if briefed and briefed > 0:
             return rate, "briefing"
         if self._someone_set("refuel_rate_source"):
-            return rate, "declared rate"
+            return rate, "declared"
         # Nothing but the column default. A countdown priced from 2.5 L/s on a
         # pump that runs at 1.0 is two and a half times short, on the one
         # number he is holding the trigger against.

@@ -468,7 +468,7 @@ def test_a_declared_rate_is_used_and_labelled_where_nothing_was_briefed():
     stub.race.state.refuel_rate_lps = 1.0
     got = _state_for(stub)
     assert got.release_in_s == pytest.approx(43.0, abs=0.05)
-    assert got.fill_rate_note == "declared rate"
+    assert got.fill_rate_note == "declared"
 
 
 def test_a_briefed_rate_is_never_labelled_measured():
@@ -1080,7 +1080,7 @@ def test_the_two_fuel_figures_reach_the_board_from_the_calls_module():
     # **And the reference travels with the figure**, out of the same
     # expression, so the caption cannot drift from the branch that produced
     # the number (rule 13).
-    assert got.fuel_to_flag_on == "on the plan's fill"
+    assert got.fuel_to_flag_on == "on the fuel aboard"
 
 
 def test_a_fuel_figure_that_cannot_be_made_carries_its_reason():
@@ -1162,15 +1162,38 @@ def test_the_flag_keeps_the_compound_and_the_corner_annotations():
 
 
 def test_a_pit_stop_empties_the_split_history():
-    """CLAUDE.md rule 11 in its stint-sized form. The window is eight laps and
-    a stop lands in the middle of it, so a fit across one describes two sets of
-    rubber as though they were a series - and the board draws the axle gap on
-    every lap now, not only past ten degrees. `SplitHistory.new_stint` has a
-    caller, which is the half of rule 11 that has been missing before."""
+    """CLAUDE.md rule 11 in its stint-sized form: a fit across a stop
+    describes two sets of rubber as though they were one series, and the
+    board draws the axle gap on every lap now rather than only past ten
+    degrees. What rule 11 asks for is a reset **with a caller** - the named
+    failure is `LiveWearSampler.new_session()`, which existed, documented why
+    it was needed, and was called only from a test file.
+
+    **Parsed, not grepped.** A substring search passes on a call sitting in a
+    comment, under `if False:`, or in the wrong branch entirely; this walks
+    the tree and asserts the call is inside the `EventKind.PIT_EXIT` test.
+    The behaviour it protects - that a cleared history claims no trend - is
+    `test_a_trend_may_not_be_fitted_across_a_pit_stop` in
+    `test_driver_board_items.py`.
+    """
+    import ast
     import inspect
+    import textwrap
 
     from pitcrew.controller import PitCrewController
 
-    source = inspect.getsource(PitCrewController._on_race_event)
-    assert "self._splits.new_stint()" in source
-    assert "EventKind.PIT_EXIT" in source
+    tree = ast.parse(textwrap.dedent(
+        inspect.getsource(PitCrewController._on_race_event)))
+
+    def calls_new_stint(node):
+        return any(isinstance(n, ast.Attribute) and n.attr == "new_stint"
+                   for n in ast.walk(node))
+
+    def tests_pit_exit(node):
+        return any(isinstance(n, ast.Attribute) and n.attr == "PIT_EXIT"
+                   for n in ast.walk(node.test))
+
+    guarded = [n for n in ast.walk(tree)
+               if isinstance(n, ast.If) and tests_pit_exit(n)
+               and any(calls_new_stint(b) for b in n.body)]
+    assert guarded, "new_stint() is not called under the PIT_EXIT branch"

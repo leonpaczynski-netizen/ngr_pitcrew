@@ -169,26 +169,33 @@ So the board carries both, and:
   the ear and the eye cannot be given different numbers. It is the live one:
   it moves with the tank and with the burn. A dash whenever there is no stop
   still to come, saying which of the reasons it is.
-* **IN HAND TO THE FLAG** is `calls.fuel_in_hand_to_flag`. With no stop left
-  it is the same expression again, now measured against the flag. **With a
-  stop still to come it is measured on a full tank at the pump, and its
-  sub-line says so in those words.** A stop refills, so what he is carrying
-  now cannot decide the run home; what can is whether the run home FITS in
-  the tank, and `capacity / burn - laps after the box` is that. It moves for
-  the two reasons it should - a burn that drifts, a stop that slips - and
-  **its negative is the finding: one stop does not do this race.** Never
-  clamped away. A dash, with its reason, where the capacity is unknown or
-  zero: that term is the whole expression, so a missing tank size must not
-  become an infinite one (rule 3).
+* **IN HAND TO THE FLAG** is `calls.fuel_in_hand_to_flag` - laps of fuel he
+  will have left at the chequer, counting the fill still to come. With no
+  stop left that is the tank against the flag, the same expression the voice
+  speaks. With a stop still to come the supply is **the biggest of what he
+  arrives with and what the plan fills to, capped by the tank**, and the
+  sub-line names whichever of the three actually bound it: `on the plan's
+  fill`, `on the fuel aboard`, `on a full tank`. **Its negative is the
+  finding: one stop does not do this race.** Never clamped away. A dash, with
+  its reason, where the capacity is unknown or zero - a missing tank size
+  must not become an infinite one (rule 3).
 
-  ⚠️ **The first version of this sized the fill George would call for and
-  measured THAT against the flag.** Arithmetically true and useless:
-  `fuel_margin_l` sizes the margin as a multiple of the burn, so the figure
-  collapsed to the constant `FUEL_MARGIN_LAPS`. Driven over the Daytona race
-  shape it read **1.0 at 45, 60, 84 and 95 litres aboard, and at every burn
-  from 4.0 to 7.0** - a block captioned "in hand" beside one that moves,
-  which could not move. An instrument reading our own switch back to us, and
-  this project has shipped one of those before. Caught by the critic.
+  ⚠️ **This figure took three attempts and both wrong ones are worth
+  keeping.** Sized as the plan's fill with a fixed caption, it read **1.0 at
+  45, 60 and 84 litres aboard** - `fuel_margin_l` falls back to
+  `FUEL_MARGIN_LAPS` where no burn scatter has been measured, so the block
+  was the app's own margin policy read back as an instrument. Replaced with
+  `capacity / burn - laps after the box` it moved, and **over-promised by the
+  whole margin**: 14.9 where the plan will leave 1.0, beside a stop figure of
+  6.1, and a 17.8-lap step across one crossing.
+
+  What was actually wrong was the caption. Where the plan's fill binds, this
+  IS the plan's margin in laps and it is *supposed* to sit still - a stop
+  refills, so what he carries before it does not decide the run home - and it
+  is not a constant: with a measured scatter the margin is sized on that
+  scatter. It moves for real where the supply is really something else, and
+  in those branches the caption now says so. It moved only where its caption
+  lied, which is the version this replaced.
 
 Both refuse rather than guess where a further stop follows this one: the laps
 after the *next* stop ride on a fill nothing has sized.
@@ -486,12 +493,13 @@ class DriverState:
     fuel_to_stop_why: str | None = None
     fuel_to_flag: float | None = None
     fuel_to_flag_why: str | None = None
-    # **What the flag figure rests on, in words, from the same expression
-    # that produced it.** It is a different supply on the two sides of the
-    # last stop - the tank aboard, or a full tank at the pump - and without
-    # this the two fuel blocks would sit side by side under near-identical
-    # captions with nothing saying that one of them cannot move with the
-    # tank. That is rule 13.
+    # **Which supply the flag figure was actually measured on, in words,
+    # from the same expression that produced it** (rule 12). It is one of
+    # three - the plan's fill, the fuel he arrives with, or a full tank - and
+    # without it the two fuel blocks sit side by side under near-identical
+    # captions with nothing saying they are answering off different supplies.
+    # It has been wrong once: a figure that came from the tank he arrived
+    # with, captioned as the plan's fill.
     fuel_to_flag_on: str | None = None
 
     # ---- the last thing said, and how it was meant.
@@ -518,7 +526,7 @@ class DriverState:
     # laps-to-the-stop and laps-to-the-flag, ten laps apart.
     next_stint_laps: int | None = None
     runs_to_flag: bool = False
-    # Where the fill rate came from - "measured here" or "declared rate".
+    # Where the fill rate came from - "briefing" or "declared".
     # On the screen because the countdown is only as good as its rate, and a
     # figure typed on the event page and one measured at this pump are not
     # the same claim.
@@ -572,12 +580,16 @@ def pair_gap(corner: str, temps: dict[str, float | None]) -> float | None:
     the absolute temperatures have no window. Nobody has ever published one
     for GT7, and the archive says why: temperature is endogenous, a
     consequence of how hard the tyre is being worked rather than an input to
-    grip, with slopes of opposite sign at Monza and Spa.
+    grip - measured directly by a one-second lag test on 48 Daytona laps, not
+    by the sign disagreement this docstring used to cite, which did not
+    survive a proper specification. See the spec at the top of this file.
 
-    The gaps do not have that problem. Measured across the archive, the
-    rear-front and RR-RL splits are monotone and match the measured wear map
-    at r=+0.82 - so of everything on this screen, this is the reading with
-    evidence behind it.
+    The gaps do not have that problem. Measured on Daytona session 118, the
+    rear-front and RR-RL splits are monotone across the stint, and across the
+    four corners of the car per-lap mean temperature tracks measured per-lap
+    wear at r=+0.82 - n=4, an association, both driven by load. Of everything
+    on this screen this is the reading with evidence behind it, and the spec
+    above says exactly what that evidence is and is not.
 
     Only ever positive: the cooler side of a pair returns None rather than a
     negative, because "13 degrees hotter than the other one" is a finding and
@@ -627,7 +639,7 @@ class _Tyre(QWidget):
     reading this display has evidence for - see `pair_gap`.
     """
 
-    VALUE_PX = 104
+    VALUE_PX = 96
     GAP_PX = 26
 
     def __init__(self, corner: str, parent: QWidget | None = None) -> None:
@@ -751,6 +763,11 @@ class _Stat(QWidget):
         self.sub.setStyleSheet(
             f"font-family:{NUMBER_FACE};font-size:{self.SUB_PX}px;"
             f"color:{INK_DIM};background:transparent;")
+        # The unelided reason, and the width it may occupy. `0` is unbounded,
+        # which is the state no block on the running board is left in - see
+        # `set_sub_width`.
+        self._sub_text = ""
+        self._sub_width = 0
         box.addWidget(self.value)
         box.addWidget(self.caption)
         box.addWidget(self.sub)
@@ -776,7 +793,58 @@ class _Stat(QWidget):
     # car ahead and the car behind are what he can act on right now, and the
     # tyres are what he acts on over a stint. Both are on the screen; only
     # one of them can be the first thing read.
-    GAP_PX = 210
+    # **180, not 210, and the cut is the monitor.** With the last-call line
+    # and the split block added, the board's enforced minimum came out at
+    # 1128 px against his 1080 panel - measured with the REAL faces, where it
+    # is 93 px taller than the same board measured offscreen, so the guard
+    # test cannot see it. The rank survives the trim: 180 is still half again
+    # the middle rank and nearly twice the corners.
+    GAP_PX = 180
+    # **How wide a reason line may be, per rank.** The middle rank carries
+    # four blocks across the panel and the lead rank two, so they can afford
+    # different amounts; the box panel carries five. Each is the panel's own
+    # room divided by the blocks on it, with the margins and the gaps between
+    # them taken off. `test_the_board_fits_his_monitor_in_the_widest_state_it
+    # _can_be_given` is what holds the arithmetic to the actual monitor.
+    # Measured at the face the stylesheet resolves to - Cascadia Mono at
+    # 27 px, 27 px a character - so the middle rank's 640 is twenty-three
+    # characters, which is what every reason string there is written to and
+    # what the longest box caption (`plan: lap 12 - no tyres`) needs.
+    MIDDLE_SUB_W = 640
+    GAP_SUB_W = 1100
+    SPLIT_SUB_W = 700
+    BOX_SUB_W = 480
+
+    def set_sub_width(self, pixels: int) -> None:
+        """Cap the reason line, and elide anything past it.
+
+        **The board's width has to be a property of the board, not of every
+        string anyone ever writes into it.** Twice now it has grown past his
+        2560 px panel on the length of a sub-line - a 46-character refusal
+        reason under a fuel figure once, and a rival's name inside a gap
+        sentence the other time (PSN ids run to sixteen characters; at
+        fourteen the board was already at 2490). The window is frameless with
+        no resize handle, and Qt answers a layout minimum bigger than the
+        screen by growing the window off it rather than by dropping anything,
+        so he loses the right-hand end - POSITION and the edge of the BEHIND
+        gap - with nothing saying he has.
+
+        Short strings are still better than elided ones and the reasons are
+        written short. This is what makes the bound true rather than
+        conventional.
+        """
+        self._sub_width = pixels
+        self.sub.setMaximumWidth(pixels)
+        self._resub()
+
+    def _resub(self) -> None:
+        from PyQt6.QtGui import QFontMetrics
+
+        text = self._sub_text
+        if self._sub_width:
+            text = QFontMetrics(self.sub.font()).elidedText(
+                text, Qt.TextElideMode.ElideRight, self._sub_width)
+        self.sub.setText(text)
 
     def _restyle(self) -> None:
         self.value.setStyleSheet(
@@ -792,7 +860,8 @@ class _Stat(QWidget):
         cost of missing bad news is higher than the cost of missing good.
         """
         self.value.setText(text)
-        self.sub.setText(sub)
+        self._sub_text = sub
+        self._resub()
         ink = NEAR if urgent else GOOD if good else INK
         if ink != self._ink:
             self._ink = ink
@@ -801,6 +870,9 @@ class _Stat(QWidget):
             f"font-family:{NUMBER_FACE};font-size:{self.SUB_PX}px;"
             f"color:{ink if (urgent or good) else INK_DIM};"
             f"background:transparent;")
+        # The stylesheet is re-applied above, which can change the face the
+        # metrics resolve to; the elide has to be redone against it.
+        self._resub()
 
     def set_label(self, label: str) -> None:
         """Rename the block.
@@ -905,7 +977,6 @@ class _LastCall(QWidget):
         self.line.setStyleSheet(
             f"font-family:{NUMBER_FACE};font-size:{self.TEXT_PX}px;"
             f"color:{INK_DIM};background:transparent;")
-        self.line.setMaximumWidth(self.MAX_WIDTH)
         self.line.setWordWrap(True)
         self.line.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.mark = QLabel("")
@@ -916,39 +987,66 @@ class _LastCall(QWidget):
         row.addStretch(1)
         # Reserved, so a call arriving mid-race does not shift the whole
         # board under him while he is looking at it.
-        self.setFixedHeight(self.TEXT_PX * self.LINES + 18)
-        # The unelided sentence, kept so a resize can re-elide from the
+        self.setFixedHeight(self.TEXT_PX * self.LINES + 22)
+        # The unelided sentence, kept so a resize can re-fit from the
         # original rather than from an already-shortened copy.
         self._text = ""
+        self._fit("")
 
-    def _elide(self) -> None:
-        """Fit the sentence to the width, with an ellipsis where it is cut.
+    def _line_box(self) -> int:
+        """The height two lines of this face are allowed to occupy."""
+        from PyQt6.QtGui import QFontMetrics
 
-        **Elided from the right, so the instruction survives.** §5.5 puts the
-        instruction first and the reason second, which makes the tail the
-        right half to lose - but only visibly. An ellipsis is the difference
-        between a driver who knows there was more and one who acts on half a
-        sentence believing it was the whole one.
+        return QFontMetrics(self.line.font()).lineSpacing() * self.LINES
+
+    def _fit(self, text: str) -> None:
+        """Set the sentence so it occupies at most `LINES` lines, and no more.
+
+        **Measured, not estimated, and the estimate was the defect.** The
+        first version elided against `MAX_WIDTH * LINES` as a single run and
+        handed the result to a word-wrapping label whose laid-out width the
+        layout decides - which came out at 780 px, so the real 126-character
+        call wrapped to five lines inside a two-line box. Centred vertically,
+        the visible slice was the MIDDLE: no *"Box this lap."* at the top and
+        no ellipsis at the bottom, and what he read was a status note about
+        being 1.4 laps short. He would have stayed out.
+
+        So the label is given a definite width and the fit is asked of Qt
+        itself - `heightForWidth` on the text actually set - and the longest
+        prefix that fits is found by bisection. That is exact, it does not
+        care what face the stylesheet resolved to, and it costs eleven layout
+        queries on the laps where something is said.
+
+        **Cut from the right**, so the instruction survives: §5.5 puts the
+        instruction first and the reason second. The ellipsis is not
+        decoration - it is the difference between a driver who knows there
+        was more and one who acts on half a sentence believing it was whole.
         """
         from PyQt6.QtGui import QFontMetrics
 
-        # **The room the row actually has, not the label's own width.** A
-        # label that has never been laid out reports Qt's default 100 px,
-        # which would elide every call to a bare ellipsis - so the widest
-        # bound is used until the row has a real width to answer with.
-        room = self.width() - self.mark.sizeHint().width() - 60
-        width = min(room if room > 200 else self.MAX_WIDTH, self.MAX_WIDTH)
+        if not text:
+            self.line.setFixedWidth(1)
+            self.line.setText("")
+            return
         metrics = QFontMetrics(self.line.font())
-        # Elided against the room TWO wrapped lines have. Qt wraps at word
-        # boundaries and this measures a single run, so it is an
-        # approximation - a generous one, which is the right direction: what
-        # it lets through wraps, and what it cuts still ends in an ellipsis.
-        self.line.setText(metrics.elidedText(
-            self._text, Qt.TextElideMode.ElideRight, width * self.LINES))
-
-    def resizeEvent(self, event) -> None:              # noqa: N802 - Qt naming
-        super().resizeEvent(event)
-        self._elide()
+        natural = metrics.horizontalAdvance(text)
+        if natural <= self.MAX_WIDTH:
+            # One line, no wrapping and nothing to cut.
+            self.line.setFixedWidth(natural + 8)
+            self.line.setText(text)
+            return
+        self.line.setFixedWidth(self.MAX_WIDTH)
+        box = self._line_box()
+        lo, hi, best = 1, len(text), "…"
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            trial = text[:mid] + ("…" if mid < len(text) else "")
+            self.line.setText(trial)
+            if self.line.heightForWidth(self.MAX_WIDTH) <= box:
+                best, lo = trial, mid + 1
+            else:
+                hi = mid - 1
+        self.line.setText(best)
 
     def _mark_css(self, ink: str) -> str:
         return (f"font-family:{LABEL_FACE};font-size:{self.TEXT_PX - 6}px;"
@@ -963,13 +1061,15 @@ class _LastCall(QWidget):
             # state of the first two laps of every race and it needs no
             # explaining.
             self._text = ""
-            self.line.setText("")
+            self._fit("")
             self.mark.setText("")
             return
         where = f"L{call.lap}  " if call.lap is not None else ""
         self._text = f"{where}{call.text}"
-        self._elide()
         self.mark.setText(call.mark.upper())
+        # After the mark, because the mark's width is part of the row and a
+        # fit measured before it lands is measured against the wrong row.
+        self._fit(self._text)
         # **Only "unconfirmed" gets an ink of its own.** It is the one mark
         # that says the engineer may be wrong, and it is the one he needs to
         # see without reading the word. Marking a suggestion in warning ink
@@ -1017,13 +1117,19 @@ class DriverWindow(QWidget):
         self.view = DriverView()
         page.addWidget(self.view)
         # **Sized to what the instrument actually needs.** This asked for
-        # 1280x480 and never got it: the laid-out minimum measured on this
-        # rig is **2457 x 1031** with the widest state the board can be given
-        # - long gap notes on both neighbours, the longest refusal on both
-        # fuel blocks, and a 126-character call - so Qt grew the window on
-        # show and the number here described nothing. An earlier version of
-        # this comment said 2004 x 1001, which was the BLANK board's minimum,
-        # i.e. the same defect again in the fix for it. It is not a free choice
+        # 1280x480 and never got it: the laid-out minimum is far larger than
+        # that at these type sizes, so Qt grew the window on show and the
+        # number here described nothing.
+        #
+        # **No point figure is quoted here on purpose.** Two have been, and
+        # both were wrong within a commit: 1920x1010 (measured on a blank
+        # board), then 2457x1031 (not reproducible - the same state measures
+        # differently depending on what was drawn before it and on the face
+        # the stylesheet resolves to). What IS checked is the bound:
+        # `test_the_board_fits_his_monitor_in_the_widest_state_it_can_be_given`
+        # drives every refusal string, a sixteen-character rival name, the
+        # box panel and a call three times longer than any the engineer makes,
+        # and holds the result under 2560 x 1080. This opens just inside that. It is not a free choice
         # - the ranks are set by how far away he is and how long a glance is,
         # and the panel is 2560x1080 - so the honest thing is to open at a
         # size the content fits in.
@@ -1172,6 +1278,14 @@ class _BoxPanel(QWidget):
         row.addStretch(1)
         for stat in (self.release_stat, self.fuel_stat, self.tyre_stat,
                      self.out_stat, self.next_stat):
+            # **The box panel is bounded too, and it was the one that got
+            # away.** `QStackedLayout`'s minimum is the maximum over BOTH
+            # pages, so a stop whose next stint has no stated length set the
+            # whole window's minimum to 3,220 px - and it kept it for the
+            # rest of the race, because the page keeps its text after he
+            # leaves the box. He came back out onto a running board 660 px
+            # wider than his monitor.
+            stat.set_sub_width(_Stat.BOX_SUB_W)
             row.addWidget(stat)
             row.addStretch(1)
         outer.addLayout(row)
@@ -1185,8 +1299,8 @@ class _BoxPanel(QWidget):
             # **The dash says why.** This is the one figure the driver is
             # holding the trigger on, and it was the only one on the panel
             # showing a bare dash with an empty caption under it.
-            reason = ("no fill rate measured here" if state.fuel_target_l
-                      else "nothing sized this stop")
+            reason = ("no fill rate here" if state.fuel_target_l
+                      else "nothing sized it")
             self.release_stat.show_value("--", reason)
         else:
             self.release_stat.show_value(
@@ -1198,11 +1312,11 @@ class _BoxPanel(QWidget):
             # Nothing sized the stop. Silence rather than a number the app
             # invented - the same refusal `RefuelWatch.note` makes, and for
             # the same reason: he is holding the trigger on this figure.
-            self.fuel_stat.show_value("--", "nothing sized this stop")
+            self.fuel_stat.show_value("--", "nothing sized it")
         else:
             parts = []
             if state.fuel_l is not None:
-                parts.append(f"{state.fuel_l:.0f} aboard")
+                parts.append(f"{state.fuel_l:.0f} L")
             # Which rate the seconds beside it were priced at. A rate measured
             # at this pump and one typed on the event page are not the same
             # claim, and the countdown is only as good as whichever it used.
@@ -1230,7 +1344,7 @@ class _BoxPanel(QWidget):
                 state.compound,
                 "plan · new set" if state.tyres_at_stop else "plan")
         elif state.has_plan:
-            self.tyre_stat.show_value("--", "the plan names no compound")
+            self.tyre_stat.show_value("--", "plan: no compound")
         else:
             self.tyre_stat.show_value("--", "no plan")
 
@@ -1251,20 +1365,20 @@ class _BoxPanel(QWidget):
         # reference. Under a helmet he could not ask which one he had heard;
         # on a screen he can read it, so it is written out.
         if state.runs_to_flag:
-            self.next_stat.show_value("FLAG", "this stint runs to the end")
+            self.next_stat.show_value("FLAG", "runs to the end")
         elif state.next_stint_laps is not None:
             self.next_stat.show_value(f"{state.next_stint_laps}",
-                                      "laps, then box again")
+                                      "then box again")
         elif state.past_the_plan:
             # Out past the end of the stint list - an unplanned stop. NOT the
             # same as having no plan, and emphatically not "runs to the flag":
             # nothing has checked the fuel aboard against what is left.
-            self.next_stat.show_value("--", "past the end of the plan")
+            self.next_stat.show_value("--", "past the plan")
         elif state.has_plan:
             # Inside the plan, on a stint whose length it does not state.
             # Sharing the caption above would have said he was past the end of
             # a plan he is squarely in the middle of.
-            self.next_stat.show_value("--", "the plan states no length")
+            self.next_stat.show_value("--", "plan: no length")
         else:
             self.next_stat.show_value("--", "no plan")
 
@@ -1276,7 +1390,7 @@ class DriverView(QWidget):
         super().__init__(parent)
         self.setStyleSheet(f"background:{GROUND};")
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(40, 12, 40, 24)
+        outer.setContentsMargins(40, 8, 40, 18)
         # **Bottom-anchored.** He glances UP from the game screen below, so the
         # bottom edge of this display is the shortest eye travel.
         outer.addStretch(1)
@@ -1336,6 +1450,8 @@ class DriverView(QWidget):
         # stint it never did.
         self.axle_stat = _Stat("", value_px=_Stat.SPLIT_PX)
         self.rear_pair_stat = _Stat("", value_px=_Stat.SPLIT_PX)
+        for stat in (self.axle_stat, self.rear_pair_stat):
+            stat.set_sub_width(_Stat.SPLIT_SUB_W)
         # **The floor is named on the board, not only in the file.** It is
         # derived rather than measured (CLAUDE.md rule 5) and the trend words
         # above it fall silent below it, so a driver who sees no trend can
@@ -1389,17 +1505,22 @@ class DriverView(QWidget):
         # numbers he plans with take the rank above them.
         for stat in (self.box_stat, self.stop_stat,
                      self.flag_stat, self.position_stat):
+            stat.set_sub_width(_Stat.MIDDLE_SUB_W)
             middle.addStretch(1)
             middle.addWidget(stat, 0, Qt.AlignmentFlag.AlignBottom)
         middle.addStretch(1)
         for stat in (self.ahead_stat, self.behind_stat):
+            # **The gap sentence carries a rival's NAME**, which comes off
+            # the game and is not ours to keep short: PSN ids run to sixteen
+            # characters and at fourteen the board already measured 2,490 px.
+            stat.set_sub_width(_Stat.GAP_SUB_W)
             lead.addStretch(1)
             lead.addWidget(stat, 0, Qt.AlignmentFlag.AlignBottom)
         lead.addStretch(1)
 
         stacked = QVBoxLayout()
         stacked.setContentsMargins(0, 0, 0, 0)
-        stacked.setSpacing(16)
+        stacked.setSpacing(12)
 
         # Top of the panel and the quietest thing on it: a record of what was
         # said, not a thing to act on.
@@ -1563,11 +1684,12 @@ class DriverView(QWidget):
         Below zero it does not reach, and that is worth an ink.
 
         **Each sub-line names the supply its own figure was measured on**, and
-        neither borrows the other's. The stop figure is the tank he is
-        carrying, in laps. The flag figure, while a stop is still to come, is
-        a full tank at the pump - it cannot move with what he is carrying now,
-        because a stop refills, and a caption that let it be read as a
-        sibling of the live number beside it is exactly rule 13.
+        neither borrows the other's. The stop figure is always the tank he is
+        carrying, in laps. The flag figure names whichever of three bound it
+        - the plan's fill, the fuel he arrives with, or a full tank - because
+        that is the one thing that tells him whether the number is his to
+        move. Where it is the plan's fill it will not move with what he is
+        carrying, and it should not: a stop refills.
 
         **The live litres are not here.** `state.fuel_l` is the packet in
         hand and both figures are computed from the tank as it read at the
@@ -1585,10 +1707,15 @@ class DriverView(QWidget):
                 f"{state.fuel_to_stop:.1f}", aboard or "",
                 urgent=state.fuel_to_stop < 0)
 
+        # **The burn is not on the running board, and the reason is width.**
+        # Four blocks across a 2,560 px panel leave about 580 px each, which
+        # is twenty-one characters; `on the plan's fill · 4.19 L/lap` wants
+        # thirty-one and would have been elided into something he could not
+        # read. The reference is the half that has to survive - it is what
+        # says whether the figure is his to move - and the litres per lap are
+        # in the voice and on the box panel. `9.1 laps aboard` beside the
+        # stop figure already carries the supply in the unit he plans in.
         rests_on = state.fuel_to_flag_on or ""
-        if state.burn_l is not None:
-            burn = f"{state.burn_l:.2f} L/lap"
-            rests_on = f"{rests_on} · {burn}" if rests_on else burn
         if state.fuel_to_flag is None:
             self.flag_stat.show_value(
                 "--", state.fuel_to_flag_why or rests_on or "not measured")

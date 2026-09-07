@@ -128,11 +128,13 @@ class SplitHistory:
         as though they were one. Driven through a realistic stint - the old
         set ramping +6 to +20 degC and a fresh one restarting at +3 and
         opening at +1 a lap - the board draws *"REAR OVER FRONT ·
-        settling"* on **four consecutive laps** after the stop, at 1.6, 2.0,
-        2.0 and 1.5 degC a lap, while the gap is in fact opening at 1.0. The
-        sample count is a lie in the same breath: half those laps are a
-        different tyre. (An earlier version of this paragraph said six laps;
-        it is four, measured.)
+        settling"* on **the third, fourth, fifth and sixth laps of the new
+        set**, at 1.6, 2.0, 2.0 and 1.5 degC a lap, while the gap is in fact
+        opening at 1.0. (The first two are silent, being under
+        `MIN_LAPS_FOR_TREND`.) The sample count is a lie in the same breath:
+        it says eight laps and half of them are a different tyre. An earlier
+        version of this paragraph said six consecutive laps; it is four, and
+        which four is now stated.
 
         **At every stop, whether or not a set went on.** The tri-state tyre
         detector can say "cannot tell", and an unknown is not a no

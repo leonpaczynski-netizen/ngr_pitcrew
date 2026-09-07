@@ -91,7 +91,9 @@ def test_the_flag_figure_no_longer_forgets_the_litres_the_stop_adds():
     to_flag, why, rests_on = fuel_in_hand_to_flag(state)
     assert why is None
     assert to_flag is not None and to_flag > 0, to_flag
-    assert rests_on == "on the plan's fill"
+    # 84 L reaches the box with more than the fill wants, so the supply that
+    # bound it is his own tank and the caption says so.
+    assert rests_on == "on the fuel aboard"
     # And the old arithmetic, reproduced here, is what it is NOT.
     old = state.fuel_l / state.fuel_per_lap_l - state.laps_remaining()
     assert to_flag != pytest.approx(old)
@@ -100,7 +102,8 @@ def test_the_flag_figure_no_longer_forgets_the_litres_the_stop_adds():
 def test_the_two_numbers_are_different_questions_and_say_so():
     """A stop nine laps away and a flag eighteen laps away are not one
     number. The stop figure is the tank he is carrying against the box; the
-    flag figure is a full tank at the pump against the run home."""
+    flag figure is the supply he will leave the box with against the run
+    home."""
     state = _race()
     to_stop, _ = fuel_in_hand_to_stop(state)
     to_flag, _, _ = fuel_in_hand_to_flag(state)
@@ -164,6 +167,27 @@ def test_the_flag_figure_keeps_the_timed_race_hedge():
     assert loose > firm
 
 
+def test_the_flag_figure_names_the_supply_that_actually_bound_it():
+    """**Rule 12, and it was broken exactly where the number moves.** The
+    supply is the biggest of what he arrives with and what the plan fills to,
+    capped by the tank - so a figure of 2.0 that came from a 84 L arrival was
+    captioned `on the plan's fill` when the plan's fill leaves 1.0. The block
+    moved only where its caption lied and told the truth only where it could
+    not move, which is worse than either on its own.
+    """
+    # The ordinary case: the fill binds.
+    assert fuel_in_hand_to_flag(_race(fuel_l=45.0))[2] == "on the plan's fill"
+    # He arrives carrying more than the fill wants: his own tank is the
+    # supply, and the pump cannot take fuel out.
+    assert fuel_in_hand_to_flag(_race(fuel_l=84.0))[2] == "on the fuel aboard"
+    # The fill does not fit: he leaves with the tank full, and that is the
+    # branch the negative comes from.
+    got, why, rests_on = fuel_in_hand_to_flag(
+        _race(fuel_capacity_l=30.0, fuel_l=25.0, lap=9, stint_ends_on_lap=10))
+    assert why is None and got < 0
+    assert rests_on == "on a full tank"
+
+
 def test_no_tank_size_refuses_rather_than_becoming_an_infinite_tank():
     """**Rule 3, and it is the whole expression here rather than a term in
     it.** `fuel_capacity_l` is None until a packet sets it, and GT7 reports
@@ -206,7 +230,7 @@ def test_past_the_box_lap_the_flag_figure_is_the_tank_alone():
     assert fuel_frame(state)[1] == TO_THE_FLAG
     to_stop, why = fuel_in_hand_to_stop(state)
     assert to_stop is None
-    assert why == "past the box lap"
+    assert why == "the stop is late"
     assert fuel_in_hand_to_flag(state)[0] == fuel_in_hand(state)[0]
     assert fuel_in_hand_to_flag(state)[2] == "on the fuel aboard"
 
@@ -218,7 +242,7 @@ def test_a_tank_that_does_not_reach_the_box_refuses_rather_than_clamps():
     state = _race(fuel_l=8.0)
     to_flag, why, _ = fuel_in_hand_to_flag(state)
     assert to_flag is None
-    assert why == "you don't reach the box"
+    assert why == "tank short of the box"
     # The stop figure still answers, and its answer is the bad news: nine
     # laps to the box on 1.9 laps of fuel.
     to_stop, _ = fuel_in_hand_to_stop(state)
@@ -260,11 +284,17 @@ def test_a_missing_input_is_named_rather_than_pooled():
         "race length unknown"
 
 
-def test_a_stop_at_or_past_the_flag_is_refused():
-    """A plan whose box lap is the last lap leaves no laps for the fill to
-    cover, and dividing by that produces a figure about nothing."""
-    state = _race(stint_ends_on_lap=20)
-    assert fuel_in_hand_to_flag(state)[1] == "stop is past the flag"
+def test_a_stop_on_the_last_lap_is_not_reported_as_past_the_flag():
+    """**Two situations, and they were sharing one sentence.** `after_box`
+    of zero is a stop scheduled for the LAST LAP, which is a real plan a
+    driver has to execute; below zero is a stop past the flag, which is not.
+    Telling him "past the flag" about the first reads as "the plan is
+    broken" beside a live countdown still saying `plan: lap 21`, and he
+    ignores a mandatory stop."""
+    assert fuel_in_hand_to_flag(_race(stint_ends_on_lap=20))[1] == \
+        "stop is the last lap"
+    assert fuel_in_hand_to_flag(_race(stint_ends_on_lap=21))[1] == \
+        "stop is past the flag"
 
 
 # --------------------------------------------- the mark, spoken and printed
@@ -404,6 +434,8 @@ def test_the_board_words_the_axle_direction_and_never_shows_a_sign(qt_app):
     assert view.axle_stat.caption.text() == "REAR OVER FRONT"
     assert "widening" in view.axle_stat.sub.text()
     assert "8 laps" in view.axle_stat.sub.text()
+    # And it is not elided away: the split rank has room for its own trend.
+    assert "…" not in view.axle_stat.sub.text()
 
     # The other way round: the same magnitude, the opposite diagnosis, and
     # still no minus sign on the screen.
@@ -494,7 +526,7 @@ def test_the_tyre_decision_reaches_him_before_he_is_stationary(qt_app):
     view = DriverView()
     view.update_state(DriverState(laps_to_box=4, box_on_lap=11,
                                   tyres_at_stop=False, compound="RS"))
-    assert "no tyres" in view.box_stat.sub.text()
+    assert view.box_stat.sub.text() == "plan: lap 11 · no tyres"
     view.update_state(DriverState(laps_to_box=4, box_on_lap=11,
                                   tyres_at_stop=True, compound="RS"))
     assert "RS on" in view.box_stat.sub.text()
@@ -517,7 +549,10 @@ def test_the_flag_block_names_the_supply_it_was_measured_on(qt_app):
                                   fuel_to_flag_on="on the plan's fill"))
     assert "9.1 laps aboard" in view.stop_stat.sub.text()
     assert "on the plan's fill" in view.flag_stat.sub.text()
-    assert "4.19 L/lap" in view.flag_stat.sub.text()
+    # **The burn is not on the running board.** Four blocks across 2,560 px
+    # leave twenty-one characters each, and the reference is the half that
+    # has to survive: it says whether the figure is his to move.
+    assert "L/lap" not in view.flag_stat.sub.text()
     # **The live litres are NOT here.** Both figures come off the tank as it
     # read at the last crossing; `packet.fuel_level` beside them put three
     # readings of one tank on the screen, none reconciling.
@@ -575,44 +610,97 @@ def test_the_board_fits_his_monitor_in_the_widest_state_it_can_be_given(
     loses its right-hand end - POSITION and the edge of the BEHIND gap - with
     nothing on the screen saying it has.
 
-    **The previous guard compared a long call against a BLANK board**, so it
-    could never see this: the growth came from a 46-character refusal reason
-    under a fuel figure, which set that block's minimum at over 1,400 px. This
-    measures against the real panel, over every refusal string the two fuel
-    figures can produce, the longest gap sentences, and a call three times
-    longer than any the engineer makes.
+    **Three versions of this guard have now missed a way for the board to
+    grow**, and each miss is why a line below is here:
+
+    * the first compared a long call against a BLANK board, so it could not
+      see a 46-character refusal reason widening a fuel block;
+    * the second hard-coded `Boxhead` and `Rocky`, the two shortest names in
+      the project's own reconstruction. The gap sentence carries a rival's
+      name off the game and PSN ids run to sixteen characters; at fourteen
+      the board already measured 2,490 px;
+    * neither ever set `in_box`, and `QStackedLayout`'s minimum is the
+      maximum over BOTH pages - so a stop whose next stint had no stated
+      length set the window's minimum to 3,220 px and KEPT it for the rest of
+      the race, because the page holds its text after he leaves the box.
+
+    So this sweeps every refusal string both fuel figures can produce, a
+    sixteen-character rival name on both neighbours, all five box states, and
+    a call three times longer than any the engineer makes.
+
+    ⚠️ **It runs offscreen, where the faces are not the rig's.** The same
+    board measures 2410 x 1035 under the offscreen platform and 1154 x 1055
+    with the real Cascadia Mono and stencil faces - wider one way, taller the
+    other - so this bounds what it can measure and the height was checked by
+    hand as well. A change that adds a rank belongs on the real fonts before
+    it is believed.
     """
     from pitcrew.race import calls as C
     from pitcrew.ui.driver_view import (BoardCall, DriverState, DriverView,
                                         GapView)
 
-    reasons = [C.NO_STOP_TO_COME, C.PAST_THE_BOX_LAP, C.NO_BURN_YET,
+    reasons = [C.NO_STOP_TO_COME, C.STOP_IS_LATE, C.NO_BURN_YET,
                C.NO_FUEL_READING, C.NO_RACE_LENGTH, C.NOT_REACHING_THE_BOX,
-               C.STOP_PAST_THE_FLAG, C.ANOTHER_STOP_AFTER, C.NO_CAPACITY]
+               C.STOP_ON_THE_LAST_LAP, C.STOP_PAST_THE_FLAG,
+               C.ANOTHER_STOP_AFTER, C.NO_CAPACITY]
+    rests = [C.ON_THE_PLANS_FILL, C.ON_THE_TANK_ABOARD, C.ON_A_FULL_TANK]
+    long_name = "AVeryLongPSNid16"
     view = DriverView()
     view.resize(2480, 1050)
     view.show()
     qt_app.processEvents()
     widest = 0
-    for reason in reasons:
-        view.update_state(DriverState(
-            fuel_to_stop_why=reason, fuel_to_flag_why=reason,
-            fuel_to_flag_on=C.ON_THE_PLANS_FILL,
-            laps_to_box=3, box_on_lap=12, tyres_at_stop=True, compound="RS",
-            position=12, field_size=24,
-            axle_split_c=12.2, axle_split_rate=1.4, rear_pair_hotter="rr",
-            rear_pair_split_c=4.0, rear_pair_rate=1.4, split_laps=8,
-            ahead=GapView(seconds=12.4,
-                          note="he is catching 0.6 s a lap - Boxhead",
-                          urgent=True),
-            behind=GapView(seconds=4.8,
-                           note="pulling away 0.9 s a lap - Rocky", good=True),
-            last_call=BoardCall(text=OVERDUE_CALL * 3,
-                                mark=MARK_UNCONFIRMED, lap=14)))
+
+    def measure(state, what):
+        nonlocal widest
+        view.update_state(state)
         qt_app.processEvents()
-        size = view.layout().minimumSize()
+        # **`minimumSizeHint`, which is the size Qt actually enforces.**
+        # `layout().minimumSize()` is not the same number and reported 1035
+        # for a board whose window came out 1128 - the height that put the
+        # first artefact over his panel.
+        size = view.minimumSizeHint()
         widest = max(widest, size.width())
-        assert size.height() <= 1080, (reason, size.height())
+        assert size.height() <= 1080, (what, size.height())
+
+    for reason in reasons:
+        for rests_on in rests:
+            measure(DriverState(
+                fuel_to_stop_why=reason, fuel_to_flag_why=reason,
+                fuel_to_flag_on=rests_on,
+                # The longest box caption there is, so the middle rank is
+                # measured at its own worst as well as the fuel blocks at
+                # theirs.
+                laps_to_box=3, box_on_lap=12, tyres_at_stop=False,
+                compound="RS", position=12, field_size=24, burn_l=4.19,
+                axle_split_c=12.2, axle_split_rate=1.4,
+                rear_pair_hotter="rr", rear_pair_split_c=4.0,
+                rear_pair_rate=1.4, split_laps=8,
+                ahead=GapView(
+                    seconds=12.4,
+                    note=f"he is catching 0.6 s a lap - {long_name}",
+                    urgent=True),
+                behind=GapView(
+                    seconds=4.8,
+                    note=f"pulling away 0.9 s a lap - {long_name}",
+                    good=True),
+                last_call=BoardCall(text=OVERDUE_CALL * 3,
+                                    mark=MARK_UNCONFIRMED, lap=14)),
+                reason)
+
+    # **The box page, which no guard had ever rendered.** All five shapes its
+    # own docstring names, including the two whose captions are longest.
+    for box in (
+            dict(fuel_target_l=63.0, release_in_s=24.0, fuel_l=31.0,
+                 fill_rate_note="declared rate", has_plan=True,
+                 out_position=7, out_behind=long_name, next_stint_laps=9,
+                 compound="RS", tyres_at_stop=True),
+            dict(has_plan=True),
+            dict(past_the_plan=True),
+            dict(runs_to_flag=True, fuel_target_l=63.0),
+            dict(fuel_target_l=63.0, fuel_l=31.0, tyres_at_stop=False)):
+        measure(DriverState(in_box=True, **box), box)
+
     assert widest <= 2560, widest
     view.hide()
 

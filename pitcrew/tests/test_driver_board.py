@@ -212,7 +212,7 @@ def test_the_fill_rate_source_is_printed_beside_the_target(app):
     view.update_state(DriverState(in_box=True, fuel_target_l=74.0, fuel_l=31.0,
                                   release_in_s=43.0,
                                   fill_rate_note="declared rate"))
-    assert "declared rate" in view.box.fuel_stat.sub.text()
+    assert "declared" in view.box.fuel_stat.sub.text()
 
 
 def test_a_plan_that_names_no_compound_is_not_no_plan_at_all(app):
@@ -220,7 +220,7 @@ def test_a_plan_that_names_no_compound_is_not_no_plan_at_all(app):
     is an honest state - and the board used to report it as having no plan."""
     view = DriverView()
     view.update_state(DriverState(in_box=True, has_plan=True))
-    assert "names no compound" in view.box.tyre_stat.sub.text()
+    assert "no compound" in view.box.tyre_stat.sub.text()
     view.update_state(DriverState(in_box=True, has_plan=False))
     assert view.box.tyre_stat.sub.text() == "no plan"
 
@@ -230,7 +230,7 @@ def test_running_off_the_end_of_the_plan_is_not_no_plan_and_not_the_flag(app):
     view.update_state(DriverState(in_box=True, has_plan=True,
                                   past_the_plan=True))
     assert view.box.next_stat.value.text() == "--"
-    assert "past the end of the plan" in view.box.next_stat.sub.text()
+    assert "past the plan" in view.box.next_stat.sub.text()
 
 
 def test_a_planned_stint_with_no_stated_length_is_not_past_the_plan(app):
@@ -239,7 +239,7 @@ def test_a_planned_stint_with_no_stated_length_is_not_past_the_plan(app):
     caption, so a stint squarely inside the plan read as being past its end."""
     view = DriverView()
     view.update_state(DriverState(in_box=True, has_plan=True))
-    assert "states no length" in view.box.next_stat.sub.text()
+    assert "plan: no length" in view.box.next_stat.sub.text()
 
 
 def test_the_rejoin_caption_does_not_read_as_a_duration(app):
