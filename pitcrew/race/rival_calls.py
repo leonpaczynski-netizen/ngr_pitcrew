@@ -755,26 +755,44 @@ def tow_trade_call(state) -> Call | None:
 def _tow_is_spent(state, them: str, trade) -> Call | None:
     """The one thing left to say about a tow once the fill is in. Once.
 
-    Said only where he was TOLD to stay in it - if the verdict he heard was
-    "Not worth it" he already knows, and repeating it after the stop is the
-    same call twice in one race with a different meaning, which is rule 13.
-    A wash counts as "told to stay in it": nothing said get out.
+    **Said only where he was told, in those words, to stay in it** - the
+    verdict spoken has to have been `True`, not merely "not False" (critic
+    pass 7). `worth_it` is also `None` when there is no refuel rate on file,
+    and `record()` files that `None` here: gated on "not False" the app first
+    said *"no refuel rate on file to price it"* and then, four laps later,
+    *"The saving was worth its standing time at the pump"* - asserting the
+    price it had just refused to name. A wash is the same shape and is
+    likewise not an instruction to stay.
+
+    **And it has to be about the car he was told about.** The verdict is
+    filed with its subject, because a driver told to stay behind Boxhead who
+    stops and comes out behind Rocket would otherwise hear the withdrawal of
+    an instruction he was never given, about a car he has never been told
+    anything about. `GapTrend` clears on a subject change so the FIGURE would
+    have been right; the premise would not.
 
     The tag carries no driver name and the whole race is its scope. This is
     not a fact about a rival, it is a fact about our own fuel, and it is true
     exactly once - `clear_stint` must not let it round again.
     """
-    if not state.tow_said or state.tow_said_worth_it is False or trade is None:
+    if trade is None or state.tow_said_worth_it is not True:
+        return None
+    if state.tow_said_about is not None and state.tow_said_about != them:
         return None
     tag = "tow-spent"
     if tag in state.said_tags:
         return None
     lost = getattr(trade, "losing_s_per_lap", None)
-    if lost is None or lost <= 0:
+    # **A tenth is the floor, not zero.** `worth_it is True` needs the loss
+    # to sit `WASH_S` under the saving, so a loss of 0.04 s a lap is exactly
+    # the reachable case - and `:.1f` prints it "0.0", which is a measurement
+    # rendered as nothing (rule 9's shape). Below a tenth there is no lap
+    # time being given away worth a sentence.
+    if lost is None or lost < 0.1:
         return None
     return Call(TOW_TRADE, state.lap,
                 f"No fuel left to save in the tow - the fill's in. "
-                f"You're losing {lost:.1f} seconds a lap to {them}.",
+                f"Behind {them} you're {lost:.1f} seconds a lap slower.",
                 "The saving was worth its standing time at the pump, and "
                 "there is no pump left.", MEDIUM, tag=tag)
 

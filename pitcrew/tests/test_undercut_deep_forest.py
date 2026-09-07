@@ -311,7 +311,11 @@ def test_the_tow_is_priced_at_the_pump_and_found_not_worth_it():
     said = next(c for c in calls[laps[0]] if c.kind == TOW_TRADE)
     assert said.call.startswith("The tow saves you 0.6 litres a lap - "
                                 "0.3 seconds at the stop.")
-    assert "You're losing 1." in said.call and "seconds a lap to Boxhead" in said.call
+    # **Not "losing N seconds a lap to Boxhead"** - `closing_call` owns that
+    # sentence for the GAP growing, and this is his lap time in the wake
+    # against clear air. Rule 13, found by critic pass 7.
+    assert "Behind Boxhead you're 1." in said.call
+    assert "seconds a lap slower." in said.call
     assert said.call.endswith("Not worth it.")
     assert said.reason.endswith("against the plan.")
     trade = race.state.tow_trade
@@ -366,6 +370,48 @@ def test_a_tow_that_saves_nothing_says_so():
     call, _ = made.sentence("him")
     assert call.startswith("No fuel saving in the tow.")
     assert made.worth_it is False
+
+
+def test_a_tow_that_costs_fuel_is_not_a_wash():
+    """Critic pass 7: `worth_it` clamped the saving at zero, so a tow
+    costing 0.4 s of fuel and 0.2 s of lap time came out inside `WASH_S` and
+    was spoken "About a wash" - in a sentence that had already said there
+    was no fuel saving and that he was slower. CLAUDE.md rule 9."""
+    from pitcrew.race.tow import TowTrade
+
+    made = TowTrade(laps_held=3, saving_l_per_lap=-0.8,
+                    saving_s_per_lap=-0.4, losing_s_per_lap=0.2,
+                    reference="the plan")
+    assert made.worth_it is False
+    call, _ = made.sentence("Boxhead")
+    assert call == ("No fuel saving in the tow. Behind Boxhead you're 0.2 "
+                    "seconds a lap slower. Not worth it.")
+
+
+def test_a_tow_that_costs_fuel_and_no_time_says_it_cannot_tell():
+    """Neither side is a gain and neither is a loss he can act on."""
+    from pitcrew.race.tow import TowTrade
+
+    made = TowTrade(laps_held=3, saving_l_per_lap=-0.8,
+                    saving_s_per_lap=-0.4, losing_s_per_lap=-0.1,
+                    reference="the plan")
+    assert made.worth_it is None
+    assert made.sentence("Boxhead")[0].endswith(
+        "Behind Boxhead you're no slower. About a wash.")
+
+
+def test_the_tow_call_does_not_borrow_the_closing_calls_sentence():
+    """Rule 13, critic pass 7. `closing_call` says "You are losing N seconds
+    a lap to X" and means the GAP is growing, read off the board. The tow
+    means his LAP TIME against clear air, while the gap is by construction
+    not growing. Same words, same rival, minutes apart."""
+    from pitcrew.race.tow import TowTrade
+
+    made = TowTrade(laps_held=3, saving_l_per_lap=0.6, saving_s_per_lap=0.3,
+                    losing_s_per_lap=1.4, reference="the plan")
+    call, _ = made.sentence("Boxhead")
+    assert "losing" not in call
+    assert "Behind Boxhead you're 1.4 seconds a lap slower." in call
 
 
 def test_a_wash_is_said_as_one():
@@ -469,7 +515,7 @@ def test_a_driver_told_the_tow_was_not_worth_it_is_not_told_again():
 
 def test_a_tow_never_spoken_about_is_not_summed_up_after_the_stop():
     """Nothing was ever said about the tow, so there is nothing that has
-    stopped being true. `tow_said` is what separates that from a wash."""
+    stopped being true."""
     from pitcrew.race.rival_calls import tow_trade_call
 
     race = _race(planned_burn=10.0, planned_ms=88_000)
@@ -478,6 +524,61 @@ def test_a_tow_never_spoken_about_is_not_summed_up_after_the_stop():
     race.state.tow_said = False
     race.state.tow_said_worth_it = None
     assert tow_trade_call(race.state) is None
+
+
+def test_an_unpriced_tow_is_not_summed_up_as_if_it_had_a_price():
+    """Critic pass 7. `worth_it` is also None with no refuel rate on file -
+    the app said "no refuel rate on file to price it". Gated on "not False"
+    it then said "The saving was worth its standing time at the pump",
+    asserting the price it had just refused to name."""
+    from pitcrew.race.rival_calls import tow_trade_call
+
+    race = _race(refuel_lps=None)
+    made = _through_the_stop(race)
+    before = [c for laps, calls in made.items() if laps < 13 for c in calls
+              if c.kind == TOW_TRADE]
+    assert before and "no refuel rate on file to price it" in before[0].call
+    assert race.state.tow_said_worth_it is None
+    assert tow_trade_call(race.state) is None
+    assert not [c for laps, calls in made.items() if laps >= 13
+                for c in calls if c.kind == TOW_TRADE]
+
+
+def test_the_withdrawal_is_only_about_the_car_he_was_told_about():
+    """Critic pass 7. Told to stay behind Boxhead, he stops and comes out
+    behind Rocket: the withdrawal of an instruction never given about Rocket
+    would be spoken about Rocket. The figure would be right - `GapTrend`
+    clears on a subject change - and the premise invented."""
+    from pitcrew.race.rival_calls import tow_trade_call
+
+    race = _race(planned_burn=10.0, planned_ms=88_000)
+    _through_the_stop(race)
+    assert race.state.tow_said_about == P2
+    race.state.said_tags = set()
+    race.state.gap_ahead_name = "Rocket"
+    assert tow_trade_call(race.state) is None
+    race.state.gap_ahead_name = P2
+    assert tow_trade_call(race.state) is not None
+
+
+def test_a_tenth_is_the_floor_on_the_lap_time_it_names():
+    """`worth_it is True` needs the loss to sit `WASH_S` under the saving,
+    so a loss of 0.04 s a lap is exactly the reachable case - and `:.1f`
+    renders it "0.0", a measurement spoken as nothing (rule 9's shape)."""
+    from dataclasses import replace as dc_replace
+
+    from pitcrew.race.rival_calls import tow_trade_call
+
+    race = _race(planned_burn=10.0, planned_ms=88_000)
+    _through_the_stop(race)
+    race.state.said_tags = set()
+    race.state.tow_trade = dc_replace(race.state.tow_trade,
+                                      losing_s_per_lap=0.04)
+    assert tow_trade_call(race.state) is None
+    race.state.tow_trade = dc_replace(race.state.tow_trade,
+                                      losing_s_per_lap=0.14)
+    said = tow_trade_call(race.state)
+    assert said is not None and "0.1 seconds a lap slower" in said.call
 
 
 def test_a_tyre_that_will_not_reach_the_flag_refuses():

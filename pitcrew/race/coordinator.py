@@ -514,11 +514,16 @@ class RaceCoordinator:
     def forget_penalty(self, lap_num: int) -> None:
         """Withdraw a penalty read: the place turned out to be the road.
 
-        The controller calls this when the same stretch of road is flagged on
-        two consecutive laps, which a served penalty is not and a corner
-        missing from the model is. The lap goes back into the pace and burn
-        populations, and an unspoken note about it is dropped - a call
-        already made cannot be unmade, which is why it went out at LOW.
+        The controller calls this when a place has been braked on nearly
+        every lap of the session, which a corner missing from the model is
+        and a served penalty is not - see `analysis/penalties.py`. **Only
+        where NOTHING is left standing on the lap:** a lap can carry a
+        penalty at one place and a missing corner at another, and a lap that
+        still carries one is still out of the pace.
+
+        The lap goes back into the pace and burn populations and an unspoken
+        note about it is dropped. A call already made cannot be unmade, which
+        is why it went out at LOW with "Unconfirmed." on the end.
         """
         if not self.running:
             return

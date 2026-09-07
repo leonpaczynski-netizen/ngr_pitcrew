@@ -67,10 +67,23 @@ class TowTrade:
 
     @property
     def worth_it(self) -> bool | None:
-        """True to stay in it, False to get out, None where it cannot say."""
+        """True to stay in it, False to get out, None where it cannot say.
+
+        **`max(self.saving_s_per_lap, 0.0)` stood here and was CLAUDE.md
+        rule 9** (critic pass 7). A negative saving is the tow COSTING him
+        fuel - a real finding - and clamping it to zero made a tow that cost
+        0.4 s of fuel and 0.2 s of lap time come out inside `WASH_S` and be
+        spoken as *"About a wash"*, in a sentence that had already said there
+        was no fuel saving and that he was losing time. Unclamped it is 0.6
+        apart and it is "Not worth it", which is the answer.
+        """
         if self.saving_s_per_lap is None:
             return None
-        gain = max(0.0, self.saving_s_per_lap)
+        gain = self.saving_s_per_lap
+        if gain <= 0 and self.losing_s_per_lap <= 0:
+            # It costs fuel and costs no time. Neither side is a gain and
+            # neither is a loss he can act on: say so rather than pick one.
+            return None
         if self.losing_s_per_lap <= 0:
             return True                 # a free tow: nothing given away
         if abs(gain - self.losing_s_per_lap) < WASH_S:
@@ -79,10 +92,23 @@ class TowTrade:
 
     def sentence(self, them: str = "him") -> tuple[str, str]:
         """`(call, reason)`. Units named on both sides - litres and seconds
-        both go "a lap", and rule 13 forbids one phrase for two quantities."""
-        lost = (f"You're losing {self.losing_s_per_lap:.1f} seconds a lap to "
-                f"{them}." if self.losing_s_per_lap > 0
-                else f"You're not losing time to {them}.")
+        both go "a lap", and rule 13 forbids one phrase for two quantities.
+
+        **And this side had to be reworded to keep that promise** (critic
+        pass 7). It said *"You're losing 1.4 seconds a lap to Boxhead"*,
+        which is the sentence `rival_calls.closing_call` already owns for a
+        different quantity - there it means the GAP is growing at 1.4 s a
+        lap, read off the board. Here it means his LAP TIME in the wake
+        against his own clear-air reference, while the gap is by
+        construction not growing at all. Two calls, the same words, the same
+        rival, minutes apart. "Behind him you're N a lap slower" cannot be
+        heard as a gap, and the reason names what it is slower THAN - which
+        is the plan on some laps and his own clear-air laps on others, so it
+        belongs there and not in the sentence (rule 12).
+        """
+        lost = (f"Behind {them} you're {self.losing_s_per_lap:.1f} seconds a "
+                f"lap slower." if self.losing_s_per_lap > 0
+                else f"Behind {them} you're no slower.")
         if self.saving_l_per_lap <= 0:
             call = f"No fuel saving in the tow. {lost}"
         elif self.saving_s_per_lap is None:

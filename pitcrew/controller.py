@@ -3016,20 +3016,29 @@ class PitCrewController(QObject):
                       if corners is not None and not skip else None)
             if served is not None:
                 # **The places the road explains are struck before anything
-                # else sees them.** The same brake on four consecutive laps
-                # is a corner the auto-segment model is missing, not a
-                # penalty served four times running - and left alone it would
-                # flag, exclude and SPEAK on every lap of the race.
-                verdict = self._road_not_penalty().filter(lap.lap_num, served)
+                # else sees them.** A place braked on nearly every lap is a
+                # corner the auto-segment model is missing, not a penalty
+                # served on nearly every lap - and left alone it would flag,
+                # exclude and SPEAK on every lap of the race. The brakes go
+                # in whether or not they were flagged: the share of laps that
+                # BRAKE there is the measure, not the share that flagged.
+                from pitcrew.analysis.penalties import braked_columns
+                verdict = self._road_not_penalty().filter(
+                    lap.lap_num, served,
+                    braked_columns(rows, FRAME_FIELDS) or ())
                 for note in verdict.notes:
                     # The accepts as well as the refusals - CLAUDE.md rule 10.
                     log("session").info("penalties: %s", note)
                 served = list(verdict.kept)
-                for handed_back in verdict.give_back:
-                    if self.race is not None and getattr(
-                            self.race, "running", False):
+                for gone in verdict.give_back:
+                    # **The count that stands afterwards, not zero.** A lap
+                    # can carry a penalty at one place and a missing corner
+                    # at another; the race only takes the lap back when
+                    # nothing is left standing on it.
+                    if (gone.served == 0 and self.race is not None
+                            and getattr(self.race, "running", False)):
                         try:
-                            self.race.forget_penalty(handed_back)
+                            self.race.forget_penalty(gone.lap)
                         except Exception:                    # noqa: BLE001
                             log("race").warning(
                                 "penalty not withdrawn from the race",
@@ -3039,11 +3048,13 @@ class PitCrewController(QObject):
                     # would still read a count the app had retracted.
                     try:
                         self.store.set_lap_penalties(
-                            self.session_id, handed_back, 0, None)
+                            self.session_id, gone.lap, gone.served,
+                            gone.lost_s)
                     except Exception:                        # noqa: BLE001
                         log("session").warning(
                             "lap %s: the withdrawn penalty could not be "
-                            "cleared from its row", handed_back, exc_info=True)
+                            "written back to its row", gone.lap,
+                            exc_info=True)
                 lost = sum(p.lost_s for p in served) if served else None
                 frames = replace(frames, penalties_served=len(served),
                                  penalty_lost_s=lost)
@@ -3661,6 +3672,11 @@ class PitCrewController(QObject):
             weather = (event["weather"] or "").strip().lower()
         except Exception:                                    # noqa: BLE001
             return "the event's weather could not be read"
+        # **An unrecorded weather is read, not refused.** This refuses a
+        # DECLARATION of wet and nothing else, and a blank field declares
+        # nothing - so it reaches the same answer as `changeable`, which is
+        # the point of the narrowing. An event whose row cannot be read at
+        # all is a different thing and is refused above.
         if any(word in weather for word in WET_WORDS):
             return (f"the event's weather is '{weather}', and every frame the "
                     f"detector was calibrated on is dry")

@@ -39,18 +39,24 @@ from a reading.
 passes 6 and 7 both reasoned about this detector from what its shape COULD
 do; the numbers here are what it has actually done.
 
-1. **An out-lap, or the session's opening lap.** This is the big one, and
-   neither critic found it: **more than twenty of the flags on file are on
-   lap 1 of a practice session** - four of them on one Monza lap (session 83:
-   600, 1,800, 3,600 and 4,800 m), five on one Spa lap (session 91). Nobody
-   serves four penalties on one lap. They are a car leaving the box, braking
-   to a crawl to check something, or joining the circuit. Sessions 83, 91 and
-   102 carry `is_out_lap = 1` on that lap; session 88's is not flagged and is
-   9% slower than lap 2, which is the opening-lap defect `flag_opening_lap`
-   exists for. So the controller does not read a pit lap, an out lap, or lap
-   one. **The cost, stated:** a penalty served on lap one of a race is
-   missed. There is no instance of one on file, and the alternative is four
-   fabricated calls off an installation lap.
+1. **A pit lap, an out lap, or the session's opening lap.** This is the big
+   one, and neither critic found it. Counted over the whole archive, of 270
+   flags: **141 are lap one of a practice session** - four of them on one
+   Monza lap (session 83: 600, 1,800, 3,600 and 4,800 m), five on one Spa lap
+   (session 91). Nobody serves four penalties on one lap. They are a car
+   leaving the box, braking to a crawl to check something, or joining the
+   circuit. Sessions 83, 91 and 102 carry `is_out_lap = 1` on that lap;
+   session 88's is not flagged and is 9% slower than lap 2, which is the
+   opening-lap defect `flag_opening_lap` exists for. A further 16 are pit
+   laps, and three or four at a time - a car in the lane, not a driver
+   serving four penalties on one lap either.
+
+   **What it costs, counted rather than asserted:** 11 race flags on lap one
+   are given up. None of them has been confirmed to be a penalty and none was
+   examined one by one, so this is a real loss and not a demonstrated
+   nothing. **Out laps cost nothing at all** - there is not one out-lap flag
+   in the archive, in a race or in practice; every race flag the gate removes
+   is on a pit lap.
 2. **An avoidance stab** - lifting hard behind a spinning car on a straight.
    Nothing in the feed distinguishes it, and nothing here pretends to: the
    call says "Possible penalty served", goes out LOW, and `Call.spoken()`
@@ -69,29 +75,54 @@ do; the numbers here are what it has actually done.
    on the possibility would delete the feature at every circuit where it has
    ever been shown to work. A possibility is not a reading, and turning one
    into a silence is the fabricated value with the sign flipped.
-4. **A corner missing from the model.** Every corner model on file is
-   `auto-segment`, so this is the one that would repeat: the same brake, at
-   the same place, on every lap. `RoadNotPenalty` below is the test, and its
-   threshold comes off the archive rather than off intuition:
+4. **A corner missing from the model, which is real and is common.** Every
+   corner model on file is `auto-segment` and several are sparse: Yas Marina
+   has six corners with a 1.6 km gap between T4 and T5, and Spa's 24 h layout
+   six for 7 km. The driver brakes in those gaps on every lap, and it reads
+   as a penalty on every lap. `RoadNotPenalty` below is the test.
 
-   * **No place on file is flagged on every lap.** The highest rate anywhere
-     is 5 of 10 (session 118, Daytona, laps 2/4/6/8/10) and the frames say
-     plainly it is not a corner - laps 1, 3, 5, 7 and 9 carry **no brake at
-     all** through 5,100-5,400 m at a flat 269 km/h, and all twenty laps of
-     the race that followed (session 127) carry none. A corner is braked
-     every lap; this is braked every other lap.
-   * **The longest run of consecutive laps at one place is TWO** - session
-     114, laps 5 and 6 at Daytona, both real. So "two in a row is the road",
-     which is what this file said first, deletes a real pair. Four in a row
-     deletes nothing on the archive and still catches a corner braked on
-     every lap by its fourth lap.
-   * Refusing every `auto-segment` model instead - critic 6's suggestion -
-     would refuse all nine models on file and delete the feature outright.
+   **The question that separates them is not how OFTEN a place is flagged.
+   It is whether the other laps brake there at all.** Two dead ends were
+   tried first and both are on the record, because both looked right:
 
-   And the retirement can itself be retired (CLAUDE.md rule 10): a place that
-   then runs `ROAD_RUN_LAPS` laps WITHOUT a flag is not braked every lap
-   after all, so it goes back. Every decision is reported to the caller to be
-   logged - the accepts too, not only the refusals.
+   * *"Two consecutive laps is the road"* deletes a real pair - session 114,
+     Daytona, laps 5 and 6.
+   * *"Four consecutive laps is the road"* rested on the claim that no place
+     on file is flagged on every lap and that the longest run is two. **Both
+     were false**, from a sweep that silently began at session 82: Yas
+     Marina's 3,470 m is flagged on 10 of the 15 laps of the session 44 RACE
+     with a run of NINE, and it is beyond doubt a corner - all fifteen laps
+     brake there at 83-100%, 250 km/h down to about 105. Any run threshold
+     long enough to spare it catches nothing at all.
+
+   Counting brakes rather than flags separates the two populations cleanly,
+   because a corner is braked on every lap and a penalty is not:
+
+   | place | flagged | braked | laps | share |
+   |---|---|---|---|---|
+   | Yas 3,470 m (s44, race) | 10 | 13 | 14 | 93% - corner |
+   | Yas 3,486 m (s11) | 4 | 6 | 6 | 100% - corner |
+   | Spa 24h 2,281 and 6,582 m (s65) | 5 | 6 | 6 | 100% - corner |
+   | Daytona 5,215 m (s118, race) | 5 | 5 | 9 | 56% - penalty |
+   | Red Bull Ring 1,386 m (s101, race) | 3 | 3 | 15 | 20% - penalty |
+   | Daytona 5,200 m (s125) | 2 | 2 | 12 | 17% - penalty |
+   | Monza 4,461 m (s10) | 2 | 2 | 14 | 14% - penalty |
+
+   Nothing on file falls between 56% and 93%, which is where
+   `BRAKED_SHARE` over `BRAKED_LAPS_NEEDED` laps sits. The verdict is
+   **recomputed from the counts on every lap and never latched**, so a place
+   whose share falls back below the bar becomes readable again without a
+   separate un-retirement rule that would need its own threshold - CLAUDE.md
+   rule 10 by construction rather than by a second guard.
+
+   Refusing every `auto-segment` model instead - critic 6's suggestion -
+   would refuse all nine models on file and delete the feature outright.
+
+   Every decision is reported to the caller to be logged, the accepts too and
+   not only the refusals. And a withdrawal names **the count that stands on
+   the lap afterwards** rather than zeroing it: a lap can carry a penalty at
+   one place and a missing corner at another, and session 65's laps 2, 3 and
+   4 each do exactly that.
 """
 from __future__ import annotations
 
@@ -112,24 +143,25 @@ APPROACH_M = 250.0
 # Recovery is judged over at most this long after the brake began.
 MAX_RECOVERY_S = 25.0
 SAMPLE_HZ = 60.0
-# Two flags this far apart round the lap are the same stretch of road. The
-# nineteen on file at Daytona's banking exit span 5,194-5,310 m - 116 m -
+# Two brakes this far apart round the lap are the same stretch of road. The
+# eighteen on file at Daytona's banking exit span 5,194-5,277 m - 83 m -
 # because the brake is picked up wherever the car happens to be, so anything
-# under about 120 m would split one place into two and never see a run.
+# under about 90 m would split one place into two.
 #
 # **It is WIDER than the gap between some pairs of corners on file** - Road
 # Atlanta's closest pair is 91.7 m apart, Red Bull Ring short's 99.2 m, and
 # Spa's 109.4 m. That is a real cost and it is the acceptable direction: the
-# only thing this constant groups is places to RETIRE, so two adjacent
-# corners the model is missing would be retired together, which is the right
+# only thing this constant groups is places to withdraw, so two adjacent
+# corners the model is missing are withdrawn together, which is the right
 # answer for both of them.
 SAME_PLACE_M = 150.0
-# Consecutive laps flagged at one place before it is called a corner rather
-# than a penalty - and the clean run that puts it back. Four, off the
-# archive: the longest real run on file is two (session 114, Daytona, laps 5
-# and 6), so four deletes nothing that has ever happened and still catches a
-# corner braked on every lap within four laps of the green.
-ROAD_RUN_LAPS = 4
+# Looked-at laps before a place may be judged the road at all, and the share
+# of them that must carry a brake there. Both off the archive - see the
+# module docstring's table. The separation is wide: the missing corners run
+# 93-100% of laps braked and the penalties 14-56%, so 80% over four laps sits
+# in the gap rather than on either population.
+BRAKED_LAPS_NEEDED = 4
+BRAKED_SHARE = 0.8
 # Words in an event's `weather` that DECLARE the session wet, so the detector
 # stands down (item 3 of the docstring). `changeable` is deliberately not one
 # of them: it is a possibility, and seven of the eleven events on file carry
@@ -227,144 +259,201 @@ def read_rows(frames, corners, *, sample_hz: float = SAMPLE_HZ
 
 
 @dataclass(frozen=True)
+class Withdrawal:
+    """A lap whose penalty count has been changed after the fact.
+
+    **The count that stands NOW, not zero.** A lap can carry a penalty at one
+    place and a brake at a missing corner at another, and session 65's laps
+    2, 3 and 4 each do - a 2,281 m flag and a 6,582 m flag apiece. Zeroing
+    the lap when one place is withdrawn writes "looked at and clean" over a
+    reading that still stands, which is CLAUDE.md rule 3 and is what the
+    schema note beside `penalties_served` forbids in as many words.
+    """
+    lap: int
+    served: int
+    lost_s: float | None
+
+
+@dataclass(frozen=True)
 class Verdict:
     """One lap's verdict from `RoadNotPenalty`: what to keep and what to say.
 
-    `give_back` are laps a PREVIOUS call kept and this one withdraws - pass
-    each to `RaceCoordinator.forget_penalty` and correct its stored row.
-    `notes` is every decision this lap in words, accepts included, for the
-    log. CLAUDE.md rule 10: the ratchet at Fuji was invisible for a whole
-    race because only the refusals were written down.
+    `give_back` are `Withdrawal`s against laps a PREVIOUS call kept - write
+    each back to its row, and hand the lap back to the race only where the
+    count has fallen to zero. `notes` is every decision this lap in words,
+    accepts included, for the log: CLAUDE.md rule 10, whose ratchet at Fuji
+    was invisible for a whole race because only the refusals were written
+    down.
     """
     kept: tuple
-    give_back: tuple[int, ...]
+    give_back: tuple
     notes: tuple[str, ...]
+
+
+def braked_at(frames, *, sample_hz: float = SAMPLE_HZ) -> list[float]:
+    """Where on the lap the car braked hard, whatever the reason.
+
+    Every run of `BRAKE_PCT` or more lasting `MIN_BRAKE_S` or more, by the
+    metre it began at. **No speed bound, no lateral-g bound and no corner
+    window** - this is the question "is this stretch of road braked for",
+    which is what tells a corner the model is missing from a penalty served,
+    and every one of those filters would answer a different question.
+    """
+    rows = [f for f in (frames or ())
+            if f.get("lap_distance_m") is not None]
+    dt = 1.0 / sample_hz
+    out: list[float] = []
+    i, n = 0, len(rows)
+    while i < n:
+        if (rows[i].get("brake_pct") or 0.0) < BRAKE_PCT:
+            i += 1
+            continue
+        j = i
+        while j < n and (rows[j].get("brake_pct") or 0.0) >= BRAKE_PCT:
+            j += 1
+        if (j - i) * dt >= MIN_BRAKE_S:
+            out.append(float(rows[i]["lap_distance_m"]))
+        i = j
+    return out
+
+
+def braked_columns(rows, field_names, *,
+                   sample_hz: float = SAMPLE_HZ) -> list[float] | None:
+    """`braked_at` from the recorder's column-array rows."""
+    index = {name: position for position, name in enumerate(field_names)}
+    wanted = ("lap_distance_m", "brake_pct")
+    if any(name not in index for name in wanted):
+        return None
+    return braked_at([{name: row[index[name]] for name in wanted}
+                      for row in rows], sample_hz=sample_hz)
 
 
 class RoadNotPenalty:
     """Which flagged places are a corner the model is missing. One session.
 
-    Item 4 of the module docstring, and its numbers. A served penalty happens
-    on a lap; a corner is there on every lap. So a place flagged on
-    `ROAD_RUN_LAPS` CONSECUTIVE laps is the road: it is retired, and every
-    lap of the run is handed back, because each was struck on a reading this
-    has just withdrawn.
+    Item 4 of the module docstring, and its table. **A corner is braked on
+    every lap and a penalty is not**, so the test is the share of the
+    session's looked-at laps that carry a brake at the place - not the share
+    that were flagged there, and not a run of consecutive laps, both of which
+    were tried and are recorded there as the dead ends they are.
 
-    **And the retirement retires** (CLAUDE.md rule 10, which is about exactly
-    this: "a rule that refuses a reading must be able to refuse its own
-    baseline"). A retired place that then runs `ROAD_RUN_LAPS` laps with no
-    flag is not braked every lap, so it was not a corner; it goes back and
-    the next flag there is a penalty again. Without that this class is a
-    one-way latch that swallows every real penalty at Daytona's banking exit
-    for the rest of a race, and writes `penalties_served = 0` - a positive
-    claim of "looked at and clean" - on every lap of it.
+    A place is the road once `BRAKED_LAPS_NEEDED` laps have been looked at
+    and `BRAKED_SHARE` of them braked there. The verdict is **recomputed from
+    the counts on every lap**, so nothing latches: a place whose share falls
+    back below the bar is readable again, and CLAUDE.md rule 10's "a rule
+    that refuses a reading must be able to refuse its own baseline" is
+    satisfied by construction rather than by a second guard.
 
-    **What it costs, stated.** The first `ROAD_RUN_LAPS - 1` laps of a
-    missing corner are still flagged and still spoken, at LOW with
-    "Unconfirmed." on the end. There is no way to tell the shape from one
-    lap: a real penalty arrives exactly once too, and refusing every first
-    sighting refuses all nineteen on file. Three hedged sentences at the
-    start of a race is the price of not deleting a real pair on lap 5 and 6
-    the way "two in a row" did.
+    **What it costs, stated.** Flags at a missing corner before the fourth
+    looked-at lap are kept and spoken, at LOW with "Unconfirmed." on the end,
+    and then withdrawn. At Yas Marina's session 44 that is one call; where
+    the place is flagged on the very first laps it can be two or three. There
+    is no way to tell the shape from one lap - a real penalty arrives exactly
+    once too - and refusing every first sighting refuses every real one.
 
-    **`note_lap` must be called for EVERY lap the detector looked at**,
-    including the ones with nothing on them - that is what a run is counted
-    against. `filter` does it for you.
+    **`filter` must be called for EVERY lap the detector looked at**,
+    including laps it found nothing on: those are what the share is counted
+    against. `None` for `found` is a lap it could NOT look at, and is not
+    counted at all.
 
     **CLAUDE.md rule 11.** One instance per session; the controller keys it
     on the session id beside `_corner_windows_cache` for the same reason.
     """
 
     def __init__(self, same_place_m: float = SAME_PLACE_M,
-                 run_laps: int = ROAD_RUN_LAPS) -> None:
+                 laps_needed: int = BRAKED_LAPS_NEEDED,
+                 share: float = BRAKED_SHARE) -> None:
         self._same_place_m = float(same_place_m)
-        self._run_laps = int(run_laps)
-        # place -> the consecutive laps flagged there, newest last
-        self._run: dict[float, list[int]] = {}
-        # place -> laps run since it was retired with nothing flagged there
-        self._retired: dict[float, int] = {}
+        self._laps_needed = int(laps_needed)
+        self._share = float(share)
+        self._laps_seen = 0
+        # place -> how many looked-at laps carried a brake there
+        self._braked: dict[float, int] = {}
+        # lap -> the (place, Penalty) pairs this ledger has kept on it
+        self._kept: dict[int, list[tuple[float, object]]] = {}
+        # Places a flag has ever been raised at. Most places braked on every
+        # lap are corners the model DOES contain - `APPROACH_M` covers them
+        # and they never flag - and naming those as "missing" in the log is
+        # noise that buries the one that matters.
+        self._flagged: set[float] = set()
 
-    def _near(self, places, at_m: float):
-        for place in places:
+    def _place(self, at_m: float) -> float:
+        """The book's own name for this stretch of road, adding it if new."""
+        for place in self._braked:
             if abs(place - at_m) <= self._same_place_m:
                 return place
-        return None
+        self._braked[at_m] = 0
+        return at_m
+
+    def _is_road(self, place: float) -> bool:
+        if self._laps_seen < self._laps_needed:
+            return False
+        return self._braked.get(place, 0) >= self._share * self._laps_seen
 
     def retired(self) -> tuple[float, ...]:
-        """The places this session currently calls corners, for the log."""
-        return tuple(sorted(self._retired))
+        """The places a flag was raised at and this session calls corners.
 
-    def filter(self, lap_num: int, found) -> Verdict:
-        """One lap's verdict. `found` is that lap's `Penalty` list.
+        For the log and for `tools/find_penalties.py`: these are the corners
+        the model is missing, and each one is worth adding to it.
+        """
+        return tuple(sorted(p for p in self._flagged if self._is_road(p)))
 
-        An empty list is a lap the detector looked at and found nothing on,
-        which is evidence about every place. `None` is a lap it could not
-        look at - no frames, a pit lap, a session it stood down on - and is
-        not evidence either way, so it BREAKS a run rather than extending
-        it: the same argument `GapTrend._window` makes about fitting a line
-        through a hole in the readings, and the safe direction, because a
-        hole can then only delay a retirement and never cause one.
+    def filter(self, lap_num: int, found, braked=()) -> Verdict:
+        """One lap's verdict.
+
+        `found` is the lap's `Penalty` list - `None` where the detector could
+        not look at the lap. `braked` is `braked_at(frames)` for the same
+        lap: every hard brake on it, flagged or not, which is what the share
+        is counted from. Passing nothing for `braked` counts only the flags,
+        which is the measure this class exists to replace - callers that can
+        read the frames must pass it.
         """
         lap_num = int(lap_num)
         if found is None:
             return Verdict((), (), ())
-        kept, give_back, notes = [], [], []
-        flagged_here = set()
+        self._laps_seen += 1
+        for at_m in dict.fromkeys(self._place(float(at)) for at in braked):
+            self._braked[at_m] = self._braked.get(at_m, 0) + 1
 
+        kept, notes = [], []
         for penalty in found:
-            at_m = float(penalty.at_m)
-            place = self._near(self._retired, at_m)
-            if place is not None:
-                self._retired[place] = 0        # flagged again: the run breaks
-                flagged_here.add(place)
+            place = self._place(float(penalty.at_m))
+            self._flagged.add(place)
+            if self._is_road(place):
                 notes.append(
-                    f"lap {lap_num}: the brake at {at_m:.0f} m is inside a "
-                    f"place already read as a corner ({place:.0f} m) - not "
-                    f"counted as a penalty")
+                    f"lap {lap_num}: the brake at {penalty.at_m:.0f} m is at a "
+                    f"place braked on {self._braked[place]} of "
+                    f"{self._laps_seen} laps - that is a corner the model is "
+                    f"missing, not a penalty")
                 continue
-            place = self._near(self._run, at_m)
-            if place is None:
-                place = at_m
-                self._run[place] = []
-            run = self._run[place]
-            if run and run[-1] != lap_num - 1 and run[-1] != lap_num:
-                run.clear()                     # the run was broken
-            if not run or run[-1] != lap_num:
-                run.append(lap_num)
-            flagged_here.add(place)
-            if len(run) >= self._run_laps:
-                # Braked every lap for a run: that is the road, not a
-                # penalty served four times running.
-                self._retired[place] = 0
-                give_back.extend(l for l in run if l != lap_num)
-                notes.append(
-                    f"lap {lap_num}: {place:.0f} m has been flagged on "
-                    f"{len(run)} consecutive laps {run} - a penalty is served "
-                    f"on a lap and a corner is there on all of them, so this "
-                    f"is a corner the model is missing. Laps "
-                    f"{[l for l in run if l != lap_num]} go back into the pace")
-                self._run.pop(place, None)
-                continue
-            notes.append(
-                f"lap {lap_num}: penalty at {at_m:.0f} m kept - "
-                f"{len(run)} consecutive lap(s) at this place, "
-                f"{self._run_laps} would be a corner")
             kept.append(penalty)
+            self._kept.setdefault(lap_num, []).append((place, penalty))
+            notes.append(
+                f"lap {lap_num}: penalty at {penalty.at_m:.0f} m kept - braked "
+                f"on {self._braked[place]} of {self._laps_seen} laps, "
+                f"{self._share:.0%} of {self._laps_needed} would be a corner")
 
-        # The laps that did NOT flag a place are what retires a retirement
-        # and what breaks a run.
-        for place in list(self._run):
-            if place not in flagged_here:
-                self._run[place] = []
-        for place in list(self._retired):
-            if place in flagged_here:
+        # A place that has JUST become the road takes its earlier flags with
+        # it, and each of those laps is recounted rather than zeroed.
+        withdrawn = {}
+        for lap, entries in list(self._kept.items()):
+            if lap == lap_num:
                 continue
-            self._retired[place] += 1
-            if self._retired[place] >= self._run_laps:
-                self._retired.pop(place)
-                notes.append(
-                    f"lap {lap_num}: {place:.0f} m has run {self._run_laps} "
-                    f"laps with no brake flagged - it is not braked every lap, "
-                    f"so it is not a corner and it goes back to being readable")
-        return Verdict(tuple(kept), tuple(dict.fromkeys(give_back)),
+            standing = [(place, p) for place, p in entries
+                        if not self._is_road(place)]
+            if len(standing) == len(entries):
+                continue
+            gone = [p for place, p in entries if self._is_road(place)]
+            self._kept[lap] = standing
+            lost = sum(p.lost_s for _, p in standing) if standing else None
+            withdrawn[lap] = Withdrawal(lap=lap, served=len(standing),
+                                        lost_s=lost)
+            notes.append(
+                f"lap {lap}: {len(gone)} reading(s) withdrawn at "
+                f"{', '.join(f'{p.at_m:.0f} m' for p in gone)} - the place is "
+                f"a corner. {len(standing)} penalt"
+                f"{'y' if len(standing) == 1 else 'ies'} still stand(s) on "
+                f"that lap")
+        return Verdict(tuple(kept),
+                       tuple(withdrawn[lap] for lap in sorted(withdrawn)),
                        tuple(notes))

@@ -707,6 +707,11 @@ class RaceState:
     # from the verdict above because that is tri-state: a wash reads None,
     # which is not the same claim as "he has never been told about the tow".
     tow_said: bool = False
+    # **And whose wake it was about.** A verdict is about one car. Told to
+    # stay behind Boxhead, then stopping and coming out behind Rocket, he
+    # would otherwise hear an instruction withdrawn that was never given
+    # about Rocket - the figure right, the premise invented.
+    tow_said_about: str | None = None
     # `(lap, seconds lost)` of a penalty served on the lap just completed,
     # from the controller's read of the frames; cleared once said.
     penalty_note: tuple | None = None
@@ -1350,15 +1355,17 @@ class RaceState:
             self.stops_off_said = True
         if call.kind == CHASE:
             self.chase_said_lap = call.lap
-        if call.kind == TOW_TRADE:
-            # What he was actually told, not what the trade currently says -
-            # `tow_trade` is remade every crossing and the sentence he is
-            # living by is the one that was spoken.
-            if call.tag != "tow-spent":
-                trade = getattr(self, "tow_trade", None)
-                self.tow_said = True
-                self.tow_said_worth_it = (getattr(trade, "worth_it", None)
-                                          if trade is not None else None)
+        if call.kind == TOW_TRADE and call.tag != "tow-spent":
+            # **What he was actually told, and about whom.** `tow_trade` is
+            # remade at every crossing, and this runs in the same tick that
+            # built the call from it - `next_call` builds every candidate,
+            # ranks them, and only the winner reaches here - so it is the
+            # trade the spoken sentence came out of.
+            trade = getattr(self, "tow_trade", None)
+            self.tow_said = True
+            self.tow_said_worth_it = (getattr(trade, "worth_it", None)
+                                      if trade is not None else None)
+            self.tow_said_about = self.gap_ahead_name
         if call.kind == INCIDENT:
             self.incident_lap = None
             self.incident_cost_ms = None

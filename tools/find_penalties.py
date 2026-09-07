@@ -21,7 +21,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pitcrew.analysis.penalties import WET_WORDS, RoadNotPenalty, read_rows
+from pitcrew.analysis.penalties import (WET_WORDS, RoadNotPenalty, braked_at,
+                                        read_rows)
 from pitcrew.analysis.resolve import circuit_key
 from pitcrew.store.db import Store
 
@@ -60,7 +61,7 @@ def main() -> int:
                   f"detector down here (no wet calibration frame). --raw "
                   f"reads it anyway.")
             return 1
-        found = 0
+        by_lap = {}
         ledger = RoadNotPenalty()
         for lap in store._query(
                 "SELECT id, lap_num, lap_time_ms, is_pit_lap, is_out_lap "
@@ -78,19 +79,26 @@ def main() -> int:
                 print(f"  lap {lap['lap_num']:>2}: "
                       f"{'not read (pit, out or lap one)' if skip else 'no frames'}")
                 continue
-            verdict = (ledger.filter(lap["lap_num"], served) if not args.raw
-                       else None)
+            verdict = (ledger.filter(lap["lap_num"], served,
+                                     braked_at(frames))
+                       if not args.raw else None)
             for note in (verdict.notes if verdict else ()):
                 print(f"    {note}")
-            for handed_back in (verdict.give_back if verdict else ()):
-                found -= 1
-                print(f"    lap {handed_back}: WITHDRAWN")
-            for p in (verdict.kept if verdict else served):
-                found += 1
+            for gone in (verdict.give_back if verdict else ()):
+                by_lap[gone.lap] = gone.served
+                print(f"    lap {gone.lap}: WITHDRAWN - {gone.served} "
+                      f"still stand(s)")
+            standing = verdict.kept if verdict else served
+            by_lap[lap["lap_num"]] = len(standing)
+            for p in standing:
                 print(f"  lap {lap['lap_num']:>2}: penalty at {p.at_m:.0f} m - "
                       f"{p.speed_from_kph:.0f} -> {p.speed_to_kph:.0f} km/h over "
                       f"{p.brake_s:.1f} s, about {p.lost_s:.1f} s lost (derived)")
+        found = sum(by_lap.values())
         print(f"{found} penalt{'y' if found == 1 else 'ies'} served")
+        if not args.raw and ledger.retired():
+            print("corners the model is missing (nothing here was counted): "
+                  + ", ".join(f"{p:.0f} m" for p in ledger.retired()))
         return 0
     finally:
         store.close()

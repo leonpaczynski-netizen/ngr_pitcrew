@@ -178,8 +178,16 @@ def test_a_declared_wet_session_is_refused_with_its_reason():
     for weather in ("wet", "Heavy rain", "damp", "thunderstorm"):
         refused = _readable({"weather": weather, "rain_possible": 0})
         assert refused is not None and "calibrated on is dry" in refused
-    assert _readable(None) is not None
-    assert _readable({}) is not None, "an event that cannot say is a refusal"
+    assert _readable(None) is not None, "no event at all is a refusal"
+    assert _readable({}) is not None, "a row that cannot be read is a refusal"
+
+
+def test_an_unrecorded_weather_is_read_like_changeable():
+    """This refuses a DECLARATION of wet and nothing else, so a blank field -
+    which declares nothing - has to reach the same answer as `changeable`,
+    or the narrowing is undone by a NULL column."""
+    assert _readable({"weather": None, "rain_possible": None}) is None
+    assert _readable({"weather": "", "rain_possible": 1}) is None
 
 
 def test_the_ledger_and_the_refusal_have_production_callers():
@@ -190,7 +198,7 @@ def test_the_ledger_and_the_refusal_have_production_callers():
     source = (pathlib.Path(__file__).resolve().parents[1] / "controller.py"
               ).read_text(encoding="utf-8")
     assert "self._road_not_penalty().filter(" in source
-    assert "self.race.forget_penalty(handed_back)" in source
+    assert "self.race.forget_penalty(gone.lap)" in source
     assert "self.store.set_lap_penalties(" in source
     start = source.index("    def _corner_windows(self)")
     end = source.index("\n    def ", start + 10)
