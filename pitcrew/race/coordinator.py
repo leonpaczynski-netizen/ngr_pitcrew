@@ -27,6 +27,7 @@ from pitcrew.race.calls import (
     STAY_OUT,
     Call,
     RaceState,
+    fuel_in_hand,
     _crossing_the_line,
     clear_stint,
     next_call,
@@ -1186,8 +1187,12 @@ class RaceCoordinator:
         if owed is not None:
             # Ahead of any held position call: the first thing he hears on the
             # way back is the account of the moment, not the places it cost.
+            # **"That cost you N seconds" is the INCIDENT call's phrase
+            # for lap time lost** (row 1.10), and this is seconds with a
+            # wheel off the road - a smaller number, on a different clock,
+            # landing first. One spin trips both.
             return Call(POSITION, self.state.lap, "You're back on it.",
-                        f"That moment cost you about {owed:.0f} seconds.")
+                        f"About {owed:.0f} seconds off the road.")
         if call is None:
             return None
         if self.composure.may_volunteer(register_of(call.kind)):
@@ -2061,7 +2066,17 @@ class RaceCoordinator:
             # answers "how long left" from it.
             "lapsEstimateFirm": self.state.laps_estimate_firm,
             "fuelL": self.state.fuel_l,
+            # **Absolute: tank divided by burn.** Not a margin, and the PTT
+            # answer used to say "8.2 laps of fuel" off it while the
+            # volunteered call said "1.9 laps of fuel in hand to the stop"
+            # off `_fuel_gap` - one phrase, two quantities, and the failure
+            # direction that kills a race is hearing the absolute as the
+            # margin (row 1.10, rule 13).
             "lapsOfFuel": self.state.laps_of_fuel(),
+            # The margin and the distance it is a margin TO, from the one
+            # expression that produces both.
+            **dict(zip(("fuelInHand", "fuelReference"),
+                       fuel_in_hand(self.state))),
             "lapsToStop": self.state.laps_to_stop(),
             "nextCompound": self.state.next_compound,
             "inPit": self.state.in_pit,

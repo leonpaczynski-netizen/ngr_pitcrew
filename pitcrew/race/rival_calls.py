@@ -311,8 +311,13 @@ def stay_out(*, lap: int, laps_left: int | None,
         # the words of an emergency, and this call means the opposite: there is
         # too much fuel aboard to fill usefully yet. `calls.py` learned exactly
         # this about leading with "No fuel" and the lesson did not travel.
+        # **"Stay out." and "Staying out?" are one syllable apart and mean
+        # different things** (row 1.10): this one is *do not box yet*, the
+        # `calls.stay_out` fold is *you have driven past the box and it
+        # works*. One is a DECISION, the other a suggestion. Said as the
+        # instruction it is.
         return Call(STAY_OUT_FUEL, lap,
-                    "Stay out.",
+                    "Don't box yet.",
                     f"Too much fuel aboard to fill. Lap {floor} at the "
                     f"earliest.", HIGH)
     if planned_stop_lap is not None and lap >= planned_stop_lap:
@@ -539,16 +544,23 @@ def rejoin_call(*, lap: int, gap_behind_s: float | None,
     # comes out in front" - an instruction-shaped sentence about a stop
     # nobody was taking, heard under a helmet as the box call. When the stop
     # is not due the same arithmetic is said as the conditional it is.
+    # **The first two words were the box instruction, and the call means the
+    # opposite** (row 1.10, §5.5). "Box now and Rocky comes out in front."
+    # is acted on before the qualifier arrives - the `due=False` variant was
+    # already fixed to lead with the consequence, and the `due=True` one was
+    # left leading with an order it does not give. Both lead with the rival
+    # now, and the stop's cost names its unit on both branches.
     if rejoin.ahead is False:
         return Call(REJOIN, lap,
-                    (f"Box now and {them} comes out in front." if due
-                     else f"A stop now puts you behind {them}."),
-                    f"He is {rejoin.their_gap_s:.0f} seconds back and the stop "
-                    f"costs {rejoin.ours_lost_s:.0f}.", HIGH if due else MEDIUM)
+                    f"{them} comes out in front if you box now." if due
+                    else f"A stop now puts you behind {them}.",
+                    f"He is {rejoin.their_gap_s:.0f} seconds back against a "
+                    f"{rejoin.ours_lost_s:.0f} second stop.",
+                    HIGH if due else MEDIUM)
     if rejoin.too_close:
         return Call(REJOIN, lap,
-                    ("Box now and it is too close to call." if due
-                     else f"A stop now is too close to call against {them}."),
+                    f"{them} is too close to call if you box now." if due
+                    else f"A stop now is too close to call against {them}.",
                     f"He is {rejoin.their_gap_s:.0f} seconds back against a "
                     f"{rejoin.ours_lost_s:.0f} second stop.", MEDIUM)
     return None
@@ -677,8 +689,9 @@ def sector_split_call(state) -> Call | None:
     if gains and losses:
         call = (f"Faster than {them} through {_sector_names(g.index for g in gains)}. "
                 f"He has you in {_sector_names(l.index for l in losses)}.")
-        reason = (f"Over {laps} laps: {sum(-g.mean_s for g in gains):.1f} a lap "
-                  f"through {_sector_names(g.index for g in gains)}, "
+        reason = (f"Over {laps} laps: {sum(-g.mean_s for g in gains):.1f} "
+                  f"seconds a lap through "
+                  f"{_sector_names(g.index for g in gains)}, "
                   f"{sum(l.mean_s for l in losses):.1f} back in "
                   f"{_sector_names(l.index for l in losses)}.")
     elif gains:
@@ -936,16 +949,22 @@ def undercut_call(state) -> Call | None:
         # opposite** (critic pass 7, fifth round): `tow_trade_call` says
         # "The tow costs you 0.8 litres a lap" and this said "No fuel saving
         # in the tow" about the same number, minutes apart. Rule 13.
+        # **Both halves said "seconds a lap" and they are two quantities**
+        # (row 1.10): standing time saved at the pump per towed lap, against
+        # lap time given away on the road. The driver asked for this trade by
+        # name, so the figures stay - what changes is that each one says
+        # which clock it is on.
         saved = trade.saving_s_per_lap
+        lost = trade.losing_s_per_lap
         if saved is not None and saved > 0:
-            tow = (f" The tow's {saved:.1f} seconds a lap at the stop against "
-                   f"{trade.losing_s_per_lap:.1f} seconds a lap lost.")
+            tow = (f" The tow saves {saved:.1f} seconds of stop time a lap "
+                   f"and costs {lost:.1f} seconds of lap time.")
         elif saved is not None and saved < 0:
-            tow = (f" The tow costs you {-saved:.1f} seconds a lap at the stop "
-                   f"and {trade.losing_s_per_lap:.1f} seconds a lap lost.")
+            tow = (f" The tow costs {-saved:.1f} seconds of stop time a lap "
+                   f"and {lost:.1f} seconds of lap time.")
         else:
-            tow = (f" No fuel saving in the tow, and "
-                   f"{trade.losing_s_per_lap:.1f} seconds a lap lost.")
+            tow = (f" No fuel saving in the tow, and {lost:.1f} seconds of "
+                   f"lap time gone.")
     reason = (f"Undercut on {them}: you're held up, and faster through "
               f"{_sector_names(g.index for g in gains)}. The fill costs the "
               f"same now as on lap {state.stint_ends_on_lap}.{tow}{tyres}")

@@ -85,7 +85,18 @@ STOP_FUEL_TAIL = "laps of fuel in hand to the stop."
 # `answer()` produces this shape for the fuel question. Parsed rather than
 # re-formatted, so the fragments are derived from what the function actually
 # returned; `test_every_fuel_line_decomposes` fails loudly if the shape moves.
-_FUEL_LINE = re.compile(r"^(\d+)\.(\d) laps of fuel\.$")
+#
+# **The tail is no longer a constant, and that is rule 13 paying the pack**
+# (row 1.10). The answer said "4.5 laps of fuel." - an absolute, in the noun
+# phrase the volunteered call uses for a MARGIN - and now says the same words
+# the engineer says: "1.9 laps of fuel in hand to the stop." So it decomposes
+# into `STOP_FUEL_TAIL` and `COLOUR_FUEL_TAIL`, which the pack already holds
+# for the volunteered line, and the only new clip is the one the answer falls
+# back to when there is no reference to be a margin to.
+_FUEL_LINE = re.compile(r"^(\d+)\.(\d) (laps of fuel[^.]*\.)$")
+# What the answer says when no stop and no flag can frame the figure: the
+# absolute, said as one so it cannot be heard as a margin.
+TANK_FUEL_TAIL = "laps of fuel in the tank."
 
 # `calls.position_line`'s two-number form. Given its own shape for the same
 # reason the fuel line has one: `_split_on_number` peels a single number and
@@ -277,19 +288,21 @@ def fuel_fragments() -> tuple[str, ...]:
     the fuel one is the most repeated of them, and it shares this family's
     number words, so one tail clip covers it.
     """
-    return (POINT, _fuel_tail(), COLOUR_FUEL_TAIL, STOP_FUEL_TAIL)
+    return (POINT, _fuel_tail(), COLOUR_FUEL_TAIL, STOP_FUEL_TAIL,
+            TANK_FUEL_TAIL)
 
 
 @lru_cache(maxsize=1)
 def _fuel_tail() -> str:
     """The invariant part of the fuel line, taken from the line itself."""
-    sample = _text(FUEL, {"lapsOfFuel": 4.5})
+    sample = _text(FUEL, {"fuelInHand": 4.5, "fuelReference": "to the stop"})
     match = _FUEL_LINE.match(sample)
     if match is None:
         raise ValueError(
-            f"the fuel answer no longer looks like '<n>.<n> laps of fuel.': "
-            f"{sample!r} - the manifest cannot decompose it")
-    return sample[match.end(2):].lstrip()
+            f"the fuel answer no longer looks like "
+            f"'<n>.<n> laps of fuel in hand <reference>.': {sample!r} - the "
+            f"manifest cannot decompose it")
+    return match.group(3)
 
 
 @lru_cache(maxsize=1)
@@ -510,7 +523,9 @@ def spoken_openers() -> tuple[str, ...]:
         "That's the best lap of the race.",
         "That's the tidiest run of the race.",
         "Halfway.",
-        "Stop next lap.",
+        # Row 1.10: the countdown said "Stop next lap." - the box call's own
+        # words, from the commentary tier. It describes now.
+        "One lap to the stop.",
         "Tyre gauge when you get a straight.",
         # engineer/intents.py - acknowledge, never analyse
         "Copy, noted with the temperatures.",

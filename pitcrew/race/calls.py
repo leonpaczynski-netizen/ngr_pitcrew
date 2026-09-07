@@ -1518,7 +1518,11 @@ def _chase(state: RaceState) -> Call | None:
     them = state.gap_ahead_name or "the car ahead"
     laps_word = "lap" if laps_left == 1 else "laps"
     call = f"{them} {latest:.1f} ahead, {laps_left} {laps_word} to go."
-    reason = f"You need {need:.1f} a lap."
+    # **"a lap" carries seconds in five places and litres in two** (row
+    # 1.10). Behind the same car the driver can hear "You need 0.7 a lap."
+    # and "The tow saves you 0.7 litres a lap." minutes apart. The unit is
+    # said here, not left to the listener.
+    reason = f"You need {need:.1f} seconds a lap."
     sigma = state.lap_sigma_s
     if sigma:
         reason += (" That's more than your lap-to-lap spread."
@@ -1908,10 +1912,23 @@ def _box_now(state: RaceState) -> Call | None:
             "not granted.",
             severity=float(overdue),
         )
+    # **The routine box call was the only one of four that did not say what
+    # it was boxing him for** (row 1.10, rule 12). The wear cliff says
+    # "Tyres are past the stint limit on the measured rate"; the gauge one
+    # names the corner and the percentage; the undercut names the rival and
+    # the sectors. This one said "Fuel to 68 litres - 9 laps after the box",
+    # which is the fill instruction standing where the reason belongs - and
+    # the decision came from `stop_still_needed`, which turns on
+    # `plan_binding_constraint`. §5.5's own worked example is "Box this lap
+    # or next. Fuel is the constraint - you're 1.2 laps short."
+    bound = (state.plan_binding_constraint or "").strip().lower()
+    said = (f"{bound.capitalize()} is the constraint." if bound
+            and bound not in ("unknown",) else "")
+    reason = f"{said} {fuel}".strip() if fuel else (said or "On the plan.")
     return Call(
         BOX_NOW, state.lap,
         f"Box this lap.{compound}",
-        fuel or "On the plan.",
+        reason,
         severity=float(overdue),
     )
 
@@ -1934,7 +1951,11 @@ def _box_soon(state: RaceState) -> Call | None:
                   "the stop was not granted.".format(state.stint_index + 1))
     return Call(
         BOX_SOON, state.lap,
-        f"Box in {to_stop}." if to_stop > 1 else "Box next lap.",
+        # **The unit, because the PTT answer has always carried it**
+        # (row 1.10): `intents._laps` renders the same instruction as "Box
+        # in 2 laps." and the volunteered one said "Box in 2." The one he
+        # acts on under a helmet was the bare one.
+        f"Box in {to_stop} laps." if to_stop > 1 else "Box next lap.",
         reason,
         severity=float(-to_stop),
     )
@@ -2263,8 +2284,12 @@ def stay_out_call(state: RaceState) -> Call | None:
         return Call(
             STAY_OUT, state.lap,
             "Staying out? You should make it.",
-            f"Short-shift {int(round(drop / 50.0) * 50)}, "
-            f"you're {abs(gap):.1f} short.",
+            # **Both units, and the distance the margin is short OF**
+            # (row 1.10). "Short-shift 450, you're 0.6 short." puts rpm and
+            # laps in one sentence with neither named - and its own sibling
+            # nine lines down has always said "0.4 laps short to the flag".
+            f"Short-shift {int(round(drop / 50.0) * 50)} rpm, "
+            f"you're {abs(gap):.1f} laps short to the flag.",
             short_shift_drop_rpm=drop)
     if gap < STAY_OUT_GAP_UNMEASURED:
         return None
@@ -2454,7 +2479,11 @@ def _incident(state: RaceState) -> Call | None:
     return Call(
         INCIDENT, state.lap,
         f"Lap {lap} is out.",
-        f"That cost you {cost_ms / 1000:.0f} seconds.",
+        # **"cost you N seconds" is lap time here and time-off-road in
+        # `composure`** (row 1.10). One spin trips both, and the off-road
+        # figure - which systematically understates the loss - lands first.
+        # This one names the lap it is measured against.
+        f"That cost you {cost_ms / 1000:.0f} seconds against your pace.",
         HIGH,
         severity=cost_ms / 1000.0)
 
@@ -2903,11 +2932,13 @@ def _conserve(state: RaceState, front: float, rear: float) -> Call | None:
     if gap < threshold or front < floor:
         return None
     slope = state.temp_gap_s_per_c
-    worth = (f" - about {slope:.1f} a lap per degree on your own laps here"
-             if slope else "")
+    worth = (f" - about {slope:.1f} seconds a lap per degree on your own "
+             f"laps here" if slope else "")
     return Call(
         TYRE_TEMP, state.lap, "Ease the traction out of the slow corners.",
-        f"Rears {gap:.0f} over the fronts{worth}.",
+        # Degrees, because "Rears 6 over the fronts" is a bare number in a
+        # call whose siblings quote seconds and percentages (row 1.10).
+        f"Rears {gap:.0f} degrees over the fronts{worth}.",
         MEDIUM, tag="conserve")
 
 

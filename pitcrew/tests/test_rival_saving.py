@@ -466,7 +466,7 @@ def test_a_stop_now_that_would_drop_us_behind_is_said():
     # says this loss was measured here. `strategy/model.stop_overhead_s`
     # carries the evidence: Watkins 15.7 measured + 7.5 = 23.2 against a
     # frame-measured 23.07 total.
-    assert "the stop costs 85" in call.reason
+    assert "85 second stop" in call.reason
 
 
 def test_a_rejoin_is_not_argued_before_the_stop_is_in_prospect():

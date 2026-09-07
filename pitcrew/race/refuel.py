@@ -294,7 +294,11 @@ def _to_flag_clause(to_flag_l: float | None, target_l: float | None) -> str:
         return ""
     if to_flag_l <= target_l + TO_FLAG_EPSILON_L:
         return ""
-    return f" {_ceil_l(to_flag_l)} to the flag if you stay out."
+    # **Litres, and it is the one place "N to the flag" is not laps** (row
+    # 1.10): every other site says "1.4 laps short of the flag". Adjacency
+    # rescues a big number; "9 to the flag" beside "9 laps after the box"
+    # does not.
+    return f" {_ceil_l(to_flag_l)} litres to the flag if you stay out."
 
 
 def _ceil_l(litres: float) -> int:

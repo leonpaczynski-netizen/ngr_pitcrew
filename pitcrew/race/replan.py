@@ -308,7 +308,11 @@ class Replan:
             return "The plan needs a look."
         if self.stops == 0:
             return "Recommend running to the flag."
-        return f"Recommend {self.stops} stop{'' if self.stops == 1 else 's'}."
+        # **"N stops" means three things** (row 1.10): the brief's total
+        # for the race, `BOX_SOON`'s ordinal ("Stop 2, on the plan"), and
+        # this, which is stops REMAINING. "from here" is the reference.
+        return (f"Recommend {self.stops} stop"
+                f"{'' if self.stops == 1 else 's'} from here.")
 
     def spoken_reason(self) -> str:
         """The reason, cut to one clause. §5.5: instruction first, reason short.

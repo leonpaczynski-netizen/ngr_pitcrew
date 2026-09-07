@@ -470,7 +470,7 @@ def _gap_answer(intent: str, snapshot: dict) -> Answer:
         if rate is not None and abs(rate) >= 0.1:
             # Positive is the gap shrinking on both sides - see `GapTrend`.
             word = "closing" if rate > 0 else "opening"
-            line += f", {word} {abs(rate):.1f} a lap"
+            line += f", {word} {abs(rate):.1f} seconds a lap"
         parts.append(line + ".")
     if parts:
         return Answer(" ".join(parts), intent, answered=True)
@@ -607,11 +607,22 @@ def answer(intent: str, snapshot: dict, *,
         return _how_much_longer(snapshot, intent)
 
     if intent == FUEL:
+        # **The same words the engineer volunteers, off the same expression**
+        # (row 1.10). This answered "8.2 laps of fuel" - an absolute - in the
+        # noun phrase the volunteered call uses for a MARGIN, with no
+        # reference on it. Heard as a margin with ten laps to run, 8.2 means
+        # believing in slack that is really minus one point eight.
+        in_hand = snapshot.get("fuelInHand")
+        reference = snapshot.get("fuelReference")
+        if in_hand is not None and reference:
+            return Answer(f"{in_hand:.1f} laps of fuel in hand {reference}.",
+                          intent)
         laps_of_fuel = snapshot.get("lapsOfFuel")
         if laps_of_fuel is None:
             return Answer("I don't have a fuel rate yet.", intent,
                           answered=False)
-        return Answer(f"{laps_of_fuel:.1f} laps of fuel.", intent)
+        # No reference to be a margin to - so the absolute, said as one.
+        return Answer(f"{laps_of_fuel:.1f} laps of fuel in the tank.", intent)
 
     if intent == BOX_WHEN:
         to_stop = snapshot.get("lapsToStop")
@@ -672,7 +683,10 @@ def answer(intent: str, snapshot: dict, *,
                           intent)
         seconds = abs(delta) / 1000.0
         way = "up on" if delta < 0 else "down on"
-        return Answer(f"{seconds:.1f} {way} the plan.", intent)
+        # Seconds a lap, said as such: `_on_plan` renders the same figure
+        # as "Pace 0.8 a lap down." and this said "0.8 down on the plan",
+        # which does not say it is per lap at all (row 1.10).
+        return Answer(f"{seconds:.1f} seconds a lap {way} the plan.", intent)
 
     return Answer("Say again.", UNKNOWN, answered=False)
 
@@ -756,12 +770,12 @@ def _on_plan(snapshot: dict) -> str:
     said = f"Burn {abs(burn):.0f} percent {direction} plan."
     if snapshot.get("paceIsReal"):
         pace = snapshot.get("paceVsPlanMs") or 0
-        said += (f" Pace {abs(pace) / 1000.0:.1f} a lap "
+        said += (f" Pace {abs(pace) / 1000.0:.1f} seconds a lap "
                  f"{'down' if pace > 0 else 'up'}.")
     else:
         floor = snapshot.get("paceDetectableMs")
-        said += (f" Pace is inside the {floor / 1000.0:.1f} a lap I can see."
-                 if floor else " Pace not measurable yet.")
+        said += (f" Pace is inside the {floor / 1000.0:.1f} seconds a lap "
+                 f"I can see." if floor else " Pace not measurable yet.")
     return said
 
 

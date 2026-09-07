@@ -760,6 +760,93 @@ driver already short-shifting read as having obeyed; the v17 note in
 `schema.py` had swallowed a v15 paragraph; and the controller half — the
 hand-placed half — had no test at all, which is now five.
 
+### Row 1.10 — the rule-13 pass, and the manifest diff
+
+**The sweep.** 28 call kinds (`REGISTER`, `calls.py:283`), 25 of them ranked in
+`URGENCY`; **51 `Call(...)` sites** — 33 in `calls.py`, 16 in `rival_calls.py`,
+2 in `coordinator.py` — plus 14 further `voice.say` sites in the controller
+feeding `brief`, `colour`, `replan`, `refuel`, `quali_fuel`, `qualifying`,
+`intents` (~40 PTT answers), `gate`, `knowledge` and `debrief`. About **239
+distinct sentence templates**.
+
+**Two would have cost him a race.**
+
+1. **"N laps of fuel" was an absolute when he asked and a margin when the
+   engineer volunteered it.** The PTT answered `lapsOfFuel` — tank over burn —
+   as *"8.2 laps of fuel."*, in the noun phrase `FUEL_LONG`, the colour line
+   and the heartbeat all use for `_fuel_gap`, a margin, with the reference on
+   it. **This is the original rule-13 defect reinstated on the push-to-talk
+   path**, and the failure direction is the one that kills a race: 8.2 heard
+   as a margin with ten to run is believing in slack that is really −1.8. The
+   answer now comes from `fuel_in_hand`, the one expression that produces the
+   figure and its reference together, and says the same words the engineer
+   says. Where nothing frames it, it says *"8.2 laps of fuel in the tank."*
+2. **The chatty tier kept counting down to a stop that had just been
+   cancelled.** `_stops_off` says *"You're fuelled to the flag. No more stops
+   on fuel."* and does not clear `stint_ends_on_lap`; `_box_now` and
+   `_box_soon` go quiet because they gate on `stop_still_needed`, and
+   `colour` speaks on exactly the crossings where they are silent — from the
+   raw field. So the next lap said *"Stop next lap."* in the box vocabulary
+   about a stop that had been called off, and on the same lap he could hear
+   *"Fuel good to the flag."* The controller passes `None` once the stop is
+   retired: the figure now comes from the expression that decided there is a
+   stop (rule 12).
+
+**The manifest diff.** Every wording that moved, and why:
+
+| Site | Was | Is |
+|---|---|---|
+| `intents` FUEL | "8.2 laps of fuel." | "1.9 laps of fuel in hand to the stop." / "8.2 laps of fuel in the tank." |
+| `colour._countdown` | "3 to the stop." / "Stop next lap." | "3 laps to the stop." / "One lap to the stop." |
+| `colour` straight | "3 to the box." | "3 laps to the stop." |
+| `colour` wear | "LR 72." | "LR 72 percent." |
+| `calls._box_soon` | "Box in 2." | "Box in 2 laps." |
+| `calls._box_now` | "…Fuel to 68 litres - 9 laps after the box." | "Fuel is the constraint. Fuel to 68 litres…" |
+| `calls._chase` | "You need 0.7 a lap." | "You need 0.7 seconds a lap." |
+| `calls.stay_out` fold | "Short-shift 450, you're 0.6 short." | "Short-shift 450 rpm, you're 0.6 laps short to the flag." |
+| `calls._incident` | "That cost you 11 seconds." | "That cost you 11 seconds against your pace." |
+| `coordinator` composure | "That moment cost you about 4 seconds." | "About 4 seconds off the road." |
+| `calls._conserve` | "about 0.1 a lap per degree" | "about 0.1 seconds a lap per degree" |
+| `calls._tyre_temp` | "Rears 6 over the fronts." | "Rears 6 degrees over the fronts." |
+| `rival_calls.stay_out` | "Stay out." | "Don't box yet." |
+| `rival_calls.sector_split` | "0.4 a lap through 1 and 2" | "0.4 seconds a lap through 1 and 2" |
+| `rival_calls.rejoin_call` | "Box now and Rocky comes out in front." | "Rocky comes out in front if you box now." |
+| `rival_calls.undercut` | "The tow's 0.3 seconds a lap at the stop against 1.4 seconds a lap lost." | "The tow saves 0.3 seconds of stop time a lap and costs 1.4 seconds of lap time." |
+| `refuel` | "92 to the flag if you stay out." | "92 litres to the flag if you stay out." |
+| `replan` | "Recommend 2 stops." | "Recommend 2 stops from here." |
+| `brief` | "I can't see other cars - position only." always | only where the wall will not watch |
+| `intents` GAP / PACE / `_on_plan` | "closing 0.3 a lap", "0.8 down on the plan", "Pace 0.8 a lap down" | all say "seconds a lap" |
+
+**Why each moved, in one line each:** "a lap" carried seconds in five places
+and litres in two while `tow.py`'s own docstring forbade exactly that; "N
+stops" meant the race's total, this stop's ordinal and the stops remaining;
+"cost you N seconds" was lap time in one place and time-off-road in another,
+and one spin trips both; "N to the flag" was litres in exactly one place and
+laps everywhere else; "Stay out." and "Staying out?" are one syllable apart
+and mean opposite things; and `REJOIN` opened with the box instruction while
+meaning the opposite, which §5.5 calls a hedge behind a flat assertion.
+
+**The pack follows the sentences, and that is what "manifest diff" buys.**
+`phrase_manifest._FUEL_LINE` parsed a fixed tail; it now takes the reference
+from the line, so the PTT answer decomposes into `STOP_FUEL_TAIL` and
+`COLOUR_FUEL_TAIL` — clips the pack **already held** for the volunteered call.
+One sentence, one clip: rule 13 pays the voice pack as well as the driver.
+`test_voice_pack` and `test_phrase_manifest` are the gate, and a sentence that
+moves without reaching the pack is a pause at the moment a call arrives.
+
+**Struck from the audit, with the reason.** `colour._milestone`'s *"5 to go."*
+against the heartbeat's *"5 laps to go."* was reported as a collision and is
+not one: rule 13 forbids one phrase meaning two things, not two phrasings of
+one unambiguous thing — and `test_race_wiring` uses the difference as the
+marker that tells a colour line from an instrument reading. Left alone.
+
+**Carried:** the `UNDERCUT` reason can still stack the fill clause, the tow
+clause and the tyre clause, which is long for §5.5. The driver asked for the
+tow figures in that call by name (7 Sep), so they stay until he says
+otherwise; what changed is that the two seconds figures no longer share a
+phrase. Also carried from the audit: `intents` GAP answers as a two-row table
+(§5.5), and `expectations`' *"3.12 against 3.20"* is two bare litres-per-lap.
+
 **Left in Phase 1:** 1.7 (race page absorbs the loaded card, Strategy page
 goes), 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three

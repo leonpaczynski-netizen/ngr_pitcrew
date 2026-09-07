@@ -26,8 +26,11 @@ def test_gap_answers_from_the_walls_reading():
                          "gapBehindS": 10.2, "gapBehindName": None,
                          "gapBehindClosingSPerLap": -0.3})
     assert reply.answered is True
-    assert reply.text.startswith("Ahead: Boxhead, 3.4 seconds, closing 0.8 a lap.")
-    assert "Behind: the car behind, 10.2 seconds, opening 0.3 a lap." in reply.text
+    # Row 1.10: "a lap" carried seconds in five places and litres in two.
+    assert reply.text.startswith(
+        "Ahead: Boxhead, 3.4 seconds, closing 0.8 seconds a lap.")
+    assert ("Behind: the car behind, 10.2 seconds, opening 0.3 seconds a lap."
+            in reply.text)
 
 
 def test_gap_with_no_reading_yet_says_so_and_invites_a_retry():
@@ -140,7 +143,10 @@ def _rejoin(due):
 def test_a_rejoin_call_is_an_instruction_only_when_the_stop_is_due():
     due = _rejoin(True)
     not_due = _rejoin(False)
-    assert due.call == "Box now and Boxhead comes out in front."
+    # Row 1.10, §5.5: the first two words were the box instruction and the
+    # call means the opposite - he acts on "Box now" before the qualifier
+    # arrives. The `due=False` variant already led with the consequence.
+    assert due.call == "Boxhead comes out in front if you box now."
     assert due.confidence == HIGH
     assert not_due.call == "A stop now puts you behind Boxhead."
     assert not_due.confidence != HIGH

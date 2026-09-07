@@ -54,6 +54,10 @@ class Instruments:
     temp_window: bool = False
     #: The packet format in use carries the per-wheel surface channel.
     surface_channel: bool = True
+    #: Whether the pit wall will watch the leaderboard this race. `None` where
+    #: the app cannot say, which is treated as "it will not" - promising less
+    #: than is there is the safe direction for a brief.
+    sees_rivals: bool | None = None
 
 
 def _compound_phrase(compounds: tuple[str, ...]) -> str:
@@ -131,7 +135,17 @@ def brief(instruments: Instruments) -> list[str]:
         lines.append("I can't see kerbs or offs on this stream.")
 
     # --- and what he cannot, always last
-    lines.append("I can't see other cars - position only.")
+    #
+    # **Unconditional, while the wall was watching** (row 1.10). With the
+    # gauge on and a sampling interval inside five seconds the wall reads the
+    # leaderboard all race, and the engineer then volunteers "Boxhead has
+    # boxed on 40 litres", "He is 8 seconds back", "Faster than Boxhead
+    # through 1 and 2" - having opened the race by promising none of it. This
+    # file's own rule, one line up, is that promising an instrument that is
+    # not there is worse than promising nothing; this was the same failure
+    # running backwards.
+    if not instruments.sees_rivals:
+        lines.append("I can't see other cars - position only.")
     return lines
 
 

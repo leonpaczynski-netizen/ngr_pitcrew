@@ -767,11 +767,11 @@ def test_the_driver_can_ask_whether_he_is_on_the_plan():
     quiet = answer(ON_PLAN, {"burnVsPlanPct": -10.6, "paceIsReal": False,
                              "paceDetectableMs": 1990})
     assert "Burn 11 percent under plan" in quiet.text
-    assert "inside the 2.0 a lap I can see" in quiet.text
+    assert "inside the 2.0 seconds a lap I can see" in quiet.text
 
     real = answer(ON_PLAN, {"burnVsPlanPct": 6.0, "paceIsReal": True,
                             "paceVsPlanMs": 2400, "paceDetectableMs": 1990})
-    assert "Pace 2.4 a lap down" in real.text
+    assert "Pace 2.4 seconds a lap down" in real.text
 
 
 # --------------------------------------------- one thing at a time, end to end

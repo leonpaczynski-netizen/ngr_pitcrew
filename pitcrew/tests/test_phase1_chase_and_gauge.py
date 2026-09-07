@@ -24,7 +24,7 @@ def test_the_chase_says_the_gap_the_laps_and_the_pace_it_takes():
     call = _chase(_chasing())
     assert call is not None and call.kind == CHASE
     assert call.call == "Boxhead 6.2 ahead, 6 laps to go."
-    assert call.reason == ("You need 1.0 a lap. That's more than your "
+    assert call.reason == ("You need 1.0 seconds a lap. That's more than your "
                            "lap-to-lap spread.")
 
 
@@ -35,7 +35,10 @@ def test_a_target_inside_his_own_spread_is_said_as_one():
 
 def test_no_spread_measured_means_no_claim_about_it():
     call = _chase(_chasing(sigma=None))
-    assert call.reason == "You need 1.0 a lap."
+    # Row 1.10: "a lap" carried seconds in five places and litres in two,
+    # and behind the same car he could hear "You need 1.0 a lap." and "The
+    # tow saves you 1.0 litres a lap." minutes apart.
+    assert call.reason == "You need 1.0 seconds a lap."
 
 
 def test_every_other_lap_and_never_in_the_window_edges():

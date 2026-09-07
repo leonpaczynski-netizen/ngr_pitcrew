@@ -191,8 +191,8 @@ def test_the_engineer_notices_where_he_has_us():
     # lap is not chained to the next, so they come in a touch under the
     # 0.4 built in; the sentence and the sign are what the driver hears.
     import re
-    found = re.search(r"Over (\d+) laps: ([\d.]+) a lap through 1 and 2, "
-                      r"([\d.]+) back in 3\.", said.reason)
+    found = re.search(r"Over (\d+) laps: ([\d.]+) seconds a lap through "
+                      r"1 and 2, ([\d.]+) back in 3\.", said.reason)
     assert found, said.reason
     assert abs(float(found.group(2)) - 0.4) < 0.15
     assert abs(float(found.group(3)) - 0.4) < 0.15
@@ -350,8 +350,12 @@ def test_the_tow_is_priced_at_the_pump_and_found_not_worth_it():
     trade = race.state.tow_trade
     assert trade is not None and trade.worth_it is False
     undercut = next(c for c in calls[7] if c.kind == UNDERCUT)
-    assert ("The tow's 0.3 seconds a lap at the stop against 1.4 seconds a "
-            "lap lost.") in undercut.reason
+    # Row 1.10: both halves said "seconds a lap" for two quantities -
+    # standing time saved at the pump per towed lap, against lap time given
+    # away on the road. The driver asked for this trade by name, so the
+    # figures stay; each one says which clock it is on.
+    assert ("The tow saves 0.3 seconds of stop time a lap and costs 1.4 "
+            "seconds of lap time.") in undercut.reason
 
 
 def test_a_tow_that_pays_means_no_undercut():

@@ -218,7 +218,9 @@ def test_box_soon_says_why_too():
     assert race.state.drop_stop_granted is False
     call = _box_soon(race.state)                 # lap 8, box on 10
     assert call is not None and call.kind == BOX_SOON
-    assert call.call == "Box in 2."
+    # Row 1.10: the PTT answer has always said "Box in 2 laps."; the
+    # volunteered instruction - the one he acts on - was the bare one.
+    assert call.call == "Box in 2 laps."
     assert "dropping the stop was not granted" in call.reason
 
     granted = _fuelled_to_the_flag(a_plan([an_entry(trigger="fuel_long",
