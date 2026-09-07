@@ -715,7 +715,8 @@ def _section_from_plan(plan: dict) -> dict:
     if not stints:
         return {}
     pit_laps = plan.get("pit_laps") or []
-    from pitcrew.strategy.handover import as_stop_count
+    from pitcrew.strategy.handover import (LAP_CEILING, as_stop_count,
+                                           as_whole_number)
 
     return {
         "plan": {
@@ -735,7 +736,13 @@ def _section_from_plan(plan: dict) -> dict:
             "compounds": [s.get("compound") for s in stints],
             # Only the first stop travels - `pitLaps` is not in the contract's
             # key allow-list, and `to_json` refuses a payload carrying one.
-            "pitLap": pit_laps[0] if pit_laps else None,
+            #
+            # **Read the same way `stops` is**, two lines up: desk JSON put
+            # `11.0` straight into the contract, `_validate_plan` never looks
+            # at this key, and `race_outcome` rendered "lap 11.0" to the
+            # driver.
+            "pitLap": (as_whole_number(pit_laps[0], LAP_CEILING, minimum=0)
+                       if pit_laps else None),
         },
         "bindingConstraint": plan.get("binding_constraint"),
         "compoundCrossover": None,
@@ -870,7 +877,8 @@ def _outcome(store, event_id: int, calls: list[dict], section: dict,
     stay_out = next((call["lap"] for call in calls
                      if call.get("kind") == "stay-out"
                      and call.get("accepted")), None)
-    from pitcrew.strategy.handover import as_stop_count
+    from pitcrew.strategy.handover import (LAP_CEILING, as_stop_count,
+                                           as_whole_number)
 
     text = race_outcome(
         race_laps,
@@ -881,7 +889,11 @@ def _outcome(store, event_id: int, calls: list[dict], section: dict,
         # earlier version of this comment said it was normalised upstream on
         # both branches, which invited the next reader to delete the call.
         planned_stops=as_stop_count(plan.get("stops")),
-        planned_pit_laps=[plan["pitLap"]] if plan.get("pitLap") else None,
+        # `if plan.get("pitLap")` folded a box lap of 0 to None; `is not
+        # None` is the question, and the value is read the way it is written.
+        planned_pit_laps=([lap] if (lap := as_whole_number(
+            plan.get("pitLap"), LAP_CEILING, minimum=0)) is not None
+            else None),
         binding_constraint=section.get("bindingConstraint"),
         declined_calls=declined,
         stay_out_lap=stay_out)

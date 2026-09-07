@@ -164,12 +164,15 @@ _STOP_CEILING = 1000
 LAP_CEILING = 100_000
 
 
-def as_whole_number(value, ceiling: int) -> int | None:
-    """A stored field read as a whole number no larger than `ceiling`.
+def as_whole_number(value, ceiling: int, *,
+                    minimum: int | None = None) -> int | None:
+    """A stored field read as a whole number within the caller's bounds.
 
-    The bound is the caller's, because a stop count and a lap count are not
-    the same quantity and one ceiling for both would refuse a real endurance
-    distance to catch a corrupt stop field.
+    **The bounds are the caller's**, because a stop count and a lap count are
+    not the same quantity: one ceiling for both would refuse a real endurance
+    distance to catch a corrupt stop field, and `minimum` is None for stops -
+    where a negative is deliberately kept as an unusable reading and named as
+    one - and 0 for laps, where it is simply not a lap count.
     """
     if isinstance(value, bool):
         return None
@@ -182,9 +185,9 @@ def as_whole_number(value, ceiling: int) -> int | None:
     # 400-digit one rendered a 2,822 px line against a 733 px plate.
     if isinstance(value, float) and value.is_integer():
         value = int(value)
-    if isinstance(value, int) and abs(value) <= ceiling:
-        return value
-    return None
+    if not isinstance(value, int) or abs(value) > ceiling:
+        return None
+    return None if minimum is not None and value < minimum else value
 
 
 def as_stop_count(value) -> int | None:

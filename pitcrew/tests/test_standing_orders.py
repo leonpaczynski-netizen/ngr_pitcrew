@@ -1512,9 +1512,14 @@ def test_a_stops_value_that_is_not_a_count_is_a_problem_not_a_skip():
 
 
 def test_a_lap_count_is_not_bounded_by_the_stop_ceiling():
-    """Reusing `as_stop_count` for `stintLaps` bounded a lap count at 1000,
-    and a 24-hour race at 90-second laps is 960 - close enough that it is a
-    category error rather than a margin."""
+    """A stop ceiling is not a lap ceiling: 1,000 would refuse a 24-hour race
+    at 90-second laps, which is 960.
+
+    **Caught in the writing, not in the tree** - reusing `as_stop_count` for
+    `stintLaps` was the first draft of the pass-15 fix and never shipped, so
+    this pins the constant rather than closing a defect. Said plainly because
+    an earlier docstring here narrated it as one.
+    """
     from pitcrew.export.payload import _validate_plan
     from pitcrew.strategy.handover import (LAP_CEILING, as_stop_count,
                                            as_whole_number)
@@ -1550,7 +1555,11 @@ def test_one_float_in_stintlaps_no_longer_disables_every_check():
 
 def test_the_refusal_and_the_order_quote_a_value_the_same_way():
     """`certify`'s refusal reaches a driver-facing status label and quoted the
-    field with a bare `repr`; the standing order truncated. One expression."""
+    field with a bare `repr`; the standing order truncated. One expression.
+
+    Pins behaviour an earlier pass shipped rather than this one - kept
+    because nothing else held the two together.
+    """
     from pitcrew.strategy.certify import certify
     from pitcrew.strategy.handover import short_value
 
@@ -1564,3 +1573,79 @@ def test_the_refusal_and_the_order_quote_a_value_the_same_way():
     assert said, got.refusals
     assert short_value(huge) in said[0], said
     assert len(said[0]) < 120, len(said[0])
+
+
+def test_an_empty_stintlaps_is_a_readable_list_of_no_laps():
+    """**It skipped every check below it and the payload was written.**
+
+    `if raw_stints and all(...)` / `elif raw_stints:` left an EMPTY list in
+    neither branch, so the sum, the stops and the compounds checks all
+    vanished with no problem raised - where the version before it reached
+    them, because `all(...)` over an empty list is True. Measured end to end
+    through the MCP door: a 20-lap, one-stop, two-compound section with no
+    stints at all exported clean, and §7's "refuse to export rather than
+    export something wrong" did not fire.
+    """
+    from pitcrew.export.payload import _validate_plan
+
+    said = _validate_plan({"plan": {"stintLaps": [], "laps": 20, "stops": 1,
+                                    "compounds": ["RS", "RS"]}})
+    assert any("sums to 0 against a plan of 20 laps" in line
+               for line in said), said
+    assert any("0 stints against 1 stop" in line for line in said), said
+    assert any("2 compound(s) for 0 stint(s)" in line for line in said), said
+
+
+def test_a_junk_stintlaps_no_longer_silences_the_other_fields():
+    """The stops problem was still nested under the stints, so a stintLaps
+    that could not be read took the stops check down with it - the half of
+    the previous pass's claim that was not delivered."""
+    from pitcrew.export.payload import _validate_plan
+
+    said = _validate_plan({"plan": {"stintLaps": ["a"], "stops": True}})
+    assert any("not a list of lap counts" in line for line in said), said
+    assert any("not a stop count" in line for line in said), said
+
+    # And a laps that cannot be read is named rather than skipped in silence.
+    laps = _validate_plan({"plan": {"stintLaps": [15, 5], "laps": "20",
+                                    "stops": 1}})
+    assert any("laps is '20', which is not a lap count" in line
+               for line in laps), laps
+
+
+def test_a_negative_stint_length_is_not_a_lap_count():
+    """`abs(value) <= ceiling` let `[-5, 25]` sum to 20 and pass, under a
+    message whose own words are "not a list of lap counts". A negative is
+    kept as an unusable reading for STOPS, where it is named as one; for laps
+    it is simply not a lap count."""
+    from pitcrew.export.payload import _validate_plan
+    from pitcrew.strategy.handover import (LAP_CEILING, as_stop_count,
+                                           as_whole_number)
+
+    assert as_whole_number(-5, LAP_CEILING, minimum=0) is None
+    assert as_whole_number(-5, LAP_CEILING) == -5
+    assert as_stop_count(-1) == -1, "a negative stop count is still read"
+
+    said = _validate_plan({"plan": {"stintLaps": [-5, 25], "laps": 20,
+                                    "stops": 1}})
+    assert any("not a list of lap counts" in line for line in said), said
+
+
+def test_the_box_lap_is_read_the_way_the_stop_count_is():
+    """`pitLap` is the unnormalised sibling of `stops`, two lines under the
+    comment saying why `stops` is normalised: desk JSON put `11.0` into the
+    contract, `_validate_plan` never looks at that key, and `race_outcome`
+    rendered "lap 11.0" to the driver. And `if plan.get("pitLap")` folded a
+    box lap of 0 to None."""
+    from pitcrew.export.build import _section_from_plan
+
+    section = _section_from_plan({
+        "stints": [{"laps": 15, "compound": "RM"},
+                   {"laps": 5, "compound": "RM"}],
+        "stops": 1.0, "pit_laps": [11.0]})
+    assert section["plan"]["pitLap"] == 11
+    assert not isinstance(section["plan"]["pitLap"], float)
+
+    junk = _section_from_plan({
+        "stints": [{"laps": 15, "compound": "RM"}], "pit_laps": ["x"]})
+    assert junk["plan"]["pitLap"] is None

@@ -110,8 +110,17 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     if not stints:
         return Certificate(["the plan names no stints"])
 
-    laps = [s.get("laps") for s in stints]
-    if any(not isinstance(n, int) or n <= 0 for n in laps):
+    # **The same `isinstance`-on-a-JSON-number gate.** `{"laps": 10.0}` was
+    # refused as "not a whole number of laps" while `{"stops": 1.0}` on the
+    # same plan certified - two opposite verdicts on the same JSON number,
+    # one file over from where that was fixed. It fails safe (a refusal, not
+    # an accept), and it told the driver a plan lacked whole lap counts when
+    # it had them.
+    from pitcrew.strategy.handover import LAP_CEILING, as_whole_number
+
+    laps = [as_whole_number(s.get("laps"), LAP_CEILING, minimum=0)
+            for s in stints]
+    if any(n is None or n <= 0 for n in laps):
         refusals.append("every stint needs a positive whole number of laps")
         return Certificate(refusals)
 

@@ -1532,6 +1532,41 @@ Bounded rather than fixed: `certify` refuses such a plan and both approval
 routes are certify-gated, so it cannot become the approved plan the export
 reads.
 
+### Row 1.7, critic pass 16 — an empty `stintLaps` skipped every check
+
+1. **(A), introduced by pass 15.** `if raw_stints and all(…)` / `elif
+   raw_stints:` left an **empty list in neither branch**, so the sum, the
+   stops and the compounds checks all vanished with no problem raised — where
+   the version before it reached them, because `all(…)` over an empty list is
+   True. Demonstrated end to end through the MCP door on a DB copy: a 20-lap,
+   one-stop, two-compound section **with no stints at all** exported clean,
+   and §7's *"refuse to export rather than export something wrong"* did not
+   fire. An empty list is a readable list of no laps; the checks below say
+   what is wrong with it.
+2. **The other half of pass 15's claim was not delivered.** The stops
+   readability problem was still nested under the stints, so a `stintLaps`
+   that could not be read took it down too. Both it and an unreadable `laps`
+   are their own problems now, outside that block.
+3. **The same `isinstance`-on-a-JSON-number gate in `certify`**, on stint
+   laps: `{"laps": 10.0}` was refused as *"not a positive whole number"*
+   while `{"stops": 1.0}` on the same plan certified. It failed safe — a
+   refusal, not an accept — but told the driver a plan lacked whole lap
+   counts when it had them.
+4. `abs(value) <= ceiling` made a negative a whole number, so `[-5, 25]`
+   summed to 20 and passed under a message reading *"not a list of lap
+   counts"*. `as_whole_number` takes a `minimum`: `None` for stops, where a
+   negative is deliberately kept and **named** as unusable, and 0 for laps,
+   where it is simply not a lap count.
+5. `pitLap` was the unnormalised sibling of `stops`, two lines under the
+   comment saying why `stops` is normalised — desk JSON put `11.0` into the
+   contract, `_validate_plan` never looks at that key, and `race_outcome`
+   rendered *"lap 11.0"* to the driver. And `if plan.get("pitLap")` folded a
+   box lap of 0 to None.
+
+Minor: pass 15 added a test whose docstring narrated a defect **no commit ever
+contained** — reusing `as_stop_count` for `stintLaps` was the first draft of
+that pass's fix and never shipped. It pins the constant, and now says so.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), plus critic
 5's carried questions (a misidentified board row resets the held-up window;
 two locator misreads still cut the gauge series; the sector map's offset path
