@@ -10,7 +10,7 @@ import time
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QEvent, Qt, QTimer
 from PyQt6.QtGui import (QColor, QFontMetrics, QIcon, QKeySequence,
                          QPainter, QShortcut)
 from PyQt6.QtWidgets import (
@@ -581,6 +581,7 @@ class NavRail(QWidget):
         # direct `setFocus`, so End, Down and Ctrl+7 all put the crayon focus
         # bar 71 px below the fold with nothing on screen to say where he is.
         self._scroller = scroller
+        scroller.viewport().installEventFilter(self)
         # **No local scrollbar rule.** One was added here on the strength
         # of an unstyled #9f9f9f stripe and a 14 px width - both measured
         # with `theme.apply` NOT loaded. The app-wide sheet already paints
@@ -705,6 +706,24 @@ class NavRail(QWidget):
 
     def resizeEvent(self, event) -> None:            # noqa: N802 - Qt naming
         super().resizeEvent(event)
+        self._elide_notes()
+
+    def eventFilter(self, watched, event):           # noqa: N802 - Qt naming
+        """Re-elide when the VIEWPORT changes, which the rail never does.
+
+        The rail is `setFixedWidth(178)` and its height belongs to the
+        window, so `resizeEvent` does not fire when the vertical scrollbar
+        appears - and the bar is what takes the 12 px, part-way through
+        `_update_rail`'s own loop over the screens. Measured at 1600x501,
+        his smallest display: two notes were left with the width they had
+        before the bar came in, clipped with the horizontal bar off.
+        """
+        if watched is self._scroller.viewport() and \
+                event.type() == QEvent.Type.Resize:
+            self._elide_notes()
+        return super().eventFilter(watched, event)
+
+    def _elide_notes(self) -> None:
         for index in range(len(self._notes)):
             self._elide_note(index)
 

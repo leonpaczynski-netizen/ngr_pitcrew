@@ -187,11 +187,17 @@ def _stop_disagreement(plan: dict) -> str | None:
     readings = _stop_readings(plan)
     if len(set(readings.values())) < 2:
         return None
-    said = {"stints": "lists {n} stint" + ("s" if readings.get("stints") != 0
-                                           else ""),
-            "stops": "says {n} stop", "pit_laps": "names {n} box lap"}
+    # **One place adds the plural.** It was added twice for `stints` - once
+    # against the stop count and once against the stint count - so every
+    # plan with two or more stints read "lists 3 stintss". The test that
+    # covered this used a single-stint plan, the one case where it cannot
+    # show.
+    said = {"stints": "lists {n} stint", "stops": "says {n} stop",
+            "pit_laps": "names {n} box lap"}
     parts = []
     for name, number in readings.items():
+        # `stints` is stored as a STOP count; the sentence quotes the field
+        # as the plan writes it, which is one more.
         shown = (number + 1) if name == "stints" else number
         word = said[name].format(n=shown)
         parts.append(word if shown == 1 else word + "s")
@@ -464,8 +470,28 @@ def standing_orders(stored: dict) -> list[Order]:
     # about one rule is what the whole `live`/`dead` split exists to stop,
     # and dropping the unfireable ones into `dead` said three - a retirement
     # notice, an unfireable notice and a no-rule notice, all disagreeing.
-    readable = [e for e in named
-                if e.trigger in TRIGGERS and e.trigger not in CANNOT_SEE]
+    # **Last wins, because `grants` and the coordinator both take the last.**
+    # Built per-entry, a playbook holding `fuel_long: drop_stop` then
+    # `fuel_long: report_only` printed BOTH under *George may* while the race
+    # honoured only the second - the driver believing a lever is armed when
+    # it is not, which is the screen-vs-race split this module exists to
+    # close.
+    by_trigger: dict[str, PlaybookEntry] = {}
+    for entry in named:
+        by_trigger[entry.trigger] = entry
+    latest = list(by_trigger.values())
+    # **The ACTION is checked too, not only the trigger.** This function
+    # exists because stored rows escape validation, and it re-checked the
+    # trigger against `TRIGGERS` while printing `fuel long - fuel map` - a
+    # standing refusal of the driver's - as something George may do alone,
+    # and letting `incident - teleport to pits` fill the coverage gap for
+    # incidents so he was never told he was on his own for one.
+    unrunnable = [e for e in latest
+                  if e.trigger in TRIGGERS and e.trigger not in CANNOT_SEE
+                  and e.action not in ACTIONS]
+    readable = [e for e in latest
+                if e.trigger in TRIGGERS and e.trigger not in CANNOT_SEE
+                and e.action in ACTIONS]
     stillborn = [e for e in readable
                  if _cannot_fire(e.trigger, e.action, plan)]
     live = [e for e in readable
@@ -476,7 +502,9 @@ def standing_orders(stored: dict) -> list[Order]:
     # misclassify either. Critic pass 1 claimed otherwise and was wrong; the
     # real duplicate-entry defect was in `grants`, above. Kept because
     # identity is what the question means.
-    dead = [e for e in named if not any(e is kept for kept in readable)]
+    dead = [e for e in latest
+            if not any(e is kept for kept in readable)
+            and not any(e is dud for dud in unrunnable)]
     if live:
         out.append(Order("George may, on his own", GAP, heading=True))
         for entry in live:
@@ -547,6 +575,14 @@ def standing_orders(stored: dict) -> list[Order]:
         out.append(Order(
             f"The desk's rule for {entry.trigger.replace('_', ' ')} cannot "
             f"fire on this plan - there is no stop to drop.", GAP))
+    for entry in unrunnable:
+        forbidden = entry.action in FORBIDDEN_ACTIONS
+        out.append(Order(
+            f"The desk's rule for {entry.trigger.replace('_', ' ')} asks for "
+            f"{entry.action.replace('_', ' ') or 'nothing'}, which "
+            + ("you have refused outright" if forbidden
+               else "George cannot execute")
+            + " - it will never fire.", GAP))
 
     withheld = []
     for trigger, action in GATED:
@@ -571,14 +607,14 @@ def standing_orders(stored: dict) -> list[Order]:
             + ", ".join(t.replace("_", " ") for t in falls_back)
             + " - George falls back to his own.", GAP))
 
-    # **The assumptions the plan rests on, which nothing rendered.** Six of
-    # them are stored against the Daytona plan and no screen has ever shown
-    # one - so a plan whose stint length rests on a wear rate nobody measured
-    # looked exactly like one that did not (row 1.7).
     disagreement = _stop_disagreement(plan)
     if disagreement is not None:
         out.append(Order(disagreement, GAP))
 
+    # **The assumptions the plan rests on, which nothing rendered.** Six of
+    # them are stored against the Daytona plan and no screen has ever shown
+    # one - so a plan whose stint length rests on a wear rate nobody measured
+    # looked exactly like one that did not (row 1.7).
     assumptions = handover.get("assumptions") or []
     if assumptions:
         out.append(Order("Resting on", GAP, heading=True))

@@ -1183,6 +1183,54 @@ sentence now. And `max(60, ...)` in `_note_room` — a floor invented for a
 viewport the widget could not read — is gone with the ceiling that replaced
 the need for it.
 
+### Row 1.7, critic pass 6 — the re-elision missed the path the app uses
+
+1. **`resizeEvent` never fires when the scrollbar appears.** The rail is
+   `setFixedWidth(178)` and its height belongs to the window, so the widget
+   is not resized by the thing that narrows the viewport by 12 px — and that
+   happens part-way through `_update_rail`'s own loop over the screens.
+   Measured on the real platform with the theme at **1600×501, his smallest
+   display**: two notes clipped, `ludo plan - Daytona GR3` with the ellipsis
+   itself half cut — the exact state pass 5's comment claimed to have fixed.
+   An event filter on the viewport now, and the test brings the bar in the
+   way the app does (seven notes at a height where the empty rail fits and
+   the filled one does not) rather than by resizing the rail.
+2. **"The plan lists 3 stintss."** The plural was added twice for `stints`,
+   and both fire for every plan with two or more stints — which is every real
+   one. Pass 5's test used a single-stint plan, the one case where it cannot
+   show.
+3. **`live` was built per-entry while `grants` is last-wins.** A playbook
+   holding `fuel_long: drop_stop` then `fuel_long: report_only` printed both
+   under *George may* while the race honoured only the second: the driver
+   believing a lever is armed when it is not, in the block pass 5 rewrote
+   under the heading *"an entry is in exactly one state"*.
+4. **The AST guard had a false PASS in the idiom `calls.py` itself uses.**
+   `constant()` unwrapped an `IfExp` to its `body` and discarded the `else`,
+   so `structural_action="add_stop" if unplanned else "abandon_plan"` read as
+   one gate and dropped the other in silence — the whole thing the guard
+   exists to prevent. Both branches now, and the break-test covers it.
+5. **The rail assertion was a fallback-font artefact for the third time.**
+   *"Eliding must not make the rail want more room than a short note does"*
+   is **false on the real font** — it held offscreen only because the
+   fallback inflates the nav labels to 178 px and swamps the note. It
+   compares the elided text's own advance against the room the LAYOUT gives
+   it (margins read off the layout, not from `NOTE_MARGINS`), which is true
+   under any font and is not `_note_room`'s expression.
+6. **The action was never checked**, only the trigger — so `fuel long - fuel
+   map`, a standing refusal of the driver's, printed as something George may
+   do alone, and `incident - teleport to pits` **filled the coverage gap** so
+   he was never told he was on his own for an incident. And six ordinary
+   shapes (`getattr`, a comparison, `global`, an import, a `def` of that
+   name, a comprehension key) were falsely accused of blinding the walker.
+
+**And a failure that was not row 1.7's**, found by this pass: eleven tests in
+`test_hub_events.py` went red overnight on `SOON = "2026-09-07T10:30:00"` —
+a hard-coded future date that became the past, so *"the round that is
+coming"* linked nothing. It is `test_hub_calendar.py`'s constant too. Both
+derive from the day the test runs now; bumping them would only reset the
+fuse. CLAUDE.md §7's *"reproduce it with your change reverted"* is exactly
+what this was.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three
 kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic
