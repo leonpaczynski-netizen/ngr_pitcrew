@@ -564,13 +564,46 @@ def test_the_rail_fits_the_smallest_display_he_owns(qt_app):
     # less the column margins, which is what actually changes when the
     # scrollbar appears, and a constant for the narrow case cut every note
     # short in the wide one.
-    room = rail._scroller.viewport().width() - NavRail.NOTE_MARGINS
-    assert room > 0
+    # **Against what the LAYOUT hands the label, not what `set_note` was
+    # given.** Comparing with `viewport().width() - NOTE_MARGINS` was the
+    # elider checked against its own expression, bit for bit: the suite was
+    # green with `NOTE_MARGINS = 0`, while notes rendered 41 px past the
+    # viewport with the horizontal bar off - unreachable and un-ellipsised.
+    # **A note must never be what widens the rail.** Horizontal scrolling is
+    # `AlwaysOff`, so anything past 178 px is unreachable and un-ellipsised.
+    #
+    # Asserted as a DIFFERENCE, not against 178: the absolute width is a text
+    # measurement, and the suite runs offscreen where Qt has no font database
+    # - there "Reference" alone wants 154 px of the rail's 178 (it wants 96
+    # on the real font). Measuring that would be the third instrument error
+    # on this row. What no font can change is that eliding a long note must
+    # not make the rail want more room than a short one does.
+    inner = rail._scroller.widget()
+    rail.set_note(0, "12 LAPS")
+    qt_app.processEvents()
+    baseline = inner.minimumSizeHint().width()
     for note in ("Ludo 1-stop, RBR Short, 30 Aug", "3 x RM, 2 stops",
                  "ludo plan - Daytona GR3 Rd6, 11+9 with playbook (rev 2)"):
         rail.set_note(0, note)
-        assert rail._notes[0].sizeHint().width() <= room, (
-            note, rail._notes[0].sizeHint().width(), room)
+        qt_app.processEvents()
+        assert inner.minimumSizeHint().width() <= baseline, (
+            note, inner.minimumSizeHint().width(), baseline)
+
+    # **And the room follows the scrollbar.** A note elided while the bar was
+    # hidden used to keep its old text and have the last 12 px clipped, with
+    # the horizontal bar off, until something happened to set it again -
+    # reachable by dragging the window toward its own 560 px minimum.
+    rail.resize(178, 900)
+    qt_app.processEvents()
+    long_note = "ludo plan - Daytona GR3 Rd6, 11+9 with playbook"
+    rail.set_note(0, long_note)
+    rail.resize(178, 200)
+    qt_app.processEvents()
+    # The raw text is kept so the resize can redo the elision - asserting the
+    # elided STRING changed would need real font metrics, because offscreen
+    # 146 px and 132 px of fallback advance round to the same cut.
+    assert rail._note_text[0] == long_note
+    assert inner.minimumSizeHint().width() <= baseline
     # **This half needs a real font, and saying so IS the finding.**
     # Offscreen Qt has no font database: `QFontInfo(...).pixelSize()` is -1,
     # every glyph gets the same fallback advance, and no string over twelve
@@ -647,14 +680,26 @@ def _structural_sites(source: str):
     **Lifted out of its test so the break-test is a test.** Four shapes used
     to pass while blind: a dict literal splatted as `**rail`, an action named
     through a module constant, a missing `trigger` key, and plain keyword
-    arguments. Returns `(pairs, unreadable, balanced)` - `balanced` is False
-    when the walker read fewer containers than the source has uses, which is
-    how it says it has gone blind rather than going quiet.
+    arguments. Returns `(pairs, unreadable, balanced)`.
+
+    `balanced` is False when some occurrence of the identifier fits none of
+    the forms below - which is how this says it has gone blind rather than
+    going quiet. It is a CLASSIFICATION, not a count: the arithmetic version
+    assumed exactly one benign mention and then failed on a bare local read
+    and on `replace(call, structural_action=None)`, both of which
+    `coordinator.py` already contains.
+
+    **One shape it still cannot see, stated rather than claimed away**: a
+    `Call(...)` built with the field passed POSITIONALLY mentions the name
+    nowhere, so nothing is there to classify. The field sits eleventh in
+    `Call`, so nobody writes it that way - but "cannot go blind" would be the
+    overstatement this row keeps finding, and this is the honest bound.
     """
     import ast
     import io
     import tokenize
 
+    NAME = "structural_action"
     tree = ast.parse(source)
 
     def constant(node):
@@ -665,11 +710,15 @@ def _structural_sites(source: str):
             node = node.body
         return node.value if isinstance(node, ast.Constant) else None
 
-    found, containers, unread = set(), 0, []
+    # An `AnnAssign`'s target is an `ast.Name`, and `ast.walk` visits both -
+    # so the declaration counted twice and nothing balanced. Claim it once.
+    claimed = {id(node.target) for node in ast.walk(tree)
+               if isinstance(node, ast.AnnAssign)
+               and isinstance(node.target, ast.Name) and node.target.id == NAME}
+
+    found, unread, classified = set(), [], 0
     for node in ast.walk(tree):
-        # Two shapes, because `calls.py` uses one of them: keyword arguments
-        # on a call - including `dict(structural_action=..., trigger=...)`
-        # later splatted as `**rail` - and a dict literal.
+        # --- the two shapes a gate is written in ---------------------------
         if isinstance(node, ast.Dict):
             pairs = {k.value: v for k, v in zip(node.keys, node.values)
                      if isinstance(k, ast.Constant)}
@@ -677,31 +726,46 @@ def _structural_sites(source: str):
             pairs = {k.arg: k.value
                      for k in getattr(node, "keywords", None) or ()
                      if k.arg}
-        if "structural_action" not in pairs:
+        if NAME in pairs:
+            classified += 1
+            action = pairs[NAME]
+            # A literal None is a deliberate STRIP, not a gate:
+            # `_within_the_playbook` writes exactly that to withhold one.
+            if isinstance(action, ast.Constant) and action.value is None:
+                continue
+            trigger = constant(pairs.get("trigger"))
+            action = constant(action)
+            if trigger is None or action is None:
+                # **Counted but not read is the same as not seen.** This used
+                # to fall through, keeping the tally balanced and dropping
+                # the pair in silence.
+                unread.append(ast.dump(node)[:120])
+                continue
+            found.add((trigger, action))
             continue
-        containers += 1
-        trigger = constant(pairs.get("trigger"))
-        action = constant(pairs["structural_action"])
-        if trigger is None or action is None:
-            # **Counted but not read is the same as not seen.** `containers`
-            # used to increment here regardless, so a site naming its action
-            # through a constant kept the tally balanced and dropped the pair.
-            unread.append(ast.dump(node)[:120])
-            continue
-        found.add((trigger, action))
+        # --- and the forms that are not a gate at all ----------------------
+        if isinstance(node, ast.AnnAssign) and \
+                isinstance(node.target, ast.Name) and node.target.id == NAME:
+            classified += 1        # the dataclass field's own declaration
+        elif isinstance(node, ast.Attribute) and node.attr == NAME:
+            classified += 1        # reading it back off a Call
+        elif isinstance(node, ast.arg) and node.arg == NAME:
+            classified += 1        # a parameter named after it
+        elif isinstance(node, ast.Name) and node.id == NAME and \
+                id(node) not in claimed:
+            classified += 1        # a local of that name, read or written
 
     # Tokenised, not `str.count`: the raw substring appears in comments and
     # in prose, so counting text failed on a docstring and passed on a
-    # rename. One use is the dataclass field declaration, not a call site.
+    # rename.
     uses = 0
     for token in tokenize.generate_tokens(io.StringIO(source).readline):
-        if token.type == tokenize.NAME and token.string == "structural_action":
+        if token.type == tokenize.NAME and token.string == NAME:
             uses += 1
         elif token.type == tokenize.STRING and \
-                token.string.strip("bBrRuUfF") in ('"structural_action"',
-                                                   "'structural_action'"):
+                token.string.strip("bBrRuUfF") in (f'"{NAME}"', f"'{NAME}'"):
             uses += 1
-    return found, unread, containers == uses - 1
+    return found, unread, classified == uses
 
 
 def test_the_loader_prints_the_checks_that_could_not_run(store, event_id,
@@ -758,40 +822,54 @@ def test_the_loader_prints_the_checks_that_could_not_run(store, event_id,
     assert "Standing orders" not in printed, "the CLI prints no heading"
 
 
-def test_the_walker_cannot_pass_while_blind():
-    """The break-test, as a test. Four of these five shapes used to leave
-    `found` equal to `GATED` and the guard green about a call site it had
-    never read; the fifth - a mention in a comment - must NOT fail it."""
-    # The shape `calls.py` really uses, as the control: one readable site
-    # plus the dataclass field declaration.
+def test_the_walker_sees_what_it_claims_to_see():
+    """The break-test, as a test. **Both directions.**
+
+    Five shapes used to leave `found` equal to `GATED` and the guard green
+    about a call site it had never read. And the fix for that - a
+    `containers == uses - 1` balance - then failed on four shapes of ordinary
+    code, two of which `coordinator.py` already contains, saying the guard
+    "is not guarding anything" about a file nobody had touched.
+    """
     control = ('rail = dict(structural_action="add_stop" if u else None,\n'
                '            trigger="tyre_short")\n'
                'structural_action: str | None = None\n')
-    found, unread, balanced = _structural_sites(control)
-    assert found == {("tyre_short", "add_stop")} and not unread and balanced
+    good = {("tyre_short", "add_stop")}
 
-    blind = {
-        "dict literal":
-            'rail = {"structural_action": "abandon_plan", '
-            '"trigger": "incident"}\n',
-        "action via a constant":
+    def reads_cleanly(source):
+        found, unread, balanced = _structural_sites(source)
+        return found == good and not unread and balanced
+
+    assert reads_cleanly(control)
+
+    # --- must NOT fail: none of these is a gate ---------------------------
+    for name, extra in {
+        "an attribute read": "_x = bool(call.structural_action)\n",
+        "a keyword-only parameter":
+            "def _mk(*, structural_action=None):\n"
+            "    return structural_action\n",
+        "a second annotated field":
+            "class _Other:\n    structural_action: str | None = None\n",
+        "the deliberate strip": "_y = replace(c, structural_action=None)\n",
+        "a mention in a comment": '# structural_action="abandon_plan"\n',
+        "a local of that name": 'structural_action = "x"\n',
+    }.items():
+        assert reads_cleanly(extra + control), name
+
+    # --- must fail: each is a gate the standing orders would not mention --
+    for name, extra in {
+        "a dict literal":
+            '{"structural_action": "abandon_plan", "trigger": "incident"}\n',
+        "an action named through a constant":
             '_A = "abandon_plan"\n'
             'r = dict(structural_action=_A, trigger="incident")\n',
-        "no trigger key":
-            'r = dict(structural_action="abandon_plan")\n',
+        "no trigger key": 'r = dict(structural_action="abandon_plan")\n',
         "plain keywords":
             'c = Call(structural_action="abandon_plan", trigger="incident")\n',
-    }
-    for name, source in blind.items():
-        found, unread, balanced = _structural_sites(source + control)
-        caught = (found != {("tyre_short", "add_stop")}) or bool(unread) \
-            or not balanced
-        assert caught, f"{name} passed while blind"
-
-    # And a mention in a comment must not fail it for nothing.
-    found, unread, balanced = _structural_sites(
-        '# structural_action="abandon_plan" would go here\n' + control)
-    assert found == {("tyre_short", "add_stop")} and not unread and balanced
+        "a subscript assignment":
+            'r = {}\nr["structural_action"] = "abandon_plan"\n',
+    }.items():
+        assert not reads_cleanly(extra + control), f"{name} passed while blind"
 
 
 def test_a_plan_with_only_stints_is_read_for_its_stops():
@@ -838,5 +916,59 @@ def test_the_two_withheld_sentences_say_it_the_same_way():
     """Rule 13. They drifted: the tyre line dropped "without a rule from the
     desk" while the fuel line kept it, so the driver could not tell that the
     tyre gate is a permission the desk could grant."""
-    said = lines(a_plan())
-    assert said.count("without a rule from the desk") == 2, said
+    from pitcrew.strategy.handover import GATED, _withheld_sentence
+
+    plan = a_plan()
+    for trigger, _action in GATED:
+        sentence = _withheld_sentence(trigger, plan)
+        assert sentence is not None
+        assert "without a rule from the desk" in sentence, (trigger, sentence)
+        assert sentence in lines(plan)
+
+
+def test_fields_that_disagree_about_stops_are_not_answered_with_a_number():
+    """**Three fields say how many stops a plan holds and nothing makes them
+    agree.** `certify` refuses `stops != len(stints) - 1` but never checks
+    `pit_laps` against either, and `validate` requires only `stints` - so a
+    plan listing one box lap and one stint validates, certifies and stores.
+    Reading `stints` first and returning it answered `0`, and the Race page
+    printed "box lap 10" two inches above "No stop is planned".
+    """
+    from pitcrew.strategy.handover import _stops_planned
+
+    plan = {"stints": [{"laps": 20, "compound": "RM", "start_lap": 1}],
+            "pit_laps": [10], "binding_constraint": "fuel",
+            "handover": {"playbook": []}}
+    assert _stops_planned(plan) is None, "0 is a claim, and nothing made it"
+
+    said = lines(plan)
+    assert "they disagree, so how many stops it holds is not known" in said, \
+        said
+    # Neither of the two sentences that assume a count.
+    assert "No stop is planned" not in said
+    assert "may bring a planned stop forward" not in said
+    # And the half that is true either way is still said.
+    assert "cannot add a stop without a rule from the desk" in said
+
+    # Agreeing fields still answer.
+    assert _stops_planned(a_plan()) == 1
+    assert "they disagree" not in lines(a_plan())
+
+
+def test_a_rule_is_described_once_and_in_one_state():
+    """An entry is readable and able to fire, readable and unable, or not
+    readable - never two of those. Dropping the unfireable ones into `dead`
+    got a rule a retirement notice, an unfireable notice AND a no-rule
+    notice, all disagreeing."""
+    plan = {"stints": [{"laps": 20, "compound": "RM", "start_lap": 1}],
+            "handover": {"playbook": [
+                {"trigger": "fuel_long", "action": "drop_stop",
+                 "when": "1.5 laps in hand", "until": "the flag"}]}}
+    said = lines(plan)
+
+    assert said.count("fuel long") == 1, said
+    assert "cannot fire on this plan - there is no stop to drop" in said
+    # Not under "George may", not retired, and not reported as unruled.
+    assert "fuel long - drop stop" not in said
+    assert "George no longer acts on" not in said
+    assert "No rule from the desk on fuel short, stop missed, incident" in said

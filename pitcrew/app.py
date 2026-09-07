@@ -562,6 +562,8 @@ class NavRail(QWidget):
         self._stack = stack
         self._labels: list[StencilLabel] = []
         self._notes: list[StencilLabel] = []
+        # What `set_note` was given, before elision, so a resize can redo it.
+        self._note_text: list[str] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -626,6 +628,7 @@ class NavRail(QWidget):
 
                 self._labels.append(label)
                 self._notes.append(note)
+                self._note_text.append("")
                 index += 1
 
         column.addStretch(1)
@@ -650,7 +653,18 @@ class NavRail(QWidget):
     # and they run to 306 px against a 178 px rail. That is the rail's width,
     # not this function's - carried, not fixed here.
     def _note_room(self) -> int:
-        return max(60, self._scroller.viewport().width() - self.NOTE_MARGINS)
+        """The pixels a note has, now.
+
+        **Bounded by the rail's own fixed width.** `_update_rail` runs from
+        `PitCrewWindow.__init__`, before `show()`, when the scroll area is
+        unlaid and its viewport reports the default 640 - so this returned
+        608, nothing elided, and the driver's first painted frame carried a
+        307 px note hard-cut inside a 178 px rail with the horizontal bar
+        off. A ceiling costs nothing and cannot be wrong before layout.
+        """
+        ceiling = self.width() - self.NOTE_MARGINS
+        return min(self._scroller.viewport().width() - self.NOTE_MARGINS,
+                   ceiling)
 
     def focus_item(self, index: int) -> None:
         """Move focus along the rail, wrapping. Skips what is not built."""
@@ -671,12 +685,28 @@ class NavRail(QWidget):
         """A one-line state under a rail item, or "" to clear it."""
         if not 0 <= index < len(self._notes):
             return
+        # **The raw text is kept, because the room moves.** The scrollbar
+        # takes 12 px when it appears, and dragging the window toward its own
+        # 560 px minimum brings it in - so a note elided while the bar was
+        # hidden kept its old width and had the last 12 px clipped by the
+        # inner widget, with the horizontal bar off, until something happened
+        # to set it again.
+        self._note_text[index] = text
+        self._elide_note(index)
+
+    def _elide_note(self, index: int) -> None:
         note = self._notes[index]
         # `note.font()` carries the app-wide sheet's family, so these metrics
         # are the ones the label paints with - measured, not assumed.
         note.setText(QFontMetrics(note.font()).elidedText(
-            text, Qt.TextElideMode.ElideRight, self._note_room()))
-        note.setVisible(bool(text))
+            self._note_text[index], Qt.TextElideMode.ElideRight,
+            self._note_room()))
+        note.setVisible(bool(self._note_text[index]))
+
+    def resizeEvent(self, event) -> None:            # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        for index in range(len(self._notes)):
+            self._elide_note(index)
 
     def select(self, index: int) -> None:
         if index >= self._stack.count():

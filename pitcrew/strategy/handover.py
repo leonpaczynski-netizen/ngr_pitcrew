@@ -143,25 +143,60 @@ def grants(entries, trigger: str, action: str) -> bool:
 GATED = (("tyre_short", "add_stop"), ("fuel_long", "drop_stop"))
 
 
+def _stop_readings(plan: dict) -> dict[str, int]:
+    """Every field of the plan that says how many stops it holds.
+
+    Three of them, and no gate makes all three agree. `Handover.validate`
+    requires only `stints`; `certify` refuses `stops != len(stints) - 1` but
+    **never checks `pit_laps` against either**, so a plan listing one box lap
+    and one stint validates, certifies and stores.
+    """
+    readings: dict[str, int] = {}
+    stints = plan.get("stints")
+    if isinstance(stints, list) and stints:
+        # `Plan.stops`' own definition, and the expression the coordinator
+        # arms from: `_apply_stint` sets `stint_ends_on_lap = None` when
+        # there is no stint after this one.
+        readings["stints"] = len(stints) - 1
+    stops = plan.get("stops")
+    if isinstance(stops, int) and not isinstance(stops, bool):
+        readings["stops"] = stops
+    laps = plan.get("pit_laps")
+    if isinstance(laps, list):
+        readings["pit_laps"] = len(laps)
+    return readings
+
+
 def _stops_planned(plan: dict) -> int | None:
     """How many stops the plan holds, or None. **Never 0 for "don't know".**
 
-    **Off `stints`, because that is the field a stored plan must have.**
-    `Handover.validate` requires `stints` and neither `stops` nor `pit_laps`,
-    so a plan that certifies and stores can carry only the first - and asking
-    the other two returned None, which the caller then rendered as *"he may
-    bring a planned stop forward"* about a plan with no stop in it. That is
-    `Plan.stops`' own definition (`model.py`), it is present on all 28 stored
-    plans, and it agrees with the stored `stops` on every one of them.
+    **Three fields say it and nothing makes them agree**, so this reports a
+    number only when they do. Reading `stints` first and returning it was the
+    pass-4 fix and it was rule 3 in the shape rule 9 warns about: a plan whose
+    `pit_laps` said one stop and whose `stints` said none rendered a
+    confident `0`, and the Race page printed *"box lap 10"* two inches above
+    *"No stop is planned"*. Where two readings disagree, the disagreement is
+    the finding (rule 1) - `_stop_disagreement` says it aloud.
     """
-    stints = plan.get("stints")
-    if isinstance(stints, list) and stints:
-        return len(stints) - 1
-    stops = plan.get("stops")
-    if isinstance(stops, int) and not isinstance(stops, bool):
-        return stops
-    laps = plan.get("pit_laps")
-    return len(laps) if isinstance(laps, list) else None
+    values = set(_stop_readings(plan).values())
+    return values.pop() if len(values) == 1 else None
+
+
+def _stop_disagreement(plan: dict) -> str | None:
+    """The plan's own fields, quoted, when they do not agree about stops."""
+    readings = _stop_readings(plan)
+    if len(set(readings.values())) < 2:
+        return None
+    said = {"stints": "lists {n} stint" + ("s" if readings.get("stints") != 0
+                                           else ""),
+            "stops": "says {n} stop", "pit_laps": "names {n} box lap"}
+    parts = []
+    for name, number in readings.items():
+        shown = (number + 1) if name == "stints" else number
+        word = said[name].format(n=shown)
+        parts.append(word if shown == 1 else word + "s")
+    return ("The plan " + ", ".join(parts)
+            + " - they disagree, so how many stops it holds is not known.")
 
 
 def _cannot_fire(trigger: str, action: str, plan: dict) -> bool:
@@ -192,7 +227,16 @@ def _withheld_sentence(trigger: str, plan: dict) -> str | None:
     if trigger == "tyre_short":
         if stops == 0:
             return ('No stop is planned, so he cannot bring one forward: on '
-                    'tyre short he says "Tyres past the stint limit." and you '
+                    'tyre short he cannot add one without a rule from the '
+                    'desk - he says "Tyres past the stint limit." and you '
+                    'decide.')
+        if stops is None:
+            # **The half that is true either way.** Adding a stop is gated
+            # whatever the plan holds; bringing one forward is free, and
+            # naming a stop we cannot count would be the thing rule 3 is
+            # about. `_stop_disagreement` says why the count is missing.
+            return ('On tyre short he cannot add a stop without a rule from '
+                    'the desk - he says "Tyres past the stint limit." and you '
                     'decide.')
         return ('On tyre short he may bring a planned stop forward, but '
                 'cannot add one after the last without a rule from the desk - '
@@ -200,7 +244,9 @@ def _withheld_sentence(trigger: str, plan: dict) -> str | None:
     if trigger == "fuel_long":
         if stops == 0:
             # `_stops_off` needs a planned stop, so the call cannot fire and
-            # the line would be about a decision nobody faces.
+            # the line would be about a decision nobody faces. An UNKNOWN
+            # count is not that: the stop may be there, and a false silence
+            # is the worse of the two errors.
             return None
         return ('On fuel long he cannot drop a stop without a rule from the '
                 'desk - he says "You\'re fuelled to the flag." and the stops '
@@ -413,15 +459,24 @@ def standing_orders(stored: dict) -> list[Order]:
     # named rather than rendered as "The desk left a rule for , which ...".
     blank = [e for e in entries if not e.trigger.strip()]
     named = [e for e in entries if e.trigger.strip()]
-    live = [e for e in named
-            if e.trigger in TRIGGERS and e.trigger not in CANNOT_SEE]
+    # **Three states, and an entry is in exactly one.** Readable and able to
+    # fire; readable and unable; not readable at all. Saying two of them
+    # about one rule is what the whole `live`/`dead` split exists to stop,
+    # and dropping the unfireable ones into `dead` said three - a retirement
+    # notice, an unfireable notice and a no-rule notice, all disagreeing.
+    readable = [e for e in named
+                if e.trigger in TRIGGERS and e.trigger not in CANNOT_SEE]
+    stillborn = [e for e in readable
+                 if _cannot_fire(e.trigger, e.action, plan)]
+    live = [e for e in readable
+            if not any(e is dud for dud in stillborn)]
     # By identity, because a row is a row. **This fixes nothing that was
     # broken** - liveness is a function of `trigger` alone, so two equal
     # entries are both live or both dead and `e not in live` could not
     # misclassify either. Critic pass 1 claimed otherwise and was wrong; the
     # real duplicate-entry defect was in `grants`, above. Kept because
     # identity is what the question means.
-    dead = [e for e in named if not any(e is kept for kept in live)]
+    dead = [e for e in named if not any(e is kept for kept in readable)]
     if live:
         out.append(Order("George may, on his own", GAP, heading=True))
         for entry in live:
@@ -433,9 +488,13 @@ def standing_orders(stored: dict) -> list[Order]:
 
     # **Recomputed against today's triggers**, not read off the stored row: a
     # handover stored before a trigger was retired or added would otherwise
-    # show a gap that no longer exists, or hide one that does. Only the LIVE
-    # entries count as cover, so a rule that cannot fire never fills a gap.
-    covered = {entry.trigger for entry in live}
+    # show a gap that no longer exists, or hide one that does.
+    #
+    # A rule that cannot fire on THIS plan still counts as cover, because the
+    # desk did write one - the gap line would say "no rule from the desk"
+    # about a rule it can see three lines below. What that rule cannot do is
+    # said once, in its own sentence.
+    covered = {entry.trigger for entry in readable}
     unhandled = [t for t in TRIGGERS if t not in covered]
     no_rule = [t for t in unhandled if t not in CANNOT_SEE]
 
@@ -481,16 +540,17 @@ def standing_orders(stored: dict) -> list[Order]:
     # screen-vs-race split this function exists to close. Equal today only
     # because both gated triggers happen to be live; retiring one - which is
     # what happened to `safety_car` on 7 Sep - would have reopened it.
+    # **Granted is not the same as reachable.** A rule the plan makes
+    # unfireable is the same failure as a rule for a trigger he cannot see:
+    # the driver believes it is armed. Said once, and not under *George may*.
+    for entry in stillborn:
+        out.append(Order(
+            f"The desk's rule for {entry.trigger.replace('_', ' ')} cannot "
+            f"fire on this plan - there is no stop to drop.", GAP))
+
     withheld = []
     for trigger, action in GATED:
         if grants(named, trigger, action):
-            # **Granted is not the same as reachable.** A rule the plan makes
-            # unfireable is the same failure as a rule for a trigger he
-            # cannot see: the driver believes it is armed.
-            if _cannot_fire(trigger, action, plan):
-                out.append(Order(
-                    f"The desk's rule for {trigger.replace('_', ' ')} cannot "
-                    f"fire on this plan - there is no stop to drop.", GAP))
             continue
         sentence = _withheld_sentence(trigger, plan)
         if sentence is not None:
@@ -515,6 +575,10 @@ def standing_orders(stored: dict) -> list[Order]:
     # them are stored against the Daytona plan and no screen has ever shown
     # one - so a plan whose stint length rests on a wear rate nobody measured
     # looked exactly like one that did not (row 1.7).
+    disagreement = _stop_disagreement(plan)
+    if disagreement is not None:
+        out.append(Order(disagreement, GAP))
+
     assumptions = handover.get("assumptions") or []
     if assumptions:
         out.append(Order("Resting on", GAP, heading=True))

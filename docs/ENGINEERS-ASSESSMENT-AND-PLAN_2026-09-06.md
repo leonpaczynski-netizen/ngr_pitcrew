@@ -1127,6 +1127,62 @@ a **granted** `fuel_long: drop_stop` on a plan with no stop is a rule that can
 never fire, which is the same failure as a rule for a trigger he cannot see
 and now says so.
 
+### Row 1.7, critic pass 5 — a confident zero, and three guards with no teeth
+
+1. **`_stops_planned` returned a confident `0` for a plan whose other fields
+   said `1`.** `certify` refuses `stops != len(stints) - 1` but **never checks
+   `pit_laps` against either**, and `validate` requires only `stints` — so a
+   plan listing one box lap and one stint validates, certifies, stores, and
+   printed *"box lap 10"* two inches above *"No stop is planned"* on the grid
+   card. Pass 4 caused it by reading `stints` first and returning it. Three
+   disagreeing fields is a don't-know, and the function's own headline says
+   never 0 for a don't-know. It reports a number only when the readings agree
+   now, and **says the disagreement aloud** (rule 1): *"The plan lists 1
+   stint, names 1 box lap — they disagree, so how many stops it holds is not
+   known."* The `tyre_short` sentence has a third form for the unknown case —
+   the half that is true whatever the count.
+2. **My own MAJOR-5 fix said the same thing three times.** Dropping an
+   unfireable rule out of `live` put it in `dead` (*"George no longer acts on
+   it"* — false, it is a live trigger) and left its trigger uncovered
+   (*"No rule from the desk on fuel long"* — also false, there is one). An
+   entry is in exactly one of three states now: readable and able to fire,
+   readable and unable, unreadable.
+3. **The rail assertion was `_note_room`'s own expression, bit for bit.** The
+   suite was green with `NOTE_MARGINS = 0` while notes ran 41 px past the
+   viewport with horizontal scrolling off. And the first two replacements
+   were the **instrument error a third time**: the label grows with its own
+   content so its width says nothing, and the absolute rail width is a text
+   measurement — offscreen, *"Reference"* alone wants 154 px of the rail's
+   178 (96 on the real font). What no font can change is that eliding a long
+   note must not make the rail want more room than a short one, and that is
+   what it asserts.
+4. **`_note_room()` was 608 at the moment the app calls `set_note`.**
+   `_update_rail` runs from `PitCrewWindow.__init__`, before `show()`, when
+   the scroll area is unlaid and its viewport reports the default 640 — so
+   nothing elided and the first painted frame carried a 307 px note hard-cut
+   inside a 178 px rail. Bounded by the rail's own fixed width now.
+5. **Notes were never re-elided**, so one set while the scrollbar was hidden
+   kept its text and had the last 12 px clipped — reachable by dragging the
+   window toward its own 560 px minimum. The raw text is kept and
+   `resizeEvent` redoes it.
+6. **The AST guard's `containers == uses - 1`** hard-coded "exactly one
+   benign mention" and failed on `return bool(call.structural_action)`, a
+   keyword-only parameter, a second annotated dataclass, and
+   `replace(call, structural_action=None)` — ordinary code, two of which
+   `coordinator.py` already contains. Every occurrence is classified into a
+   named box now, and anything that fits no box is what *gone blind* means.
+   Break-tested both ways in the suite: six innocent shapes stay green, five
+   blind ones go red (dict literal, action via a constant, missing trigger,
+   plain keywords, subscript assignment). The one shape it still cannot see —
+   a positional `Call(...)` — is stated in the docstring rather than claimed
+   away.
+
+Minor: the rule-13 assertion was a bare `count(...) == 2`, which stays green
+if one sentence is emitted twice and the other dropped; it checks each
+sentence now. And `max(60, ...)` in `_note_room` — a floor invented for a
+viewport the widget could not read — is gone with the ceiling that replaced
+the need for it.
+
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three
 kinds are the known ones; `UNDERCUT` now carries the tyre word), plus critic
