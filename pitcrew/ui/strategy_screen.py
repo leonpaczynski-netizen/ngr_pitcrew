@@ -38,6 +38,7 @@ from pitcrew.ui.widgets import (
     MarkButton,
     Measured,
     Plate,
+    render_standing_orders,
     SpecLine,
     StencilLabel,
 )
@@ -235,14 +236,6 @@ class PlanCard(QWidget):
         painter.end()
 
 
-# Triggers the feed carries nothing for. GT7 broadcasts no weather in any
-# packet format, so George cannot detect rain whatever a playbook says - and
-# the card must say "he cannot see it", not "he has no rule", because those
-# ask different things of the driver. (The safety car left `TRIGGERS` on
-# 7 Sep 2026 for the same reason, so it no longer needs saying here.)
-CANNOT_SEE = ("rain",)
-
-
 class LoadedCard(QWidget):
     """A plan the app did not write, and the contract that came with it.
 
@@ -274,12 +267,11 @@ class LoadedCard(QWidget):
     def __init__(self, strategy_id: int, row: dict,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        from pitcrew.strategy.handover import author_of, playbook_of
+        from pitcrew.strategy.handover import author_of
 
         self.strategy_id = strategy_id
         self._chosen = False
         plan = row.get("plan") or {}
-        handover = plan.get("handover") or {}
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         author = author_of(plan) or "the desk"
@@ -313,73 +305,17 @@ class LoadedCard(QWidget):
             f"{detail}. Limited by {constraint}.",
             size=13, colour=theme.STENCIL_DIM, wrap=True))
 
-        certificate = handover.get("certificate") or {}
-        # **Wrapped, like every other prose line here.** `Derived` does not,
-        # and a real certify warning is a sentence: measured, one of them set
-        # the card's minimum width to 1,352 px and an `unchecked` line to
-        # 1,607 px against a ~733 px plate, pushing the very thing the card
-        # exists to carry off the side of the screen. The plate's
-        # `ScrollBarAsNeeded` hid it from the width guard.
-        for warning in certificate.get("warnings") or ():
-            column.addWidget(BodyLabel(warning, size=13,
-                                       colour=theme.DERIVED, wrap=True))
-        for gap in certificate.get("unchecked") or ():
-            # Named, not dropped. A check that could not run is not a check
-            # that passed, and the driver is the only one who can decide
-            # whether to race on it.
-            column.addWidget(BodyLabel(f"Not checked: {gap}", size=13,
-                                       colour=theme.STENCIL_DIM, wrap=True))
-
-        entries = playbook_of(plan)
-        if entries:
-            column.addWidget(StencilLabel(
-                "George may, on his own", size=11,
-                colour=theme.STENCIL_DIM, tracking=14.0))
-            for entry in entries:
-                column.addWidget(BodyLabel(
-                    f"{entry.trigger.replace('_', ' ')} - "
-                    f"{entry.action.replace('_', ' ')} "
-                    f"when {entry.when}"
-                    + (f", until {entry.until}" if entry.until else ""),
-                    size=13, colour=theme.CRAYON, wrap=True))
-
-        # **Recomputed against today's triggers**, not read off the stored
-        # row: a handover stored before a trigger was retired or added would
-        # otherwise show a gap that no longer exists, or hide one that does.
-        from pitcrew.strategy.handover import TRIGGERS
-
-        covered = {entry.trigger for entry in entries}
-        unhandled = [t for t in TRIGGERS if t not in covered]
-        blind = [t for t in unhandled if t in CANNOT_SEE]
-        no_rule = [t for t in unhandled if t not in CANNOT_SEE]
-        if blind:
-            # **These he cannot see at all**, whatever any playbook says. GT7
-            # broadcasts no weather and no flag state in any packet format, so
-            # a rule for either is a rule that can never fire - which is worse
-            # than no rule, because the driver believes it is armed.
-            column.addWidget(BodyLabel(
-                "He cannot see " + ", ".join(t.replace("_", " ")
-                                             for t in blind)
-                + " at all - tell him.",
-                size=13, colour=theme.STENCIL_DIM, wrap=True))
-        if no_rule:
-            # **"No rule from the desk", not "he will do nothing".** The card
-            # said the second and it was false in the direction that matters:
-            # `stop_still_needed` and `stay_out_call` decide fuel and a missed
-            # stop with or without a playbook, so a driver told George would
-            # stay out of it would have been told the opposite of the truth on
-            # the one screen where he is reading the contract.
-            # **`STENCIL_DIM`, not `STRUCK`.** Struck means removed from the
-            # count - placeholders, disabled controls, an excluded lap. This
-            # is prose, and it is the most consequential prose on the card:
-            # the driver reading it is learning what George will stay silent
-            # about. Setting it in the ink for things that do not count, at
-            # 2.93:1, would be the register saying the opposite of the words.
-            column.addWidget(BodyLabel(
-                "No rule from the desk on "
-                + ", ".join(t.replace("_", " ") for t in no_rule)
-                + " - George falls back to his own.",
-                size=13, colour=theme.STENCIL_DIM, wrap=True))
+        # **The contract, rendered by the shared function** (row 1.7). It
+        # used to be composed inline here, and then the Race page needed the
+        # same sentences before the green - which is how a driver ends up
+        # reading two versions of what his engineer may do. The wrapping the
+        # inline version needed is inside it: a real certify warning is a
+        # sentence, and one of them set this card's minimum width to 1,352 px
+        # against a ~733 px plate before it wrapped.
+        #
+        # No author heading here - `Declared(author)` is already in the
+        # header, two lines up.
+        render_standing_orders(column, plan)
 
     def setChosen(self, chosen: bool) -> None:  # noqa: N802 - Qt naming
         self._chosen = chosen

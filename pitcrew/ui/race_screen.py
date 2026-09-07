@@ -49,6 +49,7 @@ from pitcrew.ui.widgets import (
     Measured,
     Plate,
     PlanSpine,
+    render_standing_orders,
     StencilLabel,
 )
 
@@ -363,11 +364,52 @@ class RaceScreen(QWidget):
             "you cross the line; everything he says lands here with its "
             "reason and its confidence, including calls you decline.")
         self.log_layout.addWidget(self.log_empty)
+        # **The standing orders, below the calls and above the stretch.**
+        # They belong on this page - `refresh_plan` is already wired to this
+        # screen's `shown` signal and was refreshing a card rendered a screen
+        # away (row 1.7, S12) - and they belong INSIDE the scroller because
+        # the page has eight pixels of headroom against the 501 the smallest
+        # display gives. Calls insert at index 0, so the contract sits under
+        # them and scrolls away as the race fills the log: before the green
+        # it is the whole of what he sees here, which is the point.
+        self.orders = QWidget()
+        self.orders_layout = QVBoxLayout(self.orders)
+        self.orders_layout.setContentsMargins(0, 0, 0, 0)
+        self.orders_layout.setSpacing(theme.GAP_TIGHT)
+        self.orders.setVisible(False)
+        self.log_layout.addWidget(self.orders)
         self.log_layout.addStretch(1)
         scroller.setWidget(self.log)
 
         plate.body.addWidget(scroller, 1)
         return plate
+
+    def show_standing_orders(self, plan: dict | None,
+                            author: str | None = None) -> None:
+        """What George may do on his own, before the green. Once per plan.
+
+        The words come from `strategy.handover.standing_orders`, which the
+        Strategy page's `LoadedCard` renders too - one contract, one source.
+
+        **The list is empty only when there is NO PLAN**, and then the block
+        hides: a heading over nothing reads as the app having lost something.
+        A plan with no HANDOVER is a different thing and is not empty - it
+        says George has no rule from the desk on any trigger and falls back
+        to his own, which is the most consequential line on the grid and is
+        true of seven of the ten approved plans on file.
+        """
+        while self.orders_layout.count():
+            item = self.orders_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+        # The heading names the author here and not on the Strategy card,
+        # where `Declared(author)` is already in the header beside the label.
+        shown = render_standing_orders(self.orders_layout, plan,
+                                       author=author or "the desk")
+        self.orders.setVisible(bool(shown))
 
     # ---------------------------------------------------------------- actions
 
@@ -405,6 +447,8 @@ class RaceScreen(QWidget):
         `plan_json` the coordinator arms from - so what is on the screen is
         what will be run rather than a second rendering of the same idea.
         """
+        from pitcrew.strategy.handover import author_of
+
         if not strategy:
             self.plan_line.setText(
                 "No plan approved — the engineer will call fuel only.")
@@ -413,8 +457,17 @@ class RaceScreen(QWidget):
             # An empty spine draws a bare rule rather than nothing, so the
             # absence of a plan is visible in the place a plan would be.
             self.spine.setPlan([])
+            self.show_standing_orders(None)
             return
         plan = strategy.get("plan") or {}
+        # **The contract, on the page he starts the race from** (row 1.7).
+        # It is filled here rather than by the controller because this is the
+        # method that is HANDED the approved row - by `_refresh_race_options`,
+        # which this screen's own `shown` signal already triggers, and by
+        # `_poll_plan` when the approved id moves. A second call site reading
+        # the store again is a second chance for the orders and the plan line
+        # two inches above them to describe different plans.
+        self.show_standing_orders(plan, author=author_of(plan))
         stints = plan.get("stints") or []
         # The same stints the line below spells out in words, as one object.
         self.spine.setPlan([st.get("laps") for st in stints],

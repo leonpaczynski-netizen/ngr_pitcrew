@@ -55,10 +55,21 @@ MIN_WINDOW = (900, 560)
 # the driver to paste, and take a setup sheet back - and that whole transport
 # is gone: the tune builder holds the car and issues changes directly. What
 # the app still owes him is what it measured, which is Practice and Race.
+# **Strategy is not a race-day screen** (row 1.7). It is where a plan is
+# built, approved and qualifying is planned - all of it read with the headset
+# off - and the one thing on it the driver needed on the grid, the standing
+# orders, is on the Race page now. Leaving it under *Race day* offered him a
+# page to go and read at the moment he should be on the page he starts from.
+#
+# Split rather than relocated, deliberately: `SCREENS` is this flattened and
+# the rail indexes straight into the stack, so moving the NAME would renumber
+# the stack's build order, `LATE_SCREENS` and the shortcuts. This leaves the
+# flattened order identical and changes only what the rail says.
 NAV_GROUPS = (
     ("Prepare", ("Event", "Car")),
     ("Learn", ("Practice",)),
-    ("Race day", ("Strategy", "Race")),
+    ("Plan", ("Strategy",)),
+    ("Race day", ("Race",)),
     ("", ("Reference", "Settings")),
 )
 SCREENS = tuple(name for _heading, names in NAV_GROUPS for name in names)
@@ -521,6 +532,10 @@ class NavRail(QWidget):
     Grouping rather than restructuring: the same eight screens, with the two
     loops named and ruled apart, so the rail describes the work instead of
     listing it.
+
+    **Four named groups since row 1.7**, because planning is its own step: it
+    happens after the practice it rests on and before the race, and it is the
+    last thing done with the headset off.
     """
 
     def __init__(self, stack: QStackedWidget, groups,

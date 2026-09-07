@@ -229,6 +229,124 @@ def author_of(stored: dict) -> str | None:
     return ((stored or {}).get("handover") or {}).get("author") or None
 
 
+# **What George cannot see at all, whatever a playbook says.** GT7
+# broadcasts no weather in any packet format, so a rule for it is a rule that
+# can never fire - which is worse than no rule, because the driver believes it
+# is armed. (The safety car left `TRIGGERS` on 7 Sep 2026 for the same
+# reason, so it no longer needs saying here.)
+CANNOT_SEE = ("rain",)
+
+# The register each line is set in, which is the whole of what the ink means:
+# a human declared it, the app derived it, or it is prose about a gap.
+DECLARED, DERIVED, GAP = "declared", "derived", "gap"
+
+
+@dataclass(frozen=True)
+class Order:
+    """One line of the standing orders, and the register it is said in."""
+    text: str
+    register: str
+    heading: bool = False
+
+
+def standing_orders(stored: dict) -> list[Order]:
+    """What George may do on his own, and what he is blind to. One source.
+
+    **Rendered on two screens now** (row 1.7): the Strategy page's
+    `LoadedCard`, where the plan is approved, and the Race page, where the
+    driver is sitting on the grid. The words live here rather than in either
+    of them - two copies of a contract are two contracts, and this one says
+    what the engineer is allowed to do without asking.
+
+    `None` register means prose about an absence; `DECLARED` is a human's
+    word; `DERIVED` is the app's own certification.
+    """
+    # **No plan is not "no rules"** - it is nothing to say. A plan with no
+    # HANDOVER is different and does have orders: it says George has no rule
+    # from the desk on anything and falls back to his own, which is the most
+    # consequential thing the driver can learn on the grid.
+    if not stored:
+        return []
+    plan = stored
+    handover = plan.get("handover") or {}
+    out: list[Order] = []
+
+    certificate = handover.get("certificate") or {}
+    for warning in certificate.get("warnings") or ():
+        out.append(Order(warning, DERIVED))
+    for gap in certificate.get("unchecked") or ():
+        # Named, not dropped. A check that could not run is not a check that
+        # passed, and the driver is the only one who can decide whether to
+        # race on it.
+        out.append(Order(f"Not checked: {gap}", GAP))
+
+    # **A rule is only a rule if it can fire.** Two ways it cannot, and a
+    # stored plan on file has one of each: the trigger names a channel the
+    # feed does not carry (`CANNOT_SEE`), or it was retired from `TRIGGERS`
+    # after the plan was written. `PlaybookEntry.validate` catches both when a
+    # handover is AUTHORED and nothing revalidates a stored one, so the check
+    # has to be here, at the point the driver reads it.
+    entries = playbook_of(plan)
+    live = [e for e in entries
+            if e.trigger in TRIGGERS and e.trigger not in CANNOT_SEE]
+    dead = [e for e in entries if e not in live]
+    if live:
+        out.append(Order("George may, on his own", GAP, heading=True))
+        for entry in live:
+            out.append(Order(
+                f"{entry.trigger.replace('_', ' ')} - "
+                f"{entry.action.replace('_', ' ')} when {entry.when}"
+                + (f", until {entry.until}" if entry.until else ""),
+                DECLARED))
+
+    # **Recomputed against today's triggers**, not read off the stored row: a
+    # handover stored before a trigger was retired or added would otherwise
+    # show a gap that no longer exists, or hide one that does. Only the LIVE
+    # entries count as cover, so a rule that cannot fire never fills a gap.
+    covered = {entry.trigger for entry in live}
+    unhandled = [t for t in TRIGGERS if t not in covered]
+    no_rule = [t for t in unhandled if t not in CANNOT_SEE]
+
+    # **Two sentences, because they ask different things of the driver.** One
+    # says there is nothing there. The other says there is something there
+    # that will not work, which is the more urgent of the two and was the one
+    # the card fell silent on.
+    ruled = sorted({e.trigger for e in dead})
+    unruled = [t for t in CANNOT_SEE if t not in {e.trigger for e in dead}]
+    if unruled:
+        out.append(Order(
+            "He cannot see " + ", ".join(t.replace("_", " ") for t in unruled)
+            + " at all - tell him.", GAP))
+    if ruled:
+        out.append(Order(
+            "The desk left a rule for "
+            + ", ".join(t.replace("_", " ") for t in ruled)
+            + ", which he cannot see at all - it will never fire. Tell him.",
+            GAP))
+    if no_rule:
+        # **"No rule from the desk", not "he will do nothing".** The card said
+        # the second and it was false in the direction that matters:
+        # `stop_still_needed` and `stay_out_call` decide fuel and a missed
+        # stop with or without a playbook, so a driver told George would stay
+        # out of it would have been told the opposite of the truth on the one
+        # screen where he is reading the contract.
+        out.append(Order(
+            "No rule from the desk on "
+            + ", ".join(t.replace("_", " ") for t in no_rule)
+            + " - George falls back to his own.", GAP))
+
+    # **The assumptions the plan rests on, which nothing rendered.** Six of
+    # them are stored against the Daytona plan and no screen has ever shown
+    # one - so a plan whose stint length rests on a wear rate nobody measured
+    # looked exactly like one that did not (row 1.7).
+    assumptions = handover.get("assumptions") or []
+    if assumptions:
+        out.append(Order("Resting on", GAP, heading=True))
+        for line in assumptions:
+            out.append(Order(str(line), DECLARED))
+    return out
+
+
 def from_dict(payload: dict) -> Handover:
     """Rebuild a handover from the JSON an author writes.
 
