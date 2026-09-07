@@ -141,11 +141,16 @@ def test_every_screen_fits_the_smallest_display_he_owns(qt_app):
     for screen in (EventScreen(), CarScreen(), PracticeScreen(),
                    StrategyScreen(), RaceScreen(),
                    ReferenceScreen(), settings):
-        # **With the sheet the app runs.** Bare, every screen reports 6-8 px
-        # less than it will actually take - the app-wide `font-size: 15px`
-        # box metric - so this guard had that much slack on the one display
-        # that cannot afford any. The Race page is 493 bare and 499 styled
-        # against a 501 cap; the others sit between 259 and 324.
+        # **With the sheet the app runs.** Bare, a screen reports up to 22 px
+        # less than it will actually take, so this guard had that much slack
+        # on the one display that cannot afford any.
+        #
+        # Measured natively, bare -> styled: Car 247 -> 247, Settings
+        # 243 -> 265, Event 249 -> 267, Strategy 257 -> 279, Reference
+        # 267 -> 285, Practice 305 -> 324, **Race 497 -> 499** against a 501
+        # cap. The cost is not a font size - deleting `font-size: 15px` from
+        # the sheet changes nothing on either platform; what moves the Race
+        # page is `QScrollBar::handle:vertical { min-height: 40px }`.
         screen.setStyleSheet(theme.STYLESHEET)
         height = screen.minimumSizeHint().height()
         assert height <= 501, (

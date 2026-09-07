@@ -379,8 +379,8 @@ class RaceScreen(QWidget):
         # checked); what sets the figure is
         # `QScrollBar::handle:vertical { min-height: 40px }` - drop that one
         # rule and the page wants 459. Bare, the page is 493 offscreen and
-        # 497 native, so four of those pixels really are the font database
-        # `pitcrew/ui/widgets.py` describes.
+        # 497 native, so four of those six pixels are the font database that
+        # offscreen Qt does not have, and only two are the sheet.
         #
         # Calls insert at index 0, so the contract sits under
         # them and scrolls away as the race fills the log: before the green

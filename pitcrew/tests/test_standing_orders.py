@@ -63,13 +63,26 @@ def test_no_plan_says_nothing_at_all():
 def test_a_plan_with_no_handover_still_says_george_has_no_rules():
     """The other side of the same line. A plan IS approved, nobody wrote a
     playbook for it, and that is the most consequential thing on the grid -
-    seven of the ten approved plans on file are in exactly this state."""
-    orders = standing_orders({"stints": [{"laps": 10}]})
-    text = " | ".join(o.text for o in orders)
-    assert "No rule from the desk on" in text
-    for trigger in TRIGGERS:
-        if trigger not in CANNOT_SEE:
-            assert trigger.replace("_", " ") in text, trigger
+    twenty of the twenty-eight plans on file are in exactly this state.
+
+    **Both plan shapes**, because the single-stint fixture this used to
+    carry is a 0-STOP plan, and every gated sentence branches on the stop
+    count. Asserting only that each trigger appears somewhere was green
+    whichever branch ran, so it could not tell a true sentence from a false
+    one - it just needed the words.
+    """
+    for stints in ([{"laps": 20}], [{"laps": 10}, {"laps": 10}]):
+        orders = standing_orders({"stints": stints})
+        text = " | ".join(o.text for o in orders)
+        for trigger in TRIGGERS:
+            if trigger not in CANNOT_SEE:
+                assert trigger.replace("_", " ") in text, (stints, trigger)
+        # And the gated pair is never both fallen back on and withheld.
+        for line in text.split(" | "):
+            if "falls back to his own" not in line:
+                continue
+            assert "cannot drop a stop" not in line, line
+            assert "cannot add one" not in line, line
 
 
 def test_a_rule_for_something_he_cannot_see_is_not_a_standing_order():
@@ -1092,7 +1105,7 @@ def test_the_disagreement_reads_as_english():
     bad = {"stints": [{"laps": 5}] * 3, "stops": -2}
     assert _stops_planned(bad) is None
     said = _stop_disagreement(bad)
-    assert said is not None and "its stop count says -2, which is not a count"         in said, said
+    assert said is not None and         "its stop count says -2 - which is not a count" in said, said
     assert "he may bring a planned stop forward" not in lines(
         {**bad, "handover": {"playbook": []}})
 
@@ -1193,3 +1206,22 @@ def test_an_action_george_cannot_run_is_not_a_standing_order():
     fell_back = [line for line in said.split(" | ")
                  if "fuel long" in line and "falls back to his own" in line]
     assert not fell_back, fell_back
+
+    # **And on a plan with NO stop the clause is true and must be there.**
+    # Every fixture in this file carries a stop, so the suppression could be
+    # keyed on the trigger rather than on whether a withheld sentence
+    # follows - and a garbage rule then REMOVED a true statement that having
+    # no rule at all left in place. `_stops_off` cannot fire without a stop,
+    # but the FUEL_LONG call carries no `structural_action` at all: George
+    # says "You can push." on his own judgement.
+    no_stop = {"stints": [{"laps": 20, "compound": "RM", "start_lap": 1}],
+               "handover": {"playbook": [
+                   {"trigger": "fuel_long", "action": "teleport_to_pits",
+                    "when": "a", "until": "b"}]}}
+    with_rule = lines(no_stop)
+    assert "will never fire, and George falls back to his own" in with_rule, \
+        with_rule
+    # ...and it says the same thing as having no rule at all does.
+    without = lines({"stints": no_stop["stints"],
+                     "handover": {"playbook": []}})
+    assert "fuel long" in without.split("No rule from the desk on")[1]

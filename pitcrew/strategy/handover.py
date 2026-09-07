@@ -213,16 +213,27 @@ def _stop_disagreement(plan: dict) -> str | None:
     said = {"stints": "its stints imply {n}",
             "stops": "its stop count says {n}",
             "pit_laps": "its box laps name {n}"}
-    parts = []
-    for name, number in readings.items():
-        if number < 0:
-            parts.append(said[name].format(n=number) + ", which is not a "
-                                                       "count")
-            continue
-        parts.append(said[name].format(n=number)
-                     + (" stop" if number == 1 else " stops"))
-    return ("The plan disagrees with itself about stops - "
-            + ", ".join(parts) + ". How many it holds is not known.")
+    # **Corrupt readings last, and the clause that describes them is not
+    # left dangling into the next one.** "its stop count says -2, which is
+    # not a count, its box laps name 1 stop" reads as one sentence about the
+    # box laps.
+    good = [(name, number) for name, number in readings.items() if number >= 0]
+    bad = [(name, number) for name, number in readings.items() if number < 0]
+    parts = [said[name].format(n=number)
+             + (" stop" if number == 1 else " stops")
+             for name, number in good]
+    parts += [said[name].format(n=number) + " - which is not a count"
+              for name, number in bad]
+    # **Only a real disagreement is called one.** With a single corrupt
+    # reading and nothing to compare it against, the plan is not arguing
+    # with itself; it is holding a figure that cannot be read.
+    if len(readings) > 1:
+        return ("The plan disagrees with itself about stops - "
+                + ", ".join(parts) + ". How many it holds is not known.")
+    return ("The plan's " + ", ".join(parts).split(" says ")[0].removeprefix(
+        "its ") + " cannot be read: it says "
+        + ", ".join(parts).split(" says ", 1)[1].split(" - ")[0]
+        + ". How many stops it holds is not known.")
 
 
 def _cannot_fire(trigger: str, action: str, plan: dict) -> bool:
@@ -622,16 +633,18 @@ def standing_orders(stored: dict) -> list[Order]:
         out.append(Order(
             f"The desk's rule for {entry.trigger.replace('_', ' ')} cannot "
             f"fire on this plan - there is no stop to drop.", GAP))
-    # **The clause is true only where the trigger is not gated.** For
-    # `fuel_long` and `tyre_short` a withheld sentence is printed a few lines
-    # below saying what George may NOT do - "and George falls back to his
-    # own" beside it is pass 1's second blocker said again. Those two are the
-    # only structural pairs, and an unrunnable rule can never be the granted
-    # action, so a withheld sentence always follows.
-    gated_names = {trigger for trigger, _action in GATED}
+    # **Suppressed where a WITHHELD SENTENCE will follow, not merely where
+    # the trigger is gated.** Saying "George falls back to his own" a few
+    # lines above "he cannot drop a stop without a rule from the desk" is
+    # pass 1's second blocker said again - but on a plan with no stop there
+    # is nothing to withhold, `_withheld_sentence` returns None, and the
+    # clause is true: the FUEL_LONG call carries no `structural_action`, so
+    # George says "You can push." with no playbook at all. Keyed on the
+    # trigger, a garbage rule REMOVED that true statement while having no
+    # rule kept it.
     for entry in unrunnable:
         trigger = entry.trigger.replace("_", " ")
-        falls_back = ("" if entry.trigger in gated_names
+        falls_back = ("" if _withheld_sentence(entry.trigger, plan) is not None
                       else ", and George falls back to his own")
         if not entry.action.strip():
             # **Not "asks for nothing, which George cannot execute"** - doing

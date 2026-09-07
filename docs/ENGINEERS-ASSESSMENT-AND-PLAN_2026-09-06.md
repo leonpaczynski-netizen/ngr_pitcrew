@@ -1344,8 +1344,44 @@ sentences legitimately repeat a figure. The claim was wrong, not the test.
    fix.
 
 Minor: a cross-reference to a comment in `race_screen.py` that lives in
-`ui/widgets.py`, and a low-end screen height (259) quoted from offscreen
-where the real spread is 265–324.
+`ui/widgets.py`, and a low-end screen height (259) quoted from offscreen.
+
+### Row 1.7, critic pass 10 — one finding refused, and the asymmetry under it
+
+**The pass's headline is refused, and pass 5 established why.** It reported
+*"No rule from the desk on … fuel long — George falls back to his own"* on a
+0-stop plan as false. It is true: `_past_half_stint` falls back to
+`lap >= laps_total / 2` when there is no stop, so the FUEL_LONG call fires —
+measured, *"You can push."* with `structural_action=None`, so the playbook is
+never consulted. Changing it would be the oscillation this pass was asked to
+look for, with me causing it. **Recorded rather than acted on.**
+
+**The real defect was the asymmetry underneath it**, which the same pass
+reported as a minor: on a 0-stop plan, a plan with NO `fuel_long` rule was
+told George falls back to his own, and one with a GARBAGE rule was told only
+that it will never fire — so adding an unrunnable rule *removed* a true
+statement. The suppression was keyed on *"is this trigger gated"* when it
+means *"will a withheld sentence follow"*, and on a 0-stop plan none does.
+
+**Three tests were blind to that shape**, because every fixture in the file
+carries a stop — including the one written in pass 9 to close this very
+contradiction. `test_a_plan_with_no_handover_still_says_george_has_no_rules`
+was green *because* of the leak: it asserted each trigger's words appear
+somewhere, which cannot tell a true sentence from a false one. Both plan
+shapes now, and it asserts the gated pair is never both fallen back on and
+withheld.
+
+Minor: *"one reading cannot disagree with itself"* — a lone corrupt `stops`
+said *"The plan disagrees with itself"*; and the *"which is not a count"*
+clause dangled into the next reading when the negative was not last. Corrupt
+readings are ordered last and the head sentence matches the case.
+
+**And a fourth copy of the disproven `font-size` cause**, in
+`test_impeccable_findings.py`, with figures from the wrong platform. Measured
+natively, bare → styled: Car 247→247, Settings 243→265, Event 249→267,
+Strategy 257→279, Reference 267→285, Practice 305→324, **Race 497→499**
+against the 501 cap. Deleting `font-size: 15px` changes nothing on either
+platform.
 
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three
