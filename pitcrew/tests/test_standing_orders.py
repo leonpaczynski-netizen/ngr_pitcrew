@@ -307,6 +307,35 @@ def test_arming_the_race_does_not_delete_the_contract(qt_app):
     assert screen.orders_layout.count()
 
 
+def test_the_tyre_short_sentence_is_true_of_the_stint_it_is_about():
+    """**The gate has a condition and the sentence stated it flat.**
+
+    `add_stop` is set on the wear cliff only when `stint_ends_on_lap is
+    None` - the last stint. With a stop ahead the same reading brings it
+    forward, which is timing, and timing is free. So the driver hears "Box
+    this lap." on lap 8 of stint 1 at Daytona, the instruction the contract
+    had just told him he would not get. Asserted against the CALL, not
+    against the words, because the words were the thing that was wrong.
+    """
+    from pitcrew.race.calls import _wear
+    from .test_playbook_bounds import _at_the_cliff, a_plan as a_race_plan
+
+    with_a_stop = _at_the_cliff(a_race_plan(), stop_planned=True)
+    assert _wear(with_a_stop.state).structural_action is None
+    assert with_a_stop._within_the_playbook(
+        _wear(with_a_stop.state)).call == "Box this lap."
+
+    last_stint = _at_the_cliff(a_race_plan(), stop_planned=False)
+    withheld = last_stint._within_the_playbook(_wear(last_stint.state))
+    assert withheld.call == "Tyres past the stint limit."
+
+    said = lines(a_plan())
+    assert "may bring a planned stop forward" in said, said
+    assert "on the last stint he cannot ADD one" in said
+    # The contract quotes the call, so the two cannot drift apart.
+    assert withheld.call in said
+
+
 def test_he_is_told_what_he_cannot_do_without_a_rule(qt_app):
     """**"George falls back to his own" was false for the two gated pairs.**
 
@@ -318,7 +347,7 @@ def test_he_is_told_what_he_cannot_do_without_a_rule(qt_app):
     would use his judgement on the one decision he is barred from.
     """
     text = lines(a_plan())
-    assert "On tyre short he cannot add a stop without a rule from the desk" \
+    assert "on the last stint he cannot ADD one without a rule from the desk" \
         in text, text
     assert "On fuel long he cannot drop a stop without a rule from the desk" \
         in text
@@ -328,15 +357,21 @@ def test_he_is_told_what_he_cannot_do_without_a_rule(qt_app):
 
 
 def test_a_granted_structural_action_is_not_reported_as_withheld():
-    plan = a_plan(playbook=[
+    """Both halves in one run, so the assertion is a difference rather than
+    the absence of a string."""
+    granted = a_plan(playbook=[
         PlaybookEntry(trigger="tyre_short", action="add_stop",
                       when="the gauge passes the cliff", until="the stop"),
         PlaybookEntry(trigger="fuel_long", action="drop_stop",
                       when="1.5 laps in hand", until="the flag")])
-    text = lines(plan)
-    assert "cannot add a stop" not in text, text
-    assert "cannot drop a stop" not in text
-    assert "tyre short - add stop" in text
+    said = lines(granted)
+    assert "cannot ADD one" not in said, said
+    assert "cannot drop a stop" not in said
+    assert "tyre short - add stop" in said
+    # The same two sentences DO appear with nothing granted.
+    bare = lines(a_plan())
+    assert "cannot ADD one" in bare
+    assert "cannot drop a stop" in bare
 
 
 def test_a_rule_that_is_not_the_gated_action_does_not_grant_it():
@@ -352,22 +387,37 @@ def test_a_rule_that_is_not_the_gated_action_does_not_grant_it():
 
 
 def test_the_screen_and_the_race_ask_the_same_gate():
-    """One expression. `_may` used to be a second copy of it, computed from
-    the action while the screen computed from "is there an entry"."""
-    from pitcrew.race.coordinator import RaceCoordinator
-    from pitcrew.strategy.handover import grants
+    """One expression, asked of the SAME stored plan by both sides.
 
-    entry = PlaybookEntry(trigger="tyre_short", action="add_stop",
-                          when="the cliff", until="the stop")
-    book = {"tyre_short": entry}
-    coordinator = RaceCoordinator.__new__(RaceCoordinator)
-    coordinator._playbook = book
-    for trigger, action in (("tyre_short", "add_stop"),
-                            ("fuel_long", "drop_stop"),
-                            ("fuel_short", "short_shift"),
-                            ("incident", "report_only")):
-        assert coordinator._may(trigger, action) == \
-            grants(book, trigger, action), (trigger, action)
+    Comparing `_may` with `grants` is `x == x` now that one calls the other;
+    what has been wrong twice is the plan the SCREEN reads against the book
+    the RACE builds from the same row.
+    """
+    from pitcrew.race.coordinator import RaceCoordinator
+    from pitcrew.strategy.handover import GATED, grants, playbook_of
+
+    books = (
+        [],
+        [PlaybookEntry(trigger="tyre_short", action="add_stop",
+                       when="the cliff", until="the stop")],
+        [PlaybookEntry(trigger="fuel_long", action="report_only",
+                       when="1.5 in hand", until="the flag")],
+        [PlaybookEntry(trigger="fuel_long", action="drop_stop",
+                       when="1.5 in hand", until="the flag"),
+         PlaybookEntry(trigger="fuel_long", action="report_only",
+                       when="1.5 in hand", until="the flag")],
+    )
+    for book in books:
+        plan = a_plan(playbook=book)
+        stored = playbook_of(plan)
+        coordinator = RaceCoordinator.__new__(RaceCoordinator)
+        coordinator._playbook = {e.trigger: e for e in stored}
+        said = lines(plan)
+        for trigger, action, sentence in GATED:
+            withheld = not coordinator._may(trigger, action)
+            assert grants(stored, trigger, action) is not withheld, \
+                (book, trigger)
+            assert (sentence in said) is withheld, (book, trigger, said)
 
 
 def test_a_retirement_is_not_reported_as_blindness():
@@ -383,16 +433,32 @@ def test_a_retirement_is_not_reported_as_blindness():
     assert "tyre pressure, which he cannot see" not in text
 
 
-def test_two_identical_entries_are_two_rows():
-    """`dead = [e for e in entries if e not in live]` compared frozen
-    dataclasses by VALUE, so a duplicated entry put a live rule in the dead
-    list and reported it as never firing."""
-    entry = PlaybookEntry(trigger="fuel_short", action="short_shift",
-                          when="0.5 laps short", until="it clears")
-    plan = a_plan(playbook=[entry, entry])
-    text = lines(plan)
-    assert "never fire" not in text, text
-    assert text.count("fuel short - short shift") == 2
+def test_a_duplicated_trigger_reads_the_way_the_race_reads_it():
+    """**The screen and the race answered one stored plan differently.**
+
+    `grants`' list branch took the FIRST entry for a trigger; the
+    coordinator's dict comprehension keeps the LAST. So a playbook holding
+    `fuel_long: drop_stop` then `fuel_long: report_only` had the screen say
+    George may drop the stop while the race refused it - the exact inversion
+    the single expression exists to remove.
+
+    `Handover.validate` rejects a duplicated trigger, but
+    `mcp.propose_strategy` stores a payload without validating and `certify`
+    never reads the playbook, which is the premise of this whole module.
+    """
+    from pitcrew.strategy.handover import grants
+
+    drop = PlaybookEntry(trigger="fuel_long", action="drop_stop",
+                         when="1.5 laps in hand", until="the flag")
+    report = PlaybookEntry(trigger="fuel_long", action="report_only",
+                           when="1.5 laps in hand", until="the flag")
+    for order in ([drop, report], [report, drop]):
+        as_the_race_reads_it = grants({e.trigger: e for e in order},
+                                      "fuel_long", "drop_stop")
+        assert grants(order, "fuel_long", "drop_stop") == as_the_race_reads_it
+        said = "On fuel long he cannot drop a stop" in lines(
+            a_plan(playbook=order))
+        assert said is not as_the_race_reads_it, order
 
 
 def test_an_entry_with_no_trigger_is_named_as_unreadable():
@@ -450,3 +516,130 @@ def test_the_rail_fits_the_smallest_display_he_owns(qt_app):
     assert height <= 501, (
         f"the rail demands {height}px; the smallest display gives 501 and "
         f"Settings is the last item on it")
+
+    # **And the height alone has no teeth once it scrolls** - it is 68 px
+    # whatever the rail holds. What can still go wrong is moving focus or
+    # selection to an item below the fold: `QScrollArea` follows
+    # `focusNextPrevChild`, NOT a direct `setFocus`, so End and Ctrl+7 put
+    # the crayon focus bar 71 px off-screen with nothing to say where he is.
+    rail.resize(178, 441)
+    rail.show()
+    qt_app.processEvents()
+    last = rail._labels[len(SCREENS) - 1]
+    assert last.geometry().bottom() > 441, "not below the fold; test is void"
+    rail.focus_item(len(SCREENS) - 1)
+    qt_app.processEvents()
+    assert not last.visibleRegion().isEmpty(), "focused off-screen"
+    rail._scroller.verticalScrollBar().setValue(0)
+    qt_app.processEvents()
+    rail.select(len(SCREENS) - 1)
+    qt_app.processEvents()
+    assert not last.visibleRegion().isEmpty(), "selected off-screen"
+
+    # The note the rail actually sets must fit the width it actually has.
+    rail.set_note(0, "W" * NavRail.NOTE_CHARS)
+    room = (rail._scroller.viewport().width()
+            - rail._notes[0].parentWidget().layout().contentsMargins().left()
+            - rail._notes[0].parentWidget().layout().contentsMargins().right())
+    assert rail._notes[0].sizeHint().width() <= room, (
+        f"NOTE_CHARS={NavRail.NOTE_CHARS} wants "
+        f"{rail._notes[0].sizeHint().width()}px of {room}; a note that clips "
+        f"is worse than a shorter one")
+
+
+def test_gated_names_every_structural_call_site():
+    """**`GATED` is hand-maintained against `calls.py`.**
+
+    `change_compound` and `abandon_plan` are in `STRUCTURAL_ACTIONS` with no
+    call site today. If either gains one, the standing orders go silent about
+    a decision George has been barred from - which is the defect class this
+    whole row is about, and nothing would have said so.
+
+    Read off the source rather than trusted: every `Call(...)` carrying a
+    `structural_action` must have its (trigger, action) pair named in
+    `GATED`, and every pair in `GATED` must have a call.
+    """
+    import ast
+    import pathlib
+
+    from pitcrew.strategy.handover import GATED
+
+    tree = ast.parse(pathlib.Path(
+        "pitcrew/race/calls.py").read_text(encoding="utf-8"))
+    found = set()
+    for node in ast.walk(tree):
+        keywords = getattr(node, "keywords", None)
+        if not keywords:
+            continue
+        named = {k.arg: k.value for k in keywords if k.arg}
+        if "structural_action" not in named or "trigger" not in named:
+            continue
+        trigger = named["trigger"]
+        action = named["structural_action"]
+        # `structural_action="add_stop" if unplanned else None` - the action
+        # is the branch that is not None, and the condition is what the
+        # sentence has to carry.
+        if isinstance(action, ast.IfExp):
+            action = action.body
+        if isinstance(trigger, ast.Constant) and isinstance(action,
+                                                            ast.Constant):
+            found.add((trigger.value, action.value))
+
+    assert found == {(t, a) for t, a, _sentence in GATED}, (
+        f"calls.py gates {found}; GATED names "
+        f"{{(t, a) for t, a, _ in GATED}} - a pair in one and not the other "
+        f"is a decision the standing orders are silent about")
+
+
+def test_the_loader_prints_the_checks_that_could_not_run(store, event_id,
+                                                         capsys, tmp_path):
+    """**The CLI re-rendered what it was SENT, not what it stored.**
+
+    `accept` attaches the certificate after `as_stored` and returns only the
+    warnings, so every "Not checked:" line was dropped at the one moment the
+    author could still act on it. Silence is never a pass.
+    """
+    import json
+
+    from pitcrew.strategy import handover as module
+
+    payload = {
+        "plan": {"stints": [{"laps": 15, "compound": "RM", "fuel_l": 92.0,
+                             "start_lap": 1},
+                            {"laps": 5, "compound": "RM", "fuel_l": 32.0,
+                             "start_lap": 16}],
+                 "stops": 1, "pit_laps": [15], "binding_constraint": "fuel"},
+        "playbook": [], "author": "ludo", "assumptions": []}
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    stored_rows = []
+
+    class _Store:
+        def close(self):
+            pass
+
+        def list_strategies(self, _event):
+            return stored_rows
+
+    def _accept(store, event, handover, *, label=None):
+        stored = handover.as_stored(handover.plan)
+        stored["handover"]["certificate"] = {
+            "warnings": [], "unchecked": ["the lap count"]}
+        stored_rows.append({"id": 7, "plan": stored})
+        return 7, []
+
+    # `main` imports Store from `store.db` inside itself, so the patch goes
+    # there rather than onto this module.
+    from pitcrew.store import db
+
+    real_store, real_accept = db.Store, module.accept
+    db.Store, module.accept = _Store, _accept
+    try:
+        assert module.main(["--event", str(event_id), "--file", str(path)]) == 0
+    finally:
+        db.Store, module.accept = real_store, real_accept
+
+    printed = capsys.readouterr().out
+    assert "Not checked: the lap count" in printed, printed
+    assert "Standing orders" not in printed, "the CLI prints no heading"

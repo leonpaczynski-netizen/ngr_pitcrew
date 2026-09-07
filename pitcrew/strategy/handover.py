@@ -110,23 +110,44 @@ def grants(entries, trigger: str, action: str) -> bool:
     """
     if action not in STRUCTURAL_ACTIONS:
         return True
-    entry = (entries.get(trigger) if isinstance(entries, dict)
-             else next((e for e in entries if e.trigger == trigger), None))
+    if isinstance(entries, dict):
+        entry = entries.get(trigger)
+    else:
+        # **Last wins, because the coordinator's dict comprehension does.**
+        # Taking the first was the same inversion this function exists to
+        # remove: on a playbook holding `fuel_long: drop_stop` then
+        # `fuel_long: report_only`, the screen said George may drop the stop
+        # and the race refused it. `Handover.validate` rejects a duplicated
+        # trigger, but `mcp.propose_strategy` stores a payload without
+        # validating and `certify` never reads the playbook, so a duplicate
+        # reaches `plan_json` - which is the premise of this whole module.
+        entry = None
+        for candidate in entries:
+            if candidate.trigger == trigger:
+                entry = candidate
     return entry is not None and entry.action == action
 
 
-# **The structural decisions a trigger can reach, and what George does
-# instead when the desk did not grant one.** Both pairs are real call sites -
-# `calls.py:2720` (`add_stop`, the wear cliff with no stop planned) and
-# `calls.py:1906` (`drop_stop`) - and both fall back to the call's
-# `report_form`, so the driver hears the reading and decides the shape.
-# Anything not listed here is free: `_may` never consults the playbook for it
-# and an author who forgot an entry cannot silence it.
+# **The structural decisions a trigger can reach, what George says instead
+# when the desk did not grant one, and WHEN the gate actually bites.**
+#
+# The third of those was missing and it made the sentence false for most of
+# every race on file. `add_stop` is set on the wear cliff only when
+# `state.stint_ends_on_lap is None` - the LAST stint. With a stop still ahead
+# the same reading brings it forward, which is timing, and timing is free, so
+# the driver hears "Box this lap." exactly as he would with a rule. Stating
+# the gate flat told him he would not get the instruction he will get.
+#
+# The words after the dash are the call's own `report_form`, quoted, so the
+# contract and the call say the same thing (rule 13).
 GATED = (
-    ("tyre_short", "add_stop", "add a stop",
-     "he reports the reading and the stop stays out of the plan"),
-    ("fuel_long", "drop_stop", "drop a stop",
-     "he says you are fuelled to the flag and the stops stay in the plan"),
+    ("tyre_short", "add_stop",
+     'On tyre short he may bring a planned stop forward on his own, but on '
+     'the last stint he cannot ADD one without a rule from the desk - he '
+     'says "Tyres past the stint limit." and you decide.'),
+    ("fuel_long", "drop_stop",
+     'On fuel long he cannot drop a stop without a rule from the desk - he '
+     'says "You\'re fuelled to the flag." and the stops stay in the plan.'),
 )
 
 # Names the stored payload owns. A plan carrying one of these is refused
@@ -337,8 +358,12 @@ def standing_orders(stored: dict) -> list[Order]:
     named = [e for e in entries if e.trigger.strip()]
     live = [e for e in named
             if e.trigger in TRIGGERS and e.trigger not in CANNOT_SEE]
-    # Compared by identity, not by value: two byte-identical entries are two
-    # rows, and `e not in live` would have dropped the second of them.
+    # By identity, because a row is a row. **This fixes nothing that was
+    # broken** - liveness is a function of `trigger` alone, so two equal
+    # entries are both live or both dead and `e not in live` could not
+    # misclassify either. Critic pass 1 claimed otherwise and was wrong; the
+    # real duplicate-entry defect was in `grants`, above. Kept because
+    # identity is what the question means.
     dead = [e for e in named if not any(e is kept for kept in live)]
     if live:
         out.append(Order("George may, on his own", GAP, heading=True))
@@ -394,20 +419,17 @@ def standing_orders(stored: dict) -> list[Order]:
     # race runs on: a structural action with no entry is refused, and the
     # driver has to know which decisions that removes from George rather than
     # being told he will use his judgement on all of them.
-    withheld = [(trigger, cannot, instead)
-                for trigger, action, cannot, instead in GATED
+    withheld = [(trigger, sentence) for trigger, action, sentence in GATED
                 if not grants(live, trigger, action)]
-    for trigger, cannot, instead in withheld:
-        out.append(Order(
-            f"On {trigger.replace('_', ' ')} he cannot {cannot} without a "
-            f"rule from the desk - {instead}.", GAP))
+    for _trigger, sentence in withheld:
+        out.append(Order(sentence, GAP))
 
     # **"No rule from the desk", not "he will do nothing".** The card said the
     # second and it was false in the direction that matters: `stop_still_
     # needed` and `stay_out_call` decide fuel and a missed stop with or
     # without a playbook. The gated pairs are named above and drop out here,
     # because saying both about one trigger is saying two things.
-    gated_triggers = {trigger for trigger, _c, _i in withheld}
+    gated_triggers = {trigger for trigger, _sentence in withheld}
     falls_back = [t for t in no_rule if t not in gated_triggers]
     if falls_back:
         out.append(Order(
@@ -544,6 +566,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         strategy_id, problems = accept(store, args.event, handover,
                                        label=args.label)
+        # **Read back what was STORED, not re-render what was sent.**
+        # `accept` attaches the certificate after `as_stored`, and returns
+        # only the warnings - so rendering the handover again dropped every
+        # "Not checked:" line, at the one moment the author could still act
+        # on it. Silence is never a pass.
+        stored = next((row.get("plan") or {}
+                       for row in store.list_strategies(args.event)
+                       if row.get("id") == strategy_id), {})
     finally:
         store.close()
 
@@ -562,7 +592,7 @@ def main(argv: list[str] | None = None) -> int:
     # wording of one fact - "George will report it and decide nothing" - and
     # it was the wording the screens were changed away from for being false
     # on the free triggers (rule 13).
-    for order in standing_orders(handover.as_stored(handover.plan)):
+    for order in standing_orders(stored):
         if order.register == GAP and not order.heading:
             print(f"  {order.text}")
     return 0

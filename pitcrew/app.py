@@ -573,6 +573,24 @@ class NavRail(QWidget):
         scroller.setStyleSheet("background: transparent;")
         inner = QWidget()
         outer.addWidget(scroller)
+        # Held because `focus_item` and `select` have to scroll to what they
+        # just moved to: `QScrollArea` follows `focusNextPrevChild` and NOT a
+        # direct `setFocus`, so End, Down and Ctrl+7 all put the crayon focus
+        # bar 71 px below the fold with nothing on screen to say where he is.
+        self._scroller = scroller
+        # **A narrow, themed bar.** The default takes 14 px off a rail that
+        # is `setFixedWidth(178)` with horizontal scrolling forced off, so
+        # those pixels are clipped rather than reachable - and it painted an
+        # unstyled #9f9f9f stripe down a RUBBER_DEEP rail.
+        scroller.verticalScrollBar().setStyleSheet(
+            f"QScrollBar:vertical {{ background: transparent; width: 6px; "
+            f"margin: 0; }}"
+            f"QScrollBar::handle:vertical {{ background: {theme.TREAD}; "
+            f"min-height: 24px; border-radius: 3px; }}"
+            f"QScrollBar::add-line:vertical, "
+            f"QScrollBar::sub-line:vertical {{ height: 0; }}"
+            f"QScrollBar::add-page:vertical, "
+            f"QScrollBar::sub-page:vertical {{ background: transparent; }}")
 
         column = QVBoxLayout(inner)
         column.setContentsMargins(20, 26, 12, 20)
@@ -621,7 +639,14 @@ class NavRail(QWidget):
 
     # What fits on one line in the rail at this size, tracked. A note that
     # clips is worse than a shorter one: "NOTHING ASKED YE" reads as a bug.
-    NOTE_CHARS = 15
+    #
+    # **Measured, 7 Sep 2026, and 15 never fitted.** The column has 140 px
+    # between its margins inside the scroller; at the widest character 15
+    # wants 162 px, 13 wants 141, and 12 wants 130. So `3 x RM, 2 stops` and
+    # `Ludo 1-stop, R…` were clipped by the widget on the surface used every
+    # visit - the failure this constant exists to prevent, in the constant
+    # itself.
+    NOTE_CHARS = 12
 
     def focus_item(self, index: int) -> None:
         """Move focus along the rail, wrapping. Skips what is not built."""
@@ -636,6 +661,7 @@ class NavRail(QWidget):
         while index not in usable:
             index = (index + 1) % len(self._labels)
         self._labels[index].setFocus(Qt.FocusReason.TabFocusReason)
+        self._scroller.ensureWidgetVisible(self._labels[index])
 
     def set_note(self, index: int, text: str) -> None:
         """A one-line state under a rail item, or "" to clear it."""
@@ -657,6 +683,8 @@ class NavRail(QWidget):
         if self._builder is not None:
             self._builder(index)
         self._stack.setCurrentIndex(index)
+        if 0 <= index < len(self._labels):
+            self._scroller.ensureWidgetVisible(self._labels[index])
         for position, label in enumerate(self._labels):
             if position >= self._stack.count():
                 label.setStyleSheet(

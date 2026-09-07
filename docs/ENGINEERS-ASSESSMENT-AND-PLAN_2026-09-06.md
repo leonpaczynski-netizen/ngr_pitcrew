@@ -972,13 +972,55 @@ first time.
    this row's new heading took it to 425/551. Nothing clipped because the
    layout spent the 20 px bottom margin first. It scrolls now, and there is a
    test.
-7. Minor, each fixed: `dead` compared frozen dataclasses **by value**, so a
-   duplicated entry reported a live rule as never firing; a blank stored
-   trigger rendered *"The desk left a rule for , which …"*; the height test
-   was a tautology inside a scroller (it asserts the block is in the scroll
-   area too now); `render_standing_orders` returned a count one short of the
-   widgets it added; and the `show_standing_orders` docstring named the wrong
-   condition for an empty block.
+7. Minor, each fixed: a blank stored trigger rendered *"The desk left a rule
+   for , which …"*; the height test was a tautology inside a scroller (it
+   asserts the block is in the scroll area too now); `render_standing_orders`
+   returned a count one short of the widgets it added; and the
+   `show_standing_orders` docstring named the wrong condition for an empty
+   block. **One claimed minor was not a defect**: pass 1 said `dead`
+   compared frozen dataclasses by value so a duplicated entry reported a live
+   rule as never firing. It did not — liveness is a function of `trigger`
+   alone, so two equal entries are both live or both dead. The comparison is
+   by identity because that is what the question means, and the commit
+   message for `3cf458c` overstates it.
+
+### Row 1.7, critic pass 2 — three majors, all of them in pass 1's own fixes
+
+1. **The `tyre_short` sentence was false for every stint but the last, on
+   every approved plan on file.** `GATED` stated the gate flat; `calls.py`
+   sets `add_stop` only when `stint_ends_on_lap is None`, which is the last
+   stint — with a stop ahead the same reading brings it forward, which is
+   timing, and timing is free. So on lap 8 of stint 1 at Daytona the driver
+   hears *"Box this lap."*, the instruction the contract had just told him he
+   would not get. And it was **worse than the sentence it replaced**, because
+   `falls_back` now excludes gated triggers, so he got the wrong line instead
+   of the incomplete one. Rule 12 half-applied: the sentence moved onto
+   `grants()` and left the other half of the gate behind. The sentence now
+   carries the condition and quotes the call's own `report_form`.
+2. **`grants` answered the screen and the race differently for one stored
+   plan.** The list branch took the FIRST entry for a trigger; the
+   coordinator's dict comprehension keeps the LAST. On a playbook holding
+   `fuel_long: drop_stop` then `fuel_long: report_only` the screen said
+   George may drop the stop and the race refused it — the exact inversion the
+   single-expression fix existed to remove, reintroduced by it. Reachable:
+   `mcp.propose_strategy` stores a payload without `Handover.validate`, and
+   `certify` never reads the playbook.
+3. **The new rail scroller focused and selected items it did not scroll into
+   view.** `QScrollArea` follows `focusNextPrevChild`, not a direct
+   `setFocus`, so End / Down / Ctrl+7 put the crayon focus bar 71 px below
+   the fold with nothing on screen to say where he was. `ensureWidgetVisible`
+   in both, and the test asserts it rather than a height that can no longer
+   fail.
+
+And the rail's `NOTE_CHARS = 15` **never fitted**: 140 px between the column
+margins, 162 px wanted at the widest character, so `3 x RM, 2 stops` was
+clipped by the widget on the surface used every visit — the failure the
+constant exists to prevent, in the constant itself. Measured to 12. The
+scrollbar is 6 px and themed; the default took 14 px off a rail with
+horizontal scrolling forced off, so those pixels were unreachable rather than
+scrollable. The CLI re-rendered the handover it was sent rather than the row
+it stored, which dropped every *"Not checked:"* line at the one moment the
+author could still act on it.
 
 **Left in Phase 1:** 1.8 (driver board spec and screenshot), 1.10 (rule-13 pass on the call
 inventory — the "to the stop / to the flag" pair and "Box this lap" from three
