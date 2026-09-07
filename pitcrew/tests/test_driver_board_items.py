@@ -549,7 +549,10 @@ def test_the_tyre_decision_reaches_him_before_he_is_stationary(qt_app):
     view = DriverView()
     view.update_state(DriverState(laps_to_box=4, box_on_lap=11,
                                   tyres_at_stop=False, compound="RS"))
-    assert view.box_stat.sub.text() == "plan: lap 11 · no tyres"
+    # `_sub_text`, the string the block was given: `plan: lap 11 · fuel
+    # only` is 24 characters, which the middle rank holds on the rig at
+    # 16 px a character and elides under the offscreen test font at 27.
+    assert view.box_stat._sub_text == "plan: lap 11 · fuel only"
     # **The set going ON, not the set he is on**, and the two are given here
     # as the controller gives them: `compound` is what is bolted to the car,
     # `next_compound` is the plan's decision. Built with only `compound`,
@@ -559,7 +562,7 @@ def test_the_tyre_decision_reaches_him_before_he_is_stationary(qt_app):
     view.update_state(DriverState(laps_to_box=4, box_on_lap=11,
                                   tyres_at_stop=True, compound="RM",
                                   next_compound="RS"))
-    assert "RS on" in view.box_stat.sub.text()
+    assert "fit RS" in view.box_stat.sub.text()
     assert "RM" not in view.box_stat.sub.text()
     # **A plan that did not say is silent.** "Fuel only" and "the plan is
     # quiet about it" are different answers and only one is a decision.
@@ -824,6 +827,13 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
         from pitcrew.ui.driver_view import DriverState, DriverView, GapView
         from pitcrew.race import calls as C
         view = DriverView()
+        # **Shown, like its offscreen sibling.** Without this the widget is
+        # never laid out and its width hint comes back 784 px light - 1154
+        # against 1938 - so the width leg could not fail however wide the
+        # caps were set. The height leg was right either way.
+        view.resize(2480, 1050)
+        view.show()
+        app.processEvents()
         name = "AVeryLongPSNid16"
         worst = (0, 0)
         states = []
@@ -866,6 +876,11 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
     if "skip" in got:
         pytest.skip(f"no real faces to measure: {got['skip']}")
     # 2560 x 1080, and the window is frameless with no resize handle.
+    # **The height leg is the one that bites.** `GAP_PX = 210` and
+    # `LINES = 3` both fail it, which is what it exists for. The width leg
+    # cannot fail on anything reachable - the real-face board has some 600 px
+    # of headroom - and that is worth asserting anyway and worth saying
+    # plainly rather than dressing up as a test of the caps.
     assert got["h"] <= 1080, got
     assert got["w"] <= 2560, got
 
@@ -908,7 +923,12 @@ def test_a_dash_on_the_flag_block_carries_a_reason_and_not_a_burn(qt_app):
     view.update_state(DriverState(fuel_to_flag=None, burn_l=4.19,
                                   fuel_to_flag_on="on the plan's fill"))
     assert view.flag_stat.value.text() == "--"
-    assert "4.19" not in view.flag_stat.sub.text()
+    # **The string the block was GIVEN.** Asserted on the rendered label this
+    # passed with the defect reinstated: offscreen the sub elides at 640 px
+    # to `on the plan's fill · 4…`, so the burn was cut by the harness's font
+    # rather than by the code. On the rig the mutant renders the whole thing.
+    assert "4.19" not in view.flag_stat._sub_text
+    assert view.flag_stat._sub_text == "not measured"
 
 
 def test_a_stop_that_sizes_to_zero_litres_is_not_a_stop_nobody_sized(qt_app):

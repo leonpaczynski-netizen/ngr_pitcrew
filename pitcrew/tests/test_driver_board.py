@@ -85,7 +85,12 @@ def test_the_box_shows_the_fill_target_and_what_is_aboard(app):
     view.update_state(DriverState(
         in_box=True, fuel_target_l=74.0, fuel_l=31.0, release_in_s=43.0))
     assert view.box.fuel_stat.value.text() == "74"
-    assert "31" in view.box.fuel_stat.sub.text()
+    # **The word, not just the number.** `31` alone passes for `31 L`,
+    # which is what this was shortened to once - and `31 L` under a big `63`
+    # does not say which is the tank and which is the target. `aboard` is the
+    # word that separates them, and the running board uses `laps aboard` for
+    # the same idea.
+    assert "31 aboard" in view.box.fuel_stat._sub_text
     assert view.box.release_stat.value.text() == "43"
 
 

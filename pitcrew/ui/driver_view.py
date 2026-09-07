@@ -347,7 +347,7 @@ from PyQt6.QtWidgets import (
 from pitcrew.store.tyres import WEAR_ONSET_C
 # The one vocabulary for how a call was meant, shared with `Call.spoken()` so
 # the word on the screen and the word in his ear are one decision (rule 12).
-from pitcrew.race.calls import MARK_UNCONFIRMED
+from pitcrew.race.calls import MARK_UNCONFIRMED, NO_STOP_TO_COME
 # The trend floor, imported rather than restated: it is derived, its
 # arithmetic is documented where it is defined, and two copies would drift.
 from pitcrew.race.tyre_split import RATE_WORTH_SAYING_C
@@ -813,8 +813,9 @@ class _Stat(QWidget):
     # four blocks across the panel and the lead rank two, so they can afford
     # different amounts; the box panel carries five. Each is the panel's own
     # room divided by the blocks on it, with the margins and the gaps between
-    # them taken off. `test_the_board_fits_his_monitor_in_the_widest_state_it
-    # _can_be_given` is what holds the arithmetic to the actual monitor.
+    # them taken off - see the note below, which is what that turned out to
+    # be worth. `test_the_board_fits_his_monitor_on_the_faces_he_actually_has`
+    # is what holds the board to the actual monitor.
     # **Two faces, and the numbers differ by 1.7.** On the rig, Cascadia Mono
     # at 27 px is 16 px a character, so the middle rank's 640 holds forty and
     # nothing on the board is elided at all. Under the offscreen platform the
@@ -822,13 +823,21 @@ class _Stat(QWidget):
     # a character - twenty-three - and the longest strings DO elide there.
     #
     # **These are not "the panel's room divided by the blocks on it."** They
-    # were described that way and the arithmetic does not hold: four middle
-    # subs at 640 measure 2,792 px offscreen and five box subs at 620 measure
-    # 3,274, both past 2,560. The board fits because the blocks do not all
-    # reach their cap at once - POSITION's sub is `of 12`. What holds the
-    # panel is `test_the_board_fits_his_monitor_on_the_faces_he_actually_has`,
-    # which measures the real faces; these caps stop any ONE reason line
-    # running away.
+    # were described that way and the arithmetic does not hold: driven to
+    # their caps the middle rank and the box page both measure past 2,560
+    # offscreen. The board fits because the blocks do not all reach their cap
+    # at once - POSITION's sub is `of 12`.
+    #
+    # **On the rig these caps never fire at all**, because his face is 16 px
+    # a character and the longest string on the board is well inside them. So
+    # what they are is insurance against a string nobody has written yet, and
+    # what holds the panel is
+    # `test_the_board_fits_his_monitor_on_the_faces_he_actually_has`. That
+    # test's HEIGHT leg bites - `GAP_PX = 210` and `LINES = 3` both fail it -
+    # and its width leg cannot, because the real-face board has some 600 px
+    # of headroom. Stated rather than engineered around: the width is not
+    # under threat and pretending a guard tests it would be worse than
+    # saying it does not.
     MIDDLE_SUB_W = 640
     GAP_SUB_W = 1100
     SPLIT_SUB_W = 700
@@ -1150,10 +1159,12 @@ class DriverWindow(QWidget):
         # board), then 2457x1031 (not reproducible - the same state measures
         # differently depending on what was drawn before it and on the face
         # the stylesheet resolves to). What IS checked is the bound:
-        # `test_the_board_fits_his_monitor_in_the_widest_state_it_can_be_given`
-        # drives every refusal string, a sixteen-character rival name, the
-        # box panel and a call three times longer than any the engineer makes,
-        # and holds the result under 2560 x 1080. This opens just inside that. It is not a free choice
+        # `test_the_board_fits_his_monitor_on_the_faces_he_actually_has`
+        # measures the real faces in a subprocess and holds 2560 x 1080; its
+        # offscreen sibling sweeps every refusal string, a sixteen-character
+        # rival name, the box page and a call three times longer than any the
+        # engineer makes, and holds a growth ceiling. This opens above the
+        # real-face minimum, and Qt grows it where a state needs more. It is not a free choice
         # - the ranks are set by how far away he is and how long a glance is,
         # and the panel is 2560x1080 - so the honest thing is to open at a
         # size the content fits in.
@@ -1396,6 +1407,15 @@ class _BoxPanel(QWidget):
             # a dash where the opposite decision gets the word NO TYRES is how
             # he takes a fuel-only stop the plan did not ask for.
             self.tyre_stat.show_value("NEW SET", "plan · set not named")
+        elif state.past_the_plan:
+            # **Past the end of the stint list is not "the plan did not name
+            # a compound".** An unplanned splash sets `past_the_plan` and
+            # leaves `next_tyres` and `next_compound` None, and this block
+            # said the plan had asked for a stop and not named a tyre while
+            # the block beside it said the plan does not reach this stop at
+            # all. He fits tyres nobody asked for - three seconds and a cold
+            # out-lap (CLAUDE.md 5.4).
+            self.tyre_stat.show_value("--", "past the plan")
         elif state.has_plan:
             self.tyre_stat.show_value("--", "plan: no compound")
         else:
@@ -1659,14 +1679,40 @@ class DriverView(QWidget):
             widget.show_value(temps.get(corner), kind, lopsided,
                               pair_gap(corner, temps),
                               (state.split_rates or {}).get(corner))
+        # **Say when there is no threshold at all.** With no compound
+        # `onset_for` is None, `classify` returns "cool", and the four
+        # numbers paint in the same white a measured-below-onset reading
+        # gets - so 96 degC on an unknown set draws exactly like 60, and this
+        # file's own docstring says that white claims "not yet wearing faster
+        # for heat". It cannot claim that with nothing to compare against.
+        # `_apply_stint(over_a_stop=True)` clears `tyre_compound` whenever
+        # the stint the stop starts names none, so it is reachable, and a
+        # plan naming no compounds leaves it None all race.
         self.tyre_caption.setText(
-            "TYRE SURFACE °C" if not state.compound
-            else f"TYRE SURFACE °C · {state.compound.upper()}")
+            f"TYRE SURFACE °C · {state.compound.upper()}" if state.compound
+            else "TYRE SURFACE °C · COMPOUND UNKNOWN, NO WEAR LINE")
         self._show_splits(state)
         self.last_call.show_call(state.last_call)
 
         if state.finished:
             self.box_stat.show_value("FLAG", "race over")
+        elif state.laps_to_box is None and state.has_plan:
+            # **A plan with no further stop is not "no plan".**
+            # `laps_to_stop()` is None exactly when `stint_ends_on_lap` is,
+            # and `_apply_stint` sets that to None on the LAST stint - so
+            # this block told him the engineer had no plan for laps 12-20 of
+            # every one-stop race, and for the whole of a zero-stop one,
+            # while `IN HAND TO THE FLAG` two blocks along was live and
+            # right. He has no reason to trust a number on a board that says
+            # nobody is planning.
+            #
+            # This is the third page this same defect has been fixed on -
+            # `_BoxPanel` carries "the board said 'no plan' while a plan was
+            # being executed" and the `finished` branch carries "'no plan' is
+            # the wrong thing to tell a man who has just finished". The words
+            # are `race/calls.py`'s, so the board and the fuel block say the
+            # same thing about the same fact (rule 13).
+            self.box_stat.show_value("--", NO_STOP_TO_COME)
         elif state.laps_to_box is None:
             self.box_stat.show_value("--", "no plan")
         elif state.laps_past_box is not None:
@@ -1674,11 +1720,16 @@ class DriverView(QWidget):
             # his box lap read "0 laps to box, box on lap 15" - the current
             # lap, every lap, with nothing saying he was late. `past_box_lap`
             # carries the sign the clamp discards.
+            # **The tyre word survives the box lap.** `past_box_lap` fires
+            # at `to_stop == 0`, so `_box_caption` stopped being called on
+            # the one lap the decision is executed - and the whole case for
+            # putting it on this block is that "fit a set" and "fuel only"
+            # ask for different in-laps and different brake balance. The
+            # voice says "Box this lap. RS on." here; the board said nothing.
+            late = ("box this lap" if state.laps_past_box <= 0 else
+                    f"{state.laps_past_box} past the box lap")
             self.box_stat.show_value(
-                "NOW",
-                "box this lap" if state.laps_past_box <= 0 else
-                f"{state.laps_past_box} past the box lap",
-                urgent=True)
+                "NOW", self._tyre_clause(state, late), urgent=True)
         else:
             self.box_stat.show_value(
                 f"{state.laps_to_box:.0f}",
@@ -1705,35 +1756,43 @@ class DriverView(QWidget):
                 f"of {state.field_size}" if state.field_size else "")
 
     @staticmethod
+    def _tyre_clause(state: DriverState, head: str) -> str:
+        """`head` with the plan's tyre decision appended, or `head` alone.
+
+        **One expression for both captions.** The countdown and the "NOW"
+        that replaces it are the same block saying the same thing about the
+        same stop, and the decision went missing from the second because they
+        were written twice.
+
+        `· fuel only` rather than `· no tyres`: it is the box panel's own
+        word for this decision, and on the running board the pair has to be
+        told apart in the dimmest ink on the screen at 200 km/h - where
+        `no tyres` and `new set` differ only in a two-word tail.
+        """
+        if state.tyres_at_stop is False:
+            return f"{head} · fuel only"
+        if state.tyres_at_stop and state.next_compound:
+            return f"{head} · fit {state.next_compound.upper()}"
+        if state.tyres_at_stop:
+            return f"{head} · fit a set"
+        # None: the plan did not say. Silence, because "fuel only" and "the
+        # plan is quiet about it" are different answers and only one of them
+        # is a decision he can act on.
+        return head
+
+    @staticmethod
     def _box_caption(state: DriverState) -> str:
         """What sits under the laps-to-box figure: the lap, and the decision.
 
         **The tyre decision moved here from the box panel**, where he could
-        only read it once he was stationary and it was already being executed.
-        "RS on" and "no tyres" ask for different in-laps and different brake
-        balance, and the plan has said which since before the green.
+        only read it once he was stationary and it was already being
+        executed. "Fit RS" and "fuel only" ask for different in-laps and
+        different brake balance, and the plan has said which since before the
+        green.
         """
-        # `is None`, not truthiness: it is a lap number, and rule 3 is about
-        # a zero that means "not measured" being read as a real value.
-        # Unreachable through the controller - `lap_on_screen()` floors at 1 -
-        # but the shape is the one this board keeps getting caught by.
         if state.box_on_lap is None:
             return ""
-        plan = f"plan: lap {state.box_on_lap}"
-        if state.tyres_at_stop is False:
-            return f"{plan} · no tyres"
-        # **`next_compound`, never `compound`.** See the field's own note: on
-        # track the second is the set he is ON, and captioning that as the
-        # plan's decision named the wrong tyre on exactly the stops this
-        # caption exists for.
-        if state.tyres_at_stop and state.next_compound:
-            return f"{plan} · {state.next_compound.upper()} on"
-        if state.tyres_at_stop:
-            return f"{plan} · new set"
-        # None: the plan did not say. Silence, because "fuel only" and "the
-        # plan is quiet about it" are different answers and only one of them
-        # is a decision he can act on.
-        return plan
+        return DriverView._tyre_clause(state, f"plan: lap {state.box_on_lap}")
 
     def _show_fuel(self, state: DriverState) -> None:
         """The two in-hand figures, each against the distance it names.

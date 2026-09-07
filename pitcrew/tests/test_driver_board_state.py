@@ -1255,5 +1255,5 @@ def test_the_box_caption_names_the_set_going_on_not_the_one_coming_off():
     assert got.next_compound == "RH"
     view = DriverView()
     view.update_state(got)
-    assert "RH on" in view.box_stat.sub.text()
+    assert "fit RH" in view.box_stat.sub.text()
     assert "RM" not in view.box_stat.sub.text()

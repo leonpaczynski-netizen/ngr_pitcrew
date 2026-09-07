@@ -3197,14 +3197,15 @@ def fuel_in_hand(state: RaceState) -> tuple[float | None, str]:
 # and four blocks on one row took the board past the 2,560 of his monitor - on
 # a frameless window with no resize handle, which Qt answers by growing it off
 # the screen rather than by dropping anything. Keep them to about twenty
-# characters. The longest here is twenty-four, which the middle rank holds
+# characters. The longest here is twenty-one, which the middle rank holds
 # with room to spare on the rig - its 640 px is forty characters at Cascadia
 # Mono's real 16 px, not the twenty-three an earlier note claimed off the
-# offscreen test font.
+# offscreen test font. (An earlier revision of this line said twenty-four;
+# measured, the four longest are all twenty-one.)
 #
 # **The bound is enforced in the widget, not by this convention.**
 # `_Stat.set_sub_width` elides every reason line to the room its rank has, and
-# `test_the_board_fits_his_monitor_in_the_widest_state_it_can_be_given` holds
+# `test_the_board_fits_his_monitor_on_the_faces_he_actually_has` holds
 # the whole board against the real panel. Keeping the strings short is what
 # stops him reading an ellipsis instead of an answer.
 NO_STOP_TO_COME = "no stop still to come"

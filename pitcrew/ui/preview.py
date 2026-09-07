@@ -127,7 +127,11 @@ def sample_board() -> DriverState:
         # **The compound the plan says to FIT.** Without it the artefact
         # draws `plan: lap 12 · new set` and pictures none of what the last
         # two rounds were about - the board naming the set coming OFF.
-        tyres_at_stop=True, next_compound="RS", has_plan=True,
+        # **A DIFFERENT compound from the one on the car**, so the picture
+        # shows the thing two rounds of critics were about: the board naming
+        # the set going ON. With both set to "RS" the artefact was identical
+        # to what the defect would have drawn.
+        tyres_at_stop=True, next_compound="RM", has_plan=True,
         laps_of_fuel=state.laps_of_fuel(), burn_l=state.fuel_per_lap_l,
         fuel_to_stop=to_stop, fuel_to_stop_why=stop_why,
         fuel_to_flag=to_flag, fuel_to_flag_why=flag_why,
