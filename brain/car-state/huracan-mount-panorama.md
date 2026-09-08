@@ -187,3 +187,84 @@ the front/rear reading stays symmetric too (36 % / 33 %, against 12 % / 13 % bef
   28–30 s at medium-high confidence and it is an estimate. **Measure it.**
 - **No tyre model, no wear rate, no stint length.** All of it needs laps. The race plan is a
   separate turn and it has nothing to stand on yet.
+
+---
+
+# Session 151 — 8 Sep 2026, 10 laps, first laps ever driven here
+
+**Sheet as issued, `SCREEN`-confirmed. RS/RS. Best 2:03.003 on the last lap, still improving.**
+⭐ **Gearbox `FEED`-verified unchanged** — 3.022 / 2.450 / 1.972 / 1.598 / 1.285 / 1.030.
+**Rank zero is now fully closed on this circuit: 23 values by screen, the box by feed.**
+
+Lap times: 2:06.3 · 2:16.3 · 2:11.8 · **2:03.7 · 2:03.4** · 2:04.1 · 2:04.1 · 2:04.2 · **2:03.0**
+(lap 1 out-lap excluded). Sector 2 — the mountain — is now his **most repeatable** sector:
+43.5 / 43.4 / 44.7 / 43.3 / 43.6 / 43.5 after 45.8 / 45.6 / 49.2 early.
+
+## `[DRIVER REPORT]` — and the correction that changed the diagnosis
+
+> *"felt good a little touchy across the top of the mountain through skyline"* …
+> *"it's not light on skyline its very pointed which is good but almost too much,
+> that could also be me getting used to car and track"*
+
+⚠️ **The first reading of "touchy" was going-light. It was wrong, and he corrected it before
+any analysis was done.** Had the correction not come, the compliance prediction would have
+been scored as falsified and ride height would have moved for a symptom that does not exist.
+**"Touchy" is not a symptom word in this driver's vocabulary — resolve it before using it.**
+
+## Predictions from the initial sheet, checked
+
+| prediction | outcome |
+|---|---|
+| car survives Skyline without going light or bottoming | **Not falsified, and not confirmed either.** He reports NOT light. The falsifier did not fire — which is weaker than a confirmation. Recorded as `unresolvable` on `rh_f`, direction up. |
+| 6th arrives at The Chase off the limiter | **Held.** 282.5 km/h at 5,000 m in 6th, no tow, against a ~311 km/h limiter. Conrod tops out with room to spare. |
+| `lsd_b` 35 holds the rear at The Chase | **Held.** Zero frames of rear slip below 0.90 anywhere in the braking zone. **`lsd_b` up stays holstered.** |
+| the three gears that beep are the right three | **Held.** No report of a late beep; the mountain runs 2nd–4th. |
+
+## What the mountain actually did — Skyline, 3,000–3,150 m
+
+| lap | min speed | catching the back end | min suspension |
+|---|---|---|---|
+| 2 · 3 · 4 | 115.7 · 151.0 · 118.9 km/h | **26 · 42 · 17 frames** | 217 · 228 · 234 mm |
+| 5 · 6 · 7 · 8 · 9 · 10 | 179.6 · 177.0 · 185.6 · 182.2 · 188.6 · 185.1 | **0 · 0 · 0 · 0 · 0 · 0** | 246–248 mm |
+
+⭐ **He was right about himself.** Zero catches on six consecutive laps, roughly **60 km/h more
+minimum speed**, and the lap-to-lap spread four times tighter (15.93 → 3.91 km/h). The early
+suspension unloading is **downstream of being sideways**, not of the spring and ride-height
+change — which is exactly why `rh_f` is recorded `unresolvable` rather than confirmed.
+
+**And the car is inside its grip there:** front 0.9953 against rear 0.9947, neither axle above
+1.00, 197 frames off both pedals. *"Almost too much"* is eagerness, not the car letting go.
+
+## ⚠️ What he did NOT report — The Cutting
+
+**The worst traction zone on the circuit, and it is not improving.** 56 % of on-power frames
+spinning the rears (`DERIVED`, 646 frames, laps 5–10), by lap: 47 · 58 · 59 · 54 · 25 · **88 %**
+— scattered, not converging, and worst on his fastest lap.
+
+**It is a traction limit, not a differential question.** Rear left/right slip gap median
+**0.0073** ⇒ both wheels together. ⛔ Do not reach for `lsd_a`: the wheel-speed split says
+nothing about the diff on this car and it wrongly closed that axis for a week.
+
+⭐ **AND IT DOES NOT BUY A SETUP CHANGE, because the car-wide number is normal.** Whole-lap
+wheelspin 5.4 % here against Daytona's 7.0 / 5.8 / 5.5 %. The Cutting is a steep uphill 3rd-gear
+full-throttle exit and this is what that costs. **A telemetry-only flag buys a question, not a
+change** — so it is a question.
+
+## The balance finding, and why it is NOT attributed
+
+Mid-corner front/rear slip gap is **0.001–0.004 at every zone here** against roughly **0.011**
+at Daytona, where the front slipped about twice the rear in all six setups tested. The car is
+far more balanced mid-corner — consistent with *"very pointed"*.
+
+⛔ **Not attributed to any one change.** Four things moved at once, by design, because it is a
+new circuit: ride height, spring rate, front rebound, and the ballast shifting the balance
+43:57 → 44:56. Any of them, or the circuit's own corners, could carry it. **Two candidates
+worth naming for later:** front rebound 46 → 50 (front stays planted on turn-in) and the
+forward ballast (more front load on a car whose chronic weakness is a front-limited middle).
+**Ballast position remains one of 22 axes never tested on this car.**
+
+## Decision — NO CHANGE
+
+Ten laps at a brand-new circuit, still improving, the driver likes the car, the symptom he
+raised is resolving on its own, and the one measurable defect is normal for the car. **Moving
+anything now throws away the baseline and chases an adaptation curve.**
