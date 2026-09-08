@@ -37,6 +37,13 @@ true:
   A plan is never undone - it may already be armed and partly executed - it is
   replaced by writing a better one.
 * `write_race_knowledge` writes the briefing George's rules read.
+* `write_measurement` and `write_verdict` land the numbers the engineer
+  derives off the frames, and what an axis is believed to do on the strength
+  of them. They apply for the same reason as the rest: a number that lives
+  only in a conversation is re-derived from scratch next session and cannot
+  be compared with itself. Neither holds a setup value - a measurement points
+  at its configuration by reference, and `brain/car-state/<car>-<circuit>.md`
+  stays the only place one is written down.
 
 `propose_strategy` remains, unchanged, for a plan he wants to read before it
 touches anything.
@@ -526,6 +533,174 @@ def write_race_knowledge(circuit_key: str, briefing: str,
             before=base.as_export(), after=written.as_export())
         return _dump({"written": True, "briefing": written.as_export(),
                       "ignored": sorted(set(payload) - set(fields))})
+    except Exception as exc:                                 # noqa: BLE001
+        return _dump({"written": False, "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        store.close()
+
+
+@mcp.tool()
+def measurements(car_name: str = "", circuit_key: str = "", metric: str = "",
+                 zone: str = "", limit: int = 40) -> str:
+    """Derived numbers already on file, newest first - so they are not
+    re-derived off the frames every session.
+
+    Every row carries its sample count, its noise floor and how that floor was
+    obtained. **A null floor means it was never established, not zero**: a
+    difference cannot be called resolvable against a floor nobody took.
+    """
+    store = _store()
+    try:
+        rows = store.measurements(
+            car_name=car_name or None, circuit_key=circuit_key or None,
+            metric=metric or None, zone=zone or None,
+            limit=min(limit, MAX_ROWS))
+        return _dump([row.as_export() for row in rows])
+    finally:
+        store.close()
+
+
+@mcp.tool()
+def axis_status(car_name: str, circuit_key: str = "", axis: str = "") -> str:
+    """What is known about a slider axis on this car - **`untested` included**.
+
+    With no `axis`, the whole board: which axes have never been tested here,
+    which were tried on an instrument that could not resolve them, and which
+    are settled. On 8 Sep 2026 ride height had never been A/B'd on any car in
+    the programme and there was no way to find that out; this is that call.
+
+    With an `axis`, its current verdict and the history behind it. An axis
+    nobody has touched answers `untested` rather than answering nothing.
+    """
+    store = _store()
+    try:
+        if not axis:
+            return _dump(store.untested_axes(car_name, circuit_key or None))
+        current = store.verdict_for(car_name, axis, circuit_key or None)
+        history = store.verdicts(car_name=car_name, axis=axis)
+        return _dump({"current": current.as_export(),
+                      "history": [v.as_export() for v in history]})
+    finally:
+        store.close()
+
+
+# ------------------------------------------------- authoritative writes 2
+#
+# These two land rows the engineer will reason from next week. They apply,
+# like the writes above them, and for the same reason: a number that lives
+# only in a conversation is re-derived from scratch every session and cannot
+# be compared with itself.
+
+@mcp.tool()
+def write_measurement(car_name: str, metric: str, value: float, unit: str,
+                      scope: str, source: str, circuit_key: str = "",
+                      zone: str = "", config_ref: str = "",
+                      config_label: str = "", n: int = 0, n_basis: str = "",
+                      noise_floor: float | None = None,
+                      floor_method: str = "", tool: str = "",
+                      session_ids: list | None = None,
+                      game_version: str = "", measured_on: str = "",
+                      note: str = "") -> str:
+    """Record one derived number, with what is needed to trust or refuse it. ⚠
+
+    `scope` is `corner` | `lap` | `stint` | `session` | `car`, and a
+    corner-scoped row has to name its `zone`. `source` is `MEASURED`,
+    `DERIVED`, `DOCTRINE`, `ASSUMED` or `DRIVER REPORT` - rule 5, nothing
+    derived is presented as measured.
+
+    **`noise_floor` left out means the floor was never established.** It is
+    not zero, and a literal 0.0 is refused: a floor of zero says every
+    difference is resolvable, which is how a change of 0.0006 got read as a
+    change. Where a floor is given, `floor_method` has to say how it was
+    obtained.
+
+    **`n` of 0 means the sample count was not recorded**, and it is stored as
+    null rather than as a count of none. Where n is given, `n_basis` says what
+    it counts - "n=15" of clean laps and of braking events are not the same
+    claim (rule 4).
+
+    ⛔ `config_ref` is a POINTER to the configuration - `huracan-daytona#s145`,
+    a revision label, a hash. Never the slider values: `brain/car-state/
+    <car>-<circuit>.md` is the only place one may be written, and a copy here
+    is the second copy that was removed on 5 Sep. A ref that reads like an
+    assignment is refused by name.
+    """
+    from pitcrew.engineer.measurements import Measurement
+
+    store = _store()
+    try:
+        row = Measurement(
+            car_name=car_name, metric=metric, value=float(value), unit=unit,
+            scope=scope, source=source, circuit_key=circuit_key or None,
+            zone=zone or None, config_ref=config_ref or None,
+            config_label=config_label or None,
+            n=int(n) if n else None, n_basis=n_basis or None,
+            noise_floor=None if noise_floor is None else float(noise_floor),
+            floor_method=floor_method or None, tool=tool or None,
+            session_ids=tuple(int(i) for i in (session_ids or ())),
+            game_version=game_version or None,
+            measured_on=measured_on or _today(), note=note or None)
+        row_id = store.record_measurement(row)
+        store.note_engineer_write(
+            "measurement", target_id=row_id, author="race engineer (MCP)",
+            summary=f"{metric} = {value} {unit} for {car_name}"
+                    + (f" at {circuit_key}" if circuit_key else ""),
+            after=row.as_export())
+        return _dump({"written": True, "measurementId": row_id,
+                      "measurement": row.as_export()})
+    except Exception as exc:                                 # noqa: BLE001
+        return _dump({"written": False, "error": f"{type(exc).__name__}: {exc}"})
+    finally:
+        store.close()
+
+
+@mcp.tool()
+def write_verdict(car_name: str, axis: str, verdict: str, why: str,
+                  circuit_key: str = "", direction: str = "",
+                  instrument: str = "", instrument_floor: float | None = None,
+                  measurement_ids: list | None = None,
+                  decided_on: str = "", game_version: str = "") -> str:
+    """Record what an axis is believed to do, and what said so. ⚠
+
+    `verdict` is `confirmed` | `refuted` | `untested` | `unresolvable`.
+
+    **`unresolvable` is not `refuted`.** The first says the instrument could
+    not see the change; the second says the car did not respond to it. On
+    1 Sep `lsd_a` was recorded as refuted on the strength of a rear wheel-speed
+    split that then sat at a median of 0.0000 through a six-click change of
+    that very axis, while a rotation index moved to twice its own floor. That
+    was `unresolvable` all along, and calling it `refuted` closed an axis that
+    was open.
+
+    So: `confirmed` and `refuted` have to name the **direction** tested and the
+    **instrument** used - a verdict on an axis from a test of half of it is the
+    other half of the same defect - and `unresolvable` has to name the
+    instrument and the floor it could not clear.
+
+    Append-only. A wrong verdict is retired by writing a better one; the old
+    row stays, because why the instrument was blind outlives the call.
+    """
+    from pitcrew.engineer.measurements import Verdict
+
+    store = _store()
+    try:
+        row = Verdict(
+            car_name=car_name, axis=axis, verdict=verdict, why=why,
+            circuit_key=circuit_key or None, direction=direction or None,
+            instrument=instrument or None,
+            instrument_floor=(None if instrument_floor is None
+                              else float(instrument_floor)),
+            measurement_ids=tuple(int(i) for i in (measurement_ids or ())),
+            decided_on=decided_on or _today(),
+            game_version=game_version or None)
+        row_id = store.record_verdict(row)
+        store.note_engineer_write(
+            "verdict", target_id=row_id, author="race engineer (MCP)",
+            summary=f"{axis} {verdict} on {car_name}"
+                    + (f" at {circuit_key}" if circuit_key else ""),
+            after=row.as_export())
+        return _dump({"written": True, "verdictId": row_id,
+                      "verdict": row.as_export()})
     except Exception as exc:                                 # noqa: BLE001
         return _dump({"written": False, "error": f"{type(exc).__name__}: {exc}"})
     finally:

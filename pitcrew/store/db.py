@@ -2406,6 +2406,193 @@ class Store:
             "SELECT * FROM traffic WHERE session_id = ? "
             "ORDER BY video_s", (session_id,))]
 
+    # ------------------------------------------- measurements and verdicts
+    #
+    # See `pitcrew/engineer/measurements.py` for the two records and the two
+    # wrong calls on 8 Sep 2026 they exist to prevent. Everything here goes
+    # through `validate()` before it is stored, so no writer - the MCP seam
+    # included - can skip the checks that make a row trustworthy.
+
+    def record_measurement(self, measurement) -> int:
+        """Store one derived number. Returns its id.
+
+        Append-only. Re-deriving a metric on new laps writes a new row rather
+        than replacing the old one: the old number was true of the laps it was
+        taken on, and the pair is what a trend is made of.
+        """
+        measurement.validate()
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO measurement ("
+                " car_name, circuit_key, config_ref, config_label, scope,"
+                " zone, metric, value, unit, n, n_basis, noise_floor,"
+                " floor_method, source, tool, session_ids, game_version,"
+                " measured_on, note, recorded_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (measurement.car_name, measurement.circuit_key,
+                 measurement.config_ref, measurement.config_label,
+                 measurement.scope, measurement.zone, measurement.metric,
+                 float(measurement.value), measurement.unit,
+                 None if measurement.n is None else int(measurement.n),
+                 measurement.n_basis,
+                 None if measurement.noise_floor is None
+                 else float(measurement.noise_floor),
+                 measurement.floor_method, measurement.source,
+                 measurement.tool,
+                 json.dumps(list(measurement.session_ids))
+                 if measurement.session_ids else None,
+                 measurement.game_version, measurement.measured_on,
+                 measurement.note, _now()))
+            measurement.id = int(cur.lastrowid)
+            return measurement.id
+
+    def record_verdict(self, verdict) -> int:
+        """Store what an axis is believed to do, and on what. Returns its id.
+
+        Append-only, newest row wins. A verdict is retired by writing a better
+        one - `verdict_for` reads the latest - because the reason an old one
+        was wrong is itself worth keeping. The 1 Sep `lsd_a` refutation was
+        retired on 8 Sep when its instrument turned out to be blind to the
+        axis, and that is a fact about the instrument that outlives the call.
+        """
+        verdict.validate()
+        with self._write() as conn:
+            cur = conn.execute(
+                "INSERT INTO verdict ("
+                " car_name, circuit_key, axis, direction, verdict, instrument,"
+                " instrument_floor, measurement_ids, decided_on, game_version,"
+                " why, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (verdict.car_name, verdict.circuit_key, verdict.axis,
+                 verdict.direction, verdict.verdict, verdict.instrument,
+                 None if verdict.instrument_floor is None
+                 else float(verdict.instrument_floor),
+                 json.dumps(list(verdict.measurement_ids))
+                 if verdict.measurement_ids else None,
+                 verdict.decided_on, verdict.game_version, verdict.why,
+                 _now()))
+            verdict.id = int(cur.lastrowid)
+            return verdict.id
+
+    def measurements(self, *, car_name: str | None = None,
+                     circuit_key: str | None = None,
+                     metric: str | None = None, zone: str | None = None,
+                     limit: int | None = None) -> list:
+        """Rows matching whatever was asked, newest first.
+
+        **An omitted argument does not filter; it is not a filter on NULL.**
+        `circuit_key=None` means "any circuit", which is what a caller passing
+        nothing meant. To ask for the rows that belong to no circuit, filter
+        the result - the distinction matters and a keyword that meant both
+        would hide it.
+        """
+        from pitcrew.engineer.measurements import Measurement
+
+        where, params = [], []
+        for column, value in (("car_name", car_name),
+                              ("circuit_key", circuit_key),
+                              ("metric", metric), ("zone", zone)):
+            if value is not None:
+                where.append(f"{column} = ?")
+                params.append(value)
+        sql = "SELECT * FROM measurement"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        return [_measurement_row(row, Measurement)
+                for row in self._query(sql, params)]
+
+    def verdicts(self, *, car_name: str | None = None,
+                 circuit_key: str | None = None,
+                 axis: str | None = None) -> list:
+        """Every verdict on file for these, newest first - history included."""
+        from pitcrew.engineer.measurements import Verdict
+
+        where, params = [], []
+        for column, value in (("car_name", car_name),
+                              ("circuit_key", circuit_key), ("axis", axis)):
+            if value is not None:
+                where.append(f"{column} = ?")
+                params.append(value)
+        sql = "SELECT * FROM verdict"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC"
+        return [_verdict_row(row, Verdict) for row in self._query(sql, params)]
+
+    def verdict_for(self, car_name: str, axis: str,
+                    circuit_key: str | None = None):
+        """The current answer for one axis. **Never None.**
+
+        An axis nobody has touched comes back as a synthesised `untested`
+        verdict rather than as an absence the caller has to interpret. That is
+        the point of the table: on 8 Sep ride height had never been A/B'd on
+        any car in the programme and nobody could find that out, because "no
+        rows" and "not asked yet" looked identical from every angle.
+
+        A verdict written against the circuit wins over one written against
+        the car with no circuit, and both stay visible through `verdicts`.
+        """
+        from pitcrew.engineer.measurements import untested
+
+        rows = self.verdicts(car_name=car_name, axis=axis)
+        if circuit_key is not None:
+            here = [v for v in rows if v.circuit_key == circuit_key]
+            if here:
+                return here[0]
+        general = [v for v in rows if v.circuit_key is None]
+        if general:
+            return general[0]
+        return untested(car_name, axis, circuit_key)
+
+    def untested_axes(self, car_name: str,
+                      circuit_key: str | None = None) -> dict:
+        """Which axes on this car at this circuit have never been tested.
+
+        One call, because it is the question that had no answer on 8 Sep.
+
+        **The axis list comes from the car's own range record**, which is the
+        only per-car statement of what its sliders are and which the driver
+        read off GT7's own screen. Without one this falls back to the shipped
+        vocabulary and says which it used in `axesFrom`: a list of axes is not
+        a list of setup values, but the two lists are not interchangeable
+        either, and a caller reasoning in percent of range needs to know.
+
+        An axis whose latest verdict is `unresolvable` counts as **tested**:
+        the instrument was pointed at it. It is reported separately, because
+        "tried, and the instrument could not see it" is the state that wants
+        another instrument rather than another test.
+        """
+        from pitcrew.setup.vocabulary import SETUP_KEYS
+
+        record = self.get_range_record(car_name)
+        if record is not None and record.ranges:
+            axes = sorted(record.ranges)
+            axes_from = "range record"
+        else:
+            axes = sorted(k.key for k in SETUP_KEYS)
+            axes_from = "shipped vocabulary - no range record for this car"
+
+        never, blind, settled = [], [], {}
+        for axis in axes:
+            answer = self.verdict_for(car_name, axis, circuit_key)
+            if answer.verdict == "untested":
+                never.append(axis)
+            elif answer.verdict == "unresolvable":
+                blind.append(axis)
+            else:
+                settled[axis] = answer.verdict
+        return {
+            "car": car_name,
+            "circuit": circuit_key,
+            "axesFrom": axes_from,
+            "untested": never,
+            "unresolvable": blind,
+            "settled": settled,
+        }
+
     def append_revision(self, race_run_id: int, lap_num: int, reason: str,
                         plan: dict, *, accepted: bool = False) -> int:
         """Append to the immutable revision chain for a race run."""
@@ -2431,6 +2618,30 @@ class Store:
             item["accepted"] = bool(item["accepted"])
             out.append(item)
         return out
+
+
+def _measurement_row(row: sqlite3.Row, cls):
+    return cls(
+        id=row["id"], car_name=row["car_name"], circuit_key=row["circuit_key"],
+        config_ref=row["config_ref"], config_label=row["config_label"],
+        scope=row["scope"], zone=row["zone"], metric=row["metric"],
+        value=row["value"], unit=row["unit"], n=row["n"],
+        n_basis=row["n_basis"], noise_floor=row["noise_floor"],
+        floor_method=row["floor_method"], source=row["source"],
+        tool=row["tool"],
+        session_ids=tuple(json.loads(row["session_ids"] or "[]")),
+        game_version=row["game_version"], measured_on=row["measured_on"],
+        note=row["note"])
+
+
+def _verdict_row(row: sqlite3.Row, cls):
+    return cls(
+        id=row["id"], car_name=row["car_name"], circuit_key=row["circuit_key"],
+        axis=row["axis"], direction=row["direction"], verdict=row["verdict"],
+        instrument=row["instrument"], instrument_floor=row["instrument_floor"],
+        measurement_ids=tuple(json.loads(row["measurement_ids"] or "[]")),
+        decided_on=row["decided_on"], game_version=row["game_version"],
+        why=row["why"], recorded_at=row["recorded_at"])
 
 
 def _event_row(row: sqlite3.Row) -> dict:

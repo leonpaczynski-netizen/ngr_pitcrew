@@ -116,6 +116,18 @@ Versions, and what upgrading means here:
   `race_revisions` for the verdict on each call.  The table is new, so no
   migration function; the columns are additive.
 
+* **v18** adds `measurement` and `verdict`: the numbers the race engineer
+  derives off the frames, and what an axis is believed to do on the strength
+  of them.  **Two brand-new tables and nothing else** - like v6, v12 and v16
+  there is deliberately no migration function, and the version moves only so
+  the guard in `Store._init_schema` still refuses a file this build predates.
+
+  Neither table holds a setup value; see the block above them for why, and
+  for the two wrong calls on 8 Sep 2026 that they exist to prevent.  **A
+  column added to either of them later needs an `ADDED_COLUMNS` entry as well
+  as the DDL line** - they are ordinary tables from the next open onward, and
+  `CREATE TABLE IF NOT EXISTS` will not touch them again.
+
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
 two columns and back-fills four — so `MIGRATIONS` below exists, and anything
@@ -127,7 +139,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -980,6 +992,128 @@ CREATE TABLE IF NOT EXISTS series_teammates (
     driver      TEXT NOT NULL,          -- drivers.name
     updated_at  TEXT NOT NULL
 );
+-- ------------------------------------------------------------------ v18
+--
+-- **What has been measured, and what an axis is believed to do.** Two
+-- tables, and the second one exists mostly so that *"nobody has ever tried
+-- this"* has somewhere to be true.
+--
+-- The engineer derives numbers off `lap_frames` every session - a rotation
+-- index at a corner exit, an opposite-lock rate, a rake-against-fuel slope -
+-- writes them into prose, and derives them again next time. Two wrong calls
+-- in one day on 8 Sep 2026 came out of that:
+--
+-- 1. **Ride height had never been A/B'd on any car in the programme** and
+--    nobody knew, because there was nowhere that fact could live. `untested`
+--    is not a gap in this table; it is the answer it is built to give.
+-- 2. **`lsd_a` was recorded as "refuted as an exit lever"** on the strength
+--    of rear wheel-speed split. The split then sat at a median of 0.0000
+--    through a six-click `lsd_a` change while an on-power rotation index
+--    moved to twice its own noise floor. A channel that cannot see the change
+--    never refuted the lever - and the record could not say which channel had
+--    been used. So a verdict here names its instrument and that instrument's
+--    floor, or it is refused.
+--
+-- ⛔ **Neither table holds a setup value.** `brain/car-state/<car>-<circuit>
+-- .md` is the only place one may be written (CLAUDE.md 1a), and a copy here
+-- would be the second copy that was removed on 5 Sep. A measurement points at
+-- the configuration it was taken under by REFERENCE - `config_ref`, a pointer
+-- into that file - and says nothing about what was in the car. To find out
+-- what differs between two configs, read the file the pointer names.
+
+CREATE TABLE IF NOT EXISTS measurement (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    car_name     TEXT    NOT NULL,
+    -- NULL means **not specific to a circuit** - a property of the car
+    -- itself - not "circuit unknown". Everything derived off frames has a
+    -- circuit; write one.
+    circuit_key  TEXT,
+    -- **A pointer, never a value.** Free text naming the configuration this
+    -- was taken under, in whatever vocabulary the car-state file uses:
+    -- `huracan-daytona#s145`, `rev-b`, a hash. Two rows with the same
+    -- `config_ref` were taken on the same car; two with different ones were
+    -- not. What actually differs is in the file, not here.
+    config_ref   TEXT,
+    -- The short tag the analysis used for it - "A", "B", "C" - so a table
+    -- written up in prose can be joined back to these rows.
+    config_label TEXT,
+    -- What the number is about: 'corner' | 'lap' | 'stint' | 'session' |
+    -- 'car'. `zone` names which corner or segment, and is NULL for anything
+    -- that is not about one - never the empty string, which reads as a zone.
+    scope        TEXT    NOT NULL,
+    zone         TEXT,
+    metric       TEXT    NOT NULL,      -- 'on_power_rotation_index'
+    value        REAL    NOT NULL,      -- a row IS a number; see note below
+    unit         TEXT    NOT NULL,      -- 'ratio', 'mm/L', 'fraction-of-laps'
+    -- Rule 4: every aggregate carries its sample count, and `n_basis` says
+    -- what n counts, because "n=15" of laps and of braking events are not
+    -- the same claim. NULL where the count was not recorded - which the
+    -- readers flag rather than hide.
+    n            INTEGER,
+    n_basis      TEXT,
+    -- ⛔ **NULL means the floor is NOT ESTABLISHED. It is never 0.0.** A
+    -- floor of zero says every difference is resolvable, which is the
+    -- `max(x, 0.0)` defect (rule 9) wearing a different hat. `Store
+    -- .record_measurement` refuses a literal 0.0 and names this line.
+    noise_floor  REAL,
+    floor_method TEXT,                  -- how the floor was obtained
+    -- MEASURED | DERIVED | DOCTRINE | ASSUMED | DRIVER REPORT. Rule 5:
+    -- nothing derived is presented as measured.
+    source       TEXT    NOT NULL,
+    tool         TEXT,                  -- the script or function behind it
+    session_ids  TEXT,                  -- JSON array of sessions.id
+    game_version TEXT,
+    measured_on  TEXT,                  -- the date the laps were run
+    note         TEXT,
+    recorded_at  TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_measurement_lookup
+    ON measurement(car_name, circuit_key, metric);
+CREATE INDEX IF NOT EXISTS idx_measurement_metric ON measurement(metric);
+
+-- **What an axis is believed to do here, and what said so.**
+--
+-- Append-only, newest row wins. A verdict is retired by writing a better
+-- one, never by editing: the 1 Sep `lsd_a` refutation had to be retired on
+-- 8 Sep and the reason it was wrong - the instrument could not see the
+-- change - is itself a row worth keeping.
+--
+-- **A confirmed or refuted verdict names a direction.** "lsd_a refuted" only
+-- ever tested RAISING it, and lowering it turned out to be resolvable and to
+-- point the other way. A verdict with no direction is a claim about an axis
+-- made from a test of half of it.
+CREATE TABLE IF NOT EXISTS verdict (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    car_name      TEXT    NOT NULL,
+    circuit_key   TEXT,                 -- NULL: not circuit-specific
+    axis          TEXT    NOT NULL,     -- a slider key: 'lsd_a', 'rh_r'
+    -- 'up' | 'down' | 'both'. NULL only where nothing was tested, which is
+    -- what an `untested` row is.
+    direction     TEXT,
+    -- 'confirmed' | 'refuted' | 'untested' | 'unresolvable'.
+    --
+    -- `untested` is the DEFAULT answer for an axis with no rows and does not
+    -- need writing down; a written one is "we went looking and there is
+    -- nothing", which is worth saying once.
+    --
+    -- `unresolvable` is the 8 Sep finding: the axis moved, the instrument
+    -- did not, and the difference was inside its floor. It is not a refusal
+    -- of the lever - it is a refusal of the instrument.
+    verdict       TEXT    NOT NULL,
+    -- The metric that produced it, matching `measurement.metric`, and that
+    -- metric's own floor. Both required for anything but `untested`.
+    instrument    TEXT,
+    instrument_floor REAL,
+    measurement_ids  TEXT,              -- JSON array of measurement.id
+    decided_on    TEXT,
+    game_version  TEXT,
+    why           TEXT    NOT NULL,     -- in words, and it is not optional
+    recorded_at   TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_verdict_axis
+    ON verdict(car_name, circuit_key, axis, id DESC);
 """
 
 # Columns added to tables that already existed in an earlier version.
