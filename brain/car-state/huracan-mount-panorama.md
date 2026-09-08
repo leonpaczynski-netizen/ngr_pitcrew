@@ -15,10 +15,63 @@ repeated here.
 
 ---
 
-## Rank zero — nothing here is `SCREEN` yet
+## Rank zero — ✅ `SCREEN` CONFIRMED, 8 Sep 2026
 
-**Issued 8 Sep 2026, before a single lap has been driven at this circuit.** Every row below
-is `ISSUED`. The sheet does not become fact until a settings-screen screenshot comes back.
+**Settings-screen screenshot received the same day it was issued.** All 14 suspension,
+aero and differential values match the issued sheet exactly, and the gearbox is the only
+row still unverified.
+
+| | screen reads | |
+|---|---|---|
+| body height | 64 / 70 | ✅ |
+| anti-roll bar | 5 / 6 | ✅ |
+| damping compression | 20 / 20 | ✅ |
+| damping expansion | 50 / 44 | ✅ |
+| natural frequency | 3.70 / 3.90 | ✅ |
+| negative camber | 2.0 / 1.2 | ✅ |
+| toe | 0.00 / 0.12 | ✅ |
+| diff initial / accel / braking | 6 / 18 / 35 (rear only — MR, front column reads 0) | ✅ |
+| downforce | 410 / 635 | ✅ |
+| ECU output | 94 | ✅ as asked |
+| ballast / position | 55 / −29 | ✅ |
+| power restrictor | 99 | ✅ |
+| top speed | 300 | ✅ |
+| compound | RS / RS | ✅ |
+| torque distribution | 0 : 100, no torque vectoring | — MR, as expected |
+
+**Weight is exactly on the limit: 1,275 → 1,285 kg. PP 752.54 → 747.32.**
+
+### ⚠️ Power landed at 536 BHP against a 540 limit — 4 bhp given away
+
+`SCREEN`, 8 Sep. Not a mistake, a granularity problem. The two screen readings give
+**6.0 bhp per ECU point exactly** (96 → 548, 94 → 536), so:
+
+| ECU / restrictor | bhp | |
+|---|---|---|
+| 94 / 99 | **536.0** `SCREEN` | legal, 4 under |
+| 95 / 99 | 542.0 `DERIVED` | **over the limit** |
+| 94 / 100 | ~541.4 `DERIVED` | **over the limit** |
+| 95 / 98 | ~536.5 `DERIVED` | legal, no better |
+
+⇒ **536 may be the closest this car gets to 540 from below**, and the derived rows are
+arithmetic off two screen readings, not measurements. **Check 94/100 and 95/98 on the screen
+and keep whichever reads highest at or under 540.** If none beats 536, 536 is the answer and
+the 4 bhp is unreachable.
+
+### ⚠️ The ballast moved the weight balance forward — noted, NOT changed
+
+**43:57 → 44:56** `SCREEN`. The +10 kg went in at position −29, which is forward.
+**Mid-corner on this car is FRONT-limited** (`AXIS-REGISTER`: front slips about twice the
+rear in every setup tested), so adding front weight is arguably the wrong direction —
+but **ballast position has never been tested on this car**, the move is 1 % of the balance,
+and rearward weight would cost traction at Forrest's Elbow, the highest-value exit here.
+**Held at −29. Logged as a candidate test, not a change.**
+
+### The gearbox is the one row the screen cannot confirm
+
+The ratios sit behind *Manual Adjustment* and are not in the shot. **`FEED` is the only
+ground truth for the box** — verify with `analysis/gearing.fitted_ratios` off the first
+Bathurst lap, against 3.022 / 2.450 / 1.972 / 1.598 / 1.285 / 1.030.
 
 ---
 
