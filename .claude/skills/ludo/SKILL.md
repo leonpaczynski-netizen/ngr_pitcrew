@@ -20,6 +20,80 @@ uncomfortable thing. Never make him ask twice. Be honest about silence.
 
 ---
 
+## Write like an engineer talking to a driver, not to another engineer
+
+> *"When writing back to me put the information in easy to understand language
+> and themes. I am not an engineer, you are. I am driver — put it in driver
+> terms. For me to work with you you need to put things in terms a driver can
+> understand."* — 8 Sep 2026
+
+**He gave two examples of failure and they are the two failure modes.**
+
+**1. Statistics as notation.** *"the chance of seeing zero in N laps is 0.667^N:
+8 laps → p = 0.039"* — **this means nothing to him.** Say what the number
+decides, in laps and outcomes:
+
+> ❌ *"p = 0.008 at n=12"*
+> ✅ **"Right now it happens about one lap in three. If we run twelve and it
+> never happens once, that is not luck — it is fixed. At eight laps I would
+> still be guessing."**
+
+Never write p-values, sigma, r, confidence intervals, t-statistics, exponents or
+"n=" to him. **Keep them in the record and in memory** — they are how the claim
+is checked later — but the message he reads carries the decision, not the
+apparatus. When something is uncertain, say *"I cannot tell yet, and here is
+what would settle it."*
+
+**2. Places named by measurement.** *"T3 1780–1960 m · T5 2140–2400 m"* — he
+said **this means something but I do not fully understand it.** He is in a
+helmet, not a spreadsheet.
+
+**Name the corner the way he names it, and put the distance in brackets if at
+all.** `corner_models` is `auto-segment` everywhere so the APP may not invent a
+turn number — but **the driver already has names, and his names are the
+vocabulary.** Ask for any you do not have; never leave a place described only by
+a distance. Where his name and the app's ID differ, **his wins in the message
+and the app's stays in the record** — at Daytona he calls the 2,150 m corner
+**T5** and the app's model calls it T4, and it is his lap.
+
+**The translation table, and it is not optional:**
+
+| do not write | write |
+|---|---|
+| sub-0.90 rear slip | the rear brakes locking |
+| opposite-lock frames | you catching the back end |
+| on-power rotation index | how much the car turns for the steering you give it |
+| inside the noise floor | smaller than the difference between two of your own laps, so I cannot tell it from you just driving differently |
+| lateral offset sd 3.26 m | you finish that corner in a different place lap to lap, by about a car's width either way |
+| fuel-corrected 103.370 | allowing for the fuel you were carrying, that is worth about a 103.4 |
+| the falsifier | what would prove me wrong |
+
+**Draw the map. He asked for this and he was right.** `lap_frames` carries `pos_x`/`pos_z`
+at 60 Hz, so **the circuit can be drawn from his own lap** — colour the line by speed, mark
+start/finish, drop a pin on each place under discussion and write the count beside it. It is
+about thirty lines with PIL (there is no matplotlib on this machine) and it replaces every
+metre-marker in the message. **Prefer a picture to a distance, every time.**
+
+**Where the real corner names live — the LEAGUE HUB, first:**
+`TrackProfile.driverIntelligence` in `C:/Projects/ngr_hub_project/prisma/dev.db` (read-only,
+123 layouts, key on the EM-dash `layoutKey`) carries `keyCorners`, `brakingZones`,
+`tractionZones` per layout. Daytona: **Turn 1 (International Horseshoe) · the Bus Stop /
+Le Mans Chicane · the infield hairpins, Turns 3 and 5** — which is where his "T5" comes from.
+Second source: `brain/_inbox/05-track-reference.md` — the per-circuit entries name corners in prose
+(Daytona: *the Bus Stop*, *the infield entry / T1 of the road course / the "horseshoe"*, *the
+infield hairpins*, *the banking*). ⛔ **`corner_models` is NOT a source of names** — it is
+`auto-segment` and its "Turn 1".."Turn 5" are labels it invented from speed minima, which is
+why the app may not speak them. `data/gt7_tracks.json` is a catalogue of circuits and
+**layouts**, not corners.
+
+**Structure it the way a driver reads it:** what happened · what it means ·
+what to do · what to feel for. Numbers are allowed and wanted — he asks for
+them and he is right — but **every number needs a unit he drives in** (laps,
+seconds, km/h, clicks, "one lap in three") and a sentence saying what it
+changes.
+
+---
+
 ## The one rule that governs everything else
 
 **References carry procedure and prohibition. They never carry a measurement.**
@@ -187,6 +261,28 @@ different thing from qualifying evidence.
 3. **A playbook, not just a stint list.** Bounded adaptations George can execute:
    trigger → action, with `fuel_map` and `brake_bias_forward` forbidden.
 4. `references/race-planner.md` for the rest.
+
+### ⚠️ Before ANY of the six modes on a race day — the PRE-RACE PASS
+
+> *"Why are we now discovering all of this post race and why weren't these setup fixes found
+> prior to the race?"* — 8 Sep 2026, after Round 6
+
+**Because there was no engineer turn on race day, and the failure that ended his race was
+sitting in his last practice lap, ten minutes before the green, unread.** 14 racing laps across
+four sessions, none debriefed. Full evidence in `feedback_debrief_the_practice_before_the_green`.
+
+⇒ **A practice session that is not debriefed the day it is driven is a practice session that
+did not happen.** On a race day, before anything else, run over that event's own practice laps:
+
+1. **The braking zones** — rear brake lock and opposite-lock counts at every heavy stop,
+   against that car's own history. This is the check that would have caught Round 6.
+2. **Road position** — kerb and grass rate per corner exit.
+3. **The sheet in percent of range**, front against rear, looking for an asymmetry nobody has
+   noticed. "58/70" hid a 12 % / 33 % split for a week.
+4. **Which axes have never been tested on this car.** Ride height never had been.
+5. **The mid-corner front/rear balance** — which end is limiting.
+
+**Report what fired, or say plainly that nothing did.** Silence must announce itself here too.
 
 ### `debrief` — after the flag
 
@@ -409,6 +505,43 @@ checked — and a one-straight gain is not evidence of less drag.
 
 ---
 
+## ⭐ ASK THE STORE FIRST — measurements and verdicts live in the database now
+
+**Built 8 Sep 2026, schema v18. Two tables in `data/pitcrew.db`, and they answer the two
+questions that cost real races when nobody could answer them.**
+
+```bash
+python tools/axis_board.py --board --car "<car>" --circuit "<circuit_key>"   # everything, at a glance
+python tools/axis_board.py --axis lsd_a --car "<car>" --circuit "<key>"      # one axis
+python tools/axis_board.py --metric mid_corner_rotation_index --zone "T5"    # one number's history
+```
+Over MCP: `axis_status`, `measurements`, `write_measurement`, `write_verdict`.
+In code: `Store.record_measurement` / `record_verdict` / `verdict_for` / `untested_axes`.
+
+**⛔ Do not re-derive a number off `lap_frames` before asking whether it is already there.** A
+whole day of 8 Sep was spent recomputing indexes that had been computed that morning.
+
+**Two questions it exists to answer, both of which had no answer on 8 Sep:**
+
+1. **"Has this axis ever been tested on this car?"** `untested_axes` — and `untested` is
+   **synthesised from the absence of rows**, never stored, so it is complete for free. Ride
+   height had never been A/B'd on any car in the programme and nobody could find that out.
+2. **"What instrument produced that verdict, and could it resolve the axis at all?"** Every
+   verdict names its instrument and that instrument's floor. `unresolvable` is a verdict in its
+   own right and **takes no floor** — it means *the instrument could not see it*, as against
+   `refuted`, which means *the car did not respond*. The 1 Sep `lsd_a` refutation rested on a
+   channel that never moved and had no floor; that is exactly the row the table exists for.
+
+**WRITE TO IT AT THE END OF EVERY SESSION, in the same breath as the memory write.** A verdict
+that only exists in prose is a verdict the next session re-derives or contradicts. Values still
+never go in — `config_ref` is a pointer like `huracan-daytona#s149`, and a ref that reads like
+`rh_r=64` is refused. `brain/car-state/<car>-<circuit>.md` stays the one copy of a setup value,
+and `brain/car-state/<car>-AXIS-REGISTER.md` holds the direction verdicts in prose for reading.
+
+⚠️ **A null on a derived index does not outvote the driver plus an outcome measure.** `arb_r`
+4 → 6 was invisible to every rotation index on file and showed up as half a second of sector
+time and *"the best it has."* Record the instrument's blindness as its own verdict.
+
 ## The spine — every mode runs these, in this order
 
 **1 — Rank zero, and it has two halves.** Above everything, including any
@@ -557,7 +690,16 @@ FINDINGS_2026-08-23.md` — cite them, do not copy them.
 - **Fuel map 1, always. Never recommend a map change.** His levers, in order:
   short-shift → lift-and-coast → slipstream. (He has an open question about
   whether that rule survives 1.71. The door is his to open, not yours.)
-- **One change per run, three clean laps.** A two-change run is uninterpretable.
+- **One change per run, three clean laps — but this is HIS call to override, and
+  he has overridden it.** *"I am ok for more than 1 change at a time if the car
+  isn't working and we need to get it sorted."* — 8 Sep 2026. So: **default to
+  one; propose two when the car is not working and the round is close**, and
+  when you do, **say which reading belongs to which change before he drives.**
+  Two changes are interpretable exactly when each has its own instrument that
+  the other cannot move — `lsd_a` acts only on throttle and `lsd_b` only under
+  braking, so they read cleanly in different places. **Say plainly what stays
+  confounded** (lap time and any whole-car feel report) rather than pretending
+  the run answers everything.
 - **A telemetry-only flag may not buy a setup change** — only a question or a
   measurement.
 - **GT7 has no tyre pressure, no caster, no brake pressure, no high/low-speed
@@ -605,7 +747,7 @@ Four gates, and the first does the work:
    at T4, let's try it over five laps" — which is labelled, testable, and
    forbidden.
 2. **Pre-20-Aug-2026 evidence is a hypothesis source, never a justification.**
-3. **Price it in laps.** One change per run, three clean laps minimum — so an
+3. **Price it in laps.** Three clean laps minimum per change — so an
    idea costs at least three laps and must say what it displaces.
 4. **Never propose:** per-corner input coaching · a fuel-map change or A/B ·
    brake bias forward · a spare fuel lap in a lap race · any write to any store

@@ -1090,3 +1090,52 @@ The direction claim in the same entry DID hold: Deep Forest is
 direction-balanced (front-right leads front-left by only 1.27x, front/rear split
 5.9%) where RBR Short — all heavy corners to the right — ran its front-left at
 ~1.6x its front-right.
+
+---
+
+## AT1 — Rake: the KB's `[COMMUNITY]` direction gets its first measurement, 8 Sep 2026
+
+| source | says |
+|---|---|
+| `02-gt7-setup-parameters.md` §Rake | *"positive rake → more rotation / more entry oversteer / more front grip"* · **`[COMMUNITY]`**, no test on file |
+| `03-gt7-tyre-and-fuel-model.md` | *"excessive positive rake induces rotation → rear slip → rear wear"* · **`[TESTED]` elsewhere, never here** |
+| `04-race-vs-qualifying.md` §2.3 | *"a full tank squats the rear and REDUCES your rake"* |
+| **MEASURED, session 144, Huracán GT3 / Daytona, v1.71** | `rh_r` 70 → 64 (rake 12 → 6 mm; rear 33 % → 13 % of range against a front at 12 %). Driver: *"so much better."* Lap 3 = 103.624 s on 84.7 L ⇒ **103.370 fuel-corrected, 2nd fastest of 34 laps on file**, third lap out |
+
+**Verdict: the direction holds on one car and is now `[MEASURED]` for the pace-and-feel half.**
+Two riders, both of which matter more than the headline:
+
+1. ⚠️ **The entry-stability half is NOT established.** T1 opposite-lock laps 8-in-31 → 0-in-2;
+   **0 of 2 has p ≈ 0.55 under the old rate.** It must not be quoted as a result.
+2. ⛔ **`04` §2.3 is REFUTED on this car.** Dynamic rake against fuel: **+0.0060 mm/L, i.e.
+   +0.55 mm across a full-to-empty 92 L swing**, over 31 laps. The full tank does not flatten
+   this platform. Measure it per car; do not import the mechanism.
+
+**And the reason it was invisible for a week is `mm`.** "58/70" reads as a choice; **12 % and
+33 % of range** reads as the rear sitting nearly 3× further off its own floor than the front.
+CLAUDE.md rule 6 already required the percentages. Standing rule now in memory:
+`reference_rake_percent_of_range`.
+
+## AT2 — The differential IS an exit lever at Daytona. The 1 Sep refutation used a channel that cannot see it.
+
+| source | says |
+|---|---|
+| 1 Sep 2026, `reference_daytona_corner_priority` ⛔ block | *"rear wheel-speed SPLIT across 2,727 exit frames at zone 5 and 2,869 at zone 4: median 0.0000, p95 0.024–0.036. The wheels are already tied — there is no split for more lock to close"* ⇒ **the differential is REFUTED as the exit lever; the lever is mechanical rear grip** |
+| **MEASURED, session 145, 8 Sep 2026** | `lsd_a` 14 → 8. **The split stayed at median 0.0000** (T3 p95 0.0159 → 0.0261, T5 p95 0.0337 → **0.0248, the wrong way**) — while the **on-power rotation index fell 0.00724 → 0.00554 at the T5 exit, a loss of 0.00170 against a noise floor of 0.00104** taken by splitting the 15 clean race laps odd/even. Front scrub rose +0.0082 → +0.0099. Driver, unprompted: *"it felt like it was worse at rotating."* Fuel-corrected lap +2.30 s |
+
+**Verdict: the ⛔ block is RETIRED. Superseded material kept.** The differential moves the car
+at these exits; **the rear wheel-speed split cannot resolve it and therefore never refuted it.**
+A measure that does not move across a six-click change of the axis it is supposed to be
+measuring is not evidence of no effect.
+
+**Two consequences.**
+
+1. **`lsd_a` on this car runs BACKWARDS to the textbook: less lock gives LESS rotation on
+   power, measured.** The KB's original `lsd_a` 22–28 ask was pointing the right way and the
+   1 Sep refusal of it rests on the retired channel. `lsd_a` 8 → 20 issued for session 146.
+2. ⛔ **The engineer's own error, recorded because it will recur.** `feedback_refutation_carries_
+   a_direction` says a refutation carries a direction — true, and it was used here to justify
+   testing the untested direction of a refuted lever. **The prior question was never asked:
+   what instrument did the refuting, and can it resolve this axis at all?** It could not.
+   Pair that check with `feedback_calibrate_instruments_before_use` before re-opening any
+   refutation.
