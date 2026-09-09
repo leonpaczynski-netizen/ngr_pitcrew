@@ -1161,3 +1161,132 @@ be, and that is worth knowing.
 gearbox shakedown, and the wear number does not care about attribution. **Issue
 the new shift table the moment he confirms the box is in:** 8,500 in gears 1-4,
 **8,000 in 5th**, 7,400 fuel-saving in 1-5, 6th silent.
+
+---
+
+# 9 Sep 2026 — the week's rake and suspension work, applied to this car. **NO CHANGE ISSUED.**
+
+`ludo refine`. No new laps. Everything below is re-derived from sessions
+128–132 (5 Sep, 40 laps, 35 non-out, all RH, GT7 v1.71) and written to the
+measurement store — ids 79–87, verdicts 10–14. **Rank zero was not re-opened:**
+the 5 Sep SCREEN check stands and nothing has been asked of the car since.
+
+## 1. The Daytona rake finding does NOT fire here — and that is the answer to the question asked
+
+`reference_rake_percent_of_range` says read both ends as **percent of their own
+range**, because "12 mm" at Daytona was really **12 % front against 33 % rear**.
+
+| | slider | range | % of range |
+|---|---|---|---|
+| `rh_f` | 60 mm | [55, 80] | **20.0 %** |
+| `rh_r` | 68 mm | [60, 90] | **26.7 %** |
+
+**6.7 pp apart, against Daytona's 21 pp.** The two ends sit at nearly the same
+place in their own travel. `+8 mm` of rake is real but **+5 mm of it is the
+floor difference between the two ranges** — only +3 mm was ever a choice.
+⇒ **No rake correction is indicated. [MEASURED]**
+
+## 2. The Bathurst floor check — nothing is spent
+
+Every suspension slider, in percent of its own range: `rh_f` 20.0 · `rh_r` 26.7 ·
+`nf_f` 20.0 · `nf_r` 30.0 · `dc_f` **15.0** · `dc_r` 25.0 · `de_f` 26.7 ·
+`de_r` 26.7. **All eight in the bottom third, none on a floor.** `dc_f` is the
+closest at three clicks — worth knowing, not yet a constraint. Unlike the
+Huracán at Bathurst, this circuit's headline levers are all still available.
+
+## 3. Where the platform actually is — mapped, not asserted
+
+Body height, 35 clean laps: **median 52.1 mm**, and two places where it drops.
+
+| Where | Distance | Speed | Lowest (median across laps) | What the car is doing |
+|---|---|---|---|---|
+| **The climb off the line** | 100–260 m | 260 km/h | **18.8 mm** | dead straight, \|lat g\| < 0.5, all four tarmac — **surface bounce, not load** |
+| **The long right onto the straight** | 4,490–4,700 m | 220 km/h | **24.6 mm** | full throttle, sustained 1.2–1.9 lat g, kerb frames at 4,570–4,586 |
+
+⚠️ **This corrects the Rev A prediction check in one respect.** That reading called
+both zones *"straight-line aero compression … not a kerb strike, not cornering
+bottoming"*. The 100–260 m end is exactly that. **The 4,490–4,700 m end is not** —
+it is a loaded corner with kerb contact, and the lowest single reading on file
+(6.7 mm) is there. The *conclusion* is unchanged — the driver reported no
+harshness and the car is not scraping — but the second zone was misdescribed.
+
+## 4. [MEASURED] The nose sinks ~3 mm through a run on this car — and the cause is CONFOUNDED
+
+Per-lap medians on the clean straight, front suspension channel against fuel:
+
+- **s128 alone (11 laps, one tyre set, 74 L → 9 L): +0.0337 mm/L, se 0.0061** —
+  5.5× its own error. s129 +0.0334, s130 +0.0467. Consistent across three runs.
+- Rear: **+0.0165 mm/L**. ⇒ **the front moves 1.7× the rear**, so the rake
+  *flattens* as the run goes on and comes back on a fresh full tank.
+
+⛔ **Fuel and tyre wear are perfectly collinear within a run and I cannot separate
+them.** `tyre_radius_m` is a constant 0.355 in the feed, so it is no help, and the
+between-session estimate (+0.0115 ± 0.0443, n=6) cannot distinguish +0.03 from
+zero. **What survives either way: the nose sits ~3 mm lower at the end of a stint
+than at the start.**
+
+⚠️ **Two doctrine lines fail against this.** `04-race-vs-qualifying.md` §2.3 says a
+full tank squats the **rear** and flattens the platform — on this car it is the
+**front** that moves, and 1.7× as much. And the Huracán read **+0.0060 mm/L**,
+so importing that "not present" result here would have been wrong by 5×.
+**Measure it per car. → RECONCILIATION.**
+
+## 5. [MEASURED, weak] The aero programme moved the front platform and the springs never followed
+
+Fuel slope removed (fitted on s128 alone), session-median residual on the straight:
+
+```
+  s128  df_f 400   +0.20 mm       null control: the three df_f 400
+  s129  df_f 400   -0.46 mm       sessions spread 0.66 mm
+  s130  df_f 400   -0.04 mm
+  s131  df_f 420   +0.01 mm   <- twenty units of wing moved NOTHING
+  s132  df_f 440   +1.10 mm   <- 1.7x the null spread, n=6 laps
+```
+
+In **the long right onto the straight**: **+1.42 mm, 2.2× that zone's own
+lap-to-lap floor (0.633 mm)**, rear unmoved (0.0×). So Rev C→E's 40 units of
+front wing (50 % → 90 % of range) put ~1.4 mm into the front spring rather than
+the tyre, in the one corner that loads it longest.
+
+⚠️ **Held to "suggestive", not settled**, for three reasons: 6 laps at 440; 1.10
+against a 0.66 control spread; and 420 → 440 doing all of it while 400 → 420 did
+none, which is either a non-linearity or noise. **It does NOT explain the S3 open
+question** — the other two fast corners in S3 moved 1.0× and 0.2× of their own
+floors, i.e. not at all. **One corner, not the sector.**
+
+## 6. Why no change is issued
+
+- **There is no symptom.** Rev E closed on *"much more balanced"*. A
+  telemetry-only flag may not buy a setup change.
+- **A front spring is a platform move**, and one-change-at-a-time will misjudge
+  it. `reference_setup_platform_before_sliders`.
+- **The wear stint outranks it.** It has failed to sample three times, and it
+  decides one stop against two. Nothing displaces it.
+
+## 7. What the next run buys for free
+
+The 12-lap wear stint from a full tank **is** the fuel/wear platform sweep, at
+double the lever arm of anything on file. No extra laps. Read it for §4 as well
+as for `w`.
+
+## 8. Pre-loaded, not issued
+
+**If** he reports the nose going light late in a stint, or understeer arriving in
+the fast corners as the fuel burns off, the answer is **`nf_f` 3.40 → 3.60 Hz
+(20 % → 30 % of range)** — the front spring, not ride height (standing refusal)
+and not more wing (440 of 450 is spent). **[ASSUMED]** until he reports.
+
+## 9. The store had nothing on this car — now it has nine rows and five verdicts
+
+`untested_axes` returned **everything** for this car+circuit before today.
+`rh_f`, `rh_r`, `nf_f`, `dc_f` are now written as **`untested`** so the absence
+is visible; `df_f` up is written **`confirmed`** on the driver's report with the
+platform side-effect attached.
+
+## Open predictions — check these at the next debrief
+
+| Prediction | Falsified if |
+|---|---|
+| The nose sinks ~3 mm from full tank to empty over the 12-lap stint | the front channel is flat across the stint, or moves < 1 mm |
+| That sink is fuel, not tyre wear, so it resets on the out-lap after the stop | the front stays low after fresh tyres and a full tank |
+| The car feels different late in a stint at the front, not the rear | he reports the change at the rear, or reports none |

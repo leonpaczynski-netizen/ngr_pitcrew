@@ -1139,3 +1139,61 @@ measuring is not evidence of no effect.
    what instrument did the refuting, and can it resolve this axis at all?** It could not.
    Pair that check with `feedback_calibrate_instruments_before_use` before re-opening any
    refutation.
+
+## AU1 — Fuel does NOT squat the rear on the Porsche RSR. It squats the front, and 1.7× as much. 9 Sep 2026
+
+**The records that disagree**
+
+- `brain/_inbox/04-race-vs-qualifying.md` §2.3: *a full tank squats the rear and
+  flattens the platform.* `[COMMUNITY]`, no per-car measurement behind it.
+- `reference_rake_percent_of_range` §4, measured on the **Huracán GT3 at
+  Daytona**: **+0.0060 mm/L ⇒ +0.55 mm across a 92 L swing. NOT PRESENT.**
+
+**What was measured, 9 Sep 2026, Porsche 911 RSR (991) '17 at Sardegna Road
+Track A, GT7 v1.71, sessions 128–132.** Per-lap median of the front and rear
+suspension-height channels on the clean main straight (≥250 km/h, full throttle,
+|lat g| < 0.5, all four wheels tarmac), regressed on fuel:
+
+```
+  front  +0.0337 mm/L   se 0.0061   n = 11 clean laps, session 128 alone
+  rear   +0.0165 mm/L   se 0.0040   n = 23 clean laps, s128/129/130 (df_f held at 400)
+```
+
+s129 gives +0.0334 and s130 +0.0467 independently. ⇒ **The front moves 1.7× the
+rear per litre, so the rake flattens on a full tank and returns as it burns off
+— about 3 mm at the nose across a stint.** The direction is the opposite of
+§2.3's, and the magnitude is ~5× the Huracán's.
+
+**⛔ The cause is confounded and must not be reported as fuel alone.** Fuel and
+tyre wear are perfectly collinear within a run. `tyre_radius_m` is a constant
+0.355 in the feed and cannot separate them; the between-session estimate is
++0.0115 ± 0.0443 on n=6, which distinguishes nothing. **What survives: the nose
+sits ~3 mm lower at the end of a stint than at the start, on this car.**
+
+**Resolution.** §2.3's line is `[COMMUNITY]` and stands as a mechanism, not as a
+per-car figure — it may not be quoted for any car without a measurement. The
+Huracán's "NOT PRESENT" is true of the Huracán and was never a fleet result.
+**Measure this per car; it is a two-minute regression off frames already on
+disk.** Rows: `measurement` 84, 85. Full working in
+`brain/car-state/rsr-sardegna-road-track-a.md` §4, 9 Sep 2026.
+
+## AU2 — The Rev A prediction check misdescribed one of the two low-platform zones. 9 Sep 2026
+
+`brain/car-state/rsr-sardegna-road-track-a.md`, session 128 prediction table,
+5 Sep 2026: body-height excursions at *"lap distance 100–200 m and 4,500–4,600 m,
+i.e. the two ends of the main straight … **Not a kerb strike, not cornering
+bottoming**"*, on a median lat g of 0.27 over the sub-25 mm frames.
+
+**Re-derived 9 Sep over all 35 clean laps, binned by distance:** the 100–260 m
+zone is exactly as described — 260 km/h, |lat g| < 0.5, four wheels tarmac,
+straight-line surface bounce. **The 4,490–4,700 m zone is not.** It carries
+sustained **1.2–1.9 lat g** at 210–230 km/h on full throttle, with kerb frames
+(`TCTT`/`TCTC`) at 4,570–4,586 m, and it holds the lowest single reading on file
+(**6.7 mm**). It is a loaded corner over kerbs, not a straight.
+
+**Resolution.** The 5 Sep *conclusion* is unaffected — no harshness was reported
+and nothing is scraping — but the second zone's description is superseded by
+§3 of the 9 Sep entry. The sub-25 mm frame filter is what hid it: selecting on
+the outcome and then averaging lat g over the survivors reports the character of
+whichever zone contributed most frames, not of each zone. **Bin by distance
+first, then describe each zone on its own.** Rows: `measurement` 82, 83.
