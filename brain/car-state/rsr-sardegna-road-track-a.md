@@ -1290,3 +1290,81 @@ platform side-effect attached.
 | The nose sinks ~3 mm from full tank to empty over the 12-lap stint | the front channel is flat across the stint, or moves < 1 mm |
 | That sink is fuel, not tyre wear, so it resets on the out-lap after the stop | the front stays low after fresh tyres and a full tank |
 | The car feels different late in a stint at the front, not the rear | he reports the change at the rear, or reports none |
+
+---
+
+# 9 Sep 2026, later — the driver closed §4's confound, and the wear claim on this file is wrong
+
+## 10. ✅ §4 RESOLVED. It is fuel, and the tank is in the nose
+
+> **[DRIVER REPORT], 9 Sep 2026, unprompted:** *"the reason the front gets higher
+> on low fuel is the tank for an MR is in the front not the back like an FR"*
+
+§4 above closed with *"the cause is confounded and I cannot separate fuel from
+tyre wear."* **That refusal was wrong and it was checkable in two minutes.**
+
+1. **GT7 never shrinks the tyre.** `tyre_radius_m` is a per-car constant on every
+   frame — Huracán **0.3525** across the whole 20-lap Daytona race (2.7 % → 39 %
+   worn, a pit stop, then 0 → 28 %), RSR **0.355** across 33 %. **Wear has no
+   channel through which it could move ride height.**
+2. **The sign is wrong for wear anyway.** Wear would put the car *lower* late in
+   a run; the measurement has it *rising*. And on a 46 : 54 car wear would take
+   the **rear** first — the opposite of the measured 1.7 : 1 front bias.
+
+⇒ **The finding stands and strengthens: front +0.0337 mm/L, rear +0.0165 mm/L,
+and the cause is FUEL.** The 911 carries its tank in the nose ahead of the
+driver, so burning it lifts the front. It is also why a mid-engined car reads
+46 : 54. `04-race-vs-qualifying.md` §2.3 is an FR statement and is end-for-end
+wrong on any 911. → **RECONCILIATION AU1a**, `reference_fuel_tank_position_moves_ride_height`.
+
+**The lesson, and it is the expensive half:** a confound needs a **mechanism with
+the right sign** and a **channel that can carry it**. Neither was checked before
+`unresolvable` was written. ⚠️ **`tyre_radius_m` is a chassis constant, not a
+wear proxy** — nothing may read wear off it.
+
+## 11. ⛔ "The wear gauge failed to sample three times" is WRONG, and it has been repeated at Rev C, D and E
+
+**Session 128 is correctly described — 15 laps, all null.** Sessions **130, 131
+and 132 all sampled**, `wear_source = 'hud-video'`, every lap after the out-lap.
+**13 laps of gauge data have been sitting on file since 5 September.**
+
+Fitted per wheel, Racing Hard, **at the race's own 8× multiplier** (no conversion,
+so no `[ASSUMED]` linearity step):
+
+```
+  FL 0.0394   FR 0.0458   RL 0.0488   RR 0.0528   per lap, mean of three runs
+  worst wheel REAR-RIGHT  ->  L = 0.85 / 0.0528 = 16.1 laps
+```
+
+against the standing figure of **0.05897–0.06034 ⇒ 14.1–14.4 laps**, which is
+pre-1.71 **and** from Monza and was flagged VOID TWICE when it was written.
+
+⚠️ **This does NOT retire the stint, for two stated reasons:**
+
+- **The gauge ticks in 36ths.** Over a 5-lap span that is **±0.0056/lap**, so the
+  honest band is **13.9 to 17.0 laps** — and it still straddles the **14.5** a
+  one-stop needs.
+- **All three runs sample only 8–39 % of tyre life.** CLAUDE.md §5.1: degradation
+  is **piecewise**. An early-life rate is a **lower bound** on the late one and
+  may never be projected through the knee.
+
+⇒ **What was missing was a stint 12 laps long, not a working gauge.** Correct the
+claim; keep the run. It is still the highest-value thing on the car.
+
+## 12. The worst wheel moved axle-side from Monza, and that is measured
+
+Monza's worst was the **rear-LEFT**. Here it is the **rear-RIGHT**, and the
+reason is the circuit: over 101,641 frames above 0.6 lat g across sessions
+128–132, **59.7 % of the loaded cornering is LEFT-hand turns**, and those lefts
+carry **1.5× the mean lateral load** of the rights (0.739 against 0.483). A
+left-hander loads the right-hand wheels. **Do not carry Monza's axle-side across.**
+
+Rows: `measurement` 88–92. → **RECONCILIATION AU2a**.
+
+## Open predictions — amended
+
+| Prediction | Falsified if |
+|---|---|
+| The nose rises ~3 mm as the tank empties over the 12-lap stint, and resets on the out-lap after a refuel | the front channel is flat across the stint, or does not reset after the stop |
+| Rear-right stays the worst wheel over a full-length stint | any other wheel leads at 12 laps |
+| The full-stint rate is **at or above** 0.0528/lap — the short runs are a lower bound | the 12-lap rate comes in below 0.0528, which would mean the early runs over-read |

@@ -1197,3 +1197,84 @@ and nothing is scraping — but the second zone's description is superseded by
 the outcome and then averaging lat g over the survivors reports the character of
 whichever zone contributed most frames, not of each zone. **Bin by distance
 first, then describe each zone on its own.** Rows: `measurement` 82, 83.
+
+## AU1a — AMENDMENT to AU1: the confound is dead. It is fuel, and the driver said why. 9 Sep 2026
+
+**AU1, written the same day, closed with:** *"⛔ The cause is confounded and must
+not be reported as fuel alone. Fuel and tyre wear are perfectly collinear within
+a run … What survives: the nose sits ~3 mm lower at the end of a stint."*
+**That refusal was wrong, and it was wrong in a checkable way.**
+
+**[DRIVER REPORT], 9 Sep 2026, unprompted:**
+
+> *"the reason the front gets higher on low fuel is the tank for an MR is in the
+> front not the back like an FR"*
+
+**Two independent confirmations, both off data already on disk:**
+
+1. **GT7 does not shrink the tyre with wear.** `tyre_radius_m` is a **per-car,
+   per-compound constant on every frame**: Huracán GT3 **0.3525** across the
+   entire 20-lap Daytona race of 4 Sep — tyres 2.7 % → 39 % worn, a pit stop,
+   then 0 → 28 % again — and RSR **0.355** across 33 % of wear at Sardegna.
+   **Wear has no channel through which it could move ride height at all.**
+2. **The sign is wrong for wear even in principle.** Wear would lower the car
+   late in a run; the measurement has the car **rising** late in a run. And on a
+   confirmed 46 : 54 rearward car, wear would take the **rear** first, not the
+   front — the opposite of the 1.7 : 1 front bias measured.
+
+**Resolution.** AU1's finding stands and strengthens: **front +0.0337 mm/L,
+rear +0.0165 mm/L, and the cause is fuel**, because the 911's tank sits in the
+nose ahead of the driver rather than behind the axle line as on a front-engined
+car. `04-race-vs-qualifying.md` §2.3's *"a full tank squats the rear"* is an
+FR statement and is **end-for-end wrong on any 911**; it may not be quoted
+without asking where that car's tank is. It also explains the confirmed 46 : 54
+balance on a mid-engined car.
+
+**And the process lesson, which is the more expensive half.** I wrote
+`unresolvable` where two checks were available in two minutes: *does the rival
+cause have a channel*, and *does it have the right sign*. **A confound needs a
+mechanism with the right sign and a channel that can carry it — otherwise it is
+not a confound, it is a possibility that has not been looked at.** `unresolvable`
+is a real verdict and must not become a place to put unchecked work. See
+`feedback_never_assume_investigate_or_ask`.
+
+⚠️ **Corollary, and it costs nothing to state:** `tyre_radius_m` is a chassis
+constant, **not a wear proxy.** Nothing anywhere may read wear off it.
+
+## AU2a — The Sardegna wear gauge DID sample. "Failed three times" is wrong. 9 Sep 2026
+
+**The record says**, in `brain/car-state/rsr-sardegna-road-track-a.md` at Rev C,
+Rev D and Rev E: *"the 12-lap wear stint … Failed to sample on three sessions
+now"*, and the Rev A prediction table: *"`wear_fl` is null on all 15 laps — the
+gauge sampled nothing."*
+
+**Session 128 is correctly described. Sessions 130, 131 and 132 are not** — all
+three carry `wear_source = 'hud-video'` readings on every lap after the out-lap:
+13 laps of gauge data in total. Fitted per wheel, Racing Hard, at the race's
+**8× multiplier**:
+
+```
+  FL 0.0394   FR 0.0458   RL 0.0488   RR 0.0528  per lap, mean of three runs
+  worst wheel REAR-RIGHT  ->  L = 0.85 / 0.0528 = 16.1 laps
+```
+
+against the standing figure on file of **0.05897–0.06034/lap ⇒ 14.1–14.4 laps**,
+which is **pre-1.71 and from Monza** and was flagged VOID TWICE when written.
+
+**Resolution.** The one-stop case is better supported than the file states — but
+this is **not** a settled number and does not retire the stint. The HUD gauge
+ticks in **36ths**, so a 5-lap span carries **±0.0056/lap**, putting the true
+figure between **13.9 and 17.0 laps** — a band that still straddles the 14.5 a
+one-stop needs. And all three runs sample only the first 8–39 % of tyre life;
+CLAUDE.md §5.1 says degradation is **piecewise**, so an early-life rate is a
+lower bound on the late one, never a projection through it.
+
+⇒ **What was actually missing was a stint 12 laps long, not a working gauge.**
+Correct the claim, keep the run, and stop describing a 3-to-6-lap run as a failed
+12-lap stint. Rows: `measurement` 88–91.
+
+**Also corrected here:** the worst wheel is the **rear-RIGHT** at Sardegna, not
+Monza's rear-left. Measured, not inferred — **60 % of the loaded cornering on
+this lap is left-hand turns, carrying 1.5× the lateral load of the rights**
+(101,641 frames above 0.6 g, sessions 128–132), and a left-hander loads the
+right-hand wheels.
