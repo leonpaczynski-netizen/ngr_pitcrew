@@ -1922,3 +1922,119 @@ nothing was wrong on 9 Sep: that table's threshold matched his shift point.
 close-ratio box:** `threshold x 0.95 x ratio_step` must exceed the highest rpm
 the driver might shift at, **in every gear the table names** - not the rpm the
 table asks for.
+
+---
+
+# Session 158 - 10 Sep 2026, 19 laps. `arb_r` CONFIRMED at 4, NOT 5. Rev H.
+
+> **[DRIVER REPORT]:** *"ran on ARB rear 5 couldn't get my worst corner turned
+> mid corner. went to ARB rear 4 and it's perfect. 5-5 was better for all but
+> one corner, it points on turn in perfect but lacked mid corner turn on 5-5
+> than 5-4."*
+
+**Both settings ran in one session and the split had to be found, not assumed.**
+Lap 11 carries `crawl_s` 11.43 s and fuel jumping **31.4 -> 93.1 L** - he came in,
+refuelled and changed the bar. ⇒ **laps 2-10 = two clicks, laps 12-19 = one
+click**, lap 11 excluded. Both blocks cover the same fuel range (93 -> ~40 L).
+⚠️ `is_pit_lap` reads **0** on lap 11 despite the refuel - the pit detector missed
+it again, and only the fuel jump gives the split away.
+
+## 27. The bracket worked, and one click is the answer
+
+| | two clicks (laps 2-10) | one click (laps 12-19) |
+|---|---|---|
+| catching the back end | **197.7 frames/lap** | **18.5 frames/lap** |
+| laps with a spin | **6 of 9** | **0 of 8** |
+| clean laps | 1 of 9 | 6 of 8 |
+| best lap | 101.916 | **100.455** |
+
+**10.7x fewer catches.** The best lap is the best Racing Medium lap on file
+(previous 100.692) - but it is inside his own lap-to-lap noise and is
+**corroboration, not evidence. The evidence is his report and the catch count.**
+
+**Two clicks found the ceiling in one run instead of four**, which is exactly
+what the bracket was for.
+
+## 28. ⛔ THE ROTATION INDEX WAS FOOLED, AND HE WAS RIGHT
+
+```
+  baseline (s157, full send)      99.55
+  two clicks   arb_r 5            79.12   <- 20.4 BELOW baseline = 2.1x the floor
+  one click    arb_r 4           100.31   <- on the baseline, says nothing
+```
+
+**By the instrument, two clicks did exactly what section 24 predicted** - it fell
+by far more than the 9.89 floor, in the predicted direction. **The prediction
+would have been scored CONFIRMED. It was measuring the wrong thing.**
+
+**Oversteer produces yaw for free.** At two clicks the rear was sliding - 198
+opposite-lock frames a lap and six spins in nine laps - so the car generated yaw
+per degree of lock without turning where he wanted it. **`steering_deg_per_yaw_rate`
+cannot tell "the car is rotating" from "the rear is going away", and it scores a
+loose car well.**
+
+⇒ **NEVER quote this index as a rotation verdict without a stability count beside
+it.** Written to the store as its own `unresolvable` verdict so the axis result
+above cannot be read as the index having worked. It is blind in **both**
+directions here: at the setting he calls perfect it sits on the baseline.
+
+**This is CLAUDE.md rule 1 doing its job** - the driver's report is primary
+evidence, telemetry is corroboration, and *where the two disagree, that
+disagreement is the finding*. It disagreed, it was checkable, and the check
+sided with him.
+
+## 29. Where the bar bit - and it is a mechanical-grip story
+
+Catches per lap, two clicks against one, 100 m bins:
+
+```
+  3,700-3,800 m   164 km/h     34  ->   4
+  3,800-3,900 m    47 km/h     58  ->   4
+  4,100-4,200 m    68 km/h     72  ->   7      <- the slowest corner on the lap
+  every other bin on the lap    0  ->   0
+```
+
+**92 % of it falls in two SLOW corners, and every fast corner is clean at both
+settings.** That is what a roll-stiffness lever does: it trades rear mechanical
+grip, and mechanical grip only decides anything where the wing is not carrying
+the car. At 200+ km/h the extra bar was free - which is precisely his *"better
+for all but one corner."*
+
+**His account and the data agree line by line:** turn-in improved everywhere
+(more rear roll stiffness, more rotation entering), and the one place it cost
+him is where the rear had no aero to lean on.
+
+Map: `sardegna-arb-catches-2026-09-10.png`.
+
+## 30. Where the proposal was wrong, and it matters for the next one
+
+Section 24's falsifier read: *"the rear steps out on brake release - his
+signature. That means `arb_r` 4."* **The conclusion was right and the stated
+symptom was wrong.** What happened was not a brake-release snap; it was
+**losing mid-corner rotation in the slow corners, with spins**. Had the
+falsifier been applied literally - watching brake release only - the run would
+have been scored as "not falsified" and two clicks would have been kept.
+
+⇒ **A falsifier should name the AXIS's failure mode, not the driver's habitual
+one.** A rear bar too stiff costs rear mechanical grip; where that shows up is
+wherever mechanical grip is what the car is standing on, which is the slow
+corners - not necessarily in the phase the driver most often complains about.
+
+## 31. ⚠️ THE WEAR NUMBERS WERE TAKEN ON THE OLD BAR
+
+Every tyre rate on this file - RH 0.0498 / 0.0491, RM 0.0668 / 0.0645 - was
+measured at `arb_r` **3**. The car now runs **4**, which loads the rear axle
+differently, and **the rear-right is the wheel that ends every stint.** The whole
+race plan rests on numbers taken on a car he is no longer driving.
+
+⇒ **The next run is a 12-lap Racing Medium stint on the final bar, full send,
+gauge open.** It re-baselines the number the race turns on. The three-compound
+same-session run follows it; nothing else needs doing to the car.
+
+## 32. Open predictions
+
+| Prediction | Falsified if |
+|---|---|
+| RM rear-right wear on `arb_r` 4 stays within one gauge tick of 0.0668/lap | it moves more, and every stint length on file is re-derived |
+| The 10.7x drop in catches holds over a full stint | catches climb back above ~60 a lap as the tyres go off |
+| He reports no loose rear over 12 laps | he does, and `arb_r` goes back to 3 |
