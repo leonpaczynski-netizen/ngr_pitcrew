@@ -2120,3 +2120,101 @@ like a physical finding and read perfectly plausibly.
 ⚠️ **And ask him what he calls the corner before naming it.** He calls this one
 *"the 3rd last"*; the app's own model finds six corners on a fifteen-corner
 circuit, so it cannot count to it. **His numbering is the vocabulary.**
+
+---
+
+# Session 159 - 12-lap race sim vs Div 2, 10 Sep 2026. **WON IT, P1.**
+
+**P1 at the flag**, after losing 10.2 s and two places on lap 3. P1 -> P3 (lap 3)
+-> P2 (lap 4) -> **P1 from lap 8 to the flag**. Racing Mediums, no stop, full
+send, on `arb_r` 4. 81.7 L used of a full tank.
+
+## 34. The three open predictions
+
+### ✅ 1. WEAR ON THE NEW BAR - HELD, and almost exactly
+
+**0.0660 +/- 0.0008 per lap** against the **0.0668** measured on `arb_r` 3.
+Difference **0.0008** against a gauge tick of 0.0278. ⇒ **the bar did not move
+the wear rate, and every stint length on file stands.** That was the one thing
+that could have invalidated the race plan and it did not.
+
+### ✅ 2. NO DEGRADATION - trend over laps 4-12 is **-0.043 +/- 0.065 s/lap**
+
+Flat, on Racing Mediums run to **80.6 % worn**. Third independent confirmation
+that this compound does not fall away before ~90 %.
+
+### ⛔ 3. "NO LOOSE REAR" - one spin, and IT WAS NOT THE CAR
+
+Lap 3, in **his blind left**. The frames are unambiguous:
+
+```
+  3,737 m   169 km/h   54.3 deg lock   1.46 g   TTTT
+  3,750 m   167 km/h   34.0 deg lock   1.30 g   TGTG   <- FRONT-LEFT AND REAR-LEFT ON GRASS
+  3,762 m    16 km/h  -180.0 deg lock                  <- spun
+```
+
+**He ran out of road on the exit and put the left-hand pair on the grass. The
+spin followed the grass; the grass did not follow a slide.** Off-tarmac frames
+in that corner: **lap 3 = 42, lap 5 = 85, lap 10 = 10.** Three laps of running
+wide in the same place.
+
+⇒ **This is track limits, not the setup** - the same shape as the Daytona Round 6
+debrief, where 4 of 5 offs were track limits. `arb_r` is not implicated and must
+not be moved for it.
+
+## 35. ⛔ THE CATCH COUNT DOES NOT SURVIVE A RACE, AND MY PREDICTION MIS-USED IT
+
+Whole-race average is **57.6 catches a lap** against **18.5** in practice on the
+same car - which reads as a 3x regression. **It is not. Split by what he was
+doing:**
+
+```
+  FREE AIR      laps 2, 6, 10, 11        median   7 a lap   <- BETTER than practice's 18.5
+  in traffic    laps 4, 5, 7             median  25
+  RACING        laps 1, 3, 8, 9, 12      median 123
+        lap 1  the pack off the line          54
+        lap 3  the spin                      186
+        lap 8  took the lead P2 -> P1        144
+        lap 9  first lap defending P1         87
+        lap 12 last lap                      123
+```
+
+**Every high lap is a racing event and every quiet lap is free air.** In clean
+air the car is *better* than it tested in practice.
+
+⇒ **`opposite_lock_frames_per_lap` measures the driver's SITUATION as much as the
+car.** It is a clean instrument in practice and a contaminated one in a race.
+**Prediction 2 was not falsified - the metric was mis-specified**, and had I
+scored it literally I would have concluded the bar had gone backwards. Any future
+use of it across a race must be split by free air against traffic first.
+
+## 36. ⭐ [MEASURED] RACING BURNS 5.7 % LESS FUEL THAN PRACTICE
+
+**6.760 L/lap racing against 7.167 hot-lapping.** A 100 L tank therefore goes
+**14.8 laps, not 14.0** - which lengthens every fuel-bound stint in the plan.
+
+⚠️ **Do NOT adopt it into the race plan yet.** He spent this race in a pack, and
+a tow is the obvious candidate; a 28-lap race led from the front may burn the
+practice rate instead. **`unmeasurable_because` the app cannot see proximity to
+another car** - §5.3 of CLAUDE.md says the same about detecting a tow. **Ask him
+whether he was in traffic, or measure it on a race led alone.**
+
+## 37. Pace, and the price of the one mistake
+
+```
+  race best      100.944 (lap 2)        practice best 100.455
+  race median    101.771 over 9 clean racing laps
+  lap 3 S3        43.271 against a 33.101 median   ->  10.2 s lost, two places
+```
+
+**He won by driving the other eleven laps well enough to absorb a ten-second
+mistake.** The incident is the largest single item in the race and it is his
+line, not the car - which is the more useful finding, because it is free to fix.
+
+## 38. Open predictions
+
+| Prediction | Falsified if |
+|---|---|
+| The blind-left exit is a repeatable track-limits problem, not a one-off | he runs the same line clean over a full stint with no off-tarmac frames there |
+| Racing fuel of 6.760 L/lap is a TOW effect | a race led alone from the front also comes in near 6.76 |
+| In free air on this bar he stays under ~10 catches a lap | a clean-air lap goes above 30 |
