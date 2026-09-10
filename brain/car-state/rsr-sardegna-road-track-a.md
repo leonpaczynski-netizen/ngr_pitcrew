@@ -1368,3 +1368,168 @@ Rows: `measurement` 88–92. → **RECONCILIATION AU2a**.
 | The nose rises ~3 mm as the tank empties over the 12-lap stint, and resets on the out-lap after a refuel | the front channel is flat across the stint, or does not reset after the stop |
 | Rear-right stays the worst wheel over a full-length stint | any other wheel leads at 12 laps |
 | The full-stint rate is **at or above** 0.0528/lap — the short runs are a lower bound | the 12-lap rate comes in below 0.0528, which would mean the early runs over-read |
+
+---
+
+# Sessions 153/154/155 - 9 Sep 2026, 35 laps, ALL THREE COMPOUNDS. Rev F issued.
+
+**Rank zero CLOSED on the gearbox.** The new box is IN: ratios `3.041 / 2.329 /
+1.900 / 1.621 / 1.446 / 1.348` **FEED-verified byte-identical on all 35 laps**.
+Everything else rests on the 5 Sep SCREEN check plus his word on `bb +3` /
+`df_f 440`.
+
+> **[DRIVER REPORT], 10 Sep 2026 - and it changes the standing rule:**
+> *"me not complaining about the car doesn't mean it's got the best setup I
+> don't know what I don't know and if you see something in the telemetry that
+> could be improved or can transfer learning from another car we should
+> absolutely try it."*
+>
+> The 9 Sep entry declined to propose anything with *"there is no symptom"* as
+> its first reason. **That reason is retired.** Silence from the driver is not a
+> clean bill of health - he cannot report a deficit he has never felt the
+> absence of. `feedback_no_complaint_is_not_a_good_setup`.
+
+## 13. FUEL BINDS HERE. Section 3's headline is overturned.
+
+Section 3 says *"Fuel does not bind here. The tyre does. That is the opposite of
+Monza."* **It is wrong, and the error was the `[ASSUMED]` 4.4-5.4 L/lap.**
+
+**Measured: 7.046 L/lap** at the race's 3x, over 67 counted laps. So a 100 L tank
+is **14.2 laps**. Over 28 laps:
+
+- **RH's stint ceiling is 13 laps and it is FUEL** - the tyre would go 17.1.
+- 2 x 13 = 26 < 28, so **there is no one-stop at full send, on any compound.**
+
+## 14. The compound sweep - measured, worst wheel REAR-RIGHT throughout
+
+| | wear/lap | tyre laps | fuel laps | stint cap | pace vs RH |
+|---|---|---|---|---|---|
+| **RH** | 0.0498 | 17.1 | 14.2 | **13, fuel** | - |
+| **RM** | 0.0668 | 12.7 | 14.2 | **12, tyre** | **-1.71 s** |
+| **RS** | 0.1500 | 5.7 | 14.2 | **5, tyre** | -2.15 s |
+
+**Pace is fuel-matched, not session medians.** All three ran from a full tank on
+one evening, so pairing on lap number pairs on fuel load: RM-RH median **-2.11 s**
+over 5 clean pairs; best-lap RH 102.399 against RM 100.692 gives **-1.71**, and
+the conservative end is used. WARNING: **not a same-session back-to-back** - the
+strategy engine refuses a delta for exactly this reason, and track evolution
+across the evening favours the later (softer) runs. **The run that settles it:
+three short runs, one per compound, in ONE session, same fuel.**
+
+WARNING: **the RM 12-lap cap is the 0.85 rule, and he beat it.** He ran 14, and
+**lap 13 at 89% worn was a normal 101.578**. The slow lap 14 was **the tank
+going dry** (`fuel_end` 0.0), not the cliff. The **RS did cliff**: 118.2 s at
+89%, 141.4 s at 100%.
+
+## 15. THE RACE PLAN - RM two-stop, full send
+
+```
+  RM12 / RM7 / RM9    2 stops, FULL SEND               <- fastest, 28 laps
+  RH14 / RH14         1 stop,  300 rpm saving           +17.1 s
+  RH13 / RS5 / RH10   2 stops, full send                +30.3 s
+  RH13 / RH7 / RH8    2 stops, full send                +39.9 s
+```
+
+**Short-shifting makes the RM plan WORSE - +3.8 s at 300 rpm, +7.6 s at 600.**
+The RM plan is **tyre**-limited at 12 laps, and fuel saved on a tyre-limited
+stint buys nothing while the lap time is paid in full. It pays **only** on RH,
+where it lifts the fuel ceiling from 13 to 14 and **deletes a stop** - the Monza
+structure exactly (`reference_shortshift_daytona_vs_monza`). So **the fuel table
+is for the RH fallback ONLY.**
+
+**The measured saving here is Sardegna's own:** `+2.254 L/1000 rpm` (t 2.92, 34
+laps, fixed effects). At 1.0 L/s that buys **2.254 s of standing time per 1000
+rpm**. The lap-time **cost** could not be fitted here (CI +/-23 s) - the usable
+figure is **Monza's controlled A/B on this same car, ~1.9 s/1000 rpm**.
+
+WARNING: **THE REFUEL RATE HAS NEVER BEEN MEASURED.** ~115 L at the event page's
+1.0 L/s is ~115 s of standing time - **more than six times the gap between the
+top two plans.** One practice stop taking fuel, with the app recording, settles
+it. **Highest-value measurement available and it costs one lap.**
+
+## 16. "More pointed" - measured, and it is NOT a mid-corner grip problem
+
+**First, an instrument correction.** Pooled across all throttle, front-minus-rear
+slip reads **-0.011**, which looks like a rear-limited car. **It is an artefact
+of mixing throttle bands** - the rear axle's slip is *drive* slip:
+
+| throttle | F-R slip | reading |
+|---|---|---|
+| coast, <5% | **+0.0003** | **dead neutral** |
+| 5-40% | -0.0047 | rear driving |
+| 40-90% | -0.0328 | rear driving |
+
+**Split by throttle before reading this channel.** True mid-corner balance is
+neutral, against the Huracan's +0.011 at Daytona (understeer) and +0.001..+0.004
+at Bathurst ("very pointed").
+
+**The deficit is in the PHASE, not the balance.** Steering per unit of yaw:
+
+```
+  trail-braking (brake >60%)   69.9      <- the car rotates
+  brake release (5-60%)        82.6
+  neutral mid-corner          108.2      <- 55% MORE lock for the same rotation
+```
+
+Noise floor **9.89** (worst odd/even split within one unchanged session). **The
+car turns in well and stops rotating the moment the brake is gone** - which is
+precisely the phase he is asking about, and precisely the phase a trail-braker
+lives in.
+
+**And the front is the limiting axle**: front slip below 0.92 on **19.8%** of
+trail-brake frames against the rear's **4.5%** (15.9% on 5 Sep). `bb` is already
+at `+3` rearward; that lever is spent.
+
+## 17. Rev F - ONE change: `arb_r` 3 -> 5
+
+**The sheet in percent of its own range, front minus rear:**
+
+```
+  rh   -6.7 pp     nf  -10.0 pp     dc  -10.0 pp     de  0.0 pp     cam  0.0 pp
+  arb  +22.2 pp   <<<  the ONLY mechanical axis biased to the FRONT
+```
+
+`arb_f` 5 = **44.4%**, `arb_r` 3 = **22.2%**. Carried from Monza, never touched
+here, and it is roll stiffness at the front - which is understeer. **Nobody
+complained for a month, and that is the point of section 13's driver note.**
+
+- **[TRANSFER]** Huracan at Daytona: `arb_r` 4 -> 6 **confirmed** on sector time
+  (S2 -0.449 s) plus *"the best it has"* - and it was **invisible to every
+  rotation index on file**, recorded as instrument blindness.
+  `project_daytona_setup_day_2026_09_08`.
+- **Why not `arb_f` down:** the Spa lesson - softening a front bar on a soft,
+  high car adds roll and tests as a failure alone. `arb_r` up is the measured
+  direction.
+- **Why not more wing:** `df_f` 440 is **90%** of [350, 450]. Spent.
+- **Why two clicks:** matching `arb_f` at 44.4%, and one click has already proved
+  unmeasurable on this car's `bb`. **Bracketing - if +5 overshoots, 4 is the
+  answer and it is found in two runs instead of four.**
+- **Predicts:** lock-per-yaw at neutral mid-corner falls from **108.2** by more
+  than **9.89**; he reports the car finishing the corner without extra steering.
+- **Falsified if:** the rear steps out on **brake release** - his known
+  signature. **That means 4, not that the direction is wrong.**
+- **Cost:** 3 clean laps.
+
+## 18. Shift table RE-ISSUED - and the number I pre-issued was wrong
+
+`tools/shift_points.py` on the new box: **every gear 1-5 reports LIMITER**,
+including 5->6 (won at all 3 comparable bins up to 8,500 in session 153's 14
+laps, and again in 154). **The pre-issued "8,000 in 5th" was `[ASSUMED]` off the
+OLD box's ratio step and is measured wrong on this one.**
+
+Now **8,500 in gears 1-5** (just under the observed cut, median 8,567 over 7,322
+rev-limiter frames), **6th silent** - there is no 6->7 to cue. Fuel table **7,400
+in 1-5**, extended to 5th because 5th is a working gear on this box.
+
+**Box prediction HELD:** 6th is genuinely used - 11,223 full-throttle frames,
+max **262.8 km/h** against a predicted 276.5 at the limiter, so the tow headroom
+is there and 6th never meets the limiter.
+
+## Open predictions
+
+| Prediction | Falsified if |
+|---|---|
+| `arb_r` 5 drops mid-corner lock-per-yaw by more than 9.89 from 108.2 | it moves less than that, or rises |
+| He reports the car finishing corners with less steering | he reports no change, or a loose rear on brake release (then `arb_r` 4) |
+| The refuel rate measures at 1.0 L/s +/-0.1 | it does not - and then the whole stop-count table is re-run |
+| A same-session three-compound run reproduces RM -1.71 s vs RH | RM comes in under -1.0 s, which closes the RM/RH gap to ~3 s and puts the RH one-stop back in play |
