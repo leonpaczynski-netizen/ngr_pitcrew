@@ -1533,3 +1533,118 @@ is there and 6th never meets the limiter.
 | He reports the car finishing corners with less steering | he reports no change, or a loose rear on brake release (then `arb_r` 4) |
 | The refuel rate measures at 1.0 L/s +/-0.1 | it does not - and then the whole stop-count table is re-run |
 | A same-session three-compound run reproduces RM -1.71 s vs RH | RM comes in under -1.0 s, which closes the RM/RH gap to ~3 s and puts the RH one-stop back in play |
+
+## 19. THE PLAN IN 15 IS WRONG. The driver was right, on two counts. 10 Sep 2026
+
+> **[DRIVER REPORT]:** *"the one stop on hards won me monza by 13 seconds over
+> the 2 stop on mediums, we save 2 litres a lap and it only cost 1 second of lap
+> time so was a net gain of 1 second per lap. Applying the same fuel saving
+> principle as we did at monza also increases tyre life as we aren't running as
+> hard so would open a one stop on mediums."*
+
+**Both halves check out, and section 15's recommendation is retired.**
+
+### 19a. His Monza numbers, verified from the archive
+
+Sessions 50 and 51, the controlled A/B, same car, same tyre, 18 minutes apart:
+
+```
+  full send    7.432 L/lap   109.223 s      short-shift   5.635 L/lap   109.941 s
+  ->  1.797 L/lap saved (-24.2%) for +0.718 s/lap  =  NET +1.08 s/lap at 1.0 L/s
+```
+
+**He under-sold it.** He remembered 2 L for 1 s; it was 1.80 L for 0.72 s.
+
+### 19b. My two errors in section 15
+
+1. **I used the wrong fuel number.** Section 15 used Sardegna's own fixed-effects
+   gradient, `+2.254 L/1000 rpm`, fitted on a natural upshift spread of about
+   **60 rpm within a session**. A deliberate 600 rpm drop is ten times beyond
+   that variation. **Monza proved this method understates the real saving**: its
+   own gradient predicted ~1.06 L/lap for 600 rpm and the controlled A/B measured
+   **1.80**. The A/B percentage is the transferable figure - same car, same
+   driver, controlled - and it is **-24.2%**, not the -9.6% I used.
+2. **I ignored the tyre-life half entirely.** CLAUDE.md section 5.3 states it:
+   short-shifting *"saves ~20% fuel for ~0.5 s/lap AND reduces rear tyre wear."*
+   **The limiting wheel here is the REAR-RIGHT on all three compounds** - exactly
+   the wheel it protects. I modelled saving as fuel-only, concluded it "buys
+   nothing on a tyre-limited stint", and that conclusion is circular: saving
+   relieves the very constraint I said it could not touch.
+
+### 19c. THE THING THAT DECIDES IT - saving buys a whole extra LAP
+
+This is a **timed** race. Standing time is laps.
+
+```
+                                    laps   standing time (transit + dead + fuel)
+  full send, mediums, 2 stops        28     170.5 s   (40 + 15 + 115)
+  save 600 rpm, mediums, 1 stop      29      90.4 s   (20 +  8 +  63)
+  save 600 rpm, hards,   1 stop      29      90.6 s   (20 +  8 +  63)
+  save 300 rpm, hards,   1 stop      28     111.8 s   (20 +  8 +  84)
+```
+
+**Saving cuts up to 80 seconds of standing still.** The lap-time cost over 29 laps
+is about 21 s. Net ~59 s - more than half a lap - and it is enough to cross from
+**28 laps to 29**. A lap up outranks every time comparison on the page.
+
+⚠️ **300 rpm is NOT enough**: it lands at 28 laps, dead level with the full-send
+medium two-stop. **The full Monza-sized drop is what buys the lap.**
+
+### 19d. How many laps on the hards - the answer to his question
+
+```
+  full send   7.05 L/lap:  tyre 17.1 | fuel 14.2  ->  14.2 laps, FUEL-limited
+  save 300    6.19 L/lap:  tyre 17.1 | fuel 16.1  ->  16.1 laps, FUEL-limited
+  save 600    5.34 L/lap:  tyre 17.1 | fuel 18.7  ->  17.1 laps, TYRE-limited
+```
+
+**Seventeen laps on the hards with the full save, and the tank is no longer what
+stops you - the tyre is.** 17 + 12 covers 29 laps in one stop.
+
+### 19e. Where it lands, and the one thing still unmeasured
+
+All 600-rpm plans complete 29 laps. Ranked:
+
+```
+  mediums 1 stop  RM15 / RM14   needs tyre life +20%     3053.8 s   <- best
+  mediums 2 stop  RM13 / RM7 / RM9  needs +10%           3084.6 s   +31 s
+  hards   1 stop  RH17 / RH12   needs NOTHING            3091.5 s   +38 s
+  mediums 2 stop  RM12 / RM8 / RM9  needs nothing        3090.1 s   +36 s
+```
+
+⇒ **Two claims, and they carry different weight:**
+
+- **SAVE FUEL. That is settled** and does not depend on the tyre question at all
+  - every saving plan is a lap up on every full-send plan.
+- **Which compound is NOT settled**, because it turns on a tyre-life benefit that
+  is **`[UNMEASURED]` here**. With +20% the medium one-stop wins by 38 s; with
+  none, the hard one-stop and the medium two-stop are within 1.4 s - a coin flip.
+
+⛔ **The tyre-life effect CANNOT be fitted from what is on file.** Every lap in
+sessions 153/154/155 ran within **62 rpm** of every other, and the gauge moves in
+36ths (0.0278) - half a lap's wear per tick. It needs the same controlled A/B
+that settled the fuel question at Monza.
+
+### 19f. The run that settles it - and it re-orders the runs
+
+**A 12-lap MEDIUM stint, short-shifting throughout, from a full tank.** It is
+directly comparable to session 154 - same compound, same circuit, same setup,
+one variable - and it returns three things at once: the fuel saving on this
+circuit, the tyre-life effect, and whether the medium reaches 14 laps.
+
+⚠️ **THIS MUST RUN BEFORE `arb_r`, and section 17's ordering is corrected.**
+A stiffer rear bar moves rear-tyre load, which is the very thing the wear stint
+measures. Changing the bar first destroys the only clean comparison available.
+**`arb_r` stays at 3 for this run.** If the bar has already been moved to 5, put
+it back for the stint or the comparison is gone.
+
+**Order: wear stint on the current car -> `arb_r` 3 -> 5, three clean laps.**
+
+### 19g. Open predictions - amended
+
+| Prediction | Falsified if |
+|---|---|
+| Short-shifting 600 rpm saves 20-25% fuel here, as at Monza | the stint burns more than 6.0 L/lap |
+| It costs under 1.0 s/lap | the clean-lap median is more than 1.0 s off session 154's 101.578 |
+| It measurably lowers rear-right wear | the 12-lap gauge trace matches session 154's within one tick |
+| Saving puts him on 29 laps rather than 28 | race pace lands more than ~20 s off plan, which drops it back to 28 and the whole board becomes a tie |
