@@ -1717,3 +1717,131 @@ exactly what these stints measure. **Wear stints first, then the bar.**
 | Lap-time cost lands between 0.7 and 1.5 s/lap | it exceeds 1.5 s/lap, and the table backs off to 8,000 |
 | Rear-right wear per lap drops below the full-send RH 0.0498 / RM 0.0668 | the gauge trace matches the full-send stints within one tick, and the medium one-stop dies |
 | RH reaches 17 laps on one tank | it does not, and the hard one-stop needs a deeper drop still |
+
+---
+
+# Sessions 156 + 157 - 10 Sep 2026. The fuel-saving test. Rev G: `arb_r` 3 -> 5.
+
+**33 laps.** s156 = RH, 19 laps, short-shifting throughout at ~7,343 rpm.
+s157 = RM, 14 laps, short-shifting to lap 9 then **full send from lap 10** -
+the driver stopped saving when a rival entered the practice lobby.
+
+> **[DRIVER REPORT]:** *"I had to stop fuel saving in second stint on mediums
+> half way through as a rival entered practice lobby and I didn't want him to
+> see my strat."*
+
+⭐ **That accident produced the best measurement of the week.** Stopping halfway
+turned session 157 into a **within-stint A/B on ONE set of tyres** - same set,
+same fuel trajectory, same session, one variable at lap 10. Nothing I could have
+designed would have controlled it better.
+
+## 21. What short-shifting actually does here - MEASURED
+
+```
+                       upshift    fuel L/lap    best lap    wear RR /lap
+  RH  s153 full send      8449        7.027      102.627    0.0498 +/-0.0006
+  RH  s156 SAVING         7343        5.165      103.708    0.0491 +/-0.0005
+  RM  s154 full send      8470        7.167      100.692    0.0668 +/-0.0006
+  RM  s157 SAVING  L1-9   7384        5.247      102.396    0.0645 +/-0.0013
+  RM  s157 full send L10+ 8389        6.670      101.397    0.0706 +/-0.0019
+```
+
+**Fuel: -26.5% on the hard, -21.3% on the medium.** Both bigger than Monza's
+-24.2%/-21% band predicted for a drop this size, and the hard ran **19 laps on
+one tank**, finishing on 1.7 L.
+
+**Lap-time cost: 1.00 s/lap**, measured within the stint (102.396 against
+101.397 on the same tyres). The RH between-session figure agrees: **+1.081**.
+
+⛔ **THIS IS THE NUMBER THAT KILLED THE 29TH LAP.** Section 19c predicted 29 laps
+using **Monza's +0.718 s at ~600 rpm**. At ~1,000 rpm it costs **1.0-1.1 s/lap**,
+and that is enough to put every plan back on **28**. The saving is still worth
+having - it is worth 60-95 seconds of standing time - but **it does not buy a
+lap, and I said it would.** Section 19c's headline is retracted.
+
+## 22. The tyre question, ANSWERED - and the answer differs by compound
+
+| | wear saving vs full send | verdict |
+|---|---|---|
+| **Racing Medium** | 0.0645 against 0.0706 = **-8.7%** | **REAL.** 0.0061 against a combined error of 0.0023 = **2.7x** |
+| **Racing Hard** | 0.0491 against 0.0498 = **-1.4%** | **NOT MEASURABLE.** 0.0007 against a combined error of 0.0008 |
+
+**The control that makes the medium result stand:** at full send throughout
+(s154) the wear rate is **flat with tyre age** - 0.0671 over laps 1-9 against
+0.0683 over laps 9-14, **+1.7%**. So tonight's **+9.5% step at the switch** is
+the shift point, not the tyre getting older.
+
+⚠️ **The hard result is weaker evidence than the medium one** and must not be
+quoted as equally strong: it is a **between-session** comparison, and the
+between-session offset has already bitten this project once
+(`feedback_within_session_floor_is_not_a_control`). The medium result is
+within one stint and has no such hole.
+
+⚠️ **I cannot explain why the medium responds and the hard does not.** Recorded
+as a fact, not dressed in a mechanism. `feedback_never_assume_investigate_or_ask`.
+
+## 23. Where the race stands - and every plan is now 28 laps
+
+**Once he is saving, FUEL STOPS BINDING AND THE TYRE BINDS** - RH saving has
+19.4 laps of fuel against 17.3 of tyre; RM saving 19.1 against 13.2. That
+inverts section 13 for the second time and it is the structural fact to hold on
+to.
+
+```
+  RM saving, 2 stops   13 / 7 / 8    3012.2 s   113 s standing   <- fastest
+  RM saving  800 rpm   13 / 7 / 8    3013.2 s   126 s
+  RM full send, 2 st   12 / 7 / 9    3023.5 s   175 s
+  RH saving, 1 STOP    17 / 11       3024.4 s    80 s            <- +12.2 s
+  RH full send, 2 st   13 / 7 / 8    3066.6 s   170 s
+```
+
+⚠️ **The top two are 12 seconds apart and that is inside what my compound pace
+delta can carry.** It rests on `RM -1.935 s/lap vs RH`, taken from best laps
+across sessions rather than a same-session back-to-back. **12 seconds is not a
+recommendation, it is a tie**, and the hard one-stop wins on everything that is
+not on the stopwatch: **half the standing time, one pit exit instead of two, one
+chance of a bad stop instead of two, and 17-lap stints instead of 13.**
+
+⇒ **No race call is made yet.** The compound decision waits on a same-session
+three-compound run. It is not needed before the `arb_r` work.
+
+## 24. Rev G - `arb_r` 3 -> 5, and the baseline MOVED
+
+The proposal is unchanged from section 17. **What changed is the number it will
+be judged against.**
+
+```
+  9 Sep,  s153/154/155 full send   108.22
+  10 Sep, s157 L10-14 full send     99.55   <- THE BASELINE FOR THIS TEST
+  10 Sep, s157 L1-9  saving         97.99
+  10 Sep, s156 saving               99.95
+```
+
+⛔ **The whole baseline drifted about 9 points overnight** - just inside the 9.89
+floor, so it is not a finding, but **judging `arb_r` against 108.22 would credit
+the bar with roughly a floor's worth of movement it did not earn.** Use **99.55**.
+
+✅ **Short-shifting does NOT move this instrument** - within one stint, saving
+97.99 against full send 99.55 = **1.56**, well inside the floor. So the
+instrument is clean; only its zero moved.
+
+⇒ **Run the `arb_r` test on RACING MEDIUM at FULL SEND**, to match s157 laps
+10-14 exactly. Three clean laps.
+
+- **Predicts:** lock-per-yaw falls from **99.55** by more than **9.89**, and he
+  reports the car finishing the corner without extra steering.
+- **Falsified if:** the rear steps out on **brake release** - his signature.
+  **That means `arb_r` 4, not that the direction is wrong.**
+- ⚠️ **The instrument may be blind to this axis.** At Daytona `arb_r` 4->6 was
+  invisible to every rotation index on file and showed up only as sector time
+  and his own report. **If lock-per-yaw does not move, that is NOT a refutation**
+  - it is recorded as instrument blindness, and his report decides.
+
+## 25. Open predictions
+
+| Prediction | Falsified if |
+|---|---|
+| `arb_r` 5 drops lock-per-yaw by more than 9.89 from 99.55 | it moves less - and then his report decides, not the index |
+| He reports the car finishing corners with less steering | he reports no change, or a loose rear on brake release (then 4) |
+| The medium's 8.7% wear saving holds over a second stint | a repeat within-stint A/B lands inside 3% |
+| A same-session three-compound run reproduces RM about 1.9 s/lap faster than RH | it comes in under 1.2 s, and the hard one-stop wins outright |
