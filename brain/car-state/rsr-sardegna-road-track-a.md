@@ -1648,3 +1648,72 @@ it back for the stint or the comparison is gone.
 | It costs under 1.0 s/lap | the clean-lap median is more than 1.0 s off session 154's 101.578 |
 | It measurably lowers rear-right wear | the 12-lap gauge trace matches session 154's within one tick |
 | Saving puts him on 29 laps rather than 28 | race pace lands more than ~20 s off plan, which drops it back to 28 and the whole board becomes a tie |
+
+## 20. The beep set to fuel-save for tonight - and WHY it needed a hack. 10 Sep 2026
+
+> **[DRIVER]:** *"set shift beep to fuel save and I will test RH and RM tonight
+> with fuel saving"*
+
+### 20a. Short-shift CANNOT be engaged in a practice session. There is no path.
+
+`Controller.set_short_shift()` (controller.py:426) is what flips the beep onto the
+fuel table. **Its only production caller is controller.py:5326, inside the live
+race-engineer call handler.** There is no UI control - `grep -rn "short_shift"
+pitcrew/ui/` returns one unrelated comment.
+
+⇒ **In practice there are no engineer calls, so the issued fuel table can never
+reach the wheel.** He would be asked to short-shift with no cue: the exact
+failure the comment at controller.py:5310 was written about - *"'Short-shift
+450.' reached his ears and nothing reached the beep."*
+
+**This is the "both ends built, caller skipped" pattern again**, and it is now a
+first-class practice activity rather than a race-only one, because the whole
+medium-vs-hard race decision turns on a tyre measurement taken in practice.
+Filed as app work.
+
+### 20b. The workaround, and it MUST be undone
+
+`shift_points` id 1 now reads **`performance` = 7,400 in gears 1-5, `fuel_saving`
+empty.** That is the fuel-saving number promoted into the performance slot so
+that it actually beeps.
+
+⛔ **THIS IS NOT THE PERFORMANCE TABLE.** The measured one for this box is
+**8,500 in gears 1-5** (every gear reports LIMITER; observed cut median 8,567
+over 7,322 rev-limiter frames). It is recorded in the row's own note and here.
+**Restore both columns after tonight.**
+
+### 20c. What tonight measures, and the one number that is a stretch
+
+**Two stints, RH and RM, short-shifting throughout, from a full tank** - directly
+against sessions 153 (RH) and 154 (RM), same car, same setup, same circuit, one
+variable. Three answers at once:
+
+1. the fuel saving on **this** circuit, at last (the 60 rpm within-session spread
+   could never give it);
+2. the **lap-time cost** here, which Sardegna's own fit could not resolve at all
+   (CI +/-23 s);
+3. **whether short-shifting extends rear-right tyre life** - the unmeasured term
+   that decides medium-one-stop against hard-one-stop.
+
+⚠️ **7,400 is 1,100 rpm below the performance point - nearly TWICE the ~600 rpm
+the Monza A/B measured.** So Monza's `-24.2% fuel / +0.718 s per lap` does **not**
+predict tonight, and the cost at 1,100 rpm is `[UNMEASURED]`. **Deliberate:** the
+deepest drop gives the clearest tyre signal, and rpm can be handed back later
+whereas data not collected cannot. If the lap-time cost comes in above about
+**1.5 s/lap**, the answer is to back the table off toward 8,000 rather than to
+abandon saving - the fuel prize is a whole lap and it is not close.
+
+### 20d. Order matters and `arb_r` still waits
+
+`arb_r` stays at **3** tonight. A stiffer rear bar moves rear-tyre load, which is
+exactly what these stints measure. **Wear stints first, then the bar.**
+
+### 20e. Open predictions
+
+| Prediction | Falsified if |
+|---|---|
+| RH at 7,400 burns 5.3-5.6 L/lap | it burns over 6.0, i.e. under 15% saved |
+| RM at 7,400 burns about the same as RH did | the two compounds differ by more than 0.3 L/lap |
+| Lap-time cost lands between 0.7 and 1.5 s/lap | it exceeds 1.5 s/lap, and the table backs off to 8,000 |
+| Rear-right wear per lap drops below the full-send RH 0.0498 / RM 0.0668 | the gauge trace matches the full-send stints within one tick, and the medium one-stop dies |
+| RH reaches 17 laps on one tank | it does not, and the hard one-stop needs a deeper drop still |
