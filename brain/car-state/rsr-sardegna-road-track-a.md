@@ -2038,3 +2038,85 @@ same-session run follows it; nothing else needs doing to the car.
 | RM rear-right wear on `arb_r` 4 stays within one gauge tick of 0.0668/lap | it moves more, and every stint length on file is re-derived |
 | The 10.7x drop in catches holds over a full stint | catches climb back above ~60 a lap as the tyres go off |
 | He reports no loose rear over 12 laps | he does, and `arb_r` goes back to 3 |
+
+## 33. ⛔ RETRACTION: section 29's "two slow corners" was built on a contaminated speed profile
+
+> **[DRIVER REPORT]:** *"no the corner I couldn't work is the 3rd last it's a
+> blind left hander at about 165km/h"*
+
+**He is right and section 29 is withdrawn.** Three separate errors, and the first
+caused the rest.
+
+### 33a. The 47 km/h corner does not exist
+
+Section 29 quoted `3,800-3,900 m at 47 km/h`. **There is no 47 km/h corner
+there.** That speed profile was taken over ALL nine `arb_r` 5 laps, six of which
+contained a spin - so the bin median is **him already off the road**. Measured on
+clean laps at the final setting, the same stretch runs at **187-206 km/h**:
+
+```
+  metres     arb_r 5, all laps     arb_r 4, clean laps
+   3750             162                    176
+   3800              59                    187
+   3850              44                    197
+   3900              70                    206
+```
+
+**I selected on the outcome and then described the survivors as terrain.** Same
+error shape as RECONCILIATION AU2 on 9 Sep - filter on a symptom, then report the
+filtered set's character as though it were the place.
+
+### 33b. His corner is FAST, not slow
+
+Corner minima from clean laps on the final setup, 20 m bins:
+
+```
+   600 m   97 kph  LEFT      3,020 m   77 kph  LEFT
+ 1,380 m   98 kph  right     3,700 m  172 kph  LEFT   <- HIS CORNER
+ 1,880 m  125 kph  LEFT      4,100 m   70 kph  LEFT
+```
+
+**The blind left at ~3,700 m, apex 172 km/h.** The car-state file already named
+it at Rev D as *"3,641-3,788 m (L, 176 km/h - the corner he complained about)"*.
+**He has flagged this same corner before and I pinned a different one.**
+
+⇒ **The map was wrong and has been redrawn** (`sardegna-arb-catches-2026-09-10.png`).
+
+### 33c. The mechanical-grip story is withdrawn
+
+Section 29 concluded the bar *"only bit where the car is leaning on mechanical
+grip, not wing."* **That does not survive.** Where the car FIRST got away on each
+of the nine laps:
+
+```
+  1,337 · 1,471 · 1,970 · 3,066 · 3,075 · 3,705 · 3,718 · 4,206 m   (one lap clean)
+```
+
+**All over the lap.** And catches per lap by region: his corner **43.7**, the slow
+left after it **76.4**, **everything else 77.6**. Not 92 % in two corners - that
+figure came from 500 m zones that swallowed the aftermath of each loss.
+
+⇒ **The rear was loose everywhere at two clicks.** His corner is where it *cost*
+him, because it is fast and blind and demands commitment - not because it is the
+only place the bar bit. **A corner can be where a fault is felt without being
+where it lives.**
+
+### 33d. What survives, unchanged
+
+- **`arb_r` 4 confirmed.** His report, plus **197.7 -> 18.5 catches a lap** and
+  six spins in nine laps becoming zero in eight.
+- **In his corner alone: 43.7 -> 5.6 catches a lap.**
+- **The rotation index was fooled** (section 28). Unaffected by this retraction -
+  if anything strengthened: the index scored a car that was loose *everywhere* as
+  rotating better.
+
+### 33e. The lesson, and it is the same one twice in three days
+
+**Never build a speed or terrain profile from laps selected by the symptom you
+are studying.** Compute the reference profile from clean laps at a known-good
+setting, then overlay the symptom on it. Both times this bit, the error looked
+like a physical finding and read perfectly plausibly.
+
+⚠️ **And ask him what he calls the corner before naming it.** He calls this one
+*"the 3rd last"*; the app's own model finds six corners on a fifteen-corner
+circuit, so it cannot count to it. **His numbering is the vocabulary.**
