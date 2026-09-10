@@ -1845,3 +1845,80 @@ instrument is clean; only its zero moved.
 | He reports the car finishing corners with less steering | he reports no change, or a loose rear on brake release (then 4) |
 | The medium's 8.7% wear saving holds over a second stint | a repeat within-stint A/B lands inside 3% |
 | A same-session three-compound run reproduces RM about 1.9 s/lap faster than RH | it comes in under 1.2 s, and the hard one-stop wins outright |
+
+## 26. Why the beep died in the medium stint - DIAGNOSED, and it is a product defect
+
+> **[DRIVER REPORT]:** *"the shift beep died in the medium stint why?"*
+
+**It did die, he is right, and it went silent in FOUR of six gears for the last
+five laps.** Nothing in the log said so - `pitcrew.log` carries no beep line
+after the table loaded at 19:47:32, and no error. He found it by noticing the
+silence, which is the only instrument there was.
+
+### 26a. The mechanism
+
+`shift_beep.py`, `should_beep()` - the hysteresis flag `shift_above` is cleared
+only here, with `REARM_FRACTION = 0.95`:
+
+```python
+  re_armed = shift_above
+  if rpm < threshold * REARM_FRACTION:
+      re_armed = False
+```
+
+**The beep re-arms only if the revs fall below 95% of the threshold.** On a
+close-ratio box an upshift does not drop them that far, so the beep survives
+only while:
+
+```
+      shift_rpm / ratio_step  <  threshold x 0.95
+```
+
+**This box's upper steps are 1.1721, 1.1210 and 1.0727.** At a 7,400 threshold
+that tolerates shifts up to **8,240 / 7,881 / 7,541 rpm** in 3->4, 4->5, 5->6.
+He was shifting at **~8,390**.
+
+### 26b. Measured off session 157 - the landing rpm is the minimum over the 0.5 s after each change
+
+```
+  SAVING, laps 2-9   (shifting ~7,380)          FULL SEND, laps 10-14 (shifting ~8,390)
+    1->2  floor 6052   re-armed 24/24            1->2  floor 6608   re-armed 17/17
+    2->3  floor 6278   re-armed 32/32            2->3  floor 6998   re-armed 17/22
+    3->4  floor 6477   re-armed 41/41            3->4  floor 7238   re-armed  0/25   SILENT
+    4->5  floor 6667   re-armed 45/45            4->5  floor 7498   re-armed  0/18   SILENT
+    5->6  floor 6811   re-armed 22/23            5->6  floor 7652   re-armed  0/2    SILENT
+```
+
+**164 of 165 shifts re-armed while he followed the beep. Zero of 45 re-armed in
+3rd, 4th and 5th once he stopped.** The moment he went back to full send the
+hysteresis latched and never released.
+
+### 26c. This is CLAUDE.md rule 10, and it is not my hack's fault alone
+
+The 7,400 threshold was the one-night promotion (section 20b), and it is what
+opened the gap between the beep and where he actually shifts. **But the latch is
+latent in the design and would fire identically on the intended path** - the
+fuel table engaged normally is the same 7,400 threshold, and the instant he
+stops following it the upper gears go quiet. **That is exactly when he most
+needs to hear it.**
+
+Rule 10: *"a rule that refuses a reading must be able to refuse its own
+baseline... it is a latch unless something can retire the reference"* - and its
+second half, *"log the accepts, not only the refusals"*. `ShiftBeep.beeps`
+counts and **nothing ever reports it**, which is why a whole stint went by.
+
+⛔ **And silence is ambiguous by design here**: a gear with no issued threshold
+is deliberately silent. So at the wheel a broken beep and a designed silence are
+the same sound. Filed as app work.
+
+### 26d. Tonight is SAFE, and here is the arithmetic
+
+The beep is back on **8,500**, which re-arms at 8,075. At that threshold the
+tolerated shift points are **10,544 / 9,898 / 9,465 / 9,052 / 8,662 rpm** - all
+above the ~8,450 he actually shifts at. **Every gear re-arms.** This is also why
+nothing was wrong on 9 Sep: that table's threshold matched his shift point.
+
+⚠️ **The general rule to check before issuing any future fuel table on a
+close-ratio box:** `threshold x 0.95 x ratio_step` must exceed the highest rpm
+the driver might shift at, **in every gear the table names** - not the rpm the
+table asks for.
