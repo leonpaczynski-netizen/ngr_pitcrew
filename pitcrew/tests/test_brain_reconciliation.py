@@ -425,7 +425,10 @@ def test_e8_no_live_lsd_band_anywhere_is_left_on_the_old_scale():
 _LESS = (r"(?:lower|reduc\w*|drop\w*|down|decreas\w*|soften\w*|open\w*|freer"
          r"|less|unlock\w*|back\b[^.|]{0,20}?\boff\b)")
 _ACCEL = r"(?:accel\w*|lsd_a\b|diff|lock)"
-_CURE = r"(?:push|understeer|rotat)"
+# The whole word, so the matched span carries it: the refutation says "gives
+# LESS rotation", and a span ending at "rotat" hid that from the exclusion
+# (the critic on 2.8 part 2, pass 7).
+_CURE = r"(?:push\w*|understeer\w*|rotat\w*)"
 # The lowering word and the axis close together, in either order, and the
 # thing it is offered to cure. The mechanism wordings count (pass 6): "a
 # freer diff frees rotation", "less lock under power", "back the accel off".
@@ -444,13 +447,25 @@ LOWER_ACCEL_FOR_PUSH = re.compile(
 # would be a false record: the overrun/braking axis, initial torque, a FWD
 # front diff, raising it - and the refutation itself, which says the words
 # in the opposite order ("less lock, LESS rotation").
+def claims_lower_accel(line: str) -> bool:
+    """Whether this line offers lowering the ACCELERATION axis as the cure.
+
+    **Judged on the matched span, not the line** (the critic on 2.8 part 2,
+    pass 7, MAJOR): a rationale naming two axes is ordinary writing - "with
+    initial torque already low, drop the acceleration sensitivity to cure
+    the push" - and a line-wide exclusion cleared the live claim beside it.
+    """
+    return any(not NOT_THIS_CLAIM.search(hit.group(0))
+               for hit in LOWER_ACCEL_FOR_PUSH.finditer(line))
+
+
 NOT_THIS_CLAIM = re.compile(
     r"overrun|braking sensitivity|initial torque|\bFWD\b|front accel"
-    r"|less rotation|no rotation"
-    # "freer differential, more rotation" is §4.1's Initial Torque bullet,
-    # which takes its axis from the heading above it - the same blind spot
-    # as `02`:440, and the reason both are stamped by hand.
-    r"|freer differential", re.IGNORECASE)
+    r"|less rotation|no rotation", re.IGNORECASE)
+# **"freer differential" is NOT excluded** (pass 7): §4.1's Initial Torque
+# bullet and the live claim say it in the same words, so no pattern can tell
+# them apart. The bullet is stamped by hand, like its sibling at `02`:440 -
+# the heading-context blind spot, applied consistently.
 
 
 def test_e10_lower_accel_for_a_push_always_says_it_is_contested():
@@ -475,8 +490,7 @@ def test_e10_lower_accel_for_a_push_always_says_it_is_contested():
         for path in sorted(ROOT.glob(pattern)):
             text = path.read_text(encoding="utf-8")
             for number, line in enumerate(text.splitlines(), 1):
-                if LOWER_ACCEL_FOR_PUSH.search(line) \
-                        and not NOT_THIS_CLAIM.search(line) \
+                if claims_lower_accel(line) \
                         and not any(m in line for m in marked):
                     bare.append(f"{path.relative_to(ROOT).as_posix()}:{number}")
     assert not bare, f"'lower accel for a push' with no pointer at {bare}"
@@ -502,10 +516,30 @@ def test_e10_sees_the_claim_and_not_its_neighbours():
         "Car snaps suddenly on power | Lower acceleration sensitivity")
     # And the claims that are somebody else's axis, or the refutation itself.
     for other in ("an open diff on the overrun is a larger rotation source",
-                  "Initial Torque decrease → freer differential, more rotation",
                   "FWD: raise front accel sensitivity for exit understeer",
                   "On this car LESS acceleration lock gives LESS rotation"):
-        assert NOT_THIS_CLAIM.search(other), other
+        assert not claims_lower_accel(other), other
+    # **"Freer differential" is the live claim's own wording**, so §4.1's
+    # Initial Torque bullet cannot be told from it by pattern - it carries a
+    # hand stamp instead, and the check is left free to flag the wording.
+    assert claims_lower_accel(
+        "Initial Torque decrease → freer differential, more rotation")
+    bullet = [line for line in (ROOT / "brain/_inbox/02-gt7-setup-parameters.md")
+              .read_text(encoding="utf-8").splitlines()
+              if "freer differential, more rotation" in line]
+    assert bullet and all("v1.70" in line for line in bullet), bullet
+    # **A second axis in the same sentence does not clear the claim** (pass
+    # 7): the exclusion is judged on the span that matched, not the line.
+    for both in ("with initial torque already low, drop the acceleration "
+                 "sensitivity to cure the push",
+                 "keep braking sensitivity high and lower accel to free rotation",
+                 "leave it on the overrun; on power, less accel lock gives "
+                 "more rotation",
+                 "on an FWD car raise front accel, but on this MR car lower "
+                 "accel for the push",
+                 "initial torque stays, accel comes down, and the push goes away",
+                 "a freer differential on power will cure the mid-corner push"):
+        assert claims_lower_accel(both), both
 
 
 def test_e7_the_register_restates_no_setup_value():

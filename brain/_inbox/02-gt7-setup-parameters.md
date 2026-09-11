@@ -417,11 +417,11 @@ Note that these two positions are not as far apart as they look: both agree that
 
 **Unit:** dimensionless index. **Range: 5–60 on effectively all cars**, integer steps. Universal scale. **[GAME, v1.70 — confirmed on three cars across two classes in `11`]**
 
-> **⚠️⚠️ 21 Aug — the floor may no longer be 5.** 1.71: *"Initial differential gear settings and **adjustment ranges** have been fixed."* **[COMMUNITY — single source, GTPlanet undocumented-changes thread]** one player reports the Fully Customisable Diff can now be set to **0/0/0**, *"never before that was possible."*
+> **⚠️ 21 Aug — the floor is no longer 5, and this is now settled.** 1.71: *"Initial differential gear settings and **adjustment ranges** have been fixed."* **[COMMUNITY — single source, GTPlanet undocumented-changes thread]** one player reported the Fully Customisable Diff can now be set to **0/0/0**, *"never before that was possible."* **Confirmed on v1.71 by `range_records`: 0–30 / 0–100 / 0–100 on all four cars read.**
 >
-> **If confirmed, a genuinely open differential is buildable for the first time in the series.** Every baseline in §4.2 is written against a floor of 5, and the space below them is unexplored. It matters most for **§4.1 Braking Sensitivity** — an open diff on the overrun is a larger rotation source than anything this section describes — and for **`08` A4**, where LSD braking sensitivity is the driver's entire off-throttle toolkit.
+> **A genuinely open differential is buildable for the first time in the series.** Every baseline in §4.2 is written against a floor of 5, and the space below them is unexplored. It matters most for **§4.1 Braking Sensitivity** — an open diff on the overrun is a larger rotation source than anything this section describes — and for **`08` A4**, where LSD braking sensitivity is the driver's entire off-throttle toolkit.
 >
-> **One person, two days after release. Confirm it on the settings screen (`16` §12 Job 1, thirty seconds) before it changes a single setup.**
+> ~~One person, two days after release. Confirm it on the settings screen before it changes a single setup.~~ **Confirmed 11 Sep 2026 — `range_records`, all four cars, v1.71.**
 
 **Unlock:** Limited-Slip Differential from Club Sports; AWD torque split needs the Torque-Vectoring Centre Differential. **[GAME]**
 **PP effect:** the *part* affects PP; the values generally do not. **[COMMUNITY]** **⚠️ But note `06` §1.2's single-source claim that PP is computed from the *default* settings of adjustable suspension and diff — if true, 1.71 changing those defaults changes PP on cars nobody touched.**
@@ -431,7 +431,7 @@ Note that these two positions are not as far apart as they look: both agree that
 **Initial Torque (5–60 on v1.70; 0–30 on v1.71)**
 The always-on preload — the baseline locking present *regardless* of throttle or brake state, and it adds to both the acceleration and braking locking effects. At 5 it is effectively an open-ish diff at zero load; at 60 the car behaves close to spool at low load.
 - **Increase →** more locked at all times. Smoother, more predictable transitions; more straight-line stability; **more mid-corner understeer** and more steering effort/scrub; more tyre wear on the driven axle.
-- **Decrease →** freer differential, more rotation, sharper direction change, but more sensitive to throttle and more prone to inside-wheel spin.
+- **Decrease →** freer differential, more rotation, sharper direction change, but more sensitive to throttle and more prone to inside-wheel spin. *(Initial torque, v1.70 scale - not the acceleration axis §10.5 contests.)*
 - **GT7 practice: keep this LOW (5–10) on almost everything.** The main exception is deliberately over-locked drag and drift setups.
 
 **Acceleration Sensitivity (5–60 on v1.70; 0–100 on v1.71)**
