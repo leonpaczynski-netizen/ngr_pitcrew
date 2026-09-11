@@ -307,6 +307,13 @@ def how_driven(store, sessions) -> None:
 
 # ---------------------------------------------------- the driver as a variable
 
+def split_notes(silences) -> tuple[list[str], list[str]]:
+    """(under his session's row, gathered below the table). His own words
+    belong on his session's row, not in a pile at the bottom (critic 6)."""
+    under = [line for line in silences if "struck by hand, in his words" in line]
+    return under, [line for line in silences if line not in under]
+
+
 def trend_line(trend, label: str) -> str:
     """One session's three numbers, each with its n, "—" where unknown."""
     if trend.incidents is None:
@@ -355,13 +362,11 @@ def driver_variable(store, event_id: int, sessions, *, start_type=None) -> None:
         trend = session_trend(laps, session_id=session["id"], kind=kind,
                               start_type=start_type if kind == "race" else None)
         print(trend_line(trend, session_label(kind, session.get("rehearsal"))))
-        for line in trend.silences:
-            if "struck by hand, in his words" in line:
-                # His own words belong on his session's row, not in a pile
-                # at the bottom (critic 6, pass 2).
-                print(f"        - {line}")
-            else:
-                notes.setdefault(line, []).append(session["id"])
+        under_row, footnotes = split_notes(trend.silences)
+        for line in under_row:
+            print(f"        - {line}")
+        for line in footnotes:
+            notes.setdefault(line, []).append(session["id"])
     for line, ids in notes.items():
         print(f"  - {line} (s{', s'.join(str(i) for i in ids)})")
 
@@ -526,7 +531,7 @@ def session_label(kind, rehearsal) -> str:
     return f"{kind} (rehearsal)" if kind == "race" and rehearsal else (kind or "")
 
 
-def against_the_plan(store, event, runs) -> None:
+def against_the_plan(store, event, runs, all_runs=None) -> None:
     """From the data, never from the plan - through the export's own
     expressions: `audit_line_from_laps` for burn, lap time and wear against
     `expects`, and `race.pit_loss.measure` for each stop."""
@@ -548,12 +553,18 @@ def against_the_plan(store, event, runs) -> None:
     length = race_length(context_from_event(event))
     # Every run's stops first: the event's one measured figure came from one
     # of them, and the line for each stop has to say which.
+    # **Every race run on the event, filtered or not** (critic 6, pass 3):
+    # built from the `--sessions`-filtered runs, a debrief of the earlier
+    # Daytona race called a figure with 49 L of fill inside it "measured",
+    # because the run it came from had been filtered out.
+    every_run = list(all_runs) if all_runs is not None else list(runs)
+    every_run += [run for run in runs if run not in every_run]
     measured: dict = {}
-    for run in runs:
+    for run in every_run:
         rows = store.list_laps(run["session_id"]) if run.get("session_id") else []
         measured[run["id"]] = (rows, pit_loss.measure(
             rows, refuel_rate_lps=event.get("refuel_rate_lps")))
-    everywhere = [(run.get("session_id"), stop) for run in runs
+    everywhere = [(run.get("session_id"), stop) for run in every_run
                   for stop in measured[run["id"]][1]]
     dropped_wear = False
     for run in runs:
@@ -743,11 +754,12 @@ def main() -> int:
         how_driven(store, sessions)
         driver_variable(store, args.event_id, sessions,
                         start_type=event.get("start_type"))
-        runs = store.list_race_runs(args.event_id)
+        all_runs = store.list_race_runs(args.event_id)
+        runs = all_runs
         if args.sessions:
-            runs = [r for r in runs if r.get("session_id") in set(args.sessions)]
+            runs = [r for r in all_runs if r.get("session_id") in set(args.sessions)]
         calls_against_outcome(store, runs)
-        against_the_plan(store, event, runs)
+        against_the_plan(store, event, runs, all_runs=all_runs)
         radio(store, args.event_id, args.sessions)
         close()
         return 0

@@ -195,6 +195,19 @@ def test_a_pit_on_lap_one_is_not_a_lap_one_cost():
     assert any("pit lap" in line for line in trend.silences)
 
 
+def test_a_lap_one_stored_as_an_incident_says_its_cost_includes_it():
+    """Critic 6, P11."""
+    from dataclasses import replace
+
+    race = [100.0, 91.0, 91.0, 91.0, 90.0, 90.2, 89.8, 90.1]
+    laps = _laps(race)
+    laps[0] = replace(laps[0], excluded=True, exclusion_reason="incident")
+    trend = session_trend(laps, kind="race", evidence_for=_off_on())
+    assert trend.lap_one_cost_s is not None
+    assert any("lap one is stored as an incident" in line for line in trend.silences)
+    assert not any("not judged for incidents" in line for line in trend.silences)
+
+
 def test_a_rolling_start_says_so():
     race = [100.0, 91.0, 91.0, 91.0, 90.0, 90.2, 89.8, 90.1]
     trend = session_trend(_laps(race), kind="race", start_type="Rolling",

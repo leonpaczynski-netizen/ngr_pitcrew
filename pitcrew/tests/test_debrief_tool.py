@@ -197,6 +197,81 @@ def test_a_stored_total_with_the_fill_inside_is_called_what_it_is():
     assert "the session 143 stop's total with its 49.1 L fill inside" in said
 
 
+def _daytona_stop():
+    from pitcrew.race.pit_loss import PitLoss
+
+    return PitLoss(total_s=72.28, ex_fuel_s=23.19, in_lap_ms=124_471,
+                   out_lap_ms=156_160, clean_lap_ms=104_200.0, clean_laps=15,
+                   fuel_added_l=49.09, refuel_rate_lps=1.0, stop_lap=12)
+
+
+def test_a_figure_that_is_this_stops_ex_fuel_says_so():
+    """The path every correctly stored figure will take (critic 6, P4)."""
+    from tools.debrief import pit_loss_line
+
+    said = pit_loss_line(_daytona_stop(), 23.19, "measured", this_session=143)
+    assert "measured at this stop, ex-fuel, so this compares it with itself" in said
+
+
+def test_another_sessions_stop_is_never_this_one():
+    """Critic 6, P8: "compares it with itself" is for this stop only."""
+    from tools.debrief import pit_loss_line
+
+    said = pit_loss_line(_stop(fuel=True), 23.19, "measured",
+                         others=[(143, _daytona_stop())], this_session=127)
+    assert "measured at the session 143 stop, ex-fuel" in said
+    assert "itself" not in said
+
+
+def test_a_filter_does_not_hide_where_the_figure_came_from(capsys):
+    """Critic 6, pass 3 (MAJOR): `--sessions 127` dropped the s143 run, and
+    the 72 s figure - its total, fill inside - was called "measured"."""
+    from tools.debrief import against_the_plan
+
+    def _rows(pit_ms, out_ms, fill):
+        rows = [{"lap_num": n, "lap_time_ms": 104_000, "is_pit_lap": False,
+                 "is_out_lap": False} for n in range(2, 12)]
+        rows.append({"lap_num": 12, "lap_time_ms": pit_ms, "is_pit_lap": True,
+                     "is_out_lap": False, "fuel_added_l": 0.0 if fill else None})
+        rows.append({"lap_num": 13, "lap_time_ms": out_ms, "is_pit_lap": False,
+                     "is_out_lap": True, "fuel_added_l": fill})
+        return rows
+
+    laps = {143: _rows(124_471, 156_160, 49.09), 127: _rows(123_200, 162_100, None)}
+
+    class Store:
+        def list_strategies(self, event_id):
+            return [{"id": 1, "label": "plan",
+                     "plan": {"stints": [{"laps": 12}, {"laps": 8, "tyres": True}]}}]
+
+        def list_event_laps(self, event_id, kind):
+            return []
+
+        def list_laps(self, session_id):
+            return laps[session_id]
+
+    event = {"id": 10, "pit_loss_secs": 72.63, "pit_loss_source": "measured",
+             "refuel_rate_lps": 1.0, "race_type": "laps", "race_laps": 20,
+             "race_minutes": None, "car_name": "Car",
+             "track": "Daytona International Speedway", "layout": "Road Course"}
+    every = [{"id": 14, "strategy_id": 1, "session_id": 127},
+             {"id": 17, "strategy_id": 1, "session_id": 143}]
+    against_the_plan(Store(), event, every[:1], all_runs=every)
+    out = capsys.readouterr().out
+    assert "the session 143 stop's total with its 49.1 L fill inside" in out
+    assert "run 17" not in out, "only the filtered run is printed"
+
+
+def test_his_words_go_on_his_row():
+    from tools.debrief import split_notes
+
+    under, below = split_notes([
+        'lap 2 struck by hand, in his words: "crash" - not in the incident count',
+        "no lap-one cost: a practice lap one is driven out of the pits"])
+    assert under == ['lap 2 struck by hand, in his words: "crash" - not in the incident count']
+    assert below == ["no lap-one cost: a practice lap one is driven out of the pits"]
+
+
 def test_declared_says_it_may_be_the_default_only_when_it_could_be():
     from tools.debrief import pit_loss_line
 
