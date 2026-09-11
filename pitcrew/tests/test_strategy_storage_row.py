@@ -624,6 +624,50 @@ def test_an_armed_race_keeps_its_plan_line_when_another_is_approved(raced):
     assert screen.plan_line.text() != shown
 
 
+def _desk_approves_another(store, event_id, label="desk rev B") -> int:
+    """What `write_strategy` does when a plan certifies: a new row, approved
+    in the store, with no refresh of the app's page."""
+    plan = dict(store.get_approved_strategy(event_id)["plan"])
+    new_id = store.save_strategy(event_id, plan, label=label)
+    store.approve_strategy(new_id)
+    return new_id
+
+
+def test_a_plan_approved_while_armed_is_shown_once_the_race_stops(raced):
+    """Critic 2, pass 7 (MAJOR): the poll marked plan B seen while the page
+    was held on A, and `stop_race` never refreshed - so after Stop the page
+    still showed A and the next Start armed B under A's line."""
+    controller, screen, store, event_id = raced
+    assert controller.start_race() is True
+    shown = screen.plan_line.text()
+    new_id = _desk_approves_another(store, event_id)
+    controller._poll_plan()
+    assert screen.plan_line.text() == shown, "held on the armed plan"
+    assert controller._seen_plan_id != new_id, "and not marked as seen"
+    controller.stop_race()
+    assert "desk rev B" in screen.plan_line.text()
+
+
+def test_start_shows_the_plan_it_arms(raced):
+    """Approved moments before Start, inside the 15 s poll."""
+    controller, screen, store, event_id = raced
+    _desk_approves_another(store, event_id, label="approved at the grid")
+    assert "approved at the grid" not in screen.plan_line.text()
+    assert controller.start_race() is True
+    assert "approved at the grid" in screen.plan_line.text()
+
+
+def test_the_plan_choice_is_locked_while_a_race_is_armed(raced):
+    """Critic 2, pass 7: the picker could read "No plan" over a race
+    holding plan A's stints."""
+    controller, screen, _store, _event_id = raced
+    assert screen.plan_picker.isEnabled()
+    assert controller.start_race() is True
+    assert not screen.plan_picker.isEnabled()
+    controller.stop_race()
+    assert screen.plan_picker.isEnabled()
+
+
 def test_the_refresh_leaves_somebody_elses_status_alone(raced):
     """The mutant that survived pass 4: a refresh that cleared ANY status."""
     controller, screen, store, event_id = raced

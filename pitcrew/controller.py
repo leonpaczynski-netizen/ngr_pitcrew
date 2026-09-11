@@ -1467,6 +1467,14 @@ class PitCrewController(QObject):
         except Exception:                                    # noqa: BLE001
             log("pitcrew").warning("could not refresh the loaded plans",
                                    exc_info=True)
+        # **Not recorded as seen while a race is armed** (critic 2, pass 7).
+        # The page is the race's then and did NOT show the new plan, so
+        # marking it seen meant `_poll_plan` never showed it after the race
+        # either - the next Start armed plan B under plan A's box laps.
+        race = getattr(self, "race", None)
+        if race is not None and (getattr(race, "armed", False)
+                                 or getattr(race, "running", False)):
+            return
         approved = self.store.get_approved_strategy(event["id"])
         self._seen_plan_id = (approved.get("id") if isinstance(approved, dict)
                               else None)
@@ -4570,6 +4578,13 @@ class PitCrewController(QObject):
                 f"Plan refused: {self.race.refusal}", warn=True)
             self.race = None
             return False
+        # **The plan line is the plan just armed** (critic 2, pass 7). The page
+        # is refreshed by a 15 s poll, so a plan approved moments before Start
+        # was armed under the previous one's box laps. Only when a plan was
+        # armed: with "No plan" chosen, `set_plan(None)` would say none is
+        # approved, which is false.
+        if approved is not None:
+            self.race_screen.set_plan(approved)
 
         # **Declare the instrument, once, on the grid.** Silence is this
         # app's most-used output and it has never meant one thing - no plan,
@@ -5269,6 +5284,16 @@ class PitCrewController(QObject):
         if self.race_screen is not None:
             self.race_screen.set_armed(False)
             self.race_screen.set_status("Race closed.")
+        # **And the page catches up with the plans** (critic 2, pass 7). A plan
+        # approved while the race was armed or running was held off the page,
+        # and nothing re-read it at the close - so the next Start armed it
+        # under the last race's box laps. `shutdown` comes through here too,
+        # so a failure is logged, never raised.
+        try:
+            self.refresh_plan()
+        except Exception:                                    # noqa: BLE001
+            log("pitcrew").warning("could not refresh the plan at the close",
+                                   exc_info=True)
 
     def _close_out_finished_race(self) -> None:
         """Close the race run at the flag, rather than at app shutdown.

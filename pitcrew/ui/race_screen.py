@@ -591,6 +591,10 @@ class RaceScreen(QWidget):
     def set_armed(self, armed: bool) -> None:  # noqa: N802 - Qt naming
         self._armed = armed
         self.start_button.setText("End race" if armed else "Start race")
+        # **The choice was made at the arm** (critic 2, pass 7). Left live,
+        # it could read "No plan" over a race holding plan A's stints, beside
+        # a status and a plan line that said otherwise.
+        self.plan_picker.setEnabled(not armed)
 
     # ------------------------------------------------------------------ data
 
