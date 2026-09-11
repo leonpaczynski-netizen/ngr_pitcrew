@@ -5634,7 +5634,14 @@ class PitCrewController(QObject):
             return DriverState()
         state = self.race.state
         has_plan = bool(getattr(self.race, "_stints", None))
-        if not self.race.running:
+        # **The flag is let through to its own branch below.** At the chequer
+        # `phase` is FINISHED - neither running nor armed - so this gate
+        # returned a bare state and the board went blank and said "no plan",
+        # while the finished branch that keeps his position and his tyres was
+        # reachable only from a stub that was running AND finished, which
+        # production never is (critic pass 2 on row 1.8).
+        finished = bool(getattr(state, "finished", False))
+        if not self.race.running and not finished:
             if not getattr(self.race, "armed", False):
                 return DriverState()
             # **On the grid the board is already up, and it said "no plan".**
@@ -5869,7 +5876,7 @@ class PitCrewController(QObject):
             found["rear_pair_rate"] = self._splits.rate(corner)[0]
         return found
 
-    def _board_fuel(self, state, *, has_plan: bool = True) -> dict:
+    def _board_fuel(self, state, *, has_plan: bool) -> dict:
         """The two in-hand figures and, where there is none, the reason.
 
         **Both come from `race/calls.py` and neither is computed here.** The

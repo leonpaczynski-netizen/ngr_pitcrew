@@ -1327,7 +1327,16 @@ def test_the_grid_board_shows_the_plan_it_is_armed_to(qt_app):  # noqa: F811
                             _stints=[{"laps": 11}, {"laps": 9}]))
     stub.race.state.lap = 0
     stub.race.state._to_stop = 11
+    # The last call reaches the grid too (critic pass 2: dropping it from the
+    # armed branch survived every board test).
+    from pitcrew.race.calls import MARK_INSTRUCTION
+    from pitcrew.ui.driver_view import BoardCall
+
+    said = BoardCall(text="Green, green, green. 20 laps.",
+                     mark=MARK_INSTRUCTION, lap=None)
+    stub._board_call = said
     got = _state_for(stub)
+    assert got.last_call is said
     assert got.has_plan is True
     assert got.laps_to_box == 11.0
     # The same expression the running board uses, so the grid and lap one
@@ -1350,6 +1359,32 @@ def test_the_grid_board_shows_the_plan_it_is_armed_to(qt_app):  # noqa: F811
     idle = _Stub(race=_Race(running=False, armed=False,
                             _stints=[{"laps": 20}]))
     assert _state_for(idle).has_plan is False
+
+
+def test_at_the_flag_the_board_keeps_his_result(qt_app):  # noqa: F811
+    """**The production shape of a finish: FINISHED, neither running nor
+    armed.** The flag tests used a stub that was running AND finished, which
+    production never is, so the branch that keeps position and tyres was
+    unreachable live and the board went blank and said "no plan"."""
+    from pitcrew.ui.driver_view import DriverView
+
+    stub = _Stub(race=_Race(running=False, armed=False))
+    stub.race.state.finished = True
+    from pitcrew.race.calls import MARK_INSTRUCTION
+    from pitcrew.ui.driver_view import BoardCall
+
+    said = BoardCall(text="Chequered flag. P6.", mark=MARK_INSTRUCTION,
+                     lap=20)
+    stub._board_call = said
+    got = _state_for(stub)
+    assert got.finished is True
+    assert got.position == 6
+    assert got.compound == "RM"
+    assert got.last_call is said
+    view = DriverView()
+    view.update_state(got)
+    assert view.box_stat.value.text() == "FLAG"
+    assert "no plan" not in view.box_stat.sub.text()
 
 
 def test_the_box_lap_itself_is_due_not_late():

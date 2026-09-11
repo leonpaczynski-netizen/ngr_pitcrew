@@ -1805,6 +1805,48 @@ stored plan lacks start laps, and every stored plan's start laps chain.
    `certificate` the app works out, and the handover's own three go *beside*
    the plan — not "rename it". The `export` branch is tested on both shapes.
 
+**Mutation sweep, in a throwaway worktree at `827712b`:** 31 mutants across
+`_with_start_laps`, `contract_gaps`, `stamp`, `certify`, `whole_numbers`,
+`Handover.validate`, approval, the grid and the MCP door — **all 31 killed.**
+The carried "three guards survive full-suite mutation" is closed.
+
+**Critic pass 2 on the storage row — NOT AGREED, two majors.**
+
+1. **The context check went into one approving door.** `write_strategy`
+   approved on `certified` alone, so last round's file written against this
+   event was approved, the good plan demoted to a candidate, and the grid
+   then refused the foreign one with nothing to fall back on — exactly what
+   the commit's own comment said the check was for.
+   `execution.built_for_another_race` is now the one expression both doors
+   ask; `write_strategy` stores a foreign plan as a candidate and says so.
+2. **The chaining refusal missed the laps before stint 1.** A first stint
+   on lap 5 certified; the page said *"box lap 10"* and George boxed on 14
+   on a load sized for 10. Refused now — `adopt`'s mid-race tail is the only
+   stint list that starts later, and it never passes the gate — and
+   `pit_laps` must be the laps the stints box on (every stored plan agrees).
+
+Minors, all fixed: an unrecorded layout read *"built for the None layout"*;
+the start-lap early return is pinned directly; an unreadable approved plan
+was told *"approval fills those in"*; the Race page showed strategies 3 and 9
+as approved all week with no sign they will not arm (it says so now, in the
+grid's own sentence); and the approval write-back left `certified: false` in
+the row's evidence — it records its own certificate and what it stamped.
+
+**And a defect the new tests found, not the critic:** `RaceScreen.set_plan`
+called `.get` on every stint, so an approved row holding an unreadable one
+raised on the Race page from `_poll_plan` every tick. It says the plan will
+not arm instead, and draws none of the stints rather than the survivors.
+
+**Critic pass 2 on row 1.8 — NOT AGREED, one major, and it predates the
+row.** At the flag `phase` is FINISHED — neither running nor armed — so the
+gate this row rewrote returned a bare state and the board went blank and
+said *"no plan"*; the finished branch that keeps position and tyres was
+reachable only from a stub that was running AND finished, which production
+never is. Let through now, and tested in production's shape. Minors: the
+grid's last call is pinned; `_board_fuel`'s `has_plan` is required; the grid
+countdown carries no "from the green" caveat through a late green detection
+(Monza detected at lap 2) — left, recorded here.
+
 ### Critic pass 7 — 8 Sep 2026, five rounds on critic 6's three defects
 
 **Commits `abcfe1a` → `f8230ca` → `c534de9` → `580addb` → `6d89827` →
