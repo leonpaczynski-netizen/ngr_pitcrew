@@ -26,7 +26,7 @@
 
 **Did not survive, or is unverified:**
 
-- **B1's baseline sheet.** Built on v1.70 slider ranges. 1.71 revised adjustment ranges for suspension, differential and aero. **Do not issue B1 as absolute numbers until `11-car-slider-ranges.md` is re-read** (15 minutes, `16` §12 Job 1).
+- **B1's baseline sheet.** Built on v1.70 slider ranges. 1.71 revised adjustment ranges for suspension, differential and aero. **Do not issue B1 as absolute numbers until `11-car-slider-ranges.md` is re-read** (15 minutes, `16` §12 Job 1). *(Re-read: all four cars are on v1.71 in `range_records`, checked 11 Sep 2026 - the gate is met; B1's numbers still want re-deriving against them.)*
 - **A1's camber rule.** 1.71 reworked per-car steering geometry — the model that produces GT7's anomalous camber behaviour. **A1 may now be wrong in either direction.** Highest-priority re-test.
 - **A7's ride-height-first rule for kerbs and bumps.** 1.71 changed damper attenuation and revised suspension defaults. Whether the 1.49 arch-rub problem survived is [UNKNOWN].
 - **A5.1 and D3.1 — the accel-14 finding.** Measured on v1.70, and 1.71 introduced a new engine torque control map, which changes the torque that finding responds to. **Re-test before reusing 14.**

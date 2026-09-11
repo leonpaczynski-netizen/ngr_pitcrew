@@ -168,15 +168,24 @@ def test_e1_no_live_doctrine_cites_a_tool_that_is_gone():
         for name in named:
             if name not in tools and not GONE.search(line):
                 stale.append(f"{path.relative_to(ROOT).as_posix()}:{number} {name}.py")
+        # And the classes §1a removed with the setup record (critic 5: `13`
+        # still called `SetupSheet.gears` "verified end to end").
+        if "SetupSheet" in line and not GONE.search(line):
+            stale.append(f"{path.relative_to(ROOT).as_posix()}:{number} SetupSheet")
     assert not stale, f"cited as if it still exists: {stale}"
 
 
 def test_e2_no_live_rule_still_issues_the_lsd_in_absolutes():
     """Retired 11 Sep 2026: all four cars read on v1.71 carry the same three
     LSD scales in `range_records` (0-30 / 0-100 / 0-100)."""
+    # The phrasings the rule was actually written in - including the two
+    # car-state sheets' "ABSOLUTES, not percentages" header, which the first
+    # version of this test did not match and so passed without checking the
+    # places sheets are issued from (critic 5 on row 2.8).
+    phrasings = ("except the LSD, in absolutes", "issue LSD in absolute values only",
+                 "ABSOLUTES, not percentages", "register has not been re-read")
     live = [f"{p.relative_to(ROOT).as_posix()}:{n}" for p, n, line in _live_lines()
-            if ("except the LSD, in absolutes" in line
-                or "issue LSD in absolute values only" in line)
+            if any(words in line for words in phrasings)
             and not GONE.search(line)]
     assert not live, f"the LSD-absolutes rule is still live at {live}"
 

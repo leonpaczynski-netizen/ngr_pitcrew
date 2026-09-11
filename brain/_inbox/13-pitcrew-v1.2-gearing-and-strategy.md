@@ -35,8 +35,9 @@ corrects doc 10's and doc 12's "nothing built yet" framing:
 - **`gear`, `rpm` and `rev_limiter` are already captured per frame** in
   `telemetry/recorder.py`. The `rpm` field carries the comment *"captured for
   short-shift analysis; never exported."* No new capture is needed for any of this.
-- **Gear ratios already round-trip both ways** — paste → Event screen → `SetupSheet.gears`
-  → `setup.gears` in the export. Verified end to end.
+- **Gear ratios already round-trip both ways** — paste → Event screen → `SetupSheet.gears` (removed)
+  → `setup.gears` in the export. Verified end to end. *(Since removed with the setup record,
+  `CLAUDE.md` §1a: the paste and that class are gone.)*
 - **`GT7Packet.gear_ratios`** (eight floats, the ratios actually fitted) is decoded and
   read by nothing. This is the only new capture in the request.
 - `strategies`, `race_runs` and `race_revisions` tables all exist and populate.

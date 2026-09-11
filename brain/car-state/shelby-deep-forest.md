@@ -68,8 +68,8 @@ SUSPENSION
   Toe angle      Front    -0.05 deg                           47.5%
                  Rear     +0.10 deg                           55.0%
 
-DIFFERENTIAL  — ABSOLUTES, not percentages: 1.71 moved the three axes off a
-               shared scale and the register has not been re-read.
+DIFFERENTIAL  — absolutes on this sheet. The absolutes-only rule is RETIRED
+               (retired 11 Sep 2026: all four cars read on v1.71 carry 0-30 / 0-100 / 0-100 - `11`)
   Initial torque          5
   Acceleration sens.      17     <- doctrine wants 20-26 here; HELD, see sheet
   Braking sens.           34

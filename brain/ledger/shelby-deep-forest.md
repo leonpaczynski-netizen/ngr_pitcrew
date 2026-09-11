@@ -9,8 +9,8 @@ Seeded 11 Sep 2026 from the car-state file at `712b4f7` 2026-09-06.
 `pitcrew.db` `range_records` holds it (read read-only 11 Sep), and every car-state percentage
 checked reproduces from it. The range register (`11-car-slider-ranges.md`, updated 24 Aug) still
 lists the Shelby as v1.70, STALE: it is the register that never absorbed the re-read, (b)-S1.
-Spans here are that record's. The file still issues the differential in absolutes ("register has
-not been re-read"), but the record gives the three LSD spans (30 / 100 / 100), so a named LSD step
+Spans here are that record's. The file issues the differential in absolutes (its "register has not
+been re-read" header retired 11 Sep), and the record gives the three LSD spans (30 / 100 / 100), so a named LSD step
 converts to pp. The one experiment actually run is a gearbox change, and gear ratios have no
 range.
 

@@ -4,9 +4,9 @@ The car and its settings: [`brain/car-state/rsr-sardegna-road-track-a.md`](../ca
 
 Seeded 11 Sep 2026 from the car-state file at `2945402` 2026-09-11.
 
-Ranges: RSR v1.71, 21 Aug 2026, verified (see the header). The file's own percentages reconcile
-with them (for example, Rev A's natural frequencies). The file says LSD is "ABSOLUTES … register has
-not been re-read since". The register shows the RSR's LSD *was* re-read on v1.71, which is (b)-R17.
+Ranges: RSR v1.71, verified, read 21 Aug and updated 5 Sep 2026 (`range_records`). The file's own
+percentages reconcile with them (for example, Rev A's natural frequencies). The file's LSD
+"ABSOLUTES … register has not been re-read" header is retired (11 Sep): (b)-R17, resolved.
 It matters only for the open lsd_a sweep row.
 
 ### 3a. Rev A to Rev E, and the gearbox (5 Sep, sessions 128–132)
@@ -187,11 +187,11 @@ Surfaced, not averaged (`CLAUDE.md` §4 rule 1). The latest is kept as the outco
   The two candidates stay `open` and were never run.
 - **R16.** §17 orders "Rev F, `arb_r`" next. §19f: "THIS MUST RUN BEFORE `arb_r`, and section 17's
   ordering is corrected" (wear stint first). Kept: §19f, and §20d repeats it.
-- **R17 (cross-file).** The file header says LSD is "ABSOLUTES … the register has not been re-read
-  since". The range register shows the RSR's three LSD axes re-read on v1.71 on 21 Aug
-  (0–30 / 0–100 / 0–99). The register itself carries an unresolved one-click disagreement on the
-  RSR's lsd_b ceiling (99 against 100 on two sister cars). Kept: the range is available. It only
-  matters for the open `lsd_a` sweep row.
+- **R17 (cross-file) - resolved 11 Sep.** The file header said LSD is "ABSOLUTES … the register has
+  not been re-read since". The RSR's three LSD axes were re-read on v1.71 on 21 Aug, and the
+  record's 5 Sep update reads 0–30 / 0–100 / 0–100 - the 21 Aug lsd_b 99 was the one-click
+  misread the register raised. The header is retired. It only matters for the open `lsd_a`
+  sweep row.
 - **R18.** The shift point for 5th was pre-issued as "[MEASURED on the old box, ASSUMED across this
   ratio change]". §18: "measured wrong on this one", with every gear from 1 to 5 reporting LIMITER.
   Kept: §18.

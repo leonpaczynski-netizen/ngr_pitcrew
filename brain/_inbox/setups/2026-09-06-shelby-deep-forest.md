@@ -343,7 +343,7 @@ sequence. **Run 1 measures it and I re-cut the same evening.**
 | Ballast | 109 kg @ 0 | | SCREEN — in the car; the mass is a regulation |
 
 **LSD in absolutes** — 1.71 moved its three axes off a shared scale and the
-register has not been re-read.
+register has not been re-read. *(Rule retired 11 Sep 2026: all four cars carry 0–30 / 0–100 / 0–100 on v1.71 - `11`.)*
 
 ---
 

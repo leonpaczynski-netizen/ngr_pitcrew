@@ -166,8 +166,8 @@ build): `audition_voices`, `render_voice_pack`, `render_voice_ab`,
 
 ## Before anything is issued
 
-**Nothing in the app checks a sheet any more.** `SetupSheet` and its validator
-went with the setup record (`CLAUDE.md` §1a), so the checks it made are yours,
+**Nothing in the app checks a sheet any more.** `SetupSheet` (removed) and its
+validator went with the setup record (`CLAUDE.md` §1a), so the checks it made are yours,
 against `range_records`: every value inside its slider's range for this car
 (`RangeRecord.fraction_of_range`); a sign only on toe front, toe rear and brake
 balance; gears strictly descending, every ratio positive, nine at most. The

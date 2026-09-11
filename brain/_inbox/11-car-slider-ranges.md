@@ -10,7 +10,7 @@
 
 **The record is the database, not this file.** Every car's endpoints live in `data/pitcrew.db` `range_records`, entered once on the app's **Car** screen (`CLAUDE.md` §1a: the range record stayed). Nothing reads the JSON blocks below - they fed the retired HTML tool - so they are history, marked, and never updated again. The table here was checked against the database, read-only, on 11 Sep 2026.
 
-**GT7 v1.71 (20 August 2026) said, in the official update notes, that adjustment ranges were revised for suspension, differential and aerodynamics. They were. Three cars have now been read on v1.71 and the same five endpoints moved on all three.**
+**GT7 v1.71 (20 August 2026) said, in the official update notes, that adjustment ranges were revised for suspension, differential and aerodynamics. They were. Four cars have now been read on v1.71 (`range_records`, checked 11 Sep 2026) and the same five endpoints moved on all four.**
 
 | Car | Status |
 |---|---|
@@ -38,7 +38,7 @@
 **Three consequences.**
 
 1. **The change is at least Gr.3-wide, and it is a version effect, not a car effect.** Three cars, two manufacturers, two drivetrain layouts (RR and MR), one class — the same five endpoints, the same values. This is the first reading with a genuine *before* column on the same car, so it also rules out the possibility that the RSR's "v1.70" figures (borrowed from this very car) were wrong to begin with.
-2. **`lsd_b` is 0 – 100 and the RSR's 99 is the odd reading.** §0.1 flagged this as a cell wanting a second look. Two cars now read 100 against the RSR's 99. **Re-read the RSR's LSD braking ceiling** — it is almost certainly a one-click misread, trivial in effect but it is the register's only remaining internal contradiction outside `top`.
+2. **`lsd_b` is 0 – 100 and the RSR's 99 is the odd reading.** §0.1 flagged this as a cell wanting a second look. Two cars now read 100 against the RSR's 99. ~~Re-read the RSR's LSD braking ceiling~~ **Closed: the RSR's record, updated 5 Sep 2026, reads 0 – 100** - the 21 Aug 99 was the one-click misread.
 3. **Percent-of-range reasoning is restored for this car**, and the standing instruction to express LSD in absolutes no longer applies to the Huracán. It no longer applies to the Shelby either: its v1.71 reading (23 Aug) carries the same three scales.
 
 > **Answered 11 Sep 2026, from `range_records`: fleet-wide on every car read - the Shelby's v1.71 LSD is 0 – 30 / 0 – 100 / 0 – 100.** The question as it stood on 24 Aug: **Gr.3-wide, or fleet-wide? The Shelby is now the only test left.** A Gr.N road car whose other endpoints differ wildly (ride height 75–160, NF 1.88–3.70, downforce 60–160) and which still reads the old 5–60 LSD. **If it re-reads as 0–30 / 0–100 / 0–100, the change is fleet-wide.** Five minutes.
@@ -84,7 +84,7 @@
 | Cell | 992 reads | Every other car in the register | |
 |---|---|---|---|
 | **`top` (max speed setting)** | **150 – 450** | **200 – 800** — all three, including the Shelby | **The only cell in the whole register that breaks pattern.** 200–800 looks universal rather than per-car. Unused so far, so it costs nothing to re-check — but it poisons every gearbox calculation on this car if it is wrong. |
-| **`lsd_b`** | 0 – **100** | RSR reads 0 – **99** | The RSR's 99 and the 992's 100 cannot both be right on two cars whose other 21 cells are identical. One was mis-read by one click. Trivial in effect. |
+| **`lsd_b`** | 0 – **100** | RSR read 0 – **99** on 21 Aug | **Closed 5 Sep 2026:** the RSR's record reads 0 – 100, so the 99 was the one-click misread. |
 
 **First sheet issued against this register: `setups/2026-08-22-992-gt3r-spa-24h.md`** — and its 20 values parsed with **0 clamped**, which is an independent confirmation that the recorded endpoints admit the values written against them.
 
@@ -134,7 +134,7 @@ The register's strongest structural result is that most endpoints are identical 
 
 Three outcomes, and they are not equally likely:
 
-1. **All three cars now read 0–30 / 0–100 / 0–99** → the parameter stays class-independent and the register absorbs the change cleanly. **Most likely, on the evidence of everything else in this file.**
+1. **All three cars now read 0–30 / 0–100 / 0–100** (the RSR's 99 re-read as 100 on 5 Sep) → the parameter stays class-independent and the register absorbs the change cleanly. **Most likely, on the evidence of everything else in this file.**
 2. **The two Gr.3 cars match but the Shelby differs** → LSD ranges have become class-derived, which would be a new structural fact and would move three parameters from the class-independent column to the chassis-derived one.
 3. **All three differ** → LSD ranges are now per-car, like ride height. This would be the biggest structural change the register has ever recorded.
 
@@ -205,7 +205,7 @@ Takes about five minutes per car. **It now needs doing again after every physics
 
 ### ✅ Porsche 911 RSR (991) '17 — Gr.3, MR — **v1.71**
 
-**Recorded 2026-08-21 · GT7 v1.71 · read off the car's own settings screen · ⭐ CURRENT**
+**Recorded 2026-08-21 · GT7 v1.71 · read off the car's own settings screen · superseded by the record's 5 Sep 2026 update, which reads LSD braking 0 – 100 - `range_records` is current, and this table keeps the 21 Aug reading**
 
 **Changed rows are marked. Everything unmarked read identically to the v1.70 block below it.**
 
@@ -227,7 +227,7 @@ Takes about five minutes per car. **It now needs doing again after every physics
 | Toe — rear | −1.00 ° | +1.00 ° | 2.00 ° | same |
 | **LSD initial torque** | **0** | **30** | **30** | ⭐ **5–60 → 0–30** |
 | **LSD acceleration sensitivity** | **0** | **100** | **100** | ⭐ **5–60 → 0–100** |
-| **LSD braking sensitivity** | **0** | **99** | **99** | ⭐ **5–60 → 0–99** |
+| **LSD braking sensitivity** | **0** | **99** | **99** | ⭐ **5–60 → 0–99** (5 Sep record: 0 – 100) |
 | Downforce — front | 350 | 450 | 100 | same |
 | Downforce — rear | 500 | 700 | 200 | same |
 | Brake balance | −5 | +5 | universal | same |
@@ -459,7 +459,7 @@ Takes about five minutes per car. **It now needs doing again after every physics
 
 > The rule silently changed meaning by more than 3× crossing from Gr.3 to Gr.N. It put three consecutive Yas Marina sheets on 80 / 98 mm while the driver spun four times in fifteen race laps and struck kerbs at 8 of 10 corners. **Rewrite B1's ride-height line as percent of range.** Tested on `setups/2026-08-16-shelby-yas-marina-revC.md` at 89 / 107 mm (16.5 % / 14.1 %).
 
-**3. The natural-frequency floor was 1.88 / 2.00 Hz on v1.70 (2.00 / 2.00 on v1.71)** — a full Hz softer than any Gr.3 car reaches. This car has run 3.05 / 3.20 Hz on all three sheets, **64 % / 63 % of its own range**, materially stiff for a heavy road car on aggressive kerbs. `01` §11 records that stiffening it at Sainte-Croix cost grip over bumps and worsened throttle exit. **There is a great deal of unused softness and none of it has been tried.**
+**3. The natural-frequency floor was 1.88 / 2.00 Hz on v1.70 (2.00 / 2.00 on v1.71)** — a full Hz softer than any Gr.3 car reaches. This car has run 3.05 / 3.20 Hz on all three sheets, **64 % / 63 % of its v1.70 range**, materially stiff for a heavy road car on aggressive kerbs. `01` §11 records that stiffening it at Sainte-Croix cost grip over bumps and worsened throttle exit. **There is a great deal of unused softness and none of it has been tried.**
 
 **4. +20 mm of rake is built into the minimums** (75 / 95), against +5 mm on the Gr.3 cars — so every Yas Marina sheet's "+18 mm rake" is in fact **−2 mm of added rake.**
 

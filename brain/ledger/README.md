@@ -35,13 +35,14 @@ week), parseable by any CSV reader.
   Bathurst file (sheet header) corroborate it: rh_f [55,80], rh_r [60,90], nf [3,5], arb [1,10],
   dc [20,40], de [30,60], cam [0,6], toe [−1,1], lsd_i [0,30], lsd_a [0,100], lsd_b [0,100],
   df_f [350,450], df_r [500,700], bb [−5,5], top [200,800], fg [2,5].
-  Porsche 911 RSR '17, v1.71, `verified`, 21 Aug 2026 (`11-car-slider-ranges.md`, RSR v1.71
-  block; the Sardegna header says its endpoints reconcile with Rev C §5). Same endpoints as the
-  Huracán except lsd_b [0,99].
+  Porsche 911 RSR '17, v1.71, `verified`, read 21 Aug and updated 5 Sep 2026 (`pitcrew.db`
+  `range_records`, read read-only 11 Sep; the Sardegna header says its endpoints reconcile with
+  Rev C §5). Same endpoints as the Huracán, lsd_b [0,100] included - the 21 Aug 99 was the
+  one-click misread the register raised.
   Shelby GT350R '16, v1.71, `verified`, 23 Aug 2026 (`pitcrew.db` `range_records`, read read-only
   11 Sep). Same endpoints as the Huracán except rh_f [75,160], rh_r [95,180], nf [2,4],
-  df_f [50,150], df_r [150,300]. The range register still carries a stale v1.70 reading: the
-  Shelby file's (b)-S1.
+  df_f [50,150], df_r [150,300]. The range register carried a stale v1.70 reading
+  until 11 Sep: the Shelby file's (b)-S1.
 - **Gear ratios, shift tables, ECU, restrictor and ballast have no slider range** in any range
   record (`pitcrew/setup/vocabulary.py` `RANGE_KEY_NAMES`; `ranges.py`). Those rows read
   "range unknown" and are also listed in (a).
