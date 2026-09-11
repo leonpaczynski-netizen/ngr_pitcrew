@@ -865,7 +865,7 @@ Fixes are **ranked by effectiveness** — try #1 first. Change **one thing at a 
 
 | # | Fix | Direction | Notes |
 |---|---|---|---|
-| 1 | **Brake balance** | Rearward (toward +) | Fastest, free, adjustable in-race. 1 click at a time. **[IN-HOUSE ✅]** RSR, Sardegna: +10 pp then +20 pp, more entry rotation, driver report and rear slip (ABS on, so the front slip channel was blind). On the RSR the steps were issued as sheet changes with his agreement; where the bias moves by his own hand it is his trim - recorded, never corrected (`brain/driver.md`). |
+| 1 | **Brake balance** | Rearward (toward +) | Fastest, free, adjustable in-race. 1 click at a time. **[IN-HOUSE ✅]** RSR, Sardegna: +10 pp then +20 pp, more entry rotation, driver report and rear slip (ABS on, so the front slip channel was blind). On the RSR the steps were issued as sheet changes (Rev B, Rev C); where the bias moves by his own hand it is his trim - recorded, never corrected (`brain/driver.md`). |
 | 2 | **LSD braking sensitivity** | **Lower** | Often the true culprit, especially on RR/MR where it's set high for stability. **[IN-HOUSE, one direction only]** Huracán, Daytona: *raising* it +5 pp cost entry rotation at T1 by more than 2x (s147, confirmed as a cost) — the driver's "lsd_b is too high". **Lowering it is untested in house:** the one step down (s127, −5 pp, his own ask) is open |
 | 3 | **Front compression damping** | **Lower** (−2 to −4) | Lets weight transfer forward faster; more front bite on turn-in |
 | 4 | **Rear expansion damping** | **Higher** (+2 to +4) | Controls rear rise, keeps the platform rotating |

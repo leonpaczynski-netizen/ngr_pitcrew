@@ -2502,6 +2502,33 @@ Minors:
 - The 1x→2x conversion is marked [ASSUMED].
 - The median is now the median of per-lap minimum slip.
 
+**Critic on 2.8 part 2, pass 2 (`b00be9f`): NOT AGREED - one blocker, one
+major, four minors, all fixed.**
+
+- **B3 was fixed in `07` and still live in two other files.** The Fuji plan
+  for 26 Sep said "discount practice burn 3-9 % for the race, as every
+  circuit on file has shown". On a 120-minute race at 1 L/s, where fuel is
+  the whole stop, that can plan one stop short. The Deep Forest sheet states
+  the rule four times, and that race is its own counter-example.
+  - The Fuji plan now measures the burn and sizes the fill from the hose.
+  - All four Deep Forest lines are re-flagged, the prediction row as
+    falsified: the race burned 7.55 L/lap overall.
+  - **e9 checks for the rule in every live doctrine file, not just `07`.**
+- **Major: one LSD band escaped** - Nürburgring GP's "LSD compromise ...
+  18-25". e8 now matches any band on a line about the diff, and exempts only
+  a line that flags the scale or states the v1.71 reading itself.
+- **Minors:**
+  - Two sentences are flagged in their own words: Laguna's "strongest weapon"
+    and the Deep Forest sheet's "worth more here".
+  - e6 sees the critic's second list too, and "not re-flagged" is not a flag.
+  - "With his agreement" is dropped, because nothing on file sources it.
+  - `11`'s floor position in words is now a change in points. The critic's
+    suggested "0 % to a sixth" was itself a position as a percentage, so
+    that is the merge with pass 1's M2.
+  - "Still open" now says where each row stands.
+- **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
+  the Deep Forest sentence.
+
 **The critic on 2.6, pass 3 (`f511c9e` + `f446334`): NOT AGREED - three
 majors, all fixed.**
 1. **A retired stop kept its tyres answer.** After "You're fuelled to the
@@ -2574,9 +2601,11 @@ limits. Now:
 - **Not written to the database.** The event row is his act on the Calendar
   screen, and that is where the BoP flag enters.
 
-**Still open in Phase 2:** 2.4 and 2.6-2.9 as written; `SKILL.md` is roughly
-twice 2.9's 450 lines; six evals short of 2.9's twenty; and **2.12 - the MCP
-server is registered nowhere** (no `pitcrew` entry in `~/.claude.json`, no
+**Still open in Phase 2 (updated 12 Sep):** 2.4, which waits for his yes;
+2.6, 2.7 and 2.8, each closing on its critic's AGREED; 2.9, where `SKILL.md`
+is at 968 lines against 450 and there are 14 evals against 20, and the "nine
+documented failures" the evals are for are named nowhere - they wait for him;
+and **2.12 - the MCP server is registered nowhere** (no `pitcrew` entry in `~/.claude.json`, no
 project `.mcp.json`), which is a change to the user's configuration and
 waits for his yes.
 

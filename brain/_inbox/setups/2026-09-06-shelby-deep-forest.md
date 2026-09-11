@@ -128,7 +128,7 @@ direction:**
 | RBR Short | 4.199 | 3.813 | −9.2% |
 
 **[MEASURED], n = 2 post-patch circuits.** So when run 3 gives me a practice
-burn today, I will discount it **3–9%** for the race and say which end I used.
+burn today, I will discount it **3–9%** for the race and say which end I used ⚠️ *[re-flagged 11 Sep 2026: not a rule - this race's last stint burned 7.92 L/lap against practice's 7.84; size the fill from the live burn]*.
 
 ### ⚠️ *"`top` 265 will still leave rpm unused"* — the question was voided
 You hand-cut the box instead, which is the better answer. §5 replaces the rule
@@ -421,7 +421,7 @@ more dead time — **≈ 25–30 s, not 40.**
   because track position is expensive. Both are
   true at once: the undercut is still mechanically weak (cold out-lap, long pit
   delta) but what you buy with it is worth more here than anywhere else you
-  race. **[DOCTRINE] — I have no measurement of either.**
+  race ⚠️ *[re-flagged 11 Sep 2026: see below]*. **[DOCTRINE] — I have no measurement of either.**
   ⚠️ *[Re-flagged 11 Sep 2026: measured afterwards. The race's one stop paid a
   1.41 s cold out-lap (one lap) plus about 3 s for the tyre change (his
   figure). Stint 2 ran about 1.0 s/lap quicker, but he also stopped coasting
@@ -514,7 +514,7 @@ separate a 4%/lap rate from a 12%/lap one — they differ by 64 percentage point
 over that run, which is far outside the gauge's coarseness.
 
 Also gives me the practice burn, which I will discount **3–9%** for the race
-per §2.
+per §2 ⚠️ *[re-flagged 11 Sep 2026: not a rule - see §2's note]*.
 
 ---
 
@@ -528,7 +528,7 @@ per §2.
 | Shift points 8500 / 8250 / 8250 in gears 1–3 | **[MEASURED]** — 206 / 2,384 / 6,932 frames |
 | Shift points in gears 4–6 | **[UNMEASURED]** — 76 and 14 frames. **Silent on purpose.** |
 | Race burn 6.5–7.0 L/lap ⇒ one stop, fuel-bound | **[DERIVED]** — two scalings of two post-patch races, in agreement |
-| Practice burn overstates race burn 3–9% | **[MEASURED]** — 2 post-patch circuits, same sign |
+| Practice burn overstates race burn 3–9% ⚠️ *[re-flagged 11 Sep 2026: not at this race - the last stint burned 7.92 against practice's 7.84]* | **[MEASURED]** — 2 post-patch circuits, same sign; **this race is the counter-example** |
 | Lap time 88–95 s | **[ASSUMED]** — Gr.3 reference and one parity observation |
 | Tyre ceiling 14.8–22.2 laps | **[DERIVED]** — per-km scaling of RBR gauge readings. Never measured here. |
 | Tyre ceiling 6.5–8 laps | **[DOCTRINE]** — pre-1.71 circuit reference, halved for 2× |
@@ -549,7 +549,7 @@ per §2.
 | Prediction | Falsified by |
 |---|---|
 | Fuel binds before the tyre; one stop, not two | a measured wear rate above **5.7 %/lap** on run 3, which puts the tyre ceiling under 15 laps |
-| Race burn lands **6.5–7.0 L/lap**; practice reads 3–9% higher | a race burn outside that band |
+| Race burn lands **6.5–7.0 L/lap**; practice reads 3–9% higher ⚠️ *[re-flagged 11 Sep 2026: falsified - the race burned 7.55 L/lap overall (session 138), 7.92 in the last stint]* | a race burn outside that band |
 | 6th at 261 km/h is **too short** — Vmax will reach or pass it and the box wants lengthening at the top | rpm at Vmax reading well under 8,800, i.e. 6th never near the limiter |
 | The 3→4 crossover at 173 km/h falls **inside** the linked sweepers and you will be shifting mid-sequence | you report holding one gear cleanly through them |
 | Lap time **88–95 s** | anything outside that |

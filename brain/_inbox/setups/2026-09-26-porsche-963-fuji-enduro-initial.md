@@ -88,8 +88,10 @@ yet**. What the hub fixes:
 - The undercut is weak in GT7 (`CLAUDE.md` §5.4), and at these standing times
   it is irrelevant beside the fill.
 - Three unknowns decide the stop count, and each is one practice run:
-  1. **burn per lap** at race pace from a full tank (and discount practice burn
-     3-9 % for the race, as every circuit on file has shown);
+  1. **burn per lap** at race pace from a full tank - measured, never a
+     practice figure discounted (Deep Forest's last stint burned *more* than
+     practice, 7.92 against 7.84 L/lap); the fill itself is sized from the
+     live burn at the hose;
   2. **wear per lap on the gauge**, OBS on, at 3x - measured at the multiplier
      raced, never converted (`CLAUDE.md` §5.2);
   3. **pit loss at Fuji** - the GR3 round's 20 s is declared, not measured.

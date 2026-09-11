@@ -148,7 +148,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Downforce: MEDIUM-HIGH**, one or two clicks more than pure Nordschleife. You are adding the GP circuit's aero-dependent back section and its slow Arena, and removing nothing from the Nordschleife's demands. The Döttinger Höhe drag penalty is amortised over a longer lap.
 
-**Additional braking and traction demands.** The GP section adds two heavy stops (Castrol-S and the GP Veedol chicane) and two more 1st/2nd-gear traction exits. This pushes the LSD compromise slightly toward more acceleration lock — **18–25** rather than 15–22.
+**Additional braking and traction demands.** The GP section adds two heavy stops (Castrol-S and the GP Veedol chicane) and two more 1st/2nd-gear traction exits. This pushes the LSD compromise slightly toward more acceleration lock — **18–25** rather than 15–22 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.
 
 **Kerbs.** You inherit the GP circuit's launcher kerbs on top of the Nordschleife's Karussell and Pflanzgarten. There is no ride height that is optimal for both; **err toward the Nordschleife setting** since 21 of the 25 km are out there.
 

@@ -267,12 +267,15 @@ def test_e5_no_eval_expects_what_was_deleted_and_no_read_car_is_called_stale():
 # - "undercut" or not (critic on 2.8 part 2, B2/M8: "an aggressive early stop
 # to get clean air" and "pit first" said the same thing without the word).
 UNDERCUT_PAYS = re.compile(
-    r"undercut(?:ting|s)?\b[^.]{0,80}?\b(?:strong|works?|viable|powerful|pays"
-    r"|effective|decisive)\b"
-    r"|\bstrong undercut\b|\bpit first\b|early stop\b[^.]{0,40}?clean air"
-    r"|aggressive strategy pays"
+    r"under-?cut(?:ting|s)?\b[^.]{0,100}?\b(?:strong|works?|viable|powerful"
+    r"|pays|effective|decisive|worth|the play)\b"
+    r"|\bstrong undercut\b|\bpit first\b|\bpit before (?:him|them|the car)\b"
+    r"|early stop\b[^.]{0,40}?clean air|\bstop early\b[^.]{0,40}?clean air"
+    r"|\bearly stop pays\b|aggressive strategy pays|strongest weapon"
     r"|except where overtaking is (?:near-)?impossible"
     r"|exception: circuits where overtaking", re.IGNORECASE)
+# "not re-flagged" is not a flag (critic on 2.8 part 2, pass 2).
+FLAGGED = re.compile(r"(?<!not )re-flagged", re.IGNORECASE)
 
 
 def _sentences(block: str):
@@ -288,8 +291,7 @@ def test_e6_every_live_claim_that_the_undercut_pays_is_re_flagged():
     live = [f"{p.relative_to(ROOT).as_posix()}:{n}"
             for p, n, block in _live_paragraphs()
             for sentence in _sentences(block)
-            if UNDERCUT_PAYS.search(sentence)
-            and "re-flagged" not in sentence.lower()]
+            if UNDERCUT_PAYS.search(sentence) and not FLAGGED.search(sentence)]
     assert not live, f"the undercut is claimed to pay, unflagged, at {live}"
 
 
@@ -300,9 +302,34 @@ def test_e6_sees_the_wordings_it_used_to_miss():
                  "the undercut is decisive", "pit first",
                  "an aggressive early stop to get clean air is correct",
                  "The overcut beats the undercut - except where overtaking "
-                 "is impossible"):
+                 "is impossible",
+                 # Pass 2's list.
+                 "stop early for clean air", "an early stop pays",
+                 "the undercut is worth two seconds", "the undercut is the play",
+                 "pit before him", "the under-cut works",
+                 "fresh tyres are the strongest weapon you have"):
         assert UNDERCUT_PAYS.search(said), said
     assert not UNDERCUT_PAYS.search("The undercut is weak in GT7")
+    assert not FLAGGED.search("this line was not re-flagged")
+
+
+DISCOUNT_RULE = re.compile(
+    r"discount\b[^.]{0,40}?3\s?[–-]\s?9\s?%|overstates race burn\s?3\s?[–-]\s?9",
+    re.IGNORECASE)
+
+
+def test_e9_no_live_doctrine_discounts_the_practice_burn():
+    """Critic on 2.8 part 2, B3 and pass 2: "discount practice burn 3-9 % for
+    the race" was a rule from two circuits, and at Deep Forest the last stint
+    burned MORE than practice (7.92 against 7.84 L/lap) - the discount would
+    have run him about 5 L dry. Fixed in `07` and still live in the Fuji plan
+    and the Deep Forest sheet. It may stay as history, re-flagged in its own
+    sentence."""
+    live = [f"{p.relative_to(ROOT).as_posix()}:{n}"
+            for p, n, block in _live_paragraphs()
+            for sentence in _sentences(block)
+            if DISCOUNT_RULE.search(sentence) and not FLAGGED.search(sentence)]
+    assert not live, f"the practice-burn discount is still a rule at {live}"
 
 
 def test_e8_every_lsd_band_in_the_track_reference_is_flagged():
@@ -311,9 +338,15 @@ def test_e8_every_lsd_band_in_the_track_reference_is_flagged():
     per-circuit entries and would issue a v1.70 number on a 0-100 slider."""
     reference = (ROOT / "brain/_inbox/05-track-reference.md").read_text(
         encoding="utf-8")
+    # Any band on a line about the diff - "LSD compromise ... 18-25" escaped
+    # a match on "LSD acceleration" (pass 2). Exempt only a line that flags
+    # the scale or states the v1.71 reading itself, not any line that
+    # happens to mention v1.71.
     bare = [n for n, line in enumerate(reference.splitlines(), 1)
-            if "LSD acceleration" in line and re.search(r"\d+[–-]\d+", line)
-            and "5–60 scale" not in line and "v1.71" not in line]
+            if re.search(r"LSD|acceleration lock", line)
+            and re.search(r"\d+[–-]\d+", line)
+            and "5–60 scale" not in line and "v1.71 reads" not in line
+            and "range_records" not in line]
     assert not bare, f"LSD bands with no scale flag at lines {bare}"
 
 
