@@ -1503,6 +1503,14 @@ class PitCrewController(QObject):
         # nowhere on the screen the race is started from, so the only way to
         # check the engineer was holding tonight's race was to run it.
         self.race_screen.set_plan(approved)
+        # **Not while a race is armed or running** (critic 2, pass 5): the
+        # status line is the race's then, and flipping the picker on a race
+        # armed with no plan replaced "Armed: no plan - fuel calls only" with
+        # a warning about a plan that race is not using.
+        race = getattr(self, "race", None)
+        if race is not None and (getattr(race, "armed", False)
+                                 or getattr(race, "running", False)):
+            return
         # **Said here, in the week, and not first on the grid** (critic 2 on
         # the storage row): a row approved before plans carried their
         # contract showed as the approved plan with no sign it will not arm.
@@ -1557,7 +1565,9 @@ class PitCrewController(QObject):
         foreign = (built_for_another_race(plan, event)
                    if event is not None else None)
         if foreign is not None:
-            return f"The {foreign}."
+            # With its remedy, as the other two have (critic 2, pass 5).
+            return (f"The {foreign}. Approve a plan built for this race on "
+                    "the Strategy page, or correct the event.")
         return None
 
     def load_active_event(self) -> None:
@@ -4270,8 +4280,16 @@ class PitCrewController(QObject):
         # handed in because this caller already has them: without them `stamp`
         # rebuilds `build_inputs`, which walks every practice lap, on the Qt
         # thread at every plan approval.
-        payload = stamp(self.store, event["id"], payload,
-                        inputs=self._inputs, event=event)
+        # **A refusal, not a raise** (critic 2, pass 5): `stamp` refuses an
+        # event it cannot build a context from, and this is a Qt slot - an
+        # uncaught ValueError here aborts the app, the pass-3 blocker's shape.
+        try:
+            payload = stamp(self.store, event["id"], payload,
+                            inputs=self._inputs, event=event)
+        except ValueError as exc:
+            self.strategy.set_status(f"Not approved. {exc}.", warn=True)
+            log("strategy").warning("refused %r: %s", plan.label(), exc)
+            return None
         strategy_id = self.store.save_strategy(
             event["id"], payload, label=plan.label(),
             evidence={"missing": self._inputs.missing()})

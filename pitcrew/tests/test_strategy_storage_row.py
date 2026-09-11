@@ -567,7 +567,11 @@ def test_the_in_week_warning_names_a_plan_for_another_race(raced):
     plan["context"] = {**plan["context"], "track": "Suzuka Circuit"}
     store.update_strategy_plan(row["id"], plan)
     controller._refresh_race_options(store.get_event(event_id))
-    assert "built for Suzuka Circuit" in screen.subtitle.text()
+    said = screen.subtitle.text()
+    assert "built for Suzuka Circuit" in said
+    # With what to do about it, as the other two warnings have (pass 5).
+    assert said.endswith("Approve a plan built for this race on the "
+                         "Strategy page, or correct the event.")
 
 
 def test_a_foreign_plan_is_certified_and_not_approved_without_contradiction(
@@ -605,6 +609,33 @@ def test_the_refresh_leaves_somebody_elses_status_alone(raced):
     screen.set_status(other, warn=True)
     controller._refresh_race_options(store.get_event(event_id))
     assert screen.subtitle.text() == other
+
+
+def test_a_certify_refusal_on_the_grid_stays_up_after_a_refresh(
+        raced, monkeypatch):
+    """Critic 2, pass 5: the surviving mutant widened the take-down to
+    anything starting "Plan refused: ". A tank refusal is still true after a
+    refresh - the refresh's own check cannot see it - so it must stay."""
+    import pitcrew.controller as controller_module
+
+    class Refused:
+        certified = False
+        warnings = ()
+
+        @staticmethod
+        def describe():
+            return "Stint 1 needs more fuel than the tank holds."
+
+    controller, screen, store, event_id = raced
+    monkeypatch.setattr(controller_module, "build_inputs",
+                        lambda *_a, **_k: (object(), None))
+    monkeypatch.setattr(controller_module, "certify",
+                        lambda *_a, **_k: Refused())
+    assert controller.start_race() is False
+    said = screen.subtitle.text()
+    assert said == "Plan refused: Stint 1 needs more fuel than the tank holds."
+    controller._refresh_race_options(store.get_event(event_id))
+    assert screen.subtitle.text() == said
 
 
 def test_no_warning_about_a_plan_he_has_set_aside(raced):
@@ -647,6 +678,35 @@ def test_an_event_with_no_distance_is_refused_at_approval(store):
     with pytest.raises(ValueError) as refused:
         stamp(store, no_distance, A_PLAN_FOR_CONTEXT)
     assert "the event has no race length" in str(refused.value)
+
+
+def test_the_optimisers_approve_refuses_in_words_rather_than_raising(raced):
+    """Critic 2, pass 5: `approve_strategy` called `stamp` outside any try,
+    and `stamp` now refuses an event it cannot build a context from - from a
+    Qt slot, an uncaught ValueError aborts the app."""
+    controller, _screen, store, event_id = raced
+    store.update_event(event_id, car_name="")
+    assert controller.approve_strategy(0) is None
+    assert "has no car" in controller.strategy.subtitle.text()
+
+
+def test_the_week_warning_does_not_overwrite_an_armed_race(raced):
+    """Critic 2, pass 5: armed on "No plan", flipping the picker ran the
+    refresh and replaced "Armed: no plan - fuel calls only" with a warning
+    about the plan that race is not using."""
+    controller, screen, store, event_id = raced
+    row = store.get_approved_strategy(event_id)
+    store.update_strategy_plan(row["id"], _unstamped(row["plan"]))
+    no_plan = screen.plan_picker.findData(False)
+    screen.plan_picker.setCurrentIndex(no_plan)
+    screen.plan_picker.activated.emit(no_plan)
+    assert controller.start_race() is True
+    armed = screen.subtitle.text()
+    with_plan = screen.plan_picker.findData(True)
+    screen.plan_picker.setCurrentIndex(with_plan)
+    screen.plan_picker.activated.emit(with_plan)
+    assert screen.subtitle.text() == armed
+    assert "will not arm" not in screen.subtitle.text()
 
 
 def test_pit_laps_on_a_plan_with_no_start_laps_is_not_a_crash():
