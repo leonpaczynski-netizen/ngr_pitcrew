@@ -2218,3 +2218,79 @@ line, not the car - which is the more useful finding, because it is free to fix.
 | The blind-left exit is a repeatable track-limits problem, not a one-off | he runs the same line clean over a full stint with no off-tarmac frames there |
 | Racing fuel of 6.760 L/lap is a TOW effect | a race led alone from the front also comes in near 6.76 |
 | In free air on this bar he stays under ~10 catches a lap | a clean-air lap goes above 30 |
+
+## 39. The fuel drop was partly WEATHER - the driver's hypothesis, tested. 11 Sep 2026
+
+> **[DRIVER REPORT]:** *"I was in a tow and you should know that from the app
+> pulling gap to car in front and screen shots"* - then - *"lobby is random
+> weather so maybe that was the cause?"*
+
+**Two corrections to section 36, both his.**
+
+**1. I said the app could not see proximity. It can** - `gap_reads` holds the
+gap ahead and behind. Read, it shows a **0.323 s tow on lap 6** and clean air from
+lap 8 when he took the lead. **Fuel towing laps 2-7: 6.747 L/lap. Leading alone
+laps 8-12: 6.768.** The tow explains **0.02 of the 0.41 L/lap** gap to practice.
+
+**2. It was not "race pace" either.** Every 10 Sep session burns ~6.7 (s157
+L10-14 6.705, s158 6.758, s159 6.749); every 9 Sep session burns ~7.1 (s153
+7.063, s154 7.174, s155 7.079). **It is a day-level difference, not race vs
+practice.**
+
+### The wind test
+
+Same gear + same speed = same rpm = same engine output, so a change in
+acceleration is a change in air resistance. Main straight, flat out, off the
+limiter, straight line:
+
+```
+                      5th, 235-245 km/h      6th, 255-262 km/h
+  9 Sep   s153 RH           1.222
+          s154 RM           1.306                  0.444
+          s155 RS           1.194
+  10 Sep  s157 RM L10-14    1.333
+          s158 RM           1.528                  1.028
+          s159 RM race      1.583                  1.139
+```
+
+Setup between s154 and s158 changed only `arb_r`, which does not touch drag, and
+s158 carried MORE fuel. **So the extra resistance on 9 Sep was a headwind on the
+main straight.** Terminal speed there rose **+6-7 km/h**; the back straight, at
+**94 deg** to it, did not move - the signature of wind along one axis.
+**Sardegna cannot rain (`track_layouts.rain = 0`), so "random weather" here is
+wind.**
+
+### What it explains and what it does not
+
+- ✅ the main-straight speed gain, and part of the fuel drop;
+- ⚠️ **not all of it** - rev-limiter time fell **3.16 -> 1.0-1.35 s/lap** in gears
+  1-4 all round the lap, and coasting rose **0.8 s/lap**, mostly lifting into the
+  125 km/h left at ~1,900 m. Those are driving.
+- ⛔ **tested and wrong:** the silent 5th-gear beep on 9 Sep. The limiter time was
+  in 1st-4th, not 5th.
+- ⚠️ **s157 does not fit cleanly** - windy-ish acceleration (1.333) with low fuel
+  (6.705), on 3 laps. The weather may have been changing through that evening.
+  **Wind and driving cannot be split exactly from what is on file.**
+
+### What it does to the plan - NOTHING, and that is the useful part
+
+```
+                     windy-day fuel         calm-day fuel
+  RM saving, 2 stop   29 laps  leader        29 laps  leader
+  RM full send        29 laps  +12.2 s       29 laps  +9.8 s
+  RH saving, 1 stop   29 laps  +14.3 s       29 laps  +15.7 s
+  RH full send        28 laps  a lap down    28 laps  a lap down
+```
+
+**The order is identical at either fuel rate.** Every plan except RH full send
+now reaches 29 laps because sessions 158/159 moved the engine's reference lap
+**102.778 -> 102.261 s**.
+
+⚠️ **The app's planner now defaults to 6.751 L/lap** - the calm-day figure,
+weighted towards the newest sessions. **Load fuel on the windy figure (~7.1)**:
+the lobby weather is random, and in a timed race running dry is the one outcome
+with no recovery. That is not a spare lap - it is the weather's own range.
+
+**Still no compound call** - section 23 stands: the top plans sit ~12-16 s apart
+on a cross-session compound delta, which is a tie. The same-session
+three-compound run is still the thing that settles it.
