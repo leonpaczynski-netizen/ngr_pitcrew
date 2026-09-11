@@ -248,7 +248,7 @@ class SettingsScreen(QWidget):
             "Open the driver board when a race arms")
         self.driver_board_enabled.setToolTip(
             "The glance-up board for the screen above the game: tyre "
-            "temperatures and laps to box while running, and the fuel, "
+            "temperatures and laps to the stop while running, and the fuel, "
             "tyres, rejoin and release countdown while you are stopped.\n\n"
             "Drag it onto the monitor you want it on and it reopens there. "
             "Escape closes it without stopping the race.")

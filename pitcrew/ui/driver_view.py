@@ -117,7 +117,7 @@ bottom edge is the shortest eye travel and the lead rank sits there.
 
     rank 4 (top, dimmest)   the last call and its mark
     rank 3                  four corner temperatures, then the two tyre splits
-    rank 2 (middle)         laps to box | in hand to the stop | in hand to
+    rank 2 (middle)         laps to the stop | in hand to the stop | in hand to
                             the flag | position
     rank 1 (bottom, 180px)  gap ahead | gap behind
 
@@ -135,7 +135,7 @@ Three states: it favours you, it favours him, or nobody can tell yet.
 Every gap item is a dash until a race runs with the repaired locator, so the
 dash says "no gap read" rather than sitting blank.
 
---- rank 2 · laps to box ------------------------------------------------------
+--- rank 2 · laps to the stop -------------------------------------------------
 
 From `RaceState.laps_to_stop()`, which clamps at zero, so `laps_past_box`
 carries the sign the clamp throws away: "NOW / box this lap" and "NOW / 2 past
@@ -1473,7 +1473,12 @@ class DriverView(QWidget):
         lead = QHBoxLayout()
         lead.setSpacing(70)
 
-        self.box_stat = _Stat("laps to box")
+        # **"to the stop", as every other surface says it** (rule 13). The
+        # voice says "N laps to the stop", the fuel block one along is "in
+        # hand to the stop", and this one was the only place the same count
+        # was captioned "laps to box". "Box this lap" stays the instruction
+        # it turns into at zero; the caption names the distance.
+        self.box_stat = _Stat("laps to the stop")
         # **Two fuel numbers, each naming its own distance in its caption.**
         # One expression each, both from `race/calls.py`, so neither can drift
         # from what the voice says about the same stop. See the spec at the

@@ -295,6 +295,28 @@ def test_a_stop_still_ahead_counts_down_normally(app):
     assert view.box_stat.value.text() == "3"
 
 
+def test_the_countdown_names_its_distance_the_way_the_voice_does(app):
+    """Rule 13. The voice says "N laps to the stop" and the fuel block beside
+    this one says "in hand to the stop"; the countdown was the one surface
+    captioning the same count "laps to box"."""
+    view = DriverView()
+    assert view.box_stat.caption.text() == "LAPS TO THE STOP"
+    assert view.stop_stat.caption.text() == "IN HAND TO THE STOP"
+
+
+def test_a_plan_with_no_stop_left_is_not_called_no_plan(app):
+    """The last stint of a real plan, and a dropped stop, both leave
+    `laps_to_box` None with a plan running. "no plan" there told him nobody
+    was planning laps 12-20 of every one-stop race."""
+    from pitcrew.race.calls import NO_STOP_TO_COME
+
+    view = DriverView()
+    view.update_state(DriverState(has_plan=True))
+    assert view.box_stat.sub.text() == NO_STOP_TO_COME
+    view.update_state(DriverState(has_plan=False))
+    assert view.box_stat.sub.text() == "no plan"
+
+
 # ------------------------------------------------------------- getting rid of it
 
 def test_escape_closes_the_board_without_stopping_the_race(app):
