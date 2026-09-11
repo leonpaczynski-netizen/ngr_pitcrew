@@ -95,6 +95,72 @@ defence is provenance and confirmation.
 
 ---
 
+## Every instrument, one line each
+
+Plan row 2.10. Ten of these existed and were re-derived by hand because
+nothing named them. Run a tool before re-deriving what it answers; read its
+own `--help` for the arguments. **Opening `Store()` upgrades the file it opens,
+in a write transaction, every time** - so even a reader touches the database it
+is pointed at. For work that must not, open sqlite with `mode=ro`, or a copy
+that includes the `-wal` file.
+
+**Readers — they answer a question and write nothing else.**
+
+- `tools/data_health.py` — what may honestly be claimed about one car at one circuit, before claiming it.
+- `tools/axis_board.py` — what has been measured on this car, and which axes nobody has tried.
+- `tools/where_the_change_landed.py` — where on the lap a change landed (above).
+- `tools/where_the_time_went.py` — where 1.71's lap time went, by distance bin.
+- `tools/debrief.py` — the practice debrief for an event, lap by lap.
+- `tools/driving_style.py` — coast share and upshift rpm, per lap and per stint.
+- `tools/brake_bias.py` — what brake balance does, measured off the wheels.
+- `tools/braking_change.py` — whether 1.71 changed braking, and whether later braking pays.
+- `tools/shift_points.py` — where to shift, per car and gear, off his own laps (the table is still issued, never typed).
+- `tools/shift_target.py` — how far to short-shift for a given race, and where it turns against him.
+- `tools/shortshift_trade.py` — what short-shifting costs and saves, off laps he drove.
+- `tools/find_penalties.py` — which laps served a track-limit penalty, off the frames.
+- `tools/replay_race_calls.py` — a recorded race replayed through the engineer: what he would have said.
+- `tools/radio_review.py` — what he asked on the radio, and what the engineer could not take.
+- `tools/gate_bands.py` — whether the voice vocabulary reaches the questions he asks.
+- `tools/geometric_corners.py` — corners as fixed places on the earth, from the track's shape.
+- `tools/draw_track_map.py` — the circuit drawn from his telemetry, in GT7's orientation.
+- `tools/analyse_m0.py` — the constants an M0 capture supports.
+- `pitcrew.analysis.wear_rates` (`fit`, `fit_stint`, `worst_corner`) — wear rates fitted from what the gauge read, per compound.
+- `pitcrew.analysis.refuel` (`measure_refuel_rate`, `refuel_evidence`) — how fast the car takes fuel, measured.
+- `pitcrew.race.temps` (`measured_temp_window`) — the tyre-temperature range from this event's own laps (a range, never an optimum).
+- `pitcrew.race.tyre_split` (`SplitHistory`) — which way a tyre's split against its opposite is going, per lap.
+- `pitcrew.race.call_outcome` (`judge`, `summarise`) — what happened after the engineer said something, where the app can tell.
+- `pitcrew.race.pit_wall` (`PitWall`) — who was in the lane, on what, with how much.
+
+**Writers — each changes the database. Run one only with the driver's yes, and
+never as a step of a diagnosis.**
+
+- `tools/backfill_measurements.py --apply` — numbers written into prose, as measurement and verdict rows.
+- `tools/build_track_map.py --apply` — anchors each corner to a place on the earth.
+- `tools/derive_grip_observations.py --apply` — grip observations from sessions on disk.
+- `tools/fit_tyre_models.py --apply` — clears and refits the tyre models from those observations.
+- `tools/flag_out_laps.py --apply` — re-judges each session's opening lap as an out-lap or not.
+- `tools/reaggregate.py --apply` — re-reads stored sessions for stops the app missed.
+- `tools/repair_dropped_laps.py --apply` — restores laps GT7 counted and the app did not.
+- `tools/stamp_game_versions.py --apply` — the GT7 version on sessions recorded before the column.
+- `tools/read_hud_wear.py --apply` — the wear gauge read off an OBS capture, against the laps.
+- `tools/read_replay_traffic.py --apply` — who was around him, off the replay's radar.
+- `tools/read_replay_board.py --apply` — names those cars off the replay's leaderboard.
+
+  Each of those eleven reports and writes nothing without `--apply`. **Three
+  do not work that way:**
+- `tools/derive_sectors.py` — **writes by default**; `--dry-run` reports only.
+- `tools/series.py` — `--set` writes at once; `--like`/`--car` ask first unless `--yes`.
+- `tools/name_drivers.py` — writes as soon as it is given a name (`old new`, `--me`, `--teammate`).
+
+**Not instruments for this skill** (the app's own health, voice, rig and
+build): `audition_voices`, `render_voice_pack`, `render_voice_ab`,
+`render_kokoro_audition`, `stt_bench`, `haptics_bench`, `rig_levels`,
+`wind_bench`, `wind_replay`, `wind_sweep`, `install_shortcut`,
+`probe_extended_packet`, `gap_bank`, `board_bench`, `build_race_fixture`,
+`extract_reference`, `draw_bathurst_map`, `schema_audit`, `wiring_audit`.
+
+---
+
 ## Validation, before anything is filed
 
 `SetupSheet.validate()` refuses: a key outside the shared vocabulary; a
@@ -128,8 +194,11 @@ a null on a known key is dropped silently and you will not be told.
 
 ## Then record it
 
-Every change is an experiment (SKILL.md, *The record*). The setup delta is now
-filed automatically when the next session opens against the new sheet — but the
-**prediction is yours**, and it is the part that makes the ledger learning
-rather than logging. Say what the change should do, and what result would prove
-it wrong.
+Every change is an experiment (SKILL.md, *The record*), and it is a row in
+`brain/ledger/<car>-<circuit>.md`, written **before the run** (`refine` step
+6): key, direction and delta in points of range - never a setting - with the
+instrument, its floor, the control, the prediction and the falsifier. Nothing
+files it for you: the app's old `setup_changes` table has no writer, and a
+change ledger in the database would be the second setup record `CLAUDE.md` §1a
+removed. The **prediction is yours**, and it is the part that makes the ledger
+learning rather than logging.

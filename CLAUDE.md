@@ -65,7 +65,7 @@ only place a setup value may be written; everything else links to it and restate
 nothing. The driver confirms what is actually in the car with a screenshot of
 GT7's own settings screen, which is the ground truth and the only one left.
 
-**Three things stayed, and each for a stated reason:**
+**Four things stayed, and each for a stated reason:**
 
 - **The range record and the Car screen.** A range record is not a setup — it is
   the car's own slider min and max, read off its settings screen once and never

@@ -38,8 +38,10 @@ week), parseable by any CSV reader.
   Porsche 911 RSR '17, v1.71, `verified`, 21 Aug 2026 (`11-car-slider-ranges.md`, RSR v1.71
   block; the Sardegna header says its endpoints reconcile with Rev C §5). Same endpoints as the
   Huracán except lsd_b [0,99].
-  Shelby GT350R '16: see §4. The car-state file and the range register disagree about which
-  record exists, and that disagreement is contradiction (b)-S1.
+  Shelby GT350R '16, v1.71, `verified`, 23 Aug 2026 (`pitcrew.db` `range_records`, read read-only
+  11 Sep). Same endpoints as the Huracán except rh_f [75,160], rh_r [95,180], nf [2,4],
+  df_f [50,150], df_r [150,300]. The range register still carries a stale v1.70 reading: the
+  Shelby file's (b)-S1.
 - **Gear ratios, shift tables, ECU, restrictor and ballast have no slider range** in any range
   record (`pitcrew/setup/vocabulary.py` `RANGE_KEY_NAMES`; `ranges.py`). Those rows read
   "range unknown" and are also listed in (a).

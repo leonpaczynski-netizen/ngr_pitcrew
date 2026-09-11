@@ -237,8 +237,8 @@ symptom→cause chain built on nothing is this mode's whole failure.
    car-state file said 4 and 5 at Deep Forest 133→134 where the tool found 0
    and 1 - **the disagreement is the finding**: surface it, say which
    definition the comparison uses, never average them (eval 13).
-6. **One change, written as an experiment before the run** - in its ledger
-   row: the key, the direction and the delta in percent of slider range; the
+6. **One change, three clean laps at least, written as an experiment
+   before the run** - in its ledger row: the key, the direction and the delta in percent of slider range; the
    instrument and its *measured* floor; **a no-change control**; the
    prediction and a complementary falsifier. A coupled set only as a named
    set (row 2.3). **The control is the drift between sessions, not the
@@ -256,6 +256,32 @@ symptom→cause chain built on nothing is this mode's whole failure.
    let his report carry the finding.
 8. **If a ratio moved, the shift table moved with it.** Re-issue it in the
    same message — see below.
+
+**Platform or trim — decide which before step 6** (plan row 2.3). A setup has
+two layers and they need opposite methods
+([[reference-setup-platform-before-sliders]] in memory):
+
+- **The platform** is ride height, natural frequency, compression damping and
+  downforce — **one decision, not four**, because each works only at the
+  value the others allow. It changes as **one named coupled set** (one ledger
+  row, keys joined with `;`), judged for its **cost on clearance
+  instruments** — the body-height channel's share of frames below the car's
+  reference, the per-wheel suspension minimum against a steady-state
+  reference (CLAUDE.md §3.3.3: bottoming is inferred, never read) — and for
+  its **merit by the driver**. A coupled set cannot be attributed key by key
+  on telemetry, so do not try.
+- **The trim** is one balance slider — ARB, diff, camber, toe, rebound, brake
+  bias — on the channel the axis register names for it, by step 6's method.
+- **One-change-at-a-time cannot find a platform, and it rejects the right
+  direction**: a change that only works as part of a set tests as a failure
+  on its own (Spa, 31 Aug: `arb_f` softer on a soft, high car only added
+  roll). **Raise ride height last** — spring rate, then compression damping,
+  then ride height (*"a last option not a first"*, the driver, 1 Sep). And
+  **never copy a reference platform in pieces**: its ride height without its
+  springs is the one way to be worse than either.
+- The worked example: Sardegna, 9 Sep — a front spring was a platform move,
+  so no single-slider change was issued, and the fuel/wear stint became the
+  platform sweep for free.
 
 ### `quali` — one lap
 
@@ -312,19 +338,34 @@ did not happen.** On a race day, before anything else, run over that event's own
 
 ### `debrief` — after the flag
 
-**Where the time went is a sector-and-bin question**, not a lap-time one. Run
-`tools/where_the_change_landed.py` against this session and the last one on the
-old setup before writing a word about whether the change worked.
+**`tools/debrief.py <event>` runs the whole list, in this order** (plan row
+2.5), and every section says what it could not see:
 
-1. **Check the open predictions first.** That is the loop closing; a debrief that
-   does not is a log. What was predicted, what happened, and which of the two was
-   right — including when it was him, which it has been four sessions running.
-2. **Plan versus actual, from the data and never from the plan.** The app once
-   lost a whole lap in a pit stop by preferring the lap-time sum over the wall
-   clock, and reported the plan's own number as the outcome.
-3. **Incidents are seconds.** They belong in the ledger and in the total.
-4. **The radio review** — `learning-loop.md`. His own questions are the only
+1. **His report first** — per corner, the four phases, each scored 1-5, in his
+   words, taken **before** any data is read (`--report FILE` prints it at the
+   top). It is primary evidence; everything after it corroborates.
+2. **The open predictions** for this car at this circuit, off `brain/ledger/`.
+   That is the loop closing; a debrief that does not is a log. What was
+   predicted, what happened, and which of the two was right — including when it
+   was him, which it has been four sessions running.
+3. **Where a change landed** is a sector-and-bin question, not a lap-time one:
+   `--before`/`--after` runs `tools/where_the_change_landed.py`'s table.
+4. **How it was driven** — coast share and upshift rpm, per session.
+5. **The driver as a variable** (row 2.11) — incident rate, lap-one cost and
+   consistency per session, each with its n. **Debrief only**: never in a brief,
+   never priced into a plan, never a warning, never per corner.
+6. **George's calls against what followed** — the verdict filed on each.
+7. **Plan versus actual, from the data and never from the plan** — burn, lap
+   time and wear against `expects`, stints planned against run, each stop's
+   measured pit loss against the declared one. The app once lost a whole lap in
+   a pit stop by preferring the lap-time sum over the wall clock, and reported
+   the plan's own number as the outcome. **Incidents are seconds**: they belong
+   in the ledger and in the total.
+8. **The radio review** — `learning-loop.md`. His own questions are the only
    evidence in the archive that he generates unprompted.
+
+Then close each open prediction in its ledger row and commit `brain/` — one
+commit per debrief.
 
 ### `what to try` — ideas
 
