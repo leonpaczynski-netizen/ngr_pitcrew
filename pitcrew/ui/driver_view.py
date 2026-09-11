@@ -347,7 +347,8 @@ from PyQt6.QtWidgets import (
 from pitcrew.store.tyres import WEAR_ONSET_C
 # The one vocabulary for how a call was meant, shared with `Call.spoken()` so
 # the word on the screen and the word in his ear are one decision (rule 12).
-from pitcrew.race.calls import MARK_UNCONFIRMED, NO_PLAN, NO_STOP_TO_COME
+from pitcrew.race.calls import (MARK_UNCONFIRMED, NO_PLAN, NO_STOP_TO_COME,
+                                RACE_OVER)
 # The trend floor, imported rather than restated: it is derived, its
 # arithmetic is documented where it is defined, and two copies would drift.
 from pitcrew.race.tyre_split import RATE_WORTH_SAYING_C
@@ -1700,7 +1701,7 @@ class DriverView(QWidget):
         self.last_call.show_call(state.last_call)
 
         if state.finished:
-            self.box_stat.show_value("FLAG", "race over")
+            self.box_stat.show_value("FLAG", RACE_OVER)
         elif state.laps_to_box is None and state.has_plan:
             # **A plan with no further stop is not "no plan".**
             # `laps_to_stop()` is None exactly when `stint_ends_on_lap` is,

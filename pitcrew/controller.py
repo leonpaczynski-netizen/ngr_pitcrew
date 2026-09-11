@@ -4345,6 +4345,15 @@ class PitCrewController(QObject):
     def start_race(self) -> bool:
         """Arm the race. Nothing fires until the car actually goes green."""
         self._pit_loss_recorded = False
+        # **A board showing a race that is over comes down before anything
+        # can refuse** (critic pass 3 on row 1.8). Only `stop_race` and
+        # `shutdown` closed it, so a re-arm refused before `self.race` was
+        # replaced - no event, the OBS pre-flight, a refused plan - left the
+        # last race's FLAG, position and last call on the new grid under "Not
+        # armed". Arming reopens it (`_open_driver_board`).
+        if self.race is not None and getattr(self.race.state, "finished",
+                                             False):
+            self._close_driver_board()
         if self.race_screen is None:
             return False
         event = self.active_event()
@@ -5683,8 +5692,13 @@ class PitCrewController(QObject):
             # the whole tyre block goes white and loses its annotations at
             # the moment he finally has time to read it - the set he took the
             # flag on is exactly what the debrief starts from.
+            from pitcrew.race.calls import RACE_OVER
+
             return DriverState(
                 temps_c=self._board_temps(), finished=True,
+                # **Every dash says why** - and "not measured", the view's
+                # fallback, is false about fuel measured all race.
+                fuel_to_stop_why=RACE_OVER, fuel_to_flag_why=RACE_OVER,
                 compound=getattr(state, "tyre_compound", None),
                 split_rates=self._split_rates(),
                 position=getattr(state, "position", None),

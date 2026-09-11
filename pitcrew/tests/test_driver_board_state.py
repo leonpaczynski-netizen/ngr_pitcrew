@@ -1381,10 +1381,16 @@ def test_at_the_flag_the_board_keeps_his_result(qt_app):  # noqa: F811
     assert got.position == 6
     assert got.compound == "RM"
     assert got.last_call is said
+    # Every dash says why, and "not measured" is false about fuel measured
+    # all race (critic pass 3).
+    from pitcrew.race.calls import RACE_OVER
+
+    assert got.fuel_to_stop_why == got.fuel_to_flag_why == RACE_OVER
     view = DriverView()
     view.update_state(got)
     assert view.box_stat.value.text() == "FLAG"
     assert "no plan" not in view.box_stat.sub.text()
+    assert view.stop_stat.sub.text() == view.flag_stat.sub.text() == RACE_OVER
 
 
 def test_the_box_lap_itself_is_due_not_late():

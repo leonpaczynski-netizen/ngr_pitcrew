@@ -421,6 +421,31 @@ def test_the_race_page_says_in_the_week_that_the_plan_will_not_arm(raced):
         "The approved plan will not arm: ", "Plan refused: ")
 
 
+def test_a_refused_rearm_takes_the_last_races_result_off_the_board(
+        raced, monkeypatch):
+    """Critic pass 3 on row 1.8: only `stop_race` and `shutdown` closed the
+    board, so a re-arm refused before `self.race` was replaced left the last
+    race's FLAG and position on the new grid under "Not armed"."""
+    controller, _screen, _store, _event_id = raced
+    assert controller.start_race() is True
+    controller.race.state.finished = True
+
+    class Board:
+        hidden = False
+
+        def geometry_text(self):
+            return ""
+
+        def hide(self):
+            self.hidden = True
+
+    board = Board()
+    controller.driver_board = board
+    monkeypatch.setattr(controller, "gauge_preflight_ok", lambda _what: False)
+    assert controller.start_race() is False
+    assert board.hidden is True
+
+
 def test_approval_records_what_it_stamped_and_its_own_certificate(raced):
     controller, _screen, store, event_id = raced
     reference = store.get_approved_strategy(event_id)["plan"]

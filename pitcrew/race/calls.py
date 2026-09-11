@@ -3327,6 +3327,10 @@ STOP_IS_DUE = "the stop is this lap"
 NO_PLAN = "no plan"
 # On the grid, armed and waiting: nothing has been driven to measure against.
 FROM_THE_GREEN = "from the green"
+# The flag is out. The box block's reason, and the fuel blocks' - which said
+# "not measured" at the chequer about fuel measured all race (critic pass 3
+# on row 1.8). One word for one fact on all three blocks.
+RACE_OVER = "race over"
 NO_BURN_YET = "no burn measured yet"
 NO_FUEL_READING = "no fuel reading"
 NO_RACE_LENGTH = "race length unknown"

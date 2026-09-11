@@ -302,6 +302,11 @@ def _stub_controller(answer: bool):
 
     app = PitCrewController.__new__(PitCrewController)
     app.session_id = None
+    # **The production shape.** `__init__` always sets `race`, and on this
+    # half-built QObject an attribute nobody set raises RuntimeError rather
+    # than AttributeError - so `start_race`'s first line, which now asks
+    # whether the race on the board is over, fell over on the stub alone.
+    app.race = None
     app.hud = _session(source=_Source(why="no program projector open"))
     app.confirm_without_gauge = lambda what, check: answer
     app.practice = _Screen()
