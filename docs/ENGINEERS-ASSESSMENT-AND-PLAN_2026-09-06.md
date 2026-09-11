@@ -2179,6 +2179,71 @@ from another file's is the finding. All three are pinned.
 **2.10** is in `8937de0` above; critic 5 checked all 51 tools and found no
 reader that writes.
 
+**Critic 5, pass 4 (on `91ee5b6`): AGREED - the Phase 2 docs are done.** Its
+one minor - the plan row asks for four phases per corner, `driver-model.md`
+names three, and `SKILL.md` had quietly used the three - is written into the
+open note: which the grid uses is part of the question the driver settles.
+
+**Critic 6 on 2.5 and 2.11 (`5137ea5`): NOT AGREED, two blockers - and the
+second is a production defect the debrief exposed, not one it caused.**
+
+1. **Races with incidents printed "incidents 0".** Laps the app had already
+   stored as incidents arrive struck, and `find_incidents` skips struck laps,
+   so none of the 20 stored race-incident laps on file was counted - the
+   Sardegna grass spin among them. `driver_trends` now counts every lap
+   stored as `incident` inside the runs `find_incidents` judges, and names
+   one outside such a run. **One lap is not tagged `incident` and is not
+   counted:** Deep Forest s135's lap 2 is struck in his own words ("crash ...
+   the driver reported damage"), which the export files as manual. Counting
+   it would make "incidents" mean two things; printing a bare 0 beside it
+   would hide his report. It is quoted on the line instead - the
+   disagreement shown, not averaged.
+2. **`pit_loss.measure` read a 0.0 as "no fill".** It took the fill from the
+   in-lap and fell back to the out-lap only on a None; Daytona's in-lap
+   stores 0.0 and its out-lap the 49 L, so the fuel term was dropped. The
+   same function runs at every flag (`_record_pit_loss`), so **Daytona's
+   stored "measured" pit loss, 72.28 s, and Bathurst's, 87.8 s, each have
+   49-65 s of refuelling inside them** - the real ex-fuel figures are about
+   23.2 and 23.1 s. Both rows are summed now, and `PitLoss.fill_seen_l`
+   keeps "no fill on file", "a fill with no rate to take it off" and "under
+   2 L" apart. **The two stored figures are wrong in the live database and
+   correcting them is a write to it - it waits for the driver's yes.**
+   Bathurst races on 14 Sep; a plan built on 88 s a stop avoids stopping.
+
+Majors, all fixed: a stop filed on two pit rows (Fuji) is one stop;
+`--sessions` filters the radio; lap one names its start type, is refused
+where lap one was a pit lap, and a rehearsal says it is one; and the audit's
+fixed sentence about three old gauge readings - printed word for word at
+every event as that race's finding - is dropped from the debrief, with the
+export side filed as its own task. Minors: no spread over fewer than three
+laps or over laps nobody screened; "declared" is said to be possibly the
+app's 20 s default; a stop compared with its own stored figure says so; the
+laps on file are set against the race's length. Four surviving mutants are
+pinned (exactly three clean laps; an incident lap inside the lap-one
+reference; the trend line's None branch; a ledger header with an empty
+side). Re-run on the backup copy: Daytona s143 reads "2 in 17 judged laps"
+and its stop "23.2 s ex-fuel against the event's 72.28 s (measured - from
+this very stop, so this compares it with itself)".
+
+**2.8, part 1 - the checkable half of doctrine hygiene.** `11` states what
+`range_records` holds, read read-only: all four cars on v1.71, verified; the
+LSD at 0-30 / 0-100 / 0-100 on every one, the Shelby included - the
+register's own "outcome 1", so **the rule to issue LSD in absolutes is
+retired**, where it is written (`11`, `17`, `refusals.md`, `SKILL.md`,
+`00-INDEX.md`); the Shelby's natural frequency and front downforce moved on
+v1.71; the JSON blocks marked as history nothing reads; the Car screen named
+as how a car is added. `09`'s paste block and `mechanic.md`'s paste block and
+`SetupSheet.validate()` - an input and a class §1a removed - are retired. The
+three deleted tools are marked as removed where they are cited. The shift-
+table example in `SKILL.md` named a car not on file and a circuit key the
+app never builds, so a table issued from it beeped nowhere; it now uses the
+store's own spellings. Eval 3 no longer expects the deleted question gate.
+`test_brain_reconciliation` section E pins all of it - and on its first run
+caught one more citation whose "since removed" note had wrapped onto the
+next line. **Part 2 is content, and needs Ludo's care:** `02` §10's tags,
+the 1.71 pass on `05`, the Shelby profile in `07`, and setup values still
+restated outside `brain/car-state/` in `11`.
+
 **Still open in Phase 2:** 2.4 and 2.6-2.9 as written; `SKILL.md` is roughly
 twice 2.9's 450 lines; six evals short of 2.9's twenty; and **2.12 - the MCP
 server is registered nowhere** (no `pitcrew` entry in `~/.claude.json`, no
