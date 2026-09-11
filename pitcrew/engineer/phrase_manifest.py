@@ -158,6 +158,15 @@ def fixed_lines() -> tuple[str, ...]:
         _text(BOX_WHAT, {"hasPlan": True}),                  # no tyre change
         _text(BOX_FUEL, {}),                                 # no fuel target
         _text(GAP, {}),                                      # never answerable
+        # **The wall is up and has nothing yet**, and the side he asked about
+        # is the one not read. Each is said at the moment he has just failed
+        # to get an answer - the exchange that has already gone wrong, and
+        # the worst place in the race for a synthesis pause.
+        _text(GAP, {"wallRunning": True}),
+        _text(GAP, {"wallRunning": True, "gapAheadS": 1.0},
+              heard="who's behind me"),
+        _text(GAP, {"wallRunning": True, "gapBehindS": 1.0},
+              heard="who am i behind"),
         *rejection_lines(),
     ]
     return tuple(dict.fromkeys(lines))
@@ -264,6 +273,34 @@ def compound_lines() -> tuple[str, ...]:
              for compound in ALL_COMPOUNDS]
     lines += [_text(BOX_WHAT, {"nextCompound": compound.code})
               for compound in ALL_COMPOUNDS]
+    return tuple(dict.fromkeys(lines))
+
+
+@lru_cache(maxsize=1)
+def tyre_word_lines() -> tuple[str, ...]:
+    """The tyre half of a box call - the DECISION - as a clip of its own.
+
+    **Every box call carrying a decision missed the pack** (11 Sep 2026, 15
+    of 36 box-call shapes). `_tyre_word` says "RS on." or "No tyres." since
+    the plan's tyre decision landed, and nothing here declared either: the
+    peel stopped at "Box this lap.", asked for "RS on. On the plan." whole,
+    and an overdue one carrying two numbers was filed by `uncovered_reason`
+    as a DECLARED gap - a decision nobody made, on the call he most needs
+    without a pause.
+
+    Taken from `calls._tyre_word` itself, every code by every decision, so a
+    reworded tyre word is a re-rendered clip and never a copy that drifts.
+    Codes only: the plan stores the code, and the full names would be a
+    dozen clips for a spelling no plan on file uses.
+    """
+    from pitcrew.race.calls import _tyre_word
+
+    lines = []
+    for code in [c.code for c in ALL_COMPOUNDS] + [None]:
+        for tyres in (True, False, None):
+            word = _tyre_word(_state(next_compound=code, next_tyres=tyres))
+            if word.strip():
+                lines.append(word.strip())
     return tuple(dict.fromkeys(lines))
 
 
@@ -501,6 +538,17 @@ def _call_states() -> list:
         _state(lap=5, laps_total=40, stint_ends_on_lap=6, fuel_l=40.0,
                fuel_per_lap_l=3.0, plan_binding_constraint="fuel",
                mandatory_stops_left=0),
+        # **Overdue, in every shape the reason takes.** None was declared, so
+        # "N laps overdue." and both of its tails - the fuel that is fine
+        # for the next stint, and FUEL_SHORT's "short of the flag on current
+        # burn" - were synthesised live on a repeated box call (11 Sep 2026).
+        _state(lap=7, laps_total=20, stint_ends_on_lap=6),
+        _state(lap=9, laps_total=20, stint_ends_on_lap=6),
+        _state(lap=8, laps_total=20, stint_ends_on_lap=6, fuel_l=60.0,
+               fuel_per_lap_l=3.4, fuel_capacity_l=100.0),
+        _state(lap=9, laps_total=20, stint_ends_on_lap=6, fuel_l=8.0,
+               fuel_per_lap_l=1.0, fuel_capacity_l=100.0, next_compound="RS",
+               next_tyres=True),
         # Box now: on the plan, to a fuel figure, and clamped to the tank.
         _state(lap=6, stint_ends_on_lap=6),
         _state(lap=6, laps_total=20, stint_ends_on_lap=6,
@@ -779,6 +827,7 @@ def clips() -> tuple[str, ...]:
         *box_when_lines(),
         *box_fuel_lines(),
         *compound_lines(),
+        *tyre_word_lines(),
         *plan_single_part_lines(),
         *number_fragments(),
         *fuel_fragments(),
@@ -824,6 +873,10 @@ def _reusable_lines() -> frozenset[str]:
     proactive call costs the pack nothing but the words that join them.
     """
     return frozenset((*fixed_lines(), *position_lines(), *compound_lines(),
+                      # The decision in a box call, peelable on its own so
+                      # "Box this lap. RS on. 3 laps overdue." is three
+                      # clips and a number rather than one miss.
+                      *tyre_word_lines(),
                       # The engineer's position call is a position line and a
                       # place-change line, both whole and both already here -
                       # so the call itself costs the pack nothing.

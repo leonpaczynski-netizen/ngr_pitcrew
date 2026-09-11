@@ -410,6 +410,45 @@ _ORDERED = sorted(
 # is a phrase); everything else that is not a letter or a digit separates.
 _WORDS = re.compile(r"[a-z0-9']+")
 
+# **Which car each GAP question is about.** The answer is one car (§5.5), so
+# the question has to be read for its side - and the inverted pairs are the
+# trap: "how far ahead am I" is about the car BEHIND, "how far behind am I"
+# about the car ahead. `None` is a question that names neither, answered with
+# the nearer car. `test_every_gap_phrase_is_classified` holds this against
+# `PHRASES[GAP]`, so a phrase added there without a side fails a test.
+GAP_SIDES = {
+    "what's the gap": None, "whats the gap": None, "how close is he": None,
+    "how far ahead is he": "ahead", "how far behind am i": "ahead",
+    "who am i behind": "ahead", "who's in front of me": "ahead",
+    "am i catching him": "ahead", "can i catch him": "ahead",
+    "gap to the car ahead": "ahead", "how far up the road is he": "ahead",
+    "is he pulling away from me": "ahead",
+    "what's the gap to the car in front": "ahead",
+    "how far behind is he": "behind", "how far ahead am i": "behind",
+    "who's behind me": "behind", "whos behind me": "behind",
+    "is he catching me": "behind", "how far back is the next car": "behind",
+    "gap to the car behind": "behind",
+}
+
+
+def gap_side(heard: str | None) -> str | None:
+    """"ahead", "behind", or None where the question names neither.
+
+    Whole-word runs, longest phrase first, exactly as `match_intent` reads -
+    so "what's the gap to the car in front" is not taken for "what's the
+    gap". A question the matcher reached semantically, in words none of these
+    contain, names no side and gets the nearer car.
+    """
+    if not heard:
+        return None
+    words = _WORDS.findall(heard.lower())
+    for phrase in sorted(GAP_SIDES, key=len, reverse=True):
+        wanted = _WORDS.findall(phrase)
+        for start in range(len(words) - len(wanted) + 1):
+            if words[start:start + len(wanted)] == wanted:
+                return GAP_SIDES[phrase]
+    return None
+
 
 @dataclass(frozen=True)
 class Answer:
@@ -456,24 +495,47 @@ _REPORT_REPLY = {
 }
 
 
-def _gap_answer(intent: str, snapshot: dict) -> Answer:
-    """Ahead and behind, from the pit wall's last reading of the board."""
-    parts = []
-    for side, label in (("Ahead", "gapAhead"), ("Behind", "gapBehind")):
-        gap = snapshot.get(f"{label}S")
-        if gap is None:
-            continue
-        who = snapshot.get(f"{label}Name") or ("the car ahead" if side == "Ahead"
-                                                else "the car behind")
-        line = f"{side}: {who}, {gap:.1f} seconds"
-        rate = snapshot.get(f"{label}ClosingSPerLap")
-        if rate is not None and abs(rate) >= 0.1:
-            # Positive is the gap shrinking on both sides - see `GapTrend`.
-            word = "closing" if rate > 0 else "opening"
-            line += f", {word} {abs(rate):.1f} seconds a lap"
-        parts.append(line + ".")
-    if parts:
-        return Answer(" ".join(parts), intent, answered=True)
+def _gap_answer(intent: str, snapshot: dict,
+                heard: str | None = None) -> Answer:
+    """One car, from the pit wall's last reading, in the board's words.
+
+    **One car, not a table** (§5.5, carried from row 1.10). It answered
+    "Ahead: Boxhead, 3.4 seconds, closing 0.8 seconds a lap. Behind: the car
+    behind, 10.2 seconds, opening 0.3 seconds a lap." - two cars, two rates,
+    and "closing" meaning opposite driving on the two sides. The question is
+    read for its side (`gap_side`); one that names neither gets the nearer.
+
+    **And the board's floor, through the board's rule** (rules 12 and 13).
+    This said "closing" above 0.1 s a lap with no lap count while the board
+    said "steady" below `TREND_WORTH_SAYING_S` (0.8) or under five laps -
+    the ear and the eye disagreeing about one car. `gaps.trend_words` is the
+    one expression both read.
+    """
+    from pitcrew.race.gaps import trend_words
+
+    read = {}
+    for side in ("ahead", "behind"):
+        key = f"gap{side.capitalize()}"
+        gap = snapshot.get(f"{key}S")
+        if gap is not None:
+            read[side] = (gap, snapshot.get(f"{key}Name"),
+                          snapshot.get(f"{key}ClosingSPerLap"),
+                          snapshot.get(f"{key}TrendLaps"))
+    asked = gap_side(heard)
+    if read:
+        if asked is not None and asked not in read:
+            # **Never the other car for the one he asked about.** Answering
+            # "who's behind me" with the car ahead is a figure about the
+            # wrong man, said as though it were the right one.
+            return Answer(f"Nothing read {asked} yet. Ask again on the next "
+                          "straight.", intent, answered=False)
+        side = asked or min(read, key=lambda s: abs(read[s][0]))
+        gap, name, rate, laps = read[side]
+        who = (f"{name} is {gap:.1f} seconds {side}" if name
+               else f"The car {side} is {gap:.1f} seconds away")
+        words = trend_words(side, rate, laps)
+        clause = words.spoken if words is not None else "steady"
+        return Answer(f"{who} - {clause}.", intent, answered=True)
     if not snapshot.get("wallRunning"):
         # One sentence for one fact, the same one the brief says and the
         # arming path says late (row 1.10): two wordings are two clips and
@@ -530,7 +592,8 @@ def _has_plan(snapshot: dict) -> bool:
 
 def answer(intent: str, snapshot: dict, *,
            last_call: str | None = None,
-           pending_replan: str | None = None) -> Answer:
+           pending_replan: str | None = None,
+           heard: str | None = None) -> Answer:
     """Answer from what the race actually knows. Never invents a number."""
     if intent == UNKNOWN:
         return Answer("Say again.", intent, answered=False)
@@ -566,7 +629,9 @@ def answer(intent: str, snapshot: dict, *,
         # reading when there is one, names both cars, and gives the closing
         # rate where five laps have said so. The refusal survives only for
         # the session with no wall at all, and it says which.
-        return _gap_answer(intent, snapshot)
+        # What he actually said, because "who's behind me" and "am I
+        # catching him" are the same intent and different cars.
+        return _gap_answer(intent, snapshot, heard)
 
     if intent == TYRES_RED:
         # Acknowledged, never analysed out loud. One observation is one

@@ -1754,6 +1754,23 @@ class PlanSpine(QWidget):
             x += width + gap
 
 
+# **The longest a desk assumption is shown on the page, in characters.**
+# Strategy 15 carried eight of them at 206-432 characters - 2,262 of the
+# block's 3,432 - on the page he reads on the grid. Cut at a word, whole on
+# the tooltip, and never applied to a rule (see `Order.resting`).
+RESTING_CAP = 160
+
+
+def _cut_at_word(text: str, cap: int) -> str:
+    """`text` whole if it fits, else cut at the last space inside `cap`."""
+    if len(text) <= cap:
+        return text
+    head = text[:cap - 1]
+    if " " in head:
+        head = head[:head.rfind(" ")]
+    return head.rstrip() + "…"
+
+
 def render_standing_orders(layout, plan: dict | None,
                            author: str | None = None,
                            heading: bool = False) -> int:
@@ -1797,8 +1814,17 @@ def render_standing_orders(layout, plan: dict | None,
                                           tracking=14.0))
             added += 1
             continue
-        layout.addWidget(BodyLabel(
-            order.text, size=13,
-            colour=ink.get(order.register, theme.STENCIL_DIM), wrap=True))
+        # **Cut here, in the one renderer both screens use**, so the card
+        # and the Race page still say the same words - and the whole line is
+        # on the tooltip on both, because the cut is for the glance and the
+        # assumption is still the desk's word.
+        shown = (_cut_at_word(order.text, RESTING_CAP) if order.resting
+                 else order.text)
+        label = BodyLabel(
+            shown, size=13,
+            colour=ink.get(order.register, theme.STENCIL_DIM), wrap=True)
+        if shown != order.text:
+            label.setToolTip(order.text)
+        layout.addWidget(label)
         added += 1
     return added

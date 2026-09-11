@@ -23,14 +23,17 @@ def test_gap_answers_from_the_walls_reading():
     reply = answer(GAP, {"wallRunning": True, "gapAheadS": 3.4,
                          "gapAheadName": "Boxhead",
                          "gapAheadClosingSPerLap": 0.8,
+                         "gapAheadTrendLaps": 6,
                          "gapBehindS": 10.2, "gapBehindName": None,
-                         "gapBehindClosingSPerLap": -0.3})
+                         "gapBehindClosingSPerLap": -0.3,
+                         "gapBehindTrendLaps": 6})
     assert reply.answered is True
     # Row 1.10: "a lap" carried seconds in five places and litres in two.
-    assert reply.text.startswith(
-        "Ahead: Boxhead, 3.4 seconds, closing 0.8 seconds a lap.")
-    assert ("Behind: the car behind, 10.2 seconds, opening 0.3 seconds a lap."
-            in reply.text)
+    # **One car, the nearer, in the board's words** (11 Sep 2026): it was a
+    # two-row table with "closing" meaning opposite driving on each side.
+    assert reply.text == ("Boxhead is 3.4 seconds ahead - you're catching "
+                          "him 0.8 seconds a lap.")
+    assert "10.2" not in reply.text
 
 
 def test_gap_with_no_reading_yet_says_so_and_invites_a_retry():
@@ -48,8 +51,10 @@ def test_gap_with_no_wall_names_the_missing_instrument():
 
 def test_a_tiny_rate_is_not_called_closing_or_opening():
     reply = answer(GAP, {"wallRunning": True, "gapAheadS": 3.4,
-                         "gapAheadClosingSPerLap": 0.05})
-    assert reply.text == "Ahead: the car ahead, 3.4 seconds."
+                         "gapAheadClosingSPerLap": 0.05,
+                         "gapAheadTrendLaps": 6})
+    # "steady" - the board's word for the same reading.
+    assert reply.text == "The car ahead is 3.4 seconds away - steady."
 
 
 # -------------------------------------------------------------- registers

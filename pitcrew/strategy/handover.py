@@ -595,6 +595,11 @@ class Order:
     text: str
     register: str
     heading: bool = False
+    # **One of the desk's assumptions**, the prose under *Resting on*. The
+    # renderer caps these and nothing else: a rule or a line about what
+    # George cannot do is the contract, and a rule cut short is a rule the
+    # driver cannot read in full.
+    resting: bool = False
 
 
 def standing_orders(stored: dict) -> list[Order]:
@@ -861,7 +866,7 @@ def standing_orders(stored: dict) -> list[Order]:
     if assumptions:
         out.append(Order("Resting on", GAP, heading=True))
         for line in assumptions:
-            out.append(Order(str(line), DECLARED))
+            out.append(Order(str(line), DECLARED, resting=True))
     return out
 
 

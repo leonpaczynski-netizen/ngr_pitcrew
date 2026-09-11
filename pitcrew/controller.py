@@ -5799,8 +5799,7 @@ class PitCrewController(QObject):
         "steady". Reporting noise is how a driver learns to distrust the tool,
         which costs more than the finding was worth.
         """
-        from pitcrew.race.gaps import (MIN_LAPS_FOR_TREND,
-                                       TREND_WORTH_SAYING_S)
+        from pitcrew.race.gaps import trend_words
         from pitcrew.race.rival_calls import _snapshot
         from pitcrew.ui.driver_view import GapView
 
@@ -5812,27 +5811,17 @@ class PitCrewController(QObject):
             return None
         rate, laps = trend.closing_s_per_lap()
         name = getattr(self.race.state, f"gap_{side}_name", None) or ""
-        if rate is None or laps < MIN_LAPS_FOR_TREND \
-                or abs(rate) < TREND_WORTH_SAYING_S:
+        # **The same rule the voice asks** (`gaps.trend_words`), so the board
+        # and the push-to-talk answer cannot disagree about one car - they
+        # did, the voice saying "closing" above 0.1 s a lap where this said
+        # "steady" below 0.8 (11 Sep 2026).
+        words = trend_words(side, rate, laps)
+        if words is None:
             return GapView(seconds=seconds,
                            note=f"steady{' - ' + name if name else ''}")
-        closing = rate > 0
-        pace = f"{abs(rate):.1f} s a lap"
-        if side == "ahead":
-            # Closing on the car ahead is the good news, and the one worth
-            # spending tyre on.
-            note = f"catching {pace}" if closing else f"losing {pace}"
-            urgent = not closing
-            good = closing
-        else:
-            # Behind, a closing gap is HIM catching US. Same number, opposite
-            # instruction - which is the whole reason these are two sentences.
-            note = f"he is catching {pace}" if closing else f"pulling away {pace}"
-            urgent = closing
-            good = not closing
-        if name:
-            note = f"{note} - {name}"
-        return GapView(seconds=seconds, note=note, urgent=urgent, good=good)
+        note = f"{words.board} - {name}" if name else words.board
+        return GapView(seconds=seconds, note=note, urgent=words.urgent,
+                       good=words.good)
 
     def _board_splits(self) -> dict:
         """The two tyre splits the board draws, per lap, with their lap count.
@@ -6215,13 +6204,17 @@ class PitCrewController(QObject):
             snapshot[f"{key}S"] = latest
             snapshot[f"{key}Name"] = getattr(self.race.state,
                                              f"gap_{side}_name", None)
-            rate = None
+            rate = laps = None
             if trend is not None and latest is not None:
                 try:
-                    rate, _count = trend.closing_s_per_lap()
+                    rate, laps = trend.closing_s_per_lap()
                 except Exception:                            # noqa: BLE001
-                    rate = None
+                    rate = laps = None
             snapshot[f"{key}ClosingSPerLap"] = rate
+            # **The laps behind the rate travel with it** (rule 4), so the
+            # voice applies the board's five-lap floor rather than quoting a
+            # slope through two points - it used to drop the count here.
+            snapshot[f"{key}TrendLaps"] = laps
         # The fuel target for the stop, so "how much fuel do I take" has an
         # answer rather than a refusal.
         stints = (self.race.plan or {}).get("stints") or []

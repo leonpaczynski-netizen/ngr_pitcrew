@@ -108,6 +108,60 @@ MIN_LAPS_FOR_TREND = 5
 TREND_WORTH_SAYING_S = 0.8
 
 
+@dataclass(frozen=True)
+class TrendWords:
+    """What a gap trend says about one side, for the eye and for the ear."""
+    # The board's note, short: "catching 0.9 s a lap".
+    board: str
+    # The voice's clause, spelled out: "you're catching him 0.9 seconds a lap".
+    spoken: str
+    # Which way the news cuts, for the board's ink.
+    urgent: bool
+    good: bool
+
+
+def trend_words(side: str, rate: float | None,
+                laps: int | None) -> TrendWords | None:
+    """The closing rate in words for `side`, or None - "steady".
+
+    **One expression for the board and the voice** (rules 12 and 13, 11 Sep
+    2026). The board applied this floor and these five laps; the push-to-talk
+    answer said "closing" above 0.1 s a lap with no lap count at all, so the
+    ear could say "closing 0.3 seconds a lap" while the eye read "steady"
+    about the same car. None covers all three reasons there is nothing worth
+    saying - no rate, too few consecutive laps, or a rate inside the noise -
+    which is what "steady" has always meant on the board.
+
+    **Written per side and never shared**, because one signed rate means
+    opposite things: on the car ahead a closing gap is us catching him, on
+    the car behind it is him catching us, and those demand opposite driving.
+    """
+    if rate is None or laps is None or laps < MIN_LAPS_FOR_TREND \
+            or abs(rate) < TREND_WORTH_SAYING_S:
+        return None
+    pace = abs(rate)
+    closing = rate > 0
+    if side == "ahead":
+        # Closing on the car ahead is the good news, and the one worth
+        # spending tyre on.
+        if closing:
+            return TrendWords(f"catching {pace:.1f} s a lap",
+                              f"you're catching him {pace:.1f} seconds a lap",
+                              urgent=False, good=True)
+        return TrendWords(f"losing {pace:.1f} s a lap",
+                          f"you're losing {pace:.1f} seconds a lap to him",
+                          urgent=True, good=False)
+    # Behind, a closing gap is HIM catching US. Same number, opposite
+    # instruction - which is the whole reason these are two sentences.
+    if closing:
+        return TrendWords(f"he is catching {pace:.1f} s a lap",
+                          f"he's catching you {pace:.1f} seconds a lap",
+                          urgent=True, good=False)
+    return TrendWords(f"pulling away {pace:.1f} s a lap",
+                      f"you're pulling away {pace:.1f} seconds a lap",
+                      urgent=False, good=True)
+
+
 def read_gaps(frame, board) -> tuple[float | None, float | None]:
     """`(ahead, behind)` in seconds, from the two rows either side of ours.
 

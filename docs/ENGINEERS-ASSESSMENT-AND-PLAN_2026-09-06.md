@@ -1847,6 +1847,67 @@ grid's last call is pinned; `_board_fuel`'s `has_plan` is required; the grid
 countdown carries no "from the green" caveat through a late green detection
 (Monza detected at lap 2) — left, recorded here.
 
+**Critic pass 3 on row 1.8 — AGREED at `e662626`.** Driven through a real
+`RaceCoordinator` on all three finish paths (last crossing, `RACE_FINISHED`,
+a timed race's clock): each board reads `FLAG / race over` with position,
+compound and last call; the next race's grid shows none of the last one's
+result (rule 11); all three mutations of the new gate caught. Minors: both
+fuel blocks read "not measured" at the flag, which is false (fixed — "race
+over"); a re-arm refused before `self.race` is replaced left the previous
+race's result on the new grid (fixed — the board closes on entry to
+`start_race` when the race it shows is over); and a set fitted on a stop
+whose pit exit arrives after the flag leaves the finished board naming the
+set that came off — post-race only, left.
+
+### The carried live-call items — build (11 Sep 2026)
+
+**The biggest was not on the list.** Scoping "two sentence families
+live-synthesise", a read-only probe of 36 box-call shapes found **15 missing
+the voice pack: every box call carrying a tyre DECISION** ("RS on.", "No
+tyres.", "Tyres on.") **and every overdue one.** `_tyre_word` has said those
+words since the Phase 0.2 decision landed, and the manifest's states were
+never extended to them, so every stop with a `tyres` field has been a
+synthesis pause on the call he acts on. Worse, the overdue call with a tyre
+word was not even counted as a miss: the peel stopped at "Box this lap.",
+the rest landed as one clause holding two numbers, and `uncovered_reason`
+filed it as a *declared* gap — a decision nobody made. The tyre words are
+now their own family taken from `_tyre_word` itself (codes only — the plan
+stores the code), peelable on their own; every overdue shape is declared,
+with both of its tails; and the GAP refusals ("No gap read yet", and the new
+"Nothing read ahead/behind yet") are fixed lines. Pack: 658 → 678 clips,
+under the 700 budget. **The rendered pack on disk holds 580 — it was 78
+behind before this — so it needs `tools/render_voice_pack.py`.**
+
+**GAP answers one car, in the board's words.** It was a two-row table, and
+worse than the note said: the voice said "closing" above **0.1 s a lap with
+no lap count**, while the board says "steady" below `TREND_WORTH_SAYING_S`
+(0.8, set from the gap's own random walk) or under five laps — so the ear
+could say "closing 0.3 seconds a lap" about a car the eye called steady.
+`gaps.trend_words` is now the one expression both read, per side ("you're
+catching him" / "he's catching you"), and the snapshot carries the lap count
+it used to drop. The question is read for its side (`intents.GAP_SIDES`,
+held against every GAP phrase — "how far ahead am I" is the car BEHIND); a
+question naming neither gets the nearer car, and a side asked for but not
+read is refused rather than answered with the other car. **"Steady" for too
+few laps is the board's decision, not reversed**:
+`test_too_few_consecutive_laps_is_steady_rather_than_a_slope` pins it, and
+the voice took the same meaning rather than a second one.
+
+**Standing orders: the desk's prose is capped, the contract is not.** Every
+line over 200 characters on strategy 15 is a *Resting on* assumption (2,262
+of 3,432). `Order.resting` marks them; the one renderer both screens use cuts
+them at a word inside 160 characters with the whole line on the tooltip — so
+the Strategy card and the Race page still say the same words — and never
+touches a rule, because a rule cut short is one he cannot read in full.
+
+**Two carried items are not changed, and why.** The `UNDERCUT` reason's
+three clauses stay: the driver asked for the tow figures in that call by
+name (7 Sep), and §9a already says they stay until he says otherwise. The
+cancelled-stop latch is its own batch: every plan on file grants `fuel_long`
+recost or report, never `drop_stop`, so `stop_still_needed` is always True
+and the latch cannot fire on any plan on file today — below a gap that fires
+on every stop.
+
 ### Critic pass 7 — 8 Sep 2026, five rounds on critic 6's three defects
 
 **Commits `abcfe1a` → `f8230ca` → `c534de9` → `580addb` → `6d89827` →

@@ -583,7 +583,8 @@ class PushToTalk:
     def _answer(self, intent: str, heard: str) -> str:
         reply = answer(intent, self._snapshot() or {},
                        last_call=self.last_call,
-                       pending_replan=self.pending_replan)
+                       pending_replan=self.pending_replan,
+                       heard=heard)
         if intent in ("accept", "keep") and self.pending_replan:
             self.pending_replan = None
         self._reply(reply.text, heard)
