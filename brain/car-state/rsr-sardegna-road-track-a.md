@@ -2339,3 +2339,52 @@ it.
 stint runs while a stop is still available - if the rear falls away at 90%+, he
 can box a lap early. Run the other way round, the 97% laps are the last laps of
 the race with no remedy.
+
+## 41. Stint order set by the driver: 14 then 15. And the app cannot arm the plan yet. 11 Sep 2026
+
+> **[DRIVER]:** *"14 then 15 track position is more important and tyres wear less
+> with less weight from slightly less fuel in second stint"*
+
+**Order is his call and it stands: RM14 / RM15, fuel-save stints, one stop.**
+
+**The weight claim, checked - the data does not show it.** Rear-right wear, heavy
+half of a stint against light half, same tyre set each time:
+
+```
+  s154 RM full send   0.0675 -> 0.0665   -1%
+  s159 RM race        0.0619 -> 0.0694   +12%
+  s153 RH full send   0.0496 -> 0.0506   +2%
+  s156 RH saving      0.0472 -> 0.0515   +9%
+```
+
+Fuel and tyre age fall and rise together inside a stint, so this cannot separate
+them - but "lighter wears less" appears in none of them. ⇒ **Budget stint 2 at the
+same rate or worse: 15 laps projects to ~97-100% on the rear-right, at the flag,
+with no stop left.** The 15-lap RM saving practice stint is now the single most
+important run before the race.
+
+### The plan could not be written into George
+
+Dry-run through `from_dict` -> `validate` (clean) -> `stamp` -> `certify`:
+
+```
+  refused: stint 1 runs 14 laps on a tank that reaches 13
+  refused: stint 2 runs 15 laps on a tank that reaches 13
+  unchecked: stint length, because no wear rate has been measured
+```
+
+`certify` prices fuel reach off `inputs.fuel_per_lap_l` - the event's FULL-SEND
+burn (6.751) - and nothing in a plan can declare a saving stint. It is enforced
+at the write door, at approval (`approve_stored_strategy`) and at the grid
+(`start_race`), so there is no route round it. **It would have refused the Monza
+one-stop that won.** Its tyre check reads `inputs.wear_per_lap` (None) instead of
+the per-compound measured wear, so it skips the one part of this plan that is
+genuinely tight. **Nothing was written.** Filed as app work.
+
+Also: no plan field can arm the fuel-save beep. George engages short-shift only
+when fuel projects short, and stint 1 at 14 laps is not fuel-short - it saves for
+the tyre - so as things stand he would save with no cue.
+
+**Until the certifier is fixed:** race without an armed plan (the Race screen
+offers it), short-shift from the beep table by hand, and George still sizes the
+fill from the stint-1 burn.
