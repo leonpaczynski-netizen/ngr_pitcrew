@@ -145,8 +145,13 @@ ROOT = Path(__file__).resolve().parents[2]
 # and still carried the retired LSD rule after `ludo` had lost it (critic 5).
 LIVE_DOCTRINE = (".claude/skills/**/*.md", "brain/_inbox/**/*.md",
                  "brain/car-state/*.md", "brain/RECONCILIATION.md")
-GONE = re.compile(r"removed|deleted|retired|superseded|resolved|\bmet\b|"
-                  r"no longer applies", re.IGNORECASE)
+# Word-bounded, so "unresolved" is not a retirement; and "met" only as a
+# gate met, so "not met" is not one either (critic 5, pass 3).
+GONE = re.compile(r"\b(?:removed|deleted|retired|superseded|resolved)\b|"
+                  r"\bgate (?:is )?met\b|no longer applies", re.IGNORECASE)
+# A table row or a list item is its own block: one retired row must not
+# clear every other row of the table it sits in (critic 5, pass 3).
+_ITEM = re.compile(r"^\s*(?:\||[-*] |\d+\. )")
 
 
 def _live_lines():
@@ -165,6 +170,11 @@ def _live_paragraphs():
             block, start = [], None
             lines = path.read_text(encoding="utf-8").splitlines() + [""]
             for number, line in enumerate(lines, 1):
+                if line.strip() and block and _ITEM.match(line):
+                    # A new row or item closes the one before it; a wrapped
+                    # continuation line (no marker) stays with its item.
+                    yield path, start, re.sub(r"\s+", " ", " ".join(block))
+                    block = []
                 if line.strip():
                     if not block:
                         start = number

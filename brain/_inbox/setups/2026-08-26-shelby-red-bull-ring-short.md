@@ -170,7 +170,8 @@ reasons it is not moving today:
 2. **The axis is unresolved.** 28–35 on the old 5–60 scale is 42–55% of range;
    on the 0–100 scale this car now reports it is 28–35%. The register has not
    been re-read since 1.71 and I will not quote a number whose scale I cannot
-   name.
+   name. *(This scale reason is retired 11 Sep 2026: all four cars are on v1.71
+   in `range_records`, the Shelby at 0–100. Item 1, his own report, stands.)*
 
 **Tripling the lock on an FR car with 606 bhp, on a slow uphill exit, on a
 circuit you have never driven, is how a trail-braker ends up in the wall.**
