@@ -119,7 +119,8 @@ from *practice*. The race actually burned **3.813**. At the real rate the tank
 covers **26 laps**.
 
 **Practice burn overstates race burn on this car, on every circuit, in the same
-direction:**
+direction** ⚠️ *[re-flagged 11 Sep 2026: not at this race - the last stint
+burned 7.92 L/lap against practice's 7.84]*:
 
 | circuit | practice | race | |
 |---|---:|---:|---:|

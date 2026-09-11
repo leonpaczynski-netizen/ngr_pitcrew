@@ -2529,6 +2529,25 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Critic on 2.8 part 2, pass 3 (`24a332e`): NOT AGREED - one major, two
+minors, fixed.**
+- **Major:** the Deep Forest Rev B sheet still planned on the discount - "race
+  burn at the measured 3-9% practice discount is 7.46-7.95 L/lap" - with the
+  number before the word, where e9 could not see it. That sentence is now
+  re-flagged with 7.55 overall and 7.92 in the last stint. e9 now matches
+  every form the rule took: the number first, "take/knock X % off
+  practice", "runs X % under practice", and the number-less "overstates race
+  burn ... on every circuit". The critic's probes are pinned, and the
+  observation in `07` ("ran above race burn at ...") is held clear of it.
+- **Minor:** the Deep Forest sheet's "overstates race burn on this car, on
+  every circuit" is flagged where it stands.
+- **Minor:** I had asked whether a delta in points still leaks a position,
+  and it does. "Rose by about a sixth" solves, with both formulas printed
+  beside it, to exactly 5. It now says only that initial torque moved
+  further than any other axis.
+- **Proof at the parent:** e9 flags both sentences.
+- **Tests:** `test_brain_reconciliation` 18 passed.
+
 **The critic on 2.6, pass 3 (`f511c9e` + `f446334`): NOT AGREED - three
 majors, all fixed.**
 1. **A retired stop kept its tyres answer.** After "You're fuelled to the

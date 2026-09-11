@@ -114,7 +114,7 @@ On v1.70 all three ran **5–60**. On the 21 Aug reading they ran **0–30**, **
 >
 > This file has already caught the same failure mode twice — the natural-frequency heuristic on the RSR and the ride-height heuristic on the Shelby. Both were rules that changed meaning when transported across a class boundary. **This one changes meaning without going anywhere at all.**
 >
-> **Worked example, on the sheet raced at the time** (Rev B's RSR diff; its values are the sheet's, and no position is kept here - §1a): the same three numbers convert by `(v − 5) / 55` on v1.70 and by `v / 30`, `v / 100` and `v / 100` on v1.71. **Initial torque's reading rose by about a sixth of its range; acceleration and braking each fell a few points.**
+> **Worked example, on the sheet raced at the time** (Rev B's RSR diff; its values are the sheet's, and no position is kept here - §1a): the same three numbers convert by `(v − 5) / 55` on v1.70 and by `v / 30`, `v / 100` and `v / 100` on v1.71. **Initial torque's reading moved further than any other axis's; acceleration and braking moved little.**
 >
 > **The absolute values are untouched and the car drives as built** — Job 0 confirmed that, and the telemetry confirmed it independently (gear ratios byte-identical, `17` §1). **What changed is every proportional statement ever made about them.** Initial torque's proportional reading moved further than any other axis's.
 >

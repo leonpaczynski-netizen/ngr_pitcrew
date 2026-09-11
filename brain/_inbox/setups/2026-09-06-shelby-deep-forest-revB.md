@@ -151,7 +151,9 @@ accelerations.** A corner-dense lap beats both distance and time scaling.
 
 **What it does to the race** — race burn at the measured 3-9% practice discount
 is **7.46-7.95 L/lap**, so the tank covers **12.6-13.4 laps** against a ~20.5-lap
-race:
+race ⚠️ *[re-flagged 11 Sep 2026: the discount is not a rule - the race burned
+7.55 L/lap overall and 7.92 in its last stint (session 138); size the fill from
+the live burn]*:
 
 - **One stop, fuel-bound, and the window is lap 12-13** — earlier than the
   14-15 I gave you this morning.

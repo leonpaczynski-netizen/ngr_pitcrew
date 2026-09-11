@@ -313,8 +313,15 @@ def test_e6_sees_the_wordings_it_used_to_miss():
     assert not FLAGGED.search("this line was not re-flagged")
 
 
+_PCT = r"\d+(?:\.\d+)?\s?(?:[–-]\s?\d+(?:\.\d+)?\s?)?%"
+# Every form the rule took (pass 3: the number before the word, "take X %
+# off", and the number-less "overstates race burn ... on every circuit").
 DISCOUNT_RULE = re.compile(
-    r"discount\b[^.]{0,40}?3\s?[–-]\s?9\s?%|overstates race burn\s?3\s?[–-]\s?9",
+    rf"discount\b[^.]{{0,40}}?{_PCT}"
+    rf"|{_PCT}[^.]{{0,20}}?discount"
+    rf"|\b(?:take|knock|shave|cut)\b[^.]{{0,15}}?{_PCT}\s?off\b[^.]{{0,25}}?practice"
+    rf"|race burn runs\b[^.]{{0,15}}?{_PCT}\s?(?:under|below)\b[^.]{{0,10}}?practice"
+    r"|overstates race burn\b[^.]{0,60}?(?:every circuit|always|\d)",
     re.IGNORECASE)
 
 
@@ -330,6 +337,20 @@ def test_e9_no_live_doctrine_discounts_the_practice_burn():
             for sentence in _sentences(block)
             if DISCOUNT_RULE.search(sentence) and not FLAGGED.search(sentence)]
     assert not live, f"the practice-burn discount is still a rule at {live}"
+
+
+def test_e9_sees_every_form_of_the_discount():
+    """The critic's pass-3 probes, and the observation that is NOT a rule."""
+    for said in ("race burn at the measured 3-9% practice discount",
+                 "race burn runs 3-9 % under practice",
+                 "take 5 % off the practice burn", "knock 9% off practice burn",
+                 "Practice burn overstates race burn on this car, on every "
+                 "circuit, in the same direction",
+                 "discount practice burn 3-9 % for the race"):
+        assert DISCOUNT_RULE.search(said), said
+    assert not DISCOUNT_RULE.search(
+        "Practice burn ran above race burn at Road Atlanta (−3.5 %) and Red "
+        "Bull Ring (−9.2 %)")
 
 
 def test_e8_every_lsd_band_in_the_track_reference_is_flagged():
