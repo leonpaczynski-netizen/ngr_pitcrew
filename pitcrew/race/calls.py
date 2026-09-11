@@ -3316,6 +3316,17 @@ NO_STOP_TO_COME = "no stop still to come"
 # box lap" about a different quantity, and one phrase for two things a glance
 # apart is rule 13 with the two ends on the same screen.
 STOP_IS_LATE = "the stop is late"
+# **Due is not late.** On the box lap itself `past_box_lap` is already true,
+# and `DriverState.laps_past_box` records why the two must read differently -
+# the box block says "box this lap" there, and "late" beside it was the
+# defect that block was fixed for, one block along (critic on row 1.8).
+STOP_IS_DUE = "the stop is this lap"
+# The board's word for no plan running at all - the driver chose "No plan",
+# or none was approved. Not `NO_STOP_TO_COME`, which is a PLAN's answer: said
+# beside a red flag figure it told him a stop nobody planned was not needed.
+NO_PLAN = "no plan"
+# On the grid, armed and waiting: nothing has been driven to measure against.
+FROM_THE_GREEN = "from the green"
 NO_BURN_YET = "no burn measured yet"
 NO_FUEL_READING = "no fuel reading"
 NO_RACE_LENGTH = "race length unknown"
@@ -3374,8 +3385,15 @@ def fuel_in_hand_to_stop(state: RaceState) -> tuple[float | None, str | None]:
     is.
     """
     if not _stop_is_the_frame(state):
-        if state.past_box_lap:
-            return None, STOP_IS_LATE
+        # **Late only while the stop is still a stop, and only past its lap**
+        # (critic on row 1.8). `laps_to_stop()` retires a dropped stop, but
+        # `past_box_lap` does not - so from a dropped stop's box lap to the
+        # flag this block said "the stop is late" beside the countdown's "no
+        # stop still to come", after he had heard "No more stops on fuel".
+        # "Late" is the word that sends him in for fuel he does not need.
+        if state.past_box_lap and stop_still_needed(state):
+            return None, (STOP_IS_LATE if state.lap > state.stint_ends_on_lap
+                          else STOP_IS_DUE)
         return None, NO_STOP_TO_COME
     gap = _fuel_gap(state)
     if gap is None:

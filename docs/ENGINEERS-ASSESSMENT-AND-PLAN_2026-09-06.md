@@ -1731,6 +1731,43 @@ block, the spec and the settings tooltip (`612217f`), and the `has_plan`
 branch, which carried a fix and no test, is pinned. Suite before the batch:
 4425 passed, 5 skipped.
 
+**Critic pass 1 on row 1.8 — NOT AGREED, five majors, all one shape: the
+fix reached the block it was aimed at and not the one beside it.** Driven
+through real `RaceState`s into a real `DriverView`:
+
+1. A **dropped stop** read `LAPS TO THE STOP -- / no stop still to come`
+   beside `IN HAND TO THE STOP -- / the stop is late`, after *"No more stops
+   on fuel"* — `laps_to_stop()` retires the stop, `past_box_lap` does not,
+   and `fuel_in_hand_to_stop` asked the second. "Late" is the word that sends
+   him in for fuel he does not need (Fuji). Now late only while
+   `stop_still_needed`.
+2. **On the box lap itself** the fuel block said "late" beside "box this
+   lap" — the due-vs-late defect `laps_past_box`'s own comment records,
+   one block along. New reason `STOP_IS_DUE`, *"the stop is this lap"*.
+3. With **No plan** chosen the fuel block said *"no stop still to come"*
+   beside a red −5.0 flag figure — a plan's answer, given where nobody
+   planned. `_board_fuel` now says `NO_PLAN`, the box block's own word, now a
+   shared constant.
+4. **On the grid** the board is opened at arming and the state was a bare
+   `DriverState()` until the green, so it said "no plan" under *"Armed:
+   running to the approved plan"* — the carried §9a defect on a path the fix
+   never reached. The armed board now builds the countdown off the same two
+   expressions the running board uses (the stint is applied at construction)
+   and says *"from the green"* for the fuel figures.
+5. **`has_plan = False` survived every board file.** Pinned both ways off a
+   real `_stints` list — and the default stub, which had a countdown and no
+   plan, now carries the two-stint plan its own state describes.
+
+And a minor that was not minor: `test_the_box_caption_names_the_set_going_on_
+not_the_one_coming_off` built a `DriverView` with **no QApplication** and
+aborted the process with 0xC0000409 when run alone — reproduced under
+PowerShell, not only Git Bash. It passed in the suite only because an earlier
+file had made an app. §7's own sentence: passes in a group, fails alone, is
+shared state. Minor 6 (the in-box panel's "past the plan" against the running
+board's "no stop still to come" after an unplanned stop) is left: they
+describe the stop in progress and the stop still to come, which are different
+facts.
+
 ### The strategy-storage row — build (11 Sep 2026)
 
 The census first, read-only off the live DB: **10 plans lack `context` and 13

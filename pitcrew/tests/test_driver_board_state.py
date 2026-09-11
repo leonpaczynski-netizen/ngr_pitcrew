@@ -20,6 +20,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from pitcrew.controller import PitCrewController  # noqa: E402
 from pitcrew.race.gaps import GapTrend  # noqa: E402
 
+from .test_driver_view import qt_app  # noqa: E402,F401
+
 
 @dataclass
 class _Knowledge:
@@ -137,8 +139,15 @@ class _State:
 class _Race:
     state: _State = field(default_factory=_State)
     running: bool = True
+    # ARMED: on the grid, the board already up, the green still to come.
+    armed: bool = False
     knowledge: object = field(default_factory=_Knowledge)
-    _stints: list = field(default_factory=list)
+    # **A plan by default, because the default state is a planned race** - a
+    # countdown of 3 and a next compound. An empty list here described a race
+    # counting down to a stop nobody planned, which the board now answers
+    # "no plan" (critic on row 1.8); tests about no plan pass `[]`.
+    _stints: list = field(default_factory=lambda: [{"laps": 15},
+                                                   {"laps": 10}])
 
 
 @dataclass
@@ -1232,7 +1241,13 @@ def test_a_pit_stop_empties_the_split_history():
     assert guarded, "new_stint() is not called under the PIT_EXIT branch"
 
 
-def test_the_box_caption_names_the_set_going_on_not_the_one_coming_off():
+def test_the_box_caption_names_the_set_going_on_not_the_one_coming_off(
+        qt_app):  # noqa: F811
+    # **`qt_app`, which this test did not take** (critic on row 1.8). It
+    # builds a `DriverView`, and with no QApplication that aborts the process
+    # with 0xC0000409 - so it passed in the suite, where an earlier file had
+    # made one, and killed every run that reached it alone. CLAUDE.md 7: a
+    # test that passes in a group and fails alone is shared state.
     """**The board and the voice must name the same tyre.**
 
     `_tyre_word` speaks `next_compound`; the board's laps-to-box caption was
@@ -1257,3 +1272,90 @@ def test_the_box_caption_names_the_set_going_on_not_the_one_coming_off():
     view.update_state(got)
     assert "fit RH" in view.box_stat.sub.text()
     assert "RM" not in view.box_stat.sub.text()
+
+
+# ------------------------------------ critic on row 1.8: one fact, one word
+
+def test_a_dropped_stop_is_not_called_late():
+    """`laps_to_stop()` retires a dropped stop and `past_box_lap` does not, so
+    from its box lap to the flag the fuel block said "the stop is late"
+    beside "no stop still to come" - the word that sends him in for fuel he
+    does not need."""
+    from pitcrew.race import calls as C
+
+    state = C.RaceState(lap=12, laps_total=20, stint_ends_on_lap=11,
+                        fuel_l=60.0, fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+                        plan_binding_constraint="fuel", mandatory_stops_left=0,
+                        drop_stop_granted=True)
+    assert state.laps_to_stop() is None
+    assert C.fuel_in_hand_to_stop(state) == (None, C.NO_STOP_TO_COME)
+    # The same state with the drop not granted: the stop stands, and it is.
+    state.drop_stop_granted = False
+    assert C.fuel_in_hand_to_stop(state) == (None, C.STOP_IS_LATE)
+
+
+def test_has_plan_comes_off_the_race_not_off_the_countdown():
+    """The controller half of the "no plan" fix, which no test read (critic on
+    row 1.8: `has_plan = False` survived every board file). A plan on its
+    last stint has no countdown and IS a plan; a race with no stints is not."""
+    from pitcrew.race import calls as C
+
+    planned = _Stub(race=_Race(_stints=[{"laps": 11}, {"laps": 9}]))
+    planned.race.state._to_stop = None
+    got = _state_for(planned)
+    assert got.has_plan is True
+    assert got.fuel_to_stop_why == C.NO_STOP_TO_COME
+
+    unplanned = _Stub(race=_Race(_stints=[]))
+    unplanned.race.state._to_stop = None
+    got = _state_for(unplanned)
+    assert got.has_plan is False
+    # **And the fuel block agrees with the box block**: "no stop still to
+    # come" is a plan's answer, and beside a red flag figure it told him a
+    # stop nobody planned was not needed.
+    assert got.fuel_to_stop_why == C.NO_PLAN
+
+
+def test_the_grid_board_shows_the_plan_it_is_armed_to(qt_app):  # noqa: F811
+    """`_open_driver_board` runs at arming, and the state was a bare
+    `DriverState()` until the green - "no plan" under "Armed: running to the
+    approved plan"."""
+    from pitcrew.race import calls as C
+    from pitcrew.ui.driver_view import DriverView
+
+    stub = _Stub(race=_Race(running=False, armed=True,
+                            _stints=[{"laps": 11}, {"laps": 9}]))
+    stub.race.state.lap = 0
+    stub.race.state._to_stop = 11
+    got = _state_for(stub)
+    assert got.has_plan is True
+    assert got.laps_to_box == 11.0
+    # The same expression the running board uses, so the grid and lap one
+    # count the same way.
+    assert got.box_on_lap == stub.race.state.lap_on_screen() + 11
+    assert got.fuel_to_stop_why == got.fuel_to_flag_why == C.FROM_THE_GREEN
+    view = DriverView()
+    view.update_state(got)
+    assert view.box_stat.value.text() == "11"
+    assert view.stop_stat.sub.text() == C.FROM_THE_GREEN
+
+    # Armed with "No plan" chosen: the grid says so, in the board's words.
+    bare = _Stub(race=_Race(running=False, armed=True, _stints=[]))
+    got = _state_for(bare)
+    assert got.has_plan is False and got.laps_to_box is None
+    view.update_state(got)
+    assert view.box_stat.sub.text() == C.NO_PLAN
+
+    # Neither running nor armed: nothing to show.
+    idle = _Stub(race=_Race(running=False, armed=False,
+                            _stints=[{"laps": 20}]))
+    assert _state_for(idle).has_plan is False
+
+
+def test_the_box_lap_itself_is_due_not_late():
+    from pitcrew.race import calls as C
+
+    state = C.RaceState(lap=11, laps_total=20, stint_ends_on_lap=11)
+    assert C.fuel_in_hand_to_stop(state) == (None, C.STOP_IS_DUE)
+    state.lap = 12
+    assert C.fuel_in_hand_to_stop(state) == (None, C.STOP_IS_LATE)

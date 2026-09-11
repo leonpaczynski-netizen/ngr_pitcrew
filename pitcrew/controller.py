@@ -5593,11 +5593,39 @@ class PitCrewController(QObject):
         its only consumer and half of it - the live tank, the countdown -
         comes off the packet in hand rather than off the race per-lap state.
         """
+        from pitcrew.race.calls import FROM_THE_GREEN
         from pitcrew.ui.driver_view import DriverState
 
-        if self.race is None or not self.race.running:
+        if self.race is None:
             return DriverState()
         state = self.race.state
+        has_plan = bool(getattr(self.race, "_stints", None))
+        if not self.race.running:
+            if not getattr(self.race, "armed", False):
+                return DriverState()
+            # **On the grid the board is already up, and it said "no plan".**
+            # `_open_driver_board` runs at arming - on the grid, not at the
+            # green - and this returned a bare state for anything not
+            # running, so `has_plan` was False under "Armed: running to the
+            # approved plan" (critic on row 1.8). The stint is applied at
+            # construction, so the countdown is known here and comes off the
+            # same two expressions the running board uses; the fuel figures
+            # have nothing driven to measure against yet, and say so.
+            to_stop = state.laps_to_stop() if has_plan else None
+            return DriverState(
+                temps_c=self._board_temps(),
+                compound=getattr(state, "tyre_compound", None),
+                next_compound=getattr(state, "next_compound", None),
+                tyres_at_stop=getattr(state, "next_tyres", None),
+                has_plan=has_plan,
+                laps_to_box=None if to_stop is None else float(max(0, to_stop)),
+                box_on_lap=(None if to_stop is None
+                            else state.lap_on_screen() + max(0, to_stop)),
+                fuel_to_stop_why=FROM_THE_GREEN,
+                fuel_to_flag_why=FROM_THE_GREEN,
+                position=getattr(state, "position", None),
+                field_size=getattr(state, "field_size", None),
+                last_call=self._board_call)
         # **The flag is not a teardown, and this is why that matters here.**
         # `_close_out_finished_race` deliberately leaves the race running -
         # the slow-down lap is still being recorded - so without this the
@@ -5633,7 +5661,6 @@ class PitCrewController(QObject):
         in_box = bool(state.in_pit or filling)
 
         to_stop = state.laps_to_stop()
-        has_plan = bool(getattr(self.race, "_stints", None))
         base = DriverState(
             temps_c=temps,
             # Which way each split is going, for the corners where five laps
@@ -5680,7 +5707,7 @@ class PitCrewController(QObject):
             field_size=getattr(state, "field_size", None),
             last_call=self._board_call,
             **self._board_splits(),
-            **self._board_fuel(state),
+            **self._board_fuel(state, has_plan=has_plan),
             # **Both neighbours, on the running panel only.** In the box the
             # gap to a car still circulating is not a thing he can act on, and
             # the box panel has five items already.
@@ -5808,7 +5835,7 @@ class PitCrewController(QObject):
             found["rear_pair_rate"] = self._splits.rate(corner)[0]
         return found
 
-    def _board_fuel(self, state) -> dict:
+    def _board_fuel(self, state, *, has_plan: bool = True) -> dict:
         """The two in-hand figures and, where there is none, the reason.
 
         **Both come from `race/calls.py` and neither is computed here.** The
@@ -5818,10 +5845,16 @@ class PitCrewController(QObject):
         being asked to cover. One expression per question, named in the words
         the voice already uses (CLAUDE.md rules 12 and 13).
         """
-        from pitcrew.race.calls import (fuel_in_hand_to_flag,
+        from pitcrew.race.calls import (NO_PLAN, fuel_in_hand_to_flag,
                                         fuel_in_hand_to_stop)
 
         to_stop, stop_why = fuel_in_hand_to_stop(state)
+        # **"No stop still to come" is a plan's answer.** With none running
+        # it sat beside a red flag figure proving a stop was needed, telling
+        # him one nobody planned was not (critic on row 1.8). The box block
+        # already says "no plan" here; the block beside it now agrees.
+        if not has_plan and to_stop is None:
+            stop_why = NO_PLAN
         # **The reference travels with the figure**, out of one expression.
         # It names whichever of three supplies actually bound the answer -
         # the plan's fill, the fuel he arrives with, or a full tank - and a

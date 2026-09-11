@@ -686,7 +686,8 @@ def test_the_board_does_not_grow_in_the_widest_state_it_can_be_given(qt_app):
     from pitcrew.ui.driver_view import (BoardCall, DriverState, DriverView,
                                         GapView)
 
-    reasons = [C.NO_STOP_TO_COME, C.STOP_IS_LATE, C.NO_BURN_YET,
+    reasons = [C.NO_STOP_TO_COME, C.STOP_IS_LATE, C.STOP_IS_DUE, C.NO_PLAN,
+               C.FROM_THE_GREEN, C.NO_BURN_YET,
                C.NO_FUEL_READING, C.NO_RACE_LENGTH, C.NOT_REACHING_THE_BOX,
                C.STOP_ON_THE_LAST_LAP, C.STOP_PAST_THE_FLAG,
                C.ANOTHER_STOP_AFTER, C.NO_CAPACITY]

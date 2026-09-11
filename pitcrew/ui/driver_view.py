@@ -347,7 +347,7 @@ from PyQt6.QtWidgets import (
 from pitcrew.store.tyres import WEAR_ONSET_C
 # The one vocabulary for how a call was meant, shared with `Call.spoken()` so
 # the word on the screen and the word in his ear are one decision (rule 12).
-from pitcrew.race.calls import MARK_UNCONFIRMED, NO_STOP_TO_COME
+from pitcrew.race.calls import MARK_UNCONFIRMED, NO_PLAN, NO_STOP_TO_COME
 # The trend floor, imported rather than restated: it is derived, its
 # arithmetic is documented where it is defined, and two copies would drift.
 from pitcrew.race.tyre_split import RATE_WORTH_SAYING_C
@@ -1719,7 +1719,9 @@ class DriverView(QWidget):
             # same thing about the same fact (rule 13).
             self.box_stat.show_value("--", NO_STOP_TO_COME)
         elif state.laps_to_box is None:
-            self.box_stat.show_value("--", "no plan")
+            # The same constant the fuel block beside it uses for the same
+            # fact - with no plan running both say "no plan".
+            self.box_stat.show_value("--", NO_PLAN)
         elif state.laps_past_box is not None:
             # **`laps_to_stop()` clamps at zero**, so a driver three laps past
             # his box lap read "0 laps to box, box on lap 15" - the current
