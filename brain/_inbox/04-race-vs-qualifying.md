@@ -255,7 +255,7 @@ The trap to avoid: setting ride height at the qualifying minimum, then loading t
 
 ### 2.5 LSD: rotation vs. tyre preservation
 
-> **⚠️ 1.71: "Initial differential gear settings and adjustment ranges have been fixed."** And **[COMMUNITY — single source]** the diff may now floor at 0/0/0 rather than 5/5/5 (`16` §5). If so, the "maximise rotation" quali philosophy below has genuinely new territory beneath it — **a truly open diff on the overrun would be a bigger rotation source than anything this section describes.** Confirm the range before exploring it.
+> **⚠️ 1.71: "Initial differential gear settings and adjustment ranges have been fixed."** And the diff does now floor at 0/0/0 rather than the v1.70 5/5/5 - **confirmed on v1.71 by `range_records`** (0–30 / 0–100 / 0–100 on every car read). So the "maximise rotation" quali philosophy below has genuinely new territory beneath it — **a truly open diff on the overrun would be a bigger rotation source than anything this section describes.** Confirm the range before exploring it.
 
 **GT7 model.** Fully-customisable LSD with three parameters — **Initial Torque, Acceleration Sensitivity, Braking Sensitivity** — each on a **5–60** scale on v1.70 - **0–30 / 0–100 / 0–100 on v1.71** (`range_records`). Low = open, high = locked. Initial Torque sets the baseline preload/locking threshold and controls how quickly the diff transitions between open and locked. Acceleration Sensitivity controls locking under power; Braking Sensitivity controls locking under lift/braking.
 
@@ -480,7 +480,7 @@ The evidence:
 | Layout / condition | Typical late-stint migration | Pre-compensation |
 |---|---|---|
 | **FR Gr.3** (Supra, Mustang, Aston, Corvette, Viper, RCZ, WRX) on a track with long-radius, high-load corners | **Toward understeer** — front-limited | Bias the sheet slightly oversteery on fresh tyres; keep brake bias rearward headroom; consider slightly more front downforce than the fresh-tyre optimum |
-| **MR / RR Gr.3** (Huracán, 650S, NSX, 911 RSR, RX-Vision) on a track with slow, traction-limited exits | **Toward power oversteer** — rear-limited | Bias slightly understeery on fresh tyres; keep brake bias *forward* headroom; lower LSD accel sensitivity; more rear downforce |
+| **MR / RR Gr.3** (Huracán, 650S, NSX, 911 RSR, RX-Vision) on a track with slow, traction-limited exits | **Toward power oversteer** — rear-limited | Bias slightly understeery on fresh tyres; keep brake bias *forward* headroom; lower LSD accel sensitivity (v1.70 guidance, against power oversteer); more rear downforce |
 | **Any car, very high tyre multiplier (5–6×)** | Migration is fast and steep; the last third of the stint is a different car | Set up unambiguously for mid-stint; plan an in-race balance-management sequence, not a static setup |
 | **Any car, 1× wear, sprint** | Negligible migration | Ignore degradation entirely; tune for fresh-tyre pace |
 

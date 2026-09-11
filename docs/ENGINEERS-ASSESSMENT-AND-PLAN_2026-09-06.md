@@ -2529,6 +2529,62 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Critic on 2.7, pass 2 (`db55a11`): NOT AGREED - one blocker, four minors,
+fixed.**
+- **The blocker: the hub's first word was kept for good as if it were his.**
+  Pass 1's fix filled a NULL and then reported, never overwrote, a value on
+  file. But no screen writes `bop_enabled`, `tuning_allowed` or the power
+  and weight limits: the hub is their only author. In the critic's repro
+  the league turned BoP on and moved the limit after he saved, and the app
+  went on handing Ludo "BoP off" at 509 BHP. A sheet with gear ratios would
+  have gone to a round that locks them. The power change was not said at
+  all.
+  - For these four hub-only columns, the hub's current value now wins on
+    every load of a linked upcoming round, and each change is said in his
+    words: "BoP is now on for this round", "power limit now 520 BHP (was
+    509)". "Report, never overwrite" stays for the columns that have a box.
+  - The hub's word is applied **before** the form loads, so a later Save
+    carries it, not the stale copy.
+- **Minors:**
+  - The blocker's regression test now takes the round off the hub before
+    saving, so it pins the save path on its own. It had passed without the
+    fix, because the next load filled the values back.
+  - The weight limit is tested.
+  - The change notes are in the driver's words, not "BoP 0 here, 1 on the
+    hub".
+  - The hub is read once per load, and the proposal is passed on to the
+    comparison.
+  - A fill is logged with the round that caused it.
+
+**Critic on 2.8 part 2, pass 5 (`e4f2767`): NOT AGREED - one major, two
+minors, fixed, and the class now has its own check.** Passes 4 and 5 each
+found four more places offering "lower the accel" as the cure for a power-on
+push, unpointed, after the v1.71 Huracán test refuted that step (s145).
+Chasing lines critic by critic was not converging, so the claim itself is
+now checked.
+
+- **e10** covers every line in the skills, the knowledge base (`00`-`17`)
+  and the car-state files that ties lowering the accel to a push,
+  understeer or rotation. Each must carry "CONTESTED", the `02` §10.5
+  pointer or its v1.70 stamp.
+  - The snap, tyre-wear and wet-weather "lower accel" lines are a different
+    claim and stay clear of it, and a test pins that.
+  - **Its limit, stated:** a line that never names the accel ("come DOWN
+    from 25") and the arrow forms ("18 → 14", "25→20") are beyond a worded
+    pattern. `08`:530, `01` §11, `01`:163 and `08`:274 carry their pointers
+    by hand.
+  - `01` §11 is stamped v1.70, with a note that its values are history.
+- **e8b now also sees** a band written before "accel", a triple after the
+  diff, and "initial torque N, acceleration N". A triple in a car-state file
+  is that car's setting, so it is exempt. Newly flagged: `02`:510, `06`:529
+  and :535, `07`:220 and :543.
+- **Two more stale "floor may be 0" lines** (`04`:258, `07`:392) now say
+  `range_records` confirmed it. `07`:40's "20-28" is labelled v1.70, the
+  case the critic raised: an exemption clearing a line whose band was still
+  the old scale.
+- **Proof at the parent:** e10 flags 6 lines and e8b's new forms 5.
+- **Tests:** `test_brain_reconciliation` 21 passed.
+
 **Critic on 2.7 (`c48e018`): NOT AGREED - one blocker, three majors, five
 minors, fixed.**
 - **B1: the BoP flag never reached the Fuji event.** Every Enduro round

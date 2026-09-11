@@ -37,7 +37,7 @@
 
 ## The three things to re-test first, in order
 
-1. **Huracán LSD acceleration sensitivity.** §3.6.1's finding — that 14 beats the MR baseline of 15 and beats the track norm of 20–28 on a restricted build — is **an argument about torque *shape*, and 1.71 changed how torque is delivered.** The three transferable conclusions all survive; the value 14 needs re-establishing. **And if the diff floor really did drop from 5 to 0 (`16` §5), the useful territory extends below anywhere we have looked.** ⚠️ *It did (`range_records`, v1.71) - and lowering accel was then refuted on this car at Daytona (s145), `02` §10.5.*
+1. **Huracán LSD acceleration sensitivity.** §3.6.1's finding — that 14 beats the MR baseline of 15 and beats the track norm of 20–28 (v1.70 scale) on a restricted build — is **an argument about torque *shape*, and 1.71 changed how torque is delivered.** The three transferable conclusions all survive; the value 14 needs re-establishing. **And if the diff floor really did drop from 5 to 0 (`16` §5), the useful territory extends below anywhere we have looked.** ⚠️ *It did (`range_records`, v1.71) - and lowering accel was then refuted on this car at Daytona (s145), `02` §10.5.*
 2. **Camber on both Gr.3 cars.** §2.7 flags the 2022 tunes' −3.0° as a pre-1.49 max-grip choice, and the modern baseline as −1.0 to −2.0°. **1.71 reworked the exact model that made heavy camber expensive in GT7.** If the penalty softened, the modern baseline is now over-conservative. `16` §12 Job 5, ten minutes.
 3. **Which car actually suits the driver now.** §6.3 ranks the RSR first for a heavy trail-braker, on mass distribution plus low polar moment plus 1.49's brake-bias sensitivity. **Mass distribution and polar moment are intact; the other two terms moved** — 1.71 adjusted ABS slip-ratio control and cornering brake behaviour, which is the trail-braking phase directly. **The ranking is a hypothesis again.**
 
@@ -217,7 +217,7 @@ Context: [Occam's Racer's GT7 aerodynamics analysis](https://occamsracers.com/20
 | Brake balance | not specified | −3 | Start at 0 |
 | Final drive | 3.800 | — | — |
 
-Note the very large divergence between the 2022 lobby tunes and the modern baseline on **camber** (−3.0 vs −1.5/−2.0) and **LSD** (15/40/50 vs 5/15/20). My reading is that 1.49's tyre model changes made heavy static camber and heavy diff lock more costly, and that the 2022 numbers reflect a max-grip, tyre-wear-indifferent qualifying philosophy. **Start from the modern MR baseline and add locking/camber only as the car demonstrates it needs it** — and note §3.6.1, where even the modern MR baseline proved too much lock on a restricted build.
+Note the very large divergence between the 2022 lobby tunes and the modern baseline on **camber** (−3.0 vs −1.5/−2.0) and **LSD** (15/40/50 vs 5/15/20, both on the v1.70 5–60 scale). My reading is that 1.49's tyre model changes made heavy static camber and heavy diff lock more costly, and that the 2022 numbers reflect a max-grip, tyre-wear-indifferent qualifying philosophy. **Start from the modern MR baseline and add locking/camber only as the car demonstrates it needs it** — and note §3.6.1, where even the modern MR baseline proved too much lock on a restricted build.
 
 > **⭐⭐ 21 Aug — and this is the most interesting open question in the file.** That reading attributes the 2022-vs-modern camber divergence to **1.49's tyre model** making heavy camber costly. **1.71 reworked per-car steering geometry — the other half of the mechanism that makes camber expensive in GT7.**
 >
@@ -389,7 +389,7 @@ The old organising question for this car was *"does this buy me rear tyre life?"
 >
 > **First, the torque map changed.** 1.71 introduced a new engine torque control map, citing improved partial-throttle speed control. **This finding is entirely an argument about torque *shape* in the early corner-exit phase — which is the thing PD just re-authored.** Conclusion 2 above is the load-bearing one and it is the one most exposed.
 >
-> **Second, the diff range changed.** 1.71 revised the differential's initial settings and adjustment ranges, and **[COMMUNITY — single source]** one report says the Fully Customisable Diff now floors at **0/0/0** rather than 5. If true, **the useful territory extends below anywhere this test looked** — and this is a finding about the bottom of the range.
+> **Second, the diff range changed.** 1.71 revised the differential's initial settings and adjustment ranges, and **[COMMUNITY — single source]** one report said the Fully Customisable Diff now floors at **0/0/0** rather than the v1.70 5 - **confirmed on v1.71 by `range_records`**. So **the useful territory extends below anywhere this test looked** — and this is a finding about the bottom of the range.
 >
 > **All three transferable conclusions survive** — they are about method, about restricted builds in general, and about diagnosis. **The number 14 does not.** Add a fourth conclusion: **re-test accel sensitivity after a physics update, not only after a restrictor change.**
 
@@ -540,7 +540,7 @@ A heavy trail-braker will find it requires **more deliberate rotation induction*
 | Toe F/R | 0.00° / +0.05° |
 | Natural frequency | 70–80% of slider; rear slightly stiffer ⚠️ *known-broken heuristic on Gr.3 — anchor in absolute Hz, see `11`* |
 | Ride height | Front 3–5 clicks above min; rear 5–8 above ⚠️ *known-broken heuristic — state as percent of range, see `11`* |
-| LSD (FR) | **5 / 25 / 10** — treat accel 25 as a *ceiling* on a restricted build ⚠️ *floor may now be 0* |
+| LSD (FR) | **5 / 25 / 10** — treat accel 25 as a *ceiling* on a restricted build ⚠️ *v1.70 scale; the floor is 0 on v1.71 (`range_records`)* |
 | Brake balance | Start at 0 |
 | Downforce | Max front first, then trim rear for high-speed balance ⚠️ *aero ranges revised* |
 

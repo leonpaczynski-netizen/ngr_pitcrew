@@ -391,16 +391,70 @@ def test_e8_no_live_lsd_band_anywhere_is_left_on_the_old_scale():
         r"[^.|]{0,20}\bsensitivity)[^\n]{0,120}?"
         r"(?<![\d.])\d{1,2}\s?[–-]\s?\d{1,2}(?![\d.])",
         re.IGNORECASE)
+    # Pass 5: the band before the word ("20-28 accel"), and value forms - a
+    # triple after the diff, or "initial torque 5, acceleration 25". A triple
+    # in a car-state file is that car's setting, where §1a puts it.
+    before = re.compile(r"(?<![\d.])\d{1,2}\s?[–-]\s?\d{1,2}(?![\d.])\s?"
+                        r"(?:\w+\s){0,1}accel", re.IGNORECASE)
+    values = re.compile(
+        r"(?:\bLSD\b|\blsd\b)[^\n]{0,60}?(?<![\d.])\d{1,2}\s?/\s?\d{1,2}\s?/"
+        r"\s?\d{1,2}(?![\d.])|initial torque \d+, acceleration \d+",
+        re.IGNORECASE)
     stamped = ("v1.70", "5–60 scale", "v1.71 reads", "on v1.71",
                "range_records", "0–30 / 0–100")
     bare = []
     for pattern in scope:
         for path in sorted(ROOT.glob(pattern)):
             text = path.read_text(encoding="utf-8")
+            kb = "car-state" not in path.as_posix()
             for number, line in enumerate(text.splitlines(), 1):
-                if near.search(line) and not any(s in line for s in stamped):
+                hit = (near.search(line) or before.search(line)
+                       or (kb and values.search(line)))
+                if hit and not any(s in line for s in stamped):
                     bare.append(f"{path.relative_to(ROOT).as_posix()}:{number}")
     assert not bare, f"LSD bands with no version or scale flag at {bare}"
+
+
+# "Lower the accel" offered as the cure for a push, understeer or lost
+# rotation - the claim the v1.71 Huracán test refuted (s145). Arrow forms
+# ("18 → 14") are pinned by hand; these are the worded ones.
+_LOWER_ACCEL = (r"(?:(?:lower|reduc|drop|down)\w*\b[^.|]{0,40}\baccel"
+                r"|\baccel\w*\b[^.|]{0,40}\b(?:lower|reduc\w*|down)\b)")
+LOWER_ACCEL_FOR_PUSH = re.compile(
+    rf"{_LOWER_ACCEL}[^.]{{0,160}}?(?:push|understeer|rotat)"
+    rf"|(?:push|understeer|rotat)\w*[^.]{{0,160}}?{_LOWER_ACCEL}",
+    re.IGNORECASE)
+
+
+def test_e10_lower_accel_for_a_push_always_says_it_is_contested():
+    """Critic on 2.8 part 2, passes 4 and 5: each pass pointed four more
+    places at "lower the accel" as the cure for a power-on push, after the
+    v1.71 Huracán test refuted lowering it (s145). Every such line, anywhere
+    Ludo reasons from, carries the pointer, the word, or its v1.70 stamp."""
+    scope = (".claude/skills/**/*.md", "brain/_inbox/0*.md",
+             "brain/_inbox/1[0-7]-*.md", "brain/car-state/*.md")
+    marked = ("CONTESTED", "§10.5", "v1.70")
+    bare = []
+    for pattern in scope:
+        for path in sorted(ROOT.glob(pattern)):
+            text = path.read_text(encoding="utf-8")
+            for number, line in enumerate(text.splitlines(), 1):
+                if LOWER_ACCEL_FOR_PUSH.search(line) \
+                        and not any(m in line for m in marked):
+                    bare.append(f"{path.relative_to(ROOT).as_posix()}:{number}")
+    assert not bare, f"'lower accel for a push' with no pointer at {bare}"
+
+
+def test_e10_sees_the_claim_and_not_its_neighbours():
+    for said in ("if it pushes on throttle, bring accel down from 25",
+                 "Reduce accel LSD slightly to free rotation",
+                 "LSD accel down → frees rotation under power",
+                 "Power-on mid-corner understeer, resolved by dropping LSD "
+                 "accel from 18 to 14"):
+        assert LOWER_ACCEL_FOR_PUSH.search(said), said
+    # A different claim: lower accel for the two-wheel snap or for wear.
+    assert not LOWER_ACCEL_FOR_PUSH.search(
+        "Car snaps suddenly on power | Lower acceleration sensitivity")
 
 
 def test_e7_the_register_restates_no_setup_value():

@@ -271,11 +271,11 @@ And here is why this matters enormously in *your* league specifically:
 
 ### B2. Where the ARB numbers came from, and why your Fuji move was right
 
-Your tested Fuji change — **front ARB 5→4, front toe −0.10→−0.15, LSD accel 25→20, rear toe 0.20→0.25** — is a near-perfect worked example, because it addressed entry/mid understeer *and* loose throttle exit simultaneously without touching brake bias:
+Your tested Fuji change — **front ARB 5→4, front toe −0.10→−0.15, LSD accel 25→20, rear toe 0.20→0.25** — is a near-perfect worked example, because it addressed entry/mid understeer *and* loose throttle exit simultaneously without touching brake bias ⚠️ *[v1.70 5–60 scale; and on v1.71 lowering accel against a push is CONTESTED - Huracán, Daytona, s145, `02` §10.5]*:
 
 - Front ARB softer → more front mid-corner grip
 - Front toe more out → more entry bite (correct *for that car*, empirically validated)
-- LSD accel down → frees rotation under power and reduces the both-wheels-let-go snap
+- LSD accel down → frees rotation under power and reduces the both-wheels-let-go snap ⚠️ *[v1.70. The rotation half is CONTESTED on v1.71: lowering it did not bring on-power rotation back on the Huracán at Daytona (s145) - `02` §10.5]*
 - Rear toe in → rear exit security to pay for the freed diff
 
 One flag: **rear toe 0.25 is fairly large by GT7 standards.** It is the biggest alignment contributor to tyre wear and it costs straight-line speed. Try recovering some of that stability from LSD braking sensitivity or rear expansion damping instead, and pull rear toe back toward +0.15.
@@ -527,7 +527,7 @@ Full profiles in `07-car-profiles.md`. The decisions that matter.
 That weight is the headline: **355 kg heavier than a Gr.3 Mustang.** Far more mass to manage into braking zones and correspondingly more tyre wear. Combined with the flat-plane crank's peaky delivery, a genuinely demanding platform.
 
 - **FR character:** entry understeer to manage, exit traction limitation, and **it will not rotate for free.** You have to manufacture rotation with brake bias, front geometry and a looser entry diff. **⭐ If the LSD floor really did drop to 0, this car benefits most of the three — "a looser entry diff" now has somewhere further to go.**
-- **LSD FR baseline: 5 / 25 / 10.** Accel 25 is markedly higher than the MR 15 — FR cars need more locking to put power down. ⚠️ **But per D3.1, if you ever run this car restricted and it pushes on throttle, come DOWN from 25 before touching front grip.**
+- **LSD FR baseline: 5 / 25 / 10 (v1.70 5–60 scale).** Accel 25 is markedly higher than the MR 15 — FR cars need more locking to put power down. ⚠️ **But per D3.1, if you ever run this car restricted and it pushes on throttle, come DOWN from 25 before touching front grip.** ⚠️ *[CONTESTED on v1.71: lowering accel against a push was refuted on the Huracán at Daytona (s145) - `02` §10.5]*
 - **The Watkins Glen unresolved item — rear locking with no ABS — should be attacked as: ABS Weak, LSD braking sensitivity up in +2 steps, rear expansion damping down, rear ride height up from the 95 mm floor.** Brake bias stays at neutral. **⚠️ The 95 mm floor is a v1.70 reading and 1.71 revised suspension ranges — re-read it (Job 1) before using it as a floor.**
 - **This car has the most unused softness of the three** — `11` records it running 3.05 / 3.20 Hz on a 1.88–3.70 / 2.00–3.90 Hz range, i.e. ~64% of its own range, on a heavy road car with aggressive kerbs, and none of the softness below that has ever been tried. **⚠️ Re-read the range first; the whole observation depends on where the floor is.**
 

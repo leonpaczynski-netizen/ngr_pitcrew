@@ -526,13 +526,13 @@ Progression:
 
 **PP:** installing costs PP; **the settings are PP-free.** ([DiamondLobby](https://diamondlobby.com/gran-turismo-7/best-tuning-setups-for-gt7/); [Coach Dave Academy](https://coachdaveacademy.com/tutorials/gran-turismo-7-tuning-explained/))
 
-**Tuning direction:** high values = more locked; low = more open. The standard approach is *"as high as you're comfortable with for acceleration"* and *"as low as you can manage for braking."* A typical FR baseline: initial torque 5, acceleration 25, braking 10.
+**Tuning direction:** high values = more locked; low = more open. The standard approach is *"as high as you're comfortable with for acceleration"* and *"as low as you can manage for braking."* A typical FR baseline: initial torque 5, acceleration 25, braking 10 (v1.70 5–60 scale - a direction only on v1.71's 0–30 / 0–100 / 0–100).
 
 > **⚠️⚠️ 21 Aug — the 5–60 scale may no longer be 5–60.** 1.71: *"Initial differential gear settings and adjustment ranges have been fixed."* **[COMMUNITY — single source]** One GTPlanet player reports the Fully Customisable Diff can now be set to **0/0/0**, which was never previously possible in the series.
 >
 > **If confirmed, a genuinely open differential is buildable for the first time**, and every LSD baseline in this knowledge base is written against a floor that no longer exists. `03` §8.5, `04` §2.5 and `08` B1 all assume 5. **Confirm on the settings screen — `16` §12 Job 1 — before it changes a single setup.**
 
-> **Historical bug worth knowing:** on a TVR Tuscan Speed 6, fitting the Fully Customisable LSD dropped PP by **−139.74** (603.11 → 463.37), and an LSD setting of 10/51/20 took it to **−143.09** (603.11 → 460.02) — the car was massively under-rated while being *faster*. The bug was described as *"very simple but incredibly hard to recreate."* ([GTPlanet](https://www.gtplanet.net/forum/threads/strange-pp-changes-when-changing-parts.409005/)) **Almost certainly patched — but this class of bug recurs after every physics change.** A league should have a rule for it (see §9).
+> **Historical bug worth knowing:** on a TVR Tuscan Speed 6, fitting the Fully Customisable LSD dropped PP by **−139.74** (603.11 → 463.37), and an LSD setting of 10/51/20 (v1.70-era scale) took it to **−143.09** (603.11 → 460.02) — the car was massively under-rated while being *faster*. The bug was described as *"very simple but incredibly hard to recreate."* ([GTPlanet](https://www.gtplanet.net/forum/threads/strange-pp-changes-when-changing-parts.409005/)) **Almost certainly patched — but this class of bug recurs after every physics change.** A league should have a rule for it (see §9).
 >
 > **⭐ And note the specific relevance now: that bug involved LSD *settings* moving PP, which they are not supposed to do at all.** 1.71 revised the diff's defaults and ranges. **If PP is really computed from the *default* diff settings (§1.2), a changed default is a changed PP on every car with an adjustable diff fitted.** This is the most likely single explanation for unexpected PP movement on our three cars, all of which run Fully Customisable LSDs.
 

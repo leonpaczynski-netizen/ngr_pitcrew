@@ -124,7 +124,7 @@ When multiple controls could address the same symptom, work down this list. It e
 | "Loses rear when I lift" | Lift-off oversteer | Stabilise rear decel, reduce excessive rake/stiffness, preserve compliance |
 | "Loose on throttle exit" | Power oversteer, wheelspin, diff/gearing | **Check pedal calibration first**; then rear toe, accel LSD direction, 2nd gear, rear support |
 | "Won't hook up under throttle" | Too much wheelspin or insufficient rear load | Longer lower gear, more rear support, geometry/diff correction, smoother torque delivery |
-| "Won't rotate under throttle" | Excessive acceleration lock / too much rear security | Reduce accel LSD slightly to free rotation without removing braking stability |
+| "Won't rotate under throttle" | Excessive acceleration lock / too much rear security | Reduce accel LSD slightly to free rotation without removing braking stability ⚠️ *[CONTESTED on v1.71: lowering it did not bring on-power rotation back on the Huracán at Daytona (s145) - `02` §10.5]* |
 | "Undriveable over bumps" | Platform too stiff | Soften spring/bar/rebound axis; keep tyres in contact rather than chasing response |
 | "Gearbox too long/short" | Ratio spread mismatch | Validate actual gear reached at end of straight and corner-exit rpm; then adjust individual ratios/final |
 
@@ -160,7 +160,7 @@ It is the clearest match to the driver profile: responsive nose, strong brake-re
 - A previous quali/race pair deliberately separated the philosophies: **quali ≈ 55/59 mm ride height, ARB 7/7, 3.50/3.60 Hz; race ≈ 56/63 mm, ARB 7/6, 3.35/3.45 Hz** — the race car intentionally calmer and less peaky for consistency and tyre protection.
 - Telemetry showed **22 wheelspin events in one lap** with no lock-ups or oversteer recorded, and braking inconsistency around 22.6 m. Lesson: the biggest loss can be traction/braking *repeatability* even when the lap doesn't look spectacularly unstable.
 - Top speed was ~271 km/h against a nominal 300 km/h target — so lengthening the gearbox would have been the wrong response. **Ratios must follow actual pull, not a target-speed number.**
-- A tested response to entry/mid understeer plus loose throttle exit: **front ARB 5→4, front toe −0.10→−0.15, LSD accel 25→20, rear toe 0.20→0.25.** A good template — add front bite *and* rear exit security simultaneously.
+- A tested response to entry/mid understeer plus loose throttle exit: **front ARB 5→4, front toe −0.10→−0.15, LSD accel 25→20, rear toe 0.20→0.25.** A good template — add front bite *and* rear exit security simultaneously. ⚠️ *[v1.70 5–60 scale; and on v1.71 lowering accel against a push is CONTESTED - Huracán, Daytona, s145, `02` §10.5]*
 
 **Spa**
 - Reinforced high-speed platform stability and sufficient rear aero. Must be able to commit through fast loaded sections without the rear going nervous.
@@ -175,7 +175,9 @@ It is the clearest match to the driver profile: responsive nose, strong brake-re
 **Watkins Glen / high-speed circuits (general RSR rule)**
 Firm platform support, sufficient rear downforce, stable brake-side differential behaviour, mild rear toe-in, and **less aggressive front toe-out than on slower circuits.** Front response is still required, but the car cannot be knife-edge through fast direction changes.
 
-### Lamborghini Huracán GT3 '15 — Laguna Seca, 10 Aug 2026 ✅ **first validated result on this car**
+### Lamborghini Huracán GT3 '15 — Laguna Seca, 10 Aug 2026 ✅ **first validated result on this car** (v1.70)
+
+⚠️ *v1.70, a void version: the values below are what was run, not a setting (§1a - a value set on a car lives in `brain/car-state/`), and the LSD scales changed on v1.71 (`11`). **And the direction is CONTESTED on v1.71:** lowering accel for a power-on push was refuted on this car at Daytona (s145) - `02` §10.5.*
 
 **The case.** Race build: 525 bhp / 1300 kg, restrictor 70, ECU 97, 70 kg ballast at −25, Racing Hards, brake bias 0, LSD 6 / **18** / 26. Symptom reported: *"car is understeering and not rotating mid corner."*
 
@@ -228,7 +230,7 @@ Firm platform support, sufficient rear downforce, stable brake-side differential
 ### Other learnings
 
 - **Ford Escort RS Cosworth '92 — Bathurst.** Rear instability under braking through the Dipper. **AWD traction does not equal braking stability.** A car can feel secure on power yet rotate too abruptly when unloaded downhill under brake release. Rear decel control and bump compliance remain essential.
-- **Brands Hatch GP — 525 bhp / 1300 kg build.** Mid-corner understeer on acceleration; needed both more hook-up and a slightly more pointed entry. Gearbox development moved from far too long to too short — ratio tuning must be iterative and based on actual corner exits and 6th-gear usage. Fuel testing showed the car roughly two laps short of making the event without refuelling in an economy mode: **gearing and fuel-saving are strategic variables, not just performance variables.** *(Note: "mid-corner understeer on acceleration" on the same 525 bhp restricted package is the same signature later resolved at Laguna by dropping accel LSD. Worth re-testing there.)*
+- **Brands Hatch GP — 525 bhp / 1300 kg build.** Mid-corner understeer on acceleration; needed both more hook-up and a slightly more pointed entry. Gearbox development moved from far too long to too short — ratio tuning must be iterative and based on actual corner exits and 6th-gear usage. Fuel testing showed the car roughly two laps short of making the event without refuelling in an economy mode: **gearing and fuel-saving are strategic variables, not just performance variables.** *(Note: "mid-corner understeer on acceleration" on the same 525 bhp restricted package is the same signature later resolved at Laguna by dropping accel LSD. Worth re-testing there.)* ⚠️ *[v1.70. On v1.71 lowering accel against a power-on push is CONTESTED - refuted on the Huracán at Daytona (s145), `02` §10.5.]*
 - **Laguna Seca 20-lap build.** Gearbox too long plus a car that pushed wide. Reinforces the normal priority order: first restore usable front/mid-corner rotation, then set ratios around the actual speed range of the track rather than a maximum-speed number Laguna will never use. **Resolved 10 Aug 2026 — see the Huracán entry above; the push was accel LSD.**
 - **Yas Marina Gr.4 selection.** The Alfa Gr.4 was rejected for excessive understeer. **Vehicle selection should screen for natural front response and rotation before investing heavily in setup.** A theoretically quick car that constantly fights the driver's rotation style is usually the wrong race choice.
 

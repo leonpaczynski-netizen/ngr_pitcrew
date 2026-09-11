@@ -231,7 +231,7 @@ All sheets under `setups/` were built and run on v1.70 or earlier. They are now 
 
 They are being stamped rather than deleted, for three reasons:
 
-1. **The diagnoses are the valuable part, and diagnoses survive patches.** "Power-on mid-corner understeer from lap 1, resolved by dropping LSD accel from 18 to 14" is a reasoning chain. Only the two numbers are version-dependent.
+1. **The diagnoses are the valuable part, and diagnoses survive patches.** "Power-on mid-corner understeer from lap 1, resolved by dropping LSD accel from 18 to 14" is a reasoning chain. Only the two numbers are version-dependent. ⚠️ *[Overtaken 11 Sep: on v1.71 the direction itself is CONTESTED - lowering accel did not bring on-power rotation back on the Huracán at Daytona (s145), `02` §10.5.]*
 2. **They are the control group.** When a car is re-baselined on 1.71, the pre-1.71 sheet is the only thing to compare it against. Delete it and the comparison is gone. **This is not abstract — §12 Job 2A is built entirely on the existence of ~200 laps of prior RSR data at Monza, and on the Rev B sheet that documents its numbers.**
 3. **The 17 Aug win** (`setups/2026-08-17-huracan-watkins-glen-long-revC.md`) is the reference for what a working setup felt like on this car. Rev D exists to build on it.
 

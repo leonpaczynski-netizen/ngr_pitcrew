@@ -493,7 +493,7 @@ GT7 gives you **a front diff, a rear diff, and a Front/Rear Torque Distribution 
 |---|---|
 | Inside driven wheel lights up on exit | **Raise** acceleration sensitivity |
 | Car snaps suddenly (not progressively) on power | **Lower** acceleration sensitivity (GT7's both-wheels-let-go quirk) |
-| **Car pushes wide mid-corner *while on throttle*** | **Lower** acceleration sensitivity — the third failure mode, and the one that caught us out twice |
+| **Car pushes wide mid-corner *while on throttle*** | **Lower** acceleration sensitivity — the third failure mode, and the one that caught us out twice (v1.70) ⚠️ *[CONTESTED on v1.71: refuted on the Huracán at Daytona, s145 - §10.5]* |
 | Rear steps out on entry / on lift | **Raise** braking sensitivity |
 | Car won't turn in on the brakes | **Lower** braking sensitivity |
 | Car won't turn mid-corner at any throttle | **Lower** initial torque |
@@ -507,7 +507,7 @@ GT7 gives you **a front diff, a rear diff, and a Front/Rear Torque Distribution 
 3. Tuning the diff before the suspension, especially on AWD and FF.
 4. Copying real GT3 diff philosophy (high preload). GT7 does not reward it.
 5. Ignoring braking sensitivity because "I don't have engine braking to tune." In GT7 it *is* your engine-braking tuning.
-6. **⭐ Importing a track's generic diff guidance without checking the build it assumes.** Laguna's published norm of 20–28 accel was written for unrestricted max-PP cars; on the restricted Huracán it was nearly double what the car wanted. `08` A5.1.
+6. **⭐ Importing a track's generic diff guidance without checking the build it assumes.** Laguna's published norm of 20–28 accel (v1.70 5–60 scale) was written for unrestricted max-PP cars; on the restricted Huracán it was nearly double what the car wanted. `08` A5.1.
 
 ---
 
