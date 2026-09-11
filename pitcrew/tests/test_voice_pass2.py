@@ -75,6 +75,47 @@ def test_a_side_named_in_other_words_is_still_read(heard, side):
     assert gap_side(heard) == side
 
 
+def test_a_question_naming_both_sides_names_neither():
+    """Critic 3, pass 2: "behind" was checked first, so this was read as the
+    car behind. Both named is no side - the nearer car answers, and says
+    which it is."""
+    assert gap_side("how far behind is the car ahead") is None
+
+
+def test_back_to_the_car_in_front_is_the_car_in_front():
+    """The same pass: "back" was a side word, so this was the car behind. It
+    is not a side, and the question is about the car in front."""
+    assert gap_side("what's the gap back to the car in front") == "ahead"
+
+
+def test_back_is_not_a_side():
+    assert gap_side("is he coming back to me") is None
+
+
+@pytest.mark.parametrize("crossed, frame", [
+    (False, "1 lap after the box."), (True, "1 lap to the flag.")])
+def test_a_one_lap_fill_plays_from_the_pack(crossed, frame):
+    """Critic 3, pass 2: the singular this batch introduced was never in the
+    pack, so a late splash filed its whole box call as a declared gap."""
+    from pitcrew.race.calls import next_call
+
+    # Not yet across the line in the box, the fill covers the laps AFTER the
+    # box lap - so one of them needs a 14-lap race from lap 12; across the
+    # line, the lap in progress is the one it covers.
+    state = RaceState(lap=12, laps_total=13 if crossed else 14,
+                      stint_ends_on_lap=12, fuel_l=1.0, fuel_per_lap_l=3.0,
+                      fuel_capacity_l=100.0, next_compound="RS",
+                      next_tyres=True, crossed_in_box=crossed)
+    spoken = next_call(state).spoken()
+    assert frame in spoken, spoken
+    assert manifest.uncovered_reason(spoken) is None, spoken
+    assert _plays(spoken), manifest.segments_for(spoken)
+
+
+def test_a_sentence_of_numbers_alone_is_not_split():
+    assert manifest._split_on_numbers("3 7.") is None
+
+
 def test_the_inverted_pairs_still_win_over_the_word_fallback():
     assert gap_side("how far ahead am i") == "behind"
     assert gap_side("how far behind am i") == "ahead"

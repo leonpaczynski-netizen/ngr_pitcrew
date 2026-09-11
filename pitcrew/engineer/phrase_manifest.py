@@ -339,6 +339,22 @@ def _box_fuel_states() -> list:
                         lap=12, laps_total=20, stint_ends_on_lap=12,
                         fuel_capacity_l=100.0, next_compound="RS",
                         next_tyres=tyres, **reason, **fuel, **basis))
+    # **One lap of fill, both frames** (critic 3, pass 2): "1 lap after the
+    # box." and "1 lap to the flag." are the singular the fill sentence was
+    # given in this batch, and no state above left a single lap - so a late
+    # splash filed its whole box call as a declared gap.
+    # Thirteen and fourteen laps, because the two frames count differently:
+    # across the line the lap in progress is covered, before it the laps
+    # after the box lap are - so one lap of each needs a different race.
+    for crossed in (False, True):
+        for total in (13, 14):
+            for basis in (dict(), dict(next_stint_laps=1,
+                                       further_stop_planned=False)):
+                states.append(_state(
+                    lap=12, laps_total=total, stint_ends_on_lap=12,
+                    fuel_l=1.0, fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+                    next_compound="RS", next_tyres=True,
+                    crossed_in_box=crossed, **basis))
     return states
 
 
@@ -416,6 +432,11 @@ def _split_on_numbers(sentence: str) -> tuple[str, ...] | None:
     allowed = set(fuel_sentence_fragments())
     pieces = _text_between_numbers(sentence)
     if pieces is None or any(p and p not in allowed for p in pieces):
+        return None
+    # **At least one word.** A sentence of numbers alone - "3 7." - passed
+    # the check above on its empty pieces and played as two number words
+    # (critic 3, pass 2). Latent, and not a sentence any call says.
+    if not any(pieces):
         return None
     out: list[str] = []
     for text, match in zip(pieces, matches):

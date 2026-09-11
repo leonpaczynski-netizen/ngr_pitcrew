@@ -453,11 +453,18 @@ def gap_side(heard: str | None) -> str | None:
     # side, and was answered with the car ahead. The inverted pairs ("how
     # far ahead am I") are phrases and have already won; "am I" anywhere
     # else is a question about us and names no side.
+    # **Both sides named is no side, and "back" is not a side** (critic 3,
+    # pass 2): "what's the gap back to the car in front" and "how far behind
+    # is the car ahead" are about the car ahead and were read as behind,
+    # because "behind"/"back" were checked first. A question naming both is
+    # answered with the nearer car, which says which it is.
     if "am" in words and "i" in words:
         return None
-    if "behind" in words or "back" in words:
+    behind = "behind" in words
+    ahead = "ahead" in words or "front" in words
+    if behind and not ahead:
         return "behind"
-    if "ahead" in words or "front" in words:
+    if ahead and not behind:
         return "ahead"
     return None
 
