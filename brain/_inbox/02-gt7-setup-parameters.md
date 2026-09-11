@@ -17,11 +17,11 @@
 
 | Content | Why |
 |---|---|
-| **Every stated range** — §3.1 ride height, §3.2 natural frequency, §3.4 damper 20–40 / 30–50, §3.5 camber, §3.6 toe ±0.50, §4 LSD 5–60, §5 aero | 1.71: *"Initial suspension settings and **adjustment ranges** have been fixed."* Same for the differential and for aerodynamics on race cars. **PD say in the official notes that the endpoints moved.** `11-car-slider-ranges.md` is the authority for our three cars and is being re-read. |
+| **Every stated range** — §3.1 ride height, §3.2 natural frequency, §3.4 damper 20–40 / 30–50, §3.5 camber, §3.6 toe ±0.50, §4 LSD 5–60 (v1.70), §5 aero | 1.71: *"Initial suspension settings and **adjustment ranges** have been fixed."* Same for the differential and for aerodynamics on race cars. **PD say in the official notes that the endpoints moved.** `11-car-slider-ranges.md` is the authority for our three cars and is being re-read. |
 | **§3.5 camber — the whole section** | ⚠️⚠️ **The highest-priority re-test in the knowledge base.** §3.5's headline claim is that GT7 over-penalises negative camber. That behaviour is a product of the **steering geometry model**, and 1.71 reworked steering geometry **per car**. If the penalty softened, this section is wrong in a direction that has been costing mid-corner grip. `16` §12 Job 5, ten minutes. |
 | **§3.6 toe — the contested core** | Toe sensitivity is downstream of the same geometry model. GT7's front-toe behaviour was **already disputed** (Position A vs Position B below); that dispute has now been re-rolled. Also note `11` measured toe at **±1.00°**, twice the ±0.50 stated in §3.6 — so this section was already understated by a factor of two before the patch. |
 | **§3.4 dampers — the four-quadrant table's magnitudes** | 1.71: *"Damper attenuation characteristics have been changed to make stance changes and road surface tracking feel more natural."* **Stance changes = pitch and roll; road-surface tracking = bump compliance.** That is both of the things damping does. §3.4's quirk #1 — *"post-1.49, dampers do less than you expect"* — is exactly the complaint this change reads as a response to. **If dampers do more now, the whole four-quadrant table gets stronger and the workflow ordering in §11 changes.** |
-| **§4 LSD 5–60** | Diff ranges revised. **[COMMUNITY — single source]** one GTPlanet player reports the Fully Customisable Diff can now be set to **0/0/0**, which was never previously possible. **If true, a genuinely open differential is buildable for the first time in the series** and every baseline in §4.2 sits against a floor that no longer exists. `16` §5. |
+| **§4 LSD 5–60 (v1.70)** | Diff ranges revised - **confirmed 11 Sep: `range_records` reads 0–30 / 0–100 / 0–100 on all four cars.** **[COMMUNITY — single source]** one GTPlanet player reports the Fully Customisable Diff can now be set to **0/0/0**, which was never previously possible. **If true, a genuinely open differential is buildable for the first time in the series** and every baseline in §4.2 sits against a floor that no longer exists. `16` §5. |
 | **§5 aero magnitudes and the % -of-range track table** | Aero defaults *and ranges* revised on race cars. A percent-of-range target means nothing until the range is re-read. *(Re-read: all four cars on v1.71 in `range_records`, 11 Sep 2026 - the gate is met.)* |
 | **§8.4 PP** | Recalculated fleet-wide. The **mechanism** (PP is a simulated test drive, not a formula) is untouched and in fact predicted this; the numbers are not. `06` has the detail. |
 | **§7.5 / §9.1 ABS and TCS** | 1.71: TCS intervention behaviour *"optimised"*; ABS *"slip ratio control and cornering brake behaviour"* adjusted. §7.5's note that 1.55 changed these now needs a second entry — **and "cornering brake behaviour" names the trail-braking phase directly**, which is this driver's primary technique. |
@@ -434,7 +434,7 @@ The always-on preload — the baseline locking present *regardless* of throttle 
 - **Decrease →** freer differential, more rotation, sharper direction change, but more sensitive to throttle and more prone to inside-wheel spin.
 - **GT7 practice: keep this LOW (5–10) on almost everything.** The main exception is deliberately over-locked drag and drift setups.
 
-**Acceleration Sensitivity (5–60)**
+**Acceleration Sensitivity (5–60 on v1.70; 0–100 on v1.71)**
 How aggressively the diff locks under throttle.
 - **Increase →** more locking on power. Better traction out of slow corners; kills inside-wheel spin; but makes the car **want to drive in a straight line and stop turning** under throttle → power understeer.
 - **Decrease →** more rotation on throttle, better ability to steer with the throttle; risk of one-wheel spin and lost drive.
@@ -1075,7 +1075,7 @@ GT7 **does** model per-axle wear, and **fronts almost always wear faster than re
 2. **Gears.** Free in PP. Max Speed slider → final drive → individual gears. Do this before balance work, because gearing changes exit behaviour. **⭐ And re-gear on 1.71 regardless — rolling resistance changed.**
 3. **Aero (if adjustable) and any PP-affecting parts.** Lock in your PP budget before spending time on chassis feel. **⭐ Read the PP number *before* you start too — the build may already be over the cap.**
 4. **Mid-corner balance with ARBs.** Coarse, effective, integer steps.
-5. **LSD.** Start low: init 5, accel 15–25, brake 10–20 depending on layout. Fix exit traction and entry stability here, not with toe.
+5. **LSD.** Start low: init 5, accel 15–25, brake 10–20 depending on layout ⚠️ *[v1.70 5–60 scale: a direction, not a number - issue in percent of the car's own v1.71 range (`11`)]*. Fix exit traction and entry stability here, not with toe.
 6. **Brake balance.** Set the entry phase.
 7. **Dampers.** Fine-tune the entry and exit transients using the four-quadrant table. **⚠️ If 1.71 gave dampers back their authority (§1.2 item 2), this step may deserve to move earlier. Test before reordering.**
 8. **Camber sweep.** One axle at a time, Data Logger on. **⚠️ Sweep it on 1.71 regardless of what the sheet says — the geometry rework may have changed the sign of the answer.**

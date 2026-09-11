@@ -351,7 +351,8 @@ more lock to close ⇒ the differential is REFUTED as the exit lever"*) rests on
 **stayed at 0.0000 across a 6-click diff change while the rotation index moved twice its noise
 floor.** A measure that cannot see the change cannot refute the lever. ⇒ **the differential IS
 an exit lever here, `reference_daytona_corner_priority`'s ⛔ block is retired, and the KB's
-original `lsd_a` 22-28 ask was pointing the right way.**
+original `lsd_a` 22-28 (v1.70 scale) ask was pointing the right way** *(a direction only -
+the band is not on this car's v1.71 0–100 slider)*.
 
 ⛔ **s145 L3 also went off at the T3 exit — the FIFTH time at that spot** (8.13 s off-track,
 `spin_s` 0.23, S2 50.0 s and S3 61.2 s, so two separate incidents on one lap).

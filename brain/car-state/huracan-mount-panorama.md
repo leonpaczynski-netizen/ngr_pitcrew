@@ -111,7 +111,7 @@ measured 24 Aug 2026).
 | damping expansion `de` | 46 / 44 (53 % / 47 %) | **50 / 44** (67 % / 47 %) | ⬆ **front only** | settle the front between the walls on the descent. **Rear held: `de_r` up was REFUTED 8 Sep** (44→52 lost throttle rotation and brought the rear brake lock back) |
 | camber `cam` | 2.0 / 1.2 | **2.0 / 1.2** | — | camber is a ride-height lever here (2.8 mm/deg). The platform is being moved deliberately; do not move it twice |
 | toe | 0.00 / +0.12 | **0.00 / +0.12** | — | `toe_f` 0.00 removed a front braking asymmetry on 3 Sep and that fix is holding |
-| diff `lsd` i/a/b | 6 / 18 / 35 | **6 / 18 / 35** | — | `lsd_a` 18 is already inside the reference's 20–28 band and 14→20 is inside the instrument's floor. `lsd_b` 35 held — see the trigger below |
+| diff `lsd` i/a/b | 6 / 18 / 35 | **6 / 18 / 35** | — | `lsd_a` 18 cannot be read against the reference's 20–28 band - that band is on the v1.70 5–60 scale (`05` banner), and 18 is outside it anyway - and 14→20 is inside the instrument's floor. `lsd_b` 35 held — see the trigger below |
 | downforce `df` | 410 / 635 (60 % / 68 %) | **410 / 635** | — | measured 4 Sep: this car's whole wing range is 3–6 % of aero load and moved nothing. Held, and named as a test the instrument probably cannot resolve here |
 | gearbox | 3.022 / 2.450 / 1.972 / 1.598 / 1.285 / 1.030 `FEED` | **unchanged** | — | see below |
 | top speed slider | 300 | **300** | — | |

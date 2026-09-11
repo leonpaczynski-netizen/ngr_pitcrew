@@ -371,6 +371,38 @@ def test_e8_every_lsd_band_in_the_track_reference_is_flagged():
     assert not bare, f"LSD bands with no scale flag at lines {bare}"
 
 
+def test_e8_no_live_lsd_band_anywhere_is_left_on_the_old_scale():
+    """Critic on 2.8 part 2, pass 4: `02` §11 step 5 still gave "accel
+    15-25, brake 10-20" unflagged - e8 read only `05`. Every live doctrine
+    line giving an LSD band or step carries its version, a scale flag, or
+    the v1.71 reading itself."""
+    # Where Ludo reasons from: the skills, the knowledge base (00-10) and the
+    # car-state files. Left out, each for a reason: `11`, `16` and `17` exist
+    # to state the v1.71 ranges; the dated setup sheets are v1.70 history
+    # under `setups/00-PRE-1.71-NOTICE.md`; RECONCILIATION is a log.
+    scope = (".claude/skills/**/*.md", "brain/_inbox/0*.md",
+             "brain/_inbox/10-*.md", "brain/car-state/*.md")
+    # A band shortly after the diff is named - a table cell away counts, so
+    # a car-state row comparing a value against a v1.70 band is seen. The
+    # slider keys too: `\bLSD\b` cannot match `lsd_a` (the underscore is a
+    # word character), and that is how the Mount Panorama row was written.
+    near = re.compile(
+        r"(?:\bLSD\b|\blsd_[iab]\b|acceleration lock|\baccel(?:eration)?\b"
+        r"[^.|]{0,20}\bsensitivity)[^\n]{0,120}?"
+        r"(?<![\d.])\d{1,2}\s?[–-]\s?\d{1,2}(?![\d.])",
+        re.IGNORECASE)
+    stamped = ("v1.70", "5–60 scale", "v1.71 reads", "on v1.71",
+               "range_records", "0–30 / 0–100")
+    bare = []
+    for pattern in scope:
+        for path in sorted(ROOT.glob(pattern)):
+            text = path.read_text(encoding="utf-8")
+            for number, line in enumerate(text.splitlines(), 1):
+                if near.search(line) and not any(s in line for s in stamped):
+                    bare.append(f"{path.relative_to(ROOT).as_posix()}:{number}")
+    assert not bare, f"LSD bands with no version or scale flag at {bare}"
+
+
 def test_e7_the_register_restates_no_setup_value():
     """§1a: a setup value is written in one place, `brain/car-state/`. `11`
     quoted sheets' diff, rebound, ride height and spring values as absolutes;

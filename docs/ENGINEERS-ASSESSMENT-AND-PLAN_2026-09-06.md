@@ -2529,6 +2529,65 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Critic on 2.7 (`c48e018`): NOT AGREED - one blocker, three majors, five
+minors, fixed.**
+- **B1: the BoP flag never reached the Fuji event.** Every Enduro round
+  arrives incomplete, because the hub gives no legal compounds. So it goes
+  pick -> fill the compounds -> Save. The save copies a fixed list of
+  fields, and the flag, `tuning_allowed` and 0.14's power and weight limits
+  were not on it. The Event screen now carries all four, the save writes
+  them, and the critic's repro is kept as a regression test.
+- **M1: nothing wrote the hub's word onto an event already stored.** A NULL
+  is not his answer, so on every load of a linked event the hub now fills
+  it. A value he holds is compared against the hub, and a change is reported
+  ("BoP 0 here, 1 on the hub"), never written over. **Event 4 (Spa Enduro,
+  "RUNS BoP" in its notes) is a past round and will not fill that way.
+  Backfilling it is a write to the live DB, and waits for his yes.**
+- **M2: Ludo had no route to the flag before an event row exists.**
+  `initial` step 2 now names the hub itself, read-only, for that case.
+- **M3: `what to try` could propose a locked key.** `refusals.md` carries
+  the BoP refusal for every mode. The Fuji runs must be run in a BoP lobby
+  on the Enduro settings, because burn, pace and shift points taken in a
+  time trial are a different car's.
+- **Minors:**
+  - A mixed True/False test case, so swapping the two columns fails.
+  - `list_events` must carry the new keys.
+  - Eval 10's expected output no longer says "the app has no BoP field".
+  - The practice-intent gap is about practice sessions; race sessions never
+    carry the field.
+  - The Fuji plan labels the open-tuning list and the ECU, restrictor and
+    ballast lock [ASSUMED], with their source, and adds slipstream-disabled
+    qualifying.
+  - **Out of this row, for a follow-up:** `CLAUDE.md` §2 still says the league
+    has no BoP.
+
+**Critic on 2.8 part 2, pass 4 (`68eb4d1`): NOT AGREED - two majors, two
+minors, fixed.**
+- **Major: "lower the LSD acceleration" still read as validated** in `01`,
+  `03`, `07` and `08`. The worst was `01`: "This is the whole answer more
+  often than not". Each place now points to `02` §10.5: on v1.71 the Huracán
+  refuted lowering it, and raising it cost 2 spins in 10 laps.
+- **Major: `02` §11 gave "accel 15-25, brake 10-20" unflagged.** e8b extends
+  the band check to the skills, the knowledge base (`00`-`10`) and the
+  car-state files. It found **two live car-state lines** reading the
+  Huracán's v1.71 `lsd_a` against a v1.70 band, which is exactly the error
+  the flags exist for:
+  - Mount Panorama: "18 is already inside the reference's 20–28", and 18 is
+    outside it anyway.
+  - Daytona: the knowledge base's "22-28 ask was pointing the right way".
+  It also found fourteen knowledge-base lines. Four of them still said the
+  floor "may be 0"; `range_records` has answered that.
+  **The first narrowed version missed both car-state lines.** `\bLSD\b`
+  cannot match `lsd_a`, because the underscore is a word character, and an
+  80-character window was too short. It now matches the slider keys over
+  120 characters. **At the parent it flags 19 lines**, both car-state lines
+  and the two the critic named among them.
+- **Minors:**
+  - `03` §8.5's note is current, and its step sizes are flagged.
+  - The absolute v1.70 values in `07` are declared, once in its banner,
+    history of a void version and never a setting. I chose that over
+    converting two of the seven places they appear.
+
 **Critic on 2.8 part 2, pass 3 (`24a332e`): NOT AGREED - one major, two
 minors, fixed.**
 - **Major:** the Deep Forest Rev B sheet still planned on the discount - "race
@@ -2547,6 +2606,39 @@ minors, fixed.**
   further than any other axis.
 - **Proof at the parent:** e9 flags both sentences.
 - **Tests:** `test_brain_reconciliation` 18 passed.
+
+**The critic on 2.6, pass 5 (`ee4e4d4`): AGREED - row 2.6 is done.** N1, N5
+and N6 are killed by the new tests. The test pinning N1 now runs with the
+compound unnamed and with it named. The one pinning N5 and N6 goes through the
+real `_driver_board_state` with the race running. N3 and N4 are recorded as
+equivalent. On the grid no lap has been judged, so `laps_to_stop()` is None
+only on a plan's last stint, where `next_tyres` and `next_compound` are
+already None, and neither guard can change what the board shows. Across
+passes 4 and 5 every other mutant on a new branch is caught by a test. Its
+suite on this machine: 5 failed, 4729 passed, 8 skipped. The five are the
+same data-dependent tests that fail at the parent.
+
+**The critic on 2.6, pass 4 (`234b0af`): NOT AGREED - on tests, not code.**
+It could not build a wrong call or screen against the code. A fuzz of
+112,944 plans found `tyres_refusal` and `stint_tyre_problems` refusing the
+same ones. Of 27 mutants on the new branches, 21 were killed through their
+real callers. Last pass's eight survivors are all among them.
+
+- **The major:** three of the retired-stop guards had no test.
+  - **N1:** the retired-stop test's plan named no compound, so the snapshot's
+    guard changed nothing it could see.
+  - **N5 and N6:** the running board's guards were never exercised after a
+    stop was retired.
+  - All three are pinned in `ee4e4d4`. The test now runs with a compound and
+    without. A board test drives the real `_driver_board_state` through a
+    retirement.
+- **Two harmless survivors:** N3 and N4, the same guards on the grid board.
+  Before the green no lap is judged, so `to_stop` cannot be None while a
+  stop is planned.
+- **Minor:** the "same stop count, the desk's decision stands" branch of
+  `adopt` cannot be reached from an accepted offer. `assess` only offers a
+  count that differs from his plan. The branch is correct and pinned, and
+  stays as the answer if `assess` ever offers a same-count shape.
 
 **The critic on 2.6, pass 3 (`f511c9e` + `f446334`): NOT AGREED - three
 majors, all fixed.**

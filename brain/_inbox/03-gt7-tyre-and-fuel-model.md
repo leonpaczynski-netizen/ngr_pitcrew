@@ -42,7 +42,7 @@
 | **§5 the fuel model** | **⚠️ Suspect via rolling resistance** | Tank capacity (100 L) and fuel-map structure are unaffected. **But "rolling resistance has been optimised" is a fuel term as much as a tyre term** — every L/lap figure in §5.2 may have moved, independently of driver input. §5.5's 4%/8% fuel-map rule was already flagged as GT Sport-era and is now overdue for a re-test. |
 | **§6 pit stops** | **Intact** | Pit travel time is a track constant. Refuel rate is an event property. Neither was touched. |
 | **§7 wet weather** | **Suspect** | Off-track grip loss on "Real" was adjusted, and wet compounds live at the extreme of the slipping regime. Section 7.5's wet setup table is reasoning-led and should survive directionally. |
-| **§8 setup consequences** | **⚠️ Mixed — read carefully** | §8.1's core principle is vehicle dynamics and survives as *reasoning*. Whether it still describes GT7's *wear function* is the open question. **§8.3 camber is the most likely single item to have changed** — 1.71 reworked per-car steering geometry, which is exactly the model that produced GT7's anomalous camber behaviour. **§8.5 LSD baselines are written against a 5–60 range that may now floor at 0** (single community report — `16` §5). |
+| **§8 setup consequences** | **⚠️ Mixed — read carefully** | §8.1's core principle is vehicle dynamics and survives as *reasoning*. Whether it still describes GT7's *wear function* is the open question. **§8.3 camber is the most likely single item to have changed** — 1.71 reworked per-car steering geometry, which is exactly the model that produced GT7's anomalous camber behaviour. **§8.5 LSD baselines are written against the v1.70 5–60 range; v1.71 reads 0–30 / 0–100 / 0–100 on every car in `range_records`.** |
 | **§9 league quick reference** | **Void as numbers, intact as advice** | Items 1–8 of "things to tell your drivers" are behavioural and mostly survive. Item 3 (sliding kills tyres) is the one to re-verify. Item 9 — *measure before you choose* — is the whole document now. |
 | **§10 known gaps** | **All still open, and several got cheaper** | The temperature-window item and the camber-swap item are now the two highest-value tests available, because the patch made both live. |
 
@@ -688,7 +688,7 @@ A ~40x change in compound advantage across a modest change in rainfall. Practica
 
 ## 8. Setup consequences
 
-> **⚠️ 21 Aug 2026 — mixed exposure, read the banner's §8 row before using this section.** §8.1's core principle is vehicle dynamics and survives as reasoning; whether it still describes GT7's wear function is open. **§8.3 (camber) is the most likely single item in this document to have changed**, because 1.71 reworked per-car steering geometry — the exact model that produced GT7's anomalous camber behaviour. **§8.5 (LSD) is written against a 5–60 range that may now floor at 0.**
+> **⚠️ 21 Aug 2026 — mixed exposure, read the banner's §8 row before using this section.** §8.1's core principle is vehicle dynamics and survives as reasoning; whether it still describes GT7's wear function is open. **§8.3 (camber) is the most likely single item in this document to have changed**, because 1.71 reworked per-car steering geometry — the exact model that produced GT7's anomalous camber behaviour. **§8.5 (LSD) is written against the v1.70 5–60 range; on v1.71 every car in `range_records` reads 0–30 / 0–100 / 0–100, so its numbers are a direction only.**
 
 ### 8.1 The core principle
 
@@ -761,11 +761,11 @@ The differential is the **primary rear-tyre-wear control** in GT7, and it is und
 | MR | 5 | 15 | 20 |
 | RR | 5 | 15 | 25 |
 
-**For a high-wear stint, reduce acceleration sensitivity by 5–10 from these baselines.**
+**For a high-wear stint, reduce acceleration sensitivity by 5–10 from these baselines.** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see §8.5's banner row]*
 
-> **✅ [MEASURED — IN HOUSE, 10 Aug 2026] The MR accel baseline of 15 is a ceiling, not a midpoint, on a restricted build.** The Huracán at Laguna produced power-on mid-corner understeer from lap 1 at accel 18 (a value chosen from track-specific guidance calling for 20–28). **14 resolved it completely.** The mechanism: a **power restrictor cuts top-end while preserving low-end torque**, so a restricted car delivers proportionally *more* torque in the early corner-exit phase than its headline power suggests — and more early torque through a locked diff is the direct recipe for power-on push. **Published tunes are unrestricted max-PP builds and do not account for this. Re-test accel sensitivity whenever the restrictor moves.** Full write-up: `setups/2026-08-10-huracan-laguna-seca.md` §9 Test 1.
+> **✅ [MEASURED — IN HOUSE, 10 Aug 2026] The MR accel baseline of 15 is a ceiling, not a midpoint, on a restricted build.** The Huracán at Laguna produced power-on mid-corner understeer from lap 1 at accel 18 (a value chosen from track-specific guidance calling for 20–28). **14 resolved it completely.** The mechanism: a **power restrictor cuts top-end while preserving low-end torque**, so a restricted car delivers proportionally *more* torque in the early corner-exit phase than its headline power suggests — and more early torque through a locked diff is the direct recipe for power-on push. **Published tunes are unrestricted max-PP builds and do not account for this. Re-test accel sensitivity whenever the restrictor moves.** ⚠️ *[v1.70. On v1.71 the one in-house test of lowering accel was refuted - Huracán, Daytona, s145; `02` §10.5 is CONTESTED.]* Full write-up: `setups/2026-08-10-huracan-laguna-seca.md` §9 Test 1.
 >
-> **⚠️ 21 Aug: this is our best LSD finding and it is directly in the firing line.** It is a claim about the *bottom* of a 5–60 range. If the range now starts at 0, the useful territory extends further down than we have ever looked — and 1.71 also introduced a new engine torque control map, which changes the torque this finding is a response to. **Re-test on v1.71 before reusing 14.**
+> **⚠️ 21 Aug: this is our best LSD finding and it is directly in the firing line.** It is a claim about the *bottom* of the v1.70 5–60 range. The range does now start at 0 (`range_records`, v1.71), so the useful territory extends further down than we have ever looked — and 1.71 also introduced a new engine torque control map, which changes the torque this finding is a response to. **Re-test on v1.71 before reusing 14.**
 
 **Note the FF row:** the recommended FF accel sensitivity (35) is the highest of any layout, which is precisely why FF cars destroy front tyres (§2.6). **FF cars in a high-wear league are a trap: they qualify well and finish badly.**
 
@@ -783,7 +783,7 @@ The differential is the **primary rear-tyre-wear control** in GT7, and it is und
 
 6. **Soften ARBs 1–2 clicks on the wearing axle.**
 7. **Reduce damper compression and expansion 1–2 clicks each.**
-8. **Reduce LSD acceleration sensitivity 5–10.**
+8. **Reduce LSD acceleration sensitivity 5–10.** ⚠️ *[v1.70 5–60 scale: a direction, not a number]*
 9. **Reduce camber ~0.3° on the wearing axle.**
 10. **Soften springs slightly.**
 

@@ -33,10 +33,11 @@
 | **§2.7 / §3.7 / §5.7 baseline setups** | ⚠️ **Starting points only, and now on unverified ranges** | The 2022 sheets were already three physics generations stale; they are now four. |
 | **§6 comparative section** | ⚠️ **The most exposed part of the document** | Per-car geometry rework can reorder comparisons. §6.3's trail-braking ranking depends on mass distribution (intact) *and* on how each car converts brake pressure into yaw (reworked). |
 | **§7 data gaps** | ⚠️ **Several reopened** | See the addendum at §7. |
+| **Absolute v1.70 values quoted as findings** (accel 18 → 14, LSD braking 26, and the like) | ⚠️ **History of a void version, never a setting** | They are what was run on v1.70 and what it showed; nothing here is issued. A value set on a car lives in `brain/car-state/` (§1a), and on v1.71 the LSD scales changed (`11`). |
 
 ## The three things to re-test first, in order
 
-1. **Huracán LSD acceleration sensitivity.** §3.6.1's finding — that 14 beats the MR baseline of 15 and beats the track norm of 20–28 on a restricted build — is **an argument about torque *shape*, and 1.71 changed how torque is delivered.** The three transferable conclusions all survive; the value 14 needs re-establishing. **And if the diff floor really did drop from 5 to 0 (`16` §5), the useful territory extends below anywhere we have looked.**
+1. **Huracán LSD acceleration sensitivity.** §3.6.1's finding — that 14 beats the MR baseline of 15 and beats the track norm of 20–28 on a restricted build — is **an argument about torque *shape*, and 1.71 changed how torque is delivered.** The three transferable conclusions all survive; the value 14 needs re-establishing. **And if the diff floor really did drop from 5 to 0 (`16` §5), the useful territory extends below anywhere we have looked.** ⚠️ *It did (`range_records`, v1.71) - and lowering accel was then refuted on this car at Daytona (s145), `02` §10.5.*
 2. **Camber on both Gr.3 cars.** §2.7 flags the 2022 tunes' −3.0° as a pre-1.49 max-grip choice, and the modern baseline as −1.0 to −2.0°. **1.71 reworked the exact model that made heavy camber expensive in GT7.** If the penalty softened, the modern baseline is now over-conservative. `16` §12 Job 5, ten minutes.
 3. **Which car actually suits the driver now.** §6.3 ranks the RSR first for a heavy trail-braker, on mass distribution plus low polar moment plus 1.49's brake-bias sensitivity. **Mass distribution and polar moment are intact; the other two terms moved** — 1.71 adjusted ABS slip-ratio control and cornering brake behaviour, which is the trail-braking phase directly. **The ranking is a hypothesis again.**
 
@@ -191,7 +192,7 @@ Context: [Occam's Racer's GT7 aerodynamics analysis](https://occamsracers.com/20
 **Reasoning, flagged**, built on the sourced character above:
 
 1. **Brake balance (and its in-race migration).** Post-1.49 this is the most sensitive stability control on the car. **⚠️ And 1.71 adjusted ABS cornering brake behaviour — re-establish the reference.**
-2. **LSD braking sensitivity.** For an MR car this is the corner-entry stability control. Flux89's MR baseline is **20**, versus 25 for RR. Both GT7 tunes found for this car use **50**, which is a max-grip lobby choice, not a trail-braker's choice. **⚠️ Baselines assume a 5–60 range; 1.71 revised the diff range and it may now floor at 0 (`16` §5).**
+2. **LSD braking sensitivity.** For an MR car this is the corner-entry stability control. Flux89's MR baseline is **20**, versus 25 for RR. Both GT7 tunes found for this car use **50**, which is a max-grip lobby choice, not a trail-braker's choice. **⚠️ Baselines assume the v1.70 5–60 range; on v1.71 it floors at 0 (`range_records`: 0–30 / 0–100 / 0–100), so they are a direction only.**
 3. **Rear downforce / rake balance.** Governs the top-speed-versus-rotation trade.
 4. **Rear ARB and rear natural frequency.** The direct handles on exit-phase rotation, the car's actual failure mode.
 5. **Gearing.** Because the car is straight-line-limited, final drive selection to protect the most important corner exit is worth more here than on a car with power in hand. **⚠️ Rolling resistance changed — re-gear.**
@@ -362,7 +363,7 @@ The old organising question for this car was *"does this buy me rear tyre life?"
 
 #### 3.6.1 ✅ VALIDATED — LSD acceleration sensitivity: start at **14**, not 15, and never at the track norm
 
-**⚠️ Validated on v1.70. Re-test required — see the note at the end of this subsection.**
+**⚠️ Validated on v1.70. Re-test required — see the note at the end of this subsection.** **And on v1.71 the one in-house test of lowering accel was refuted** (this car, Daytona, s145 - `02` §10.5), so the direction itself is contested, not only the number.
 
 **Test:** Laguna Seca, 10 Aug 2026, GT7 v1.70. Open tuning, no BoP. 525 bhp / 1300 kg, **power restrictor 70 / ECU 97**, 70 kg ballast at −25, brake bias 0, TCS 0, ABS Weak.
 

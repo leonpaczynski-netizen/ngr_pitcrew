@@ -149,7 +149,7 @@ The catch: **braking sensitivity that is too high makes the car refuse to turn i
 
 - **Inside rear wheel lights up alone on exit** → accel sensitivity is too LOW → raise it.
 - **Both rears let go together, feels like a snap** → accel sensitivity is too HIGH → lower it.
-- **The car pushes wide mid-corner *while you are on throttle*** → accel sensitivity is too HIGH → lower it. **This is the third failure mode and it is the one that caught us out.**
+- **The car pushes wide mid-corner *while you are on throttle*** → accel sensitivity is too HIGH → lower it. **This is the third failure mode and it is the one that caught us out.** ⚠️ *[v1.70. On v1.71 the one in-house test of lowering it was refuted - Huracán, Daytona, s145; `02` §10.5 is CONTESTED.]*
 
 Watch the on-screen tyre indicators to tell the first two apart. Do not guess. **This diagnostic is symptom-based and version-independent — it still works.**
 
@@ -159,7 +159,7 @@ Watch the on-screen tyre indicators to tell the first two apart. Do not guess. *
 
 **Huracán GT3, Laguna Seca, 525 bhp / 1300 kg, restrictor 70 / ECU 97, TCS 0, ABS Weak.**
 
-Accel sensitivity was set to **18** — chosen by splitting the difference between the MR baseline (15) and generic Laguna guidance calling for **20–28** to protect the T11 traction exit. The result was **power-on mid-corner understeer through T2–T5, present from lap 1, cold and hot.** Notably **T11 — the corner 18 was aimed at — did not complain.**
+On v1.70, accel sensitivity was set to **18** — chosen by splitting the difference between the MR baseline (15) and generic Laguna guidance calling for **20–28** to protect the T11 traction exit. The result was **power-on mid-corner understeer through T2–T5, present from lap 1, cold and hot.** Notably **T11 — the corner 18 was aimed at — did not complain.**
 
 **Accel 18 → 14 resolved it completely.** Driver: *"lsd change sorted it perfect."*
 
@@ -261,7 +261,7 @@ And here is why this matters enormously in *your* league specifically:
 | **Camber F/R** | **1.2 / 1.2** | Low. GT7 taxes camber against braking and traction — your two strengths. **But don't go lower than this defensively without a measured wear reason (A1).** ⚠️ **Suspended pending the Job 5 A/B — 1.71 reworked steering geometry.** |
 | **Toe F** | **0.00**, then A/B ±0.05 | Never toe-**in**. Beyond that, test — do not assume (A3). |
 | **Toe R** | **+0.05 to +0.10** | Mild rear toe-in. Your recurring stabiliser. Keep it small. |
-| **LSD initial torque** | **5–8** | Low. High preload is a silent cause of the persistent mid-corner push you hate. ⚠️ **Floor may now be 0 rather than 5 — confirm (A4).** |
+| **LSD initial torque** | **5–8** | Low. High preload is a silent cause of the persistent mid-corner push you hate. ⚠️ **v1.70 scale; the floor is 0 on v1.71 (`range_records`).** |
 | **LSD acceleration** | MR **15** · FR **25** · **restricted MR: start at 14** | Low, and prove you need more (A5). ✅ The restricted-MR figure is measured — ⚠️ **on v1.70, against the old torque map. Re-test.** |
 | **LSD braking** | MR **20** · FR **10**, then walk up +2 | Your primary rear-stability axis (A4). |
 | **Brake balance** | **0 (neutral)** | Per your explicit preference. A trim, applied last. **The −5…+5 range and the sign convention are settled and unaffected.** |
@@ -457,7 +457,7 @@ Not equivalent, and the choice should follow the track:
 >
 > A restrictor doesn't just make the car slower — **it changes the shape of the torque delivery in a way that alters your chassis balance.** Because the restrictor cuts top-end and keeps the bottom, a restricted car has **proportionally more torque in the early corner-exit phase** than its headline power figure implies.
 >
-> **On an MR car with TCS 0 that means more wheelspin risk AND more power-on understeer than you would predict, despite the lower power number.** At Laguna this made an accel-LSD value of 18 — already below the track norm of 20–28 — badly too much lock, producing mid-corner push from lap 1. **14 fixed it.**
+> **On an MR car with TCS 0 that means more wheelspin risk AND more power-on understeer than you would predict, despite the lower power number.** At Laguna this made an accel-LSD value of 18 — already below the track norm of 20–28 (v1.70 scale) — badly too much lock, producing mid-corner push from lap 1. **14 fixed it.**
 >
 > **Three standing rules:**
 > 1. **Re-test LSD acceleration sensitivity after every restrictor change**, alongside re-gearing. Treat them as one job.
@@ -508,7 +508,7 @@ Full profiles in `07-car-profiles.md`. The decisions that matter.
 
 **✅ What changed on 10 Aug 2026 — two measured results, both overturning prior guidance:**
 
-**1. The diff wants 14, not 15–28.** See A5.1 and D3.1. Below the MR baseline, far below the track norm, and the fix for a power-on push that was present from lap 1. **This is now the car's starting point on any traction-limited circuit with a restrictor fitted.** ⚠️ **On v1.70, against the old torque map. Re-test before reusing.**
+**1. The diff wants 14, not 15–28.** See A5.1 and D3.1. Below the MR baseline, far below the track norm, and the fix for a power-on push that was present from lap 1. **This is now the car's starting point on any traction-limited circuit with a restrictor fitted.** ⚠️ **On v1.70, against the old torque map. Re-test before reusing.** ⚠️ *[And on v1.71 lowering accel was refuted on this car at Daytona (s145) - `02` §10.5 is CONTESTED; the direction is in question, not only the number.]*
 
 **2. The tyre-life reputation is overstated.** This document previously called wear *"the defining weakness and it is not marginal,"* on the strength of a 2019 GT Sport ranking (2nd-worst in the MR field, "undrivable by lap 6"). Measured: **11–12 laps at 2× on Racing Softs at race pace from full fuel.** That comfortably covers a 10-lap stint with margin, on the *softest* compound available. ⚠️ **On v1.70.**
 

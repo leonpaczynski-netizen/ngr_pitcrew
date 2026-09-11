@@ -123,7 +123,7 @@ Plot lap time vs. "aggression" (rearward balance, stiffness, low-drag, low-compl
 | ARB | Stiffer, more rear-biased | Softer overall; rear 1 click softer relative to front | −1 front, −1 to −2 rear on the 1–10 scale | Medium |
 | Ride height | At the aggressive minimum | +2 to +5 mm both ends, rear-biased raise | Preserve or slightly increase rake | Medium |
 | Damping | Higher, tighter control | Lower compression especially; more compliance | −2 to −5 on compression, −2 to −3 on expansion (of the 20–40 / 30–50 scales) | Medium **⚠️ 1.71 damper rework** |
-| LSD initial torque | Low (5–10) | Low-to-moderate (5–15) | +0 to +5 | Medium **⚠️ floor may be 0 now** |
+| LSD initial torque | Low (5–10) | Low-to-moderate (5–15) | +0 to +5 | Medium **⚠️ v1.70 scale; the floor is 0 on v1.71 (`range_records`)** |
 | LSD accel | Moderate–high for exit drive | Slightly lower for tyre preservation | −5 to −10 | Medium |
 | LSD braking | Low for rotation | Higher for entry stability | +5 to +15 | Medium |
 | Gearing | Optimised for the fastest single lap in clean air | Longer top end for slipstream/defence; adjusted for heavier car | Final drive/top speed +5 to +15 km/h of theoretical | High **⚠️ rolling resistance changed** |
@@ -257,7 +257,7 @@ The trap to avoid: setting ride height at the qualifying minimum, then loading t
 
 > **⚠️ 1.71: "Initial differential gear settings and adjustment ranges have been fixed."** And **[COMMUNITY — single source]** the diff may now floor at 0/0/0 rather than 5/5/5 (`16` §5). If so, the "maximise rotation" quali philosophy below has genuinely new territory beneath it — **a truly open diff on the overrun would be a bigger rotation source than anything this section describes.** Confirm the range before exploring it.
 
-**GT7 model.** Fully-customisable LSD with three parameters — **Initial Torque, Acceleration Sensitivity, Braking Sensitivity** — each typically on a **5–60** scale. Low = open, high = locked. Initial Torque sets the baseline preload/locking threshold and controls how quickly the diff transitions between open and locked. Acceleration Sensitivity controls locking under power; Braking Sensitivity controls locking under lift/braking.
+**GT7 model.** Fully-customisable LSD with three parameters — **Initial Torque, Acceleration Sensitivity, Braking Sensitivity** — each on a **5–60** scale on v1.70 - **0–30 / 0–100 / 0–100 on v1.71** (`range_records`). Low = open, high = locked. Initial Torque sets the baseline preload/locking threshold and controls how quickly the diff transitions between open and locked. Acceleration Sensitivity controls locking under power; Braking Sensitivity controls locking under lift/braking.
 
 **Drivetrain baselines** (widely-used starting points, Initial/Accel/Braking):
 
@@ -274,7 +274,7 @@ Another common, more general baseline is **5/30/5** with the middle number adjus
 **The quali philosophy: maximise rotation.**
 - **Low Initial Torque (5–10)** — a diff that unlocks readily allows snappy, immediate transitions and lets the inside rear spin up freely in slow corners, which rotates the car. Sharper turn-in, more agility, more one-lap time.
 - **Low Braking Sensitivity (5–15)** — an open diff on the overrun lets the rear axle differentiate under trail-braking, which is a large rotation source in GT7. This is one of the biggest single-lap levers on Gr.3.
-- **Accel Sensitivity at the point of best drive** — usually moderate-to-high (25–40 on FR), because you want maximum traction out of the last corner onto the timing straight and there is no wear penalty to worry about.
+- **Accel Sensitivity at the point of best drive** — usually moderate-to-high (25–40 on FR, v1.70 scale), because you want maximum traction out of the last corner onto the timing straight and there is no wear penalty to worry about.
 
 **The race philosophy: preserve the rears and reduce workload.**
 - **Initial Torque up slightly (+0 to +5).** A little more preload makes the diff's behaviour more predictable and less prone to the abrupt lock/unlock transitions that upset a GT7 car at the limit. It costs a little turn-in.
@@ -704,7 +704,7 @@ Three laps TCS 0, three laps TCS 1, same car and track. Note the per-corner cost
 ## 9. CONFIDENCE AND CAVEATS
 
 - **Well-documented and verified:** GT7's 100 L universal fuel tank; the 1.49 tyre and physics changes (post-50%-wear drop, sliding-dominant wear, increased understeer *and* oversteer, greater brake-bias sensitivity); fuel-mixture arithmetic (−4% power / −8% consumption per step); official natural-frequency ranges (3–5 Hz race, 1.1–1.5 Hz road); the Daily Race settings-restriction regime and multipliers; qualifying being a separate no-wear/no-fuel session; the March 2025 Gr.3 BoP power cut; downshift protection in 1.66; BoP-in-Time-Trials in 1.68. **⚠️ The 1.49 physics items are now historical rather than current — see the banner.**
-- **Community consensus, well-supported but not officially documented:** slider baselines (damper 20–40/30–50, LSD 5–60, ARB 1–10, downforce percentage bands by track type), the rake-vs-rotation relationship, the "expansion above compression" convention, drivetrain-specific LSD and brake-bias baselines, tyre-temperature being practically inert. **⚠️ The slider baselines are explicitly revised by 1.71; tyre-temperature-inert is downgraded to [CONTESTED].**
+- **Community consensus, well-supported but not officially documented:** slider baselines (damper 20–40/30–50, LSD 5–60 on v1.70, ARB 1–10, downforce percentage bands by track type), the rake-vs-rotation relationship, the "expansion above compression" convention, drivetrain-specific LSD and brake-bias baselines, tyre-temperature being practically inert. **⚠️ The slider baselines are explicitly revised by 1.71; tyre-temperature-inert is downgraded to [CONTESTED].**
 - **Derived from real-world race engineering and applied by analogy — validate in-game:** the specific magnitudes of the quali-to-race parameter deltas, the ~1.5–2.5 s/lap Gr.3 fuel delta, the mid-stint principle's quantitative form, ride-height-sensitive aero mapping in GT7, and the λ decision scalar. **This tier is the least affected by 1.71 — real-world race engineering does not patch.**
 - **Actively contested / car-dependent:** which axle degrades first. Pre-1.49 Gr.3 MR data showed rear-limited behaviour; post-1.49 reports show front-limited behaviour on many cars. **Measure it (Test 2) rather than assuming.** **⭐ And now: whether tyre temperature is practically relevant (§6.1 vs `03` §3.2), and whether GT7's grip-to-slip transition is still binary (§1.2a).**
 - **Version risk.** GT7 has shipped physics-affecting updates in 1.49, 1.52, 1.55, 1.66, 1.68 **and 1.71**. Re-validate baselines after every major patch, and treat published setups older than the current physics build as starting points only. **⭐ 1.71 is the largest since 1.49: it reworked the tyre slipping model, per-car steering geometry, damper attenuation, the adjustment ranges of suspension / differential / aero, PP fleet-wide, both assists, and the damage model — and PD reset every leaderboard in the game. See `16-update-1.71-physics-change.md`.**

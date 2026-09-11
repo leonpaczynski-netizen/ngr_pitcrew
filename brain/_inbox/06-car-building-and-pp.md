@@ -521,7 +521,7 @@ Five types:
 Progression:
 1. **One-Way LSD** — fixed, non-adjustable
 2. **Two-Way LSD** — adjustable
-3. **Fully Customisable LSD** — full access: **Initial Torque, Acceleration Sensitivity, Braking Sensitivity** (scale roughly 5–60)
+3. **Fully Customisable LSD** — full access: **Initial Torque, Acceleration Sensitivity, Braking Sensitivity** (5–60 on v1.70; 0–30 / 0–100 / 0–100 on v1.71)
 4. **Active LSD Controller** — on compatible cars
 
 **PP:** installing costs PP; **the settings are PP-free.** ([DiamondLobby](https://diamondlobby.com/gran-turismo-7/best-tuning-setups-for-gt7/); [Coach Dave Academy](https://coachdaveacademy.com/tutorials/gran-turismo-7-tuning-explained/))

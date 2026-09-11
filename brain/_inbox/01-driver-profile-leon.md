@@ -117,7 +117,7 @@ When multiple controls could address the same symptom, work down this list. It e
 | Driver says | Likely cause | First engineering response |
 |---|---|---|
 | "Pushes wide mid-corner" — **and I'm off throttle / trailing brake** | Front mechanical grip, too much front roll stiffness, insufficient rotation | Soften front ARB one step; review front toe; add front aero. **Do not touch accel LSD — it isn't engaged.** |
-| "Pushes wide mid-corner" — **and I'm on throttle** | **Excessive acceleration lock**, or gearing putting the engine in peak torque too early | **Reduce LSD acceleration in 2–4 point steps. This is the whole answer more often than not** — see §11, Huracán / Laguna. Only if that fails, look at front grip. |
+| "Pushes wide mid-corner" — **and I'm on throttle** | **Excessive acceleration lock**, or gearing putting the engine in peak torque too early | **Reduce LSD acceleration in 2–4 point steps. This is the whole answer more often than not** — see §11, Huracán / Laguna. ⚠️ *[CONTESTED on v1.71: Huracán, Daytona - lowering it −6 pp was refuted (s145); raising it moved the derived rotation index up, at a cost of 2 spins in 10 laps - see `02` §10.5. The Laguna result is v1.70, on the old 5–60 scale.]* Only if that fails, look at front grip. |
 | "Initial turn-in is lazy" | Front response / geometry / platform | More front bite via mild toe-out, front aero or controlled rake; keep rear braking stable |
 | "Rear is excited/sketchy on brakes" | Rear decel stability, lock-up, platform control | Stabilise rear mechanically: brake LSD / rear toe / platform support. Do **not** rely on large front BB |
 | "Rear is floating" | Insufficient rear support or poor rebound/aero balance | Add platform control / rear support; review rebound and rear aero |
@@ -284,7 +284,7 @@ The sequence for every new car/circuit combination.
 |---|---|---|
 | Rear unstable under braking? | YES | Hold front-bite changes. Fix rear decel/platform first. Review brake LSD, rear toe, rebound/compliance, aero. Keep BB near neutral. |
 | Rear stable, but turn-in lazy? | YES | Add front response in small steps: front mechanical grip / toe / aero, or modest rake. |
-| Turn-in good, mid-corner pushes? | YES | **Ask where the right foot is — this is the fork.** Coasting → mechanical front grip. Power-on → **accel LSD down first, everything else second.** Validated at Laguna, §11. |
+| Turn-in good, mid-corner pushes? | YES | **Ask where the right foot is — this is the fork.** Coasting → mechanical front grip. Power-on → **accel LSD down first, everything else second.** Validated at Laguna, §11 - on v1.70. ⚠️ *[CONTESTED on v1.71: lowering it was refuted on the Huracán at Daytona (s145) - `02` §10.5.]* |
 | Mid-corner good, exit loose? | YES | Confirm pedal calibration, then distinguish snap wheelspin from gradual oversteer. Adjust LSD / rear toe / gearing accordingly. |
 | Car loses both axles over bumps? | YES | Reduce stiffness / rebound severity. Do not solve with more aero alone. |
 | Car stable but feels dead? | YES | Restore front communication/rotation. Do not accept "safe but slow." |
