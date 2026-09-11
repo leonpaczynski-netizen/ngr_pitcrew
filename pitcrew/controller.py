@@ -1782,7 +1782,15 @@ class PitCrewController(QObject):
             # 2). A first fill is not news - except on a match the calendar
             # INFERRED from circuit and car, where the link itself is the
             # thing he was never told (minor 1).
-            adopted = bool(getattr(proposal, "adopted", False))
+            # **`adopted` is already false by the time we get here** (the
+            # critic on row 2.7, pass 4, MAJOR): `_link_round` writes the
+            # round id before any load, and `upcoming()` then resolves the
+            # event through `known_rounds` rather than inferring it again.
+            # So the fact is carried from the link itself, and spent once.
+            inferred = getattr(self, "_adopted_rounds", set())
+            adopted = bool(getattr(proposal, "adopted", False)) \
+                or round_id in inferred
+            inferred.discard(round_id)
             notes = [self._said_change(key, event.get(key), value)
                      for key, value in fill.items()
                      if event.get(key) is not None or adopted]
@@ -1925,6 +1933,11 @@ class PitCrewController(QObject):
         try:
             self.store.link_event_to_round(int(proposal.event_id),
                                            proposal.round_id)
+            # Remembered for the load that follows: this link was INFERRED
+            # from circuit and car, so the regulations it brings with it are
+            # news (pass 4). `_apply_hub_regulations` spends it once.
+            self._adopted_rounds = getattr(self, "_adopted_rounds", set()) | {
+                proposal.round_id}
             log("pitcrew").info(
                 "calendar: %s is event %s - linked by circuit and car",
                 proposal.name, proposal.event_id)

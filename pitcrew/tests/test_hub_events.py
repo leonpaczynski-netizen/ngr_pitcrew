@@ -559,6 +559,99 @@ def test_a_linked_event_follows_the_hub_and_says_what_changed(
     assert event_screen.values()["power_limit_bhp"] == 520.0
 
 
+def test_an_inferred_link_says_the_regulations_it_brings(
+        wired, tmp_path, monkeypatch):
+    """The critic on row 2.7, pass 4 (MAJOR): a link matched by circuit and
+    car writes the round's BoP onto HIS event, and said nothing - a first
+    fill is deliberately not news. The `adopted` flag could not carry that,
+    because the link is written before the load that applies them."""
+    _bop_hub(tmp_path, monkeypatch, bop=True, power=509)
+    controller, event_screen, _, store = wired
+    controller._on_event_saved(an_event(
+        name="Round 6", track=COMPLETE, layout="Full Course",
+        car_name="Lamborghini Huracan GT3"))          # no hub_round_id
+    event_id = store.active_event_id()
+    assert store.get_event(event_id)["bop_enabled"] is None
+
+    controller.open_on_next_round()
+    controller.load_active_event()
+
+    got = store.get_event(event_id)
+    assert (got["hub_round_id"], got["bop_enabled"]) == ("r1", 1)
+    said = event_screen.footer_note.text()
+    assert "linked to" in said and "by circuit and car" in said
+    assert "BoP is now on for this round" in said
+    assert "power limit now 509 BHP, not stated before" in said
+    # Spent once: the next load is not news again.
+    controller.load_active_event()
+    assert "linked to" not in event_screen.footer_note.text()
+
+
+def test_a_first_fill_on_a_link_he_made_is_not_news(wired, tmp_path,
+                                                    monkeypatch):
+    """The other side of it: where the round id is his, the hub filling a
+    column he was never asked about changes no instruction."""
+    _bop_hub(tmp_path, monkeypatch, bop=True)
+    controller, event_screen, _, store = wired
+    controller._on_event_saved(an_event(
+        name="Round 6", track=COMPLETE, layout="Full Course",
+        car_name="Lamborghini Huracan GT3", hub_round_id="r1"))
+    assert store.get_event(store.active_event_id())["bop_enabled"] == 1
+    assert "From the hub" not in event_screen.footer_note.text()
+
+
+def test_a_round_that_states_no_regulations_writes_nothing(
+        wired, tmp_path, monkeypatch):
+    """Silence is not a change (pass 3). The comparison still runs."""
+    path = tmp_path / "bare-league.db"
+    db = sqlite3.connect(path)
+    db.executescript(SCHEMA)
+    db.execute("INSERT INTO Series (id, name, status, defaultLobbySettings) "
+               "VALUES ('s1','NGR GR3','ACTIVE',?)",
+               (json.dumps({**GR3, "carRegulations": {}}),))
+    db.execute("INSERT INTO Driver VALUES ('d1','u1','Beeni','Beeni-187')")
+    db.execute("INSERT INTO SeriesRegistration VALUES "
+               "('sr1','s1','d1','Lamborghini Huracan GT3','OK')")
+    db.execute("INSERT INTO Round VALUES ('r1','s1','r1',?,'SCHEDULED',1,?,"
+               "'null')", (SOON, COMPLETE))
+    db.commit()
+    db.close()
+    monkeypatch.setattr(hub_read, "DEFAULT_PATH", path)
+    controller, event_screen, _, store = wired
+    controller._on_event_saved(an_event(
+        name="Round 6", track=COMPLETE, layout="Full Course",
+        car_name="Lamborghini Huracan GT3", hub_round_id="r1",
+        mandatory_stops=0))
+    got = store.get_event(store.active_event_id())
+    assert (got["bop_enabled"], got["power_limit_bhp"]) == (None, None)
+    # ...and the boxed fields are still compared.
+    assert "mandatory stops" in event_screen.footer_note.text()
+
+
+def test_a_write_that_fails_says_nothing_it_did_not_do(wired, tmp_path,
+                                                       monkeypatch):
+    """Pass 3, minor 2: the notes are worded BEFORE the write, so a failure
+    there must leave the row, the form and what he is told in step."""
+    _bop_hub(tmp_path, monkeypatch, bop=False, power=509)
+    controller, event_screen, _, store = wired
+    controller._on_event_saved(an_event(
+        name="Round 6", track=COMPLETE, layout="Full Course",
+        car_name="Lamborghini Huracan GT3", hub_round_id="r1"))
+    event_id = store.active_event_id()
+    _bop_hub(tmp_path, monkeypatch, bop=True, power=520,
+             name="bare-league-2.db")
+
+    def refuse(*args, **kwargs):
+        raise sqlite3.OperationalError("no")
+
+    monkeypatch.setattr(store, "update_event", refuse)
+    controller.load_active_event()
+    monkeypatch.undo()
+    got = store.get_event(event_id)
+    assert (got["bop_enabled"], got["power_limit_bhp"]) == (0, 509.0)
+    assert "BoP is now on" not in event_screen.footer_note.text()
+
+
 def test_an_event_left_unlinked_cannot_be_compared_against_anything(wired,
                                                                     hub_at):
     """The comparison keys on `hub_round_id`, so leaving the driver on his own
