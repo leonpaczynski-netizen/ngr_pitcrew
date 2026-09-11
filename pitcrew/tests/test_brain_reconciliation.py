@@ -141,9 +141,12 @@ def test_b2_the_bottoming_flag_still_has_no_mean_heave_figure():
 # so where it is written - or the next reader acts on it.
 
 ROOT = Path(__file__).resolve().parents[2]
-LIVE_DOCTRINE = (".claude/skills/ludo/**/*.md", "brain/_inbox/**/*.md",
+# Every skill, not only Ludo's: `gt7-brain` loads on every setup question
+# and still carried the retired LSD rule after `ludo` had lost it (critic 5).
+LIVE_DOCTRINE = (".claude/skills/**/*.md", "brain/_inbox/**/*.md",
                  "brain/car-state/*.md", "brain/RECONCILIATION.md")
-GONE = re.compile(r"removed|deleted|retired", re.IGNORECASE)
+GONE = re.compile(r"removed|deleted|retired|superseded|resolved|\bmet\b|"
+                  r"no longer applies", re.IGNORECASE)
 
 
 def _live_lines():
@@ -152,6 +155,23 @@ def _live_lines():
             text = path.read_text(encoding="utf-8")
             for number, line in enumerate(text.splitlines(), 1):
                 yield path, number, line
+
+
+def _live_paragraphs():
+    """Blank-line-separated blocks, whitespace folded - a rule and the note
+    that retires it are often a wrapped line apart."""
+    for pattern in LIVE_DOCTRINE:
+        for path in sorted(ROOT.glob(pattern)):
+            block, start = [], None
+            lines = path.read_text(encoding="utf-8").splitlines() + [""]
+            for number, line in enumerate(lines, 1):
+                if line.strip():
+                    if not block:
+                        start = number
+                    block.append(line)
+                elif block:
+                    yield path, start, re.sub(r"\s+", " ", " ".join(block))
+                    block = []
 
 
 def test_e1_no_live_doctrine_cites_a_tool_that_is_gone():
@@ -182,11 +202,18 @@ def test_e2_no_live_rule_still_issues_the_lsd_in_absolutes():
     # car-state sheets' "ABSOLUTES, not percentages" header, which the first
     # version of this test did not match and so passed without checking the
     # places sheets are issued from (critic 5 on row 2.8).
-    phrasings = ("except the LSD, in absolutes", "issue LSD in absolute values only",
-                 "ABSOLUTES, not percentages", "register has not been re-read")
-    live = [f"{p.relative_to(ROOT).as_posix()}:{n}" for p, n, line in _live_lines()
-            if any(words in line for words in phrasings)
-            and not GONE.search(line)]
+    # Every phrasing a sweep of every skill and brain file found the rule
+    # written in (11 Sep 2026) - after two passes in which each fix covered
+    # only the wordings its critic had named. Read by paragraph, because the
+    # retirement note is often the next wrapped line.
+    phrasings = ("except the lsd, in absolutes", "issue lsd in absolute values only",
+                 "absolutes, not percentages", "register has not been re-read",
+                 "lsd in absolutes", "stated in absolutes",
+                 "(absolutes — the three axes", "until the register is re-read",
+                 "is unverified in full")
+    live = [f"{p.relative_to(ROOT).as_posix()}:{n}" for p, n, block in _live_paragraphs()
+            if any(words in block.lower() for words in phrasings)
+            and not GONE.search(block)]
     assert not live, f"the LSD-absolutes rule is still live at {live}"
 
 

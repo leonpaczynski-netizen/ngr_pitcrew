@@ -14,7 +14,7 @@
 
 **Consequences right now:**
 
-- **`11-car-slider-ranges.md` is unverified in full.** Adjustment ranges were explicitly revised. No sheet should be issued until all three cars are re-read. **15 minutes.**
+- ~~`11-car-slider-ranges.md` is unverified in full.~~ **Gate met 11 Sep 2026:** all four cars are re-read on v1.71 in `range_records` - the RSR, the 992, the Huracán and the Shelby.
 - **`03-gt7-tyre-and-fuel-model.md` is the worst affected document**, including our own measured Laguna and Monza wear results. Every stint length and compound choice in it is a v1.70 number.
 - **Every sheet in `setups/` is pre-1.71.** Historical record and control group, not values to type in. See `setups/00-PRE-1.71-NOTICE.md`.
 - **PP moved fleet-wide.** Our three builds may have moved relative to the league cap. This is a race-weekend problem, not a tuning problem.
@@ -74,9 +74,9 @@ The **GT7 Race Engineering** artifact (desktop Cowork sidebar) is the front end 
 2. **Driver Feedback** — carries car, circuit and event across from the brief. Session-type aware (practice / quali / time trial / completed race), captures the setup as run, symptoms by corner phase, pace, tyre and fuel data, optional Pit Crew telemetry, and driver notes verbatim. Emits a setup-refinement prompt asking for a diagnosis, revised sheets and a delta table.
 3. **Quick Reference** — change hierarchy, rear-stability stack, GT7 traps, baseline sheet.
 
-**Slider ranges persist per car.** The tool holds a range library keyed by car. Picking a car whose ranges are in `11-car-slider-ranges.md` loads its real limits automatically and flags them as verified; anything else falls back to generic race-car or road-car windows and says so. Browser storage is unavailable in artifacts, so this register **is** the persistence layer; if a range record arrives and is not written here, it is lost.
+**Slider ranges persist per car - in the app, not here.** They live in `pitcrew.db` `range_records`, entered once on Pit Crew's Car screen, and every prompt and export reads them from there. *(The artifact's range library, and this register as its persistence layer, are retired with the HTML tool: `11`'s JSON is history nothing reads, and a range written only into `11` would be a second copy.)*
 
-> **⚠️ 1.71 note.** The tool's range library is loaded from `11`, and `11` is a v1.70 record. **Until the register is re-read, the tool is confidently serving stale limits and marking them "verified."** Treat every auto-loaded range as unverified until `11` is updated, and re-enter the new numbers there first so the tool inherits them.
+> **⚠️ 1.71 note - superseded 11 Sep 2026.** It warned that the artifact's range library served `11`'s v1.70 limits as verified. Both are retired: all four cars are on v1.71 in `range_records`, which is what the app reads.
 
 ---
 

@@ -94,7 +94,7 @@
 |---|---|---|---|
 | **LSD initial torque** | 5 – 60 | **0 – 30** | floor to 0, **ceiling halved** |
 | **LSD acceleration sensitivity** | 5 – 60 | **0 – 100** | floor to 0, ceiling +40 |
-| **LSD braking sensitivity** | 5 – 60 | **0 – 99** | floor to 0, ceiling +39 |
+| **LSD braking sensitivity** | 5 – 60 | **0 – 99** (5 Sep record: 0 – 100) | floor to 0, ceiling +39 on the 21 Aug reading |
 | **Damper expansion — front** | 30 – 50 | **30 – 60** | ceiling +10 |
 | **Damper expansion — rear** | 30 – 50 | **30 – 60** | ceiling +10 |
 
@@ -108,7 +108,7 @@ The community report carried in `16` §5 was **[COMMUNITY — single source]**: 
 
 **But the part nobody reported is the part that matters more: the three LSD axes no longer share a scale.**
 
-On v1.70 all three ran **5–60**. They now run **0–30**, **0–100** and **0–99**. Three parameters that were interchangeable in proportional terms are now three different rulers.
+On v1.70 all three ran **5–60**. On the 21 Aug reading they ran **0–30**, **0–100** and **0–99** (the 5 Sep record reads **0–100** braking). Three parameters that were interchangeable in proportional terms are now three different rulers.
 
 > ### 🔴 This is the percent-of-range trap, for the third time, and this time it is worse
 >

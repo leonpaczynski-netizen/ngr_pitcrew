@@ -68,6 +68,7 @@ SUSPENSION
 
 DIFFERENTIAL                        (absolutes — the three axes no longer
                                      share a scale. §6.1)
+                                     (absolutes-only rule retired 11 Sep 2026 - `11`)
   Initial torque                    0   <- CHANGE       0      (0–30, at MIN)
   Acceleration sensitivity          17  (17%)         19      (0–100)
   Braking sensitivity               26  <- CHANGE       24      (0–100)

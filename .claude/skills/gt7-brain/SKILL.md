@@ -112,10 +112,11 @@ carries the rest of the standing refusals.
 2. **A telemetry-only flag may not buy a setup change.** It may buy a question
    or a measurement. This was overridden exactly once and cost 5 mm of ride
    height and 2 mm of rake for nothing.
-3. **Reason in percent of slider range, not absolute values** — *except* that
-   1.71 moved ranges, so this is only safe once `11` is re-read for the car in
-   hand. **Express LSD in absolutes until then:** the three axes no longer share
-   a scale.
+3. **Reason in percent of slider range, not absolute values.** The ranges are
+   `range_records`, re-read on v1.71 for all four cars on file (checked 11 Sep
+   2026). The LSD's three axes no longer share a scale (0–30 / 0–100 / 0–100),
+   so each is its own range - and the rule to express LSD in absolutes is
+   retired. After the next physics patch, re-read before any sheet.
 4. **One change per run, three clean laps minimum**, recorded with its result.
 5. **Every measurement carries its date and its game version.** A number without
    a version cannot be trusted after the next patch, and there is always a next
