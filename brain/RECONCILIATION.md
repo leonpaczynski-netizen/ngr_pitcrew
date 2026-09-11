@@ -38,7 +38,7 @@ KB should be amended**; no app work follows.
 | B1 | `15` §5.4: `fuelMap` null | **Not a code defect.** Laps inherit the event's declared map and do so perfectly: event 3 declares `1` and all 79 of its laps carry it; events 1 and 2 declare nothing and 0 of 254 do. **It has simply never been entered on two events.** See E5 | data entry, not code |
 | B2 | `15` §1 fixes 1–3: per-speed-band reference, mean heave reported alongside per-wheel minima, kerb frames excluded | Not implemented. See C1 — the underlying mechanism turned out to be different, but these three remain good ideas independently | medium |
 | B3 | `15` §2 fixes 2–3: normalise the yaw deficit for speed; report a continuous magnitude rather than a boolean | The `1/v²` structural bias argument stands and is analytic | medium |
-| B4 | `15` §4: the `setup` / `performance` / PP block is stale | **CONFIRMED LIVE, and the cause is upstream of the app.** `Store.sheet_for` correctly returns the newest sheet it holds; the fault is that revisions are issued, typed into GT7, and never filed. `tools/check_setup_sheets.py` now detects it — see E6 | **high** |
+| B4 | `15` §4: the `setup` / `performance` / PP block is stale | **CONFIRMED LIVE, and the cause is upstream of the app.** `Store.sheet_for` correctly returns the newest sheet it holds; the fault is that revisions are issued, typed into GT7, and never filed. `tools/check_setup_sheets.py` (since removed with the setup record, `CLAUDE.md` §1a) detected it — see E6 | **high** |
 
 ---
 
@@ -176,7 +176,7 @@ that exists. Nothing inside the app could see that, because the missing sheet
 is missing.
 
 `brain/` being in the repository makes it visible for the first time.
-`tools/check_setup_sheets.py` compares issued setup documents against stored
+`tools/check_setup_sheets.py` (since removed with the setup record, §1a) compared issued setup documents against stored
 sheets. On the day it was written it found two:
 
 | Car | Knowledge base | App holds | Gap |
@@ -199,7 +199,7 @@ something much sharper**, and one of the three alarms was false:
 +3/+3 is the raise that `15` §1's `bottoming` flag bought, whose rationale was
 withdrawn but which he won the race on. The app has never had it.
 
-`tools/read_setup_document.py` does the extraction. Two things it had to get
+`tools/read_setup_document.py` (since removed with the setup record, §1a) did the extraction. Two things it had to get
 right, both found by checking rather than by shipping:
 
 * **The reply parser cannot read these documents.** Handed one it returned three
@@ -666,7 +666,7 @@ lengthened."* Three clean laps (674/675/677) of seven; two incidents.
 | V5 | *"The front-end changes cost at least 2.7 km/h of drag"* (Ludo, 1 Sep, entry T2) | **⛔ REFUTED BY V4, AND I HAD BANKED A COST THAT DOES NOT EXIST.** T2 read the front straight alone (285.8 -> 283.1). On the **back straight, which faces the other way, R2 was FASTER by 2.6** (279.1 -> 281.7) - the same reversal. **Wind-corrected: R1a 282.5 against R2 282.4.** ⇒ **the toe / camber / front ride-height package cost NOTHING in drag.** Entry U6 re-checked T2 for a part-throttle artefact and cleared it; the actual defect was that **a single-straight terminal is not a drag measurement on a circuit with wind.** Checking the right thing wrongly still passes |
 | V6 | The rear is stepping out because it is loose (implied by the driver report, and the natural reading of V1) | **NO - IT IS STORED STEERING CASHED IN AT THE BRAKE RELEASE, AND EVERY REAR-DIRECTED FIX MAKES IT WORSE.** Oversteer index (measured yaw / Ackermann-commanded yaw) through the lap-6 snap **tracks the brake pedal while the steering is being UNWOUND**: brake 39% -> index 0.99, 30% -> 1.13, 20% -> 1.20, 1% -> 1.71, 0% -> 2.14 -> 2.80 -> 6.92, with steering falling +28.8 -> +6.2 deg. Yaw rate holds 0.50-0.78 rad/s while commanded yaw collapses 0.515 -> 0.043. **The suspension agrees: through the release the REAR COMPRESSES (272.9 -> 282.1 mm) while the front extends (274.1 -> 268.2) - the rear is GAINING load.** A rear losing grip goes light; this one goes heavy. And the aggregate is flat: index >1.0 at the Bus Stop is **19.5% / 16.2% / 20.1%** across R1a/R2/R3 - **the rear has not changed, the front lock has (7.5x).** ⇒ **`lsd_b`, softer rear ARB and rearward bias all add rotation to a car already over-rotating at the release.** The lever is `toe_f` −0.08 -> 0.00, which is the same change that stops the front-left locking. ⚠️ **The index is a bare Ackermann model - no compliance, no aero - so its absolute values are meaningless** (the denominator collapses). **The SHAPE is the evidence** |
 | V7 | 6th 1.030 -> 1.010 (revised from entry V3 after V4) | **THE HEADROOM FIGURE IN V3 WAS A TAILWIND NUMBER.** Wind-neutral terminal is **284 km/h**; tonight's tailwind alone reached **293.2 with no tow**, against a **298.4** ceiling at 1.030. Event weather is `changeable`. ⚠️ **No tow has ever been measured on this project - `race_knowledge.tow_s_per_lap` is NULL at every circuit** - so the tow is `[UNMEASURED]` and is not given a number here. ⇒ **1.010 (ceiling 304.4 km/h)** keeps him off the limiter in a tailwind AND a tow and no longer depends on which way the wind blew the night it was cut. **The gear did not get short - the wind made it look short one lap and long the next** |
-| V8 | `data_health.py`: *"gearbox - every session ran the sheet it is tagged with"* | **⚠️ A VACUOUS PASS, NOT A CLEAN ONE.** `setup_sheet_id` is NULL on sessions 113/114/115/116, so there is no sheet to compare the gearbox against and the check has nothing to fail on. It reports the same words for "verified" and for "nothing to verify". **App defect: the gearbox check must distinguish AGREED from NOT COMPARED**, as `check_setup_sheets.py` already does for the sheet half |
+| V8 | `data_health.py`: *"gearbox - every session ran the sheet it is tagged with"* | **⚠️ A VACUOUS PASS, NOT A CLEAN ONE.** `setup_sheet_id` is NULL on sessions 113/114/115/116, so there is no sheet to compare the gearbox against and the check has nothing to fail on. It reports the same words for "verified" and for "nothing to verify". **App defect: the gearbox check must distinguish AGREED from NOT COMPARED**, as `check_setup_sheets.py` did for the sheet half before it was removed with the setup record |
 | V9 | Entry T2's terminal comparison was taken off part-throttle frames | **NO - RE-CHECKED AND T2 STANDS.** Re-measured at throttle >=99.5%: R1a max **285.6** (against the 285.8 quoted) and R2 max **282.7** (against 283.1). The 0.2-0.4 km/h difference is immaterial and the −2.7 km/h finding survives. **Recorded because I went looking to overturn my own verdict and it held** |
 | V10 | *"What can I do different in my driving to maximise speed through the bus stop"* (driver, 3 Sep) | **⛔ REFUSED, WITH THE NUMBER RE-DERIVED RATHER THAN QUOTED - n=16 clean laps across all three runs. 2sd: brake point 32.6 m · v-min 14.7 km/h · exit speed 22.7 km/h · corner time 0.44 s.** Any instruction I could give is **a third of his own lap-to-lap variation.** ⭐ **And it is worse than the noise argument: v-min at the Bus Stop against lap time is r = −0.30 over 16 laps, which does not clear significance at this n** - so I cannot even assert that more speed through there buys lap time. **What is honestly sayable: the cap is the car. 11.7% of his 90-100% brake frames at the Bus Stop lock a front, at 89.4% median brake pressure - there is no technique that finds speed under a saturated instrument.** `toe_f` 0.00 is the change that unsaturates it |
 | V11 | Run 4 sheet, read off the GT7 settings screen (rank zero, 3 Sep) | **`toe_f` −0.08 -> 0.00 CONFIRMED IN THE CAR**, and every other issued value present: `rh` 58/70 · `nf` 3.90/4.10 · `arb` 5/4 · `de` 46/44 · `cam` 2.4/1.2 · `toe_r` 0.12 · diff 6/14/28 · `df` 380/600 · ECU 96 · restrictor 99 · ballast 45 @ −29 · top 300 · RS/RS · **548 BHP** (my arithmetic said 547 - **the garage number is authoritative**), 1,275 kg, PP 751.67 |
@@ -1032,7 +1032,7 @@ it means anything. The Daytona finding stands; this one never existed.
 | **THE CAR, settings screenshot 6 Sep 2026** | **`arb_f` 5** |
 
 **Verdict: 5. Sheet 31 is wrong and has been since 23 Aug 2026.** Flagged by
-`tools/check_setup_sheets.py` and carried as an open dispute on the Round 5
+`tools/check_setup_sheets.py` (since removed) and carried as an open dispute on the Round 5
 sheet for eleven days; closed by a screenshot.
 
 **Consequence, and it is not cosmetic:** the Round 4 race at Road Atlanta

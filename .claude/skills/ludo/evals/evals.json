@@ -29,7 +29,7 @@
       "id": 3,
       "name": "trap-question-with-a-resolver",
       "prompt": "the huracan felt like it was spinning up the inside rear on exit at fuji. can you ask me some questions to narrow down whats causing it?",
-      "expected_output": "Should NOT ask whether one rear wheel spins alone - that has a working resolver and 17,421 corner-exit frames already answered it. Ludo should read the telemetry first and come back with what the data says, asking only what the feed cannot carry. Should run or cite the question gate rather than inventing a question list.",
+      "expected_output": "Should NOT ask whether one rear wheel spins alone - that has a working resolver and 17,421 corner-exit frames already answered it. Ludo should read the telemetry first and come back with what the data says, asking only what the feed cannot carry.",
       "assertions": [
         "Does not ask a question that the stored frames can already answer",
         "Reads or proposes to read the per-wheel slip data before asking anything",

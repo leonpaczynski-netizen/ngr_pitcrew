@@ -1,8 +1,8 @@
 # Setup Sheet Output Format
 
-**Purpose:** every setup I produce comes back in this exact layout, so it can be typed straight into GT7's settings screen and into Pit Crew without translation or re-ordering. The order below follows GT7's in-game sheet top to bottom.
+**Purpose:** every setup I produce comes back in this exact layout, so it can be typed straight into GT7's settings screen without translation or re-ordering. **It is not typed into Pit Crew** (`CLAUDE.md` §1a): the one copy of what is in the car is `brain/car-state/<car>-<circuit>.md`. The order below follows GT7's in-game sheet top to bottom.
 
-**Every sheet ships in two forms:** the human sheet below, and the Pit Crew paste blocks in the last section. Both, every time, without being asked.
+**Every sheet ships as the human sheet below**, and the car-state file is updated with it. The Pit Crew paste block it used to carry is retired (last section).
 
 ## Why values are given as percent-of-range
 
@@ -16,7 +16,7 @@ Every per-car parameter is therefore given three ways:
 - **Clicks from minimum** — fastest to dial in; hold the slider at minimum, then count up
 - **Absolute estimate** — a convenience figure, and explicitly *an estimate* unless that car's ranges have been recorded
 
-Parameters on **universal scales** are given as plain numbers, because they are the same on every car: ARB (1–10), dampers (~20–40 compression / ~30–50 expansion), LSD (5–60), brake balance (−5 to +5), camber and toe in degrees.
+Parameters on **universal scales** are given as plain numbers, because they are the same on every car: ARB (1–10), dampers (20–40 compression / 30–60 expansion on v1.71), LSD (0–30 initial / 0–100 acceleration / 0–100 braking on v1.71 - three scales, never one line), brake balance (−5 to +5), camber and toe in degrees.
 
 ---
 
@@ -86,7 +86,7 @@ ASSISTS (not on the sheet, but part of the setup)
 3. **Strategy note.** Expected stint length at the event's multipliers, the stop window, fuel map plan, and the in-race brake-balance and TCS migration through the stint.
 4. **Three things to test first**, ranked, if the car is not right on the first run. One change per run, three clean laps.
 5. **Confidence flags.** Anything derived from a contested or single-source claim is marked, so it gets tested rather than trusted.
-6. **The Pit Crew paste blocks** — one per sheet, per the section below. Non-negotiable: re-typing 22 values into the app is where transcription errors enter the loop.
+6. ~~The Pit Crew paste blocks~~ — **retired 5 Sep 2026** with the app's setup record (`CLAUDE.md` §1a); `pitcrew/setup/parse.py` no longer exists. The car-state file update travels instead.
 
 ## Ordering rule for the two columns
 
@@ -95,6 +95,8 @@ The **race sheet is the primary column** and is built first. The qualifying shee
 ---
 
 # Feeding Pit Crew — the paste block
+
+> **⛔ RETIRED 5 Sep 2026 - history only.** The app no longer takes a setup (`CLAUDE.md` §1a) and the parser this section describes is deleted, so a block pasted anywhere in the app goes nowhere. **Do not produce these blocks.**
 
 **Status: verified against the app's own parser (`pitcrew/setup/parse.py`) on 11 Aug 2026.** This is not a proposed contract; it is what the code actually reads.
 

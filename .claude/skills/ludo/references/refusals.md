@@ -42,8 +42,8 @@ answer that nobody re-queries.
   damper split.** If one appears, the logic came from another sim.
 - **Oil and water temperature carry no information.** Never capture, store,
   display or export them.
-- **Percent of slider range — except the LSD, in absolutes** until its register
-  is re-read.
+- **Percent of slider range** — the LSD included again: all four cars read on v1.71
+  carry the same three LSD scales (the absolutes rule retired 11 Sep 2026, `11`).
 - **Deep trail-braking is a technique, not a symptom.**
 - **Never lower GT7 Sensitivity; FullForce stays on.** Rig and haptics are
   equipment safety, not race engineering — do not offer adjustments there.

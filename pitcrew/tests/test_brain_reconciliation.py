@@ -25,6 +25,9 @@ telling a race engineer to work around something that no longer happens.
 from __future__ import annotations
 
 import inspect
+import json
+import re
+from pathlib import Path
 
 from pitcrew.analysis import gearing, thresholds
 from pitcrew.export import build, payload
@@ -130,3 +133,85 @@ def test_b2_the_bottoming_flag_still_has_no_mean_heave_figure():
     assert not any("heave" in str(k).lower() for k in exported), (
         f"a mean-heave figure has appeared in the thresholds block. That closes "
         f"{AMEND} §B2 - delete this test and strike the row.")
+
+
+# --------------------------------------------------------------- section E
+# Doctrine hygiene (plan row 2.8, 11 Sep 2026). What the knowledge base tells a
+# race engineer to use must exist, and a rule that has been retired must say
+# so where it is written - or the next reader acts on it.
+
+ROOT = Path(__file__).resolve().parents[2]
+LIVE_DOCTRINE = (".claude/skills/ludo/**/*.md", "brain/_inbox/**/*.md",
+                 "brain/car-state/*.md", "brain/RECONCILIATION.md")
+GONE = re.compile(r"removed|deleted|retired", re.IGNORECASE)
+
+
+def _live_lines():
+    for pattern in LIVE_DOCTRINE:
+        for path in sorted(ROOT.glob(pattern)):
+            text = path.read_text(encoding="utf-8")
+            for number, line in enumerate(text.splitlines(), 1):
+                yield path, number, line
+
+
+def test_e1_no_live_doctrine_cites_a_tool_that_is_gone():
+    """L16: `log_setup_change.py`, `check_setup_sheets.py` and
+    `read_setup_document.py` were cited as working tools after they were
+    deleted with the setup record. A citation may stay as history - on a line
+    that says the tool is gone."""
+    tools = {p.stem for p in (ROOT / "tools").glob("*.py")}
+    stale = []
+    for path, number, line in _live_lines():
+        named = re.findall(r"tools/(\w+)\.py", line) + re.findall(
+            r"(?<![\w/])(check_setup_sheets|log_setup_change|read_setup_document)\.py",
+            line)
+        for name in named:
+            if name not in tools and not GONE.search(line):
+                stale.append(f"{path.relative_to(ROOT).as_posix()}:{number} {name}.py")
+    assert not stale, f"cited as if it still exists: {stale}"
+
+
+def test_e2_no_live_rule_still_issues_the_lsd_in_absolutes():
+    """Retired 11 Sep 2026: all four cars read on v1.71 carry the same three
+    LSD scales in `range_records` (0-30 / 0-100 / 0-100)."""
+    live = [f"{p.relative_to(ROOT).as_posix()}:{n}" for p, n, line in _live_lines()
+            if ("except the LSD, in absolutes" in line
+                or "issue LSD in absolute values only" in line)
+            and not GONE.search(line)]
+    assert not live, f"the LSD-absolutes rule is still live at {live}"
+
+
+def test_e3_the_paste_block_is_retired_with_its_parser():
+    """§1a: the app takes no setup. A doctrine that tells Ludo to paste a
+    sheet into it describes an input that goes nowhere."""
+    assert not (ROOT / "pitcrew" / "setup" / "parse.py").exists()
+    sheet = (ROOT / "brain/_inbox/09-setup-sheet-format.md").read_text(encoding="utf-8")
+    assert "RETIRED 5 Sep 2026" in sheet
+    mechanic = (ROOT / ".claude/skills/ludo/references/mechanic.md").read_text(
+        encoding="utf-8")
+    assert "SetupSheet.validate()" not in mechanic
+    assert "The parser reads" not in mechanic
+
+
+def test_e4_the_shift_table_example_names_a_table_the_app_would_find():
+    """L16: the example issued a table for "Huracán GT3 EVO" at
+    "daytona-road-course" - a car not on file and a key the app never builds,
+    so a table issued that way beeps nowhere."""
+    from pitcrew.controller import circuit_key_for
+
+    skill = (ROOT / ".claude/skills/ludo/SKILL.md").read_text(encoding="utf-8")
+    block = skill.split("write_shift_points(", 1)[1].split("```", 1)[0]
+    key = re.search(r'circuit_key="([^"]+)"', block).group(1)
+    assert key == circuit_key_for({"track": "Daytona International Speedway",
+                                   "layout": "Road Course"})
+    assert 'car_name="Lamborghini Huracán GT3 \'15"' in block
+    assert re.search(r'performance_rpm=\{"1": ', block), "keys arrive as JSON strings"
+
+
+def test_e5_no_eval_expects_what_was_deleted_and_no_read_car_is_called_stale():
+    evals = json.loads((ROOT / ".claude/skills/ludo/evals/evals.json").read_text(
+        encoding="utf-8"))["evals"]
+    assert not [e["id"] for e in evals if "question gate" in e["expected_output"]]
+    register = (ROOT / "brain/_inbox/11-car-slider-ranges.md").read_text(
+        encoding="utf-8")
+    assert "Stale. Do not issue" not in register

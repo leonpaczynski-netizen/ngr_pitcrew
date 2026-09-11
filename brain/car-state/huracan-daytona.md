@@ -54,8 +54,8 @@ than R3** ⇒ **R3 ran 30 and the change went into run 4.**
    *"every session ran the sheet it is tagged with"* — **a vacuous pass, not a clean one**:
    there is no sheet to compare against, and the check says the same words for
    "verified" and "nothing to verify."
-2. **There is no Daytona `setup_sheets` row at all** for this car. `check_setup_sheets.py`
-   lists Spa, Fuji and Watkins Glen and simply does not mention Daytona.
+2. **There is no Daytona `setup_sheets` row at all** for this car.
+   `check_setup_sheets.py` (since removed with the setup record, §1a) listed Spa, Fuji and Watkins Glen and simply does not mention Daytona.
 3. **`setup_changes` logs only suspension and diff keys**, so restrictor, ECU, ballast and
    gearing **cannot appear in it at any time** — which is how the build drifted from
    restrictor 99 / ECU 94 to 93 / 100 with no row anywhere recording it.
@@ -75,7 +75,7 @@ than R3** ⇒ **R3 ran 30 and the change went into run 4.**
   `issued` / `sheet-diff` / `driver` — because **a request is not a reading**, which is
   the distinction that failed on this very value. All 202 existing rows keep NULL in
   both: back-filling them would be inventing intent nobody stated.
-- **`tools/log_setup_change.py`** files a change with its reason, or attaches one to a
+- **`tools/log_setup_change.py`** *(since removed: `setup_changes` has no writer, and `brain/ledger/` replaced it)* filed a change with its reason, or attaches one to a
   row already written. **A hand-filed change without `--why` is refused** — the
   automatic path may have a null reason because a sheet diff genuinely has none; a
   human at a keyboard does not get that excuse.

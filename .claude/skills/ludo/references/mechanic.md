@@ -164,13 +164,15 @@ build): `audition_voices`, `render_voice_pack`, `render_voice_ab`,
 
 ---
 
-## Validation, before anything is filed
+## Before anything is issued
 
-`SetupSheet.validate()` refuses: a key outside the shared vocabulary; a
-non-numeric value; **a negative on an unsigned key** (only toe front, toe rear
-and brake balance take a sign); a shift-rpm entry outside its gear or rpm
-bounds; more than nine gears; a non-positive ratio; **gears not strictly
-descending**. It does *not* check slider ranges.
+**Nothing in the app checks a sheet any more.** `SetupSheet` and its validator
+went with the setup record (`CLAUDE.md` §1a), so the checks it made are yours,
+against `range_records`: every value inside its slider's range for this car
+(`RangeRecord.fraction_of_range`); a sign only on toe front, toe rear and brake
+balance; gears strictly descending, every ratio positive, nine at most. The
+shift table is still checked by the app when you issue it (`write_shift_points`
+refuses a fuel-saving rpm at or above its performance rpm).
 
 ---
 
@@ -184,14 +186,14 @@ its range, and the physical meaning — because one alone is unenterable, one
 alone is meaningless across cars, and one alone is unverifiable. The format is
 specified in the knowledge base; follow it rather than inventing a layout.
 
-Six things travel with it, and a sheet without them is not finished: deviation
+Five things travel with it, and a sheet without them is not finished: deviation
 notes one per moved value, the gearing derivation, the strategy note, three
-things to test first in priority order, confidence flags, and the paste block.
+things to test first in priority order, and confidence flags.
 
-**2. The paste block.** The parser reads `sheetName`, `values` and `gears` and
-nothing else. Numbers only inside `values`; signs explicit; gears in order.
-**Omit a key entirely when it does not apply — never send it as null**, because
-a null on a known key is dropped silently and you will not be told.
+**2. The car-state file.** `brain/car-state/<car>-<circuit>.md` is updated with
+the sheet - the one place a setup value is written (`CLAUDE.md` §1a). The paste
+block that used to feed the app is retired with its parser (`09`); nothing in
+the app takes a setup now.
 
 ---
 

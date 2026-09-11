@@ -1,21 +1,25 @@
 # Car Slider Ranges — The Register
 
-**What this is:** the recorded min/max of every per-car slider, read off each car's own settings screen in game. Once a car is in here, its real limits load automatically in the GT7 Race Engineering tool and are treated as hard limits in every sheet issued for it.
+**What this is:** the recorded min/max of every per-car slider, read off each car's own settings screen in game. Once a car is in `range_records` (entered once on the app's **Car** screen), its limits are what every percent-of-range figure is taken against.
 
 **Why it matters more than it looks.** GT7 derives each slider's endpoints from per-car chassis data — lever ratio, corner mass, suspension travel. Natural frequency, ride height, downforce and gearing limits differ between every car; many road cars cannot reach 3.50 Hz at all, some race cars exceed 5.00. A percent-of-range recommendation is only convertible into a number you can type once the range is known. Recording a car's ranges once removes the estimate from every sheet that car ever gets.
 
 ---
 
-# 🟢 THREE CARS READ ON v1.71, ONE STILL STALE — updated 24 August 2026
+# 🟢 ALL FOUR CARS READ ON v1.71 — and the register is `range_records` (11 Sep 2026)
+
+**The record is the database, not this file.** Every car's endpoints live in `data/pitcrew.db` `range_records`, entered once on the app's **Car** screen (`CLAUDE.md` §1a: the range record stayed). Nothing reads the JSON blocks below - they fed the retired HTML tool - so they are history, marked, and never updated again. The table here was checked against the database, read-only, on 11 Sep 2026.
 
 **GT7 v1.71 (20 August 2026) said, in the official update notes, that adjustment ranges were revised for suspension, differential and aerodynamics. They were. Three cars have now been read on v1.71 and the same five endpoints moved on all three.**
 
 | Car | Status |
 |---|---|
-| **Porsche 911 RSR (991) '17** | ✅ **Re-read 21 Aug 2026 on v1.71. Five endpoints moved.** |
-| **Porsche 911 GT3 R (992) '22** | ✅ **First reading, 22 Aug 2026, on v1.71. New car — see §0.1.** |
-| **Lamborghini Huracán GT3 '15** | ✅ **Re-read 24 Aug 2026 on v1.71 — see §0.2. The class-comparison test, and it reproduces.** |
-| Ford Shelby GT350R '16 | 🔴 **v1.70 reading. Stale. Do not issue.** — and it is now the only card left to turn |
+| **Porsche 911 RSR (991) '17** | ✅ v1.71, verified. Re-read 21 Aug; the record was updated 5 Sep and its `lsd_b` reads **0 – 100**, not the 21 Aug 99 - the one-click question §0.2 raised |
+| **Porsche 911 GT3 R (992) '22** | ✅ v1.71, verified, 22 Aug 2026. New car — see §0.1 |
+| **Lamborghini Huracán GT3 '15** | ✅ v1.71, verified, 24 Aug 2026 — see §0.2 |
+| **Ford Shelby GT350R '16** | ✅ **v1.71, verified, 23 Aug 2026 — read, and never absorbed by this file** until the experiment ledger's contradiction S1 found it on 11 Sep |
+
+**What the Shelby's v1.71 reading settles.** Its LSD reads **0 – 30 / 0 – 100 / 0 – 100**, the same as all three Gr.3 cars: the LSD ranges are **class-independent - outcome 1** of "What was unknown" below - and the rule to issue LSD in absolutes is **retired**. Damper expansion reads 30 – 60 on all four. **And on this road car two chassis-derived endpoints did move:** natural frequency is 2.00 – 4.00 Hz at both ends (1.88 – 3.70 / 2.00 – 3.90 on v1.70) and front downforce 50 – 150 (60 – 160); ride height and rear downforce held. So PD's "aerodynamics" meant endpoints on the Shelby, not only initial settings. **`game_version` is recorded on all four records.**
 
 ## §0.2 ⭐ The Huracán — the class comparison, and it reproduces on all five
 
@@ -35,9 +39,9 @@
 
 1. **The change is at least Gr.3-wide, and it is a version effect, not a car effect.** Three cars, two manufacturers, two drivetrain layouts (RR and MR), one class — the same five endpoints, the same values. This is the first reading with a genuine *before* column on the same car, so it also rules out the possibility that the RSR's "v1.70" figures (borrowed from this very car) were wrong to begin with.
 2. **`lsd_b` is 0 – 100 and the RSR's 99 is the odd reading.** §0.1 flagged this as a cell wanting a second look. Two cars now read 100 against the RSR's 99. **Re-read the RSR's LSD braking ceiling** — it is almost certainly a one-click misread, trivial in effect but it is the register's only remaining internal contradiction outside `top`.
-3. **Percent-of-range reasoning is restored for this car**, and the standing instruction to express LSD in absolutes no longer applies to the Huracán. It still applies to the Shelby.
+3. **Percent-of-range reasoning is restored for this car**, and the standing instruction to express LSD in absolutes no longer applies to the Huracán. It no longer applies to the Shelby either: its v1.71 reading (23 Aug) carries the same three scales.
 
-> **Still open: Gr.3-wide, or fleet-wide? The Shelby is now the only test left.** A Gr.N road car whose other endpoints differ wildly (ride height 75–160, NF 1.88–3.70, downforce 60–160) and which still reads the old 5–60 LSD. **If it re-reads as 0–30 / 0–100 / 0–100, the change is fleet-wide.** Five minutes.
+> **Answered 11 Sep 2026, from `range_records`: fleet-wide on every car read - the Shelby's v1.71 LSD is 0 – 30 / 0 – 100 / 0 – 100.** The question as it stood on 24 Aug: **Gr.3-wide, or fleet-wide? The Shelby is now the only test left.** A Gr.N road car whose other endpoints differ wildly (ride height 75–160, NF 1.88–3.70, downforce 60–160) and which still reads the old 5–60 LSD. **If it re-reads as 0–30 / 0–100 / 0–100, the change is fleet-wide.** Five minutes.
 
 ### ⚠️ What the re-read does to sheets already written against the old scale
 
@@ -73,7 +77,7 @@
 
 **Status: [MEASURED — two cars, in house]. The LSD and damper-expansion changes are not car-specific.**
 
-> **Still open: Gr.3-wide, or fleet-wide?** Both cars read so far are Gr.3. **The Shelby decides it** — a road car whose other endpoints differ wildly (ride height 75–160, NF 1.88–3.70, downforce 60–160) and which still reads the old 5–60 LSD. **If it re-reads as 0–30 / 0–100 / 0–100, the change is fleet-wide. Five minutes.**
+> **Answered 11 Sep 2026 - fleet-wide (see the top).** As it stood: **Gr.3-wide, or fleet-wide?** Both cars read so far are Gr.3. **The Shelby decides it** — a road car whose other endpoints differ wildly (ride height 75–160, NF 1.88–3.70, downforce 60–160) and which still reads the old 5–60 LSD. **If it re-reads as 0–30 / 0–100 / 0–100, the change is fleet-wide. Five minutes.**
 
 ### ⚠️ Two cells on the 992 that want a second look
 
@@ -120,9 +124,9 @@ On v1.70 all three ran **5–60**. They now run **0–30**, **0–100** and **0�
 >
 > **The absolute values are untouched and the car drives as built** — Job 0 confirmed that, and the telemetry confirmed it independently (gear ratios byte-identical, `17` §1). **What changed is every proportional statement ever made about them.** Initial torque at 5 used to be *sitting on the floor*; it is now a sixth of the way up.
 >
-> **Rule: issue LSD in absolute values only, on every car, until all three are re-read.** And when they are re-read, record the three ranges separately rather than as one "LSD 5–60" line — that shorthand is what made this invisible.
+> **Rule, 21 Aug: issue LSD in absolute values only, on every car, until all three are re-read. ⭐ RETIRED 11 Sep 2026:** all four cars read on v1.71 carry the same three scales in `range_records` (0 – 30 / 0 – 100 / 0 – 100), so a percent of range means one thing again. And when they are re-read, record the three ranges separately rather than as one "LSD 5–60" line — that shorthand is what made this invisible.
 
-## 🔴 What is still unknown, and it is the interesting question
+## ✅ What was unknown - answered 11 Sep 2026: outcome 1, class-independent (the Shelby reads 0 – 30 / 0 – 100 / 0 – 100)
 
 **Whether the new LSD ranges are class-independent.**
 
@@ -140,11 +144,11 @@ Three outcomes, and they are not equally likely:
 
 ## 📋 The re-read worksheet
 
-**Two cars left, five minutes each.**
+**Done — all four cars are read on v1.71, in `range_records`.**
 
 - [x] **Porsche 911 RSR (991) '17** — Gr.3, MR — ✅ done 21 Aug 2026
 - [x] **Lamborghini Huracán GT3 '15** — Gr.3, MR — ✅ **done 24 Aug 2026. Reproduced all five. See §0.2.**
-- [ ] **Ford Shelby GT350R '16** — Gr.N, FR road car — **the class-independence test**
+- [x] **Ford Shelby GT350R '16** — Gr.N, FR road car — ✅ **read 23 Aug 2026 on v1.71, verified; this file found out on 11 Sep. Outcome 1.**
 
 **On the remaining two, read all 22 parameters** — not just the five that moved on the RSR. A parameter that held on a Gr.3 car may not hold on a road car, and the whole point of the register is that it does not guess.
 
@@ -152,15 +156,15 @@ Three outcomes, and they are not equally likely:
 
 1. **⭐ Record the step size while the screen is open.** Five seconds per slider. **Now five sessions overdue**, and it was not captured on the RSR re-read either. It is the only thing standing between every click count in every sheet being an instruction rather than an estimate.
 2. **⭐ Note the new defaults, not just the endpoints.** 1.71 revised initial settings as well as ranges. The default is a free datapoint about where PD think the car should sit.
-3. **⭐ Record the game version in the app.** `game_version` is **NULL** on all three range records in `pitcrew.db`, including the new RSR one. **The 21 Aug reading is only distinguishable from a v1.70 reading by its date.** That is Standing Rule 10 not being enforced by the tool, and it is now the highest-priority Pit Crew defect.
+3. **⭐ Record the game version in the app.** `game_version` was **NULL** on all three range records on 21 Aug; **it is recorded on all four now (checked 11 Sep 2026).** **The 21 Aug reading is only distinguishable from a v1.70 reading by its date.** That is Standing Rule 10 not being enforced by the tool, and it is now the highest-priority Pit Crew defect.
 
 ---
 
 ## How a car gets added
 
 1. In game, open the car's settings sheet. For each parameter, drag the slider to each end and read the number.
-2. In the **Slider ranges** section of the tool, enter them, tick *"these are read off this car's in-game sheet"*, and press **Save these ranges for this car**.
-3. Send me the block it produces — or leave it in `pitcrew.db`, which is where the 21 Aug RSR reading was found. I add it to the register below and to the tool's range library, and it loads itself from then on.
+2. On the app's **Car** screen, pick the car, enter them, mark them as read off this car's own sheet, and save. They go into `range_records` in `pitcrew.db`, and every prompt and export reads them from there.
+3. Nothing is copied into this file: **the database is the register.** Add the car to the status table at the top, with its version.
 
 Takes about five minutes per car. **It now needs doing again after every physics-tagged patch — 1.71 proved that in writing and then in measurement.**
 
@@ -179,19 +183,19 @@ Takes about five minutes per car. **It now needs doing again after every physics
 
 > **⚠️ Arithmetic correction, 21 Aug 2026.** Earlier revisions of this file described the split as **"13 of 22 class-independent, 9 chassis-derived"** and that phrasing is repeated in `07` and `08`. Counting the sliders individually as the register lists them gives **16 and 6**. The structural claim is unaffected — it is the count that was wrong, not the finding — but the "9 chassis-derived endpoints" phrasing should be read as **6** wherever it appears.
 
-**Of the 16 class-independent sliders, five have now moved on v1.71** — the three LSD axes and both damper expansion sliders — **and they have moved on one car only.** Until the other two are read, "class-independent" is a v1.70 property that may or may not have survived.
+**Of the 16 class-independent sliders, five have now moved on v1.71** — the three LSD axes and both damper expansion sliders — **and they moved identically on all four cars read** (11 Sep, `range_records`) - so "class-independent" survived v1.71 for them.
 
-**The 6 chassis-derived sliders did not move on the RSR at all.** Given that PD's notes named aerodynamics explicitly, that is a genuine surprise and worth confirming on a second car before relying on it.
+**The 6 chassis-derived sliders did not move on the RSR at all** - nor on the Huracán or the 992. **On the Shelby two of them did** (natural frequency to 2.00 – 4.00 Hz, front downforce to 50 – 150; 11 Sep, `range_records`): chassis-derived is per-car in its patch behaviour too.
 
 ### The rule this produces, and it has now been broken in three ways
 
 | Parameter | Express targets as | Because | Caught on |
 |---|---|---|---|
-| **Natural frequency** | **absolute Hz** | Floors range from 1.88 Hz (Shelby) to 3.00 Hz (Gr.3). A percent-of-range target puts a Gr.3 car at 4.4–4.6 Hz — a full 1.0 Hz stiffer than it has ever raced well on. | RSR, 11 Aug |
+| **Natural frequency** | **absolute Hz** | Floors range from 2.00 Hz (Shelby on v1.71; 1.88 on v1.70) to 3.00 Hz (Gr.3). A percent-of-range target puts a Gr.3 car at 4.4–4.6 Hz — a full 1.0 Hz stiffer than it has ever raced well on. | RSR, 11 Aug |
 | **Ride height** | **percent of range** (or mm scaled to the span) | Spans range from 25 mm (Gr.3 front) to 85 mm (Shelby, both ends) — a **3.4× difference**. `08` B1's "3–5 clicks above minimum" means 20 % of range on a Gr.3 car and **6 %** on the Shelby. | **Shelby, 16 Aug** |
 | **Toe, camber** | **absolute degrees** | Range is class-independent, and percent hides how small the useful steps are — 5 % of toe range is 0.10°, twice the smallest change worth making. | RSR, 11 Aug |
-| **Downforce** | **absolute points, plus the front-share percentage** | Spans vary by class more than anything else on the sheet (Gr.3 total 850–1150; Shelby total 210–460). | Shelby, 13 Aug |
-| **⭐ LSD, all three axes** | **absolute values** | The three axes ran a shared 5–60 scale for the life of this register and now run **0–30, 0–100 and 0–99**. Any proportional statement about a diff setting silently changed meaning on 20 August. | **RSR, 21 Aug** |
+| **Downforce** | **absolute points, plus the front-share percentage** | Spans vary by class more than anything else on the sheet (Gr.3 total 850–1150; Shelby total 200–450 on v1.71, 210–460 on v1.70). | Shelby, 13 Aug |
+| **⭐ LSD, all three axes** | **percent of range again, from 11 Sep 2026** (absolutes 21 Aug – 11 Sep) | The three axes ran a shared 5–60 scale for the life of this register and now run **0–30, 0–100 and 0–100** - on all four cars read, so the scale is class-independent again. A proportional statement made before 20 August still addresses a different slider. | **RSR, 21 Aug; retired on all four, 11 Sep** |
 
 > **The general lesson, now in three parts.** A heuristic must declare **(a)** whether it is absolute or proportional, **(b)** which version of the game its range was read on, and **(c)** — the new one — **it must not share a range statement across parameters that merely happen to agree.** "LSD 5–60" was a convenience that bundled three independent sliders into one fact. When they diverged, the bundle hid it.
 
@@ -229,6 +233,8 @@ Takes about five minutes per car. **It now needs doing again after every physics
 | Brake balance | −5 | +5 | universal | same |
 | Maximum speed (auto-set) | 200 km/h | 800 km/h | generator span | same |
 | Final gear | 2.000 | 5.000 | 3.000 | same |
+
+*History only - nothing reads this block; the record is `range_records`, entered on the app's Car screen (11 Sep 2026).*
 
 ```json
 {
@@ -271,13 +277,15 @@ Takes about five minutes per car. **It now needs doing again after every physics
 
 **New defaults not recorded.** 1.71 revised initial settings; what PD now think this car should sit at was not written down.
 
-**`game_version` is NULL in the database** on this very record. The date is the only thing marking it as a v1.71 reading.
+**`game_version` was NULL in the database** on this very record on 21 Aug. **Recorded since (checked 11 Sep 2026).**
 
 ---
 
 ### 🔴 Porsche 911 RSR (991) '17 — Gr.3, MR — **v1.70, superseded**
 
 **Recorded 2026-08-11 · GT7 v1.70 · kept as the comparison record. Do not issue.**
+
+*History only - nothing reads this block; the record is `range_records`, entered on the app's Car screen (11 Sep 2026).*
 
 ```json
 {
@@ -316,9 +324,9 @@ Takes about five minutes per car. **It now needs doing again after every physics
 
 ---
 
-### 🔴 Lamborghini Huracán GT3 '15 — Gr.3, MR — **v1.70, STALE**
+### 🔴 Lamborghini Huracán GT3 '15 — Gr.3, MR — **v1.70, superseded**
 
-**Recorded 2026-08-13 · GT7 v1.70 · ⚠️ NOT RE-READ ON v1.71 · do not issue**
+**Recorded 2026-08-13 · GT7 v1.70 · superseded by the 24 Aug v1.71 reading (§0.2) · kept as the comparison record**
 
 **On v1.70 this car's ranges were identical to the RSR's on all 22 parameters.** That was the register's strongest result. **It is now a hypothesis again** — and testing it is the single most informative five minutes left in this file, because it separates "LSD ranges are class-independent" from "LSD ranges are now per-car."
 
@@ -346,6 +354,8 @@ Takes about five minutes per car. **It now needs doing again after every physics
 | Brake balance | −5 | +5 | universal |
 | Maximum speed (auto-set) | 200 km/h | 800 km/h | generator span |
 | Final gear | 2.000 | 5.000 | 3.000 |
+
+*History only - nothing reads this block; the record is `range_records`, entered on the app's Car screen (11 Sep 2026).*
 
 ```json
 {
@@ -387,11 +397,11 @@ Takes about five minutes per car. **It now needs doing again after every physics
 
 ---
 
-### 🔴 Ford Shelby GT350R '16 — Gr.N, FR road car — **v1.70, STALE**
+### 🔴 Ford Shelby GT350R '16 — Gr.N, FR road car — **v1.70, superseded**
 
-**Recorded 2026-08-13, filed 16 Aug · GT7 v1.70 · ⚠️ NOT RE-READ ON v1.71 · do not issue**
+**Recorded 2026-08-13, filed 16 Aug · GT7 v1.70 · superseded by the 23 Aug v1.71 reading (`range_records`, verified): natural frequency 2.00 – 4.00 Hz both ends, front downforce 50 – 150, damper expansion 30 – 60, LSD 0 – 30 / 0 – 100 / 0 – 100; every other endpoint as below · kept as the comparison record**
 
-**This is the class-independence test.** If this car's LSD also reads 0–30 / 0–100 / 0–99, the parameter stays class-independent and the register absorbs 1.71 cleanly. If it reads anything else, three sliders move from the class-independent column to the chassis-derived one and the 16/6 split becomes 13/9.
+**This was the class-independence test, and it came back outcome 1** (the top of this file). If this car's LSD also read 0–30 / 0–100 / 0–99, the parameter stays class-independent and the register absorbs 1.71 cleanly. If it reads anything else, three sliders move from the class-independent column to the chassis-derived one and the 16/6 split becomes 13/9.
 
 | Parameter | Min | Max | Span | vs Gr.3 (v1.70) |
 |---|---|---|---|---|
@@ -417,6 +427,8 @@ Takes about five minutes per car. **It now needs doing again after every physics
 | Brake balance | −5 | +5 | universal | same ✅ |
 | Maximum speed (auto-set) | 200 km/h | 800 km/h | generator span | same ✅ |
 | Final gear | 2.000 | 5.000 | 3.000 | same ✅ |
+
+*History only - nothing reads this block; the record is `range_records`, entered on the app's Car screen (11 Sep 2026).*
 
 ```json
 {
@@ -447,7 +459,7 @@ Takes about five minutes per car. **It now needs doing again after every physics
 
 > The rule silently changed meaning by more than 3× crossing from Gr.3 to Gr.N. It put three consecutive Yas Marina sheets on 80 / 98 mm while the driver spun four times in fifteen race laps and struck kerbs at 8 of 10 corners. **Rewrite B1's ride-height line as percent of range.** Tested on `setups/2026-08-16-shelby-yas-marina-revC.md` at 89 / 107 mm (16.5 % / 14.1 %).
 
-**3. The natural-frequency floor is 1.88 / 2.00 Hz** — a full Hz softer than any Gr.3 car reaches. This car has run 3.05 / 3.20 Hz on all three sheets, **64 % / 63 % of its own range**, materially stiff for a heavy road car on aggressive kerbs. `01` §11 records that stiffening it at Sainte-Croix cost grip over bumps and worsened throttle exit. **There is a great deal of unused softness and none of it has been tried.**
+**3. The natural-frequency floor was 1.88 / 2.00 Hz on v1.70 (2.00 / 2.00 on v1.71)** — a full Hz softer than any Gr.3 car reaches. This car has run 3.05 / 3.20 Hz on all three sheets, **64 % / 63 % of its own range**, materially stiff for a heavy road car on aggressive kerbs. `01` §11 records that stiffening it at Sainte-Croix cost grip over bumps and worsened throttle exit. **There is a great deal of unused softness and none of it has been tried.**
 
 **4. +20 mm of rake is built into the minimums** (75 / 95), against +5 mm on the Gr.3 cars — so every Yas Marina sheet's "+18 mm rake" is in fact **−2 mm of added rake.**
 
@@ -470,21 +482,21 @@ The short keys in the JSON, in tool order.
 | Key | Parameter | Unit | Per-car? |
 |---|---|---|---|
 | `rh_f` / `rh_r` | Ride height front / rear | mm | **yes — and the SPAN varies 3.4×, so target in percent of range.** Unchanged on v1.71 (RSR) |
-| `nf_f` / `nf_r` | Natural frequency front / rear | Hz | **yes — and the FLOOR varies 1.1 Hz, so target in absolute Hz.** Unchanged on v1.71 (RSR) |
+| `nf_f` / `nf_r` | Natural frequency front / rear | Hz | **yes — and the FLOOR varies 1 Hz, so target in absolute Hz.** Unchanged on v1.71 on the three Gr.3 cars; **moved on the Shelby (2.00 – 4.00)** |
 | `arb_f` / `arb_r` | Anti-roll bar front / rear | index | no — 1–10, confirmed ×3, two classes. **Held on v1.71** |
 | `dc_f` / `dc_r` | Damper compression front / rear | % (damping ratio) | no — 20–40, confirmed ×3. **Held on v1.71** |
-| `de_f` / `de_r` | Damper expansion front / rear | % (damping ratio) | ⭐ **MOVED on v1.71: 30–50 → 30–60 on the RSR.** Unknown on the other two |
+| `de_f` / `de_r` | Damper expansion front / rear | % (damping ratio) | ⭐ **MOVED on v1.71: 30–50 → 30–60, the same on all four cars read** |
 | `cam_f` / `cam_r` | Camber front / rear | degrees | no — 0.0–6.0 confirmed ×3. **Held on v1.71.** Issue in absolute degrees |
 | `toe_f` / `toe_r` | Toe front / rear | degrees, signed | no — ±1.00 confirmed ×3. **Held on v1.71.** Issue in absolute degrees, never percent |
-| `lsd_i` | LSD initial torque | index | ⭐ **MOVED: 5–60 → 0–30 on the RSR.** Unknown on the other two |
-| `lsd_a` | LSD acceleration sensitivity | index | ⭐ **MOVED: 5–60 → 0–100 on the RSR.** Unknown on the other two |
-| `lsd_b` | LSD braking sensitivity | index | ⭐ **MOVED: 5–60 → 0–99 on the RSR.** Unknown on the other two |
+| `lsd_i` | LSD initial torque | index | ⭐ **MOVED: 5–60 → 0–30 on all four** |
+| `lsd_a` | LSD acceleration sensitivity | index | ⭐ **MOVED: 5–60 → 0–100 on all four** |
+| `lsd_b` | LSD braking sensitivity | index | ⭐ **MOVED: 5–60 → 0–100 on all four** (the RSR's 21 Aug "99" reads 100 in its 5 Sep record) |
 | `awd` | Front/rear torque distribution | % front | **yes**, AWD only |
-| `df_f` / `df_r` | Downforce front / rear | points | **yes — varies enormously by class.** **Unchanged on v1.71 (RSR), which was not expected** |
+| `df_f` / `df_r` | Downforce front / rear | points | **yes — varies enormously by class.** **Unchanged on v1.71 on the three Gr.3 cars; the Shelby's front moved (50 – 150)** |
 | `bb` | Brake balance | integer | no — −5 to +5, confirmed ×3. **Held on v1.71** |
 | `top` | Maximum speed (auto-set) | km/h | no — 200–800 confirmed ×3. **Held on v1.71.** Generator, not a trim |
 | `fg` | Final gear | ratio | no — 2.000–5.000 confirmed ×3. **Held on v1.71** |
-| `version` | **The game version the reading was taken on** | string | **Mandatory (Standing Rule 10). A range without a version is not a measurement.** ⚠️ **Currently NULL in `pitcrew.db` on all three records** |
+| `version` | **The game version the reading was taken on** | string | **Mandatory (Standing Rule 10). A range without a version is not a measurement.** **Recorded on all four records (checked 11 Sep 2026)** |
 
 > **⭐ Do not write the three LSD axes as a single "LSD 5–60" line ever again.** They agreed for the life of this register and diverged on 20 August, and the shorthand is what made the divergence invisible.
 
@@ -492,8 +504,8 @@ The short keys in the JSON, in tool order.
 
 ## Priority order for measuring
 
-1. **⭐ Re-read the Huracán on v1.71.** 5 minutes. **The class comparison** — it separates "LSD ranges are class-independent" from "per-car" in one reading, and it unblocks every Huracán sheet including Rev D.
-2. **⭐ Re-read the Shelby on v1.71.** 5 minutes. **The class-independence test**, and it also settles whether the aero-range line in the patch notes means endpoints or initial settings.
+1. ✅ **Done 24 Aug - re-read the Huracán on v1.71.** **The class comparison** — it separates "LSD ranges are class-independent" from "per-car" in one reading, and it unblocks every Huracán sheet including Rev D.
+2. ✅ **Done 23 Aug - re-read the Shelby on v1.71** (outcome 1; two of its chassis-derived endpoints moved). **The class-independence test**, and it also settles whether the aero-range line in the patch notes means endpoints or initial settings.
 3. **Step sizes on any car whose screen is open.** Free. **Five sessions overdue and missed again on the 21 Aug RSR read.**
 4. **New defaults**, on all three. 1.71 revised initial settings and none have been recorded.
 5. **A third Gr.3 car — ideally FR, not MR.** The Mustang Gr.3 or the M6. Two identical MR Gr.3 cars is suggestive; a matching FR car would confirm the 6 chassis-derived endpoints are a Gr.3 constant rather than an MR-Gr.3 one. **More interesting on v1.71, because the steering-geometry rework was explicitly per car.**
@@ -515,6 +527,6 @@ For a car raced once, generic windows plus a flag on anything near a limit is en
 - **The patch notes over-described the change.** Three categories were named; on the RSR, one moved a lot, one moved slightly, and **aerodynamics did not move at all**. **Read the notes to decide whether to measure, never to decide what the numbers are.**
 - **The notes also under-described it.** Nothing in them said the three LSD axes would stop sharing a scale, and that is the change with the widest blast radius across this knowledge base. **The measurement found something the documentation did not contain — which is the entire argument for keeping this register.**
 
-**And record the version on every entry (Standing Rule 10).** A range without a version is not a measurement, because there is no way to know when it stopped being true. **This is currently failing in the tool — `game_version` is NULL on all three database records, including the new one.**
+**And record the version on every entry (Standing Rule 10).** A range without a version is not a measurement, because there is no way to know when it stopped being true. **It was failing in the tool on 21 Aug; all four records carry it now (checked 11 Sep 2026).**
 
 Related: `17-v1.71-measured-results.md` §6 for the full write-up of the 21 Aug reading, `16-update-1.71-physics-change.md` §6 for the 1.71 case, `02-gt7-setup-parameters.md` §3.0 for how the endpoints are derived, and `09-setup-sheet-format.md` for why every per-car value is issued as percent-of-range plus clicks plus absolute.

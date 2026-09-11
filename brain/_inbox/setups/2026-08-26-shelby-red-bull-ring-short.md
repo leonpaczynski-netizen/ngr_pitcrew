@@ -43,7 +43,7 @@ guessed.
 
 Rev B's paste block (§5), Road Atlanta v1 (its settings table, *"Front 5
 (44%)"*) and Yas Marina Rev C all read **5**. Only the app's stored sheet reads
-4, and `tools/check_setup_sheets.py` flags it. **I have written 5 into this
+4, and `tools/check_setup_sheets.py` (since removed) flagged it. **I have written 5 into this
 sheet** — three documents against one database row — but that is an assumption,
 not a reading.
 
