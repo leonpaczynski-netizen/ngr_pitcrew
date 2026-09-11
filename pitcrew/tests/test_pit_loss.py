@@ -81,6 +81,39 @@ def test_best_prefers_a_stop_with_a_fuel_term():
 
 # ------------------------------------------------------------------ the store
 
+def _straddle(in_fill, out_fill):
+    """Daytona session 143's own shape: the stop's in-lap stores 0.0 and the
+    out-lap stores the fill."""
+    rows = [{"lap_num": n, "lap_time_ms": 104_000, "is_pit_lap": False,
+             "is_out_lap": False} for n in range(2, 12)]
+    rows.append({"lap_num": 12, "lap_time_ms": 124_471, "is_pit_lap": True,
+                 "is_out_lap": False, "fuel_added_l": in_fill})
+    rows.append({"lap_num": 13, "lap_time_ms": 156_160, "is_pit_lap": False,
+                 "is_out_lap": True, "fuel_added_l": out_fill})
+    return rows
+
+
+def test_a_zero_on_the_in_lap_is_not_the_fill():
+    """Critic 6 on row 2.5 (BLOCKER): the 0.0 was read as the fill, the fuel
+    term was dropped, and 72 s with the refuelling inside it was stored as
+    Daytona's measured pit loss."""
+    import pytest
+
+    stop, = measure(_straddle(0.0, 49.09), refuel_rate_lps=1.0)
+    assert stop.fuel_added_l == pytest.approx(49.09)
+    assert stop.ex_fuel_s == pytest.approx(stop.total_s - 49.09, abs=0.01)
+    assert "49.1 L at 1.00 L/s taken off" in stop.method
+
+
+def test_a_fill_on_file_with_no_rate_is_not_called_no_fill():
+    stop, = measure(_straddle(0.0, 49.09), refuel_rate_lps=None)
+    assert stop.fuel_added_l is None and stop.fill_seen_l == 49.09
+    assert "no refuel rate" in stop.method
+    assert "no fill on file" not in stop.method
+    bare, = measure(_straddle(None, None), refuel_rate_lps=1.0)
+    assert bare.method.endswith("no fill on file")
+
+
 def test_a_measured_pit_loss_replaces_the_declared_constant(tmp_path):
     store = Store(tmp_path / "pl.db")
     try:

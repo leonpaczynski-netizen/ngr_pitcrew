@@ -307,7 +307,27 @@ def how_driven(store, sessions) -> None:
 
 # ---------------------------------------------------- the driver as a variable
 
-def driver_variable(store, event_id: int, sessions) -> None:
+def trend_line(trend, label: str) -> str:
+    """One session's three numbers, each with its n, "—" where unknown."""
+    if trend.incidents is None:
+        incidents = "—"
+    else:
+        incidents = (f"{trend.incidents} in {trend.judged_laps} judged laps "
+                     f"({trend.incident_rate:.0%})")
+    if trend.lap_one_cost_s is None:
+        lap_one = "—"
+    else:
+        start = (f"start: {trend.start_type}" if trend.start_type
+                 else "start type not on the event")
+        lap_one = (f"{trend.lap_one_cost_s:+.1f} s vs lap 5 on "
+                   f"(n={trend.lap_one_reference_n}; {start})")
+    spread = ("—" if trend.consistency_sd_s is None
+              else f"sd {trend.consistency_sd_s:.3f} s")
+    return (f"  s{str(trend.session_id):<4} {label:<16} incidents {incidents}   "
+            f"lap one {lap_one}   consistency {spread} (n={trend.consistency_n})")
+
+
+def driver_variable(store, event_id: int, sessions, *, start_type=None) -> None:
     """Plan row 2.11 - here, and in no brief, plan or live call."""
     from pitcrew.analysis.driver_trends import session_trend
     from pitcrew.export.build import event_lap_inputs
@@ -331,21 +351,13 @@ def driver_variable(store, event_id: int, sessions) -> None:
                 if lap.session_id == session["id"] and lap.session_id in wanted]
         if not laps:
             continue
-        trend = session_trend(laps, session_id=session["id"],
-                              kind=session.get("kind"))
-        if trend.incidents is None:
-            incidents = "—"
-        else:
-            incidents = (f"{trend.incidents} in {trend.judged_laps} judged laps "
-                         f"({trend.incident_rate:.0%})")
-        lap_one = ("—" if trend.lap_one_cost_s is None else
-                   f"{trend.lap_one_cost_s:+.1f} s vs lap 5 on "
-                   f"(n={trend.lap_one_reference_n})")
-        spread = ("—" if trend.consistency_sd_s is None else
-                  f"sd {trend.consistency_sd_s:.3f} s")
-        print(f"  s{session['id']:<4} {session.get('kind') or '':<8} "
-              f"incidents {incidents}   lap one {lap_one}   "
-              f"consistency {spread} (n={trend.consistency_n})")
+        kind = session.get("kind")
+        trend = session_trend(laps, session_id=session["id"], kind=kind,
+                              start_type=start_type if kind == "race" else None)
+        # A rehearsal is not the league race, and says so (critic 6).
+        label = (f"{kind} (rehearsal)" if kind == "race" and session.get("rehearsal")
+                 else kind or "")
+        print(trend_line(trend, label))
         for line in trend.silences:
             notes.setdefault(line, []).append(session["id"])
     for line, ids in notes.items():
@@ -401,13 +413,24 @@ def calls_against_outcome(store, runs) -> None:
 # ---------------------------------------------------- the race against its plan
 
 def stint_lengths(rows) -> list[int]:
-    """Laps per stint as run: a pit lap closes the stint it ends."""
-    lengths, current = [], 0
+    """Laps per stint as run: a pit lap closes the stint it ends.
+
+    **A stop filed as two pit rows in a row is one stop** (critic 6 on row
+    2.5): at Fuji the stop straddled the line, lap 5 and lap 6 both carry the
+    pit flag, and "run [5, 1, 14]" reported a second stop after a one-lap
+    stint that nobody drove.
+    """
+    lengths, current, previous_pit = [], 0, False
     for row in sorted(rows, key=lambda r: r.get("lap_num") or 0):
         current += 1
-        if row.get("is_pit_lap"):
+        pit = bool(row.get("is_pit_lap"))
+        if pit and previous_pit and lengths:
+            lengths[-1] += current
+            current = 0
+        elif pit:
             lengths.append(current)
             current = 0
+        previous_pit = pit
     if current:
         lengths.append(current)
     return lengths
@@ -424,12 +447,29 @@ def pit_loss_line(stop, figure, source) -> str:
     not separated (`pit_loss.best`), and printing its total as "ex-fuel"
     claimed a split nobody made.
     """
-    against = (f"the event's {figure} s ({source or 'no source - the schema default'})"
-               if figure is not None else "no figure on the event")
+    if figure is None:
+        against = "no figure on the event"
+    else:
+        if source == "measured":
+            # The flag writes a race's own stop onto the event, so the one
+            # measured figure on file can be this stop - and then the line
+            # is a stop compared with itself (critic 6).
+            own = any(abs(float(figure) - value) < 0.05
+                      for value in (stop.total_s, stop.ex_fuel_s))
+            said = ("measured - from this very stop, so this compares it "
+                    "with itself" if own else "measured")
+        elif source == "declared":
+            # `pit_loss_source` says `declared` whether he typed it or the
+            # row was created with the app's 20 s default (store docstring).
+            said = ("declared - typed, or the app's 20 s default; the record "
+                    "cannot tell which")
+        else:
+            said = "no source recorded"
+        against = f"the event's {figure} s ({said})"
     if stop.fuel_added_l is None:
-        return (f"stop on lap {stop.stop_lap}: {stop.total_s:.1f} s in all - no "
-                f"fill on file, so a ceiling and not the ex-fuel figure; "
-                f"against {against}; {stop.method}")
+        return (f"stop on lap {stop.stop_lap}: {stop.total_s:.1f} s in all - "
+                f"the fuel could not be taken off, so a ceiling and not the "
+                f"ex-fuel figure; against {against}; {stop.method}")
     return (f"stop on lap {stop.stop_lap}: {stop.ex_fuel_s:.1f} s ex-fuel "
             f"against {against}; {stop.method}")
 
@@ -440,7 +480,8 @@ def against_the_plan(store, event, runs) -> None:
     `expects`, and `race.pit_loss.measure` for each stop."""
     from pitcrew.export.build import event_lap_inputs
     from pitcrew.race import pit_loss
-    from pitcrew.race.expectations import audit_line_from_laps
+    from pitcrew.race.coordinator import context_from_event
+    from pitcrew.race.expectations import WEAR_CONTRADICTION, audit_line_from_laps
 
     _head("THE RACE AGAINST ITS PLAN — from the data, never from the plan")
     if not runs:
@@ -450,6 +491,16 @@ def against_the_plan(store, event, runs) -> None:
     race_laps = event_lap_inputs(store, event["id"], "race")
     figure = event.get("pit_loss_secs")
     source = event.get("pit_loss_source")
+    # What a full race is, so a short recording reads as short (critic 6):
+    # "run [16]" of a thirty-minute race is sixteen laps ON FILE.
+    context = context_from_event(event)
+    if getattr(context, "race_laps", None):
+        length = f"{context.race_laps} laps"
+    elif getattr(context, "race_minutes", None):
+        length = f"{context.race_minutes:g} minutes"
+    else:
+        length = "not on the event"
+    dropped_wear = False
     for run in runs:
         row = strategies.get(run.get("strategy_id"))
         if row is None:
@@ -461,25 +512,46 @@ def against_the_plan(store, event, runs) -> None:
         print(f"  run {run['id']} against strategy {row['id']} "
               f"({row.get('label') or 'unlabelled'}):")
         line = audit_line_from_laps(plan.get("expects"), laps)
+        # **Not a fixed sentence presented as this race's finding** (critic
+        # 6): the audit ends its wear clause with `WEAR_CONTRADICTION`, three
+        # particular gauge readings, word for word at every event.
+        fixed = f"; {WEAR_CONTRADICTION}."
+        if fixed in line:
+            line = line.replace(fixed, ".")
+            dropped_wear = True
         print(f"    {line or 'the plan carried no expectation to score against'}")
         rows = store.list_laps(run["session_id"]) if run.get("session_id") else []
         planned = [s.get("laps") for s in plan.get("stints") or []
                    if isinstance(s, dict)]
-        print(f"    stints planned {planned or '—'}   run {stint_lengths(rows) or '—'}")
+        print(f"    stints planned {planned or '—'}   run "
+              f"{stint_lengths(rows) or '—'}   ({len(rows)} laps on file; the "
+              f"race is {length})")
         stops = pit_loss.measure(rows, refuel_rate_lps=event.get("refuel_rate_lps"))
         if not stops:
             print("    pit loss: no stop these rows can resolve (an in-lap, its "
                   "out-lap and three clean laps)")
         for stop in stops:
             print(f"    {pit_loss_line(stop, figure, source)}")
+    if dropped_wear:
+        print("  (the audit's fixed sentence about three old gauge readings is "
+              "left out - it is\n   not this race's finding; the export still "
+              "carries it, as its own open task)")
 
 
 # ------------------------------------------------------------------ the radio
 
-def radio(store, event_id: int) -> None:
+def radio(store, event_id: int, session_ids=None) -> None:
     _head("THE RADIO — what he asked, and what the engineer could not take")
     tool = _tool("radio_review")
-    rows = tool._rows(store, "WHERE sessions.event_id = ?", (event_id,))
+    if session_ids:
+        # `--sessions` filters every section (critic 6): unfiltered, s143's
+        # debrief printed four exchanges from sessions 118, 119 and 125.
+        marks = ",".join("?" * len(session_ids))
+        rows = tool._rows(
+            store, f"WHERE sessions.event_id = ? AND radio.session_id IN ({marks})",
+            (event_id, *session_ids))
+    else:
+        rows = tool._rows(store, "WHERE sessions.event_id = ?", (event_id,))
     for line in tool.report(rows, misses_only=True):
         print(line)
 
@@ -620,13 +692,14 @@ def main() -> int:
         if args.sessions:
             sessions = [s for s in sessions if s["id"] in set(args.sessions)]
         how_driven(store, sessions)
-        driver_variable(store, args.event_id, sessions)
+        driver_variable(store, args.event_id, sessions,
+                        start_type=event.get("start_type"))
         runs = store.list_race_runs(args.event_id)
         if args.sessions:
             runs = [r for r in runs if r.get("session_id") in set(args.sessions)]
         calls_against_outcome(store, runs)
         against_the_plan(store, event, runs)
-        radio(store, args.event_id)
+        radio(store, args.event_id, args.sessions)
         close()
         return 0
     finally:

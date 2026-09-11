@@ -350,8 +350,9 @@ did not happen.** On a race day, before anything else, run over that event's own
    row 2.5 asks for a per-corner grid, each phase scored 1-5, before the data
    - on a twelve-corner circuit that is some forty prompted answers, which
    step 4 does not allow. Until he settles it, the grid is taken only if he
-   volunteers it, or inside step 4's four questions. The phases are
-   `driver-model.md`'s: entry, mid, exit.)*
+   volunteers it, or inside step 4's four questions. The row says four
+   phases; `driver-model.md` names three - entry, mid, exit - and which the
+   grid uses is part of the same open question.)*
 2. **The open predictions** for this car at this circuit, off `brain/ledger/`.
    That is the loop closing; a debrief that does not is a log. What was
    predicted, what happened, and which of the two was right — including when it
@@ -368,7 +369,7 @@ did not happen.** On a race day, before anything else, run over that event's own
 6. **George's calls against what followed** — the verdict filed on each.
 7. **Plan versus actual, from the data and never from the plan** — burn, lap
    time and wear against `expects`, stints planned against run, each stop's
-   measured pit loss against the declared one. The app once lost a whole lap in
+   measured pit loss against the event's own figure, named by its source. The app once lost a whole lap in
    a pit stop by preferring the lap-time sum over the wall clock, and reported
    the plan's own number as the outcome. **Incidents are seconds**: they belong
    in the ledger and in the total.
@@ -399,12 +400,21 @@ the only part the app still stores, and it is written by you:
 
 ```python
 write_shift_points(
-    car_name="Lamborghini Huracán GT3 EVO",
-    circuit_key="daytona-road-course",
-    performance_rpm={1: 8100, 2: 8150, 3: 8200, 4: 8200, 5: 8250, 6: 8250},
-    fuel_saving_rpm={3: 7400, 4: 7400, 5: 7450, 6: 7500},
+    car_name="Lamborghini Huracán GT3 '15",
+    circuit_key="daytona-international-speedway-road-course",
+    performance_rpm={"1": 8100, "2": 8150, "3": 8200, "4": 8200, "5": 8250, "6": 8250},
+    fuel_saving_rpm={"3": 7400, "4": 7400, "5": 7450, "6": 7500},
     note="Rev C box. Fuel table is the -20% short-shift, ~0.5 s/lap.")
 ```
+
+The MCP tool `write_shift_points` (`pitcrew/mcp/server.py`). **The car and the
+circuit are the store's own spellings**, or the table is found by nothing: the
+car as the event names it, and `circuit_key` as `circuit_key_for(event)` builds
+it - the slugged track and layout. An earlier version of this example used
+`"daytona-road-course"` and a car name that is not on file; a table issued that
+way beeps nowhere. Gear keys are strings because tool arguments arrive as JSON.
+**The rpm figures above are illustrative, not Daytona's issued table** - that
+lives in `shift_points`.
 
 Four rules, and each is a defect that has already happened somewhere:
 
@@ -786,8 +796,9 @@ FINDINGS_2026-08-23.md` — cite them, do not copy them.
   damper split.** If one appears, the logic was pattern-matched from another sim.
 - **Oil and water temperature carry no information.** Never capture, store,
   display or export them.
-- **Percent of slider range — except the LSD, in absolutes** until the register
-  is re-read; 1.71 moved its three axes off a shared scale.
+- **Percent of slider range** — the LSD included again: 1.71 moved its three axes
+  off a shared scale, and all four cars read since carry the same three
+  (0–30 / 0–100 / 0–100; the absolutes rule retired 11 Sep 2026, `11`).
 
 **About the plan**
 - **He will not carry a spare lap of fuel in a lap race.** Any conservatism is

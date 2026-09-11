@@ -69,6 +69,40 @@ def test_a_pit_lap_closes_the_stint_it_ends():
     assert stint_lengths([]) == []
 
 
+def test_a_stop_filed_on_two_rows_is_one_stop():
+    """Critic 6: Fuji's stop straddled the line, laps 5 and 6 both flagged -
+    "run [5, 1, 14]" reported a stop that did not happen."""
+    rows = [{"lap_num": n, "is_pit_lap": n in (5, 6)} for n in range(1, 21)]
+    assert stint_lengths(rows) == [6, 14]
+
+
+def test_a_ledger_header_with_an_empty_side_matches_nothing(tmp_path):
+    _ledger(tmp_path, "blank.md", " × ", [])
+    event = {"car_name": "Lamborghini Huracán GT3 '15",
+             "track": "Daytona International Speedway", "layout": "Road Course"}
+    assert ledger_for(event, tmp_path) == []
+
+
+def test_the_trend_line_says_what_it_does_not_know():
+    from pitcrew.analysis.driver_trends import SessionTrend
+    from tools.debrief import trend_line
+
+    blank = SessionTrend(session_id=113, kind="practice", judged_laps=0,
+                         incidents=None, lap_one_cost_s=None,
+                         lap_one_reference_n=0, consistency_sd_s=None,
+                         consistency_n=1)
+    said = trend_line(blank, "practice")
+    assert "incidents —" in said and "lap one —" in said
+    assert "consistency — (n=1)" in said
+    raced = SessionTrend(session_id=143, kind="race", judged_laps=15,
+                         incidents=2, lap_one_cost_s=11.7,
+                         lap_one_reference_n=12, consistency_sd_s=1.6,
+                         consistency_n=13, start_type="Standing")
+    said = trend_line(raced, "race")
+    assert "2 in 15 judged laps (13%)" in said
+    assert "+11.7 s vs lap 5 on (n=12; start: Standing)" in said
+
+
 def _stop(*, fuel):
     from pitcrew.race.pit_loss import PitLoss
 
@@ -88,6 +122,22 @@ def test_a_measured_figure_is_never_called_declared():
     assert "the event's 72.28 s (measured)" in said
     assert "40.6 s ex-fuel" in said
     assert "no source" in pit_loss_line(_stop(fuel=True), 20.0, None)
+
+
+def test_a_stop_compared_with_itself_says_so():
+    """Critic 6: the flag stored this stop's own total as the event's
+    measured figure, and the line reported the agreement."""
+    from tools.debrief import pit_loss_line
+
+    said = pit_loss_line(_stop(fuel=False), 75.6, "measured")
+    assert "from this very stop" in said and "compares it with itself" in said
+
+
+def test_declared_says_it_may_be_the_default():
+    from tools.debrief import pit_loss_line
+
+    said = pit_loss_line(_stop(fuel=True), 20.0, "declared")
+    assert "the app's 20 s default" in said and "cannot tell which" in said
 
 
 def test_a_stop_with_no_fill_is_a_ceiling_not_an_ex_fuel_figure():

@@ -89,6 +89,85 @@ def test_a_clean_session_is_a_measured_zero():
     assert trend.incident_rate == 0.0
 
 
+def test_a_lap_already_stored_as_an_incident_is_counted():
+    """Critic 6 (BLOCKER): stored incident laps arrive struck, and
+    `find_incidents` skips struck laps - so none of the 19 stored race
+    incidents on file was counted, the grass spin among them."""
+    from dataclasses import replace
+
+    laps = _laps(PRACTICE)
+    laps[4] = replace(laps[4], excluded=True, exclusion_reason="incident")
+    trend = session_trend(laps, kind="practice", evidence_for=_off_on())
+    assert trend.incidents == 1
+    assert trend.judged_laps == 7
+
+
+def test_a_stored_incident_in_a_run_too_short_to_judge_is_named_not_rated():
+    from dataclasses import replace
+
+    laps = _laps([95.0, 90.0, 99.0])
+    laps[2] = replace(laps[2], excluded=True, exclusion_reason="incident")
+    trend = session_trend(laps, kind="practice", evidence_for=_off_on())
+    assert trend.incidents is None
+    assert any("stored as incidents" in line for line in trend.silences)
+
+
+def test_a_lap_he_struck_in_his_own_words_is_quoted_not_counted():
+    """Deep Forest s135's shape: lap 2 struck with "crash ... the driver
+    reported damage". The export calls that manual, not an incident, so it
+    is not counted - and it is not hidden behind a bare 0 either (rule 1)."""
+    from dataclasses import replace
+
+    laps = _laps([95.0, 97.7, 90.0, 90.2, 90.4, 90.1])
+    laps[1] = replace(laps[1], excluded=True, exclusion_reason=(
+        "crash - 97.698 against an 87.4 clean pace; the driver reported damage"))
+    trend = session_trend(laps, kind="race", evidence_for=_off_on())
+    assert trend.incidents == 0
+    assert any(line.startswith("lap 2 struck by hand") and "reported damage" in line
+               for line in trend.silences)
+
+
+def test_three_clean_laps_are_enough_to_judge():
+    trend = session_trend(_laps([95.0, 90.0, 90.2, 90.4]), kind="practice",
+                          evidence_for=_off_on())
+    assert trend.judged_laps == 3 and trend.incidents == 0
+
+
+def test_an_incident_lap_is_not_in_the_lap_one_reference():
+    """Lap 6 went off: left in, three reference laps from lap 5 on; taken
+    out, two - which is no reference at all."""
+    race = [100.0, 91.0, 91.0, 91.0, 90.0, 110.0, 90.0]
+    trend = session_trend(_laps(race), kind="race", evidence_for=_off_on(6))
+    assert trend.lap_one_reference_n == 2
+    assert trend.lap_one_cost_s is None
+
+
+def test_a_pit_on_lap_one_is_not_a_lap_one_cost():
+    from dataclasses import replace
+
+    race = [160.0, 91.0, 91.0, 91.0, 90.0, 90.2, 89.8, 90.1]
+    laps = _laps(race)
+    laps[0] = replace(laps[0], is_pit_lap=True)
+    trend = session_trend(laps, kind="race", evidence_for=_off_on())
+    assert trend.lap_one_cost_s is None
+    assert any("pit lap" in line for line in trend.silences)
+
+
+def test_a_rolling_start_says_so():
+    race = [100.0, 91.0, 91.0, 91.0, 90.0, 90.2, 89.8, 90.1]
+    trend = session_trend(_laps(race), kind="race", start_type="Rolling",
+                          evidence_for=_off_on())
+    assert trend.lap_one_cost_s is not None
+    assert any("rolling start" in line for line in trend.silences)
+
+
+def test_no_spread_over_laps_nobody_screened():
+    """Critic 6: "sd 10.247 s (n=2)" off laps with no incident verdict."""
+    trend = session_trend(_laps([95.0, 90.0, 100.2]), kind="practice",
+                          evidence_for=_off_on())
+    assert trend.incidents is None and trend.consistency_sd_s is None
+
+
 def test_one_lap_of_spread_is_not_a_spread():
     trend = session_trend(_laps([95.0, 90.0]), kind="practice",
                           evidence_for=_off_on())

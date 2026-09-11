@@ -44,12 +44,23 @@ class PitLoss:
     fuel_added_l: float | None
     refuel_rate_lps: float | None
     stop_lap: int
+    # What the two rows recorded going in, whether or not it could be taken
+    # off - so "no fill on file" is never said of a stop that had one.
+    fill_seen_l: float | None = None
 
     @property
     def method(self) -> str:
-        fuel = (f"{self.fuel_added_l:.1f} L at {self.refuel_rate_lps:.2f} L/s "
-                f"taken off" if self.fuel_added_l and self.refuel_rate_lps
-                else "no fuel term")
+        if self.fuel_added_l and self.refuel_rate_lps:
+            fuel = (f"{self.fuel_added_l:.1f} L at {self.refuel_rate_lps:.2f} "
+                    f"L/s taken off")
+        elif self.fill_seen_l is None:
+            fuel = "no fill on file"
+        elif self.fill_seen_l < MIN_FILL_L:
+            fuel = (f"{self.fill_seen_l:.1f} L on file - under "
+                    f"{MIN_FILL_L:.0f} L, so no fuel term")
+        else:
+            fuel = (f"{self.fill_seen_l:.1f} L on file but no refuel rate to "
+                    f"take it off")
         return (f"(in {self.in_lap_ms / 1000:.1f} s + out "
                 f"{self.out_lap_ms / 1000:.1f} s) - 2 x clean "
                 f"{self.clean_lap_ms / 1000:.1f} s over {self.clean_laps} laps; "
@@ -92,9 +103,16 @@ def measure(laps: list, *, refuel_rate_lps: float | None) -> list[PitLoss]:
         if in_ms <= 0 or out_ms <= 0:
             continue
         total = (in_ms + out_ms) / 1000.0 - 2.0 * reference / 1000.0
-        added = row.get("fuel_added_l")
-        if added is None:
-            added = following.get("fuel_added_l")
+        # **Both rows, summed** (critic 6 on row 2.5). The fill was taken
+        # from the in-lap and only fell back to the out-lap on a None - and
+        # Daytona's in-lap stores 0.0 while its out-lap stores the 49 L, so
+        # the 0.0 was read as "no fill", the fuel term was dropped, and 72 s
+        # with the refuelling inside it was stored as the circuit's measured
+        # pit loss. A 0.0 on one row is "not on this row", not "none" (rule 3).
+        seen = [float(value) for value in (row.get("fuel_added_l"),
+                                           following.get("fuel_added_l"))
+                if value is not None]
+        added = sum(seen) if seen else None
         fuel_term = 0.0
         fuel_l = None
         if added is not None and added >= MIN_FILL_L and refuel_rate_lps:
@@ -107,7 +125,7 @@ def measure(laps: list, *, refuel_rate_lps: float | None) -> list[PitLoss]:
                            fuel_added_l=fuel_l,
                            refuel_rate_lps=(float(refuel_rate_lps)
                                             if fuel_l is not None else None),
-                           stop_lap=num))
+                           stop_lap=num, fill_seen_l=added))
     return out
 
 
