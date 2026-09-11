@@ -2268,6 +2268,42 @@ as a dead tool - on its first run, also my own "`SetupSheet` ... went with"
 in `mechanic.md`, which did not say removed. 118 ledger rows, all 13
 columns.
 
+**Critic 5, pass 2 on 2.8 part 1 (`afc0d5d`): NOT AGREED - and the lesson
+is in how the fixes were being made.** The retired LSD rule was still
+binding in the `gt7-brain` skill ("Express LSD in absolutes until then"),
+which loads on every setup question and which the test did not scan; and
+`00-INDEX.md` still named the retired artifact's range library, with `11`
+as its persistence layer. **Two passes running, each fix had covered only
+the phrasings its critic named.** So this pass began with a sweep of every
+skill and every brain file for any line pairing LSD with "absolute", any
+"ABSOLUTES", and any "until ... re-read" gate, sorted into live and history,
+and fixed the live ones at once: the `gt7-brain` rule, `00-INDEX`'s gate
+and range-library paragraphs, `02`'s gate, `11`'s two present-tense 0-99
+lines, RECONCILIATION D3, and two more archived differential headers.
+`test_e2` now scans every skill, reads paragraphs rather than lines (a rule
+and the note retiring it are often a wrapped line apart), and carries every
+phrasing the sweep found - **and it was shown to fail on the unpatched
+files, flagging all six live places, before it was trusted to pass.**
+
+**Critic 6, pass 2 on 2.5/2.11 (`0958a02`): NOT AGREED, two majors, fixed.**
+(1) **My Fuji fix went the wrong way**: "[6, 14]" put the out-lap in stint 1
+and had him box a lap late; he boxed on lap 5. A stop now closes on its
+first pit row and the out-lap opens the next stint - Fuji "[5, 15]",
+Daytona still "[12, 8]". (2) **"Measured - compares it with itself" told
+him nothing**: Daytona's stored 72.28 s is the s143 stop's *total*, fill
+inside, stored as the ex-fuel figure. The event's figure is now matched
+against every race session's stops, and a total with a fill in it is
+called that - "about 49 s high; the correction waits for the driver's
+yes" - and the earlier Daytona race is told which session it came from.
+Minors: a hand strike is quoted by the export's own rule (`_driver_note`),
+not the app's placeholder, and on its session's row; a stored incident on
+a pit lap is named; "the app's 20 s default" only for a figure of 20; a
+lap one stored as an incident says its cost includes it. **Its mutation
+sweep left eight untested branches; each has a test now** - the two
+consistency guards separately, the radio filter through a fake store, the
+stored pit lap, and the rehearsal label, wear strip and race length as pure
+helpers.
+
 **2.6 - every stop carries its tyres decision.** `Handover.validate` refuses
 a plan whose stints after the first carry no `tyres` (absent or null): the
 box call otherwise names the compound as a bare "RS." - "fit RS" under a
