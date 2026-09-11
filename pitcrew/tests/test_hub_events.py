@@ -495,6 +495,180 @@ def test_bop_survives_the_calendar_pick_of_an_incomplete_round(
     assert saved["weight_limit_kg"] == 1243.0
 
 
+# A second circuit, for the tests that need two rounds at once.
+ELSEWHERE = "Circuit de Spa-Francorchamps"
+
+
+def _hub_stating(tmp_path, monkeypatch, rounds, *, name="regs", **regs):
+    """A hub whose series states BoP and the limits.
+
+    `hub_at` builds the plain GR3 series, which states none of the four
+    hub-only columns - and those columns are what these tests are about.
+    """
+    blob = {**GR3, "carRegulations": {**GR3.get("carRegulations", {}), **regs}}
+    path = tmp_path / f"{name}.db"
+    db = sqlite3.connect(path)
+    db.executescript(SCHEMA)
+    db.execute("INSERT INTO Series (id, name, status, defaultLobbySettings) "
+               "VALUES ('s1', 'NGR GR3', 'ACTIVE', ?)", (json.dumps(blob),))
+    db.execute("INSERT INTO Driver VALUES ('d1', 'u1', 'Beeni', 'Beeni-187')")
+    db.execute("INSERT INTO SeriesRegistration VALUES "
+               "('sr1', 's1', 'd1', 'Lamborghini Huracan GT3', 'OK')")
+    for rid, track in rounds:
+        db.execute("INSERT INTO Round VALUES "
+                   "(?, 's1', ?, ?, 'SCHEDULED', 1, ?, 'null')",
+                   (rid, rid, SOON, track))
+    db.commit()
+    db.close()
+    monkeypatch.setattr(hub_read, "DEFAULT_PATH", path)
+    return path
+
+
+def _mine(controller, store, name, track):
+    """An event of his own at that circuit, in the car he is registered in -
+    which is what makes the calendar infer the link."""
+    controller._on_event_saved(an_event(
+        name=name, track=track, layout="Full Course",
+        car_name="Lamborghini Huracan GT3"))
+    return store.active_event_id()
+
+
+def _link_all(controller):
+    """The launch path's inference, without the launch."""
+    for proposal in controller.hub_proposals():
+        if proposal.event_id is not None:
+            controller._link_round(proposal)
+
+
+def test_a_switch_says_the_hub_news_instead_of_overwriting_it(
+        wired, tmp_path, monkeypatch):
+    """**The critic on row 2.7, pass 5, MAJOR** (its repro, kept).
+
+    `switch_event` rebuilt the footer out of its own regulation comparison and
+    wrote it over the one `load_active_event` had just composed. The
+    comparison survived that, because the switch did it again; everything else
+    did not - above all "From the hub: BoP is now on for this round", which is
+    the whole of row 2.7's news, appears on no other screen, and cannot be
+    said a second time: the round has been spent and the stored value now
+    agrees with the hub. On the ordinary route between two events he was told
+    nothing, while the sheet quietly changed underneath him.
+    """
+    _hub_stating(tmp_path, monkeypatch, (("r1", COMPLETE), ("r2", ELSEWHERE)),
+                 bopEnabled=True, powerLimitBhp=509)
+    controller, event_screen, _, store = wired
+    mine = _mine(controller, store, "Mine A", COMPLETE)
+    _mine(controller, store, "Mine B", ELSEWHERE)
+    _link_all(controller)
+
+    controller.switch_event(mine)
+
+    footer = event_screen.footer_note.text()
+    assert "Working on Mine A" in footer            # the switch's own line
+    assert "From the hub:" in footer                # and the load's, kept
+    assert "linked to" in footer
+    assert "BoP is now on for this round" in footer
+    assert store.get_event(mine)["bop_enabled"] == 1
+
+
+def test_a_round_whose_write_failed_is_still_known_to_be_inferred(
+        wired, tmp_path, monkeypatch):
+    """**Pass 5, minor 2.** The round was spent above the write it justifies,
+    so an `update_event` that raised left the row unwritten, the footer silent
+    and the link unsayable ever after - the one thing that knew the match was
+    inferred having already been thrown away."""
+    _hub_stating(tmp_path, monkeypatch, (("r1", COMPLETE),),
+                 bopEnabled=True, powerLimitBhp=509)
+    controller, event_screen, _, store = wired
+    mine = _mine(controller, store, "Mine A", COMPLETE)
+    _link_all(controller)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("the database went away")
+
+    # Restored by hand, not with `monkeypatch.undo()`: that would put the
+    # hub's path back as well, and the second half of this test needs the hub.
+    wrote = store.update_event
+    store.update_event = boom
+    try:
+        controller.load_active_event()
+    finally:
+        store.update_event = wrote
+
+    assert "r1" in controller._adopted_rounds, "spent on a write that failed"
+    assert store.get_event(mine)["bop_enabled"] is None
+
+    controller.load_active_event()
+
+    footer = event_screen.footer_note.text()
+    assert "linked to" in footer and "BoP is now on" in footer
+    assert store.get_event(mine)["bop_enabled"] == 1
+    assert "r1" not in controller._adopted_rounds, "and spent once it lands"
+
+
+def test_an_event_that_already_agrees_is_told_it_was_linked_and_spends_it(
+        wired, tmp_path, monkeypatch):
+    """**Pass 5, minor 3.** The link was said only alongside a fill, and the
+    round was spent only alongside one - so an event whose stored values
+    already matched the hub was never told it had been matched at all, and
+    kept the round remembered indefinitely. The next genuine change, whole
+    loads later, was then announced as a fresh link: "linked to NGR GR3 Rd 6
+    by circuit and car; BoP is now off", crediting a match that had nothing to
+    do with it. The link is news on its own."""
+    _hub_stating(tmp_path, monkeypatch, (("r1", COMPLETE),), name="on",
+                 bopEnabled=True, powerLimitBhp=509)
+    controller, event_screen, _, store = wired
+    controller._on_event_saved(an_event(
+        name="Mine A", track=COMPLETE, layout="Full Course",
+        car_name="Lamborghini Huracan GT3",
+        bop_enabled=1, power_limit_bhp=509.0))
+    _link_all(controller)
+
+    controller.load_active_event()                  # nothing to fill
+
+    assert "linked to" in event_screen.footer_note.text()
+    assert "r1" not in controller._adopted_rounds
+
+    # The league turns BoP off. That is a change, and only a change.
+    # Nothing to invalidate: `hub_proposals` re-reads the file every call, on
+    # purpose - a cache there would be state outliving a session.
+    _hub_stating(tmp_path, monkeypatch, (("r1", COMPLETE),), name="off",
+                 bopEnabled=False, powerLimitBhp=509)
+    controller.load_active_event()
+
+    footer = event_screen.footer_note.text()
+    assert "BoP is now off for this round" in footer
+    assert "linked to" not in footer, "a change is not a fresh match"
+
+
+def test_spending_one_inferred_round_does_not_spend_the_other(
+        wired, tmp_path, monkeypatch):
+    """**Pass 5, minor 4** - the discard was pinned by nothing, and three
+    mutants lived: never spending, spending every remembered round, and
+    dropping the discard while keeping the notes. Each round is spent by its
+    own event's load, and by no other."""
+    _hub_stating(tmp_path, monkeypatch, (("r1", COMPLETE), ("r2", ELSEWHERE)),
+                 bopEnabled=True, powerLimitBhp=509)
+    controller, event_screen, _, store = wired
+    first = _mine(controller, store, "Mine A", COMPLETE)
+    second = _mine(controller, store, "Mine B", ELSEWHERE)
+    _link_all(controller)
+    assert controller._adopted_rounds == {"r1", "r2"}
+
+    controller.switch_event(first)
+
+    assert controller._adopted_rounds == {"r2"}, "one load, one round spent"
+    assert "linked to" in event_screen.footer_note.text()
+
+    controller.switch_event(second)
+
+    assert controller._adopted_rounds == set()
+    assert "linked to" in event_screen.footer_note.text()
+
+    controller.switch_event(first)
+
+    assert "linked to" not in event_screen.footer_note.text(), "said once"
+
+
 def _bop_hub(tmp_path, monkeypatch, *, bop=True, tuning=True, power=None,
              weight=None, name="bop-league.db"):
     """A one-round hub with these car regulations."""

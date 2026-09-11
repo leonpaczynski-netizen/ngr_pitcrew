@@ -1693,14 +1693,20 @@ class PitCrewController(QObject):
         # has wrong. But `mandatory_stops = 0` on a round the league publishes
         # as a mandatory one-stop is an input to the strategy engine, and it
         # has been sitting there unnoticed because nothing could compare them.
-        # `load_active_event` above has already put any disagreement with the
-        # hub on the footer; this replaces it with the switch's own line plus
-        # the same comparison, so the two paths cannot say different things.
-        differences = self._regulation_differences(event)
+        #
+        # **Prefixed to what `load_active_event` just said, never instead of
+        # it** (pass 5, MAJOR). This rebuilt the footer from its own
+        # comparison, which said the disagreement again and silently lost
+        # everything else on it - above all "From the hub: BoP is now on for
+        # this round", which is the whole of rows 2.7's news, is said on no
+        # other screen, and cannot be said again: the round is spent and the
+        # stored value now matches the hub. Same parts, one builder, so the
+        # two paths genuinely cannot say different things.
+        said, warn = getattr(self, "_calendar_news", ([], False))
         note = f"Working on {event['name']}. {recorded}"
-        if differences:
-            note += " Against the hub: " + "; ".join(differences) + "."
-        self.event_screen.note(note, warn=bool(differences))
+        if said:
+            note += " " + " ".join(said)
+        self.event_screen.note(note, warn=warn)
 
     def _regulation_differences(self, event: dict, proposal=...) -> list[str]:
         """How this event's regulations differ from the league's published ones.
@@ -1764,6 +1770,24 @@ class PitCrewController(QObject):
             proposal = self._proposal(round_id)
             if proposal is None:
                 return event, None, []
+            # **`adopted` is already false by the time we get here** (the
+            # critic on row 2.7, pass 4, MAJOR): `_link_round` writes the
+            # round id before any load, and `upcoming()` then resolves the
+            # event through `known_rounds` rather than inferring it again.
+            # So the fact is carried from the link itself, and spent once.
+            #
+            # **Decided above the fill, and the link said on its own** (pass
+            # 5, minor 3). Below it, an event whose stored values already
+            # agreed with the hub returned early with the round still
+            # remembered - and the next genuine change, whole loads later,
+            # was announced as "linked to ... by circuit and car", crediting
+            # a fresh match for something that had nothing to do with it.
+            # The link is news whether or not anything follows from it.
+            inferred = getattr(self, "_adopted_rounds", set())
+            adopted = bool(getattr(proposal, "adopted", False)) \
+                or round_id in inferred
+            linked = ([f"linked to {proposal.name} by circuit and car"]
+                      if adopted else [])
             if not any(proposal.regs.get(key) is not None
                        for key in self.HUB_ONLY):
                 # Said nowhere else: a round that states none of them leaves
@@ -1771,35 +1795,32 @@ class PitCrewController(QObject):
                 # from agreement (pass 3, minor 4).
                 log("pitcrew").info(
                     "calendar: round %s states no BoP, tuning or limits", round_id)
-                return event, proposal, []
+                inferred.discard(round_id)
+                return event, proposal, linked
             fill = {key: proposal.regs[key] for key in self.HUB_ONLY
                     if proposal.regs.get(key) is not None
                     and event.get(key) != proposal.regs[key]}
             if not fill:
-                return event, proposal, []
+                inferred.discard(round_id)
+                return event, proposal, linked
             # **Worded before the write, so a raise here cannot leave the row
             # updated, the form stale and the change unsaid** (pass 3, minor
             # 2). A first fill is not news - except on a match the calendar
             # INFERRED from circuit and car, where the link itself is the
             # thing he was never told (minor 1).
-            # **`adopted` is already false by the time we get here** (the
-            # critic on row 2.7, pass 4, MAJOR): `_link_round` writes the
-            # round id before any load, and `upcoming()` then resolves the
-            # event through `known_rounds` rather than inferring it again.
-            # So the fact is carried from the link itself, and spent once.
-            inferred = getattr(self, "_adopted_rounds", set())
-            adopted = bool(getattr(proposal, "adopted", False)) \
-                or round_id in inferred
-            inferred.discard(round_id)
             notes = [self._said_change(key, event.get(key), value)
                      for key, value in fill.items()
                      if event.get(key) is not None or adopted]
-            if adopted and notes:
-                notes.insert(0, f"linked to {proposal.name} by circuit and car")
             self.store.update_event(event["id"], **fill)
+            # **Spent only once the write it justifies has been made** (pass
+            # 5, minor 2). Above the write, a `update_event` that raised left
+            # the round already spent: the row unwritten, the footer silent,
+            # and the link unsayable on every load afterwards, because the one
+            # thing that knew the match was inferred had been thrown away.
+            inferred.discard(round_id)
             log("pitcrew").info("calendar: %s took %s from the hub (round %s)",
                                 event.get("name"), fill, round_id)
-            return {**event, **fill}, proposal, notes
+            return {**event, **fill}, proposal, linked + notes
         except Exception:
             log("pitcrew").exception("the hub's regulations could not be read in")
             return event, None, []
@@ -1831,9 +1852,16 @@ class PitCrewController(QObject):
                        if event else [])
         if differences:
             said.append("Against the hub: " + "; ".join(differences) + ".")
+        warn = bool(differences or applied)
+        # **Kept, because this is the only builder and the other paths read
+        # it** (pass 5, MAJOR). `switch_event` used to compose a rival footer
+        # out of its own comparison and write it over this one, which dropped
+        # every "From the hub:" clause - the BoP and limit changes that are
+        # said nowhere else, and that no later load can repeat, the round
+        # having been spent and the stored values now agreeing.
+        self._calendar_news = (said, warn)
         if said:
-            self.event_screen.note(" ".join(said),
-                                   warn=bool(differences or applied))
+            self.event_screen.note(" ".join(said), warn=warn)
 
     def _refresh_event_picker(self, active_id) -> None:
         """Fill the picker: the stored events, then the rounds still to come.
@@ -1970,9 +1998,19 @@ class PitCrewController(QObject):
             self._link_round(proposal)
             self.switch_event(proposal.event_id)
             if proposal.adopted:
+                # **Added to the switch's footer, not written over it** - the
+                # same fault as pass 5's MAJOR, one layer further out. This
+                # path is exactly the one that infers a link, so the footer it
+                # was replacing is the one carrying "linked to ... by circuit
+                # and car" and the BoP that came with it.
+                said = self.event_screen.footer_note.text()
+                # The warning carries too, or a footer that was a warning is
+                # quietly demoted to a note by the sentence appended to it.
+                _, warn = getattr(self, "_calendar_news", ([], False))
                 self.event_screen.note(
-                    f"{proposal.name} is the event you already had here, so "
-                    f"it is that one you are working on - not a second copy.")
+                    f"{said} {proposal.name} is the event you already had "
+                    f"here, so it is that one you are working on - not a "
+                    f"second copy.".strip(), warn=warn)
             return
 
         if proposal.known:

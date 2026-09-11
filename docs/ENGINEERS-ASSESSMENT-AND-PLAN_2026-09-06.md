@@ -2529,6 +2529,44 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Critic on 2.7, pass 5 (`4cf5dbc`): NOT AGREED - one major, three minors,
+fixed.** The carry itself was verified sound - the critic's corrected mutants
+killed it in both directions - but everything it produces was being destroyed
+on the ordinary route between two events.
+- **Major: `switch_event` threw the hub's news away, and nothing could ever
+  say it again.** It rebuilt the footer out of its own regulation comparison
+  and wrote it over the one `load_active_event` had just composed. The
+  comparison survived, because the switch repeated it; every "From the hub:"
+  clause did not - the BoP and the limits, which appear on no other screen.
+  And they cannot be repeated: by then the round is spent and the stored value
+  agrees with the hub, so no later load has anything to say. The stored value
+  was right and Ludo's instruction was right; the driver was simply never
+  told. **One note builder now**: `_say_calendar_news` keeps what it composed
+  in `_calendar_news`, and the switch prefixes its own line to those parts
+  instead of replacing them. The two paths cannot say different things because
+  there is only one thing.
+- **Minor: the round was spent above the write it justifies.** An
+  `update_event` that raised left the row unwritten, the footer silent and the
+  link unsayable ever after - the one fact that knew the match was inferred
+  having already been discarded. Moved below the write. Same spend-before-act
+  shape as pass 3's minor 2.
+- **Minor: a load with nothing to fill left the round remembered for good.**
+  The early return sat above the discard, so an event whose values already
+  agreed was never told it had been matched - and the next genuine change,
+  whole loads later, was announced as "linked to ... by circuit and car",
+  crediting a fresh match for something unrelated to it. **The link is news on
+  its own now**, said and spent whether or not a fill follows.
+- **Minor: the discard was pinned by nothing** - three mutants lived. Four
+  tests added, asserting on the remembered set itself.
+- **Found while fixing it, same class one layer out:** `_switch_to_round`
+  calls `switch_event` and then overwrote *its* footer for an adopted round -
+  which is the one path that infers a link, so the note being replaced was the
+  one carrying it. It appends now, and carries the warning with it.
+- **Proof:** five mutants, all killed - the switch rebuilding its own footer,
+  the discard back above the write, the no-fill return dropping the link,
+  `inferred.clear()` for `discard`, and the discard removed entirely. Suite:
+  4750 passed, 5 skipped.
+
 **Critic on 2.8 part 2, pass 8 (`5a01a32`): NOT AGREED - one major, two
 minors, fixed.**
 - **Major: the span rule fixed the examples, not the class.** Pass 7's
