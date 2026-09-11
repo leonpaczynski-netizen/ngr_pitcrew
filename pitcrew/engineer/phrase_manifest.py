@@ -122,6 +122,11 @@ PERCENT = "percent"
 
 def number_word(value: int) -> str:
     """English for a whole number. Only as far as the ranges above need."""
+    # **A full tank is a hundred litres**, and a fill to 100 indexed past
+    # `TENS_WORDS` here - so the one figure most likely at a long-stint stop
+    # could never be played from the pack (11 Sep 2026).
+    if value == 100:
+        return "one hundred"
     if value < 20:
         return NUMBER_WORDS[value]
     tens, units = divmod(value, 10)
@@ -304,6 +309,129 @@ def tyre_word_lines() -> tuple[str, ...]:
     return tuple(dict.fromkeys(lines))
 
 
+def _box_fuel_states() -> list:
+    """Box calls as a race with a measured burn makes them.
+
+    **The coverage sweep never had one** (critic 3 on the voice batch, 11
+    Sep 2026): every box state here carried no fuel data, so no swept call
+    carried a fuel figure - and no race with a burn makes any other. Every
+    reason branch, every tyre decision, all three fuel sentences, and each
+    basis the fill names.
+    """
+    states = []
+    reasons = (dict(mandatory_stops_left=1),
+               dict(mandatory_stops_left=None),
+               dict(mandatory_stops_left=0, plan_binding_constraint="fuel"),
+               dict(mandatory_stops_left=0, plan_binding_constraint="tyre"))
+    fuels = (dict(fuel_l=10.0, fuel_per_lap_l=3.0),            # fuel to N
+             dict(fuel_l=60.0, fuel_per_lap_l=3.0),            # fuel is fine
+             dict(fuel_l=2.0, fuel_per_lap_l=9.0))             # fuel to full
+    bases = (dict(next_stint_laps=8, further_stop_planned=False),
+             dict(next_stint_laps=8, further_stop_planned=False,
+                  crossed_in_box=True),
+             dict(next_stint_laps=9, further_stop_planned=True),
+             dict(next_stint_laps=None, further_stop_planned=None))
+    for reason in reasons:
+        for fuel in fuels:
+            for basis in bases:
+                for tyres in (True, False, None):
+                    states.append(_state(
+                        lap=12, laps_total=20, stint_ends_on_lap=12,
+                        fuel_capacity_l=100.0, next_compound="RS",
+                        next_tyres=tyres, **reason, **fuel, **basis))
+    return states
+
+
+@lru_cache(maxsize=1)
+def reason_lines() -> tuple[str, ...]:
+    """Every whole sentence a call's reason says with no number in it.
+
+    **Peelable, which they were not** (critic 3). "The regulations need a
+    stop." was a clip and `_decompose` could not peel it, because nothing
+    put the reasons in `_reusable_lines` - so the peel stopped at the
+    reason and the fuel sentence behind it landed as one two-number clause,
+    filed as a declared gap. Taken from the calls' own reasons, sentence by
+    sentence, so a reworded reason is a re-rendered clip.
+    """
+    from pitcrew.race.calls import next_call
+
+    lines = []
+    for state in [*_call_states(), *_box_fuel_states()]:
+        call = next_call(state)
+        if call is None or not call.reason:
+            continue
+        for sentence in re.split(r"(?<=\.)\s+", call.reason):
+            if sentence and not re.search(r"\d", sentence):
+                lines.append(sentence)
+    return tuple(dict.fromkeys(lines))
+
+
+@lru_cache(maxsize=1)
+def fuel_sentence_fragments() -> tuple[str, ...]:
+    """The words around the numbers of the fuel sentence.
+
+    The fill sentence carries two numbers - the litres and the laps they
+    are for - and `_split_on_number` refuses two, so it was filed as
+    combinatorial. It is not: the words between its numbers are a handful,
+    and they are taken here from `_fuel_instruction` itself over every basis
+    the fill can name, so `_split_on_numbers` can play the sentence from
+    these and the number words.
+    """
+    from pitcrew.race.calls import _fuel_instruction
+
+    fragments = []
+    for state in _box_fuel_states():
+        for sentence in re.split(r"(?<=\.)\s+", _fuel_instruction(state)):
+            pieces = _text_between_numbers(sentence)
+            if pieces is not None and len(pieces) > 1:
+                fragments.extend(piece for piece in pieces if piece)
+    return tuple(dict.fromkeys(fragments))
+
+
+def _text_between_numbers(sentence: str) -> list[str] | None:
+    """The text on either side of every number in `sentence`, stripped."""
+    matches = list(_NUMBER.finditer(sentence))
+    if not matches:
+        return None
+    pieces, cursor = [], 0
+    for match in matches:
+        pieces.append(sentence[cursor:match.start()].strip())
+        cursor = match.end()
+    tail = sentence[cursor:].strip()
+    pieces.append("" if tail in {".", "!", "?"} else tail)
+    return pieces
+
+
+def _split_on_numbers(sentence: str) -> tuple[str, ...] | None:
+    """A sentence of several numbers, as its words and number words.
+
+    Only where every piece of text between the numbers is a declared
+    fragment - the fuel sentence's - so a combinatorial line (the plan
+    summary) is still refused rather than split into words the pack does
+    not hold.
+    """
+    matches = list(_NUMBER.finditer(sentence))
+    if len(matches) < 2:
+        return None
+    allowed = set(fuel_sentence_fragments())
+    pieces = _text_between_numbers(sentence)
+    if pieces is None or any(p and p not in allowed for p in pieces):
+        return None
+    out: list[str] = []
+    for text, match in zip(pieces, matches):
+        if text:
+            out.append(text)
+        whole = int(match.group(1))
+        if whole > MAX_FUEL_LITRES or match.group(3):
+            return None
+        out.append(number_word(whole))
+        if match.group(2) is not None:
+            out += [POINT, number_word(int(match.group(2)))]
+    if pieces[-1]:
+        out.append(pieces[-1])
+    return tuple(out)
+
+
 @lru_cache(maxsize=1)
 def number_fragments() -> tuple[str, ...]:
     """The number words, shared by every line assembled from parts.
@@ -312,7 +440,7 @@ def number_fragments() -> tuple[str, ...]:
     between them would be thousands of whole clips. One set of number words
     serves all of them, which is how a pre-recorded pack has always worked.
     """
-    return tuple(number_word(n) for n in range(0, MAX_LAPS + 1))
+    return tuple(number_word(n) for n in range(0, MAX_FUEL_LITRES + 1))
 
 
 def fuel_fragments() -> tuple[str, ...]:
@@ -571,6 +699,8 @@ def _call_states() -> list:
     states += [_state(lap=6, laps_total=16, fuel_l=onboard,
                       fuel_per_lap_l=1.0)
                for onboard in _fuel_short_onboard()]
+    # The box call with its fuel figure, so its segments are rendered.
+    states += _box_fuel_states()
     # Every compound the plan can call for, on a box-now.
     states += [_state(lap=6, stint_ends_on_lap=6, next_compound=code)
                for code in _compound_words()]
@@ -834,6 +964,8 @@ def clips() -> tuple[str, ...]:
         *box_fuel_lines(),
         *compound_lines(),
         *tyre_word_lines(),
+        *reason_lines(),
+        *fuel_sentence_fragments(),
         *plan_single_part_lines(),
         *number_fragments(),
         *fuel_fragments(),
@@ -883,6 +1015,9 @@ def _reusable_lines() -> frozenset[str]:
                       # "Box this lap. RS on. 3 laps overdue." is three
                       # clips and a number rather than one miss.
                       *tyre_word_lines(),
+                      # And the reasons, so the peel reaches the fuel
+                      # sentence behind them (critic 3).
+                      *reason_lines(),
                       # The engineer's position call is a position line and a
                       # place-change line, both whole and both already here -
                       # so the call itself costs the pack nothing.
@@ -906,7 +1041,7 @@ def _split_on_number(sentence: str) -> tuple[str, ...] | None:
         return None
     match = _NUMBER.search(sentence)
     whole = int(match.group(1))
-    if whole > MAX_LAPS:
+    if whole > MAX_FUEL_LITRES:
         return None
     number = [number_word(whole)]
     if match.group(2) is not None:
@@ -958,7 +1093,7 @@ def _decompose(text: str) -> tuple[str, ...]:
         # the clock, the laps remaining and the fuel - so stopping at the
         # first would have made every crossing of the race a pack miss, and
         # rendering the combinations whole is tens of thousands of files.
-        split = _split_on_number(sentence)
+        split = _split_on_number(sentence) or _split_on_numbers(sentence)
         if split is None:
             break
         parts.extend(split)
@@ -972,7 +1107,7 @@ def _decompose(text: str) -> tuple[str, ...]:
     # went on asking for a wav containing a full stop while the per-sentence
     # path had stopped. A line that asks for a clip the manifest no longer
     # declares is a silent miss and a live synthesis.
-    split = _split_on_number(rest)
+    split = _split_on_number(rest) or _split_on_numbers(rest)
     if split is None:
         # No number, or several: several means the line is combinatorial - the
         # plan summary is the one that reaches here - and splitting it would
@@ -1051,6 +1186,8 @@ def race_call_examples() -> tuple[str, ...]:
     word would hide.
     """
     states = list(_call_states())
+    # The box call a real race makes, with its fuel figure (critic 3).
+    states += _box_fuel_states()
     states += [_state(lap=0, laps_total=n) for n in range(1, MAX_LAPS + 1)]
     states += [_state(lap=6, finished=True, position=n)
                for n in range(1, MAX_POSITION + 1)]

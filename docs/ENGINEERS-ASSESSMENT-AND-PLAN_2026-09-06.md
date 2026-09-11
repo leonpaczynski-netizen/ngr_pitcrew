@@ -1908,6 +1908,50 @@ recost or report, never `drop_stop`, so `stop_still_needed` is always True
 and the latch cannot fire on any plan on file today — below a gap that fires
 on every stop.
 
+**Critic pass 3 on the storage row — NOT AGREED, a BLOCKER in pass 2's own
+fix.** The context check pass 2 added put an app crash on the Approve
+button: `stamp` checked the context's keys and not its values, so a desk
+typo - `"race_laps": "twenty"`, `"race_minutes": "50"` - stored clean and
+`int()` raised inside `built_for_another_race`, uncaught (PyQt aborts after
+the excepthook); `write_strategy` returned `int()`'s own message, the exact
+thing item 3 of this row removed. `execution._context_problem` now reads the
+values once, in the one shape check every door and the grid ask, and refuses
+by field name; a null distance is refused rather than read as "0 laps"
+(rule 3). **MAJOR:** the in-week warning was set when true and never taken
+down, so after he re-approved the plan the Race page still said it would not
+arm - it is taken down now, and only that warning. Minors fixed: the week's
+warning names a plan for another race too (the grid's own `matches` words)
+and says nothing when he has chosen not to use the plan; `write_strategy`
+reports a foreign plan under `builtForAnotherRace`, so `certified: True`
+and the certificate's empty refusals no longer sit beside a refusal in one
+reply; the `pit_laps` no-start-laps guard is pinned.
+
+**Critic pass 1 on the voice batch — NOT AGREED, and the probe that scoped
+it had the same blind spot as its test.** Every box state in the sweep
+carried no fuel data, and no race with a measured burn makes that call: with
+a burn it says *"Box this lap. RS on. The regulations need a stop. Fuel to
+24 litres - 7 laps after the box."*, the reason sentences were clips but not
+peelable, the fuel sentence carries two numbers, and the whole call was
+filed as a declared gap - 588 box lines declared and 306 missing in the
+critic's sweep, on the call he acts on at every stop. And the declared-gap
+test accepted any "numbers left" line whatever kind of call it was. Now:
+`reason_lines` (the calls' own reason sentences) are peelable;
+`fuel_sentence_fragments`, taken from `_fuel_instruction` over every basis,
+let `_split_on_numbers` play a sentence of several numbers when every word
+between them is declared; the sweep carries fuel-bearing box states; and a
+box call may never be declared (the undercut is the named exception - its
+reason carries the rival's name, and the engine plays a line from the pack
+only whole). **Two defects found under the fix:** `number_word(100)` indexed
+past `TENS_WORDS`, so "Fuel to 100 litres" - a full tank - could never play;
+and a last-lap stop said *"1 laps after the box."* Minors fixed: "steady" is
+no longer said from no trend at all (a slope through too few laps still is
+- the board's pinned word); a side named in other words ("what's the gap
+behind") is read; a gap of zero or less is not a reading, and one under a
+twentieth is said "within a tenth". Left and recorded: full compound names
+in the "X on." form (the plan stores codes), answered GAP lines are live
+(they carry a name), and a cut assumption can lose a trailing qualifier
+behind its "…" (the whole line is on the tooltip on the Strategy page).
+
 ### The cancelled-stop latch — build (11 Sep 2026)
 
 Rule 10's two guards, both. **The retirement latches when he is told** —

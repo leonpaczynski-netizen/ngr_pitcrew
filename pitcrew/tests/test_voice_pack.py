@@ -116,6 +116,20 @@ def test_every_declared_gap_is_one_of_the_two_named_ones():
     uncovered = [line for line in sweep()
                  if manifest.uncovered_reason(line)]
     assert uncovered, "the plan summary should still be a declared gap"
+    # **A box call is never a declared gap** (critic 3 on the voice batch):
+    # this accepted any line whose reason said "numbers left", whatever it
+    # was, and 588 box calls with a fuel figure hid behind it. The undercut
+    # is the named exception - its reason carries the rival's name, which
+    # no clip can hold, and the engine plays a line from the pack only whole.
+    openers = ("Box this lap.", "Box next lap.", "Box in ",
+               "The stop is back on.")
+    # The plan SUMMARY ("Box in 4 laps, onto Racing Medium.") is the
+    # push-to-talk answer that is combinatorial by design, not a call; what
+    # is forbidden is a box CALL filed for its numbers.
+    boxed = [line for line in uncovered
+             if line.startswith(openers) and "Undercut on" not in line
+             and "combinatorial" not in manifest.uncovered_reason(line)]
+    assert not boxed, f"{len(boxed)} box calls declared, e.g. {boxed[:3]}"
     for line in uncovered:
         reason = manifest.uncovered_reason(line)
         assert "combinatorial" in reason or "numbers left" in reason, line

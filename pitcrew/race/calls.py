@@ -2242,10 +2242,15 @@ def _laps_the_fill_covers(state: RaceState) -> tuple[int | None, str | None]:
     # heartbeat counts the lap in progress; the fill before the crossing does
     # not, so it is said as "after the box" and never as "to the flag" until
     # the two counts are the same number.
-    frame = "laps to the flag" if state.crossed_in_box else "laps after the box"
+    where = "to the flag" if state.crossed_in_box else "after the box"
+
+    def counted(n: int) -> str:
+        # "1 lap", never "1 laps" - a last-lap stop said it in the plural.
+        return f"{n} {'lap' if n == 1 else 'laps'}"
+
     if state.next_stint_laps is not None:
         if state.further_stop_planned is False and remaining is not None:
-            return remaining, f"{remaining} {frame}"
+            return remaining, f"{counted(remaining)} {where}"
         stint = state.next_stint_laps
         return stint, f"the next {stint}-lap stint"
     if (state.stint_ends_on_lap is not None and state.laps_total
@@ -2254,9 +2259,9 @@ def _laps_the_fill_covers(state: RaceState) -> tuple[int | None, str | None]:
         # planned box lap, not at the current lap. Labelled as the plan's.
         laps = state.laps_total - state.stint_ends_on_lap
         if laps > 0:
-            return laps, f"{laps} laps after the planned box"
+            return laps, f"{counted(laps)} after the planned box"
     if remaining is not None:
-        return remaining, f"{remaining} {frame}"
+        return remaining, f"{counted(remaining)} {where}"
     return None, None
 
 

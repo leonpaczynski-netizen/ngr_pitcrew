@@ -445,8 +445,20 @@ def gap_side(heard: str | None) -> str | None:
     for phrase in sorted(GAP_SIDES, key=len, reverse=True):
         wanted = _WORDS.findall(phrase)
         for start in range(len(words) - len(wanted) + 1):
-            if words[start:start + len(wanted)] == wanted:
+            if words[start:start + len(wanted)] == wanted \
+                    and GAP_SIDES[phrase] is not None:
                 return GAP_SIDES[phrase]
+    # **A side named in other words** (critic 3): "what's the gap behind"
+    # reached GAP through the literal matcher, named no phrase above with a
+    # side, and was answered with the car ahead. The inverted pairs ("how
+    # far ahead am I") are phrases and have already won; "am I" anywhere
+    # else is a question about us and names no side.
+    if "am" in words and "i" in words:
+        return None
+    if "behind" in words or "back" in words:
+        return "behind"
+    if "ahead" in words or "front" in words:
+        return "ahead"
     return None
 
 
@@ -517,7 +529,9 @@ def _gap_answer(intent: str, snapshot: dict,
     for side in ("ahead", "behind"):
         key = f"gap{side.capitalize()}"
         gap = snapshot.get(f"{key}S")
-        if gap is not None:
+        # **Zero or less is not a reading**, as `_chase` has it: "0.0
+        # seconds ahead" was spoken and chosen as the nearer car (critic 3).
+        if gap is not None and gap > 0:
             read[side] = (gap, snapshot.get(f"{key}Name"),
                           snapshot.get(f"{key}ClosingSPerLap"),
                           snapshot.get(f"{key}TrendLaps"))
@@ -531,8 +545,17 @@ def _gap_answer(intent: str, snapshot: dict,
                           "straight.", intent, answered=False)
         side = asked or min(read, key=lambda s: abs(read[s][0]))
         gap, name, rate, laps = read[side]
-        who = (f"{name} is {gap:.1f} seconds {side}" if name
-               else f"The car {side} is {gap:.1f} seconds away")
+        # A gap under a twentieth reads "0.0" at one decimal - a measurement
+        # spoken as nothing (rule 9's shape), so it is said as what it is.
+        amount = (f"{gap:.1f} seconds" if gap >= 0.05
+                  else "within a tenth of a second")
+        who = (f"{name} is {amount} {side}" if name
+               else f"The car {side} is {amount} away")
+        # **No rate at all is not "steady"** (critic 3, rule 3): a single
+        # reading, or a rate with no lap count, is no slope - so no clause.
+        # A slope through too few laps IS "steady", the board's pinned word.
+        if rate is None or laps is None:
+            return Answer(f"{who}.", intent, answered=True)
         words = trend_words(side, rate, laps)
         clause = words.spoken if words is not None else "steady"
         return Answer(f"{who} - {clause}.", intent, answered=True)
