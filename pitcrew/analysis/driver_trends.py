@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from statistics import median, pstdev
 
 from pitcrew.analysis.incidents import REASON_INCIDENT, stored_or_read
-from pitcrew.analysis.runs import (EXCLUSION_REASONS, auto_out_laps,
+from pitcrew.analysis.runs import (_driver_note, auto_out_laps,
                                    classify_exclusions, split_runs)
 from pitcrew.analysis.session import counted_laps
 
@@ -126,12 +126,22 @@ def session_trend(laps, *, session_id=None, kind=None, start_type=None,
     # not as an incident, so counting it would make "incidents" mean two
     # things (rule 13) - and printing "0" beside it with nothing else would
     # hide his report (rule 1). The disagreement is shown, not averaged.
+    # **What he typed, by the export's own rule** (`runs._driver_note`, critic
+    # 6 pass 2): the app's placeholder "struck by hand" says nothing and was
+    # quoted 22 times, and "not as an incident" claimed more than a bare
+    # strike supports.
     for position, lap in enumerate(laps, 1):
-        reason = (lap.exclusion_reason or "").strip()
-        if lap.excluded and reason and reason not in EXCLUSION_REASONS:
-            quoted = reason if len(reason) <= 90 else reason[:87] + "..."
-            silences.append(f"lap {position} struck by hand, not as an "
-                            f"incident: \"{quoted}\"")
+        note = _driver_note(lap, "")
+        if note:
+            quoted = note if len(note) <= 90 else note[:87] + "..."
+            silences.append(f"lap {position} struck by hand, in his words: "
+                            f"\"{quoted}\" - not in the incident count")
+    # And a pit lap stored as an incident is not dropped without a word.
+    on_pit = [position for position, lap in enumerate(laps, 1)
+              if _stored_incident(lap) and lap.is_pit_lap]
+    if on_pit:
+        silences.append(f"lap {', '.join(map(str, on_pit))} stored as an "
+                        "incident on a pit lap - named here, not rated")
 
     # `classify_exclusions` returns new objects, so everything below reads
     # THIS list and its own `counted` flag - never identity against `marked`.
@@ -169,8 +179,12 @@ def session_trend(laps, *, session_id=None, kind=None, start_type=None,
             # `find_incidents` never judges lap one - `auto_out_laps` makes
             # every run's first lap an out-lap - so an off at the start is
             # inside this figure and in no incident count. Said, not guessed.
-            silences.append("lap one is not judged for incidents, so its "
-                            "cost may include one")
+            if _stored_incident(first):
+                silences.append("lap one is stored as an incident, so its "
+                                "cost includes it")
+            else:
+                silences.append("lap one is not judged for incidents, so "
+                                "its cost may include one")
             if "rolling" in (start_type or "").lower():
                 silences.append("a rolling start - lap one's cost is not a "
                                 "standing start's")

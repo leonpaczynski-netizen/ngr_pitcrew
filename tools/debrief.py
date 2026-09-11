@@ -354,12 +354,14 @@ def driver_variable(store, event_id: int, sessions, *, start_type=None) -> None:
         kind = session.get("kind")
         trend = session_trend(laps, session_id=session["id"], kind=kind,
                               start_type=start_type if kind == "race" else None)
-        # A rehearsal is not the league race, and says so (critic 6).
-        label = (f"{kind} (rehearsal)" if kind == "race" and session.get("rehearsal")
-                 else kind or "")
-        print(trend_line(trend, label))
+        print(trend_line(trend, session_label(kind, session.get("rehearsal"))))
         for line in trend.silences:
-            notes.setdefault(line, []).append(session["id"])
+            if "struck by hand, in his words" in line:
+                # His own words belong on his session's row, not in a pile
+                # at the bottom (critic 6, pass 2).
+                print(f"        - {line}")
+            else:
+                notes.setdefault(line, []).append(session["id"])
     for line, ids in notes.items():
         print(f"  - {line} (s{', s'.join(str(i) for i in ids)})")
 
@@ -413,21 +415,19 @@ def calls_against_outcome(store, runs) -> None:
 # ---------------------------------------------------- the race against its plan
 
 def stint_lengths(rows) -> list[int]:
-    """Laps per stint as run: a pit lap closes the stint it ends.
+    """Laps per stint as run: the pit lap that opens a stop closes the stint.
 
-    **A stop filed as two pit rows in a row is one stop** (critic 6 on row
-    2.5): at Fuji the stop straddled the line, lap 5 and lap 6 both carry the
-    pit flag, and "run [5, 1, 14]" reported a second stop after a one-lap
-    stint that nobody drove.
+    **A stop filed on two pit rows is one stop, and it closes on the first**
+    (critic 6, passes 1 and 2). At Fuji lap 5 is the in-lap and lap 6 carries
+    the pit flag, the out-lap flag and the fill - so lap 6 opens stint 2, as
+    Daytona's out-lap does. "[5, 1, 14]" invented a stop; "[6, 14]" then
+    had him box a lap later than he did.
     """
     lengths, current, previous_pit = [], 0, False
     for row in sorted(rows, key=lambda r: r.get("lap_num") or 0):
         current += 1
         pit = bool(row.get("is_pit_lap"))
-        if pit and previous_pit and lengths:
-            lengths[-1] += current
-            current = 0
-        elif pit:
+        if pit and not previous_pit:
             lengths.append(current)
             current = 0
         previous_pit = pit
@@ -436,7 +436,35 @@ def stint_lengths(rows) -> list[int]:
     return lengths
 
 
-def pit_loss_line(stop, figure, source) -> str:
+def _whose_figure(stop, figure: float, others, this_session) -> str:
+    """Which measured stop the event's figure came from, and what it holds.
+
+    **The flag stores a race's own stop onto the event** (`_record_pit_loss`),
+    and until 11 Sep it stored a stop's TOTAL - fill inside - as the ex-fuel
+    figure. So the figure is matched against every race session's stops, and
+    a total with a fill in it is called what it is (critic 6, pass 2).
+    """
+    candidates = [(this_session, stop)] + [(sid, s) for sid, s in others
+                                           if s is not stop]
+    for session_id, origin in candidates:
+        mine = origin is stop
+        where = "this stop" if mine else f"the session {session_id} stop"
+        itself = ", so this compares it with itself" if mine else ""
+        if (origin.fuel_added_l is not None
+                and abs(figure - origin.ex_fuel_s) < 0.05):
+            return f"measured at {where}, ex-fuel{itself}"
+        if abs(figure - origin.total_s) < 0.05:
+            if origin.fuel_added_l is not None:
+                return (f"stored as measured, but it is {where}'s total with "
+                        f"its {origin.fuel_added_l:.1f} L fill inside - about "
+                        f"{origin.total_s - origin.ex_fuel_s:.0f} s high; the "
+                        f"correction waits for the driver's yes")
+            return (f"measured at {where}, a ceiling - no fill could be taken "
+                    f"off{itself}")
+    return "measured"
+
+
+def pit_loss_line(stop, figure, source, *, others=(), this_session=None) -> str:
     """One measured stop against the event's own figure, in words that say
     which each is (rule 13).
 
@@ -451,18 +479,14 @@ def pit_loss_line(stop, figure, source) -> str:
         against = "no figure on the event"
     else:
         if source == "measured":
-            # The flag writes a race's own stop onto the event, so the one
-            # measured figure on file can be this stop - and then the line
-            # is a stop compared with itself (critic 6).
-            own = any(abs(float(figure) - value) < 0.05
-                      for value in (stop.total_s, stop.ex_fuel_s))
-            said = ("measured - from this very stop, so this compares it "
-                    "with itself" if own else "measured")
+            said = _whose_figure(stop, float(figure), others, this_session)
         elif source == "declared":
             # `pit_loss_source` says `declared` whether he typed it or the
-            # row was created with the app's 20 s default (store docstring).
+            # row was created with the app's 20 s default (store docstring) -
+            # which only a figure of 20 can be (critic 6, pass 2).
             said = ("declared - typed, or the app's 20 s default; the record "
-                    "cannot tell which")
+                    "cannot tell which" if abs(float(figure) - 20.0) < 0.05
+                    else "declared")
         else:
             said = "no source recorded"
         against = f"the event's {figure} s ({said})"
@@ -474,6 +498,34 @@ def pit_loss_line(stop, figure, source) -> str:
             f"against {against}; {stop.method}")
 
 
+def race_length(context) -> str:
+    """What a full race is: laps, or minutes for a timed one."""
+    laps = getattr(context, "race_laps", None)
+    minutes = getattr(context, "race_minutes", None)
+    if laps:
+        return f"{laps} laps"
+    if minutes:
+        return f"{minutes:g} minutes"
+    return "not on the event"
+
+
+def strip_fixed_wear(line: str) -> tuple[str, bool]:
+    """**Not a fixed sentence presented as this race's finding** (critic 6):
+    the audit ends its wear clause with `WEAR_CONTRADICTION`, three particular
+    gauge readings, word for word at every event. (line, whether it was cut)"""
+    from pitcrew.race.expectations import WEAR_CONTRADICTION
+
+    fixed = f"; {WEAR_CONTRADICTION}."
+    if fixed in line:
+        return line.replace(fixed, "."), True
+    return line, False
+
+
+def session_label(kind, rehearsal) -> str:
+    """A rehearsal is not the league race, and says so (critic 6)."""
+    return f"{kind} (rehearsal)" if kind == "race" and rehearsal else (kind or "")
+
+
 def against_the_plan(store, event, runs) -> None:
     """From the data, never from the plan - through the export's own
     expressions: `audit_line_from_laps` for burn, lap time and wear against
@@ -481,7 +533,7 @@ def against_the_plan(store, event, runs) -> None:
     from pitcrew.export.build import event_lap_inputs
     from pitcrew.race import pit_loss
     from pitcrew.race.coordinator import context_from_event
-    from pitcrew.race.expectations import WEAR_CONTRADICTION, audit_line_from_laps
+    from pitcrew.race.expectations import audit_line_from_laps
 
     _head("THE RACE AGAINST ITS PLAN — from the data, never from the plan")
     if not runs:
@@ -493,13 +545,16 @@ def against_the_plan(store, event, runs) -> None:
     source = event.get("pit_loss_source")
     # What a full race is, so a short recording reads as short (critic 6):
     # "run [16]" of a thirty-minute race is sixteen laps ON FILE.
-    context = context_from_event(event)
-    if getattr(context, "race_laps", None):
-        length = f"{context.race_laps} laps"
-    elif getattr(context, "race_minutes", None):
-        length = f"{context.race_minutes:g} minutes"
-    else:
-        length = "not on the event"
+    length = race_length(context_from_event(event))
+    # Every run's stops first: the event's one measured figure came from one
+    # of them, and the line for each stop has to say which.
+    measured: dict = {}
+    for run in runs:
+        rows = store.list_laps(run["session_id"]) if run.get("session_id") else []
+        measured[run["id"]] = (rows, pit_loss.measure(
+            rows, refuel_rate_lps=event.get("refuel_rate_lps")))
+    everywhere = [(run.get("session_id"), stop) for run in runs
+                  for stop in measured[run["id"]][1]]
     dropped_wear = False
     for run in runs:
         row = strategies.get(run.get("strategy_id"))
@@ -511,27 +566,21 @@ def against_the_plan(store, event, runs) -> None:
         laps = [lap for lap in race_laps if lap.session_id == run.get("session_id")]
         print(f"  run {run['id']} against strategy {row['id']} "
               f"({row.get('label') or 'unlabelled'}):")
-        line = audit_line_from_laps(plan.get("expects"), laps)
-        # **Not a fixed sentence presented as this race's finding** (critic
-        # 6): the audit ends its wear clause with `WEAR_CONTRADICTION`, three
-        # particular gauge readings, word for word at every event.
-        fixed = f"; {WEAR_CONTRADICTION}."
-        if fixed in line:
-            line = line.replace(fixed, ".")
-            dropped_wear = True
+        line, dropped = strip_fixed_wear(
+            audit_line_from_laps(plan.get("expects"), laps))
+        dropped_wear = dropped_wear or dropped
         print(f"    {line or 'the plan carried no expectation to score against'}")
-        rows = store.list_laps(run["session_id"]) if run.get("session_id") else []
+        rows, stops = measured[run["id"]]
         planned = [s.get("laps") for s in plan.get("stints") or []
                    if isinstance(s, dict)]
         print(f"    stints planned {planned or '—'}   run "
               f"{stint_lengths(rows) or '—'}   ({len(rows)} laps on file; the "
               f"race is {length})")
-        stops = pit_loss.measure(rows, refuel_rate_lps=event.get("refuel_rate_lps"))
         if not stops:
             print("    pit loss: no stop these rows can resolve (an in-lap, its "
                   "out-lap and three clean laps)")
         for stop in stops:
-            print(f"    {pit_loss_line(stop, figure, source)}")
+            print(f"    {pit_loss_line(stop, figure, source, others=everywhere, this_session=run.get('session_id'))}")
     if dropped_wear:
         print("  (the audit's fixed sentence about three old gauge readings is "
               "left out - it is\n   not this race's finding; the export still "

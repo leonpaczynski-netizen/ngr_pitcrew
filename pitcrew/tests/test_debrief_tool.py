@@ -69,11 +69,53 @@ def test_a_pit_lap_closes_the_stint_it_ends():
     assert stint_lengths([]) == []
 
 
-def test_a_stop_filed_on_two_rows_is_one_stop():
-    """Critic 6: Fuji's stop straddled the line, laps 5 and 6 both flagged -
-    "run [5, 1, 14]" reported a stop that did not happen."""
-    rows = [{"lap_num": n, "is_pit_lap": n in (5, 6)} for n in range(1, 21)]
-    assert stint_lengths(rows) == [6, 14]
+def test_a_stop_filed_on_two_rows_is_one_stop_and_closes_on_the_first():
+    """Critic 6, passes 1 and 2: Fuji's in-lap is lap 5; lap 6 carries the
+    pit flag, the out-lap flag and the fill. "[5, 1, 14]" invented a stop and
+    "[6, 14]" boxed him a lap late - he boxed on lap 5."""
+    fuji = [{"lap_num": n, "is_pit_lap": n in (5, 6), "is_out_lap": n == 6}
+            for n in range(1, 21)]
+    assert stint_lengths(fuji) == [5, 15]
+    daytona = [{"lap_num": n, "is_pit_lap": n == 12, "is_out_lap": n == 13}
+               for n in range(1, 21)]
+    assert stint_lengths(daytona) == [12, 8]
+
+
+def test_the_radio_is_filtered_to_the_sessions_asked_for():
+    """Critic 6: `--sessions 143` printed four exchanges from 118, 119, 125."""
+    from tools.debrief import radio
+
+    class Store:
+        def __init__(self):
+            self.asked = []
+
+        def _query(self, sql, params):
+            self.asked.append((sql, params))
+            return []
+
+    store = Store()
+    radio(store, 10, [143])
+    sql, params = store.asked[-1]
+    assert "radio.session_id IN (?)" in sql and params == (10, 143)
+    radio(store, 10)
+    assert store.asked[-1][1] == (10,)
+
+
+def test_the_small_helpers_say_what_they_should():
+    from types import SimpleNamespace
+
+    from pitcrew.race.expectations import WEAR_CONTRADICTION
+    from tools.debrief import race_length, session_label, strip_fixed_wear
+
+    assert session_label("race", 1) == "race (rehearsal)"
+    assert session_label("race", 0) == "race"
+    assert session_label("practice", 1) == "practice"
+    line = f"Wear stayed the plan's assumption; {WEAR_CONTRADICTION}."
+    assert strip_fixed_wear(line) == ("Wear stayed the plan's assumption.", True)
+    assert strip_fixed_wear("Planned on 7.7 L/lap.") == ("Planned on 7.7 L/lap.", False)
+    assert race_length(SimpleNamespace(race_laps=20, race_minutes=None)) == "20 laps"
+    assert race_length(SimpleNamespace(race_laps=None, race_minutes=30.0)) == "30 minutes"
+    assert race_length(SimpleNamespace(race_laps=None, race_minutes=None)) == "not on the event"
 
 
 def test_a_ledger_header_with_an_empty_side_matches_nothing(tmp_path):
@@ -130,14 +172,38 @@ def test_a_stop_compared_with_itself_says_so():
     from tools.debrief import pit_loss_line
 
     said = pit_loss_line(_stop(fuel=False), 75.6, "measured")
-    assert "from this very stop" in said and "compares it with itself" in said
+    assert "measured at this stop, a ceiling" in said
+    assert "compares it with itself" in said
 
 
-def test_declared_says_it_may_be_the_default():
+def test_a_stored_total_with_the_fill_inside_is_called_what_it_is():
+    """Critic 6, pass 2: Daytona's 72.28 s is the s143 stop's TOTAL, with the
+    49 L fill inside, stored as the ex-fuel figure - "measured, compares it
+    with itself" told him nothing about which number to believe."""
+    from pitcrew.race.pit_loss import PitLoss
+    from tools.debrief import pit_loss_line
+
+    daytona = PitLoss(total_s=72.28, ex_fuel_s=23.19, in_lap_ms=124_471,
+                      out_lap_ms=156_160, clean_lap_ms=104_200.0, clean_laps=15,
+                      fuel_added_l=49.09, refuel_rate_lps=1.0, stop_lap=12)
+    said = pit_loss_line(daytona, 72.28, "measured", this_session=143)
+    assert "this stop's total with its 49.1 L fill inside" in said
+    assert "about 49 s high" in said and "driver's yes" in said
+    # The earlier race at the same circuit is scored against the same
+    # figure - and is told where it came from.
+    earlier = _stop(fuel=False)
+    said = pit_loss_line(earlier, 72.28, "measured", others=[(143, daytona)],
+                         this_session=127)
+    assert "the session 143 stop's total with its 49.1 L fill inside" in said
+
+
+def test_declared_says_it_may_be_the_default_only_when_it_could_be():
     from tools.debrief import pit_loss_line
 
     said = pit_loss_line(_stop(fuel=True), 20.0, "declared")
     assert "the app's 20 s default" in said and "cannot tell which" in said
+    said = pit_loss_line(_stop(fuel=True), 19.0, "declared")
+    assert "default" not in said and "(declared)" in said
 
 
 def test_a_stop_with_no_fill_is_a_ceiling_not_an_ex_fuel_figure():

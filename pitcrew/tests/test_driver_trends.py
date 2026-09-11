@@ -127,6 +127,48 @@ def test_a_lap_he_struck_in_his_own_words_is_quoted_not_counted():
                for line in trend.silences)
 
 
+def test_the_apps_placeholder_is_not_quoted_as_his_words():
+    """Critic 6, pass 2: "struck by hand" was quoted 22 times - the export's
+    own rule (`runs._driver_note`) says it carries nothing."""
+    from dataclasses import replace
+
+    laps = _laps(PRACTICE)
+    laps[2] = replace(laps[2], excluded=True, exclusion_reason="struck by hand")
+    trend = session_trend(laps, kind="practice", evidence_for=_off_on())
+    assert not any("in his words" in line for line in trend.silences)
+
+
+def test_a_pit_lap_stored_as_an_incident_is_named():
+    from dataclasses import replace
+
+    laps = _laps(PRACTICE)
+    laps[3] = replace(laps[3], is_pit_lap=True, excluded=True,
+                      exclusion_reason="incident")
+    trend = session_trend(laps, kind="practice", evidence_for=_off_on())
+    assert any("stored as an incident on a pit lap" in line
+               for line in trend.silences)
+
+
+def test_no_spread_when_an_incident_leaves_two_counted_laps():
+    """The n < 3 guard on its own: judged, but two laps left to spread."""
+    trend = session_trend(_laps([95.0, 90.0, 90.2, 100.0]), kind="practice",
+                          evidence_for=_off_on(4))
+    assert trend.incidents == 1
+    assert trend.consistency_n == 2 and trend.consistency_sd_s is None
+
+
+def test_no_spread_over_counted_laps_nobody_could_screen():
+    """The incidents-None guard on its own: two runs of two laps each - four
+    counted laps, and no run long enough for `find_incidents` to judge."""
+    from dataclasses import replace
+
+    laps = _laps([95.0, 90.0, 90.5, 120.0, 100.0, 90.2, 90.4])
+    laps[3] = replace(laps[3], is_pit_lap=True)
+    trend = session_trend(laps, kind="practice", evidence_for=_off_on())
+    assert trend.incidents is None
+    assert trend.consistency_n >= 3 and trend.consistency_sd_s is None
+
+
 def test_three_clean_laps_are_enough_to_judge():
     trend = session_trend(_laps([95.0, 90.0, 90.2, 90.4]), kind="practice",
                           evidence_for=_off_on())
