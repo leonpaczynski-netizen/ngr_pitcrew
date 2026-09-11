@@ -2285,6 +2285,23 @@ and the note retiring it are often a wrapped line apart), and carries every
 phrasing the sweep found - **and it was shown to fail on the unpatched
 files, flagging all six live places, before it was trusted to pass.**
 
+**Critic 5, pass 3 on 2.8 part 1 (`79c964d`): AGREED - 2.8 part 1 is
+done.** Its own sweep, wider than the test and including folders the test
+does not scan, found no live copy of the retired rule; it agreed with every
+line I had judged history, and named `16`'s "the app's range library
+inherits `11`'s numbers" as the one borderline case - a dated impact table,
+so history. Its three minors were each a way `test_e2` could still pass a
+live rule, and all three are closed: the retirement words are word-bounded
+("unresolved" is not "resolved"), "met" counts only as "gate met" ("not met"
+is not a retirement), and a table row or list item is its own block, so one
+retired row no longer clears a whole table. **The stricter test at once
+found a live one the looser had hidden**: the Red Bull Ring sheet's "the
+register has not been re-read since 1.71", passed because the same item said
+"the axis is unresolved". Annotated there - the scale reason retired, the
+driver-report reason beside it standing. The test was also shown on
+synthetic files to flag all three of the minors' cases and to pass a
+properly retired rule.
+
 **Critic 6, pass 2 on 2.5/2.11 (`0958a02`): NOT AGREED, two majors, fixed.**
 (1) **My Fuji fix went the wrong way**: "[6, 14]" put the out-lap in stint 1
 and had him box a lap late; he boxed on lap 5. A stop now closes on its
@@ -2304,6 +2321,20 @@ consistency guards separately, the radio filter through a fake store, the
 stored pit lap, and the rehearsal label, wear strip and race length as pure
 helpers.
 
+**Critic 6, pass 3 on 2.5/2.11 (`79c964d`): NOT AGREED, one major, fixed.**
+Every fix held on every event in the full debrief - Fuji "[5, 15]" agreeing
+with its own "stop on lap 5", Daytona and Bathurst each naming the stop
+their stored figure came from - but `--sessions` brought the pass-2 defect
+back: the stops the figure is matched against were built from the filtered
+runs, so `debrief.py 10 --sessions 127` called a figure with 49 L of fill
+inside it "measured". They come from every race run on the event now, and
+the filter chooses only what is printed; a fake-store test filters to the
+earlier race and still has it name the session 143 stop. Its five surviving
+mutants are pinned: a figure that is this stop's own ex-fuel (the path every
+corrected figure will take); "compares it with itself" never attached to
+another session's stop; lap one stored as an incident; his words under his
+own row (`split_notes`, a pure helper now); and the full-run stop list.
+
 **2.6 - every stop carries its tyres decision.** `Handover.validate` refuses
 a plan whose stints after the first carry no `tyres` (absent or null): the
 box call otherwise names the compound as a bare "RS." - "fit RS" under a
@@ -2313,8 +2344,31 @@ is exempt; a one-stint race has no stop. `validate` has two callers,
 already stored arms exactly as before. `race-planner.md` says so, and names
 the deliverable as three things from Suzuka on: the plan with its tyres
 decisions, the playbook, and the engineering sheet (every `race_knowledge`
-field, or a line saying why not). The rule refused 21 fixtures that built a
-stop with no decision; each was given one, and none was loosened.
+field, or a line saying why not). The rule failed 21 tests, built by five fixture
+factories that made a stop with no decision; each factory was given one,
+and none was loosened.
+
+**The critic on 2.6 (`aad9ae3`): NOT AGREED - the guard was right and the
+row's promise was not.** Its blocker was on the radio: the box call said
+"Box this lap. No tyres." and "what tyres?" answered "RS." - under a
+helmet, "fit RS" (rule 13). The snapshot had no `nextTyres`; it has now,
+and BOX_WHAT answers in the box call's three forms ("No tyres.", "RM on.",
+"RM.") while the plan summary says "no tyres" rather than "onto RM", both
+declared to the pack. Its majors: `propose_strategy` was a third door with
+no check - one `stint_tyre_problems` now answers for all three, and adds
+that a fuel-only stop may not change compound; `certify` priced a
+`tyres: false` stop as a fresh set, so a stated fuel-only 10 + 10 certified
+past a 17-lap cliff - laps on one set are summed across it now, read
+through the coordinator's own `_tri`; a mid-race re-plan (`adopt`) dropped
+the decision, so "No tyres." became "RS." after he accepted - it is carried,
+and a changed compound becomes a set going on; and **the app's own optimiser
+never wrote the decision** - it prices every stop as a fresh set and now
+says so. **Bathurst's approved plan (strategy 30, event 14) came from the
+optimiser before this and carries no decision: its box call will say "RS."
+until it is rebuilt and re-approved** - a driver's act on the Strategy
+page. Minors: the refusal reads "plan refused", not "playbook refused"; the
+old "true, false or absent" message no longer says absent is allowed; the
+fixture count above says what was counted.
 
 **Still open in Phase 2:** 2.4 and 2.6-2.9 as written; `SKILL.md` is roughly
 twice 2.9's 450 lines; six evals short of 2.9's twenty; and **2.12 - the MCP
