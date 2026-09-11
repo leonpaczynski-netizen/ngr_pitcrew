@@ -379,6 +379,20 @@ the hub says weather RANDOM with inters and wets allowed.
 | 3.2 | **Name the drivers**: `tools/name_drivers.py` run with hub identities; roster bitmaps ↔ hub names | S3 | `drivers` has real names |
 | 3.3 | **Rival stop tendencies** per circuit from the book → George's undercut/overcut window and "he cannot make the end" calls | G7 | after two races the book projects a rival's stop lap |
 | 3.4 | **Hub track intelligence** as `[DOCTRINE]` notes in the brief | §5 | brief line |
+| 3.5 | **Their lap time, derived and labelled so**: a rival's lap is ours plus the change in the gap, read at the same road position each lap off `gap_reads` (v16). Carries its sample count (rule 4) and goes under `derived` with the model stated (rule 5) — never spoken as a measured time | driver, 12 Sep | George states a named rival's pace with its n, or says he cannot |
+| 3.6 | **Read the stop off the standing time**: a gap jump of about the circuit's stored pit loss marks it; litres = (standing − dead time − tyre time) × the measured refuel rate. **Tyres-or-fuel is not separable from standing time alone**, so the fill is a range with its assumption named, and `None` when the stop was not seen (rule 3) | G7, driver 12 Sep | `rival_stops` carries a row per stop with its source and its range |
+| 3.7 | **Must they stop again, and are we ahead**: their derived burn against the laps to the flag; our remaining stops × pit loss plus our pace against theirs; and the lap time needed to get or stay in front, against his own measured lap-to-lap spread (`expectations.sigma_ms`, not Monza's σ). Reports the constraint that bound it (rule 12) | driver, 12 Sep | one call per race naming the rival, the number and what bound it |
+| 3.8 | **The profile that carries between races**: per driver name per series — habitual stop count, stop lap as a fraction of the race, compound choice, whether they defend or yield. Written to the book, refused on fewer than two races | S13, driver 12 Sep | the brief names a rival's habitual strategy with the race count behind it |
+
+**What binds Phase 3, and it is not the arithmetic.** Every row above keys off
+seeing a rival stop. The GT7 board shows **only the top 8**
+(`reference-gt7-board-truncation`) and a car that pits drops below the cut —
+so the name and the gap both go dark at precisely the moment the derivation
+needs them. `rival_stops` is still empty, which is the keystone defect on the
+Deep Forest register. Until a stop can be timed from the board, 3.6 returns
+`None` rather than a number and 3.7 and 3.8 have nothing to stand on, so
+**3.2 — naming the drivers — is the row that unblocks the rest**, and 3.5 is
+the only one of the four that can land before it.
 
 ### Phase 4 — The learning loop that carries (ongoing)
 
