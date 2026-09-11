@@ -99,6 +99,7 @@ from pitcrew.strategy.certify import certify, certify_for_event
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.execution import (built_for_another_race,
                                         contract_gaps, stamp, unreadable)
+from pitcrew.strategy.handover import stint_tyre_problems
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.selftest import LISTEN_S
 from pitcrew.telemetry.listener import (
@@ -1595,6 +1596,14 @@ class PitCrewController(QObject):
             # With its remedy, as the other two have (critic 2, pass 5).
             return (f"The {foreign}. Approve a plan built for this race on "
                     "the Strategy page, or correct the event.")
+        # **A stop with no tyres decision** (the critic on row 2.6, pass 2):
+        # every door that writes a plan asks this now, but a row approved
+        # before they did - Bathurst's strategy 30 - still said "Box this
+        # lap. RS." and nothing in the app said so. The same expression.
+        tyres = stint_tyre_problems(plan)
+        if tyres:
+            return (f"{tyres[0][0].upper()}{tyres[0][1:]}. Approve a plan "
+                    "that says, at every stop, tyres on or fuel only.")
         return None
 
     def load_active_event(self) -> None:
@@ -2473,6 +2482,9 @@ class PitCrewController(QObject):
             laps_estimate=_planned_distance_of(stints) if timed else None,
             stops=(len(stints) - 1) if stints else None,
             compounds=compounds,
+            fuel_only_stops=sum(
+                1 for index, s in enumerate(stints)
+                if index and isinstance(s, dict) and s.get("tyres") is False),
             # **Only if it can actually work this session.** Switched on and
             # not stood down - promising an instrument that is not there is
             # worse than promising nothing. The first draft read
@@ -4389,6 +4401,11 @@ class PitCrewController(QObject):
         why = built_for_another_race(plan, event)
         if why is not None:
             return refuse(f"The {why}.")
+        # The tyres decision, by the rule every writing door asks (pass 2):
+        # a candidate stored before the doors asked can still be on file.
+        tyres = stint_tyre_problems(plan)
+        if tyres:
+            return refuse(f"{tyres[0][0].upper()}{tyres[0][1:]}.")
 
         certificate = certify_for_event(self.store, event["id"], plan)
         if not certificate.certified:
@@ -6725,7 +6742,8 @@ class PitCrewController(QObject):
         offer = resolution.offer
         if accepted and offer.stint_laps and self.race is not None:
             self.race.adopt(offer.stint_laps,
-                            compounds=offer.stint_compounds or None)
+                            compounds=offer.stint_compounds or None,
+                            tyres=offer.stint_tyres or None)
         # The question is answered, so it stops being asked.
         if self.race_screen is not None:
             self.race_screen.hide_offer()

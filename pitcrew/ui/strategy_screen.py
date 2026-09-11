@@ -85,7 +85,11 @@ class StintBar(QWidget):
             painter.fillRect(x, 0, width, self.height(), colour)
 
             painter.setPen(QPen(theme.band_ink(stint.compound)))
-            label = f"{stint.compound or '—'}  {stint.laps}"
+            # A fuel-only stop runs the same set on (the critic on row 2.6,
+            # pass 2): labelled as a compound it read as a second set.
+            label = (f"NO TYRES  {stint.laps}"
+                     if getattr(stint, "fuel_only", False)
+                     else f"{stint.compound or '—'}  {stint.laps}")
             painter.drawText(x, 0, width, self.height(),
                              Qt.AlignmentFlag.AlignCenter, label)
             x += width
@@ -345,15 +349,18 @@ class LoadedCard(QWidget):
 class _Stint:
     """What `StintBar` reads, off a stored plan's plain dicts."""
 
-    __slots__ = ("laps", "compound")
+    __slots__ = ("laps", "compound", "fuel_only")
 
-    def __init__(self, laps: int, compound: str | None) -> None:
-        self.laps, self.compound = laps, compound
+    def __init__(self, laps: int, compound: str | None,
+                 fuel_only: bool = False) -> None:
+        self.laps, self.compound, self.fuel_only = laps, compound, fuel_only
 
 
 def _as_stints(rows: list) -> list:
-    return [_Stint(int(r.get("laps") or 0), r.get("compound"))
-            for r in rows if isinstance(r, dict)]
+    rows = [r for r in rows if isinstance(r, dict)]
+    return [_Stint(int(r.get("laps") or 0), r.get("compound"),
+                   fuel_only=bool(index) and r.get("tyres") is False)
+            for index, r in enumerate(rows)]
 
 
 class StrategyScreen(QWidget):

@@ -742,6 +742,12 @@ def answer(intent: str, snapshot: dict, *,
         # three forms `calls._tyre_word` speaks.
         if decided is False:
             return Answer("No tyres.", intent)
+        if decided is True and not compound:
+            # **A set on, compound unnamed** (the critic on row 2.6, pass 2,
+            # BLOCKER): a plan may say `tyres: true` without a compound, and
+            # the box call said "Tyres on." while this said "No tyre change
+            # planned." - the opposite instruction, on the same stop.
+            return Answer("Tyres on.", intent)
         if not compound:
             if not _has_plan(snapshot):
                 return Answer(NO_PLAN, intent, answered=False)
@@ -908,6 +914,9 @@ def _plan_summary(snapshot: dict) -> str:
         parts.append("no tyres")
     elif snapshot.get("nextCompound"):
         parts.append(f"onto {snapshot['nextCompound']}")
+    elif snapshot.get("nextTyres") is True:
+        # A set on with no compound named: said, not left out (pass 2).
+        parts.append("tyres on")
     remaining = snapshot.get("lapsRemaining")
     if remaining is not None:
         parts.append(f"{_laps(remaining)} to go")

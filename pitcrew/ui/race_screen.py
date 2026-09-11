@@ -535,7 +535,8 @@ class RaceScreen(QWidget):
         stints = plan.get("stints") or []
         # The same stints the line below spells out in words, as one object.
         self.spine.setPlan([st.get("laps") for st in stints],
-                           [st.get("compound") for st in stints])
+                           [st.get("compound") for st in stints],
+                           [st.get("tyres") for st in stints])
         # Through the one expression, so a `1.0` stored by the MCP door -
         # JSON has no integer type - reads as "1 stop" rather than
         # "1.0 stop", and a field that is not a count says nothing at all
@@ -553,7 +554,14 @@ class RaceScreen(QWidget):
                          + " laps")
             compounds = [st.get("compound") for st in stints]
             if any(compounds):
-                parts.append(" → ".join(c or "?" for c in compounds))
+                # **A fuel-only stop is not a second set** (the critic on row
+                # 2.6, pass 2): "RS → RS" read as a set going on, on the page
+                # he reads on the grid, under a plan whose box call says "No
+                # tyres."
+                parts.append(" → ".join(
+                    (c or "?") + (" (no tyres)" if index and st.get("tyres")
+                                  is False else "")
+                    for index, (c, st) in enumerate(zip(compounds, stints))))
             # **Only a number is formatted as litres.** `:.0f` on a stored
             # `"sixty"` raised on this path too; a figure that is not a
             # number is shown as not known, like a missing one.

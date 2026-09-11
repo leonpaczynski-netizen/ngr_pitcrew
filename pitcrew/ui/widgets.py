@@ -1688,16 +1688,26 @@ class PlanSpine(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._stints: list[tuple[int, str | None]] = []
+        # Indexes of stints begun by a fuel-only stop (the critic on row
+        # 2.6, pass 2): the same set runs on, so its band is labelled NO
+        # TYRES and not with a compound code that reads as a second set.
+        self._fuel_only: set[int] = set()
         self._lap: int | None = None
         self.setFixedHeight(self.HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Fixed)
 
-    def setPlan(self, stints, compounds=None) -> None:   # noqa: N802
+    def setPlan(self, stints, compounds=None, tyres=None) -> None:  # noqa: N802
         codes = list(compounds or [])
-        self._stints = [
-            (int(laps), codes[i] if i < len(codes) else None)
-            for i, laps in enumerate(stints or []) if laps]
+        decisions = list(tyres or [])
+        self._stints = []
+        self._fuel_only = set()
+        for i, laps in enumerate(stints or []):
+            if not laps:
+                continue
+            if i and i < len(decisions) and decisions[i] is False:
+                self._fuel_only.add(len(self._stints))
+            self._stints.append((int(laps), codes[i] if i < len(codes) else None))
         self.update()
 
     def setLap(self, lap: int | None) -> None:           # noqa: N802
@@ -1724,7 +1734,7 @@ class PlanSpine(QWidget):
         top, height = 4, 26
         x = 0
         driven = 0
-        for laps, code in self._stints:
+        for index, (laps, code) in enumerate(self._stints):
             width = max(2, round(usable * laps / total))
             colour = theme.band_colour(code) if code else QColor(theme.TREAD)
             here = (self._lap is not None
@@ -1748,7 +1758,9 @@ class PlanSpine(QWidget):
                 painter.setPen(QPen(QColor(theme.STENCIL_DIM)))
                 painter.setFont(theme.stencil_font(10, tracking=10.0))
                 painter.drawText(x, top + height + 2, width, 14,
-                                 Qt.AlignmentFlag.AlignHCenter, code)
+                                 Qt.AlignmentFlag.AlignHCenter,
+                                 "NO TYRES" if index in self._fuel_only
+                                 else code)
 
             driven += laps
             x += width + gap

@@ -87,6 +87,57 @@ def test_one_rule_for_every_door():
     assert stint_tyre_problems(_plan(True, False)) == []
 
 
+def test_a_set_on_with_no_compound_is_said_as_a_set_on():
+    """Pass 2, BLOCKER: `tyres: true` with no compound - the box call said
+    "Tyres on." and "what tyres?" answered "No tyre change planned."."""
+    on = {"hasPlan": True, "nextCompound": None, "nextTyres": True,
+          "lapsToStop": 3}
+    assert answer(BOX_WHAT, on).text == "Tyres on."
+    assert answer(PLAN, on).text == "Box in 3 laps, tyres on."
+    # And the absence of a decision is still said as one.
+    assert answer(BOX_WHAT, dict(on, nextTyres=None)).text \
+        == "No tyre change planned."
+
+
+def test_a_replan_that_adds_a_stop_takes_the_replanners_decisions():
+    """Pass 2, MAJOR: carried by position, a lap-14 "No tyres." moved onto a
+    new lap-8 stop and the added third stop had no decision at all."""
+    plan = {"stints": [
+        {"laps": 14, "compound": "RS", "fuel_l": 50.0, "start_lap": 1},
+        {"laps": 6, "compound": "RS", "fuel_l": 20.0, "start_lap": 15,
+         "tyres": False}]}
+    race = _race(plan)
+    race.adopt((8, 6, 6), compounds=("RS", "RS", "RS"),
+               tyres=(None, True, True))
+    assert [s["tyres"] for s in race._stints] == [None, True, True]
+    assert race.state.next_tyres is True
+
+
+def test_the_replanner_prices_every_stop_as_a_set():
+    from pitcrew.race.replan import Replan
+
+    offer = Replan("recommended", "why", stops=2, stint_laps=(8, 6, 6),
+                   stint_compounds=("RS",) * 3, stint_tyres=(None, True, True))
+    assert offer.as_plan()["stint_tyres"] == [None, True, True]
+
+
+def test_the_brief_says_a_fuel_only_stop_before_the_green():
+    """Pass 2, minor: "20 laps, 1 stop, on RS." on the grid, then "No
+    tyres." at the box - the one was never said before the other."""
+    from pitcrew.race.brief import Instruments, brief
+
+    def said(stops, fuel_only):
+        return brief(Instruments(has_plan=True, race_laps=20, stops=stops,
+                                 compounds=("RS",), fuel_only_stops=fuel_only))
+
+    assert "No tyres at the stop - fuel only." in said(1, 1)
+    assert "No tyres at any stop - fuel only." in said(2, 2)
+    assert "Not every stop takes tyres - I'll say which at the box." \
+        in said(2, 1)
+    assert not any("tyres at" in line or "takes tyres" in line
+                   for line in said(1, 0))
+
+
 def test_the_optimisers_plan_says_a_set_goes_on():
     """Bathurst's strategy 30 came from here with no decision at all."""
     plan = Plan(stints=[Stint(10, "RM", 60.0, 1), Stint(10, "RM", 60.0, 11)],

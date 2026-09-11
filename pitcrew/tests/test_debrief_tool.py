@@ -262,6 +262,47 @@ def test_a_filter_does_not_hide_where_the_figure_came_from(capsys):
     assert "run 17" not in out, "only the filtered run is printed"
 
 
+def test_main_scores_a_filtered_run_against_every_run(monkeypatch):
+    """Critic 6, pass 4 (minor): the pass-3 fix rides on one line in `main`
+    that nothing ran - passing no `all_runs`, or the filtered runs as
+    `all_runs`, brought the defect back silently."""
+    import tools.debrief as debrief
+
+    every = [{"id": 14, "session_id": 127}, {"id": 17, "session_id": 143}]
+    got = {}
+
+    class Store:
+        def __init__(self, *args):
+            pass
+
+        def get_event(self, event_id):
+            return {"id": event_id, "start_type": None}
+
+        def list_sessions(self, event_id):
+            return []
+
+        def list_race_runs(self, event_id):
+            return list(every)
+
+        def close(self):
+            pass
+
+    def against_the_plan(store, event, runs, all_runs=None):
+        got["runs"], got["all_runs"] = runs, all_runs
+
+    monkeypatch.setattr(debrief, "Store", Store)
+    monkeypatch.setattr(debrief, "against_the_plan", against_the_plan)
+    for name in ("driver_first", "open_predictions", "render", "change_landed",
+                 "how_driven", "driver_variable", "calls_against_outcome",
+                 "radio", "close", "_head"):
+        monkeypatch.setattr(debrief, name, lambda *a, **k: None)
+    monkeypatch.setattr(debrief, "from_store", lambda *a, **k: None)
+    monkeypatch.setattr(sys, "argv", ["debrief.py", "10", "--sessions", "127"])
+    assert debrief.main() == 0
+    assert got["runs"] == every[:1]
+    assert got["all_runs"] == every
+
+
 def test_his_words_go_on_his_row():
     from tools.debrief import split_notes
 

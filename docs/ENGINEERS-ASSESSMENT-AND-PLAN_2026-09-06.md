@@ -2370,6 +2370,41 @@ page. Minors: the refusal reads "plan refused", not "playbook refused"; the
 old "true, false or absent" message no longer says absent is allowed; the
 fixture count above says what was counted.
 
+**Critic 6, pass 4 on 2.5/2.11 (`90a720e`): AGREED - the debrief rows are
+done.** `--sessions 127` names the session 143 stop word for word as the
+unfiltered run does; every event 1-14 runs without a crash or a write after
+`Store()`. Its minor: the one line in `main` that feeds the pass-3 fix was
+run by nothing, so two mutants on it survived - `main` is driven with
+`--sessions` now, and must score the filtered run against every run.
+
+**The voice pack lost nine lines to the latch, with nothing red (`f446334`).**
+After `85522eb` an unjudged stop is the plan's and stands, so the manifest's
+bare states for `_stops_off` and the ungranted drop never reached either
+branch: "You're fuelled to the flag.", its litres, and the seven "not
+granted" lines fell out (687 -> 678 clips). The coverage test checks the
+manifest's own examples, so the generator and the check went blind
+together. The states now say the fuel has retired the stop; the nine are
+pinned by name, and a race judged for `STOP_FLIP_LAPS` laps is driven
+through `next_call`, granted and not, and must play from the pack.
+
+**The critic on 2.6, pass 2 (`90a720e`): NOT AGREED - one blocker, one
+major, fixed.** Blocker: `tyres: true` with no compound - the box call said
+"Tyres on." and "what tyres?" answered "No tyre change planned.", the
+opposite instruction on the same stop. It answers "Tyres on." and the plan
+summary says "tyres on". Major: `adopt` carried decisions by position, so a
+re-plan that added a stop moved a lap-14 "No tyres." onto a new lap-8 stop
+and left the added stop undecided. The re-planner's offer carries its own
+decisions now (`stint_tyres`: every stop it priced is a fresh set) and they
+win; the positional carry is left only for callers that priced nothing.
+Minors, all fixed: the Race page line reads "RS → RS (no tyres)" and both
+stint bars label a fuel-only stint NO TYRES; the grid brief says "No tyres
+at the stop - fuel only." (three fixed sentences, rendered); and **Bathurst's
+strategy 30 is flagged by the app now** - `stint_tyre_problems` is asked at
+approval and by `_why_it_will_not_arm`, so the Race page says in the week
+that it will not arm, and it cannot be re-approved without a decision.
+Its note that each new branch was killed by one test only is answered with
+a second test on the radio, `adopt` and the gate.
+
 **Still open in Phase 2:** 2.4 and 2.6-2.9 as written; `SKILL.md` is roughly
 twice 2.9's 450 lines; six evals short of 2.9's twenty; and **2.12 - the MCP
 server is registered nowhere** (no `pitcrew` entry in `~/.claude.json`, no

@@ -2023,7 +2023,8 @@ class RaceCoordinator:
         """Stops still in the plan from here, for the re-plan comparison."""
         return max(0, len(self._stints) - 1 - self.state.stint_index)
 
-    def adopt(self, stint_laps, *, compounds=None, fuel_l=None) -> None:
+    def adopt(self, stint_laps, *, compounds=None, fuel_l=None,
+              tyres=None) -> None:
         """Take on a re-plan the driver accepted.
 
         The stints already completed are left alone: what changes is the
@@ -2060,14 +2061,23 @@ class RaceCoordinator:
             # row 2.6): rebuilt without it, "No tyres." became a bare "RS."
             # the moment he accepted a re-plan. A changed compound is a set
             # going on, whatever the old stint said.
+            #
+            # **Where the re-planner priced a decision, its decision wins**
+            # (pass 2, MAJOR). Carried by position alone, a re-plan that
+            # added a stop moved "No tyres." - made for a lap-14 stop with six
+            # to go - onto a new lap-8 stop with twelve, and left the added
+            # stop with no decision at all. `recommend` priced every one of
+            # those stops as a fresh set; the old decision contradicts it.
             previous = fresh[-1] if fresh else (done[-1] if done else None)
             before = previous.get("compound") if isinstance(previous, dict) else None
-            tyres = was.get("tyres")
+            priced = (tyres[offset]
+                      if tyres is not None and offset < len(tyres) else None)
+            decided = priced if priced is not None else was.get("tyres")
             if compound and before and compound != before:
-                tyres = True
+                decided = True
             fresh.append({"laps": laps, "compound": compound,
                           "fuel_l": litres, "start_lap": start,
-                          "tyres": tyres})
+                          "tyres": decided})
             start += laps
         self._stints = done + fresh
         self._apply_stint(self.state.stint_index)

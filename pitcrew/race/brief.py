@@ -48,6 +48,8 @@ class Instruments:
     #: Stops the plan makes, and the compounds in order, where it has them.
     stops: int | None = None
     compounds: tuple[str, ...] = ()
+    #: How many of those stops are fuel only (`tyres: false`).
+    fuel_only_stops: int = 0
     #: The live wear reader is on, connected, and has not stood down.
     wear_gauge: bool = False
     #: A measured temperature window exists for this event.
@@ -91,6 +93,24 @@ def _compound_phrase(compounds: tuple[str, ...]) -> str:
     return ", " + " onto ".join(ordered)
 
 
+def _tyres_line(instruments: Instruments) -> str | None:
+    """Whether the stops take tyres, where any of them does not.
+
+    **The brief never said "fuel only"** (the critic on row 2.6, pass 2):
+    "20 laps, 1 stop, on RS." on the grid, then "Box this lap. No tyres." at
+    the stop. Fixed sentences, so every one is a clip; which stop is said at
+    the box, where the box call already names it.
+    """
+    stops, fuel_only = instruments.stops or 0, instruments.fuel_only_stops
+    if not stops or not fuel_only:
+        return None
+    if fuel_only < stops:
+        return "Not every stop takes tyres - I'll say which at the box."
+    if stops == 1:
+        return "No tyres at the stop - fuel only."
+    return "No tyres at any stop - fuel only."
+
+
 def brief(instruments: Instruments) -> list[str]:
     """The lines to speak, in order. Never empty.
 
@@ -109,6 +129,9 @@ def brief(instruments: Instruments) -> list[str]:
                            f"{'' if instruments.stops == 1 else 's'}")
         shape += _compound_phrase(instruments.compounds)
         lines.append(shape + ".")
+        tyres = _tyres_line(instruments)
+        if tyres:
+            lines.append(tyres)
     elif instruments.race_minutes:
         # **A clock, not a distance.** The lap count of a timed race follows
         # from the pace and cannot be stood behind on the grid.
@@ -118,6 +141,9 @@ def brief(instruments: Instruments) -> list[str]:
                       else f", {instruments.stops} stop"
                            f"{'' if instruments.stops == 1 else 's'}")
         lines.append(shape + " - this one runs to the clock.")
+        tyres = _tyres_line(instruments)
+        if tyres:
+            lines.append(tyres)
         if instruments.laps_estimate:
             # The same estimate the green will say, said the same way; the
             # brief used to promise no count and the green then gave one.

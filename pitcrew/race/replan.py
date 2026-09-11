@@ -268,6 +268,14 @@ class Replan:
     # on the floor, so `adopt` had nothing to take and wrote `None` over the
     # plan's own answer. A compound is not a detail of a stop, it is the stop.
     stint_compounds: tuple[str | None, ...] = ()
+    # **The tyres decision the re-planner priced, per stint** (the critic on
+    # row 2.6, pass 2, MAJOR). `recommend` prices every stop as a fresh set,
+    # so every stop in its answer is `True`; the first stint is the one being
+    # driven, whose stop is behind him, and is `None` - nothing to decide.
+    # Without it `adopt` carried the old plan's decisions by position, and a
+    # re-plan that added a stop moved "No tyres." onto a stop it was never
+    # made for.
+    stint_tyres: tuple[bool | None, ...] = ()
     gain_s: float = 0.0
     confidence: str = "medium"
     # The lap the next stop would fall on under this answer, or None where the
@@ -335,6 +343,7 @@ class Replan:
             "stops": self.stops,
             "stint_laps": list(self.stint_laps),
             "stint_compounds": list(self.stint_compounds),
+            "stint_tyres": list(self.stint_tyres),
             "next_stop_lap": self.next_stop_lap,
             "laps_to_next_stop": self.laps_to_next_stop,
             "gain_s": round(self.gain_s, 1),
@@ -855,6 +864,8 @@ def assess(*, laps_done: int, laps_total: int | None,
         stops=best.stops,
         stint_laps=tuple(stint.laps for stint in best.stints),
         stint_compounds=tuple(stint.compound for stint in best.stints),
+        stint_tyres=tuple(None if index == 0 else True
+                          for index in range(len(best.stints))),
         gain_s=gain,
         confidence=confidence,
         next_stop_lap=next_stop,

@@ -90,6 +90,30 @@ def test_approving_again_is_the_way_back_to_the_grid(raced):
     assert controller.start_race() is True
 
 
+def test_a_stop_with_no_tyres_decision_is_said_in_the_week_and_refused(raced):
+    """The critic on row 2.6, pass 2: Bathurst's strategy 30 was approved
+    before the doors asked for a decision, still said "Box this lap. RS.",
+    and nothing in the app flagged it - nor stopped it being approved again."""
+    controller, screen, store, event_id = raced
+    row = store.get_approved_strategy(event_id)
+    plan = json.loads(json.dumps(row["plan"]))
+    assert len(plan["stints"]) >= 2
+    plan["stints"][1].pop("tyres", None)
+    store.update_strategy_plan(row["id"], plan)
+
+    controller._refresh_race_options(store.get_event(event_id))
+    said = screen.subtitle.text()
+    assert said.startswith("The approved plan will not arm: Stint 2 carries "
+                           "no tyres decision"), said
+    assert said.endswith("tyres on or fuel only.")
+    assert controller.start_race() is False
+    assert controller.race is None
+
+    assert controller.approve_stored_strategy(row["id"]) is False
+    assert "Not approved. Stint 2 carries no tyres decision" \
+        in controller.strategy.subtitle.text()
+
+
 def test_a_candidate_built_for_another_race_is_not_approved(raced):
     """`arm` would refuse it anyway - but only on the grid, after the Race
     screen had spent the week saying "approved" over it."""

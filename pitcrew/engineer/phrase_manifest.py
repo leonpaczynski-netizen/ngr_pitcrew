@@ -817,6 +817,10 @@ def spoken_openers() -> tuple[str, ...]:
         "and not a number.",
         "I can't see kerbs or offs on this stream.",
         "I can't see other cars - position only.",
+        # The fuel-only stops (the critic on row 2.6, pass 2).
+        "No tyres at the stop - fuel only.",
+        "No tyres at any stop - fuel only.",
+        "Not every stop takes tyres - I'll say which at the box.",
         # The register suffixes - "You can push ... Suggestion." and a
         # LOW-confidence call's "Unconfirmed."
         "Suggestion.",
@@ -1161,7 +1165,7 @@ def _decompose(text: str) -> tuple[str, ...]:
 # which `plan_single_part_lines` renders whole - deliberately does not count.
 _PLAN_SUMMARY = re.compile(
     r"^(?:Running to the flag|Box this lap|Box in \d+ laps?)"
-    r"(, onto .+?|, no tyres)?(, \d+ laps? to go)?\.$")
+    r"(, onto .+?|, no tyres|, tyres on)?(, \d+ laps? to go)?\.$")
 
 
 def uncovered_reason(text: str) -> str | None:
@@ -1212,6 +1216,7 @@ def plan_summary_examples() -> tuple[str, ...]:
         {"lapsToStop": 4, "nextCompound": "Racing Soft", "lapsRemaining": 12},
         {"lapsToStop": 4, "nextCompound": "RS", "nextTyres": False,
          "lapsRemaining": 12},
+        {"lapsToStop": 4, "nextTyres": True, "lapsRemaining": 12},
         {"nextCompound": "Racing Hard", "lapsRemaining": 20},
         {"lapsRemaining": 0},
     ]
