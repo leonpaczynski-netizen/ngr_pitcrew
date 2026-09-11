@@ -1698,6 +1698,8 @@ class PlanSpine(QWidget):
                            QSizePolicy.Policy.Fixed)
 
     def setPlan(self, stints, compounds=None, tyres=None) -> None:  # noqa: N802
+        from pitcrew.strategy.handover import tyres_decision
+
         codes = list(compounds or [])
         decisions = list(tyres or [])
         self._stints = []
@@ -1705,10 +1707,22 @@ class PlanSpine(QWidget):
         for i, laps in enumerate(stints or []):
             if not laps:
                 continue
-            if i and i < len(decisions) and decisions[i] is False:
+            # Through the voice's own expression (a JSON 0 is fuel only), and
+            # only where a band precedes it - a zero-lap first stint must not
+            # hand its successor a stop it never had (pass 3).
+            if (i and self._stints and i < len(decisions)
+                    and tyres_decision(decisions[i]) is False):
                 self._fuel_only.add(len(self._stints))
             self._stints.append((int(laps), codes[i] if i < len(codes) else None))
         self.update()
+
+    def band_label(self, index: int) -> str | None:
+        """What is written under band `index`: its compound, or NO TYRES
+        where a fuel-only stop began it - the same set runs on, and a code
+        there reads as a second set (row 2.6)."""
+        if not 0 <= index < len(self._stints):
+            return None
+        return "NO TYRES" if index in self._fuel_only else self._stints[index][1]
 
     def setLap(self, lap: int | None) -> None:           # noqa: N802
         self._lap = lap
@@ -1754,13 +1768,13 @@ class PlanSpine(QWidget):
             painter.drawText(x, top, width, height,
                              Qt.AlignmentFlag.AlignCenter, label)
 
-            if code and width >= 34:
+            # NO TYRES is drawn even under a band with no compound (pass 3).
+            label = self.band_label(index)
+            if label and width >= 34:
                 painter.setPen(QPen(QColor(theme.STENCIL_DIM)))
                 painter.setFont(theme.stencil_font(10, tracking=10.0))
                 painter.drawText(x, top + height + 2, width, 14,
-                                 Qt.AlignmentFlag.AlignHCenter,
-                                 "NO TYRES" if index in self._fuel_only
-                                 else code)
+                                 Qt.AlignmentFlag.AlignHCenter, label)
 
             driven += laps
             x += width + gap

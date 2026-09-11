@@ -846,6 +846,53 @@ def test_keeping_the_plan_is_remembered_as_his_choice(raced, monkeypatch):
                    for line in controller.voice.spoken[spoke:])
 
 
+def test_an_accepted_replan_takes_its_own_tyres_decision(raced, monkeypatch):
+    """The critic on row 2.6, pass 3 (M5): the controller could stop handing
+    the offer's `stint_tyres` to `adopt` and nothing went red - the old
+    plan's fuel-only decision would ride by position onto a stop the
+    re-planner priced as a fresh set, and the box call would say "No tyres."."""
+    from pitcrew.race.replan import RECOMMENDED, Replan
+
+    controller, _, _, _ = raced
+    controller.start_race()
+    green(controller)
+    race = controller.race
+    for stint in race._stints[race.state.stint_index + 1:]:
+        stint["tyres"] = False
+    offer = Replan(RECOMMENDED, "burning 20% more fuel than planned",
+                   stops=2, stint_laps=(7, 6, 6), gain_s=12.0,
+                   stint_compounds=(None, None, None),
+                   stint_tyres=(None, True, True), laps_to_next_stop=7)
+    _always(controller, monkeypatch, offer)
+    a_lap(controller, 1, 88.6)
+    assert controller.ptt.pending_replan
+
+    controller._resolve_replan(accepted=True)
+    after = race._stints[race.state.stint_index + 1:]
+    assert [s["tyres"] for s in after] == [True, True]
+    assert race.state.next_tyres is True
+
+
+def test_the_grid_brief_says_a_fuel_only_stop(raced):
+    """The critic on row 2.6, pass 3 (M8): the controller could count no
+    fuel-only stops and the grid brief never said "fuel only", with every
+    test green - the brief's own test calls `brief()` directly."""
+    import json
+
+    controller, screen, store, event_id = raced
+    plan = json.loads(json.dumps(store.get_approved_strategy(event_id)["plan"]))
+    stops = len(plan["stints"]) - 1
+    assert stops >= 1
+    # A JSON 0 - what the MCP door can store - is fuel only to the brief as
+    # it is to the voice (pass 3, MAJOR 2).
+    for stint in plan["stints"][1:]:
+        stint["tyres"] = 0
+    controller._say_brief(store.get_event(event_id), plan, speaks=False)
+    said = screen.subtitle.text()
+    assert ("No tyres at the stop - fuel only." if stops == 1
+            else "No tyres at any stop - fuel only.") in said, said
+
+
 def test_an_acknowledgement_is_not_an_acceptance(raced, monkeypatch):
     """ACCEPT's vocabulary includes "copy that", which he says to acknowledge
     ANY call. The gate used to be "the register has said something", which

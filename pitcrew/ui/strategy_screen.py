@@ -57,6 +57,14 @@ SOURCE_WORD = {
 }
 
 
+def stint_label(stint) -> str:
+    """A band's words. **A fuel-only stop runs the same set on** (the critic
+    on row 2.6, pass 2): labelled with its compound it read as a second set."""
+    if getattr(stint, "fuel_only", False):
+        return f"NO TYRES  {stint.laps}"
+    return f"{stint.compound or '—'}  {stint.laps}"
+
+
 class StintBar(QWidget):
     """The plan as a run of sets: band widths are stint lengths."""
 
@@ -85,11 +93,7 @@ class StintBar(QWidget):
             painter.fillRect(x, 0, width, self.height(), colour)
 
             painter.setPen(QPen(theme.band_ink(stint.compound)))
-            # A fuel-only stop runs the same set on (the critic on row 2.6,
-            # pass 2): labelled as a compound it read as a second set.
-            label = (f"NO TYRES  {stint.laps}"
-                     if getattr(stint, "fuel_only", False)
-                     else f"{stint.compound or '—'}  {stint.laps}")
+            label = stint_label(stint)
             painter.drawText(x, 0, width, self.height(),
                              Qt.AlignmentFlag.AlignCenter, label)
             x += width
@@ -357,9 +361,12 @@ class _Stint:
 
 
 def _as_stints(rows: list) -> list:
+    from pitcrew.strategy.handover import tyres_decision
+
     rows = [r for r in rows if isinstance(r, dict)]
     return [_Stint(int(r.get("laps") or 0), r.get("compound"),
-                   fuel_only=bool(index) and r.get("tyres") is False)
+                   fuel_only=(bool(index)
+                              and tyres_decision(r.get("tyres")) is False))
             for index, r in enumerate(rows)]
 
 

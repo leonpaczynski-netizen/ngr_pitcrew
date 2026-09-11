@@ -142,10 +142,11 @@ def _tri(value) -> bool | None:
     fuel only - the opposite instruction. Anything else is None here (the
     plan did not say) and is refused by `Handover.validate` at the door.
     """
-    if value is None or isinstance(value, bool):
-        return value
-    if value in (0, 1):
-        return bool(value)
+    from pitcrew.strategy.handover import tyres_decision
+
+    decided = tyres_decision(value)
+    if decided is not None or value is None:
+        return decided
     log("race").warning("a stint's tyres field reads %r - not a bool, so it "
                         "is treated as unsaid", value)
     return None
@@ -2072,7 +2073,18 @@ class RaceCoordinator:
             before = previous.get("compound") if isinstance(previous, dict) else None
             priced = (tyres[offset]
                       if tyres is not None and offset < len(tyres) else None)
-            decided = priced if priced is not None else was.get("tyres")
+            # **And the desk's decision stands where the shape keeps its stop
+            # count** (pass 3, the merge of the two critics). Pass 2: carried
+            # by position across a CHANGED count, "No tyres." landed on a stop
+            # it was never made for. Pass 3: replacing it everywhere turned a
+            # fuel-only plan into "RS on." on an offer that never mentioned
+            # tyres. Same count, same stops: the desk's answer. A changed
+            # count describes stops the desk never decided, and the priced
+            # decision is the only answer there is.
+            desk = was.get("tyres")
+            reshaped = len(stint_laps) != len(planned)
+            decided = (priced if priced is not None
+                       and (reshaped or desk is None) else desk)
             if compound and before and compound != before:
                 decided = True
             fresh.append({"laps": laps, "compound": compound,
@@ -2158,11 +2170,19 @@ class RaceCoordinator:
                 and self.state.past_box_lap
                 and not self.state.in_pit and not self.state.finished
                 and self.state.stint_ends_on_lap is not None else None),
-            "nextCompound": self.state.next_compound,
+            # **Only while there IS a next stop** (the critic on row 2.6, pass
+            # 3). After the fuel retired the stop the call said "No more stops
+            # on fuel." and "what tyres?" still answered "Tyres on." - the
+            # stop's decision outliving the stop. `lapsToStop` is the same
+            # expression BOX_WHEN answers "No stop planned" from.
+            "nextCompound": (self.state.next_compound
+                             if self.state.laps_to_stop() is not None
+                             else None),
             # The plan's tyre decision for that stop, tri-state, so the
             # radio answers "what tyres" in the box call's own words
             # (the critic on row 2.6).
-            "nextTyres": self.state.next_tyres,
+            "nextTyres": (self.state.next_tyres
+                          if self.state.laps_to_stop() is not None else None),
             "inPit": self.state.in_pit,
             # **The flag, because the box reading has to know about it.**
             # Post-flag with a stop never taken the Race screen read "BOX IN

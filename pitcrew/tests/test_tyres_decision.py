@@ -121,6 +121,33 @@ def test_the_replanner_prices_every_stop_as_a_set():
     assert offer.as_plan()["stint_tyres"] == [None, True, True]
 
 
+def test_the_offer_assess_makes_carries_a_decision_per_stint(monkeypatch):
+    """The critic on row 2.6, pass 3 (M4): `assess` could stop putting
+    `stint_tyres` on its offer and nothing went red, because the test above
+    builds a `Replan` by hand. Driven through `assess` itself here, with
+    `recommend` answering a faster two-stop against his one-stop - the only
+    road to an offer with stints that needs no hand-tuned race."""
+    from pitcrew.race import replan
+    from pitcrew.race.replan import RECOMMENDED, assess
+
+    from .test_ptt_and_replan import an_inputs
+
+    two_stop = Plan(stints=[Stint(5, "RM", 20.0, 6), Stint(5, "RM", 20.0, 11),
+                            Stint(5, "RM", 20.0, 16)],
+                    total_time_s=1000.0, binding_constraint="fuel")
+    one_stop = Plan(stints=[Stint(7, "RM", 30.0, 6), Stint(8, "RM", 30.0, 13)],
+                    total_time_s=1100.0, binding_constraint="fuel")
+    monkeypatch.setattr(replan, "recommend",
+                        lambda *a, **k: [two_stop, one_stop])
+    offer = assess(laps_done=5, laps_total=20, fuel_l=60.0,
+                   planned_fuel_per_lap=3.4, observed_fuel_per_lap_l=3.4,
+                   lap_time_ms=94_000, planned_lap_time_ms=94_000,
+                   current_stops=1, inputs=an_inputs())
+    assert offer.verdict == RECOMMENDED, offer
+    assert offer.stint_laps == (5, 5, 5)
+    assert offer.stint_tyres == (None, True, True)
+
+
 def test_the_brief_says_a_fuel_only_stop_before_the_green():
     """Pass 2, minor: "20 laps, 1 stop, on RS." on the grid, then "No
     tyres." at the box - the one was never said before the other."""
@@ -136,6 +163,71 @@ def test_the_brief_says_a_fuel_only_stop_before_the_green():
         in said(2, 1)
     assert not any("tyres at" in line or "takes tyres" in line
                    for line in said(1, 0))
+    # And a timed race, whose shape line is a different branch (pass 3, M13).
+    timed = brief(Instruments(has_plan=True, race_minutes=30.0, stops=1,
+                              compounds=("RS",), fuel_only_stops=1,
+                              laps_estimate=20))
+    assert "No tyres at the stop - fuel only." in timed
+
+
+def test_a_retired_stop_takes_its_tyres_decision_with_it():
+    """Pass 3, MAJOR 1: after "You're fuelled to the flag. No more stops on
+    fuel." the radio still answered "Tyres on." and the plan summary
+    "Running to the flag, tyres on" - the stop's decision outliving it."""
+    from pitcrew.race.calls import STOP_FLIP_LAPS
+
+    plan = {"stints": [
+        {"laps": 10, "compound": "RS", "fuel_l": 60.0, "start_lap": 1},
+        {"laps": 10, "fuel_l": 30.0, "start_lap": 11, "tyres": True}],
+        "binding_constraint": "fuel"}
+    race = _race(plan)
+    race.state.lap, race.state.laps_total = 8, 20
+    race.state.fuel_l, race.state.fuel_per_lap_l = 60.0, 3.0
+    race.state.drop_stop_granted = True
+    for _ in range(STOP_FLIP_LAPS):
+        race.state.note_stop_need()
+    snap = race.snapshot()
+    assert snap["lapsToStop"] is None
+    assert (snap["nextTyres"], snap["nextCompound"]) == (None, None)
+    assert answer(BOX_WHAT, snap).text == "No tyre change planned."
+    assert "tyres on" not in answer(PLAN, snap).text
+    # While the stop stands, the decision is said.
+    assert _race(plan).snapshot()["nextTyres"] is True
+
+
+def test_a_replan_keeping_the_stop_count_keeps_the_desks_decision():
+    """The merge of passes 2 and 3: the same number of stops keeps the desk's
+    fuel-only; a changed number takes the re-planner's priced fresh set."""
+    race = _race(_plan(False))
+    race.adopt((5, 10), tyres=(None, True))
+    assert race._stints[1]["tyres"] is False
+    race = _race(_plan(False))
+    race.adopt((5, 5, 5), tyres=(None, True, True))
+    assert [s["tyres"] for s in race._stints[1:]] == [True, True]
+    # And a plan that never decided takes the priced answer either way.
+    race = _race(_plan(None))
+    race.adopt((5, 10), tyres=(None, True))
+    assert race._stints[1]["tyres"] is True
+
+
+def test_the_driver_refusal_and_the_desk_refusal_refuse_the_same_plans():
+    """Pass 3, minor: one remedy was appended to every problem, in the desk's
+    words. `tyres_refusal` speaks to the driver; it must refuse exactly what
+    `stint_tyre_problems` refuses."""
+    from pitcrew.strategy.handover import tyres_refusal
+
+    changed = _plan(False)
+    changed["stints"][1]["compound"] = "RS"
+    first = _plan(True)
+    first["stints"][0]["tyres"] = "yes"
+    plans = [_plan(None), changed, _plan("false"), first, _plan(True, False),
+             _plan(0), _plan(1), _plan(), {"stints": []}, {}]
+    for plan in plans:
+        assert (tyres_refusal(plan) is None) == (stint_tyre_problems(plan) == []), plan
+    assert "fits a set there or keeps RM" in tyres_refusal(changed)
+    assert "neither tyres on nor fuel only" in tyres_refusal(first)
+    assert all(tyres_refusal(p).endswith("on the Strategy page.")
+               for p in plans if tyres_refusal(p))
 
 
 def test_the_optimisers_plan_says_a_set_goes_on():

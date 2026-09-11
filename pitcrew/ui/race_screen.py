@@ -484,7 +484,8 @@ class RaceScreen(QWidget):
         `plan_json` the coordinator arms from - so what is on the screen is
         what will be run rather than a second rendering of the same idea.
         """
-        from pitcrew.strategy.handover import author_of, as_stop_count
+        from pitcrew.strategy.handover import (author_of, as_stop_count,
+                                               tyres_decision)
 
         self._approved_row = strategy if strategy else None
         if not strategy:
@@ -553,15 +554,21 @@ class RaceScreen(QWidget):
             parts.append(" + ".join(str(st.get("laps", "?")) for st in stints)
                          + " laps")
             compounds = [st.get("compound") for st in stints]
+            # **A fuel-only stop is not a second set** (the critic on row
+            # 2.6, pass 2): "RS → RS" read as a set going on, on the page he
+            # reads on the grid, under a plan whose box call says "No tyres."
+            # Read through the voice's own expression, so a JSON 0 is fuel
+            # only here too, and said even where no compound is named (pass 3).
+            fuel_only = [bool(index) and tyres_decision(st.get("tyres")) is False
+                         for index, st in enumerate(stints)]
             if any(compounds):
-                # **A fuel-only stop is not a second set** (the critic on row
-                # 2.6, pass 2): "RS → RS" read as a set going on, on the page
-                # he reads on the grid, under a plan whose box call says "No
-                # tyres."
                 parts.append(" → ".join(
-                    (c or "?") + (" (no tyres)" if index and st.get("tyres")
-                                  is False else "")
-                    for index, (c, st) in enumerate(zip(compounds, stints))))
+                    (c or "?") + (" (no tyres)" if f else "")
+                    for c, f in zip(compounds, fuel_only)))
+            elif any(fuel_only):
+                stops = [str(index) for index, f in enumerate(fuel_only) if f]
+                parts.append(("no tyres at stop " if len(stops) == 1
+                              else "no tyres at stops ") + ", ".join(stops))
             # **Only a number is formatted as litres.** `:.0f` on a stored
             # `"sixty"` raised on this path too; a figure that is not a
             # number is shown as not known, like a missing one.

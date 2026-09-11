@@ -222,12 +222,40 @@ def test_a_judged_race_says_its_retired_stop_from_the_pack(granted):
         state.note_stop_need()
     call = next_call(state)
     assert call is not None
+    # The call this test exists for, not merely some call (pass 3, nit) -
+    # and played, not excused as a declared gap.
+    words = f"{call.call} {call.reason}"
+    assert ("fuelled to the flag" if granted else "not granted") in words, words
     for line in (call.call, call.reason):
         if not line:
             continue
         segments = manifest.segments_for(line)
-        playable = bool(segments) and all(name in clips for name in segments)
-        assert playable or manifest.uncovered_reason(line), (line, segments)
+        assert segments and all(n in clips for n in segments), (line, segments)
+
+
+def test_the_grid_brief_says_a_fuel_only_stop_from_the_pack():
+    """The critic on row 2.6, pass 3 (M14): the three fuel-only brief lines
+    could be dropped from the manifest with every test green - the way nine
+    lines left the pack in `f446334`. Each line `brief()` produces is taken
+    from `brief()` itself, and must play from the pack."""
+    from pitcrew.race.brief import Instruments, brief
+
+    clips = set(manifest.clips())
+    seen = set()
+    for stops, fuel_only in ((1, 1), (2, 2), (2, 1)):
+        for timed in (False, True):
+            lines = brief(Instruments(
+                has_plan=True, stops=stops, compounds=("RS",),
+                fuel_only_stops=fuel_only,
+                race_laps=None if timed else 20,
+                race_minutes=30.0 if timed else None,
+                laps_estimate=20 if timed else None))
+            for line in lines:
+                if "tyres at" in line or "takes tyres" in line:
+                    seen.add(line)
+                    segments = manifest.segments_for(line)
+                    assert segments and all(n in clips for n in segments), line
+    assert len(seen) == 3, seen
 
 
 def test_a_number_inside_a_word_is_not_split_out():

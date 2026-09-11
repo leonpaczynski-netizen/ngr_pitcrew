@@ -467,6 +467,58 @@ class PlaybookEntry:
                 "when": self.when, "until": self.until, "note": self.note}
 
 
+def tyres_decision(value) -> bool | None:
+    """A stint's `tyres` field as the decision it states: True (a set goes on),
+    False (fuel only) or None (unsaid, or unreadable).
+
+    **One expression for every reader** (the critic on row 2.6, pass 3): JSON
+    has no boolean the MCP door must keep, so a plan can carry `0`; the voice
+    read it as fuel only through the coordinator's `_tri` while the brief, the
+    Race page, the spine and the stint bar tested `is False` and drew a
+    second set. `bool("false")` is True, so a word is never read as a bool.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    return None
+
+
+def tyres_refusal(plan) -> str | None:
+    """The first tyres problem, in the words the driver reads on the Race and
+    Strategy pages - with the remedy for THAT problem, and where to take it.
+
+    The same checks as `stint_tyre_problems`, which speaks to the desk ("say
+    true ... or false"); a test holds the two to refusing the same plans.
+    """
+    stints = plan.get("stints") if isinstance(plan, dict) else None
+    previous = None
+    for index, stint in enumerate(stints or [], start=1):
+        if not isinstance(stint, dict):
+            previous = None
+            continue
+        raw = stint.get("tyres")
+        decided = tyres_decision(raw)
+        if raw is not None and decided is None:
+            return (f"Stint {index}'s tyres decision reads {raw!r}, which is "
+                    f"neither tyres on nor fuel only. Approve a plan that "
+                    f"says one or the other, on the Strategy page.")
+        if index > 1 and decided is None:
+            return (f"The stop before stint {index} does not say whether "
+                    f"tyres go on - the box call would name the compound as "
+                    f"if fitting it. Approve a plan that says, at every stop, "
+                    f"tyres on or fuel only, on the Strategy page.")
+        if index > 1 and decided is False and previous is not None:
+            was, now = previous.get("compound"), stint.get("compound")
+            if was and now and was != now:
+                return (f"The stop before stint {index} is fuel only but "
+                        f"changes compound ({was} to {now}). Approve a plan "
+                        f"that fits a set there or keeps {was}, on the "
+                        f"Strategy page.")
+        previous = stint
+    return None
+
+
 def stint_tyre_problems(plan) -> list[str]:
     """The tyres decision on every stint - one expression for every door.
 

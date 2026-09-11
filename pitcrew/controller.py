@@ -99,7 +99,7 @@ from pitcrew.strategy.certify import certify, certify_for_event
 from pitcrew.strategy.evidence import build_inputs
 from pitcrew.strategy.execution import (built_for_another_race,
                                         contract_gaps, stamp, unreadable)
-from pitcrew.strategy.handover import stint_tyre_problems
+from pitcrew.strategy.handover import tyres_decision, tyres_refusal
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.selftest import LISTEN_S
 from pitcrew.telemetry.listener import (
@@ -1600,11 +1600,8 @@ class PitCrewController(QObject):
         # every door that writes a plan asks this now, but a row approved
         # before they did - Bathurst's strategy 30 - still said "Box this
         # lap. RS." and nothing in the app said so. The same expression.
-        tyres = stint_tyre_problems(plan)
-        if tyres:
-            return (f"{tyres[0][0].upper()}{tyres[0][1:]}. Approve a plan "
-                    "that says, at every stop, tyres on or fuel only.")
-        return None
+        # In the driver's words, with the remedy for that problem (pass 3).
+        return tyres_refusal(plan)
 
     def load_active_event(self) -> None:
         event = self.active_event()
@@ -2484,7 +2481,8 @@ class PitCrewController(QObject):
             compounds=compounds,
             fuel_only_stops=sum(
                 1 for index, s in enumerate(stints)
-                if index and isinstance(s, dict) and s.get("tyres") is False),
+                if index and isinstance(s, dict)
+                and tyres_decision(s.get("tyres")) is False),
             # **Only if it can actually work this session.** Switched on and
             # not stood down - promising an instrument that is not there is
             # worse than promising nothing. The first draft read
@@ -4403,9 +4401,9 @@ class PitCrewController(QObject):
             return refuse(f"The {why}.")
         # The tyres decision, by the rule every writing door asks (pass 2):
         # a candidate stored before the doors asked can still be on file.
-        tyres = stint_tyre_problems(plan)
+        tyres = tyres_refusal(plan)
         if tyres:
-            return refuse(f"{tyres[0][0].upper()}{tyres[0][1:]}.")
+            return refuse(tyres)
 
         certificate = certify_for_event(self.store, event["id"], plan)
         if not certificate.certified:
@@ -5783,8 +5781,12 @@ class PitCrewController(QObject):
             return DriverState(
                 temps_c=self._board_temps(),
                 compound=getattr(state, "tyre_compound", None),
-                next_compound=getattr(state, "next_compound", None),
-                tyres_at_stop=getattr(state, "next_tyres", None),
+                # Only while there is a stop to describe (pass 3) - the
+                # same guard the radio's snapshot takes.
+                next_compound=(getattr(state, "next_compound", None)
+                               if to_stop is not None else None),
+                tyres_at_stop=(getattr(state, "next_tyres", None)
+                               if to_stop is not None else None),
                 has_plan=has_plan,
                 laps_to_box=None if to_stop is None else float(max(0, to_stop)),
                 box_on_lap=(None if to_stop is None
@@ -5848,12 +5850,16 @@ class PitCrewController(QObject):
             compound=getattr(state, "tyre_compound", None),
             # The plan's tyre decision for the coming stop, as stated, so the
             # box panel can say "NO TYRES" rather than the compound's name.
-            tyres_at_stop=getattr(state, "next_tyres", None),
+            # **Only while there is a stop** (the critic on row 2.6, pass 3):
+            # after the fuel retired it the caption still read "fit a set".
+            tyres_at_stop=(getattr(state, "next_tyres", None)
+                           if to_stop is not None else None),
             # **And the compound it says to fit, separately from the one on
             # the car.** `calls._tyre_word` speaks this; the board's
             # laps-to-box caption was drawing `tyre_compound` instead, so on
             # a compound-changing stop it named the set coming OFF.
-            next_compound=getattr(state, "next_compound", None),
+            next_compound=(getattr(state, "next_compound", None)
+                           if to_stop is not None else None),
             laps_to_box=None if to_stop is None else float(max(0, to_stop)),
             # **The lap number GT7 is showing him, and it counts the same way
             # the countdown beside it does.**

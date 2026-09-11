@@ -103,14 +103,14 @@ def test_a_stop_with_no_tyres_decision_is_said_in_the_week_and_refused(raced):
 
     controller._refresh_race_options(store.get_event(event_id))
     said = screen.subtitle.text()
-    assert said.startswith("The approved plan will not arm: Stint 2 carries "
-                           "no tyres decision"), said
-    assert said.endswith("tyres on or fuel only.")
+    assert said.startswith("The approved plan will not arm: The stop before "
+                           "stint 2 does not say whether tyres go on"), said
+    assert said.endswith("tyres on or fuel only, on the Strategy page.")
     assert controller.start_race() is False
     assert controller.race is None
 
     assert controller.approve_stored_strategy(row["id"]) is False
-    assert "Not approved. Stint 2 carries no tyres decision" \
+    assert "Not approved. The stop before stint 2 does not say" \
         in controller.strategy.subtitle.text()
 
 
@@ -442,6 +442,47 @@ def test_the_race_page_does_not_fall_over_on_an_unreadable_plan(qt_app):  # noqa
         "stints": [{"laps": 10, "compound": "RS", "fuel_l": "sixty"},
                    {"laps": 10, "compound": "RS", "fuel_l": 60.0}]}})
     assert "? L + 60 L" in screen.plan_line.text()
+
+
+def test_a_fuel_only_stop_is_not_drawn_as_a_second_set(qt_app):  # noqa: F811
+    """The critic on row 2.6, pass 3 (M9, M10): the Race page's "(no tyres)"
+    and the spine's NO TYRES could each be taken away with nothing red - and
+    "RS → RS" on the grid reads as a set going on under a box call that
+    says "No tyres."."""
+    from pitcrew.ui.race_screen import RaceScreen
+    from pitcrew.ui.strategy_screen import _as_stints, stint_label
+
+    stints = [{"laps": 10, "compound": "RS"},
+              {"laps": 10, "compound": "RS", "tyres": False}]
+    screen = RaceScreen()
+    screen.set_plan({"label": "fuel only", "plan": {"stints": stints}})
+    assert "RS → RS (no tyres)" in screen.plan_line.text()
+    assert [screen.spine.band_label(i) for i in range(2)] == ["RS", "NO TYRES"]
+
+    fresh = [dict(stints[0]), dict(stints[1], tyres=True)]
+    screen.set_plan({"label": "a set", "plan": {"stints": fresh}})
+    assert "(no tyres)" not in screen.plan_line.text()
+    assert screen.spine.band_label(1) == "RS"
+
+    bars = _as_stints(stints)
+    assert [stint_label(s) for s in bars] == ["RS  10", "NO TYRES  10"]
+
+    # **A JSON 0 is fuel only on every screen**, as it is to the voice
+    # (pass 3, MAJOR 2) - and a stop with no compound named still says so.
+    zero = [dict(stints[0]), dict(stints[1], tyres=0)]
+    screen.set_plan({"label": "json", "plan": {"stints": zero}})
+    assert "RS → RS (no tyres)" in screen.plan_line.text()
+    assert screen.spine.band_label(1) == "NO TYRES"
+    assert _as_stints(zero)[1].fuel_only
+    bare = [{"laps": 10}, {"laps": 10, "tyres": False}]
+    screen.set_plan({"label": "bare", "plan": {"stints": bare}})
+    assert "no tyres at stop 1" in screen.plan_line.text()
+    assert screen.spine.band_label(1) == "NO TYRES"
+    # A zero-lap first stint does not hand its stop to the next band.
+    screen.spine.setPlan([0, 10], ["RS", "RS"], [None, False])
+    assert screen.spine.band_label(0) == "RS"
+    # The first stint's "tyres" is the car it starts on, never a stop.
+    assert not _as_stints([{"laps": 5, "compound": "RS", "tyres": False}])[0].fuel_only
 
 
 def test_the_race_page_says_in_the_week_that_the_plan_will_not_arm(raced):
