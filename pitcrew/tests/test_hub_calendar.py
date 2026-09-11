@@ -634,3 +634,32 @@ def test_the_car_regulations_reach_the_event_row():
     assert "power_limit_bhp" not in regulations({"carRegulations": {}})
     assert "weight_limit_kg" not in regulations({"carRegulations": {
         "weightLimitKg": None}})
+
+
+def test_bop_and_open_tuning_reach_the_event_row(tmp_path):
+    """Plan row 2.7: the Enduro runs BoP (`bopEnabled: true`), which locks the
+    gearbox and the power adjustments, and `initial` had to ask because the
+    app had no field. Only a real boolean is written; silence stays NULL."""
+    from pitcrew.hub.calendar import regulations
+    from pitcrew.store.db import Store
+
+    enduro = regulations({"carRegulations": {"bopEnabled": True,
+                                             "tuningAllowed": True}})
+    assert (enduro["bop_enabled"], enduro["tuning_allowed"]) == (1, 1)
+    closed = regulations({"carRegulations": {"bopEnabled": False,
+                                             "tuningAllowed": False}})
+    assert (closed["bop_enabled"], closed["tuning_allowed"]) == (0, 0)
+    assert "bop_enabled" not in regulations({"carRegulations": {}})
+    assert "bop_enabled" not in regulations({"carRegulations": {
+        "bopEnabled": "true"}}), "a word is not the hub saying yes"
+
+    store = Store(tmp_path / "bop.db")
+    try:
+        event_id = store.create_event(name="Fuji Enduro", track="Fuji",
+                                      **enduro)
+        row = store.get_event(event_id)
+        assert (row["bop_enabled"], row["tuning_allowed"]) == (1, 1)
+        other = store.create_event(name="GR3", track="Fuji")
+        assert store.get_event(other)["bop_enabled"] is None
+    finally:
+        store.close()

@@ -204,8 +204,16 @@ symptom→cause chain built on nothing is this mode's whole failure.
    aero ranges**, so a record from before 20 Aug 2026 is void. Without one, the
    only honest deliverable is the settings screen to read and what to read off
    it.
-2. **Is tuning even open?** BoP locks gearbox and performance on some rounds and
-   **the app has no BoP field**, so nothing will warn you — ask him.
+2. **Is tuning even open, and which car?** Read the event (`list_events`):
+   `bop_enabled` and `tuning_allowed` come from the hub's `carRegulations`
+   (NULL means the hub did not say - then ask him), and `power_limit_bhp` /
+   `weight_limit_kg` bind the sheet. **A BoP round refuses, by name: `top`,
+   `fg`, the gear ratios, ECU output, the power restrictor and ballast** -
+   the lobby locks them, so a sheet that moves one is not a sheet. In a
+   manufacturer series the car is the roster's car **for the class he is
+   assigned that round**, and the class moves between rounds (`hub/read.py`
+   `multi_class_car`); a car taken from the series entry is a different
+   category of car.
 3. **Drivetrain and the physical priors.** Read them from `gt7-brain`, not from
    memory of another car.
 4. Deliver a conservative sheet **plus the runs that would turn its assumptions
@@ -288,7 +296,12 @@ two layers and they need opposite methods
 **No qualifying session has ever been recorded.** The reference is the best
 counted *practice* lap (`race.qualifying.reference_lap`), and saying so is part
 of the answer: quali advice here rests on practice evidence, which is a
-different thing from qualifying evidence.
+different thing from qualifying evidence. **The nearest evidence is marked:**
+a practice session run as a quali simulation carries
+`sessions.practice_intent = 'qualifying'` (13 on file, 17 Aug - 7 Sep; set on
+the Practice screen, exported as `meta.practiceIntent`). Read those for the
+lap and the out-lap, and never feed them to a race burn, wear or stint figure
+(`references/race-planner.md` preflight 5).
 
 1. **The out-lap owns the result.** Warm-up is the whole game, and **no optimal
    tyre window has ever been published for GT7, by anyone**. So: a warm-up

@@ -58,6 +58,11 @@ a plan somebody *else* wrote and returns refusals, warnings and — importantly 
    linearity is assumed, never proven. Never silently convert.
 5. **What compound the evidence came from**, and whether a qualifying session
    was pooled into a race fuel model. One was, and the plan came out rich.
+   **The app records which is which:** `sessions.practice_intent` is `race`
+   (the default) or `qualifying`, set on the Practice screen and exported as
+   `meta.practiceIntent`. A `qualifying` session feeds no burn, wear or stint
+   figure, and a `race` session sets no quali target; where the field is
+   missing, the session predates it - ask him, do not assume `race`.
 6. **Burn rises across a stint as the car lightens.** Never size a fill off an
    early-stint figure.
 7. **Refuel rate: measured, not declared.** A declared rate has inverted a call
@@ -69,6 +74,15 @@ a plan somebody *else* wrote and returns refusals, warnings and — importantly 
    the cliff*, not integrating pace. Do not fit a linear model.
 10. **A timed race's distance is an output of the plan.** A stop is paid in
     laps. Rank on distance, then time.
+11. **Which class, which car, and whether it runs BoP** (plan row 2.7). In a
+    manufacturer series the car is the roster's car for the class he is
+    assigned *that round*, and the class moves. `bop_enabled` locks the
+    gearbox and the power adjustments (`mechanic.md`). **And the board
+    shows eight rows, overall**: in a multi-class field some cars are always
+    off it, a car in the pit lane drops toward the cut, and nothing on file
+    shows GT7's race board marking class - so no plan line and no call
+    claims a class position or a class gap off the board, and a slower
+    class being lapped is traffic, not a rival.
 
 ---
 

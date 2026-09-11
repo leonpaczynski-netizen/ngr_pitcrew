@@ -15,6 +15,14 @@ the car outside them is not a sheet - the lobby refuses it - so read them off
 the event row and say them on the sheet before anything else is priced. Where
 the row is NULL the league did not limit it; that is not zero.
 
+**And whether the round runs BoP** (`events.bop_enabled`, from the hub, plan
+row 2.7). **Under BoP the sheet refuses, by name, every key the lobby
+locks: `top`, `fg`, the six gear ratios, ECU output, the power restrictor
+and ballast** - write "locked by BoP" in those rows, never a value. The
+shift table survives: one gearbox for the whole event is measured once.
+`tuning_allowed` 0 refuses the rest of the sheet too. NULL on either means
+the hub did not say; ask him, and do not read it as open.
+
 **Rank zero first, both halves** (SKILL.md step 1). A correct telemetry reading
 against a wrong setup record produces a confident wrong answer, and that has
 happened in five consecutive sessions.

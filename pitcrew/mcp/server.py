@@ -100,9 +100,13 @@ def list_events() -> str:
     """Every event on file: car, circuit, format, multipliers, game version."""
     store = _store()
     try:
+        # The regulations that bind a sheet travel with the event (plan row
+        # 2.7): `initial` reads BoP and the limits here instead of asking.
         keep = ("id", "name", "track", "layout", "car_name", "race_type",
                 "race_laps", "race_minutes", "tyre_wear_mult", "fuel_mult",
-                "game_version", "abs_setting", "tcs", "drivetrain")
+                "game_version", "abs_setting", "tcs", "drivetrain",
+                "bop_enabled", "tuning_allowed", "power_limit_bhp",
+                "weight_limit_kg", "series")
         return _dump([{k: e.get(k) for k in keep} for e in store.list_events()])
     finally:
         store.close()

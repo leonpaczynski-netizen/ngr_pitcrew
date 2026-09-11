@@ -1203,6 +1203,14 @@ ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
         # not limit it", never 0 (rule 3).
         ("power_limit_bhp", "REAL"),
         ("weight_limit_kg", "REAL"),
+        # **Whether the round runs BoP, and whether tuning is open at all**
+        # (plan row 2.7). BoP locks the gearbox and the power adjustments -
+        # `top`, `fg`, the ratios, ECU, restrictor, ballast - so a sheet that
+        # moves them is refused by the lobby; the Enduro runs it and the app
+        # had no field, so event 4 carried it in `notes`. 1/0 from the hub's
+        # `carRegulations`; NULL is "the hub did not say", never "no" (rule 3).
+        ("bop_enabled", "INTEGER"),
+        ("tuning_allowed", "INTEGER"),
         # Whether `start_hour` and `time_multiplier` were typed or measured
         # off the game clock. Without it a figure the app wrote back is
         # indistinguishable from one he entered, and the app would overwrite

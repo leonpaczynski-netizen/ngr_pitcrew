@@ -46,6 +46,10 @@ and not `declared`, because the driver did not type it. The league did.
   7 Sep 2026** (`power_limit_bhp`, `weight_limit_kg`). Sardegna's 509 BHP /
   1,243 kg and Supercars' 1,335 kg bind the setup, and a sheet issued
   without them is a sheet the lobby refuses.
+- **`carRegulations.bopEnabled` / `tuningAllowed` are event columns since
+  11 Sep 2026** (`bop_enabled`, `tuning_allowed`, 1/0, NULL where the hub
+  does not say). The Enduro runs BoP, which locks the gearbox and the power
+  adjustments; before this the app had no field and `initial` had to ask.
 - **`timeWeather.variableTimeSpeedRate` is not `events.time_multiplier`** -
   or rather, it is the same quantity and writing it still breaks something.
   `store.record_measured_clock` refuses to overwrite a multiplier that is
@@ -421,6 +425,15 @@ def regulations(settings: dict | None) -> dict:
                 out[column] = float(value)
             except (TypeError, ValueError):
                 pass
+    # **BoP, and whether tuning is open** (plan row 2.7). A BoP round locks
+    # the gearbox and the power adjustments, and `initial` asked the driver
+    # because the app had no field. Only a real boolean is written: a hub
+    # that does not say leaves the column NULL, never "no" (rule 3).
+    for hub_key, column in (("bopEnabled", "bop_enabled"),
+                            ("tuningAllowed", "tuning_allowed")):
+        value = cars.get(hub_key)
+        if isinstance(value, bool):
+            out[column] = int(value)
 
     if assists.get("absLimit") == "PROHIBITED":
         out["abs_setting"] = "Off"

@@ -113,7 +113,7 @@
         "Goes to the range record before proposing any slider value",
         "Labels its output as ASSUMED or DOCTRINE rather than measured",
         "Does not diagnose a handling symptom that was never reported",
-        "Asks whether BoP applies, or names it as an unknown",
+        "Reads BoP and open tuning off the event (bop_enabled / tuning_allowed); asks only where they are NULL, and under BoP refuses top, fg, the ratios, ECU, restrictor and ballast by name",
         "Names the runs that would turn the assumptions into evidence"
       ]
     },
