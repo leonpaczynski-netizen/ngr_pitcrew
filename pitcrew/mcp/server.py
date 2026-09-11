@@ -457,8 +457,11 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
         from pitcrew.strategy.execution import built_for_another_race
 
         foreign = built_for_another_race(stamped, store.get_event(event_id))
-        refusals = list(certificate.refusals) + (
-            [f"the {foreign}"] if foreign else [])
+        # **The certificate's refusals, and the mismatch under its own key**
+        # (critic 2, pass 3): `certified: True`, "Driveable" and a refusal in
+        # one reply is rule 13 inside a single document. It IS driveable; it
+        # is for another race.
+        refusals = list(certificate.refusals)
         approve = certificate.certified and foreign is None
         payload = handover.as_stored(stamped)
         payload["handover"]["certificate"] = {
@@ -470,7 +473,8 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
             evidence={"certified": certificate.certified,
                       "refusals": refusals,
                       "warnings": certificate.warnings,
-                      "unchecked": certificate.unchecked},
+                      "unchecked": certificate.unchecked,
+                      "builtForAnotherRace": foreign},
             status="candidate")
         if approve:
             store.approve_strategy(strategy_id)
@@ -501,6 +505,7 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
             "refusals": refusals,
             "warnings": certificate.warnings,
             "unchecked": certificate.unchecked,
+            "builtForAnotherRace": foreign,
             "unhandled": handover.unhandled(),
             "verdict": certificate.describe(),
             "note": note,

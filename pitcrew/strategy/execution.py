@@ -27,13 +27,15 @@ plan"* was once said against a burn no plan ever held.
 """
 from __future__ import annotations
 
+import math
+
 # `context_from_event` is the coordinator's, deliberately. It already reads
 # the `events.race_laps` column overload - MINUTES when `race_type` is
 # `'time'` - and a second implementation of that is a second thing to get
 # wrong. There were two when this module was written; there is one now.
 from pitcrew.race.coordinator import context_from_event, context_from_stored
 from pitcrew.race.expectations import PRACTICE, Expectation
-from pitcrew.strategy.handover import LAP_CEILING, as_whole_number
+from pitcrew.strategy.handover import LAP_CEILING, as_whole_number, short_value
 
 # The keys `stamp` owns. Named so a caller can ask whether a plan has been
 # through here without knowing what is inside them.
@@ -53,9 +55,38 @@ def _is_execution_contract(expects) -> bool:
             and all(key in expects for key in REQUIRED_EXPECTS))
 
 
+def _context_problem(context) -> str | None:
+    """What is wrong with a stored context, in words, or None.
+
+    **The values, not only the keys** (critic 2, pass 3 on the storage row -
+    a BLOCKER). This checked that `car`, `track` and `race_laps` existed, so
+    `"race_laps": "twenty"` stored clean, and then `int()` raised inside
+    `built_for_another_race` on the Approve button - uncaught, and PyQt
+    aborts the process. A null distance read as "built for 0 laps" (rule 3).
+    Every door and the grid ask this one question, so no consumer can see a
+    context it cannot compare.
+    """
+    if not isinstance(context, dict):
+        return "is not a set of fields"
+    if not all(key in context for key in REQUIRED_CONTEXT):
+        return f"does not name {', '.join(REQUIRED_CONTEXT)}"
+    laps, minutes = context.get("race_laps"), context.get("race_minutes")
+    if minutes is not None and (
+            isinstance(minutes, bool) or not isinstance(minutes, (int, float))
+            or not math.isfinite(minutes) or minutes <= 0):
+        return (f"has race_minutes {short_value(minutes)}, which is not a "
+                f"number of minutes")
+    if laps is not None and as_whole_number(laps, LAP_CEILING,
+                                            minimum=0) is None:
+        return f"has race_laps {short_value(laps)}, which is not a lap count"
+    if minutes is None and not laps:
+        return ("names no race length - race_laps and race_minutes are both "
+                "empty")
+    return None
+
+
 def _is_context(context) -> bool:
-    return (isinstance(context, dict)
-            and all(key in context for key in REQUIRED_CONTEXT))
+    return _context_problem(context) is None
 
 
 def practice_lap_count(store, event_id: int) -> int:
@@ -231,10 +262,11 @@ def stamp(store, event_id: int, plan: dict, *, inputs=None,
         raise ValueError(f"no event with id {event_id}")
 
     supplied_context = stamped.get("context")
-    if supplied_context is not None and not _is_context(supplied_context):
+    problem = (_context_problem(supplied_context)
+               if supplied_context is not None else None)
+    if problem is not None:
         raise ValueError(
-            "the plan's `context` does not name "
-            f"{', '.join(REQUIRED_CONTEXT)} - `arm` compares it against the "
+            f"the plan's `context` {problem} - `arm` compares it against the "
             f"event and would refuse a good plan or accept a wrong one")
     if not stamped.get("context"):
         context = context_from_event(event)

@@ -301,7 +301,7 @@ def test_write_strategy_does_not_approve_a_plan_for_another_race(seeded):
         "layout": "Full", "race_laps": 20, "race_minutes": None})
     assert foreign["written"] is True and foreign["approved"] is False
     assert "built for Suzuka Circuit" in foreign["note"]
-    assert any("built for Suzuka Circuit" in r for r in foreign["refusals"])
+    assert "built for Suzuka Circuit" in foreign["builtForAnotherRace"]
     store = Store(db)
     try:
         assert store.get_approved_strategy(event_id)["id"] == good[
@@ -487,3 +487,107 @@ def test_the_desks_own_export_is_refused_by_name_on_the_flat_shape():
     handover = from_dict({"stints": [{"laps": 10}], "export": {"stops": 1}})
     assert any("'export'" in p and "the app builds that section itself" in p
                for p in handover.validate())
+
+
+
+
+# ------------------------------------ critic 2, pass 3 on the storage row
+
+@pytest.mark.parametrize("context", [
+    {"car": "RSR", "track": "Monza", "layout": "Full", "race_laps": "twenty",
+     "race_minutes": None},
+    {"car": "RSR", "track": "Monza", "layout": "Full", "race_laps": 0,
+     "race_minutes": "50"},
+    {"car": "RSR", "track": "Monza", "layout": "Full", "race_laps": 20.5,
+     "race_minutes": None},
+    {"car": "RSR", "track": "Monza", "layout": "Full", "race_laps": None,
+     "race_minutes": None},
+])
+def test_a_context_that_cannot_be_read_is_refused_by_name(store, event_id,
+                                                          context):
+    """**The BLOCKER.** `stamp` checked the context's keys and not their
+    values, so `"race_laps": "twenty"` stored clean and then `int()` raised
+    inside `built_for_another_race` on the Approve button - uncaught, and
+    PyQt aborts the process. A null distance read as "built for 0 laps"
+    (rule 3). One shape check, `_is_context`, for every door and the grid."""
+    from pitcrew.strategy.execution import built_for_another_race
+
+    with pytest.raises(ValueError) as refused:
+        stamp(store, event_id, {**A_PLAN_FOR_CONTEXT, "context": context})
+    assert "int()" not in str(refused.value)
+    assert "race_laps" in str(refused.value) or "race_minutes" in str(
+        refused.value)
+    # And a row that somehow carries one is a contract gap, never a raise.
+    plan = {**A_PLAN_FOR_CONTEXT, "context": context}
+    assert contract_gaps(plan)
+    assert built_for_another_race(plan, store.get_event(event_id)) is None
+
+
+A_PLAN_FOR_CONTEXT = {
+    "stints": [{"laps": 10, "compound": "RM", "start_lap": 1},
+               {"laps": 10, "compound": "RM", "start_lap": 11}],
+    "stops": 1}
+
+
+def test_a_context_typo_never_reaches_the_approve_button_as_a_raise(raced):
+    controller, _screen, store, event_id = raced
+    plan = dict(store.get_approved_strategy(event_id)["plan"])
+    plan["context"] = {**plan["context"], "race_laps": "twenty"}
+    candidate = store.save_strategy(event_id, plan, label="typo")
+    assert controller.approve_stored_strategy(candidate) is False
+    assert "race_laps" in controller.strategy.subtitle.text()
+
+
+def test_the_mcp_door_refuses_a_context_typo_in_words(seeded):
+    db, event_id = seeded
+    got = _write(db, event_id, context={
+        "car": "Porsche 911 RSR (991) '17",
+        "track": "Autodromo Nazionale Monza", "layout": "Full",
+        "race_laps": "twenty", "race_minutes": None})
+    assert got["written"] is False
+    assert "int()" not in got["error"] and "race_laps" in got["error"]
+
+
+def test_the_in_week_warning_is_taken_down_when_it_stops_being_true(raced):
+    """**MAJOR.** It was set when true and never cleared, so after he
+    re-approved the plan the page still told him it would not arm."""
+    controller, screen, store, event_id = raced
+    row = store.get_approved_strategy(event_id)
+    store.update_strategy_plan(row["id"], _unstamped(row["plan"]))
+    controller._refresh_race_options(store.get_event(event_id))
+    assert "will not arm" in screen.subtitle.text()
+    assert controller.approve_stored_strategy(row["id"]) is True
+    assert "will not arm" not in screen.subtitle.text()
+
+
+def test_the_in_week_warning_names_a_plan_for_another_race(raced):
+    controller, screen, store, event_id = raced
+    row = store.get_approved_strategy(event_id)
+    plan = dict(row["plan"])
+    plan["context"] = {**plan["context"], "track": "Suzuka Circuit"}
+    store.update_strategy_plan(row["id"], plan)
+    controller._refresh_race_options(store.get_event(event_id))
+    assert "built for Suzuka Circuit" in screen.subtitle.text()
+
+
+def test_a_foreign_plan_is_certified_and_not_approved_without_contradiction(
+        seeded):
+    """Minor 6: `certified: True`, "Driveable", and a refusal, in one reply.
+    It IS driveable - it is simply for another race - so the refusals stay
+    the certificate's and the mismatch is said under its own key."""
+    db, event_id = seeded
+    _write(db, event_id)
+    foreign = _write(db, event_id, context={
+        "car": "Porsche 911 RSR (991) '17", "track": "Suzuka Circuit",
+        "layout": "Full", "race_laps": 20, "race_minutes": None})
+    assert foreign["approved"] is False and foreign["certified"] is True
+    assert foreign["refusals"] == []
+    assert "Suzuka Circuit" in foreign["builtForAnotherRace"]
+
+
+def test_pit_laps_on_a_plan_with_no_start_laps_is_not_a_crash():
+    """Minor 5's surviving mutant: the `all(s is not None ...)` guard. A raw
+    plan carrying `pit_laps` and no start laps would raise TypeError."""
+    proposed = plan(stint(10), stint(10, "RM"))
+    proposed["pit_laps"] = [10]
+    assert certify(proposed, inputs()).certified

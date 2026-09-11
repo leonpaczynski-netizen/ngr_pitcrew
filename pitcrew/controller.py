@@ -1497,33 +1497,51 @@ class PitCrewController(QObject):
         # the storage row): a row approved before plans carried their
         # contract showed as the approved plan with no sign it will not arm.
         # The same sentence the grid gives, from the same expression.
-        why = (self._why_it_will_not_arm(approved["plan"])
-               if approved is not None else None)
+        # **Not when he has chosen not to run it** (critic 2, pass 3): the
+        # grid refuses nothing then, and a warning about a plan he has set
+        # aside is a warning about nothing.
+        why = (self._why_it_will_not_arm(approved["plan"], event)
+               if approved is not None and self.race_screen.use_plan()
+               else None)
+        warning = "The approved plan will not arm: "
         if why is not None:
-            self.race_screen.set_status(
-                f"The approved plan will not arm: {why}", warn=True)
+            self.race_screen.set_status(f"{warning}{why}", warn=True)
+        else:
+            # **And taken down when it stops being true** (critic 2, pass 3,
+            # MAJOR). It was set and never cleared, so after he re-approved
+            # the plan the page still told him it would not arm. Only this
+            # warning is taken down - any other status is somebody else's.
+            subtitle = getattr(self.race_screen, "subtitle", None)
+            if subtitle is not None and subtitle.text().startswith(warning):
+                self.race_screen.set_status("No plan armed.")
 
     @staticmethod
-    def _why_it_will_not_arm(plan) -> str | None:
+    def _why_it_will_not_arm(plan, event=None) -> str | None:
         """What stops an approved row arming, in the words the driver reads.
 
         Two different remedies, so two sentences (rule 13): a plan that
         cannot be read is refused by approval, and a plan missing its
-        contract has it filled in by approval.
+        contract has it filled in by approval. **And a plan for another
+        race**, which `arm` refuses on the grid - said in the week too, in
+        `matches`' own words (critic 2, pass 3).
         """
         broken = unreadable(plan)
         if broken is not None:
             return (f"{broken[0].upper()}{broken[1:]}. Approve another plan "
                     "on the Strategy page.")
         gaps = contract_gaps(plan)
-        if not gaps:
-            return None
-        # "a plan", not "it again": the loaded cards list only rows carrying
-        # a handover, so an optimiser plan approved before stamping has no
-        # card to press - approving any plan stamps.
-        return ("It was approved without " + "; and without ".join(gaps)
-                + ". Approve a plan on the Strategy page - approval fills "
-                "those in.")
+        if gaps:
+            # "a plan", not "it again": the loaded cards list only rows
+            # carrying a handover, so an optimiser plan approved before
+            # stamping has no card to press - approving any plan stamps.
+            return ("It was approved without " + "; and without ".join(gaps)
+                    + ". Approve a plan on the Strategy page - approval "
+                    "fills those in.")
+        foreign = (built_for_another_race(plan, event)
+                   if event is not None else None)
+        if foreign is not None:
+            return f"The {foreign}."
+        return None
 
     def load_active_event(self) -> None:
         event = self.active_event()
@@ -4390,7 +4408,8 @@ class PitCrewController(QObject):
         # taken off the event at the grid is the event checked against itself,
         # which is the check this exists to make. Approving it again is one
         # click with the headset off, and is the driver saying which race.
-        why = self._why_it_will_not_arm(plan) if plan is not None else None
+        why = (self._why_it_will_not_arm(plan, event) if plan is not None
+               else None)
         if why is not None:
             self.race_screen.set_status(f"Plan refused: {why}", warn=True)
             return False
