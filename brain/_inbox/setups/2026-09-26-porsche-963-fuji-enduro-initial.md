@@ -18,7 +18,7 @@ into `events`. Nothing here was written to the database.
 | When | 26 Sep 2026, 11:00 UTC |
 | Circuit | Fuji International Speedway - the bare name is the base layout (Full Course) |
 | Format | **120 minutes, timed**, rolling start, grid by qualifying |
-| Qualifying | 10 minutes, same wear and fuel as the race, 100 L |
+| Qualifying | 10 minutes, same wear and fuel as the race, 100 L, **no slipstream** (`qualifyingSlipstreamStrength: DISABLED`) |
 | Tyres / fuel | wear **3x**, fuel **2x**, refuel **1 L/s**, start on 100 L; no mandatory stop, no required compound change |
 | Weather / time | random weather, afternoon, time x12 |
 | Assists | ABS and TCS not limited; countersteer and ASM prohibited |
@@ -33,7 +33,9 @@ race closes for the rest - **not** the app's `extra_time_s` (hub schema note 7).
 ## 2. Refused by name — this round runs BoP
 
 The lobby locks these, so a sheet that moves one is not a sheet. **Each is
-written "locked by BoP" and never given a value:**
+written "locked by BoP" and never given a value** *[the gearbox lock is the
+driver's own report, Spa Enduro, 22 Aug; ECU, restrictor and ballast are
+ASSUMED from GT7's BoP - the list errs on the side of refusing]*:
 
 - `top` (maximum speed)
 - `fg` (final gear)
@@ -48,7 +50,9 @@ so it is measured once, in the first practice run, and issued with
 a guess about ratios nobody has read.
 
 `tuningAllowed: true` leaves suspension, dampers, alignment, the diff, aero and
-brake balance open - brake balance is his trim, recorded and never corrected.
+brake balance open *[ASSUMED - the only evidence is the Spa 992 sheet entered
+under BoP; confirm on the settings screen in run 0]* - brake balance is his
+trim, recorded and never corrected.
 
 ## 3. Rank zero — there is no range record for this car
 
@@ -97,6 +101,12 @@ yet**. What the hub fixes:
   3. **pit loss at Fuji** - the GR3 round's 20 s is declared, not measured.
 
 ## 6. The runs that turn this into evidence
+
+**Every run in a lobby with BoP on and the Enduro's settings** (3x wear, 2x
+fuel, 1 L/s). BoP changes the power, the weight and the gearbox, so a burn,
+a pace or a shift point taken in a time trial or an open lobby is a
+different car's. The app records the lobby (`practice_mode`) but not whether
+BoP was on - say so in the run plan.
 
 | # | Run | Purpose | Laps |
 |---|---|---|---|

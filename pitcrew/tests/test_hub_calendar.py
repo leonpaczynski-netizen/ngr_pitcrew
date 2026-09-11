@@ -649,6 +649,10 @@ def test_bop_and_open_tuning_reach_the_event_row(tmp_path):
     closed = regulations({"carRegulations": {"bopEnabled": False,
                                              "tuningAllowed": False}})
     assert (closed["bop_enabled"], closed["tuning_allowed"]) == (0, 0)
+    # Mixed, so swapping the two columns cannot pass (the critic, minor 1).
+    mixed = regulations({"carRegulations": {"bopEnabled": True,
+                                            "tuningAllowed": False}})
+    assert (mixed["bop_enabled"], mixed["tuning_allowed"]) == (1, 0)
     assert "bop_enabled" not in regulations({"carRegulations": {}})
     assert "bop_enabled" not in regulations({"carRegulations": {
         "bopEnabled": "true"}}), "a word is not the hub saying yes"

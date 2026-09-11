@@ -455,6 +455,80 @@ def test_the_disagreement_is_said_on_the_launch_path_not_only_on_a_switch(
     assert "mandatory stops 0 here, 1 on the hub" in event_screen.footer_note.text()
 
 
+def test_bop_survives_the_calendar_pick_of_an_incomplete_round(
+        wired, tmp_path, monkeypatch):
+    """The critic on row 2.7, BLOCKER (its repro, kept). Every Enduro round
+    arrives incomplete - no legal compounds on the hub - so it goes pick ->
+    fill the compounds -> Save, and that save dropped BoP: the Fuji event
+    would have said "ask him" after the hub had said yes."""
+    enduro = {**GR3, "carRegulations": {"bopEnabled": True,
+                                        "tuningAllowed": True,
+                                        "powerLimitBhp": 509}}
+    enduro["gridStart"] = {"startType": "ROLLING", "mandatoryPitStops": False}
+    path = tmp_path / "league.db"
+    db = sqlite3.connect(path)
+    db.executescript(SCHEMA)
+    db.execute("INSERT INTO Series (id, name, status, defaultLobbySettings) "
+               "VALUES ('s1','NGR GR3','ACTIVE',?)", (json.dumps(enduro),))
+    db.execute("INSERT INTO Driver VALUES ('d1','u1','Beeni','Beeni-187')")
+    db.execute("INSERT INTO SeriesRegistration VALUES "
+               "('sr1','s1','d1','Lamborghini Huracan GT3','OK')")
+    db.execute("INSERT INTO Round VALUES ('r1','s1','r1',?,'SCHEDULED',1,"
+               "'Fuji International Speedway','null')", (SOON,))
+    db.commit()
+    db.close()
+    monkeypatch.setattr(hub_read, "DEFAULT_PATH", path)
+    controller, event_screen, _, store = wired
+
+    controller.switch_event("r1")
+    assert store.active_event_id() is None, "an incomplete round waits for him"
+    controller._on_event_saved({**an_event(), **event_screen.values(),
+                                "available_compounds": ["RH", "RM", "RS"]})
+    saved = store.get_event(store.active_event_id())
+    assert (saved["bop_enabled"], saved["tuning_allowed"]) == (1, 1)
+    assert saved["power_limit_bhp"] == 509.0
+
+
+def _bop_hub(tmp_path, monkeypatch):
+    """A one-round hub whose league runs BoP with open tuning."""
+    blob = {**GR3, "carRegulations": {**GR3.get("carRegulations", {}),
+                                      "bopEnabled": True,
+                                      "tuningAllowed": True}}
+    path = tmp_path / "bop-league.db"
+    db = sqlite3.connect(path)
+    db.executescript(SCHEMA)
+    db.execute("INSERT INTO Series (id, name, status, defaultLobbySettings) "
+               "VALUES ('s1','NGR GR3','ACTIVE',?)", (json.dumps(blob),))
+    db.execute("INSERT INTO Driver VALUES ('d1','u1','Beeni','Beeni-187')")
+    db.execute("INSERT INTO SeriesRegistration VALUES "
+               "('sr1','s1','d1','Lamborghini Huracan GT3','OK')")
+    db.execute("INSERT INTO Round VALUES ('r1','s1','r1',?,'SCHEDULED',1,?,"
+               "'null')", (SOON, COMPLETE))
+    db.commit()
+    db.close()
+    monkeypatch.setattr(hub_read, "DEFAULT_PATH", path)
+
+
+def test_a_linked_event_takes_the_hubs_bop_and_hears_a_change(
+        wired, tmp_path, monkeypatch):
+    """The critic on row 2.7, M1: nothing wrote the hub's BoP onto an event
+    already stored, and a change on the hub was never reported. A NULL is not
+    his answer, so the hub fills it; a value he holds is reported against,
+    never written over."""
+    _bop_hub(tmp_path, monkeypatch)
+    controller, event_screen, _, store = wired
+    controller._on_event_saved(an_event(
+        name="Round 6", track=COMPLETE, layout="Full Course",
+        car_name="Lamborghini Huracan GT3", hub_round_id="r1"))
+    event_id = store.active_event_id()
+    assert store.get_event(event_id)["bop_enabled"] == 1
+
+    store.update_event(event_id, bop_enabled=0)
+    controller.load_active_event()
+    assert store.get_event(event_id)["bop_enabled"] == 0, "his answer stays"
+    assert "BoP 0 here, 1 on the hub" in event_screen.footer_note.text()
+
+
 def test_an_event_left_unlinked_cannot_be_compared_against_anything(wired,
                                                                     hub_at):
     """The comparison keys on `hub_round_id`, so leaving the driver on his own

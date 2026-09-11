@@ -57,7 +57,15 @@ HUB_HEADING = "—  Coming up, from the hub  —"
 # Loaded onto the screen and echoed back out of `values()` untouched: without
 # this, opening a hub-sourced event and pressing Save silently dropped the
 # round it belongs to and the compounds the league requires.
-CARRIED = ("hub_round_id", "required_compounds")
+#
+# **And the regulations the form has no box for** (the critic on row 2.7,
+# BLOCKER): an Enduro round arrives incomplete - the hub gives no legal
+# compounds - so it goes pick -> fill the compounds -> Save, and that save
+# dropped BoP and the power and weight limits on the floor. The Fuji event
+# would have been created with `bop_enabled` NULL, "ask him", after the hub
+# had said yes.
+CARRIED = ("hub_round_id", "required_compounds", "bop_enabled",
+           "tuning_allowed", "power_limit_bhp", "weight_limit_kg")
 # Sentinel for "no switch is pending". `None` cannot do this job: it is the
 # picker's value for New event, and a real target.
 _UNSET = object()

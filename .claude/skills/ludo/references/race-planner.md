@@ -61,8 +61,9 @@ a plan somebody *else* wrote and returns refusals, warnings and — importantly 
    **The app records which is which:** `sessions.practice_intent` is `race`
    (the default) or `qualifying`, set on the Practice screen and exported as
    `meta.practiceIntent`. A `qualifying` session feeds no burn, wear or stint
-   figure, and a `race` session sets no quali target; where the field is
-   missing, the session predates it - ask him, do not assume `race`.
+   figure, and a `race` session sets no quali target; a practice session
+   with no value predates the field (the last is 14 Aug) - ask him, do not
+   assume `race`. Race sessions never carry one; their kind says it.
 6. **Burn rises across a stint as the car lightens.** Never size a fill off an
    early-stint figure.
 7. **Refuel rate: measured, not declared.** A declared rate has inverted a call

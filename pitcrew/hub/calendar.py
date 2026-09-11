@@ -801,6 +801,10 @@ SPOKEN = {
     "available_compounds": "compounds",
     "start_type": "start",
     "refuel_rate_lps": "refuel rate",
+    # A hub that turns BoP on or off after he has an answer on file is news
+    # (the critic on row 2.7, M1). 1 is on, 0 off.
+    "bop_enabled": "BoP",
+    "tuning_allowed": "open tuning",
 }
 
 

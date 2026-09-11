@@ -204,7 +204,9 @@ symptom→cause chain built on nothing is this mode's whole failure.
    aero ranges**, so a record from before 20 Aug 2026 is void. Without one, the
    only honest deliverable is the settings screen to read and what to read off
    it.
-2. **Is tuning even open, and which car?** Read the event (`list_events`):
+2. **Is tuning even open, and which car?** Read the event (`list_events`) -
+   or, for a round with no event row yet, the hub itself, read-only
+   (`hub/calendar.py` `upcoming()` gives each round's `regs` and car):
    `bop_enabled` and `tuning_allowed` come from the hub's `carRegulations`
    (NULL means the hub did not say - then ask him), and `power_limit_bhp` /
    `weight_limit_kg` bind the sheet. **A BoP round refuses, by name: `top`,

@@ -48,6 +48,12 @@ answer that nobody re-queries.
 - **Never lower GT7 Sensitivity; FullForce stays on.** Rig and haptics are
   equipment safety, not race engineering — do not offer adjustments there.
 
+- **Under BoP, nothing the lobby locks is proposed** (`events.bop_enabled`,
+  from the hub; before an event exists, the hub itself, read-only): not `top`,
+  not `fg`, not a gear ratio, not ECU output, the restrictor or ballast - in
+  any mode, `what to try` included. The gearbox lock is the driver's own
+  report (Spa, 22 Aug); the rest is GT7's BoP as understood, erring safe.
+
 ## About the plan
 
 - **No spare lap of fuel in a lap race.** Conservatism is priced in seconds and

@@ -1715,6 +1715,41 @@ class PitCrewController(QObject):
             log("pitcrew").exception("the regulations could not be compared")
             return []
 
+    # The regulations the hub states and the form has no box for. A NULL in
+    # one of these is not his answer - he was never asked - so the hub's word
+    # fills it; a value he holds is his, and a later hub change is reported
+    # against it (`calendar.SPOKEN`), never written over it.
+    ABSORBED = ("bop_enabled", "tuning_allowed", "power_limit_bhp",
+                "weight_limit_kg")
+
+    def _absorb_hub_regulations(self, event: dict) -> dict:
+        """Fill the hub's word into regulation columns the event holds as NULL.
+
+        **An event stored before the column existed never got it** (the critic
+        on row 2.7, M1): events 13 and 14 are hub-linked and read
+        `bop_enabled` NULL, so Ludo would ask about each of them for ever.
+        Runs where the comparison already runs - every load of a linked event.
+        """
+        round_id = event.get("hub_round_id")
+        if not round_id:
+            return event
+        try:
+            proposal = self._proposal(round_id)
+            if proposal is None:
+                return event
+            fill = {key: proposal.regs[key] for key in self.ABSORBED
+                    if event.get(key) is None
+                    and proposal.regs.get(key) is not None}
+            if not fill:
+                return event
+            self.store.update_event(event["id"], **fill)
+            log("pitcrew").info("calendar: %s took %s from the hub",
+                                event.get("name"), fill)
+            return {**event, **fill}
+        except Exception:
+            log("pitcrew").exception("the hub's regulations could not be read in")
+            return event
+
     def _say_calendar_news(self, event: dict | None) -> None:
         """Put what the calendar did, and what it found, on the screen.
 
@@ -1734,6 +1769,8 @@ class PitCrewController(QObject):
             if message:
                 said.append(message)
                 setattr(self, attribute, None)
+        if event:
+            event = self._absorb_hub_regulations(event)
         differences = self._regulation_differences(event) if event else []
         if differences:
             said.append("Against the hub: " + "; ".join(differences) + ".")
@@ -1960,7 +1997,12 @@ class PitCrewController(QObject):
                     "priority", "notes", "game_version", "extra_time_s",
                     "start_hour", "time_multiplier", "weather_rule",
                     "rain_possible", "series", "hub_round_id",
-                    "required_compounds"):
+                    "required_compounds",
+                    # The hub's regulations the form carries but does not
+                    # edit (the critic on row 2.7, BLOCKER) - dropped here,
+                    # an Enduro round lost BoP on its way into the event.
+                    "bop_enabled", "tuning_allowed", "power_limit_bhp",
+                    "weight_limit_kg"):
             if key in data:
                 fields[key] = data[key]
         if existing:

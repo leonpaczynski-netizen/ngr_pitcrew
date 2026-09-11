@@ -87,6 +87,10 @@ def test_it_serves_the_events_it_has(seeded):
     assert len(got) == 1
     assert got[0]["car_name"] == "Porsche 911 RSR (991) '17"
     assert got[0]["game_version"] == "1.71"
+    # The regulations that bind a sheet travel with the event (row 2.7).
+    for key in ("bop_enabled", "tuning_allowed", "power_limit_bhp",
+                "weight_limit_kg", "series"):
+        assert key in got[0], key
 
 
 def test_a_shift_table_comes_back_for_the_circuit_it_was_issued_for(seeded):
