@@ -463,7 +463,8 @@ def test_bop_survives_the_calendar_pick_of_an_incomplete_round(
     would have said "ask him" after the hub had said yes."""
     enduro = {**GR3, "carRegulations": {"bopEnabled": True,
                                         "tuningAllowed": True,
-                                        "powerLimitBhp": 509}}
+                                        "powerLimitBhp": 509,
+                                        "weightLimitKg": 1243}}
     enduro["gridStart"] = {"startType": "ROLLING", "mandatoryPitStops": False}
     path = tmp_path / "league.db"
     db = sqlite3.connect(path)
@@ -482,19 +483,29 @@ def test_bop_survives_the_calendar_pick_of_an_incomplete_round(
 
     controller.switch_event("r1")
     assert store.active_event_id() is None, "an incomplete round waits for him"
+    # **The save path alone** (pass 2, minor 1): with the round still on the
+    # hub, the load after the save filled the values back in and the test
+    # passed without the save fix. The hub stops listing it before Save.
+    monkeypatch.setattr(controller, "hub_proposals", lambda: [])
     controller._on_event_saved({**an_event(), **event_screen.values(),
                                 "available_compounds": ["RH", "RM", "RS"]})
     saved = store.get_event(store.active_event_id())
     assert (saved["bop_enabled"], saved["tuning_allowed"]) == (1, 1)
     assert saved["power_limit_bhp"] == 509.0
+    assert saved["weight_limit_kg"] == 1243.0
 
 
-def _bop_hub(tmp_path, monkeypatch):
-    """A one-round hub whose league runs BoP with open tuning."""
-    blob = {**GR3, "carRegulations": {**GR3.get("carRegulations", {}),
-                                      "bopEnabled": True,
-                                      "tuningAllowed": True}}
-    path = tmp_path / "bop-league.db"
+def _bop_hub(tmp_path, monkeypatch, *, bop=True, tuning=True, power=None,
+             weight=None, name="bop-league.db"):
+    """A one-round hub with these car regulations."""
+    cars = {**GR3.get("carRegulations", {}), "bopEnabled": bop,
+            "tuningAllowed": tuning}
+    if power is not None:
+        cars["powerLimitBhp"] = power
+    if weight is not None:
+        cars["weightLimitKg"] = weight
+    blob = {**GR3, "carRegulations": cars}
+    path = tmp_path / name
     db = sqlite3.connect(path)
     db.executescript(SCHEMA)
     db.execute("INSERT INTO Series (id, name, status, defaultLobbySettings) "
@@ -509,24 +520,43 @@ def _bop_hub(tmp_path, monkeypatch):
     monkeypatch.setattr(hub_read, "DEFAULT_PATH", path)
 
 
-def test_a_linked_event_takes_the_hubs_bop_and_hears_a_change(
+def test_a_linked_event_follows_the_hub_and_says_what_changed(
         wired, tmp_path, monkeypatch):
-    """The critic on row 2.7, M1: nothing wrote the hub's BoP onto an event
-    already stored, and a change on the hub was never reported. A NULL is not
-    his answer, so the hub fills it; a value he holds is reported against,
-    never written over."""
-    _bop_hub(tmp_path, monkeypatch)
+    """The critic on row 2.7: M1, nothing wrote the hub's BoP onto a stored
+    event; pass 2's BLOCKER, the first word the hub said was then kept for
+    good as if it were his - BoP turned on after he saved and Ludo was still
+    handed "off", and a new power limit went unsaid. No screen writes these
+    columns, so the hub's current word wins and a change is said."""
+    _bop_hub(tmp_path, monkeypatch, bop=False, power=509, weight=1243)
     controller, event_screen, _, store = wired
     controller._on_event_saved(an_event(
         name="Round 6", track=COMPLETE, layout="Full Course",
         car_name="Lamborghini Huracan GT3", hub_round_id="r1"))
     event_id = store.active_event_id()
-    assert store.get_event(event_id)["bop_enabled"] == 1
+    got = store.get_event(event_id)
+    assert (got["bop_enabled"], got["power_limit_bhp"],
+            got["weight_limit_kg"]) == (0, 509.0, 1243.0)
 
-    store.update_event(event_id, bop_enabled=0)
+    # The league turns BoP on and moves both limits.
+    _bop_hub(tmp_path, monkeypatch, bop=True, tuning=False, power=520,
+             weight=1250, name="bop-league-2.db")
     controller.load_active_event()
-    assert store.get_event(event_id)["bop_enabled"] == 0, "his answer stays"
-    assert "BoP 0 here, 1 on the hub" in event_screen.footer_note.text()
+    got = store.get_event(event_id)
+    assert (got["bop_enabled"], got["tuning_allowed"], got["power_limit_bhp"],
+            got["weight_limit_kg"]) == (1, 0, 520.0, 1250.0)
+    said = event_screen.footer_note.text()
+    for words in ("BoP is now on", "tuning is now closed",
+                  "power limit now 520 BHP (was 509)",
+                  "weight limit now 1250 kg (was 1243)"):
+        assert words in said, (words, said)
+    # Never the raw form ("BoP 0 here, 1 on the hub", pass 2 minor 2); the
+    # boxed fields keep their own comparison, which does read "here/on the hub".
+    assert "BoP 0" not in said and "BoP 1" not in said
+    assert "open tuning" not in said
+    # The form loaded after the hub's word, so a Save carries it, not the
+    # stale copy (the pass-2 ordering).
+    assert event_screen.values()["bop_enabled"] == 1
+    assert event_screen.values()["power_limit_bhp"] == 520.0
 
 
 def test_an_event_left_unlinked_cannot_be_compared_against_anything(wired,

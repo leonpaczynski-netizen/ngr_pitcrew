@@ -801,10 +801,10 @@ SPOKEN = {
     "available_compounds": "compounds",
     "start_type": "start",
     "refuel_rate_lps": "refuel rate",
-    # A hub that turns BoP on or off after he has an answer on file is news
-    # (the critic on row 2.7, M1). 1 is on, 0 off.
-    "bop_enabled": "BoP",
-    "tuning_allowed": "open tuning",
+    # BoP, open tuning and the power and weight limits are NOT here: no
+    # screen has a box for them, so the hub's current word is applied on
+    # load and a change is said then (`controller._apply_hub_regulations`) -
+    # they can never disagree with a value of his.
 }
 
 

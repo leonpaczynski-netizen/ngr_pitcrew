@@ -1625,6 +1625,11 @@ class PitCrewController(QObject):
             self._say_calendar_news(None)
             return
 
+        # **The hub's regulations first, then the form** (the critic on row
+        # 2.7, pass 2, BLOCKER). Loaded the other way round, the form carried
+        # the row as it was before the hub's word was applied, and the next
+        # Save wrote that stale copy back over it.
+        event, proposal, applied = self._apply_hub_regulations(event)
         self.event_screen.load(event)
         self.practice.set_laps(self._rows_for_event(event["id"]))
         self.practice.set_status(self._idle_status(event))
@@ -1635,7 +1640,7 @@ class PitCrewController(QObject):
         # Last, because it writes the footer note and `event_screen.load`
         # above does not - anything said earlier would be on the screen the
         # load then replaced.
-        self._say_calendar_news(event)
+        self._say_calendar_news(event, proposal=proposal, applied=applied)
 
     def switch_event(self, event_id) -> None:
         """Make another saved event the one the whole app is working on.
@@ -1697,11 +1702,13 @@ class PitCrewController(QObject):
             note += " Against the hub: " + "; ".join(differences) + "."
         self.event_screen.note(note, warn=bool(differences))
 
-    def _regulation_differences(self, event: dict) -> list[str]:
+    def _regulation_differences(self, event: dict, proposal=...) -> list[str]:
         """How this event's regulations differ from the league's published ones.
 
         Empty for an event with no round on the hub, which is every event
         created by hand and every round the calendar could not resolve.
+        `proposal` is the round already read this load, so the hub is read
+        once, not twice (pass 2, minor); `...` means look it up.
         """
         round_id = event.get("hub_round_id")
         if not round_id:
@@ -1709,48 +1716,67 @@ class PitCrewController(QObject):
         try:
             from pitcrew.hub.calendar import disagreements
 
-            proposal = self._proposal(round_id)
+            if proposal is ...:
+                proposal = self._proposal(round_id)
             return disagreements(proposal, event) if proposal else []
         except Exception:
             log("pitcrew").exception("the regulations could not be compared")
             return []
 
-    # The regulations the hub states and the form has no box for. A NULL in
-    # one of these is not his answer - he was never asked - so the hub's word
-    # fills it; a value he holds is his, and a later hub change is reported
-    # against it (`calendar.SPOKEN`), never written over it.
-    ABSORBED = ("bop_enabled", "tuning_allowed", "power_limit_bhp",
+    # **The regulations only the hub writes.** No screen has a box for any of
+    # them, so a value stored here is always the hub's earlier word, never
+    # his - and keeping it against a newer one is the hub's first word frozen
+    # into the event (the critic on row 2.7, pass 2, BLOCKER: BoP turned on
+    # after he saved, and Ludo was still handed "off"). The hub's current
+    # value wins on every load of a linked upcoming round, and a change is
+    # said. "Report, never overwrite" stays for the columns with a box.
+    HUB_ONLY = ("bop_enabled", "tuning_allowed", "power_limit_bhp",
                 "weight_limit_kg")
 
-    def _absorb_hub_regulations(self, event: dict) -> dict:
-        """Fill the hub's word into regulation columns the event holds as NULL.
+    @staticmethod
+    def _said_change(key: str, was, now) -> str:
+        """One change, in the driver's words - not "BoP 0 here, 1 on the hub"."""
+        if key == "bop_enabled":
+            return f"BoP is now {'on' if now else 'off'} for this round"
+        if key == "tuning_allowed":
+            return f"tuning is now {'open' if now else 'closed'} for this round"
+        unit, label = (("BHP", "power limit") if key == "power_limit_bhp"
+                       else ("kg", "weight limit"))
+        return f"{label} now {now:.0f} {unit} (was {was:.0f})"
 
-        **An event stored before the column existed never got it** (the critic
-        on row 2.7, M1): events 13 and 14 are hub-linked and read
-        `bop_enabled` NULL, so Ludo would ask about each of them for ever.
-        Runs where the comparison already runs - every load of a linked event.
+    def _apply_hub_regulations(self, event: dict):
+        """The hub's current word into the hub-only columns of a linked event.
+
+        Returns `(event, proposal, notes)`: the row as it now stands, the
+        round read (handed on so the hub is read once per load), and each
+        change said - a NULL filled for the first time is not news, a value
+        that moved is. A round the hub no longer lists changes nothing.
         """
         round_id = event.get("hub_round_id")
         if not round_id:
-            return event
+            return event, None, []
         try:
             proposal = self._proposal(round_id)
             if proposal is None:
-                return event
-            fill = {key: proposal.regs[key] for key in self.ABSORBED
-                    if event.get(key) is None
-                    and proposal.regs.get(key) is not None}
+                return event, None, []
+            fill = {key: proposal.regs[key] for key in self.HUB_ONLY
+                    if proposal.regs.get(key) is not None
+                    and event.get(key) != proposal.regs[key]}
             if not fill:
-                return event
+                return event, proposal, []
             self.store.update_event(event["id"], **fill)
-            log("pitcrew").info("calendar: %s took %s from the hub",
-                                event.get("name"), fill)
-            return {**event, **fill}
+            notes = [self._said_change(key, event[key], value)
+                     for key, value in fill.items()
+                     if event.get(key) is not None]
+            log("pitcrew").info("calendar: %s took %s from the hub (round %s)",
+                                event.get("name"), fill, round_id)
+            return {**event, **fill}, proposal, notes
         except Exception:
             log("pitcrew").exception("the hub's regulations could not be read in")
-            return event
+            return event, None, []
 
-    def _say_calendar_news(self, event: dict | None) -> None:
+    def _say_calendar_news(self, event: dict | None, *, proposal=...,
+                           applied=()) -> None:
         """Put what the calendar did, and what it found, on the screen.
 
         **The launch path had neither.** `open_on_next_round` moved the active
@@ -1769,13 +1795,16 @@ class PitCrewController(QObject):
             if message:
                 said.append(message)
                 setattr(self, attribute, None)
-        if event:
-            event = self._absorb_hub_regulations(event)
-        differences = self._regulation_differences(event) if event else []
+        if applied:
+            # Said as news, because it changes what may go on the sheet.
+            said.append("From the hub: " + "; ".join(applied) + ".")
+        differences = (self._regulation_differences(event, proposal)
+                       if event else [])
         if differences:
             said.append("Against the hub: " + "; ".join(differences) + ".")
         if said:
-            self.event_screen.note(" ".join(said), warn=bool(differences))
+            self.event_screen.note(" ".join(said),
+                                   warn=bool(differences or applied))
 
     def _refresh_event_picker(self, active_id) -> None:
         """Fill the picker: the stored events, then the rounds still to come.
