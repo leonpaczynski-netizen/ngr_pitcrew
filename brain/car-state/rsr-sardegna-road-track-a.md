@@ -2294,3 +2294,48 @@ with no recovery. That is not a spare lap - it is the weather's own range.
 **Still no compound call** - section 23 stands: the top plans sit ~12-16 s apart
 on a cross-session compound delta, which is a tie. The same-session
 three-compound run is still the thing that settles it.
+
+---
+
+## 40. RACE PLAN DECIDED BY THE DRIVER - one stop, Racing Mediums, fuel-save stints. 11 Sep 2026
+
+> **[DRIVER]:** *"race will be one stop on mediums, we will know the fuel rate when
+> we fill up based on what we have used and george will know the wind conditions
+> from the first stint."* - and - *"fuel save saved tyres and fuel and can make a
+> one stop on RM work."*
+
+**The engine agrees, on the same inputs, calm day or windy:**
+
+```
+  RM one stop, saving      29 laps   RM15 / RM14   fastest
+  RM two stops, saving     29 laps                 +31.5 / +32.3 s
+  RM two stops, full send  29 laps                 +34.5 / +37.4 s
+  RH one stop, saving      29 laps                 +41.9 / +40.9 s
+```
+
+Fuel on saving stints: **74-89 L per stint** - fits, calm or windy. (My first
+answer led with full-send rows, which do not apply to this plan. Recorded as
+`feedback_hold_the_agreed_plan`.)
+
+**Fuel at the stop - confirmed in code.** George sizes the fill from *this
+race's* burn: `coordinator.py:814-854` uses the current stint's measured rate
+once it has three clean laps, and `calls.py` `fuel_target_l` sizes the fill from
+it. Nothing reads wind directly, and nothing needs to - the stint-1 burn carries
+it.
+
+**The two open items, and neither changes the plan:**
+
+1. **Rear-right past 89% is unmeasured on this compound.** Saving rate 0.0645/lap
+   puts it at ~90% after 14 laps and **~97% after 15**. The last clean medium lap
+   on file is 89% (s154 L13, 101.578). The Soft cliffed at 89-100%. **One practice
+   run settles it: a 15-lap RM stint, saving, from full.**
+2. **George will say "Tyres are at the end of their window" at ~85% in each
+   stint** - `calls.py` `_tyre()`, hard-coded `0.85`, LOW confidence. It is a
+   report. **It cannot add a stop** if the approved plan's playbook does not allow
+   one (`_within_the_playbook` strips structural actions). No plan is stored for
+   event 11 yet.
+
+**Stint order proposed: 15 first, 14 second** (the engine's own split). The long
+stint runs while a stop is still available - if the rear falls away at 90%+, he
+can box a lap early. Run the other way round, the 97% laps are the last laps of
+the race with no remedy.
