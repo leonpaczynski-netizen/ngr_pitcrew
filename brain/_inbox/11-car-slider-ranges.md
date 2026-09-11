@@ -47,15 +47,13 @@
 
 **Nothing was clamped** — all three of Rev D's LSD values and both damper-expansion values still sit inside the new endpoints, so `setups/2026-08-17-huracan-watkins-glen-long-revD.md` parses without loss. **But what they mean as a fraction of range has moved, and on one axis it moved a long way:**
 
-*The values are the sheet's, not this file's (§1a: a setup value is written in one place). Percent of range only.*
+*No position is kept here, in values or in percent (§1a, and the ledger README: on a 0–100 axis a percent IS the value). Read the value off the sheet and convert:*
 
-| Rev D axis | % of v1.70 range | **% of v1.71 range** | |
-|---|---:|---:|---|
-| `lsd_i` | 2 % | **20 %** | ⚠️ **the ceiling halved (60 → 30).** The one axis where the physical meaning most plausibly moved with it |
-| `lsd_a` | 24 % | **18 %** | |
-| `lsd_b` | 42 % | **28 %** | |
-| `de_f` | 60 % | **40 %** | rebound headroom above it that did not exist before |
-| `de_r` | 30 % | **20 %** | |
+| Axis | v1.70 range → percent | **v1.71 range → percent** | |
+|---|---|---|---|
+| `lsd_i` | (v − 5) / 55 | **v / 30** | ⚠️ **the ceiling halved (60 → 30)** - every value's percent roughly doubles; the one axis where the physical meaning most plausibly moved with it |
+| `lsd_a`, `lsd_b` | (v − 5) / 55 | **v / 100** | |
+| `de_f`, `de_r` | (v − 30) / 20 | **(v − 30) / 30** | rebound headroom above the old ceiling that did not exist before |
 
 **Any published figure quoted as an absolute LSD number is now ambiguous** until its game version is known — including `05-track-reference.md`'s per-circuit "LSD acceleration sensitivity" bands, every one of which was written against 5 – 60. On the new scale those numbers are not merely stale, they address a different slider.
 
@@ -116,15 +114,9 @@ On v1.70 all three ran **5–60**. On the 21 Aug reading they ran **0–30**, **
 >
 > This file has already caught the same failure mode twice — the natural-frequency heuristic on the RSR and the ride-height heuristic on the Shelby. Both were rules that changed meaning when transported across a class boundary. **This one changes meaning without going anywhere at all.**
 >
-> **Worked example, on the sheet raced at the time.** Rev B's RSR diff, as a percent of range (its values are the sheet's, not this file's - §1a):
+> **Worked example, on the sheet raced at the time** (Rev B's RSR diff; its values are the sheet's, and no position is kept here - §1a): the same three numbers convert by `(v − 5) / 55` on v1.70 and by `v / 30`, `v / 100` and `v / 100` on v1.71. **Initial torque that sat on the old floor now sits well up the new range; acceleration and braking each moved a few points down.**
 >
-> | | v1.70 (5–60) | **v1.71** | Range now |
-> |---|---|---|---|
-> | Initial torque | 0 % of range | **16.7 %** | 0–30 |
-> | Acceleration | 16.4 % | **14.0 %** | 0–100 |
-> | Braking | 34.5 % | **24.2 %** | 0–99 (0–100 on the 5 Sep record) |
->
-> **The absolute values are untouched and the car drives as built** — Job 0 confirmed that, and the telemetry confirmed it independently (gear ratios byte-identical, `17` §1). **What changed is every proportional statement ever made about them.** Initial torque used to be *sitting on the floor*; it is now a sixth of the way up.
+> **The absolute values are untouched and the car drives as built** — Job 0 confirmed that, and the telemetry confirmed it independently (gear ratios byte-identical, `17` §1). **What changed is every proportional statement ever made about them.** Initial torque used to be *sitting on the floor*; it no longer is.
 >
 > **Rule, 21 Aug: issue LSD in absolute values only, on every car, until all three are re-read. ⭐ RETIRED 11 Sep 2026:** all four cars read on v1.71 carry the same three scales in `range_records` (0 – 30 / 0 – 100 / 0 – 100), so a percent of range means one thing again. And when they are re-read, record the three ranges separately rather than as one "LSD 5–60" line — that shorthand is what made this invisible.
 
@@ -267,7 +259,7 @@ Takes about five minutes per car. **It now needs doing again after every physics
 
 **3. Initial torque's ceiling halved, which is the one that constrains rather than frees.** 5–60 → 0–30. Anything above 30 on an old published tune is no longer expressible. Not a problem for this programme — `08` B1 runs initial at 5–8 and calls high preload *"a silent cause of the persistent mid-corner push you hate"* — but it invalidates a chunk of the community's back catalogue outright.
 
-**4. Damper expansion gained 10 points of ceiling and lost nothing.** 30–50 → 30–60. The baseline sheet's rebound sat at 50 % / 40 % of the old range (front / rear) and sits at **33 % / 27 %** of the new one. **The sheet is proportionally softer in rebound than it reads**, and the stiff end of rebound is now unexplored. Note that `08` A4 wants rear expansion *lower* for lift-off stability, so the new headroom is at the end this car has least use for — the opposite of the LSD result.
+**4. Damper expansion gained 10 points of ceiling and lost nothing.** 30–50 → 30–60. Every rebound value on the baseline sheet sits proportionally lower on the new range - `(v − 30) / 30` against `(v − 30) / 20`. **The sheet is proportionally softer in rebound than it reads**, and the stiff end of rebound is now unexplored. Note that `08` A4 wants rear expansion *lower* for lift-off stability, so the new headroom is at the end this car has least use for — the opposite of the LSD result.
 
 **5. Aerodynamics did not move, despite the patch notes naming race cars specifically.** Front 350–450, rear 500–700, unchanged. **Either PD's "race cars" meant a different subset, or the revision was to initial settings rather than endpoints on this car.** Worth confirming on the Huracán before treating Gr.3 aero ranges as settled.
 
@@ -389,7 +381,7 @@ Takes about five minutes per car. **It now needs doing again after every physics
 3. **The RSR's findings apply verbatim** — absolute Hz, absolute degrees.
 4. **The +5 mm built-in rake applies here too.** Most of the rake the Laguna and Watkins Glen sheets state is the +5 mm the minimums build in; only 3–4 mm of it was *added*.
 
-> **⚠️ 21 Aug 2026 — and the diff numbers on every Huracán sheet are now doubly exposed.** If this car's ranges moved as the RSR's did, Rev D's diff sits at **20 % / 18 % / 28 %** of the new ranges rather than **1.8 % / 23.6 % / 41.8 %** of the old ones. **The car will drive as built — but do not reason proportionally about that diff until the ranges are read.**
+> **⚠️ 21 Aug 2026 — and the diff numbers on every Huracán sheet are now doubly exposed.** If this car's ranges moved as the RSR's did (they did - §0.2), Rev D's diff converts by the new arithmetic, not the old, and its initial torque roughly doubles in percent. **The car will drive as built — but do not reason proportionally about that diff until the ranges are read.**
 
 #### What still isn't known for this car
 
@@ -459,9 +451,9 @@ Takes about five minutes per car. **It now needs doing again after every physics
 
 **2. ⭐ It caught a broken heuristic in `08` B1, and the break is the mirror image of the RSR's.** B1 states ride height in **absolute clicks**. Written against 25 / 30 mm Gr.3 spans, 5 clicks is **20 % of range**; on this car's 85 mm spans the identical instruction produces **6 %**.
 
-> The rule silently changed meaning by more than 3× crossing from Gr.3 to Gr.N. It put three consecutive Yas Marina sheets on 6 % / 4 % of range while the driver spun four times in fifteen race laps and struck kerbs at 8 of 10 corners. **Rewrite B1's ride-height line as percent of range.** Tested on `setups/2026-08-16-shelby-yas-marina-revC.md` at 16.5 % / 14.1 %.
+> The rule silently changed meaning by more than 3× crossing from Gr.3 to Gr.N. It put three consecutive Yas Marina sheets within a few percent of both ride-height floors while the driver spun four times in fifteen race laps and struck kerbs at 8 of 10 corners. **Rewrite B1's ride-height line as percent of range.** Tested on `setups/2026-08-16-shelby-yas-marina-revC.md`.
 
-**3. The natural-frequency floor was 1.88 / 2.00 Hz on v1.70 (2.00 / 2.00 on v1.71)** — a full Hz softer than any Gr.3 car reaches. This car ran **64 % / 63 % of its v1.70 range** on all three Yas Marina sheets, materially stiff for a heavy road car on aggressive kerbs. `01` §11 records that stiffening it at Sainte-Croix cost grip over bumps and worsened throttle exit. **There is a great deal of unused softness and none of it has been tried.**
+**3. The natural-frequency floor was 1.88 / 2.00 Hz on v1.70 (2.00 / 2.00 on v1.71)** — a full Hz softer than any Gr.3 car reaches. This car ran its springs **well up its v1.70 range** on all three Yas Marina sheets, materially stiff for a heavy road car on aggressive kerbs. `01` §11 records that stiffening it at Sainte-Croix cost grip over bumps and worsened throttle exit. **There is a great deal of unused softness and none of it has been tried.**
 
 **4. +20 mm of rake is built into the minimums** (75 / 95), against +5 mm on the Gr.3 cars — so every Yas Marina sheet's stated rake was in fact **slightly less than the minimums build in - 2 mm of rake taken off, not added.**
 

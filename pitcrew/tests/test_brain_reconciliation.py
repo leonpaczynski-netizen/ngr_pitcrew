@@ -263,19 +263,58 @@ def test_e5_no_eval_expects_what_was_deleted_and_no_read_car_is_called_stale():
     assert "Stale. Do not issue" not in register
 
 
-# A claim that the undercut pays, in any wording the doctrine used for it.
+# A claim that stopping early pays, in every wording the doctrine used for it
+# - "undercut" or not (critic on 2.8 part 2, B2/M8: "an aggressive early stop
+# to get clean air" and "pit first" said the same thing without the word).
 UNDERCUT_PAYS = re.compile(
-    r"undercut\b[^.]{0,40}?\b(?:strong|works?|viable|powerful)\b", re.IGNORECASE)
+    r"undercut(?:ting|s)?\b[^.]{0,80}?\b(?:strong|works?|viable|powerful|pays"
+    r"|effective|decisive)\b"
+    r"|\bstrong undercut\b|\bpit first\b|early stop\b[^.]{0,40}?clean air"
+    r"|aggressive strategy pays"
+    r"|except where overtaking is (?:near-)?impossible"
+    r"|exception: circuits where overtaking", re.IGNORECASE)
+
+
+def _sentences(block: str):
+    return re.split(r"(?<=[.!?])\s+", block)
 
 
 def test_e6_every_live_claim_that_the_undercut_pays_is_re_flagged():
     """Row 2.8 part 2: `05` said the undercut was strong at ten circuits, and
     GT7's undercut is weak (`CLAUDE.md` §5.4) - measured in house as a 1.41 s
-    fresh-tyre out-lap at Deep Forest. A claim may stay as history, in a
-    block that says it is re-flagged."""
-    live = [f"{p.relative_to(ROOT).as_posix()}:{n}" for p, n, block in _live_paragraphs()
-            if UNDERCUT_PAYS.search(block) and "re-flagged" not in block.lower()]
+    fresh-tyre out-lap at Deep Forest. A claim may stay as history, **in a
+    sentence that says it is re-flagged** - a flag elsewhere in the paragraph
+    cleared every other sentence in it (critic on 2.8 part 2, M8)."""
+    live = [f"{p.relative_to(ROOT).as_posix()}:{n}"
+            for p, n, block in _live_paragraphs()
+            for sentence in _sentences(block)
+            if UNDERCUT_PAYS.search(sentence)
+            and "re-flagged" not in sentence.lower()]
     assert not live, f"the undercut is claimed to pay, unflagged, at {live}"
+
+
+def test_e6_sees_the_wordings_it_used_to_miss():
+    """The critic's list of claims the first regex could not see."""
+    for said in ("the undercut pays here", "undercutting works",
+                 "undercuts are strong", "a strong undercut",
+                 "the undercut is decisive", "pit first",
+                 "an aggressive early stop to get clean air is correct",
+                 "The overcut beats the undercut - except where overtaking "
+                 "is impossible"):
+        assert UNDERCUT_PAYS.search(said), said
+    assert not UNDERCUT_PAYS.search("The undercut is weak in GT7")
+
+
+def test_e8_every_lsd_band_in_the_track_reference_is_flagged():
+    """Critic on 2.8 part 2, M1: the banner said every stale line was flagged
+    where it stands and not one of the ~38 LSD bands was - Ludo reads the
+    per-circuit entries and would issue a v1.70 number on a 0-100 slider."""
+    reference = (ROOT / "brain/_inbox/05-track-reference.md").read_text(
+        encoding="utf-8")
+    bare = [n for n, line in enumerate(reference.splitlines(), 1)
+            if "LSD acceleration" in line and re.search(r"\d+[–-]\d+", line)
+            and "5–60 scale" not in line and "v1.71" not in line]
+    assert not bare, f"LSD bands with no scale flag at lines {bare}"
 
 
 def test_e7_the_register_restates_no_setup_value():
@@ -286,10 +325,20 @@ def test_e7_the_register_restates_no_setup_value():
         encoding="utf-8")
     for quoted in ("Rev D runs **LSD", "initial 5 / acceleration 14",
                    "80 / 98 mm", "89 / 107 mm", "3.05 / 3.20 Hz",
-                   "40 front / 38 rear", '"+18 mm rake"', '"+8 mm rake"'):
+                   "40 front / 38 rear", '"+18 mm rake"', '"+8 mm rake"',
+                   # **And no position written as a percentage** (the ledger
+                   # README; critic on 2.8 part 2, M2): on a 0-100 axis the
+                   # percent IS the value, and the rest invert from ranges
+                   # printed in the same file.
+                   "| `lsd_i` | 2 % |", "Initial torque | 0 % of range",
+                   "Rev D's diff sits at", "6 % / 4 % of range",
+                   "16.5 % / 14.1 %", "64 % / 63 %", "33 % / 27 %"):
         assert quoted not in register, quoted
     profiles = (ROOT / "brain/_inbox/07-car-profiles.md").read_text(encoding="utf-8")
     assert "3.05 / 3.20 Hz" not in profiles
+    for quoted in ("about 64 %", "16.5 % against 14.1 %",
+                   "Discount practice burn 3–9 % for the race"):
+        assert quoted not in profiles, quoted
     assert "the measured profile, v1.71" in profiles
     reference = (ROOT / "brain/_inbox/02-gt7-setup-parameters.md").read_text(
         encoding="utf-8")

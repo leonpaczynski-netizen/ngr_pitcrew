@@ -551,9 +551,9 @@ A heavy trail-braker will find it requires **more deliberate rotation induction*
 
 > **⭐ Two 1.71 notes on the Shelby specifically, because it is a car actually in the garage:**
 >
-> **1. Its PP of 575.47 sits in the middle of the 550–650 band that `06` §8.2 identifies as the worst-affected range for PP-vs-lap-time mismatch.** A fleet-wide PP re-roll matters most in exactly that band.
+> **1. ⚠️ Overtaken by the re-read: the car reads PP 723.61 on v1.71** (`brain/car-state/shelby-deep-forest.md`), so the 575.47 above is void and the car no longer sits in the 550–650 band that `06` §8.2 identifies as the worst-affected range for PP-vs-lap-time mismatch.
 >
-> **2. `11-car-slider-ranges.md` records that this car ran its natural frequency at about 64 % of its v1.70 range on the Yas Marina sheets — on a 1,658 kg road car at a circuit with aggressive kerbs — and that none of the softness below that has ever been tried.** That remains the single most interesting unexplored direction on this car. **The range has been read on v1.71 (23 Aug, `range_records`): 2.00–4.00 Hz at both ends**, so the floor moved up at the front; take any natural-frequency figure for this car as a percent of that range, from its car-state file.
+> **2. `11-car-slider-ranges.md` records that this car ran its natural frequency well up its v1.70 range on the Yas Marina sheets (the positions are the sheets', not this file's - §1a) — on a 1,658 kg road car at a circuit with aggressive kerbs — and that none of the softness below that has ever been tried.** That remains the single most interesting unexplored direction on this car. **The range has been read on v1.71 (23 Aug, `range_records`): 2.00–4.00 Hz at both ends**, so the floor moved up at the front; take any natural-frequency figure for this car as a percent of that range, from its car-state file.
 
 ### 5.9 ⭐ Ford Shelby GT350R '16 — the measured profile, v1.71 (plan row 2.8, 11 Sep 2026)
 
@@ -561,16 +561,16 @@ A heavy trail-braker will find it requires **more deliberate rotation induction*
 
 **The front axle is this car's limit — three independent indicators.**
 1. **Wear:** the worst wheel is a front at both circuits measured — the front-left at Red Bull Ring (0.90–1.35 %/km at 2x, ~1.6x the front-right, four sessions, monotone) and the front-right at Deep Forest (0.66 %/km, leading the front-left 1.27x on a direction-balanced circuit).
-2. **[DERIVED by GT7]** its own stability readout: **−0.50 high speed, −0.29 low speed** — understeer at both.
+2. **[DERIVED by GT7]** its own stability readout: **−0.50 high speed (Under), −0.29 low speed (Neutral)** — GT7's own labels (`brain/car-state/shelby-deep-forest.md`).
 3. **Braking, ABS prohibited:** the front locks on almost every lap at every v1.71 circuit — **37 of 41** laps at Road Atlanta, **44 of 62** at Red Bull Ring, **47 of 47** at Deep Forest (front slip below 0.90, brake over 40 %, over 60 km/h).
 
-**His rear-lock complaint was real, and the fix overshot.** Rear lock ran **8 of 41** laps at Road Atlanta, with opposite lock on 6; as the bias moved forward (his trim) it fell to **0 of 62** at Red Bull Ring and **2 of 47** at Deep Forest, while the front lock deepened (median front slip 0.663 at Deep Forest, every lap). ⚠️ Across circuits this is **suggestive, not measured** — different sheets, different tracks; the clean test is within one circuit. **A locked front rotates the car less on release, not more** (r = +0.504 over 153 braking events), so a front-locking snap is not a mechanism on this car.
+**His rear-lock complaint was real, and the fix overshot.** Rear lock ran **8 of 41** laps at Road Atlanta, with opposite lock on 6; as the bias moved forward (his trim) it fell to **0 of 62** at Red Bull Ring and **2 of 47** at Deep Forest, while the front lock deepened (at Deep Forest the median of each lap's minimum front slip was 0.663, all four wheels on tarmac, and every lap locked). ⚠️ Across circuits this is **suggestive, not measured** — different sheets, different tracks; the clean test is within one circuit. **A locked front rotates the car less on release, not more** (r = +0.504 over 153 braking events), so a front-locking snap is not a mechanism on this car.
 
-**Rake is not the lever.** Both ride-height floors are 20 mm apart, so the car sits nose-down at minimum slider already; the front runs further off its floor than the rear (about 16.5 % against 14.1 % of range). The opposite asymmetry from the Huracán at Daytona — same question, opposite answer.
+**Rake is not the lever.** Both ride-height floors are 20 mm apart, so the car sits nose-down at minimum slider already; the front runs further off its floor than the rear, in percent of range (the positions live in its car-state file, not here). The opposite asymmetry from the Huracán at Daytona — same question, opposite answer.
 
 **Gearing.** `top` is a gear-**spacing** slider, not a top speed. The invariant is **K = ratio x speed at the limiter = 304 km/h** (limiter ~8,800 rpm), agreeing to 0.3 % between Road Atlanta and Red Bull Ring. **GT7's "Top Speed (Automatically Adjusted)" readout moves the wrong way** on this car — on a hand-cut box it rose 5 while the real top speed fell 29 km/h. Never read a road speed off it.
 
-**Fuel.** Practice burn overstates race burn, the same sign at every circuit: Road Atlanta −3.5 %, Red Bull Ring −9.2 %. Discount practice burn 3–9 % for the race. Driving moves it as much as the car: at Deep Forest the burn stepped +0.47 L/lap when he stopped coasting and +0.23 more when he stopped short-shifting.
+**Fuel — observed, not a rule.** Practice burn ran above race burn at Road Atlanta (−3.5 %) and Red Bull Ring (−9.2 %). **At Deep Forest it did not:** the race's last stint burned 7.92 L/lap against practice's 7.84, because the driving changed mid-race - +0.47 L/lap when he stopped coasting and +0.23 more when he stopped short-shifting. **Never discount the fill for the last stint: size it from the live burn at the hose.** A practice-rate fill cut by 9 % would have run him dry by about 5 L over those seven laps.
 
 **Open, and each is a test not yet run:** the natural-frequency softness below anything tried (§5.8 note 2); whether `lsd_b` up lets him bring the bias back without the rear lock returning (the Huracán precedent, never issued here because 47 laps at Deep Forest do not show the problem); and 2nd gear running past its own ceiling at Deep Forest.
 

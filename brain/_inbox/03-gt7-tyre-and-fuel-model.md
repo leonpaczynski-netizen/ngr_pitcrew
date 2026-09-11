@@ -609,7 +609,7 @@ This interacts badly with §2.6:
 
 3. **⚠️ But when the stop count is already fixed by fuel, the compound question decouples entirely** — take the softest compound that survives the stint. See §1.4.
 
-4. **The undercut is weak in GT7.** The out-lap cold-tyre penalty (§3.3, ~0.5–1.5 s) plus the long pit delta means the undercut needs a large tyre-condition difference to pay. The **overcut is comparatively strong**. Advise your drivers accordingly; most sim racers arrive with F1-derived undercut instincts that don't transfer. *(Exception: circuits where overtaking is near-impossible and track position outweighs the arithmetic — Laguna is one.)* **⚠️ The out-lap penalty term depends on tyre warm-up, and 1.71 adjusted heating values. If warm-up got slower, the undercut got weaker still; if faster, it got stronger.**
+4. **The undercut is weak in GT7.** The out-lap cold-tyre penalty (§3.3, ~0.5–1.5 s) plus the long pit delta means the undercut needs a large tyre-condition difference to pay. The **overcut is comparatively strong**. Advise your drivers accordingly; most sim racers arrive with F1-derived undercut instincts that don't transfer. *(Exception: circuits where overtaking is near-impossible and track position outweighs the arithmetic — Laguna is one ⚠️ *[re-flagged 11 Sep 2026: no in-house measurement supports the exception, and the one stop measured at a hard-to-pass circuit, Deep Forest, paid a 1.41 s out-lap - see `05`'s banner]*.)* **⚠️ The out-lap penalty term depends on tyre warm-up, and 1.71 adjusted heating values. If warm-up got slower, the undercut got weaker still; if faster, it got stronger.**
 
 5. **Take fuel only to the diamond, plus one lap of margin.**
 
@@ -824,7 +824,7 @@ The differential is the **primary rear-tyre-wear control** in GT7, and it is und
 4. Brake balance is your mid-race wear tool. Move it away from the axle that's going.
 5. Fuel-save in the tow. It's free.
 6. Short shift. It saves fuel *and* rear tyres.
-7. The overcut beats the undercut in GT7 — except where overtaking is impossible.
+7. The overcut beats the undercut in GT7 — except where overtaking is impossible ⚠️ *[re-flagged 11 Sep 2026: that exception is unmeasured; see `05`'s banner]*.
 8. Err wet.
 9. **Measure your stint before you pick your compound. Every wear number in this document that wasn't measured here has been wrong at least once.**
 10. **⭐ NEW — and every wear number that *was* measured here was measured on a previous version of the game.**

@@ -283,7 +283,7 @@ Rev D had you saving fuel from lap 1. **Withdraw all of it:**
 
 The diamond marker on the fuel gauge will tell you the exact requirement. Take it plus a lap of margin. Do not take the bare minimum — see §0.2.
 
-**The undercut is strong and track position is expensive.** ⚠️ *[Re-flagged 11 Sep 2026, history: the undercut is weak in GT7 - a cold out-lap of 0.5–1.5 s plus a long pit delta (`CLAUDE.md` §5.4), and a fresh-tyre out-lap measured 1.41 s slower at Deep Forest. See `05`'s banner.]* Overtaking is realistically T2 only, plus the occasional Corkscrew move that ends in tears. **Within about a second of the car ahead at lap 9 — pit first.** Fresh Softs plus full power on the out-lap into T2 is the strongest weapon you have all race.
+**The undercut is strong and track position is expensive.** ⚠️ *[Re-flagged 11 Sep 2026, history: the undercut is weak in GT7 - a cold out-lap of 0.5–1.5 s plus a long pit delta (`CLAUDE.md` §5.4), and a fresh-tyre out-lap measured 1.41 s slower at Deep Forest. See `05`'s banner.]* Overtaking is realistically T2 only, plus the occasional Corkscrew move that ends in tears. **Within about a second of the car ahead at lap 9 — pit first ⚠️ *[re-flagged 11 Sep 2026: history - the undercut is weak in GT7]*.** Fresh Softs plus full power on the out-lap into T2 is the strongest weapon you have all race.
 
 **Watch for the field stopping late.** Anyone who modelled their fuel the way I did will believe they are fuel-limited and plan around a fuel window. If the pack stops on a different lap to you, that is why — and it is an opportunity, not a signal that you have got it wrong.
 

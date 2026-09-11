@@ -865,8 +865,8 @@ Fixes are **ranked by effectiveness** — try #1 first. Change **one thing at a 
 
 | # | Fix | Direction | Notes |
 |---|---|---|---|
-| 1 | **Brake balance** | Rearward (toward +) | Fastest, free, adjustable in-race. 1 click at a time. **[IN-HOUSE ✅]** RSR, Sardegna: +10 pp then +20 pp, more entry rotation, driver report and rear slip (ABS on, so the front slip channel was blind). **Brake balance is his trim — record it, never correct it.** |
-| 2 | **LSD braking sensitivity** | **Lower** | Often the true culprit, especially on RR/MR where it's set high for stability. **[IN-HOUSE ✅, the mirror image]** Huracán, Daytona: raising it +5 pp cost entry rotation at T1 by more than 2x (s147) — the driver's "lsd_b is too high" |
+| 1 | **Brake balance** | Rearward (toward +) | Fastest, free, adjustable in-race. 1 click at a time. **[IN-HOUSE ✅]** RSR, Sardegna: +10 pp then +20 pp, more entry rotation, driver report and rear slip (ABS on, so the front slip channel was blind). On the RSR the steps were issued as sheet changes with his agreement; where the bias moves by his own hand it is his trim - recorded, never corrected (`brain/driver.md`). |
+| 2 | **LSD braking sensitivity** | **Lower** | Often the true culprit, especially on RR/MR where it's set high for stability. **[IN-HOUSE, one direction only]** Huracán, Daytona: *raising* it +5 pp cost entry rotation at T1 by more than 2x (s147, confirmed as a cost) — the driver's "lsd_b is too high". **Lowering it is untested in house:** the one step down (s127, −5 pp, his own ask) is open |
 | 3 | **Front compression damping** | **Lower** (−2 to −4) | Lets weight transfer forward faster; more front bite on turn-in |
 | 4 | **Rear expansion damping** | **Higher** (+2 to +4) | Controls rear rise, keeps the platform rotating |
 | 5 | **Front toe** | Test **both** directions ±0.05 | GT7's contested area; A/B it, don't assume |
@@ -883,7 +883,7 @@ Fixes are **ranked by effectiveness** — try #1 first. Change **one thing at a 
 
 | # | Fix | Direction |
 |---|---|---|
-| 1 | **Front ARB softer** or **rear ARB stiffer** (−1 / +1) — the canonical mid-corner lever. **[IN-HOUSE ✅]** rear bar stiffer on two cars: Huracán, Daytona (+22.2 pp, middle-sector median −0.449 s, s149) and RSR, Sardegna (one click, driver "perfect", s158). The rotation index missed both — see the ledgers |
+| 1 | **Front ARB softer** or **rear ARB stiffer** (−1 / +1) — the canonical mid-corner lever. **[IN-HOUSE ✅]** rear bar stiffer on two cars: Huracán, Daytona (+22.2 pp, middle-sector median −0.449 s, s149) and RSR, Sardegna (one click, driver "perfect", s158). The rotation index missed both — see the ledgers. **[IN-HOUSE ❌ front bar softer]** Huracán, Daytona: −22.2 pp refuted - rotation unchanged and roll up (s148; its axis register: refuted twice) |
 | 2 | **Front natural frequency** softer 1–2 clicks (and/or rear stiffer) |
 | 3 | **LSD initial torque** lower — high preload is a hidden cause of persistent mid-corner push |
 | 4 | **Front camber** — sweep it; in GT7 this *is* the mid-corner tool, but the optimum is low |
@@ -902,7 +902,7 @@ Fixes are **ranked by effectiveness** — try #1 first. Change **one thing at a 
 
 | # | Fix | Direction |
 |---|---|---|
-| 1 | **LSD acceleration sensitivity — LOWER.** The dominant cause. High accel-sens makes GT7 cars "want to drive in a straight line and not continue turning". **[CONTESTED on v1.71]** Huracán, Daytona: lowering it −6 pp did NOT bring on-power rotation back (s145, refuted), and raising it moved the T5-exit rotation index UP, monotonic across two steps (s146, confirmed) - the opposite of this row. The two v1.70 validations below are the other side |
+| 1 | **LSD acceleration sensitivity — LOWER.** The dominant cause. High accel-sens makes GT7 cars "want to drive in a straight line and not continue turning". **[CONTESTED on v1.71, on a DERIVED index]** Huracán, Daytona: lowering it −6 pp did NOT bring the on-power rotation index back (s145, refuted), and raising it moved that index up, monotonic across two steps (s146, confirmed) - the opposite of this row. But the net +6 pp over the baseline sat inside the floor (unresolvable), and the higher setting cost **2 T5-exit spins in 10 laps**. The index is [DERIVED]; the driver prefers the higher setting, his call (rule 1). The two v1.70 validations below are the other side |
 | 2 | **Rear ARB stiffer** +1 |
 | 3 | **Rear compression damping higher** (+2 to +4) — keeps weight forward under power |
 | 4 | **Front expansion damping higher** (+2 to +4) — keeps the front loaded through track-out |
@@ -927,13 +927,13 @@ Fixes are **ranked by effectiveness** — try #1 first. Change **one thing at a 
 | 3 | **Rear toe-in** +0.05 to +0.15 |
 | 4 | **Front compression damping higher** (+2 to +4) — slows the load transfer onto the nose |
 | 5 | **Rear expansion damping lower** (−2 to −4) — lets the rear settle instead of levering itself up |
-| 6 | **Reduce rake** — equalise ride heights; positive rake promotes entry rotation. **[CONTESTED in house]** Huracán, Daytona: rear ride height −20 pp held on pace and on his report, and did NOT cut the T1 opposite-lock laps (5 of 15). On the Shelby rake is refuted as the lever by its own range record - both floors are already 20 mm apart |
+| 6 | **Reduce rake** — equalise ride heights; positive rake promotes entry rotation. **[IN-HOUSE ❌ for entry instability]** Huracán, Daytona: rear ride height −20 pp did NOT cut the T1 opposite-lock laps (5 of 15, refuted) - though it held on pace and on his report, a different claim (confirmed). On the Shelby there is no ledger row: that rake is not its lever is an argument from its range record alone (both floors are 20 mm apart) |
 | 7 | **Front ARB stiffer** +1 |
 | 8 | **Front NF stiffer** / rear softer |
 | 9 | **Rear downforce up** (only above ~150 km/h) |
 | 10 | **Ballast forward** |
 
-**⭐ For this driver, take #2, #3 and #5 before #1** — brake balance stays at 0 as a standing preference and the rear is stabilised mechanically (§7.3, `08` A4). That approach has held across four sessions on two cars. **⚠️ 11 Sep 2026: no longer the standing preference on either car in the garage.** Brake balance is his trim, recorded and never corrected: on v1.71 the RSR moved it rearward at Sardegna (`brain/ledger/rsr-sardegna-road-track-a.md`, confirmed), and the Shelby runs it forward of centre (`brain/car-state/shelby-deep-forest.md`).
+**⭐ For this driver, take #2, #3 and #5 before #1** — brake balance stays at 0 as a standing preference and the rear is stabilised mechanically (§7.3, `08` A4). That approach has held across four sessions on two cars. **⚠️ 11 Sep 2026: not the standing preference on the RSR or the Shelby.** The RSR moved it rearward at Sardegna (`brain/ledger/rsr-sardegna-road-track-a.md`, confirmed), and the Shelby runs it forward of centre by his own trim (`brain/car-state/shelby-deep-forest.md`). **The Shelby's own data argue for the old approach on that car** - its front locks on 47 of 47 laps at Deep Forest (`07` §5.9) - and the call is his.
 
 ---
 
@@ -1028,7 +1028,7 @@ GT7 **does** model per-axle wear, and **fronts almost always wear faster than re
 | 2 | **Front toe toward 0.00** — toe is the biggest alignment contributor to wear |
 | 3 | **Front camber −0.3 to −0.5°** |
 | 4 | **Front ARB softer** — less load transfer onto the loaded front |
-| 5 | **Reduce front downforce** (if it's causing sustained high load). **[IN-HOUSE ❌ as a wear lever at this size]** Huracán, Daytona: front +40 pp and rear +25 pp of wing moved no measured load or wear (runs 5-6) |
+| 5 | **Reduce front downforce** (if it's causing sustained high load). **[IN-HOUSE: no measured effect at this size, tested the other way]** Huracán, Daytona: front wing +40 pp and rear +25 pp, aimed at rear wear, moved no measured load or wear (runs 5-6). Reducing it was not tested; the direction is not refuted |
 | 6 | **Ballast rearward** |
 | 7 | Address any mid-corner understeer — a pushing car scrubs its fronts continuously |
 

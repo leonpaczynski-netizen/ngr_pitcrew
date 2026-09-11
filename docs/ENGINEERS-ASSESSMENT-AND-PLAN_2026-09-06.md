@@ -2451,6 +2451,129 @@ from a ledger row, a car-state file or a read-only count, and says which.
   carry their new sections). **Both were shown to fail on the files at HEAD
   before they were trusted** - e6 flagged all 12 places, e7 all 8 quotations.
 
+**Critic on 2.8 part 2 (`e0bcf93`): NOT AGREED - three blockers, eight
+majors, seven minors, all fixed.** Three of them would have given a wrong
+instruction.
+
+- **B1: the Deep Forest rewrite planned on practice wear.** The race's own
+  rate is 3.47-3.57 %/lap, a quarter higher, which gives about 24 laps, not
+  30. The rule "take tyres only if the gauge asks" would have left a
+  42 %-at-lap-12 set to run past the cliff in a longer race. The entry now
+  quotes both rates and plans on the race's. It calls the tyre gain
+  unresolvable, not zero: stint 2 was quicker, but he changed his driving at
+  the same time. The rule is now gauge % plus laps left times the race rate,
+  against 85 %.
+- **B2: Suzuka, the next race, still said "an aggressive early stop to get
+  clean air is usually correct".** That is the undercut without the word, so
+  e6 could not see it.
+- **B3: `07` wrote "discount practice burn 3-9 % for the race" as a rule.**
+  At Deep Forest the last stint burned *more* than practice (7.92 against
+  7.84 L/lap) because his driving changed. The discount would have left him
+  about 5 L dry. It is now an observation, and the fill is sized from the
+  live burn at the hose.
+
+Majors:
+- **M1:** every one of the 38 LSD bands in `05` is flagged where it stands,
+  and the §0 table now names the v1.71 ranges. A new test, e8, checks this.
+- **M2:** `11` and `07` kept positions as percentages. On a 0-100 axis a
+  percent *is* the value, so they are gone: `11` keeps the conversion
+  arithmetic, and `07` points to the car-state files.
+- **M3-M6, the `02` tags, corrected against the ledger rows:**
+  - `arb_f` softer was refuted;
+  - lowering `lsd_b` is untested, and the step down on file is open;
+  - the rotation index is derived, the net step was unresolvable, and it
+    cost 2 spins;
+  - front wing was tested upward for rear wear, so the direction is not
+    refuted.
+- **M7:** 9.9 s is derived, 3 s is his figure, and 1.41 s is one lap.
+- **M8:** `03`'s "except where overtaking is impossible" is re-flagged, as
+  are Laguna's "pit first" and Fuji's "aggressive strategy pays". e6 now
+  catches every wording the critic listed, and a re-flag counts only in the
+  sentence that makes the claim.
+
+Minors:
+- GT7 labels the Shelby's −0.29 stability reading Neutral.
+- Its PP is 723.61 on v1.71; the old 575.47 is void.
+- Brake balance is worded as issued on the RSR and as his own trim on the
+  Shelby, and the Shelby's 47-of-47 front lock is shown to support the old
+  preference.
+- Reduced rake is [IN-HOUSE ❌] for entry instability, and the Shelby's rake
+  claim is marked as having no ledger row.
+- The 1x→2x conversion is marked [ASSUMED].
+- The median is now the median of per-lap minimum slip.
+
+**The critic on 2.6, pass 3 (`f511c9e` + `f446334`): NOT AGREED - three
+majors, all fixed.**
+1. **A retired stop kept its tyres answer.** After "You're fuelled to the
+   flag. No more stops on fuel.", "what tyres?" said "Tyres on." (or "RS
+   on.") and the board read "fit a set". The snapshot and both driver-board
+   states now drop the next stop's compound and decision while
+   `laps_to_stop()` is None, the expression BOX_WHEN answers "No stop
+   planned" from.
+2. **A JSON `0` was fuel only to the voice and a second set to every
+   screen.** One public `handover.tyres_decision` now answers for
+   `coordinator._tri`, the brief count, the Race page, the spine and the
+   stint bar.
+3. **Eight surviving mutants**, among them the pass-2 MAJOR fix itself: M4
+   (`assess`'s `stint_tyres`), M5 (the controller's hand-off), M8, M9-M11
+   (the three NO TYRES labels, whose choice moves into `Spine.band_label`
+   and `stint_label` so it can be tested without painting), M13 and M14 (the
+   brief lines leaving the pack unseen - pinned from `brief()` itself). Each
+   has a pin through its real caller.
+
+Minors:
+- The refusals speak to the driver, with the remedy for that problem and "on
+  the Strategy page" (`tyres_refusal`, held to refusing exactly what
+  `stint_tyre_problems` refuses).
+- A compound-less fuel-only stop shows on the Race page and the spine.
+- A zero-lap first stint no longer takes the NO TYRES label.
+- The judged-race voice test names its call and no longer accepts a declared
+  gap.
+
+**Its re-plan minor reversed pass 2 on the same line, and the answer is the
+merge.** Pass 2: "No tyres." carried by position across a changed stop count
+lands on a stop it was never made for. Pass 3: replacing it everywhere turns
+a fuel-only plan into "RS on." on an offer that never mentioned tyres. **Same
+stop count: the desk's decision stands. Changed count: the re-planner's
+priced decision, the only one there is for stops the desk never saw.**
+
+**Carried, with the reason:** an accepted re-plan that changes the count
+still does not say "tyres on" in the offer's words. The box call says it at
+each stop. The Race page plan line is not repainted after `adopt`, which
+predates this row. The pack is at 690 of the test's 700 cap.
+
+**2.7 - multi-class and BoP for Fuji.** The hub already said it and the app
+dropped it: the Enduro's `carRegulations` carries **`bopEnabled: true`** and
+`tuningAllowed: true`, and `regulations()` read only the power and weight
+limits. Now:
+
+- **Two nullable event columns**, `bop_enabled` and `tuning_allowed`, are
+  added through the existing additive migration (1/0 from a real boolean, NULL
+  where the hub is silent, never "no"). `list_events` hands them to Ludo with
+  the limits and the series.
+- **`initial` reads the hub's answer instead of asking.** It asks only where
+  the hub is silent. **A BoP round refuses, by name, `top`, `fg`, the ratios,
+  ECU output, the restrictor and ballast** (`SKILL.md`, `mechanic.md`, eval 10).
+- **The car comes from the class he is assigned that round.**
+  `race-planner.md` preflight 11 says so, and states the board: eight rows,
+  overall. In a multi-class field some cars are always off it, and nothing on
+  file shows GT7 marking class, so **no call or plan line claims a class
+  position**.
+
+**The Fuji plan on file:**
+`brain/_inbox/setups/2026-09-26-porsche-963-fuji-enduro-initial.md`, an
+`initial` document.
+
+- **From the hub, read-only:** Gr.1 for this round, so the roster's **Porsche
+  963 '24**. The field is **ten cars: 4 Gr.1, 3 Gr.3, 3 Gr.4**. No per-car
+  override is set. The format is 120 minutes timed at 3x/2x, 1 L/s.
+- **It carries the refusals.**
+- **Its first deliverable is the settings screen to read**, because the 963
+  has no range record.
+- **It lists the runs** that turn it into evidence.
+- **Not written to the database.** The event row is his act on the Calendar
+  screen, and that is where the BoP flag enters.
+
 **Still open in Phase 2:** 2.4 and 2.6-2.9 as written; `SKILL.md` is roughly
 twice 2.9's 450 lines; six evals short of 2.9's twenty; and **2.12 - the MCP
 server is registered nowhere** (no `pitcrew` entry in `~/.claude.json`, no

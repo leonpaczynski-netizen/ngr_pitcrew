@@ -5,7 +5,7 @@
 >
 > 1. **Every "LSD acceleration sensitivity: N–M" band is on the v1.70 5–60 scale.** On v1.71 every car in `range_records` reads 0–30 / 0–100 / 0–100, so each band now addresses a different slider. Read a band as a direction only (more or less lock than the car's own baseline), and issue the value in percent of the car's own range (`11`), never as the number printed here.
 > 2. **"The undercut is strong / works / is powerful" is re-flagged at every circuit that says it.** In GT7 the undercut is weak: a cold out-lap costs 0.5–1.5 s and the pit delta is long, while the overcut is comparatively strong (`CLAUDE.md` §5.4). The one in-house measurement agrees — a **1.41 s** out-lap on fresh tyres at Deep Forest, 6 Sep. None of these lines was measured; each is an F1 instinct carried into a game where it does not pay.
-> 3. **The per-circuit wear figures and the `wearSeverity` grades are refuted where they have been tested.** Deep Forest's "13–16 laps at 1x" measured about four times too pessimistic, and its severity 5 ran gentler per kilometre than Red Bull Ring's 3 (`RECONCILIATION` AS4). Measure before using any of them.
+> 3. **The per-circuit wear figures and the `wearSeverity` grades are refuted where they have been tested.** Deep Forest's "13–16 laps at 1x" measured about three times too pessimistic on the race's wear rate (four on practice's), and its severity 5 ran gentler per kilometre than Red Bull Ring's 3 (`RECONCILIATION` AS4). Measure before using any of them.
 >
 > The pit-loss figures are still estimates unless a stop has been measured at that circuit; the Deep Forest entry says which of its numbers were measured.
 
@@ -38,9 +38,9 @@ You need shared vocabulary before the per-track advice makes sense.
 | **Damper compression / expansion** | 0–100 each end | Transient control | Community convention: **expansion higher than compression**. Baseline ~30 comp / 40 exp; drop compression 2–3 clicks on bumpy tracks |
 | **Ride height / rake** | Per-car | Negative rake = top speed, positive rake = turn-in precision | The single most behaviour-changing setting in GT7 per Coach Dave. Bottoming out post-1.49 is genuinely destabilising |
 | **Anti-roll bars** | 1–10 | Lateral load transfer split | MR baseline ~6F/3R, FR ~6F/4R; **add roughly +2 both ends on racing tyres** |
-| **LSD initial torque** | 5–60 | Preload — how locked the diff is off-throttle/neutral | High initial = entry understeer. Keep low (5–15) on turn-in-limited tracks |
-| **LSD acceleration sensitivity** | 5–60 | Lock under power | The traction lever. FR baseline ~25, MR ~15, RR ~15 |
-| **LSD braking sensitivity** | 5–60 | Lock off-throttle | Stability on entry. MR ~20, RR ~25, FR ~10 |
+| **LSD initial torque** | 5–60 *(v1.70; v1.71 reads 0–30)* | Preload — how locked the diff is off-throttle/neutral | High initial = entry understeer. Keep low (5–15) on turn-in-limited tracks |
+| **LSD acceleration sensitivity** | 5–60 *(v1.70; v1.71 reads 0–100)* | Lock under power | The traction lever. FR baseline ~25, MR ~15, RR ~15 — v1.70 numbers, a direction only |
+| **LSD braking sensitivity** | 5–60 *(v1.70; v1.71 reads 0–100)* | Lock off-throttle | Stability on entry. MR ~20, RR ~25, FR ~10 — v1.70 numbers, a direction only |
 | **Brake balance** | −5 (front) to +5 (rear) on the in-race slider | Entry stability vs rotation | In-race adjustable on most league configs. Front bias for downhill/heavy/slow; rear bias for fast flowing and trail braking |
 | **Camber** | Racing tyres: ~−2.0 to −2.5 front, −1.5 to −2.0 rear | Peak lateral grip | Over-camber costs braking and traction and raises inner-shoulder wear |
 | **Toe** | Front 0.00, rear +0.05 typical | Stability | Any deviation from zero scrubs and raises wear — significant on high-wear tracks |
@@ -89,7 +89,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** Three heavy, two medium. **Turn 1 (Castrol-S)** from top speed on a very slight rise — the rise helps, this is a comfortable stop. **Dunlop hairpin (T5)** heavy and flat. **Veedol chicane (T13)** the heaviest on the lap, from near top speed, flat, with severe kerbs on exit. None are downhill, none are off-camber, none are bumpy. **Brake bias: neutral to one click forward.** This track does not require the forward bias that downhill-braking circuits do, and a slightly rearward setting helps rotate the long Coca-Cola right.
 
-**Traction-limited exits.** Two that matter enormously: **Mercedes Arena exit (T5 onto the short straight)** and **Veedol chicane exit onto the pit straight**. Both are 1st/2nd gear from near-stopped. **LSD acceleration sensitivity: medium — around 20–28 for FR, 15–20 for MR.** Push it higher and the Veedol exit kerb will spin you; lower and you bog out of the Arena.
+**Traction-limited exits.** Two that matter enormously: **Mercedes Arena exit (T5 onto the short straight)** and **Veedol chicane exit onto the pit straight**. Both are 1st/2nd gear from near-stopped. **LSD acceleration sensitivity: medium — around 20–28 for FR, 15–20 for MR ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Push it higher and the Veedol exit kerb will spin you; lower and you bog out of the Arena.
 
 **Gearing.** Gear for corner exit, not top speed. **2nd gear should cover the Arena hairpins with a little headroom** so you are not shifting mid-corner. **6th should top out just past the start-finish line into Turn 1 braking** — you should be at or just under the limiter, not bouncing off it for 200 m. There is no straight long enough here for slipstream gearing to pay.
 
@@ -121,7 +121,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** Around **six genuinely heavy** and a dozen medium. The problems: **Adenauer Forst (downhill, into a compression, off-camber on entry)**, **Bergwerk (heavy, from a fast uphill run, the classic lap-killer)**, **Wehrseifen (steep downhill approach, blind, tightening)**, **Schwedenkreuz-to-Aremberg (fast, slight crest)**, and **Tiergarten/Antoniusbuche at the end of Döttinger Höhe**. Multiple heavy braking zones are downhill or over compressions. **Brake bias: two to three clicks forward** — more than you would use anywhere else. You will lock the rear at Wehrseifen and Adenauer Forst otherwise. If your league allows in-race adjustment, moving one click rearward for the fast Sector 2 and back forward for the Sector 1 downhills is a legitimate technique.
 
-**Traction-limited exits.** **Wehrseifen exit (steep uphill, 1st gear)**, **Bergwerk exit (uphill onto Kesselchen — the single most lap-time-relevant exit on the circuit)**, **Karussell exit (uphill out of the banking)**, and **Hohe Acht/Wippermann**. **LSD acceleration sensitivity: medium-low, 15–22.** Counter-intuitive given the uphill traction demands, but the Nordschleife punishes a locked diff on the mid-corner cambered sections far more than it rewards it on the exits. Prioritise the diff not fighting you through Hatzenbach and the Foxhole.
+**Traction-limited exits.** **Wehrseifen exit (steep uphill, 1st gear)**, **Bergwerk exit (uphill onto Kesselchen — the single most lap-time-relevant exit on the circuit)**, **Karussell exit (uphill out of the banking)**, and **Hohe Acht/Wippermann**. **LSD acceleration sensitivity: medium-low, 15–22 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Counter-intuitive given the uphill traction demands, but the Nordschleife punishes a locked diff on the mid-corner cambered sections far more than it rewards it on the exits. Prioritise the diff not fighting you through Hatzenbach and the Foxhole.
 
 **Gearing.** **Gear for Döttinger Höhe.** 6th should top out roughly 300 m before the Antoniusbuche kink — you want to be on the limiter for a short period only. Critically, **3rd gear must comfortably cover the Karussell and Brünnchen** and **4th must cover Schwedenkreuz and Pflanzgarten** without a shift mid-corner. This is a track where mid-corner upshifts genuinely cost you the car. Spend real time on the intermediate ratios, not just the final drive.
 
@@ -176,7 +176,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Four heavy.** **Les Combes (T5)** is the biggest and is the money overtaking spot — braking uphill, which helps stability and makes it forgiving. **La Source (T1)** is heavy from a downhill approach and is a low-speed hairpin — the trickiest of the four. **Bus Stop chicane (T19)** is heavy from near-top speed with severe kerbs. **Rivage (T8)** is a downhill, tightening, slightly off-camber medium stop that catches people out. **Brake bias: one to two clicks forward.** The downhill entries at La Source and Rivage set the requirement. A rearward bias will bite you at Rivage specifically.
 
-**Traction-limited exits.** **La Source exit is the single most consequential traction event on any circuit in GT7** — it feeds a 1.9 km uphill full-throttle run to Les Combes and a bad exit is worth several tenths *and* your slipstream position. **Bus Stop exit** is second. **LSD acceleration sensitivity: medium-high, 25–32 for FR, 18–24 for MR.** This is one of the few tracks where erring toward more acceleration lock is correct, because both traction exits feed straights.
+**Traction-limited exits.** **La Source exit is the single most consequential traction event on any circuit in GT7** — it feeds a 1.9 km uphill full-throttle run to Les Combes and a bad exit is worth several tenths *and* your slipstream position. **Bus Stop exit** is second. **LSD acceleration sensitivity: medium-high, 25–32 for FR, 18–24 for MR ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** This is one of the few tracks where erring toward more acceleration lock is correct, because both traction exits feed straights.
 
 **Gearing.** **Gear for slipstream.** 6th should top out **with a tow** at the Les Combes braking board, meaning in clean air you will be slightly short of the limiter — that is correct. Additionally, **4th gear must cover Pouhon** cleanly (no shift at the apex), and **5th must cover Blanchimont**. If you find yourself needing to shift at Pouhon's second apex, redistribute 4th and 5th rather than changing the final drive.
 
@@ -209,7 +209,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three, all heavy, all flat, all from near-top speed.** The Rettifilo (T1) is the biggest single deceleration event in GT7 Gr.3 racing — roughly 285 km/h to 90 km/h. Roggia and Ascari are both heavy. None are downhill, none are off-camber, none are bumpy — but all three end in a kerb. **Brake bias: one to two clicks forward** for stability into T1, but watch front lockup: Monza's long straights cool the tyres, and the first application at T1 with cooled fronts post-1.49 locks more readily than you expect. If your league allows in-race adjustment, running one click more rearward on cold tyres and forward as they come in is a real technique here.
 
-**Traction-limited exits.** **All three chicane exits, plus the Parabolica.** All are onto long straights, so they are the highest-value exits per unit of time anywhere in GT7. The complication: they are all over kerbs. **LSD acceleration sensitivity: medium-low, 15–22.** This is the exception to "traction exits onto straights want more lock" — because the exits are over aggressive kerbs, a locked diff produces snap oversteer on the kerb strike. Take the small bog and keep the car.
+**Traction-limited exits.** **All three chicane exits, plus the Parabolica.** All are onto long straights, so they are the highest-value exits per unit of time anywhere in GT7. The complication: they are all over kerbs. **LSD acceleration sensitivity: medium-low, 15–22 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** This is the exception to "traction exits onto straights want more lock" — because the exits are over aggressive kerbs, a locked diff produces snap oversteer on the kerb strike. Take the small bog and keep the car.
 
 **Gearing.** **Gear explicitly for slipstream — this is the most tow-dependent road circuit in GT7.** Set 6th to top out **with a tow** at the Rettifilo braking board; in clean air you should be 200–300 rpm short of the limiter down the main straight. Additionally: **2nd gear must cover all three chicanes** without an upshift between the two apexes, and **4th should carry the Parabolica** cleanly. Getting 2nd right is worth more than getting the final drive right.
 
@@ -243,7 +243,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Four heavy, two medium.** **The hairpin (T11)** is the biggest and slowest. **Degner 2** is heavy, downhill, and the entry is over a slight crest with the car unloaded — the most dangerous stop on the lap. **The final chicane** is heavy from 130R exit speed and slightly downhill. **Spoon (T13–14)** is a medium-heavy stop into a downhill double-apex left. **Turn 1** is a fast, light, downhill turn-in that most drivers over-brake. **Brake bias: one to two clicks forward** — Degner 2 and the chicane both brake with the car light or descending, and rear lockup at Degner 2 is a wall. Rearward bias is tempting for the Esses but they are not braking corners.
 
-**Traction-limited exits.** **The hairpin exit (T11) is the highest-value exit on the lap** — it feeds a long uphill run through 200R to Spoon. **Spoon exit** onto the back straight is second. **Final chicane exit** onto the pit straight is third. **LSD acceleration sensitivity: medium, 20–28.** The hairpin is a long, slow, uphill exit that genuinely wants lock; the constraint is that too much lock ruins the Esses' direction-change.
+**Traction-limited exits.** **The hairpin exit (T11) is the highest-value exit on the lap** — it feeds a long uphill run through 200R to Spoon. **Spoon exit** onto the back straight is second. **Final chicane exit** onto the pit straight is third. **LSD acceleration sensitivity: medium, 20–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** The hairpin is a long, slow, uphill exit that genuinely wants lock; the constraint is that too much lock ruins the Esses' direction-change.
 
 **Gearing.** **Gear for corner exit and for 130R.** 6th tops out at the end of the back straight before the chicane. Critically: **3rd gear must cover Spoon's second apex** and **the Degner complex**, and **5th must carry 130R without a shift**. A shift at 130R apex will cost you the car post-1.49. The Esses should sit comfortably in 4th throughout — if you are bouncing between 3rd and 4th in the Esses, your ratios are wrong.
 
@@ -251,7 +251,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **21–23 s**. *(Confidence: medium.)*
 
-**Strategy quirks.** Overtaking is genuinely hard — realistically only T1 and the chicane. That makes **qualifying and track position more valuable at Suzuka than almost anywhere else**, and makes the undercut strong ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner]*. In multi-stop formats, an aggressive early stop to get clean air is usually correct here even at a small tyre-life cost. The **East Course** (2.2 km) is a short-format novelty: T1 through the Esses then a link back — it is a mechanical-grip, high-wear sprint layout and not representative.
+**Strategy quirks.** Overtaking is genuinely hard — realistically only T1 and the chicane. That makes **qualifying and track position more valuable at Suzuka than almost anywhere else**, and makes the undercut strong ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner]*. In multi-stop formats, an aggressive early stop to get clean air is usually correct here even at a small tyre-life cost ⚠️ *[re-flagged 11 Sep: this is the undercut in other words - weak in GT7, and unmeasured here]*. The **East Course** (2.2 km) is a short-format novelty: T1 through the Esses then a link back — it is a mechanical-grip, high-wear sprint layout and not representative.
 
 **Top three levers.**
 1. **Aero level and front/rear aero balance** — set it in the Esses.
@@ -277,7 +277,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two heavy, two medium.** **Paddock Hill (T1)** — heavy, downhill, off-camber, and you are turning while braking. This is the defining brake-balance problem of the circuit. **Druids (T2)** — heavy, uphill, straightforward. **Surtees** and **Clark Curve** are medium. **Brake bias: two to three clicks forward — one of the most forward settings you should run anywhere.** Paddock Hill unloads the rear axle at exactly the moment you are asking it to both brake and turn; a rearward bias there is a spin.
 
-**Traction-limited exits.** **Druids exit** (downhill, so relatively easy) and, critically, **Clark Curve onto the pit straight** — the only overtaking-relevant exit and the one that sets your lap. **Surtees exit** matters for the run to McLaren. **LSD acceleration sensitivity: medium, 20–26.** Nothing extreme — most exits here are loaded and downhill.
+**Traction-limited exits.** **Druids exit** (downhill, so relatively easy) and, critically, **Clark Curve onto the pit straight** — the only overtaking-relevant exit and the one that sets your lap. **Surtees exit** matters for the run to McLaren. **LSD acceleration sensitivity: medium, 20–26 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Nothing extreme — most exits here are loaded and downhill.
 
 **Gearing.** **Gear entirely for corner exit.** 6th is barely used; on many Gr.3 cars you will only touch it briefly on the pit straight. Focus on **2nd for Druids** and **3rd/4th for Surtees, McLaren and Clearways**. A common mistake is running the stock long final drive and finding the car bogged out of Druids.
 
@@ -307,7 +307,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two: Paddock Hill and Druids.** Both discussed above. **Brake bias two to three clicks forward.**
 
-**Traction-limited exits.** Druids and Clearways. **LSD acceleration: 20–26.**
+**Traction-limited exits.** Druids and Clearways. **LSD acceleration: 20–26 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.**
 
 **Gearing.** Very short. 4th or 5th max. Gear tightly around Druids and Clearways exits.
 
@@ -340,7 +340,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two heavy, three medium.** **Senna S (T1)** is heavy, downhill, bumpy, and you are turning in as you release — the classic Interlagos challenge and the main overtaking spot. **Descida do Lago (T4)** is a medium-heavy downhill stop. **Junção (T12)** is a medium stop but critical for the exit. **Brake bias: two clicks forward.** The T1 entry is downhill *and* bumpy — the two conditions that most demand front bias.
 
-**Traction-limited exits.** **Junção (T12) exit is the highest-value exit on the circuit** — it feeds the 1.2 km uphill full-throttle climb to T1, so every tenth there is compounded and it determines whether you have a tow. **Senna S exit** onto the Curva do Sol is second. **LSD acceleration sensitivity: medium-high, 24–30.** Junção is uphill, slow, and feeds a straight — exactly the profile that wants lock.
+**Traction-limited exits.** **Junção (T12) exit is the highest-value exit on the circuit** — it feeds the 1.2 km uphill full-throttle climb to T1, so every tenth there is compounded and it determines whether you have a tow. **Senna S exit** onto the Curva do Sol is second. **LSD acceleration sensitivity: medium-high, 24–30 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Junção is uphill, slow, and feeds a straight — exactly the profile that wants lock.
 
 **Gearing.** **Gear for the uphill run with slipstream.** 6th should top out with a tow just before the T1 braking board. **2nd must cover Junção** cleanly with the uphill load. **3rd must carry Ferradura** without a shift.
 
@@ -373,7 +373,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three heavy, all uphill or on a crest.** **T1** from top speed, braking uphill (which helps). **T3 (Remus)** from top speed, braking uphill — the biggest overtaking spot in the game for stopping distance variability. **T4** medium-heavy. None are downhill, none are bumpy. **Brake bias: neutral to one click forward.** Uphill braking loads the front naturally, so you need less forward bias here than on almost any other circuit — and a slightly rearward setting helps rotate the tight T3.
 
-**Traction-limited exits.** **Three, all uphill, all onto straights** — this is a traction circuit. **T1 exit** (uphill onto the run to T3), **T3 exit** (uphill onto the long run to T4 — the most valuable), and **T10 exit** onto the pit straight. **LSD acceleration sensitivity: high for GT7, 28–35 for FR, 22–28 for MR.** Red Bull Ring rewards diff lock more than almost any other circuit on this list, because all three critical exits are slow, uphill and feed straights.
+**Traction-limited exits.** **Three, all uphill, all onto straights** — this is a traction circuit. **T1 exit** (uphill onto the run to T3), **T3 exit** (uphill onto the long run to T4 — the most valuable), and **T10 exit** onto the pit straight. **LSD acceleration sensitivity: high for GT7, 28–35 for FR, 22–28 for MR ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Red Bull Ring rewards diff lock more than almost any other circuit on this list, because all three critical exits are slow, uphill and feed straights.
 
 **Gearing.** **Gear for slipstream.** 6th tops out with a tow at the T3 braking board. **2nd gear must cover T1, T3 and T10** with headroom — a mid-corner upshift at T3 is a common and costly error. This is a track where a very short 2nd and a long 6th, with a big gap between 2nd and 3rd, is defensible.
 
@@ -405,7 +405,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **One very heavy, three medium.** The **hairpin at the end of the back straight** is the only genuine big stop. **T1** is a fast, light, downhill turn-in. The rest are medium, and several are on descents. **Brake bias: one to two clicks forward** — the downhill sections and the crest-unloading argue for it.
 
-**Traction-limited exits.** **Primarily the hairpin exit**, which feeds the run back to the start of the lap. Most other exits are loaded and fast. **LSD acceleration sensitivity: medium-low, 15–22.** Autopolis' rhythm sections punish a locked diff — you need the car to change direction repeatedly and a high acceleration setting will push you wide at every linked exit. Take the small hairpin loss.
+**Traction-limited exits.** **Primarily the hairpin exit**, which feeds the run back to the start of the lap. Most other exits are loaded and fast. **LSD acceleration sensitivity: medium-low, 15–22 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Autopolis' rhythm sections punish a locked diff — you need the car to change direction repeatedly and a high acceleration setting will push you wide at every linked exit. Take the small hairpin loss.
 
 **Gearing.** **Gear for the back straight**, with 6th topping out at the hairpin board. Critically, **3rd and 4th must be spaced so the rhythm section can be driven in a single gear per sequence.** Autopolis is a track where drivers lose more time to unnecessary shifting than to ratio choice.
 
@@ -435,7 +435,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two very heavy, two medium.** **Turn 1** is a genuinely enormous stop — from near top speed at the end of 1.5 km down to around 90 km/h, on a flat, smooth, wide entry. This is the best overtaking opportunity on any real circuit in GT7. **The hairpin (T11)** is heavy. **Coca-Cola** and the **Panasonic entry** are medium. **Brake bias: one click forward.** The T1 stop is flat and smooth so it does not demand much forward bias, and the tyres are cool after the long straight — the same cold-tyre lockup caution as Monza applies.
 
-**Traction-limited exits.** **Panasonic (T16) exit onto the main straight is the highest-value exit at this circuit and one of the highest in GT7** — a tenth there is worth several tenths by the T1 board, plus your slipstream position. **Hairpin exit** is second. **LSD acceleration sensitivity: medium-high, 25–32.** Panasonic is a slow, tightening exit onto the longest straight; it wants lock.
+**Traction-limited exits.** **Panasonic (T16) exit onto the main straight is the highest-value exit at this circuit and one of the highest in GT7** — a tenth there is worth several tenths by the T1 board, plus your slipstream position. **Hairpin exit** is second. **LSD acceleration sensitivity: medium-high, 25–32 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Panasonic is a slow, tightening exit onto the longest straight; it wants lock.
 
 **Gearing.** **Gear explicitly for slipstream** — Fuji is second only to Monza in tow dependency. 6th should top out **with a tow** at the T1 board. In clean air you should be short of the limiter. Additionally: **2nd gear must cover Panasonic** with the right exit ratio (this is the most important individual ratio at Fuji), and **4th must carry the 100R and 300R** without shifts.
 
@@ -443,7 +443,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **21–23 s**. *(Confidence: medium.)*
 
-**Strategy quirks.** The main straight makes Fuji a **track-position-cheap** circuit — defending is hard, so aggressive strategy pays. The tyre recovery on the straight means fresh-tyre out-laps are unusually strong here, making the **undercut powerful** ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner; "fresh-tyre out-laps are unusually strong" is unmeasured]*. Fuji is one of the best circuits in GT7 for multi-stop league racing. The **Short Course** removes the middle-sector chicane complex, raising average speed and lowering the downforce requirement further.
+**Strategy quirks.** The main straight makes Fuji a **track-position-cheap** circuit — defending is hard, so aggressive strategy pays ⚠️ *[re-flagged 11 Sep: unmeasured - see the banner]*. The tyre recovery on the straight means fresh-tyre out-laps are unusually strong here, making the **undercut powerful** ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner; "fresh-tyre out-laps are unusually strong" is unmeasured]*. Fuji is one of the best circuits in GT7 for multi-stop league racing. The **Short Course** removes the middle-sector chicane complex, raising average speed and lowering the downforce requirement further.
 
 **Top three levers.**
 1. **2nd gear ratio and LSD acceleration for the Panasonic exit.**
@@ -465,7 +465,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **One heavy (the first hairpin), two medium.** All flat, all smooth. **Brake bias: neutral to slightly rearward.** Low-speed hairpin entries benefit from rotation, and there is no downhill or bumpy braking to punish it. This is one of the few circuits where a rearward bias is straightforwardly correct.
 
-**Traction-limited exits.** **The first hairpin exit and the final hairpin exit** — both 1st/2nd gear from near-stopped in a 550+ hp car. **LSD acceleration sensitivity: LOW, 12–18.** Counter-intuitive, but a Gr.3 car has so much more torque than the corner can absorb that high acceleration lock simply produces wheelspin and snap. Low lock plus disciplined throttle is faster.
+**Traction-limited exits.** **The first hairpin exit and the final hairpin exit** — both 1st/2nd gear from near-stopped in a 550+ hp car. **LSD acceleration sensitivity: LOW, 12–18 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Counter-intuitive, but a Gr.3 car has so much more torque than the corner can absorb that high acceleration lock simply produces wheelspin and snap. Low lock plus disciplined throttle is faster.
 
 **Gearing.** Extremely short. **You will use 3rd and 4th and no more.** Set the final drive well to the short end. Make sure **1st is not so short that you are shifting immediately out of the hairpins** — a common error that costs real time on a 54-second lap.
 
@@ -498,7 +498,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three heavy.** **Turn 1 (the 90)** from top speed, flat, wide — a good overtaking spot. **The Bus Stop** from very high speed, slightly downhill, with severe kerbs — the hardest stop on the lap. **The Inner Loop / Toe of the Boot** on the Long Course. **Brake bias: one to two clicks forward** for the Bus Stop's downhill approach.
 
-**Traction-limited exits.** **Bus Stop exit** (feeds the run to the final corner), **T1 exit** (feeds the esses), and **the final turn onto the pit straight.** **LSD acceleration sensitivity: medium, 22–28.** All three exits feed long full-throttle sections, which argues for lock; the Bus Stop kerb argues against. Split the difference.
+**Traction-limited exits.** **Bus Stop exit** (feeds the run to the final corner), **T1 exit** (feeds the esses), and **the final turn onto the pit straight.** **LSD acceleration sensitivity: medium, 22–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** All three exits feed long full-throttle sections, which argues for lock; the Bus Stop kerb argues against. Split the difference.
 
 **Gearing.** **Gear for slipstream** on the back straight — 6th tops out with a tow at the Bus Stop board. **5th must carry the esses** without a shift; if you find yourself shifting in the middle of the esses, your ratios are wrong and you will lose the car. This is the most important gearing note at the Glen.
 
@@ -531,7 +531,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two heavy, three medium.** **The Bus Stop** from full banking speed is the biggest stop and the main overtaking spot — flat but with severe kerbs. **The infield entry (T1 of the road course, the "horseshoe")** is heavy. The rest are medium 2nd/3rd-gear stops. **Brake bias: one click forward.** The Bus Stop entry is flat and stable.
 
-**Traction-limited exits.** **Bus Stop exit onto the banking** (feeds the longest full-throttle section) and the **infield hairpin exits.** **LSD acceleration sensitivity: medium, 22–28.** The Bus Stop exit onto the banking is high-value and wants lock; the kerbs argue for restraint.
+**Traction-limited exits.** **Bus Stop exit onto the banking** (feeds the longest full-throttle section) and the **infield hairpin exits.** **LSD acceleration sensitivity: medium, 22–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** The Bus Stop exit onto the banking is high-value and wants lock; the kerbs argue for restraint.
 
 **Gearing.** **Gear for maximum top speed with slipstream — Daytona has the biggest tow effect of any road layout in GT7.** 6th should top out with a tow on the banking. In clean air you will be well short; accept it, because you will always have a tow in a race. **2nd gear covers the infield hairpins.**
 
@@ -594,7 +594,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three heavy, two medium.** **T2 (Andretti)** — heavy, downhill-ish approach, the main overtaking spot. **T5** — uphill, medium-heavy, stable. **T11** — heavy, downhill, and you are turning in — the hardest stop and the one that decides your lap. **T9** is a medium, downhill, committed entry. **Brake bias: two clicks forward.** T11's downhill entry and the general descending character of the second half require it.
 
-**Traction-limited exits.** **T11 exit onto the pit straight is the single most valuable exit** (it feeds the only real straight and the only overtaking approach). **T2 exit** is second. **T6 exit** (uphill) is third. **LSD acceleration sensitivity: medium, 20–28.** T11 is slow, downhill-into-flat and feeds a straight — it wants lock — but the Corkscrew and T10 need the car to rotate freely.
+**Traction-limited exits.** **T11 exit onto the pit straight is the single most valuable exit** (it feeds the only real straight and the only overtaking approach). **T2 exit** is second. **T6 exit** (uphill) is third. **LSD acceleration sensitivity: medium, 20–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** T11 is slow, downhill-into-flat and feeds a straight — it wants lock — but the Corkscrew and T10 need the car to rotate freely.
 
 **Gearing.** **Short — you will use 5th at most, and 6th possibly not at all.** Gear for exits: **2nd for T2 and T11**, **3rd for T5 and T10**, **4th for T6 and T9.** The main straight is short enough that final-drive optimisation is worth less than getting 2nd right for T11.
 
@@ -628,7 +628,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three heavy, four medium.** **The Chase (T21–22)** is the biggest: from ~290 km/h at the end of Conrod, **downhill, and slightly bumpy** — the most demanding stop in GT7. **The Cutting (T4)** is heavy and steeply uphill (which helps). **Murray's Corner (T23)** is heavy at the bottom of the descent. **Hell Corner (T1)** and the mountain corners are medium. **Brake bias: two to three clicks forward.** The Chase mandates it — a rearward bias into a downhill, bumpy 290 km/h stop is a wall. If your league permits in-race adjustment, running more forward for the descent and Chase is worthwhile.
 
-**Traction-limited exits.** **Forrest's Elbow (T19) exit onto Conrod Straight is the highest-value corner exit on any GT7 circuit** — it feeds nearly 2 km of full throttle. **Murray's Corner exit** onto the pit straight is second. **The Cutting exit** (steeply uphill) is third. **LSD acceleration sensitivity: medium, 20–28.** Forrest's Elbow wants lock; the Esses and Dipper want the car free. If you must err, err toward Forrest's Elbow — but note it is a downhill exit, which reduces the traction demand.
+**Traction-limited exits.** **Forrest's Elbow (T19) exit onto Conrod Straight is the highest-value corner exit on any GT7 circuit** — it feeds nearly 2 km of full throttle. **Murray's Corner exit** onto the pit straight is second. **The Cutting exit** (steeply uphill) is third. **LSD acceleration sensitivity: medium, 20–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Forrest's Elbow wants lock; the Esses and Dipper want the car free. If you must err, err toward Forrest's Elbow — but note it is a downhill exit, which reduces the traction demand.
 
 **Gearing.** **Gear for Conrod with slipstream** — 6th tops out with a tow before The Chase braking. Critically: **1st and 2nd must cover the mountain section** with the right spacing, because the mountain corners are so slow that a badly placed 2nd gear costs you at six corners per lap. **3rd should carry Skyline and the Esses.** Bathurst gearing is a genuinely two-part problem and deserves proper time.
 
@@ -661,7 +661,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three heavy, two medium.** **T1** from top speed, flat, wide — the main overtaking spot. **T10 (La Caixa)** heavy, on a descent. **T14 (the chicane)** heavy. **T4 (Repsol)** and **T7** are medium. **Brake bias: one to two clicks forward.** T10's downhill approach sets the requirement.
 
-**Traction-limited exits.** **T16 (the final corner) exit onto the main straight is the most valuable** — and it is a long, loaded, gradually opening right, so it is a *balance* problem more than a pure traction problem. **T10 exit** and **T5 exit** are the true traction events. **LSD acceleration sensitivity: medium, 20–28.** The long-radius exits (T3, T9, T12, T16) all suffer from too much lock — it pushes you wide and, crucially, **scrubs the front-left**, which is the thing you cannot afford here.
+**Traction-limited exits.** **T16 (the final corner) exit onto the main straight is the most valuable** — and it is a long, loaded, gradually opening right, so it is a *balance* problem more than a pure traction problem. **T10 exit** and **T5 exit** are the true traction events. **LSD acceleration sensitivity: medium, 20–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** The long-radius exits (T3, T9, T12, T16) all suffer from too much lock — it pushes you wide and, crucially, **scrubs the front-left**, which is the thing you cannot afford here.
 
 **Gearing.** **Gear for slipstream on the main straight** — 6th tops out with a tow at the T1 board. **4th must carry T3** without a mid-corner shift (T3 is long enough that a shift there is genuinely disruptive), and **5th must carry T9** over the crest.
 
@@ -694,7 +694,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Five heavy, plus two chicane stops.** **Mulsanne Corner (the 90-degree right at the end of the straight)** is the single largest deceleration event in GT7 — flat, smooth, wide, and the classic overtaking spot. **The two Mulsanne chicanes** are heavy stops from maximum speed with severe kerbs. **Indianapolis** is a fast right into a slow left, slightly **off-camber on the entry** — genuinely tricky. **Arnage** is a slow 90 with a poor approach. **The Ford chicanes** at the end of the lap. **Brake bias: one to two clicks forward.** Indianapolis' off-camber entry and the cold-brake situation at the first Mulsanne chicane both argue for it.
 
-**Traction-limited exits.** **Mulsanne Corner exit** (feeds the run to Indianapolis), **Arnage exit** (feeds the Porsche Curves), **Ford chicane exit** (feeds the pit straight), and the **two Mulsanne chicane exits** (each feeds a ~1.8 km full-throttle section — extremely high value). **LSD acceleration sensitivity: medium-high, 25–32.** Nearly every traction exit at Le Mans feeds a long straight, which is the strongest possible case for lock. Temper it slightly for the chicane kerbs.
+**Traction-limited exits.** **Mulsanne Corner exit** (feeds the run to Indianapolis), **Arnage exit** (feeds the Porsche Curves), **Ford chicane exit** (feeds the pit straight), and the **two Mulsanne chicane exits** (each feeds a ~1.8 km full-throttle section — extremely high value). **LSD acceleration sensitivity: medium-high, 25–32 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Nearly every traction exit at Le Mans feeds a long straight, which is the strongest possible case for lock. Temper it slightly for the chicane kerbs.
 
 **Gearing.** **Gear for absolute maximum top speed, with tow.** Le Mans is the most gearing-sensitive circuit in the game. 6th should top out with a slipstream at the end of the Mulsanne. **The critical secondary constraint: 4th and 5th must be placed to carry the Porsche Curves without a mid-corner shift**, and **2nd must cover Mulsanne Corner and Arnage.** Spend real time here — a badly geared Le Mans car loses multiple seconds per lap.
 
@@ -727,7 +727,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **One heavy (T1), one medium (T4/5), one light (T9).** That is it — the fewest genuine braking events of any road circuit here. **Brake bias: neutral to one click forward.** With so little braking, this is a low-priority setting; set it for T1 and forget it.
 
-**Traction-limited exits.** **Very few.** T4/5 exit and T9 exit onto the pit straight. Most exits are fast and loaded. **LSD acceleration sensitivity: low-to-medium, 15–22.** Too much lock will push you wide at every sweeper exit and shred the front-left.
+**Traction-limited exits.** **Very few.** T4/5 exit and T9 exit onto the pit straight. Most exits are fast and loaded. **LSD acceleration sensitivity: low-to-medium, 15–22 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Too much lock will push you wide at every sweeper exit and shred the front-left.
 
 **Gearing.** **Gear for the sweepers, not for top speed.** 5th and 6th should be placed so that **T2, T3 and T8 are each taken in a single gear at a comfortable rpm** — this is more important than the final drive because you spend most of the lap at part-throttle through fast corners. A car that needs to shift mid-Sweeper is a slow car.
 
@@ -762,7 +762,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three heavy, two medium.** **T5/6** at the bottom of the esses descent — heavy and slightly downhill. **T7** heavy. **T10a** — heavy, **on a blind crest, with the car unloaded** — the hardest and most consequential stop on the lap. **T12** medium. **Brake bias: two clicks forward.** T10a mandates it: braking with an unloaded rear over a crest with a rearward bias is a spin every time.
 
-**Traction-limited exits.** **T7 exit** (feeds the run to T10) and **T12 exit** onto the long pit straight — the highest-value exit. **T10b exit** onto the back straight is third but is fast and loaded, so less traction-critical. **LSD acceleration sensitivity: medium, 22–28.**
+**Traction-limited exits.** **T7 exit** (feeds the run to T10) and **T12 exit** onto the long pit straight — the highest-value exit. **T10b exit** onto the back straight is third but is fast and loaded, so less traction-critical. **LSD acceleration sensitivity: medium, 22–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.**
 
 **Gearing.** Both straights are long. **Gear for the pit straight with tow** (6th topping out at the T1 braking area). **4th must carry the esses** without a shift and **5th must cover T10b** onto the back straight.
 
@@ -796,7 +796,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two real ones: Lavant and the chicane.** Both flat and smooth. Madgwick and Woodcote are lift-or-brush. **Brake bias: neutral to one click forward.** Low-priority setting here.
 
-**Traction-limited exits.** **The chicane exit onto the pit straight** — essentially the only one that matters. Every other exit is fast and loaded. **LSD acceleration sensitivity: medium, 20–26**, set entirely for the chicane exit. Keep initial torque low so the car turns at Madgwick and Woodcote.
+**Traction-limited exits.** **The chicane exit onto the pit straight** — essentially the only one that matters. Every other exit is fast and loaded. **LSD acceleration sensitivity: medium, 20–26** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*, set entirely for the chicane exit. Keep initial torque low so the car turns at Madgwick and Woodcote.
 
 **Gearing.** **Gear for top speed** — with only one slow corner, the final drive is the dominant choice. **2nd for the chicane**, and make sure **5th/6th carry Woodcote and Madgwick** without shifts.
 
@@ -826,7 +826,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Four heavy**, all flat and smooth: T1, the T3–4 chicane approach, the hairpin (T10), and the final chicane (T13–14). All are good overtaking spots. **Brake bias: one click forward.**
 
-**Traction-limited exits.** **The hairpin exit onto the back straight** is by far the most valuable, and **the final chicane exit** onto the pit straight is second. **LSD acceleration sensitivity: medium-high, 25–32** for the hairpin — but watch the final chicane kerb.
+**Traction-limited exits.** **The hairpin exit onto the back straight** is by far the most valuable, and **the final chicane exit** onto the pit straight is second. **LSD acceleration sensitivity: medium-high, 25–32** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]* for the hairpin — but watch the final chicane kerb.
 
 **Gearing.** **Gear for slipstream on the back straight**; 6th tops out with a tow at the final chicane. **2nd must cover the hairpin.**
 
@@ -853,7 +853,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three heavy, back-to-back at T5 and T8** (the two longest straights end in slow corners), plus **T11**. All flat, smooth and wide. **Brake bias: one click forward.** Brake temperature and front-tyre lockup are the real issues.
 
-**Traction-limited exits.** **T7 exit** and **T9 exit** (both onto straights), plus **the final corner** onto the pit straight. **LSD acceleration sensitivity: medium-high, 25–32** — several slow exits feed straights.
+**Traction-limited exits.** **T7 exit** and **T9 exit** (both onto straights), plus **the final corner** onto the pit straight. **LSD acceleration sensitivity: medium-high, 25–32** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]* — several slow exits feed straights.
 
 **Gearing.** Gear for slipstream on the two long straights. **2nd for the hairpin complex.**
 
@@ -885,7 +885,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three heavy.** **Turn 1** at the end of the long straight — the biggest stop and the primary overtaking spot, flat and wide. **The hairpin** in the second half. **The final chicane**, from high speed. **Brake bias: one click forward.**
 
-**Traction-limited exits.** **The final chicane exit onto the main straight is decisive** — it determines your entire straight-line speed and slipstream position. **The hairpin exit** is second. **LSD acceleration sensitivity: medium-high, 24–30** for the final chicane exit, tempered by the kerb risk.
+**Traction-limited exits.** **The final chicane exit onto the main straight is decisive** — it determines your entire straight-line speed and slipstream position. **The hairpin exit** is second. **LSD acceleration sensitivity: medium-high, 24–30** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]* for the final chicane exit, tempered by the kerb risk.
 
 **Gearing.** **Gear for slipstream** — 6th tops out with a tow at the T1 board. **2nd covers the final chicane and the hairpin.**
 
@@ -918,7 +918,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two heavy (T1 and the descent-section entry), three medium.** Several are on gradients. **Brake bias: two clicks forward** — the downhill entries demand more than Seaside does.
 
-**Traction-limited exits.** **The final corner onto the main straight**, plus two or three slow inland exits. **LSD acceleration sensitivity: medium, 20–26** — the linked technical section punishes too much lock.
+**Traction-limited exits.** **The final corner onto the main straight**, plus two or three slow inland exits. **LSD acceleration sensitivity: medium, 20–26** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]* — the linked technical section punishes too much lock.
 
 **Gearing.** **Gear for the main straight** but with more attention to 2nd and 3rd than at Seaside, because you use them far more often.
 
@@ -947,7 +947,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three heavy.** **Turn 1** at the end of the main straight (heavy, flat, the main overtaking spot). **The corner after the first tunnel** (the tunnel exit is dark-to-light and the braking point is deceptive). **The final chicane.** **Brake bias: one to two clicks forward** for the descending sections.
 
-**Traction-limited exits.** **The final chicane exit onto the main straight** is decisive. **The uphill double-apex exit** is second and genuinely traction-limited because it is a slow, steep, uphill exit. **LSD acceleration sensitivity: medium, 22–28.**
+**Traction-limited exits.** **The final chicane exit onto the main straight** is decisive. **The uphill double-apex exit** is second and genuinely traction-limited because it is a slow, steep, uphill exit. **LSD acceleration sensitivity: medium, 22–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.**
 
 **Gearing.** **Gear for the main straight with tow.** **2nd for the final chicane**, **3rd for the uphill double-apex.**
 
@@ -977,7 +977,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two heavy, three medium.** The braking zone at the end of the pit straight and the hairpin. Several medium stops are on descents. **Brake bias: one to two clicks forward.**
 
-**Traction-limited exits.** **The banked final corner exit onto the pit straight** — but note it is *banked*, which supplies grip, so it is less traction-limited than it looks. **The two hairpin exits** are the true traction events. **LSD acceleration sensitivity: medium, 20–26** — the linked sweeper sections punish high lock.
+**Traction-limited exits.** **The banked final corner exit onto the pit straight** — but note it is *banked*, which supplies grip, so it is less traction-limited than it looks. **The two hairpin exits** are the true traction events. **LSD acceleration sensitivity: medium, 20–26** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]* — the linked sweeper sections punish high lock.
 
 **Gearing.** **Gear for the pit straight**, with **4th carrying the linked sweeper sections** and **2nd for the hairpins.** Deep Forest rewards a car that can run whole sequences in one gear.
 
@@ -990,14 +990,14 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 | Rear left | 1.967 | 0.462 | 43.2 laps |
 | Rear right | 2.778 | 0.653 | 30.6 laps |
 
-30.3 laps at 2x against the reference's 6.5–8 — **about four times** (`RECONCILIATION` AS4). And **gentler per kilometre than Red Bull Ring** (0.90–1.35 %/km at 2x on the same car), which is graded 3 against Deep Forest's 5, so the grade is anti-predictive here. The part that held: the circuit is direction-balanced — the front/rear split is 5.9 % and the front-right leads the front-left by only 1.27x. In the race (session 138) the tyre did not bind: 41.7 % worn over 12 laps, 25.0 % over 7. **One car, a Gr.N road car on its own setup; no Gr.3 car has been measured here.**
+30.3 laps at 2x on the practice rate, against the reference's 6.5–8 *[ASSUMED: its 13–16 laps at 1x halved for 2x, `CLAUDE.md` §5.2]* — about four times (`RECONCILIATION` AS4). **The race wore faster:** the front-right took 41.7 % in 12 laps and 25.0 % in 7 (session 138) — **3.47 and 3.57 %/lap, about a quarter above practice**, which puts the set at **about 24 laps** at `0.85/w`. Still about three times the reference, and **the rate to plan a race on**. And **gentler per kilometre than Red Bull Ring** (0.90–1.35 %/km at 2x on the same car), which is graded 3 against Deep Forest's 5, so the grade is anti-predictive here. The part that held: the circuit is direction-balanced — the front/rear split is 5.9 % and the front-right leads the front-left by only 1.27x. In the race the tyre did not bind over the 12 + 7 laps run. **One car, a Gr.N road car on its own setup; no Gr.3 car has been measured here.**
 
-**Pit loss.** Estimated **19–20 s**. *(Confidence: low-medium.)* **Not measured in house:** the Round 6 event carries 20 s with no source recorded. What the one race here did measure is the two costs of a stop that are not the lane: **standing time for fuel** at the league's 2.0 L/s — 19.73 L left at the flag was 9.9 s stood still, against an 8 s gap to the place ahead — and a **1.41 s** cold out-lap on fresh tyres (lap 14 against the stint-2 median), on top of about 3 s for the tyre change itself.
+**Pit loss.** Estimated **19–20 s**. *(Confidence: low-medium.)* **Not measured in house:** the Round 6 event carries 20 s with no source recorded. What the one race here did show is the two costs of a stop that are not the lane: **standing time for fuel** — 19.73 L left at the flag *[MEASURED]* at the league's declared 2.0 L/s is **9.9 s stood still** *[DERIVED]*, against an 8 s gap to the place ahead — and a **1.41 s** cold out-lap on fresh tyres *[MEASURED, one lap: lap 14 against the stint-2 median; whether it carries pit-exit time is unverified]*, on top of about 3 s for the tyre change itself *[his figure]*.
 
-**Strategy quirks.** **Deep Forest is narrow — overtaking is genuinely hard** and track position is expensive. *The reference said the undercut is unusually strong here.* **⚠️ Re-flagged 11 Sep:** the undercut is weak in GT7 (banner), and the one stop measured here paid 1.41 s on the out-lap plus the change for no measured gain. With the tyre good for 30 laps at 2x, the stop on that format is a fuel stop: size the fill from the clock at the stop, and take tyres only if the gauge asks for them.
+**Strategy quirks.** **Deep Forest is narrow — overtaking is genuinely hard** and track position is expensive. *The reference said the undercut is unusually strong here - **re-flagged 11 Sep:*** the undercut is weak in GT7 (banner), and the one stop measured here paid 1.41 s on the out-lap plus the change. Stint 2 then ran about 1.0 s/lap quicker, but he stopped coasting and short-shifting at the same time, so **what the tyres bought is unresolvable, not zero**. Size the fill from the clock at the stop. **Take tyres when the gauge's worst wheel plus the laps left at the race rate would pass 85 %** — at 3.5 %/lap a set reading 42 % has about 12 laps left in it, not 18.
 
 **Top three levers.**
-1. **Front tyre life** — the stint is the race. ⚠️ *Refuted at 2x on the one car measured (a 30-lap stint); on that format the fill decided the race, not the tyre.*
+1. **Front tyre life** — the stint is the race. ⚠️ *Not at 2x on the one car measured: about 24 laps at the race rate against a 20-lap race, and the fill decided that race, not the tyre. On a longer format it binds again — count it at the race rate.*
 2. **Aero level**, set in the linked sweepers.
 3. **Ride height at the banked final corner.**
 
@@ -1019,7 +1019,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two heavy (the two hairpins), three to four medium**, several on descents. The **Sector 3 tunnel 180 followed immediately by a chicane** is the hardest sequence — you brake, turn 180 degrees, and immediately have to change direction twice. **Brake bias: two clicks forward** for the descending entries.
 
-**Traction-limited exits.** **Both hairpin exits** and **the final right onto the main straight.** **LSD acceleration sensitivity: medium, 20–28.** The hairpins want lock; the serpentines want the car free.
+**Traction-limited exits.** **Both hairpin exits** and **the final right onto the main straight.** **LSD acceleration sensitivity: medium, 20–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** The hairpins want lock; the serpentines want the car free.
 
 **Gearing.** **2nd for the hairpins and the tunnel 180.** 6th for the main straight. Grand Valley is a mid-gear circuit — 3rd and 4th spacing matters through the serpentines.
 
@@ -1049,7 +1049,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two heavy, four to five medium**, many on descents or over crests. **Brake bias: two to three clicks forward** — Alsace has more downhill and crest braking than almost anything else in GT7 outside the Nordschleife.
 
-**Traction-limited exits.** **Several slow, uphill exits in the village and climb sections.** **LSD acceleration sensitivity: medium, 20–26** — the narrow road means too much lock pushes you into the barriers.
+**Traction-limited exits.** **Several slow, uphill exits in the village and climb sections.** **LSD acceleration sensitivity: medium, 20–26** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]* — the narrow road means too much lock pushes you into the barriers.
 
 **Gearing.** Gear for corner exit, not top speed. **2nd and 3rd are the working gears** and their spacing matters more than the final drive.
 
@@ -1075,7 +1075,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 - **Priority: mechanical grip, exclusively.**
 - **Setup: low ride height, soft-ish springs, soft ARBs** — a Tsukuba-style maximum-mechanical-grip configuration.
 - **Brake bias: neutral to slightly rearward** for rotation in the slow corners.
-- **LSD acceleration sensitivity: LOW, 12–18** — a Gr.3 car has vastly more torque than these corners can absorb.
+- **LSD acceleration sensitivity: LOW, 12–18** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]* — a Gr.3 car has vastly more torque than these corners can absorb.
 - **Gearing: extremely short.** 3rd or 4th maximum.
 - **Tyre wear:** low in absolute terms, high per lap; rear-biased from traction.
 - **Pit loss:** likely 15–18 s, which is **30–40% of a lap time** — an extreme ratio.
@@ -1099,7 +1099,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** Yamagiwa: **two heavy, three medium**, several on gradients. Miyabi: several slow, light stops. **Brake bias: one to two clicks forward.**
 
-**Traction-limited exits.** Yamagiwa's slow-corner exits (two or three) and, on the combined layout, everything in Miyabi. **LSD acceleration sensitivity: medium, 20–26.** On the combined layout, err lower — Miyabi will punish lock.
+**Traction-limited exits.** Yamagiwa's slow-corner exits (two or three) and, on the combined layout, everything in Miyabi. **LSD acceleration sensitivity: medium, 20–26 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** On the combined layout, err lower — Miyabi will punish lock.
 
 **Gearing.** Yamagiwa's main straight sets 6th. **3rd/4th must carry the mountain sweepers.** On the combined layout, ensure **2nd covers Miyabi's tight corners** without being so short that Yamagiwa suffers.
 
@@ -1132,7 +1132,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Few but severe.** On East CW, two to three heavy stops, all from very high speed and all into wall-lined corners. Some are on gradients. **Brake bias: two clicks forward** — you are braking from high speed on an uneven surface with the car occasionally light, which is the profile that most demands front bias. Rear lockup here means a wall.
 
-**Traction-limited exits.** **The tight turns at the loop ends** — typically two per lap. They are slow, wall-lined and feed long straights, so they are high-value. **LSD acceleration sensitivity: medium-high, 24–30**, but be aware that a locked diff over a bumpy exit next to a wall is a specific risk. Test it.
+**Traction-limited exits.** **The tight turns at the loop ends** — typically two per lap. They are slow, wall-lined and feed long straights, so they are high-value. **LSD acceleration sensitivity: medium-high, 24–30** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*, but be aware that a locked diff over a bumpy exit next to a wall is a specific risk. Test it.
 
 **Gearing.** **Gear for top speed with slipstream** — Tokyo has a very large tow effect. 6th tops out with a tow before the main braking zone. **2nd for the loop-end turns.**
 
@@ -1190,7 +1190,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Oval: none.** **Infield A: two to three medium stops** from banking speed into the infield — these are the only real braking events and they are from very high speed with cold-ish brakes. **Brake bias: one click forward.**
 
-**Traction-limited exits.** **Infield exits onto the banking** — high value because they feed the full-throttle section. **LSD acceleration sensitivity: medium, 22–28** on the infield layouts; irrelevant on the oval.
+**Traction-limited exits.** **Infield exits onto the banking** — high value because they feed the full-throttle section. **LSD acceleration sensitivity: medium, 22–28** ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]* on the infield layouts; irrelevant on the oval.
 
 **Gearing.** **Oval: maximum top speed with tow.** **Infield: gear for the banking top speed, with 2nd covering the infield's slowest corner.**
 
@@ -1218,7 +1218,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Two heavy (the hairpin and the end of the back straight), three medium**, some on gradients. **Brake bias: one to two clicks forward.**
 
-**Traction-limited exits.** **The hairpin exit** onto the straight, plus one or two slower exits. **LSD acceleration sensitivity: medium, 22–28.**
+**Traction-limited exits.** **The hairpin exit** onto the straight, plus one or two slower exits. **LSD acceleration sensitivity: medium, 22–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.**
 
 **Gearing.** **Gear for the back straight with tow.** **2nd for the hairpin**, **4th for the sweepers.**
 
@@ -1248,7 +1248,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Four to five, all slow, several downhill.** Downhill braking into a 1st-gear hairpin is the recurring event. **Brake bias: two to three clicks forward** — the downhill hairpin entries demand it, and this is one of the settings that most affects your Eiger lap time.
 
-**Traction-limited exits.** **Every hairpin exit, several uphill.** A Gr.3 car exiting a 1st-gear uphill hairpin with 550 hp is completely traction-limited. **LSD acceleration sensitivity: LOW, 12–20.** As at Tsukuba, more lock produces more wheelspin, not more drive. This is the single most important setting at Eiger.
+**Traction-limited exits.** **Every hairpin exit, several uphill.** A Gr.3 car exiting a 1st-gear uphill hairpin with 550 hp is completely traction-limited. **LSD acceleration sensitivity: LOW, 12–20 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** As at Tsukuba, more lock produces more wheelspin, not more drive. This is the single most important setting at Eiger.
 
 **Gearing.** **Very short.** 1st and 2nd are the working gears; you may not reach 4th. **Make sure 1st is not so short that you are shifting immediately out of every hairpin.**
 
@@ -1275,7 +1275,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **One heavy (the hairpin), one medium (the final sequence).** That is it. **Brake bias: neutral to one click forward** — a low-priority setting.
 
-**Traction-limited exits.** **The hairpin exit** and **the final corner onto the main straight.** **LSD acceleration sensitivity: medium, 22–28.**
+**Traction-limited exits.** **The hairpin exit** and **the final corner onto the main straight.** **LSD acceleration sensitivity: medium, 22–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.**
 
 **Gearing.** **Gear for maximum top speed with tow** — HSR is one of the biggest slipstream circuits in GT7. **2nd for the hairpin.**
 
@@ -1303,7 +1303,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three heavy, three medium**, all flat, smooth and wide. **Brake bias: neutral to one click forward.**
 
-**Traction-limited exits.** **Two or three infield exits**, plus the final corner onto the pit straight. **LSD acceleration sensitivity: medium, 22–28.**
+**Traction-limited exits.** **Two or three infield exits**, plus the final corner onto the pit straight. **LSD acceleration sensitivity: medium, 22–28 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.**
 
 **Gearing.** **Gear for the main straight with tow.** **3rd/4th must carry the sweepers** without mid-corner shifts.
 
@@ -1332,7 +1332,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **Three to four heavy on Layout A**, several approached at very high speed, some on gradients. **Brake bias: one to two clicks forward.**
 
-**Traction-limited exits.** **Two or three slow exits feeding long straights** — high value. **LSD acceleration sensitivity: medium-high, 24–30.**
+**Traction-limited exits.** **Two or three slow exits feeding long straights** — high value. **LSD acceleration sensitivity: medium-high, 24–30 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.**
 
 **Gearing.** **Gear for the longest straight with tow.** **4th/5th must carry the fast sweepers.**
 
