@@ -1908,6 +1908,31 @@ recost or report, never `drop_stop`, so `stop_still_needed` is always True
 and the latch cannot fire on any plan on file today — below a gap that fires
 on every stop.
 
+### The cancelled-stop latch — build (11 Sep 2026)
+
+Rule 10's two guards, both. **The retirement latches when he is told** —
+`record` on a `STOPS_OFF` that really retired the stop; with the drop not
+granted he hears the report form, the stop stands, and nothing latches — and
+`laps_to_stop()` returns None while latched, so one lap's burn moving back
+across the margin no longer makes the countdown vanish and return. **Only a
+sustained reversal retires the latch**: `STOP_BACK_LAPS` (2) consecutive laps
+on which the fuel does not reach, counted once a lap in `_on_lap` after that
+lap's burn is installed. Then it is **said** — the new DECISION `STOP_BACK`,
+*"The stop is back on."* with the stop's own reason from
+`_why_the_stop_stands` (rule 12) and no countdown in it, ranked beside the
+call it reverses — because a countdown reappearing in silence after "No more
+stops on fuel" is the contradiction `STOPS_OFF` was written to prevent. Both
+the retirement and the reinstatement are logged (the accepts, not only the
+refusals). The latch belongs to the stop it retired: `_apply_stint` clears it
+across a stop taken, a re-plan adopted and construction.
+
+**The batch's own test found the defect under it, not the reading.**
+`_worth_saying_again` silences a kind already in `said` for the whole stint,
+so a stop that came back and then retired again would never have been
+announced a second time — "told it was back on, he must be told again when it
+is off" failed. Each reversal now clears the other's entry, so each can be
+said once and neither twice in a row.
+
 ### Critic pass 7 — 8 Sep 2026, five rounds on critic 6's three defects
 
 **Commits `abcfe1a` → `f8230ca` → `c534de9` → `580addb` → `6d89827` →

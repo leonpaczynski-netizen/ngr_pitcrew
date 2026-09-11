@@ -446,6 +446,14 @@ class RaceCoordinator:
         one time an unnamed compound must not be read as "unchanged".
         """
         self.state.stint_index = index
+        # **The latch belongs to the stop it retired.** This is where
+        # `stint_ends_on_lap` is recomputed - across a stop taken, at a
+        # re-plan adopted, at construction - and a retirement of the old stop
+        # says nothing about the next one (CLAUDE.md rule 11's shape: state
+        # that outlives its subject is read as though it were about this one).
+        self.state.stop_retired = False
+        self.state.stop_back_laps = 0
+        self.state.stop_back_due = False
         # **What the NEXT stint starts on** - not the fill. The litres through
         # the hose are this minus whatever is aboard when we arrive, and
         # `_fill_at_the_stop` does that subtraction. `None` on the last stint:
@@ -941,6 +949,10 @@ class RaceCoordinator:
         if finish is not None:
             return finish
 
+        # **Once a lap, after this lap's burn is installed**, because
+        # `stop_still_needed` reads it: whether a stop he was told was off
+        # has been needed long enough to come back. See `note_stop_need`.
+        self.state.note_stop_need()
         folded = self._reconsider_ignored_box()
         if folded is not None:
             self.state.record(folded)

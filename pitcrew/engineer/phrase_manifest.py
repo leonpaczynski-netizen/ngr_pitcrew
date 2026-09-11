@@ -429,6 +429,12 @@ def _opener_states() -> list:
         _state(lap=0),                                        # green flag
         _state(lap=6, finished=True),                         # chequered flag
         _state(lap=6, stint_ends_on_lap=6),                   # box now
+        # **A stop he was told was off, back on** - the call that reverses
+        # `STOPS_OFF`, so it cannot be the one that pauses.
+        _state(lap=8, laps_total=20, stint_ends_on_lap=10, fuel_l=20.0,
+               fuel_per_lap_l=6.0, fuel_capacity_l=100.0,
+               plan_binding_constraint="fuel", mandatory_stops_left=0,
+               drop_stop_granted=True, stop_back_due=True),
         _state(lap=6, stint_ends_on_lap=7),                   # box next lap
         _state(lap=6, stint_ends_on_lap=8),                   # box in 2
         _state(lap=18, laps_total=20, fuel_l=20.0,            # fuel long

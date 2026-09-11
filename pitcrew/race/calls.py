@@ -115,6 +115,16 @@ STAY_OUT = "stay-out"
 # The tank now reaches the flag and the plan's remaining stops were only ever
 # there to fill it. See `_stops_off`.
 STOPS_OFF = "stops-off"
+# **A stop he was told was off, needed again.** The retirement is latched once
+# he is told (rule 10's first guard) and only a sustained run of laps on which
+# the fuel no longer reaches brings it back (the second) - and then it is
+# said, because a countdown that reappears in silence after "No more stops on
+# fuel" is the contradiction `STOPS_OFF` was written to prevent.
+STOP_BACK = "stop-back"
+# Consecutive laps the fuel has to fall short before a retired stop returns.
+# Two, because one is the burn median moving back across the margin - the
+# flicker this exists to stop - and a third would cost a lap of the stop.
+STOP_BACK_LAPS = 2
 # **The answer to a saving the engineer asked for.** Not an
 # instruction, so it is ranked below every call that is one - but it
 # closes a loop the engineer opened, and an unclosed loop leaves the
@@ -185,7 +195,7 @@ RIVAL_COMMITTED = "rival-committed"
 RIVAL_SHORT = "rival-short"
 STAY_OUT_FUEL = "stay-out-fuel"
 
-URGENCY = (CHEQUER, STOPS_OFF, BOX_NOW,
+URGENCY = (CHEQUER, STOPS_OFF, STOP_BACK, BOX_NOW,
            # **`UNDERCUT` sits directly below `BOX_NOW`.** It is a box
            # instruction that brings the planned stop forward, so a stop
            # already due wins, and a fuel shortfall is an argument FOR it
@@ -312,6 +322,7 @@ REGISTER = {
     BOX_NOW: DECISION,
     BOX_SOON: DECISION,
     STOPS_OFF: DECISION,
+    STOP_BACK: DECISION,
     FUEL_SHORT: DECISION,
     FUEL_LONG: DECISION,
     STAY_OUT: DECISION,
@@ -1080,9 +1091,50 @@ class RaceState:
         """
         if self.stint_ends_on_lap is None:
             return None
+        # **Latched.** Once he has heard the stop is off, one lap's burn
+        # moving back across the margin does not bring the countdown back -
+        # see `note_stop_need`, which is the only thing that can.
+        if self.stop_retired:
+            return None
         if not stop_still_needed(self):
             return None
         return max(0, self.stint_ends_on_lap - self.lap)
+
+    def note_stop_need(self) -> None:
+        """Once a lap: whether a retired stop has been needed long enough.
+
+        **Rule 10's second guard.** A latch nothing can retire refuses every
+        honest reading after one bad one; so a sustained run - `STOP_BACK_LAPS`
+        consecutive laps on which the fuel does not reach - brings the stop
+        back, and `STOP_BACK` says so. One contrary lap resets nothing but
+        its own count. **The accept is logged**, not only the refusal: a
+        stop coming back is the thing a debrief will ask about.
+        """
+        if not self.stop_retired:
+            self.stop_back_laps = 0
+            return
+        if not stop_still_needed(self):
+            self.stop_back_laps = 0
+            return
+        self.stop_back_laps += 1
+        log("race").info("the retired stop is needed again on lap %s (%d of "
+                         "%d laps)", self.lap, self.stop_back_laps,
+                         STOP_BACK_LAPS)
+        if self.stop_back_laps >= STOP_BACK_LAPS:
+            self.stop_retired = False
+            self.stop_back_laps = 0
+            self.stop_back_due = True
+            # **A second retirement is a second thing to tell him** - and
+            # `_worth_saying_again` silences any kind already in `said` for
+            # the stint, so "You're fuelled to the flag" said once could
+            # never be said again after the stop came back. Found by this
+            # batch's own test, not by reading.
+            self.stops_off_said = False
+            if STOPS_OFF in self.said:
+                self.said.remove(STOPS_OFF)
+            self.said_at.pop(STOPS_OFF, None)
+            log("race").info("the retired stop is back on from lap %s",
+                             self.lap)
 
     @property
     def past_box_lap(self) -> bool:
@@ -1106,6 +1158,16 @@ class RaceState:
     mandatory_stops_left: int | None = None
     # Said once. The driver does not need telling twice that the stops are off.
     stops_off_said: bool = False
+    # **The retirement, latched once he has been told** (plan §9a, carried
+    # from row 1.10). `laps_to_stop()` re-evaluated the arithmetic on every
+    # read, so a burn median moving back across the margin made the countdown
+    # vanish and return. Set by `record` on a `STOPS_OFF` that really retired
+    # the stop; cleared only by `note_stop_need` after `STOP_BACK_LAPS`
+    # consecutive laps the fuel falls short, or by a stop being taken.
+    stop_retired: bool = False
+    stop_back_laps: int = 0
+    # The stop has come back and he has not yet been told.
+    stop_back_due: bool = False
     # Whether the spoken count needs a hedge - noise, plus the degradation
     # bias `laps_estimate_firm` cannot see. Deliberately NOT that flag: it
     # sizes fuel margins, and widening it put a spare lap in every tank.
@@ -1408,6 +1470,20 @@ class RaceState:
             self.said_tags.add(GAUGE_ASK)
         if call.kind == STOPS_OFF:
             self.stops_off_said = True
+            # **Latched only where it really retired the stop.** With the
+            # drop not granted he hears the report form and the stop stands
+            # (`stop_still_needed` is True), so there is nothing to latch.
+            if not stop_still_needed(self):
+                self.stop_retired = True
+                self.stop_back_laps = 0
+                # And the reversal it may one day need is sayable again.
+                if STOP_BACK in self.said:
+                    self.said.remove(STOP_BACK)
+                self.said_at.pop(STOP_BACK, None)
+                log("race").info("the stop is retired on lap %s: %s",
+                                 call.lap, call.reason or call.call)
+        if call.kind == STOP_BACK:
+            self.stop_back_due = False
         if call.kind == CHASE:
             self.chase_said_lap = call.lap
         if call.kind == TOW_TRADE and call.tag != "tow-spent":
@@ -1668,6 +1744,8 @@ def _candidates(state: RaceState) -> list[Call | None]:
         _green(state),
         # Above the box calls because it is the call that cancels one.
         _stops_off(state),
+        # Beside the call it reverses.
+        _stop_back(state),
         _box_now(state),
         _box_soon(state),
         _fuel(state),
@@ -1957,6 +2035,23 @@ def _stops_off(state: RaceState) -> Call | None:
                 "You're fuelled to the flag. No more stops on fuel.",
                 reason, structural_action="drop_stop", trigger="fuel_long",
                 report_form="You're fuelled to the flag.")
+
+
+def _stop_back(state: RaceState) -> Call | None:
+    """Said once, when a stop he was told was off is needed again.
+
+    **The stop's own reason, and no countdown.** `_why_the_stop_stands` is
+    the expression that decides it stands, so the sentence cannot name a
+    constraint other than the one that brought it back (rule 12); the box
+    countdown follows on its own lap, in its own words, which keeps each
+    sentence a clip the pack carries.
+    """
+    if not state.stop_back_due or state.in_pit or state.finished:
+        return None
+    if state.laps_to_stop() is None:
+        return None
+    return Call(STOP_BACK, state.lap, "The stop is back on.",
+                _why_the_stop_stands(state) or "On the plan.")
 
 
 def _tyre_word(state: RaceState) -> str:
