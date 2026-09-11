@@ -421,6 +421,10 @@ more dead time — **≈ 25–30 s, not 40.**
   true at once: the undercut is still mechanically weak (cold out-lap, long pit
   delta) but what you buy with it is worth more here than anywhere else you
   race. **[DOCTRINE] — I have no measurement of either.**
+  ⚠️ *[Re-flagged 11 Sep 2026: measured afterwards. The race's one stop paid a
+  1.41 s cold out-lap plus about 3 s for the tyre change, for no measured gain,
+  and the tyre was good for 30 laps. The standing rule stands here too; see
+  `05`'s Deep Forest entry.]*
 - **The grid is set by fastest lap, not by a qualifying session.** Your practice
   pace *is* your grid slot.
 

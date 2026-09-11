@@ -2405,6 +2405,52 @@ that it will not arm, and it cannot be re-approved without a decision.
 Its note that each new branch was killed by one test only is answered with
 a second test on the radio, `adopt` and the gate.
 
+**2.8, part 2 - the content half of doctrine hygiene.** Every claim is taken
+from a ledger row, a car-state file or a read-only count, and says which.
+- **`05`, the 1.71 pass.** A banner names three kinds of line that no longer
+  hold. First, the ~40 per-circuit LSD bands are on the v1.70 5-60 scale: a
+  direction only, issued in percent of range. Second, "the undercut is
+  strong" was said at ten circuits; every one is re-flagged (`CLAUDE.md`
+  §5.4, plus the one in-house measurement: a 1.41 s fresh-tyre out-lap).
+  Third, the wear figures and severity grades are refuted where tested. The
+  Deep Forest entry is rewritten from what was measured: the front-right at
+  0.66 %/km, a 30-lap stint at 2x (about four times the reference, AS4),
+  gentler per km than RBR's grade 3, and the tyre did not bind in the race.
+  Its pit loss is **not** measured (the event carries 20 s with no source);
+  what was measured is standing time (9.9 s of surplus fuel against an 8 s
+  gap) and the 1.41 s out-lap. Two archived sheets that said the same about
+  the undercut are annotated as history.
+- **`02` §10, tagged.** Rows are [COMMUNITY] unless tagged. Tags from the
+  ledgers: [IN-HOUSE ✅] on rearward brake balance (RSR, Sardegna), a stiffer
+  rear bar (Huracán, Daytona and RSR, Sardegna), front wing (RSR) and LSD
+  braking up for entry stability (Huracán). [CONTESTED] on §10.5's #1:
+  lowering LSD acceleration was refuted on the v1.71 Huracán and raising it
+  confirmed, so the section's "most validated entry" now has an in-house
+  result against it. Also [CONTESTED] on reduced rake, softer compression at
+  the kerb (the driver and the instrument disagree, both kept) and "fronts
+  wear first" (the RSR's worst wheel is the rear-right). [IN-HOUSE ❌] on
+  front wing as a wear lever. The "brake balance stays at 0" preference is
+  marked as no longer true on either car. The table orderings are still the
+  community's, and the key says so.
+- **`07`, the Shelby profile** from the archive, read-only: **213 laps in 24
+  sessions, 177 on v1.71** - the plan's "156" was the count before Deep
+  Forest. The profile covers:
+  - the front axle as the limit, on three indicators;
+  - the rear-lock complaint that was real and a fix that overshot (suggestive
+    across circuits, not measured);
+  - rake refuted as the lever;
+  - K = 304 km/h;
+  - the top-speed readout that moves the wrong way;
+  - practice burn overstating race burn.
+  Yas Marina's 36 laps are void.
+- **`11`** keeps the percent of range and drops every absolute setup value
+  it quoted from a sheet - the diff, the rebound, the ride heights, the
+  spring rates and the rake (§1a).
+- **`test_brain_reconciliation`** gains e6 (every live claim that the undercut
+  pays is re-flagged) and e7 (`11` restates no setup value; `07` and `02`
+  carry their new sections). **Both were shown to fail on the files at HEAD
+  before they were trusted** - e6 flagged all 12 places, e7 all 8 quotations.
+
 **Still open in Phase 2:** 2.4 and 2.6-2.9 as written; `SKILL.md` is roughly
 twice 2.9's 450 lines; six evals short of 2.9's twenty; and **2.12 - the MCP
 server is registered nowhere** (no `pitcrew` entry in `~/.claude.json`, no

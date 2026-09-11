@@ -1,6 +1,14 @@
 # GT7 Gr.3 TRACK REFERENCE — Competitive League Edition
 **Physics baseline: post-1.49 (Update 1.49, July 2024) through current 2026 builds.** Compiled August 2026.
 
+> **🟠 11 Sep 2026 — the 1.71 pass (plan row 2.8).** Three kinds of line in this file no longer hold as written. Each is flagged where it stands.
+>
+> 1. **Every "LSD acceleration sensitivity: N–M" band is on the v1.70 5–60 scale.** On v1.71 every car in `range_records` reads 0–30 / 0–100 / 0–100, so each band now addresses a different slider. Read a band as a direction only (more or less lock than the car's own baseline), and issue the value in percent of the car's own range (`11`), never as the number printed here.
+> 2. **"The undercut is strong / works / is powerful" is re-flagged at every circuit that says it.** In GT7 the undercut is weak: a cold out-lap costs 0.5–1.5 s and the pit delta is long, while the overcut is comparatively strong (`CLAUDE.md` §5.4). The one in-house measurement agrees — a **1.41 s** out-lap on fresh tyres at Deep Forest, 6 Sep. None of these lines was measured; each is an F1 instinct carried into a game where it does not pay.
+> 3. **The per-circuit wear figures and the `wearSeverity` grades are refuted where they have been tested.** Deep Forest's "13–16 laps at 1x" measured about four times too pessimistic, and its severity 5 ran gentler per kilometre than Red Bull Ring's 3 (`RECONCILIATION` AS4). Measure before using any of them.
+>
+> The pit-loss figures are still estimates unless a stop has been measured at that circuit; the Deep Forest entry says which of its numbers were measured.
+
 ---
 
 ## 0. How to read this document
@@ -209,7 +217,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **20–22 s** — short, straightforward pit lane. *(Confidence: medium.)*
 
-**Strategy quirks.** The dominant one: **slipstream is so powerful that track position is worth less than at any other circuit.** A car 1 s/lap slower will stay attached. Consequences for your league: qualifying matters less; the undercut is strong (short pit loss); and running in dirty air costs you almost nothing in cornering because you have no aero to lose. Expect large packs and late-race lottery. The **No Chicane variant** removes the Rettifilo and Roggia, converting the circuit into a near-oval — it magnifies every point above, drops the wear further, and is a novelty rather than a serious league layout.
+**Strategy quirks.** The dominant one: **slipstream is so powerful that track position is worth less than at any other circuit.** A car 1 s/lap slower will stay attached. Consequences for your league: qualifying matters less; the undercut is strong (short pit loss) ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner]*; and running in dirty air costs you almost nothing in cornering because you have no aero to lose. Expect large packs and late-race lottery. The **No Chicane variant** removes the Rettifilo and Roggia, converting the circuit into a near-oval — it magnifies every point above, drops the wear further, and is a novelty rather than a serious league layout.
 
 **Top three levers.**
 1. **Minimum-drag aero and the matching gearing** (with-tow topping-out).
@@ -243,7 +251,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **21–23 s**. *(Confidence: medium.)*
 
-**Strategy quirks.** Overtaking is genuinely hard — realistically only T1 and the chicane. That makes **qualifying and track position more valuable at Suzuka than almost anywhere else**, and makes the undercut strong. In multi-stop formats, an aggressive early stop to get clean air is usually correct here even at a small tyre-life cost. The **East Course** (2.2 km) is a short-format novelty: T1 through the Esses then a link back — it is a mechanical-grip, high-wear sprint layout and not representative.
+**Strategy quirks.** Overtaking is genuinely hard — realistically only T1 and the chicane. That makes **qualifying and track position more valuable at Suzuka than almost anywhere else**, and makes the undercut strong ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner]*. In multi-stop formats, an aggressive early stop to get clean air is usually correct here even at a small tyre-life cost. The **East Course** (2.2 km) is a short-format novelty: T1 through the Esses then a link back — it is a mechanical-grip, high-wear sprint layout and not representative.
 
 **Top three levers.**
 1. **Aero level and front/rear aero balance** — set it in the Esses.
@@ -373,7 +381,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **19–20 s**. *(Confidence: medium.)*
 
-**Strategy quirks.** The **slipstream on both straights is very strong** and the braking zones are wide, so overtaking is easy and track position is cheap. This makes Red Bull Ring one of the best circuits for reverse-grid or handicapped formats. In multi-stop races, the undercut works well (short pit loss, big out-lap traction gains on fresh tyres at T1/T3). Track-limit penalties at T9/T10 are a genuine race-management factor — brief your drivers.
+**Strategy quirks.** The **slipstream on both straights is very strong** and the braking zones are wide, so overtaking is easy and track position is cheap. This makes Red Bull Ring one of the best circuits for reverse-grid or handicapped formats. In multi-stop races, the undercut works well (short pit loss, big out-lap traction gains on fresh tyres at T1/T3) ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7, and a fresh-tyre out-lap measured 1.41 s SLOWER at Deep Forest - see the banner]*. Track-limit penalties at T9/T10 are a genuine race-management factor — brief your drivers.
 
 **Top three levers.**
 1. **LSD acceleration sensitivity** — the highest-value single setting at this circuit.
@@ -405,7 +413,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **21 s**. *(Confidence: low — limited community data.)*
 
-**Strategy quirks.** Overtaking is genuinely difficult — realistically only the hairpin. That makes qualifying valuable and the undercut strong. The **Shortcut Course (3.0 km, 11 corners)** removes the fastest section and becomes a compact technical layout — it is used for one-make and Gr.4 dailies more than Gr.3.
+**Strategy quirks.** Overtaking is genuinely difficult — realistically only the hairpin. That makes qualifying valuable and the undercut strong ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner]*. The **Shortcut Course (3.0 km, 11 corners)** removes the fastest section and becomes a compact technical layout — it is used for one-make and Gr.4 dailies more than Gr.3.
 
 **Top three levers.**
 1. **Expansion damping** for the crests — the highest-value setting here.
@@ -435,7 +443,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **21–23 s**. *(Confidence: medium.)*
 
-**Strategy quirks.** The main straight makes Fuji a **track-position-cheap** circuit — defending is hard, so aggressive strategy pays. The tyre recovery on the straight means fresh-tyre out-laps are unusually strong here, making the **undercut powerful**. Fuji is one of the best circuits in GT7 for multi-stop league racing. The **Short Course** removes the middle-sector chicane complex, raising average speed and lowering the downforce requirement further.
+**Strategy quirks.** The main straight makes Fuji a **track-position-cheap** circuit — defending is hard, so aggressive strategy pays. The tyre recovery on the straight means fresh-tyre out-laps are unusually strong here, making the **undercut powerful** ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner; "fresh-tyre out-laps are unusually strong" is unmeasured]*. Fuji is one of the best circuits in GT7 for multi-stop league racing. The **Short Course** removes the middle-sector chicane complex, raising average speed and lowering the downforce requirement further.
 
 **Top three levers.**
 1. **2nd gear ratio and LSD acceleration for the Panasonic exit.**
@@ -594,7 +602,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **18–20 s** — **~23% of a lap time**, a high ratio.
 
-**Strategy quirks.** Overtaking is realistically T2 only, plus an occasional Corkscrew move that ends in tears. **Track position is expensive**, qualifying matters, and the undercut is strong. Laguna Seca races are usually decided in the first two corners. The high pit-loss ratio argues for one-stop or no-stop formats.
+**Strategy quirks.** Overtaking is realistically T2 only, plus an occasional Corkscrew move that ends in tears. **Track position is expensive**, qualifying matters, and the undercut is strong ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner]*. Laguna Seca races are usually decided in the first two corners. The high pit-loss ratio argues for one-stop or no-stop formats.
 
 **Top three levers.**
 1. **Corkscrew compliance** — front expansion damping and ride height.
@@ -762,7 +770,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **19–21 s**. *(Confidence: low-medium.)*
 
-**Strategy quirks.** Overtaking is realistic at T1, T7 and T10a, which for a short lap is generous — track position is relatively cheap and the racing is good. Short pit loss makes the undercut work. **An underrated league circuit** that produces better racing than its profile suggests.
+**Strategy quirks.** Overtaking is realistic at T1, T7 and T10a, which for a short lap is generous — track position is relatively cheap and the racing is good. Short pit loss makes the undercut work ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner]*. **An underrated league circuit** that produces better racing than its profile suggests.
 
 **Top three levers.**
 1. **Brake bias forward and front expansion damping** for the T10a crest.
@@ -885,7 +893,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **20–22 s**. *(Confidence: low-medium.)*
 
-**Strategy quirks.** Enormous slipstream on the main straight makes **track position cheap** and produces excellent racing. Short-ish pit loss makes the undercut viable. **One of the best all-round league circuits in GT7** — it works for both sprint and multi-stop formats.
+**Strategy quirks.** Enormous slipstream on the main straight makes **track position cheap** and produces excellent racing. Short-ish pit loss makes the undercut viable ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner]*. **One of the best all-round league circuits in GT7** — it works for both sprint and multi-stop formats.
 
 **Top three levers.**
 1. **Final chicane exit package** — 2nd gear, LSD acceleration, kerb compliance.
@@ -973,14 +981,23 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Gearing.** **Gear for the pit straight**, with **4th carrying the linked sweeper sections** and **2nd for the hairpins.** Deep Forest rewards a car that can run whole sequences in one gear.
 
-**Tyre wear.** **High and front-biased** — this is why Polyphony runs it at 5x with a compound choice. Continuous medium-speed lateral load with almost no recovery, plus the banked corner adding vertical load. Direction is reasonably balanced. Expect **13–16 laps at 1x** — and note that at the 5x multiplier used in dailies, the medium-vs-soft crossover is the entire race.
+**Tyre wear.** *The reference said:* high and front-biased, 13–16 laps at 1x, the medium-vs-soft crossover the whole race at 5x. **⚠️ Measured in house on v1.71, and it does not hold** — Ford Shelby GT350R '16 at 2x, session 134, HUD gauge, five readings, monotone on all four wheels:
 
-**Pit loss.** Estimated **19–20 s**. *(Confidence: low-medium.)*
+| wheel | %/lap | %/km | stint at `0.85/w` |
+|---|---:|---:|---:|
+| Front left | 2.215 | 0.521 | 38.4 laps |
+| **Front right** | **2.808** | **0.660** | **30.3 laps** ← the limit |
+| Rear left | 1.967 | 0.462 | 43.2 laps |
+| Rear right | 2.778 | 0.653 | 30.6 laps |
 
-**Strategy quirks.** **Deep Forest is narrow — overtaking is genuinely hard** and track position is expensive. That combined with high tyre wear creates the classic tension that makes it a good strategy race: do you stop early for clean air, or stay out and defend on old tyres? Because passing is hard, **the undercut is unusually strong here** — get out on fresh tyres in clean air and you will gain more than the tyre delta suggests.
+30.3 laps at 2x against the reference's 6.5–8 — **about four times** (`RECONCILIATION` AS4). And **gentler per kilometre than Red Bull Ring** (0.90–1.35 %/km at 2x on the same car), which is graded 3 against Deep Forest's 5, so the grade is anti-predictive here. The part that held: the circuit is direction-balanced — the front/rear split is 5.9 % and the front-right leads the front-left by only 1.27x. In the race (session 138) the tyre did not bind: 41.7 % worn over 12 laps, 25.0 % over 7. **One car, a Gr.N road car on its own setup; no Gr.3 car has been measured here.**
+
+**Pit loss.** Estimated **19–20 s**. *(Confidence: low-medium.)* **Not measured in house:** the Round 6 event carries 20 s with no source recorded. What the one race here did measure is the two costs of a stop that are not the lane: **standing time for fuel** at the league's 2.0 L/s — 19.73 L left at the flag was 9.9 s stood still, against an 8 s gap to the place ahead — and a **1.41 s** cold out-lap on fresh tyres (lap 14 against the stint-2 median), on top of about 3 s for the tyre change itself.
+
+**Strategy quirks.** **Deep Forest is narrow — overtaking is genuinely hard** and track position is expensive. *The reference said the undercut is unusually strong here.* **⚠️ Re-flagged 11 Sep:** the undercut is weak in GT7 (banner), and the one stop measured here paid 1.41 s on the out-lap plus the change for no measured gain. With the tyre good for 30 laps at 2x, the stop on that format is a fuel stop: size the fill from the clock at the stop, and take tyres only if the gauge asks for them.
 
 **Top three levers.**
-1. **Front tyre life** — the stint is the race.
+1. **Front tyre life** — the stint is the race. ⚠️ *Refuted at 2x on the one car measured (a 30-lap stint); on that format the fill decided the race, not the tyre.*
 2. **Aero level**, set in the linked sweepers.
 3. **Ride height at the banked final corner.**
 
@@ -1010,7 +1027,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Pit loss.** Estimated **21 s**. *(Confidence: low.)*
 
-**Strategy quirks.** **The narrowness is the defining strategic fact.** Overtaking is difficult and side-by-side racing risks a barrier. Track position is expensive; qualifying matters; and the undercut is strong. Your league should expect more incidents here than at a modern permanent circuit, and should consider it a "precision" round rather than a "racing" round. The **South layout** (3.1 km) is a short sprint version using Sector 1 and a link — mechanical-grip-biased, high wear per lap, big pit-loss ratio.
+**Strategy quirks.** **The narrowness is the defining strategic fact.** Overtaking is difficult and side-by-side racing risks a barrier. Track position is expensive; qualifying matters; and the undercut is strong ⚠️ *[re-flagged 11 Sep: the undercut is weak in GT7 - see the banner]*. Your league should expect more incidents here than at a modern permanent circuit, and should consider it a "precision" round rather than a "racing" round. The **South layout** (3.1 km) is a short sprint version using Sector 1 and a link — mechanical-grip-biased, high wear per lap, big pit-loss ratio.
 
 **Top three levers.** **Compliance for the descents; brake bias forward; 2nd gear for the hairpins and the tunnel 180.**
 

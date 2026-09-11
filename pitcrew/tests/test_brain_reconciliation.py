@@ -261,3 +261,36 @@ def test_e5_no_eval_expects_what_was_deleted_and_no_read_car_is_called_stale():
     register = (ROOT / "brain/_inbox/11-car-slider-ranges.md").read_text(
         encoding="utf-8")
     assert "Stale. Do not issue" not in register
+
+
+# A claim that the undercut pays, in any wording the doctrine used for it.
+UNDERCUT_PAYS = re.compile(
+    r"undercut\b[^.]{0,40}?\b(?:strong|works?|viable|powerful)\b", re.IGNORECASE)
+
+
+def test_e6_every_live_claim_that_the_undercut_pays_is_re_flagged():
+    """Row 2.8 part 2: `05` said the undercut was strong at ten circuits, and
+    GT7's undercut is weak (`CLAUDE.md` §5.4) - measured in house as a 1.41 s
+    fresh-tyre out-lap at Deep Forest. A claim may stay as history, in a
+    block that says it is re-flagged."""
+    live = [f"{p.relative_to(ROOT).as_posix()}:{n}" for p, n, block in _live_paragraphs()
+            if UNDERCUT_PAYS.search(block) and "re-flagged" not in block.lower()]
+    assert not live, f"the undercut is claimed to pay, unflagged, at {live}"
+
+
+def test_e7_the_register_restates_no_setup_value():
+    """§1a: a setup value is written in one place, `brain/car-state/`. `11`
+    quoted sheets' diff, rebound, ride height and spring values as absolutes;
+    it keeps their percent of range only (row 2.8 part 2)."""
+    register = (ROOT / "brain/_inbox/11-car-slider-ranges.md").read_text(
+        encoding="utf-8")
+    for quoted in ("Rev D runs **LSD", "initial 5 / acceleration 14",
+                   "80 / 98 mm", "89 / 107 mm", "3.05 / 3.20 Hz",
+                   "40 front / 38 rear", '"+18 mm rake"', '"+8 mm rake"'):
+        assert quoted not in register, quoted
+    profiles = (ROOT / "brain/_inbox/07-car-profiles.md").read_text(encoding="utf-8")
+    assert "3.05 / 3.20 Hz" not in profiles
+    assert "the measured profile, v1.71" in profiles
+    reference = (ROOT / "brain/_inbox/02-gt7-setup-parameters.md").read_text(
+        encoding="utf-8")
+    assert "**Tags (plan row 2.8, 11 Sep 2026).**" in reference
