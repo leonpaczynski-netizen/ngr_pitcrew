@@ -804,7 +804,10 @@ SPOKEN = {
     # BoP, open tuning and the power and weight limits are NOT here: no
     # screen has a box for them, so the hub's current word is applied on
     # load and a change is said then (`controller._apply_hub_regulations`) -
-    # they can never disagree with a value of his.
+    # they can never disagree with a value of his. **Re-adding one would be
+    # dead rather than wrong**: by the time this runs the stored value is
+    # the hub's, so the comparison could never fire - which is why this
+    # comment, and not a test, is what keeps them out.
 }
 
 

@@ -1742,6 +1742,11 @@ class PitCrewController(QObject):
             return f"tuning is now {'open' if now else 'closed'} for this round"
         unit, label = (("BHP", "power limit") if key == "power_limit_bhp"
                        else ("kg", "weight limit"))
+        # **A first fill has no "was"** (pass 3, minor 2): `f"{None:.0f}"`
+        # raises, and this used to be safe only because its one caller
+        # filtered those out beforehand.
+        if was is None:
+            return f"{label} now {now:.0f} {unit}, not stated before"
         return f"{label} now {now:.0f} {unit} (was {was:.0f})"
 
     def _apply_hub_regulations(self, event: dict):
@@ -1759,15 +1764,31 @@ class PitCrewController(QObject):
             proposal = self._proposal(round_id)
             if proposal is None:
                 return event, None, []
+            if not any(proposal.regs.get(key) is not None
+                       for key in self.HUB_ONLY):
+                # Said nowhere else: a round that states none of them leaves
+                # whatever is stored standing, which is indistinguishable
+                # from agreement (pass 3, minor 4).
+                log("pitcrew").info(
+                    "calendar: round %s states no BoP, tuning or limits", round_id)
+                return event, proposal, []
             fill = {key: proposal.regs[key] for key in self.HUB_ONLY
                     if proposal.regs.get(key) is not None
                     and event.get(key) != proposal.regs[key]}
             if not fill:
                 return event, proposal, []
-            self.store.update_event(event["id"], **fill)
-            notes = [self._said_change(key, event[key], value)
+            # **Worded before the write, so a raise here cannot leave the row
+            # updated, the form stale and the change unsaid** (pass 3, minor
+            # 2). A first fill is not news - except on a match the calendar
+            # INFERRED from circuit and car, where the link itself is the
+            # thing he was never told (minor 1).
+            adopted = bool(getattr(proposal, "adopted", False))
+            notes = [self._said_change(key, event.get(key), value)
                      for key, value in fill.items()
-                     if event.get(key) is not None]
+                     if event.get(key) is not None or adopted]
+            if adopted and notes:
+                notes.insert(0, f"linked to {proposal.name} by circuit and car")
+            self.store.update_event(event["id"], **fill)
             log("pitcrew").info("calendar: %s took %s from the hub (round %s)",
                                 event.get("name"), fill, round_id)
             return {**event, **fill}, proposal, notes
