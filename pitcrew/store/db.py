@@ -2326,7 +2326,8 @@ class Store:
             return None
         return json.loads(rows[0]["plan_json"])
 
-    def update_strategy_plan(self, strategy_id: int, plan: dict) -> None:
+    def update_strategy_plan(self, strategy_id: int, plan: dict, *,
+                             evidence: dict | None = None) -> None:
         """Replace a stored plan's JSON. **The approval stamp, and only it.**
 
         `controller.approve_stored_strategy` is the one caller: a candidate
@@ -2341,6 +2342,15 @@ class Store:
                 (json.dumps(plan), strategy_id))
             if cur.rowcount == 0:
                 raise ValueError(f"no strategy with id {strategy_id}")
+            # **And the certificate it was approved on, beside the one it was
+            # written with** (critic 2 on the storage row). Without it the row
+            # said `certified: false` with its old refusals for a plan that
+            # had just been approved, and nothing recorded that `expects` was
+            # stamped at approval rather than at writing.
+            if evidence is not None:
+                conn.execute(
+                    "UPDATE strategies SET evidence_json = ? WHERE id = ?",
+                    (json.dumps(evidence), strategy_id))
 
     def approve_strategy(self, strategy_id: int) -> None:
         """Make this the approved plan, demoting whatever held that status."""

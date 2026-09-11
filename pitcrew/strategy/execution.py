@@ -31,7 +31,7 @@ from __future__ import annotations
 # the `events.race_laps` column overload - MINUTES when `race_type` is
 # `'time'` - and a second implementation of that is a second thing to get
 # wrong. There were two when this module was written; there is one now.
-from pitcrew.race.coordinator import context_from_event
+from pitcrew.race.coordinator import context_from_event, context_from_stored
 from pitcrew.race.expectations import PRACTICE, Expectation
 from pitcrew.strategy.handover import LAP_CEILING, as_whole_number
 
@@ -110,8 +110,11 @@ def _with_start_laps(stints) -> list:
 
     Derived rather than refused because it is not a judgement: stints run
     back to back and the arithmetic has one answer. An author's own value is
-    kept - a plan may legitimately start at a lap other than one - and only
-    the gaps are filled.
+    kept and only the gaps are filled - and `certify` is what refuses a race
+    plan whose first stint does not start on lap 1. `adopt`'s mid-race tail
+    is the only stint list that legitimately does, and it never passes the
+    gate (critic 2 on the storage row: a first stint on lap 5 certified, and
+    George boxed on 14 under a page that said 10).
 
     **Only where the arithmetic HAS one answer.** This used to drop a stint
     that was not a dict and derive the rest over the survivors, and rewrite a
@@ -145,6 +148,42 @@ def _with_start_laps(stints) -> list:
                       if start is not None and laps is not None else None)
         filled.append(row)
     return filled
+
+
+def built_for_another_race(plan, event) -> str | None:
+    """Why `plan` does not fit `event`, in `PlanContext.matches`' words.
+
+    None where it fits, and None where the plan names no readable context -
+    `contract_gaps` is what names that. **One expression for both approving
+    doors** (critic 2 on the storage row): `approve_stored_strategy` refused a
+    foreign context and `write_strategy` approved one, demoting the good plan
+    - the Race page then said "approved" all week over a plan `arm` refuses
+    on the grid, with nothing left to fall back on.
+    """
+    stored = plan.get("context") if isinstance(plan, dict) else None
+    if not _is_context(stored):
+        return None
+    fits, why = context_from_stored(stored, event).matches(
+        context_from_event(event))
+    return None if fits else why
+
+
+def unreadable(plan) -> str | None:
+    """Why a stored plan cannot be read at all, or None.
+
+    **Not a contract gap**, because approval does not fill it in - it refuses
+    it. `start_race` said "approval fills those in" about a plan that was not
+    a dict (critic 2 on the storage row).
+    """
+    if not isinstance(plan, dict):
+        return "the plan cannot be read"
+    stints = plan.get("stints")
+    if not isinstance(stints, list) or not stints:
+        return "the plan names no stints"
+    for index, stint in enumerate(stints, 1):
+        if not isinstance(stint, dict):
+            return f"stint {index} of the plan cannot be read"
+    return None
 
 
 def contract_gaps(plan) -> list[str]:

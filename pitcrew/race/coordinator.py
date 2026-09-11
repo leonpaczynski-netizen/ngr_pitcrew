@@ -104,6 +104,17 @@ class PlanContext:
         if self.track != other.track:
             return False, f"plan was built for {self.track}, track is {other.track}"
         if self.layout != other.layout:
+            # **An unrecorded layout is not a different one** (rule 3, critic
+            # 2 on the storage row): "built for the None layout" was on the
+            # Strategy page for two old Monza plans written before the layout
+            # was stored. Still refused - nothing says it is this layout -
+            # but it says which side does not know.
+            if self.layout is None:
+                return False, ("plan does not record which layout it was "
+                               f"built for; this is {other.layout}")
+            if other.layout is None:
+                return False, (f"plan was built for the {self.layout} layout "
+                               f"and this event does not record one")
             return False, (f"plan was built for the {self.layout} layout, "
                            f"this is {other.layout}")
         if self.is_timed != other.is_timed:

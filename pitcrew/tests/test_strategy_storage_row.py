@@ -277,6 +277,166 @@ def test_a_plan_that_is_not_a_dict_is_refused_not_raised():
     assert got.refusals == ["the plan is ['a', 'list'], not a plan"]
 
 
+# ------------------------------------ critic 2 on the storage row
+
+def _write(db, event_id, **extra):
+    payload = {"stints": [{"laps": 10, "compound": "RS"},
+                          {"laps": 10, "compound": "RS"}],
+               "stops": 1, "playbook": [], **extra}
+    return call("write_strategy", {"event_id": event_id,
+                                   "plan": json.dumps(payload)}, db=db)
+
+
+def test_write_strategy_does_not_approve_a_plan_for_another_race(seeded):
+    """The context check went into one approving door. This one approved on
+    `certified` alone, demoted the good plan, and the grid then refused the
+    foreign one with nothing left to fall back on."""
+    from pitcrew.store.db import Store
+
+    db, event_id = seeded
+    good = _write(db, event_id)
+    assert good["approved"] is True, good
+    foreign = _write(db, event_id, context={
+        "car": "Porsche 911 RSR (991) '17", "track": "Suzuka Circuit",
+        "layout": "Full", "race_laps": 20, "race_minutes": None})
+    assert foreign["written"] is True and foreign["approved"] is False
+    assert "built for Suzuka Circuit" in foreign["note"]
+    assert any("built for Suzuka Circuit" in r for r in foreign["refusals"])
+    store = Store(db)
+    try:
+        assert store.get_approved_strategy(event_id)["id"] == good[
+            "strategyId"], "the good plan was demoted"
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("first, words", [
+    (2, "stint 1 starts on lap 2, so lap 1 belongs to no stint"),
+    (3, "stint 1 starts on lap 3, so laps 1 and 2 belong to no stint"),
+    (5, "stint 1 starts on lap 5, so laps 1 to 4 belong to no stint"),
+])
+def test_the_first_stint_starts_on_lap_one(first, words):
+    """A first stint on lap 5 certified; the page said box lap 10 and George
+    boxed on 14, on a load sized for 10."""
+    proposed = plan(stint(10), stint(10, "RM"))
+    proposed["stints"][0]["start_lap"] = first
+    proposed["stints"][1]["start_lap"] = first + 10
+    assert words in certify(proposed, inputs()).refusals
+
+
+@pytest.mark.parametrize("pit_laps, words", [
+    ([12], "the plan's pit laps say lap 12 but its stints box on lap 10"),
+    (["x"], "the plan's pit laps say lap 'x' but its stints box on lap 10"),
+    ([], "the plan's pit laps say no lap but its stints box on lap 10"),
+])
+def test_the_pit_laps_are_the_laps_the_stints_box_on(pit_laps, words):
+    """The Race page reads `pit_laps`; George boxes on the stints. One stop,
+    two lap numbers a glance apart, is rule 13."""
+    proposed = plan(stint(10), stint(10, "RM"))
+    proposed["stints"][0]["start_lap"] = 1
+    proposed["stints"][1]["start_lap"] = 11
+    proposed["pit_laps"] = pit_laps
+    assert words in certify(proposed, inputs()).refusals
+
+
+def test_pit_laps_that_agree_certify_including_as_floats():
+    proposed = plan(stint(10), stint(10, "RM"))
+    proposed["stints"][0]["start_lap"] = 1
+    proposed["stints"][1]["start_lap"] = 11
+    for pit_laps in ([10], [10.0]):
+        proposed["pit_laps"] = pit_laps
+        assert certify(proposed, inputs()).certified, pit_laps
+
+
+def test_a_bad_start_is_the_only_refusal_not_the_first_of_many():
+    """What the other checks would say about a plan whose laps cannot be
+    placed is not worth saying; the early return is pinned here."""
+    proposed = plan(stint(10, fuel=510.0), stint(10, "RM"))
+    proposed["stints"][0]["start_lap"] = 0
+    assert certify(proposed, inputs()).refusals == [
+        "stint 1 starts on lap 0; laps count from 1"]
+
+
+def test_an_unrecorded_layout_is_not_called_the_none_layout():
+    from pitcrew.race.coordinator import PlanContext
+
+    old = PlanContext(car="RSR", track="Monza", layout=None, race_laps=20)
+    here = PlanContext(car="RSR", track="Monza", layout="Full Course",
+                       race_laps=20)
+    fits, why = old.matches(here)
+    assert not fits and "None" not in why
+    assert why == ("plan does not record which layout it was built for; "
+                   "this is Full Course")
+    fits, why = here.matches(old)
+    assert not fits and "None" not in why
+
+
+def test_an_unreadable_approved_row_is_not_told_approval_fills_it_in(raced):
+    controller, screen, store, event_id = raced
+    row = store.get_approved_strategy(event_id)
+    broken = dict(row["plan"])
+    broken["stints"] = [broken["stints"][0], "x", *broken["stints"][2:]]
+    store.update_strategy_plan(row["id"], broken)
+    assert controller.start_race() is False
+    said = screen.subtitle.text()
+    assert said == ("Plan refused: Stint 2 of the plan cannot be read. "
+                    "Approve another plan on the Strategy page.")
+    assert "fills" not in said
+
+
+def test_the_race_page_does_not_fall_over_on_an_unreadable_plan(qt_app):  # noqa: F811
+    """Found by the test above: every line of `set_plan` called `.get` on a
+    stint, so an unreadable row raised on the Race page - from the refresh
+    and from `_poll_plan` every tick. It says what is wrong instead, and
+    draws none of the stints rather than the ones that survive."""
+    from pitcrew.ui.race_screen import RaceScreen
+
+    screen = RaceScreen()
+    screen.set_plan({"label": "old", "plan": {
+        "stints": [{"laps": 10, "compound": "RS"}, "x"]}})
+    assert screen.plan_line.text() == (
+        "The approved plan will not arm: stint 2 of the plan cannot be read.")
+    assert not screen.orders.isVisibleTo(screen)
+
+    # A figure that is not a number is not known, not a crash.
+    screen.set_plan({"label": "typo", "plan": {
+        "stints": [{"laps": 10, "compound": "RS", "fuel_l": "sixty"},
+                   {"laps": 10, "compound": "RS", "fuel_l": 60.0}]}})
+    assert "? L + 60 L" in screen.plan_line.text()
+
+
+def test_the_race_page_says_in_the_week_that_the_plan_will_not_arm(raced):
+    """Strategies 3 and 9 showed as the approved plan with no sign they would
+    be refused on the grid."""
+    controller, screen, store, event_id = raced
+    row = store.get_approved_strategy(event_id)
+    store.update_strategy_plan(row["id"], _unstamped(row["plan"]))
+    controller._refresh_race_options(store.get_event(event_id))
+    said = screen.subtitle.text()
+    assert said.startswith("The approved plan will not arm: It was approved "
+                           "without what it was built for")
+    # The same words the grid gives, from the same expression (rule 13).
+    assert controller.start_race() is False
+    assert screen.subtitle.text() == said.replace(
+        "The approved plan will not arm: ", "Plan refused: ")
+
+
+def test_approval_records_what_it_stamped_and_its_own_certificate(raced):
+    controller, _screen, store, event_id = raced
+    reference = store.get_approved_strategy(event_id)["plan"]
+    candidate = store.save_strategy(event_id, _unstamped(reference),
+                                    label="old", evidence={"certified": False,
+                                                           "refusals": ["x"]})
+    assert controller.approve_stored_strategy(candidate) is True
+    row = next(r for r in store.list_strategies(event_id)
+               if r["id"] == candidate)
+    evidence = row["evidence"]
+    assert evidence["refusals"] == ["x"], "what it was written with is kept"
+    stamped = evidence["at_approval"]["stamped"]
+    assert len(stamped) == 3, stamped
+    assert evidence["at_approval"]["refusals"] == []
+
+
 # --------------------------------------- reserved keys, answered by owner
 
 @pytest.mark.parametrize("key, words", [

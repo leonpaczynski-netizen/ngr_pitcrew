@@ -498,6 +498,24 @@ class RaceScreen(QWidget):
             self.show_standing_orders(None)
             return
         plan = strategy.get("plan") or {}
+        # **A plan that cannot be read is said to be one, not drawn.** Every
+        # line below calls `.get` on a stint, so an approved row holding a
+        # stint that is not one raised `AttributeError` here - from
+        # `_refresh_race_options` and from `_poll_plan` on every tick. And
+        # skipping the bad stint would draw the survivors as though they
+        # were the plan, which is the silent drop this row removed from the
+        # gate. `execution.unreadable` is the same words the grid refuses in.
+        from pitcrew.strategy.execution import unreadable
+
+        broken = unreadable(plan)
+        if broken is not None:
+            self.plan_line.setText(
+                f"The approved plan will not arm: {broken}.")
+            self.plan_line.setStyleSheet(
+                f"color: {theme.WARNING};background: transparent;")
+            self.spine.setPlan([])
+            self.show_standing_orders(None)
+            return
         # **The contract, on the page he starts the race from** (row 1.7).
         # It is filled here rather than by the controller because this is the
         # method that is HANDED the approved row - by `_refresh_race_options`,
@@ -536,7 +554,12 @@ class RaceScreen(QWidget):
             compounds = [st.get("compound") for st in stints]
             if any(compounds):
                 parts.append(" → ".join(c or "?" for c in compounds))
+            # **Only a number is formatted as litres.** `:.0f` on a stored
+            # `"sixty"` raised on this path too; a figure that is not a
+            # number is shown as not known, like a missing one.
             fuel = [st.get("fuel_l") for st in stints]
+            fuel = [f if isinstance(f, (int, float))
+                     and not isinstance(f, bool) else None for f in fuel]
             if any(f is not None for f in fuel):
                 parts.append(" + ".join(
                     f"{f:.0f} L" if f is not None else "? L" for f in fuel))

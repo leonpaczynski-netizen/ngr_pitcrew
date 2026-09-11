@@ -97,7 +97,8 @@ from pitcrew.race.quali_fuel import qualifying_fuel
 from pitcrew.race.quali_fuel import refusal as quali_fuel_refusal
 from pitcrew.strategy.certify import certify, certify_for_event
 from pitcrew.strategy.evidence import build_inputs
-from pitcrew.strategy.execution import contract_gaps, stamp
+from pitcrew.strategy.execution import (built_for_another_race,
+                                        contract_gaps, stamp, unreadable)
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.selftest import LISTEN_S
 from pitcrew.telemetry.listener import (
@@ -1492,6 +1493,37 @@ class PitCrewController(QObject):
         # nowhere on the screen the race is started from, so the only way to
         # check the engineer was holding tonight's race was to run it.
         self.race_screen.set_plan(approved)
+        # **Said here, in the week, and not first on the grid** (critic 2 on
+        # the storage row): a row approved before plans carried their
+        # contract showed as the approved plan with no sign it will not arm.
+        # The same sentence the grid gives, from the same expression.
+        why = (self._why_it_will_not_arm(approved["plan"])
+               if approved is not None else None)
+        if why is not None:
+            self.race_screen.set_status(
+                f"The approved plan will not arm: {why}", warn=True)
+
+    @staticmethod
+    def _why_it_will_not_arm(plan) -> str | None:
+        """What stops an approved row arming, in the words the driver reads.
+
+        Two different remedies, so two sentences (rule 13): a plan that
+        cannot be read is refused by approval, and a plan missing its
+        contract has it filled in by approval.
+        """
+        broken = unreadable(plan)
+        if broken is not None:
+            return (f"{broken[0].upper()}{broken[1:]}. Approve another plan "
+                    "on the Strategy page.")
+        gaps = contract_gaps(plan)
+        if not gaps:
+            return None
+        # "a plan", not "it again": the loaded cards list only rows carrying
+        # a handover, so an optimiser plan approved before stamping has no
+        # card to press - approving any plan stamps.
+        return ("It was approved without " + "; and without ".join(gaps)
+                + ". Approve a plan on the Strategy page - approval fills "
+                "those in.")
 
     def load_active_event(self) -> None:
         event = self.active_event()
@@ -4265,24 +4297,33 @@ class PitCrewController(QObject):
 
         if not isinstance(row["plan"], dict):
             return refuse("The stored plan cannot be read.")
+        filled = contract_gaps(row["plan"])
         try:
             plan = stamp(self.store, event["id"], row["plan"], event=event)
         except ValueError as exc:
             return refuse(f"{exc}.")
         # **A context that names another race is refused here, not on the
         # grid.** `arm` would refuse it anyway, but only after the Race
-        # screen had spent the week saying "approved" over it.
-        fits, why = context_from_stored(plan["context"], event).matches(
-            self._race_context(event))
-        if not fits:
+        # screen had spent the week saying "approved" over it. The same
+        # expression `write_strategy` asks, so the two doors cannot disagree.
+        why = built_for_another_race(plan, event)
+        if why is not None:
             return refuse(f"The {why}.")
 
         certificate = certify_for_event(self.store, event["id"], plan)
         if not certificate.certified:
             return refuse(certificate.describe())
 
-        if plan != row["plan"]:
-            self.store.update_strategy_plan(strategy_id, plan)
+        # **Written back with the certificate it was approved on**, beside
+        # the one it was written with, and what the stamp filled in - so a
+        # debrief can tell `expects` stamped at approval from `expects`
+        # stamped at writing.
+        self.store.update_strategy_plan(strategy_id, plan, evidence={
+            **(row.get("evidence") or {}),
+            "at_approval": {"refusals": [],
+                            "warnings": list(certificate.warnings),
+                            "unchecked": list(certificate.unchecked),
+                            "stamped": filled}})
         self.store.approve_strategy(strategy_id)
         # **The accepts are logged too, not only the refusals** - CLAUDE.md
         # rule 10. A log that only ever records refusals cannot answer "which
@@ -4340,16 +4381,9 @@ class PitCrewController(QObject):
         # taken off the event at the grid is the event checked against itself,
         # which is the check this exists to make. Approving it again is one
         # click with the headset off, and is the driver saying which race.
-        gaps = contract_gaps(plan) if plan is not None else []
-        if gaps:
-            self.race_screen.set_status(
-                "Plan refused: it was approved without "
-                + "; and without ".join(gaps)
-                # "a plan", not "it again": the loaded cards list only rows
-                # carrying a handover, so an optimiser plan approved before
-                # stamping has no card to press - approving any plan stamps.
-                + ". Approve a plan on the Strategy page - approval fills "
-                "those in.", warn=True)
+        why = self._why_it_will_not_arm(plan) if plan is not None else None
+        if why is not None:
+            self.race_screen.set_status(f"Plan refused: {why}", warn=True)
             return False
         try:
             inputs, _ = build_inputs(self.store, event["id"])

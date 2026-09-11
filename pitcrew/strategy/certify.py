@@ -176,6 +176,19 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     # prevent; two with a gap between them leave laps that belong to no stint,
     # so the box call and the fill are both sized off a stint that is not the
     # one being driven. Both are arithmetic and neither is negotiable.
+    def no_stint(first: int, last: int) -> str:
+        return (f"lap {first} belongs" if first == last else
+                f"laps {first} and {last} belong" if last == first + 1
+                else f"laps {first} to {last} belong")
+
+    # **Including the laps before stint 1** (critic 2 on the storage row). A
+    # first stint on lap 5 certified: the page said "box lap 10" and George
+    # boxed on 14 on a load sized for 10. `adopt`'s mid-race tail is the only
+    # stint list that starts later, and it never passes through here.
+    if starts[0] is not None and starts[0] > 1:
+        refusals.append(
+            f"stint 1 starts on lap {starts[0]}, so "
+            f"{no_stint(1, starts[0] - 1)} to no stint")
     for index in range(1, len(stints)):
         before, after = starts[index - 1], starts[index]
         if before is None or after is None:
@@ -186,13 +199,34 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
                 f"stint {index + 1} starts on lap {after}, inside stint "
                 f"{index}, which runs to lap {ends}")
         elif after > ends + 1:
-            first, last = ends + 1, after - 1
-            missing = (f"lap {first} belongs" if first == last else
-                       f"laps {first} and {last} belong" if last == first + 1
-                       else f"laps {first} to {last} belong")
             refusals.append(
                 f"stint {index + 1} starts on lap {after} but stint {index} "
-                f"ends on lap {ends}, so {missing} to no stint")
+                f"ends on lap {ends}, so {no_stint(ends + 1, after - 1)} to "
+                f"no stint")
+
+    # **And the plan's own box laps have to be the ones its stints box on.**
+    # The Race page reads `pit_laps`; George boxes on `start_lap + laps - 1`.
+    # Two figures for one stop is rule 13 with the two ends a glance apart.
+    # Every stored plan agrees today; this keeps the next one honest.
+    pit_laps = plan.get("pit_laps")
+    if isinstance(pit_laps, list) and all(s is not None for s in starts):
+        implied = [start + count - 1
+                   for start, count in zip(starts[:-1], laps[:-1])]
+        read = [as_whole_number(lap, LAP_CEILING, minimum=1)
+                for lap in pit_laps]
+        if read != implied:
+            def laps_said(values) -> str:
+                words = [str(v) for v in values]
+                if not words:
+                    return "no lap"
+                if len(words) == 1:
+                    return f"lap {words[0]}"
+                return f"laps {', '.join(words[:-1])} and {words[-1]}"
+
+            refusals.append(
+                f"the plan's pit laps say "
+                f"{laps_said(short_value(lap) for lap in pit_laps)} but its "
+                f"stints box on {laps_said(implied)}")
 
     # ------------------------------------------------------------- the tank
     capacity = inputs.fuel_capacity_l

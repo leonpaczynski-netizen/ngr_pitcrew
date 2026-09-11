@@ -449,6 +449,17 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
 
         stamped = stamp(store, event_id, handover.plan)
         certificate = certify_for_event(store, event_id, stamped)
+        # **The context check both approving doors make** (critic 2 on the
+        # storage row). This one approved on `certified` alone, so last
+        # round's file written against this event was approved, the good
+        # plan demoted to a candidate, and the grid refused it with nothing
+        # left to fall back on.
+        from pitcrew.strategy.execution import built_for_another_race
+
+        foreign = built_for_another_race(stamped, store.get_event(event_id))
+        refusals = list(certificate.refusals) + (
+            [f"the {foreign}"] if foreign else [])
+        approve = certificate.certified and foreign is None
         payload = handover.as_stored(stamped)
         payload["handover"]["certificate"] = {
             "warnings": list(certificate.warnings),
@@ -457,30 +468,42 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
         strategy_id = store.save_strategy(
             event_id, payload, label=label or "written by the race engineer",
             evidence={"certified": certificate.certified,
-                      "refusals": certificate.refusals,
+                      "refusals": refusals,
                       "warnings": certificate.warnings,
                       "unchecked": certificate.unchecked},
             status="candidate")
-        if certificate.certified:
+        if approve:
             store.approve_strategy(strategy_id)
+        if approve:
+            summary = "approved"
+        elif foreign:
+            summary = "stored as a candidate - built for another race"
+        else:
+            summary = "stored as a candidate - it did not certify"
         store.note_engineer_write(
             "strategy", target_id=strategy_id, event_id=event_id,
-            author="race engineer (MCP)",
-            summary=("approved" if certificate.certified
-                     else "stored as a candidate - it did not certify"),
-            after={"label": label, "certified": certificate.certified})
+            author="race engineer (MCP)", summary=summary,
+            after={"label": label, "certified": certificate.certified,
+                   "approved": approve})
+        if approve:
+            note = "approved and ready to arm."
+        elif not certificate.certified:
+            note = ("NOT approved: it did not certify, so the car cannot "
+                    "execute it as written. Fix the refusals and write again.")
+        else:
+            note = (f"NOT approved: the {foreign}. The approved plan for this "
+                    "event is unchanged. Write it against the right event, "
+                    "or fix its context.")
         return _dump({
             "written": True, "strategyId": strategy_id,
-            "approved": certificate.certified,
+            "approved": approve,
             "certified": certificate.certified,
-            "refusals": certificate.refusals,
+            "refusals": refusals,
             "warnings": certificate.warnings,
             "unchecked": certificate.unchecked,
             "unhandled": handover.unhandled(),
             "verdict": certificate.describe(),
-            "note": ("approved and ready to arm." if certificate.certified else
-                     "NOT approved: it did not certify, so the car cannot "
-                     "execute it as written. Fix the refusals and write again."),
+            "note": note,
         })
     except Exception as exc:                                 # noqa: BLE001
         return _dump({"written": False, "error": f"{type(exc).__name__}: {exc}"})
