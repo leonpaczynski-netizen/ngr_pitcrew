@@ -1926,6 +1926,22 @@ reports a foreign plan under `builtForAnotherRace`, so `certified: True`
 and the certificate's empty refusals no longer sit beside a refusal in one
 reply; the `pit_laps` no-start-laps guard is pinned.
 
+**Critic pass 4 on the storage row — NOT AGREED, one major: the stale
+message came back the likelier way.** Pass 3's take-down matched only the
+week's own prefix, so after a failed Start the page carried the grid's
+*"Plan refused: It was approved without…"*, and re-approving - exactly what
+it told him to do - left it up. The grid now remembers the refusal it wrote,
+word for word, and the refresh takes down that and the week's warning and
+nothing else: a refusal by `certify` is still true after a refresh, and a
+test now pins that another status is left alone (that mutant had survived).
+Minors fixed: `stamp` checks the context it builds from the event, so an
+event with no distance is refused at approval rather than stamped and then
+refused by its own next approval; choosing "No plan" re-asks, so the warning
+does not stand over a plan he has set aside; `_context_problem` refuses an
+empty car or track, and a duration that is true, infinite or zero. Replayed
+by the critic read-only: no stored or approved row on the live DB is newly
+refused, and no context it could build still reaches a raise.
+
 **Critic pass 1 on the voice batch — NOT AGREED, and the probe that scoped
 it had the same blind spot as its test.** Every box state in the sweep
 carried no fuel data, and no race with a measured burn makes that call: with
@@ -1952,6 +1968,23 @@ in the "X on." form (the plan stores codes), answered GAP lines are live
 (they carry a name), and a cut assumption can lose a trailing qualifier
 behind its "…" (the whole line is on the tooltip on the Strategy page).
 
+**Critic pass 2 on the voice batch — NOT AGREED, one major, and it was my
+own fix's.** The box call a real race makes plays now (the critic's sweep
+fell from 306 misses and 588 declared to none outside full compound names).
+But the singular this batch gave the fill sentence - *"1 lap after the box."*,
+*"1 lap to the flag."* - was never in the pack, because no fuel-bearing state
+left a single lap; so a one-lap fill, a late splash, filed its whole box call
+as a declared gap. One-lap bases are swept now. Minors fixed: the side-word
+fallback read "what's the gap **back** to the car in **front**" as the car
+behind, because "behind"/"back" were checked first - both sides named is no
+side now, and "back" is not a side; and `_split_on_numbers` accepted a
+sentence of numbers alone. **Left, on the budget, and said so:** a full
+compound name in "X on." (about 11 clips) and the unnamed GAP answer (about
+5) cannot both fit under 700; the plan stores codes, and `certify` refuses a
+name wherever the event declares its compounds, so the names are the one
+left. The undercut's instruction half stays live - the voice engine plays a
+line from the pack only whole, and its reason carries a rival's name.
+
 ### The cancelled-stop latch — build (11 Sep 2026)
 
 Rule 10's two guards, both. **The retirement latches when he is told** —
@@ -1969,6 +2002,84 @@ stops on fuel" is the contradiction `STOPS_OFF` was written to prevent. Both
 the retirement and the reinstatement are logged (the accepts, not only the
 refusals). The latch belongs to the stop it retired: `_apply_stint` clears it
 across a stop taken, a re-plan adopted and construction.
+
+**Critic pass 1 on the latch — NOT AGREED, a BLOCKER: it moved the flicker
+rather than closing it.** Driven through real races with `drop_stop`
+granted: taking the stop off needed one lap and putting it back needed two,
+so a burn going short, short, long cycled *"The stop is back on"* / *"No more
+stops on fuel"* **eight times in ten laps**, and push-to-talk flipped between
+"Box in 5 laps" and "No stop planned" with them — the row 1.10 flicker,
+spoken. Three majors under it: a stop coming back on its box lap was called
+a lap late (`STOP_BACK` outranked `BOX_NOW`) and then *"1 lap overdue"*
+counted from the plan; **four surfaces bypassed the latch** because they read
+`stop_still_needed` directly — the colour tier said "3 laps to the stop"
+with the countdown blank (rule 13); and `_apply_stint` cleared the latch but
+left `stops_off_said`, so after a re-plan the new stop flickered in silence.
+And the tests only ever called `note_stop_need()` by hand.
+
+**Redesigned, not patched.** The fuel's answer about the stop is now HELD in
+`_stop_needed_on_fuel` — the one predicate every consumer asks — and moves
+only in `note_stop_need`, once a lap, after `STOP_FLIP_LAPS` (2) consecutive
+laps of contrary arithmetic **in either direction**; the raw arithmetic lives
+in one private function only the lap hook reads. Holding the fuel answer
+rather than the grant keeps the report form working where the drop is not
+granted. A stop needed again on or after its box lap becomes the lap in
+progress, so `STOP_BACK` says *"The stop is back on. Box this lap."* with the
+tyre word, and "overdue" counts from then. `_apply_stint` resets all of it —
+the hold, the count, `stops_off_said`, both calls' `said` entries — and logs
+it. `record` no longer latches, so a briefing that silences `STOPS_OFF`
+cannot leave the stop unheld (minor 8). The race-driven tests go through
+`RaceCoordinator.handle`. Left and recorded: a timed race's soft distance can
+still move the arithmetic on its own; the hysteresis damps it, and "Fuel
+won't reach the flag." is unhedged there as it was before (minor 7).
+
+### Phase 2 — rows 2.1 and 2.2, first batch (11 Sep 2026)
+
+**2.1 — the experiment ledger lives in `brain/`, and the app writes nothing
+about it.** `brain/ledger/<car>-<circuit>.md` for the four circuits on file,
+plus a README: **115 rows** (Daytona 34, Mount Panorama 11, Sardegna 60, Deep
+Forest 10), every one a key, a direction and a delta in percentage points of
+slider range, every block parsing to its 13 columns. Seeded by a read-only
+extraction from the car-state files, which I read in full before a line of
+it went in, and built by slicing that extract rather than retyping it - a
+line-count guard in the build stopped one replacement that would have
+shifted every later slice by a line. **§1a turned out to cover more than the
+plan's wording:** the extraction kept no `from`/`to` in any row, but its
+prose quoted positions as percentages (*"50 → 70 → 90 %"*, *"dc 20/20"*,
+*"a slider value at 73.3 %"*), and a position in percent is a setting read
+back through the range record - ten were stripped, each asserted. Items with
+no slider range (gear ratios, shift points, ECU, ballast) are cited by
+location and restated nowhere. **Forty contradictions are surfaced in the
+files, not averaged**; three matter beyond housekeeping and are for Ludo and
+the driver: the Shelby's range record is v1.71 in its car-state file and a
+stale v1.70 in the register, and the car-state percentages fit neither;
+Bathurst's `lsd_a` is justified by a doctrine band its value sits below, on
+a pre-1.71 scale; and a Daytona `lsd_b` "it worked" rests on 5 laps against
+the same file's own 22-lap requirement.
+
+`setup_changes` is **read and written by nothing** (206 rows to session 119,
+last written 4 Sep, carrying `from_value`/`to_value`) - `CLAUDE.md` §1a now
+says so and names the ledger as its replacement, and `learning-loop.md`'s
+routing row, which still sent a setup change there "automatically", points
+at the ledger. `SKILL.md` opens the ledger first in `refine`, `race plan`
+and `debrief`.
+
+**2.2 — `refine` runs the method.** After rank zero and the ledger: a
+baseline counted by the tool's own clean-lap definition (a disagreeing count
+is the finding); one change written as an experiment *before the run* - key,
+direction, pp, instrument and its measured floor, **a no-change control
+measuring the drift between sessions**, prediction and complementary
+falsifier; the verdict on the same instrument against that drift; and an
+A-B-A return leg where a run is cheap. Two evals (12 and 13) hold it to the
+two failures the row names - Sardegna's +0.633 g against a no-change +0.411,
+and Deep Forest's 0-and-1 against 4-and-5 clean laps - **written, not yet
+run through an eval harness.**
+
+**Still open in Phase 2:** 2.3-2.11 as written; `SKILL.md` is 869 lines
+against 2.9's 450; eleven evals short of 2.9's twenty; and **2.12 - the MCP
+server is registered nowhere** (no `pitcrew` entry in `~/.claude.json`, no
+project `.mcp.json`), which is a change to the user's configuration and
+waits for his yes.
 
 **The batch's own test found the defect under it, not the reading.**
 `_worth_saying_again` silences a kind already in `said` for the whole stint,

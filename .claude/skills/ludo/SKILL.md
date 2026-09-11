@@ -218,17 +218,43 @@ symptom→cause chain built on nothing is this mode's whole failure.
 1. **Rank zero, both halves** (spine step 1). The record has been wrong in five
    consecutive sessions; this is the mode where that costs the most, because a
    correct reading against a wrong record produces a confident wrong answer.
-2. **What else changed.** Compound, fuel load, session type, game version. The
+2. **The ledger, before any hypothesis.** `brain/ledger/<car>-<circuit>.md`:
+   what has been tried on this car here, in which direction, by how much of
+   the slider's range, on which instrument, and what came of it. A change
+   already refuted in one direction is not a new idea in that direction, and
+   **`unresolvable` is not `refuted`** — a refutation carries a direction.
+   Every change this session makes is a new row there (plan row 2.1); the
+   value itself stays in the car-state file and nowhere else (§1a).
+3. **What else changed.** Compound, fuel load, session type, game version. The
    reference lap has no compound filter, so "faster on the new sheet" can be a
    softer tyre wearing a setup's clothes. Name the confound or rule it out.
-3. **His report is the brief**, in his words, with throttle state resolved —
+4. **His report is the brief**, in his words, with throttle state resolved —
    `references/driver-model.md` has the four fields, and the third decides which
    symptom table applies at all.
-4. **One change, three clean laps**, with the prediction written down.
-5. **Then read where it landed, not whether the lap moved.** The lap time
-   cannot answer this — see *Where the change landed*, above. Sectors first,
-   distance bins where the sectors are silent.
-6. **If a ratio moved, the shift table moved with it.** Re-issue it in the
+5. **A baseline, counted by the tool's definition** (plan row 2.2). Which
+   sessions, and how many clean laps as `tools/where_the_change_landed.py`
+   counts them (`off_track_s == 0`). Where another count disagrees - the
+   car-state file said 4 and 5 at Deep Forest 133→134 where the tool found 0
+   and 1 - **the disagreement is the finding**: surface it, say which
+   definition the comparison uses, never average them (eval 13).
+6. **One change, written as an experiment before the run** - in its ledger
+   row: the key, the direction and the delta in percent of slider range; the
+   instrument and its *measured* floor; **a no-change control**; the
+   prediction and a complementary falsifier. A coupled set only as a named
+   set (row 2.3). **The control is the drift between sessions, not the
+   scatter inside one**: at Sardegna on 5 Sep, +0.633 g cleared its
+   within-session floor of 0.532 g and died, because a no-change pair moved
+   +0.411 g on its own - learning is one-directional and flattering, so be
+   most suspicious of a result that agrees with you (eval 12).
+7. **The verdict on the same instrument, against the control's drift** -
+   confirmed, refuted (with its direction), or unresolvable, and the ledger
+   row closed with it. Read where it landed, not whether the lap moved: the
+   lap time cannot answer this (see *Where the change landed*, above) -
+   sectors first, distance bins where the sectors are silent. **An A-B-A
+   return leg where a run is cheap** - it is the one control learning
+   cannot fake. Where there is no valid control, say "I cannot see that" and
+   let his report carry the finding.
+8. **If a ratio moved, the shift table moved with it.** Re-issue it in the
    same message — see below.
 
 ### `quali` — one lap
@@ -618,9 +644,11 @@ closing sheet*, below.
 
 | Mode | Read |
 |---|---|
-| `initial` / `refine` | `references/mechanic.md` + `references/driver-model.md` |
-| `quali` / `race plan` | `references/race-planner.md` |
-| `debrief` | `references/race-planner.md`, **`mechanic.md` for anything per-corner**, `learning-loop.md` for the radio review |
+| `initial` | `references/mechanic.md` + `references/driver-model.md` |
+| `refine` | **the ledger first** (`brain/ledger/<car>-<circuit>.md`), then `references/mechanic.md` + `references/driver-model.md` |
+| `quali` | `references/race-planner.md` |
+| `race plan` | **the ledger first**, then `references/race-planner.md` |
+| `debrief` | **the ledger first** — every open prediction is closed there — then `references/race-planner.md`, **`mechanic.md` for anything per-corner**, `learning-loop.md` for the radio review |
 | `what to try` | `references/refusals.md` |
 | any | `references/learning-loop.md` when recording |
 

@@ -17,7 +17,7 @@ never came.
 | The finding is… | It goes to | Because |
 |---|---|---|
 | A **measurement** — a rate, a spread, a per-corner metric | `data/pitcrew.db`, via the derivation tools | It must be re-derivable. A number typed into prose cannot be re-checked |
-| A **setup change** | `setup_changes` — filed automatically when the next session opens against the new sheet | It is an experiment, and it must be tied to the run that tested it |
+| A **setup change** tested against a control | `brain/ledger/<car>-<circuit>.md` — one row in its fenced CSV block: date, session ids, key, direction, delta in **percent of slider range**, instrument and its measured floor, control, prediction, falsifier, outcome, source, car-state revision. **Never a `from`/`to` absolute** — the value lives in the car-state file and nowhere else | It is an experiment, and it must be tied to the run that tested it. A change ledger in the database is the second setup record `CLAUDE.md` §1a removed, whatever its columns — `setup_changes` is a writer-less archive now, not a route (plan row 2.1, 11 Sep 2026) |
 | The **reasoning** behind a sheet | `brain/_inbox/setups/YYYY-MM-DD-<car>-<circuit>[-revX].md` | The database has nowhere to store *why*, and why is what a later revision needs |
 | A **doctrine change** — something believed and now disproved | `brain/RECONCILIATION.md`, with the supersession recorded | A rule that was believed and refuted is evidence about the fault *and* about how it survived scrutiny |
 | A **durable fact about him, the rig, or the project** | Claude's memory directory | It is loaded automatically next session. This is the only store that reaches the next conversation unprompted |

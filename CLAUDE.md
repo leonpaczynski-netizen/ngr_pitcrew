@@ -81,6 +81,15 @@ GT7's own settings screen, which is the ground truth and the only one left.
 - **The `setup_sheets` table, as archive.** 96 sessions of laps reference it and
   `lap_frames` cascades off `laps`. It is read by `archived_setup_sheet` for the
   offline tools and written by nothing.
+- **The `setup_changes` table, as archive — and read by nothing either.**
+  206 rows to session 119, the last written 4 Sep 2026, each carrying a
+  `from_value` and a `to_value`: absolutes, the second setup record this
+  section removed. Nothing in the app writes it or reads it (checked 11 Sep:
+  the schema and one migration are its only code). **The experiment ledger that
+  replaces it lives in `brain/ledger/<car>-<circuit>.md`, not here** — key,
+  direction and delta in percent of slider range, never a from/to value (plan
+  row 2.1). A change ledger in the database is this section's defect again,
+  whatever its columns.
 
 ## 2. Who it is for
 
