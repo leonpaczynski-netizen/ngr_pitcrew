@@ -272,8 +272,8 @@ The trap to avoid: setting ride height at the qualifying minimum, then loading t
 Another common, more general baseline is **5/30/5** with the middle number adjusted for turn-in feel.
 
 **The quali philosophy: maximise rotation.**
-- **Low Initial Torque (5–10)** — a diff that unlocks readily allows snappy, immediate transitions and lets the inside rear spin up freely in slow corners, which rotates the car. Sharper turn-in, more agility, more one-lap time.
-- **Low Braking Sensitivity (5–15)** — an open diff on the overrun lets the rear axle differentiate under trail-braking, which is a large rotation source in GT7. This is one of the biggest single-lap levers on Gr.3.
+- **Low Initial Torque (5–10, v1.70 5–60 scale; 0–30 on v1.71, where 5–10 is a third of the way up rather than the floor)** — a diff that unlocks readily allows snappy, immediate transitions and lets the inside rear spin up freely in slow corners, which rotates the car. Sharper turn-in, more agility, more one-lap time.
+- **Low Braking Sensitivity (5–15, v1.70 5–60 scale; 0–100 on v1.71)** — an open diff on the overrun lets the rear axle differentiate under trail-braking, which is a large rotation source in GT7. This is one of the biggest single-lap levers on Gr.3.
 - **Accel Sensitivity at the point of best drive** — usually moderate-to-high (25–40 on FR, v1.70 scale), because you want maximum traction out of the last corner onto the timing straight and there is no wear penalty to worry about.
 
 **The race philosophy: preserve the rears and reduce workload.**

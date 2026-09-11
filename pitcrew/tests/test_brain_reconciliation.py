@@ -386,9 +386,13 @@ def test_e8_no_live_lsd_band_anywhere_is_left_on_the_old_scale():
     # a car-state row comparing a value against a v1.70 band is seen. The
     # slider keys too: `\bLSD\b` cannot match `lsd_a` (the underscore is a
     # word character), and that is how the Mount Panorama row was written.
+    # A slider's own name counts, with no "LSD" on the line: §4.1 defines
+    # them one per heading, and its "Initial Torque (5-60)" kept the v1.70
+    # range while the sibling above it was stamped (pass 6).
     near = re.compile(
-        r"(?:\bLSD\b|\blsd_[iab]\b|acceleration lock|\baccel(?:eration)?\b"
-        r"[^.|]{0,20}\bsensitivity)[^\n]{0,120}?"
+        r"(?:\bLSD\b|\blsd_[iab]\b|acceleration lock|initial torque"
+        r"|braking sensitivity|acceleration sensitivity"
+        r"|\baccel(?:eration)?\b[^.|]{0,20}\bsensitivity)[^\n]{0,120}?"
         r"(?<![\d.])\d{1,2}\s?[–-]\s?\d{1,2}(?![\d.])",
         re.IGNORECASE)
     # Pass 5: the band before the word ("20-28 accel"), and value forms - a
@@ -418,19 +422,51 @@ def test_e8_no_live_lsd_band_anywhere_is_left_on_the_old_scale():
 # "Lower the accel" offered as the cure for a push, understeer or lost
 # rotation - the claim the v1.71 Huracán test refuted (s145). Arrow forms
 # ("18 → 14") are pinned by hand; these are the worded ones.
-_LOWER_ACCEL = (r"(?:(?:lower|reduc|drop|down)\w*\b[^.|]{0,40}\baccel"
-                r"|\baccel\w*\b[^.|]{0,40}\b(?:lower|reduc\w*|down)\b)")
+_LESS = (r"(?:lower|reduc\w*|drop\w*|down|decreas\w*|soften\w*|open\w*|freer"
+         r"|less|unlock\w*|back\b[^.|]{0,20}?\boff\b)")
+_ACCEL = r"(?:accel\w*|lsd_a\b|diff|lock)"
+_CURE = r"(?:push|understeer|rotat)"
+# The lowering word and the axis close together, in either order, and the
+# thing it is offered to cure. The mechanism wordings count (pass 6): "a
+# freer diff frees rotation", "less lock under power", "back the accel off".
+_NEAR = (rf"(?:{_LESS}\b[^.|]{{0,30}}?{_ACCEL}"
+         rf"|{_ACCEL}[^.|]{{0,30}}?{_LESS}\b"
+         # The axis INSIDE the lowering phrase: "back the accel off",
+         # "take accel out of the diff" - neither ordering above can see it,
+         # because the phrase swallows the word it is about.
+         rf"|back\b[^.|]{{0,20}}?{_ACCEL}[^.|]{{0,10}}?\boff\b"
+         rf"|out of the diff)")
 LOWER_ACCEL_FOR_PUSH = re.compile(
-    rf"{_LOWER_ACCEL}[^.]{{0,160}}?(?:push|understeer|rotat)"
-    rf"|(?:push|understeer|rotat)\w*[^.]{{0,160}}?{_LOWER_ACCEL}",
+    rf"{_NEAR}[^.|]{{0,120}}?{_CURE}|{_CURE}\w*[^.|]{{0,120}}?{_NEAR}",
     re.IGNORECASE)
+# **Not this claim.** s145 tested the ACCELERATION axis on an MR car and
+# found lowering it cost rotation. These are other claims, and stamping them
+# would be a false record: the overrun/braking axis, initial torque, a FWD
+# front diff, raising it - and the refutation itself, which says the words
+# in the opposite order ("less lock, LESS rotation").
+NOT_THIS_CLAIM = re.compile(
+    r"overrun|braking sensitivity|initial torque|\bFWD\b|front accel"
+    r"|less rotation|no rotation"
+    # "freer differential, more rotation" is §4.1's Initial Torque bullet,
+    # which takes its axis from the heading above it - the same blind spot
+    # as `02`:440, and the reason both are stamped by hand.
+    r"|freer differential", re.IGNORECASE)
 
 
 def test_e10_lower_accel_for_a_push_always_says_it_is_contested():
     """Critic on 2.8 part 2, passes 4 and 5: each pass pointed four more
     places at "lower the accel" as the cure for a power-on push, after the
     v1.71 Huracán test refuted lowering it (s145). Every such line, anywhere
-    Ludo reasons from, carries the pointer, the word, or its v1.70 stamp."""
+    Ludo reasons from, carries the pointer, the word, or its v1.70 stamp.
+
+    **Two limits, stamped by hand instead.** A bullet that takes its axis
+    from the heading above it names nothing a line-level check can read -
+    §4.1's "Decrease -> more rotation on throttle" under Acceleration
+    Sensitivity, and its "freer differential" sibling under Initial Torque.
+    And the arrow forms ("18 -> 14", "25->20") carry no lowering word at all.
+    So `02`:440, `08`:530, `01` §11, `01`:163 and `08`:274 are pointed by
+    hand, and `NOT_THIS_CLAIM` keeps the other axes out.
+    """
     scope = (".claude/skills/**/*.md", "brain/_inbox/0*.md",
              "brain/_inbox/1[0-7]-*.md", "brain/car-state/*.md")
     marked = ("CONTESTED", "§10.5", "v1.70")
@@ -440,6 +476,7 @@ def test_e10_lower_accel_for_a_push_always_says_it_is_contested():
             text = path.read_text(encoding="utf-8")
             for number, line in enumerate(text.splitlines(), 1):
                 if LOWER_ACCEL_FOR_PUSH.search(line) \
+                        and not NOT_THIS_CLAIM.search(line) \
                         and not any(m in line for m in marked):
                     bare.append(f"{path.relative_to(ROOT).as_posix()}:{number}")
     assert not bare, f"'lower accel for a push' with no pointer at {bare}"
@@ -450,11 +487,25 @@ def test_e10_sees_the_claim_and_not_its_neighbours():
                  "Reduce accel LSD slightly to free rotation",
                  "LSD accel down → frees rotation under power",
                  "Power-on mid-corner understeer, resolved by dropping LSD "
-                 "accel from 18 to 14"):
+                 "accel from 18 to 14",
+                 # Pass 6's list - the mechanism, not the instruction.
+                 "decrease acceleration sensitivity for more rotation",
+                 "open the diff on power and it will rotate",
+                 "a freer diff frees rotation",
+                 "less lock under power will bring the rotation back",
+                 "back the accel off and the push goes",
+                 "soften acceleration sensitivity to cure the understeer",
+                 "take accel out of the diff, it will rotate"):
         assert LOWER_ACCEL_FOR_PUSH.search(said), said
     # A different claim: lower accel for the two-wheel snap or for wear.
     assert not LOWER_ACCEL_FOR_PUSH.search(
         "Car snaps suddenly on power | Lower acceleration sensitivity")
+    # And the claims that are somebody else's axis, or the refutation itself.
+    for other in ("an open diff on the overrun is a larger rotation source",
+                  "Initial Torque decrease → freer differential, more rotation",
+                  "FWD: raise front accel sensitivity for exit understeer",
+                  "On this car LESS acceleration lock gives LESS rotation"):
+        assert NOT_THIS_CLAIM.search(other), other
 
 
 def test_e7_the_register_restates_no_setup_value():

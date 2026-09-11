@@ -2529,6 +2529,63 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Critic on 2.7, pass 3 (`5b656db`): AGREED - row 2.7 is done.** All five of
+its break attempts behaved: a hub that goes silent leaves the stored value
+standing (silence is not a change); a Save between a hub change and the next
+load cannot strand a stale value, because `_on_event_saved` ends in
+`load_active_event`; no hub means no crash and no claim; the create path
+carries the regulations; and re-linking works. Seven of nine mutants killed,
+the two survivors being test adequacy rather than behaviour.
+
+Its four minors, fixed:
+- **The notes were worded after the write and inside its `try`.** A raise
+  there would have left the row updated, the form stale and the change
+  unsaid. They are built before the write now, and `_said_change` says "not
+  stated before" instead of formatting a None.
+- **An inferred adoption** - a link matched by circuit and car - stamps the
+  round's regulations onto his own event, and said nothing, because a first
+  fill is deliberately not news. It now says "linked to <round> by circuit
+  and car" with the values.
+- The `SPOKEN` comment says why re-adding an entry there would be dead
+  rather than wrong: by the time it runs the stored value is the hub's.
+- A linked round that states none of the four is logged, so "stated today"
+  and "stated once, then silence" are distinguishable in the log.
+
+**Critic on 2.8 part 2, pass 6 (`af58e50`): NOT AGREED - two majors, two
+minors, fixed.** Both majors were the same shape: a line-level check misses
+the claim when it is written another way.
+
+- **M1: the claim survived in the two most canonical places**, stated as a
+  mechanism rather than an instruction.
+  - `02` §4.1's own definition of the parameter: "Decrease → more rotation
+    on throttle", with "Increase → ... power understeer" saying it from the
+    other side.
+  - `07` §6.2 on the Huracán: "less acceleration lock means less rear
+    scrub", where **that car's own file says the opposite** - "on this car
+    LESS acceleration lock gives LESS rotation on power". Both now carry the
+    pointer, and `07`'s cites the car-state line that refutes it.
+  - e10 gains the mechanism wordings: decrease, freer, open the diff, less
+    lock, soften, back off, out of the diff.
+- **M2: e8b could not see a band unless the line said "LSD"**, and §4.1
+  names each slider in its own heading. So "Initial Torque (5-60)" and
+  "Braking Sensitivity (5-60)" kept the v1.70 range while the acceleration
+  sibling had been stamped - the section contradicted itself. It now matches
+  a slider's own name, and `04`'s quali bands are stamped: taking "initial
+  torque 5-10" on v1.71's 0-30 slider is a third of the way up, not the
+  floor.
+- **Minors:** `02` §4's and `08`'s hedged zero floor now cite
+  `range_records`, and the critic's probe list is pinned.
+- **Widening it found five false positives, each a different claim:** the
+  overrun/braking axis (`02`:422, `08`:118, `11`:256), Initial Torque's own
+  bullet (`02`:434), a FWD front diff being *raised* (`02`:915), and **the
+  refutation itself** (`car-state/huracan-daytona.md`:342). Stamping any of
+  them would have been a false record, so `NOT_THIS_CLAIM` keeps them out
+  and a test pins that.
+- **Two blind spots, stated and hand-stamped instead:** a bullet that takes
+  its axis from the heading above it (`02`:440 and its Initial Torque
+  sibling), and the arrow forms ("18 → 14", "25→20"), which carry no
+  lowering word at all.
+
 **Critic on 2.7, pass 2 (`db55a11`): NOT AGREED - one blocker, four minors,
 fixed.**
 - **The blocker: the hub's first word was kept for good as if it were his.**

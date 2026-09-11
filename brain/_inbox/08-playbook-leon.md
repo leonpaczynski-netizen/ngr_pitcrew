@@ -113,9 +113,9 @@ Your Watkins Glen Shelby session — rear locking with no ABS, brake bias forwar
 
 The catch: **braking sensitivity that is too high makes the car refuse to turn in on the brakes.** For a deep trail-braker that is the failure mode on the other side. So this parameter is your primary tuning axis, worked in **2-point steps**.
 
-> **⭐ 1.71 note, and it could be significant.** The diff's adjustment range was revised, and **[COMMUNITY — single source]** one player reports the Fully Customisable Diff can now be set to **0/0/0**, which was never previously possible. The scale in this document is 5–60 throughout.
+> **⭐ 1.71 note, and it could be significant.** The diff's adjustment range was revised, and **[COMMUNITY — single source]** one player reported the Fully Customisable Diff can now be set to **0/0/0**, which was never previously possible - **confirmed on v1.71 by `range_records`: 0–30 / 0–100 / 0–100 on all four cars read.** The scale in this document is the v1.70 5–60 throughout.
 >
-> **If the floor really is 0, your primary tuning axis just got longer at the end you use least — and a genuinely open diff on the overrun would be a larger rotation source than anything in A4 or C1.** It also means the *quali* end of the LSD scale has territory nobody has explored. **Confirm it on the settings screen (Job 1) before it changes anything.** One person, two days after release.
+> **The floor is 0 (`range_records`, v1.71), so your primary tuning axis is longer at the end you use least — and a genuinely open diff on the overrun would be a larger rotation source than anything in A4 or C1.** It also means the *quali* end of the LSD scale has territory nobody has explored. ~~Confirm it on the settings screen (Job 1) before it changes anything.~~ **Confirmed 11 Sep 2026 - `range_records`, all four cars.**
 
 **The rear-stability stack, in your hierarchy order:**
 

@@ -428,7 +428,7 @@ Note that these two positions are not as far apart as they look: both agree that
 
 ### 4.1 The three parameters
 
-**Initial Torque (5–60)**
+**Initial Torque (5–60 on v1.70; 0–30 on v1.71)**
 The always-on preload — the baseline locking present *regardless* of throttle or brake state, and it adds to both the acceleration and braking locking effects. At 5 it is effectively an open-ish diff at zero load; at 60 the car behaves close to spool at low load.
 - **Increase →** more locked at all times. Smoother, more predictable transitions; more straight-line stability; **more mid-corner understeer** and more steering effort/scrub; more tyre wear on the driven axle.
 - **Decrease →** freer differential, more rotation, sharper direction change, but more sensitive to throttle and more prone to inside-wheel spin.
@@ -436,15 +436,15 @@ The always-on preload — the baseline locking present *regardless* of throttle 
 
 **Acceleration Sensitivity (5–60 on v1.70; 0–100 on v1.71)**
 How aggressively the diff locks under throttle.
-- **Increase →** more locking on power. Better traction out of slow corners; kills inside-wheel spin; but makes the car **want to drive in a straight line and stop turning** under throttle → power understeer.
-- **Decrease →** more rotation on throttle, better ability to steer with the throttle; risk of one-wheel spin and lost drive.
+- **Increase →** more locking on power. Better traction out of slow corners; kills inside-wheel spin; but makes the car **want to drive in a straight line and stop turning** under throttle → power understeer. ⚠️ *[CONTESTED on v1.71 - §10.5: on the Huracán at Daytona (s145) less acceleration lock gave LESS rotation on power, not more.]*
+- **Decrease →** more rotation on throttle, better ability to steer with the throttle; risk of one-wheel spin and lost drive. ⚠️ *[CONTESTED on v1.71 - §10.5: the one in-house test (Huracán, Daytona, s145) found the opposite, and the car's own file says so.]*
 - **The critical GT7 quirk:** *"when you break traction with higher locking numbers, the transition from having grip to losing grip with BOTH rear tires is quite a sharp loss of traction."* In GT7, a high accel-sens diff doesn't slide progressively — it lets go of both driven wheels at once. **This is why GT7 tuners run much lower acceleration sensitivity than real-world or other-sim practice would suggest.** **[STRONG]**
 
 > **📝 Downgraded in `08` A5, and the downgrade stands:** that quirk is **single-source**, and more importantly **it is not a GT7 anomaly** — a heavily locked diff approaches a spool, and a spool axle breaks away as a unit in every sim and in reality. **Treat it as ordinary diff physics.** That reframing is why it survives 1.71 untouched while the *values* around it do not.
 
 > **⚠️ And 1.71 introduced a new engine torque control map.** Acceleration sensitivity is the parameter that manages torque delivery to the driven axle, so **every accel value in the knowledge base is a response to a torque curve that has been re-authored** — including the in-house measured 14 on the restricted Huracán (`08` A5.1) and the 18 that superseded it when the restrictor came off (`setups/…-revD.md` §7). **Re-test before reusing either.**
 
-**Braking Sensitivity (5–60)**
+**Braking Sensitivity (5–60 on v1.70; 0–100 on v1.71)**
 How much the diff locks off-throttle and under braking. This is GT7's substitute for an engine-braking map.
 - **Increase →** more locking on the overrun. Stabilises corner entry, reduces lift-off and trail-brake oversteer; **the car becomes less keen to turn in.** Especially powerful on rear-weight-biased cars (RR/MR) to kill entry snap.
 - **Decrease →** freer on entry, more rotation under braking and on lift.
