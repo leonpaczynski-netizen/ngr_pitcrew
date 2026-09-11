@@ -1,17 +1,39 @@
-"""Print the practice debrief for an event.
+"""Print the debrief for an event - the whole list, in the protocol's order.
 
     python tools/debrief.py 10
+    python tools/debrief.py 10 --report his-report.md
+    python tools/debrief.py 10 --before 129 130 --after 132
     python tools/debrief.py 10 --sessions 113 114 115
+    python tools/debrief.py 10 --walk
 
-Reads only. Nothing here writes to the database.
+Plan row 2.5. The order is the protocol's (`SKILL.md`, *debrief*): **his
+report first, unprompted, before he is shown any of this** - per corner, the
+four phases each scored 1-5 - because numbers shown first lead him and his
+account is primary evidence (CLAUDE.md rule 1). It asks him nothing: the
+questions come after the telemetry is read (the spine's step 3). Then the open predictions the ledger holds for this car at
+this circuit; the practice session; where a named change landed; how it was
+driven; the driver as a variable (row 2.11 - here and nowhere else); George's
+calls against what followed them; the race against its plan; the radio. Every
+section says what it could not see rather than going quiet.
+
+Reads only - apart from the schema upgrade every `Store()` makes when it opens
+a file (`references/mechanic.md`). After it the debrief closes each open
+prediction in `brain/ledger/` and commits `brain/`: one commit per debrief.
 """
 from __future__ import annotations
 
 import argparse
+import csv
+import importlib.util
+import io
+import re
 import sys
+from collections import Counter
 from pathlib import Path
+from statistics import median
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
 
 # Windows consoles default to cp1252 and this prints em dashes and arrows.
 if hasattr(sys.stdout, "reconfigure"):
@@ -25,6 +47,7 @@ from pitcrew.analysis.debrief import (  # noqa: E402
 from pitcrew.store.db import Store  # noqa: E402
 
 RULE = "-" * 72
+LEDGER_DIR = REPO / "brain" / "ledger"
 
 
 def _ms(value) -> str:
@@ -36,6 +59,99 @@ def _ms(value) -> str:
 def _head(text: str) -> None:
     print(f"\n{text}\n{RULE}")
 
+
+def _tool(name: str):
+    """A sibling tool, imported by path - its functions, not its `main`."""
+    spec = importlib.util.spec_from_file_location(
+        f"_debrief_{name}", REPO / "tools" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# ------------------------------------------------------------ his report first
+
+def driver_first(report_path) -> None:
+    _head("HIS REPORT FIRST — before he is shown anything below")
+    if report_path is None:
+        print("  none given. Take it now, unprompted: per corner, the four "
+              "phases, each")
+        print("  scored 1-5, in his words. It is primary evidence and "
+              "everything below")
+        print("  corroborates it (CLAUDE.md rule 1). It asks him nothing - the "
+              "questions")
+        print("  come after the telemetry is read. `--report FILE` prints it "
+              "here.")
+        return
+    for line in Path(report_path).read_text(encoding="utf-8").splitlines():
+        print(f"  {line}")
+
+
+# ------------------------------------------------------- the open predictions
+
+def _tokens(text) -> set[str]:
+    from pitcrew.store.tyres import slugify
+
+    return {part for part in slugify(text or "").split("-") if part}
+
+
+def ledger_for(event, directory: Path = LEDGER_DIR) -> list[Path]:
+    """The ledger files for this car at this circuit.
+
+    A ledger's first line names its pair as `... — <car> × <circuit>`, in the
+    words the car-state file uses, which are not the event's: "Huracán GT3
+    '15" against "Lamborghini Huracán GT3 '15", "Daytona Road Course" against
+    a track and a layout. So every word of the ledger's car must be in the
+    event's car, and every word of its circuit in the track and layout -
+    through `slugify`, the one slug rule.
+    """
+    car = _tokens(event.get("car_name"))
+    circuit = _tokens(f"{event.get('track') or ''} {event.get('layout') or ''}")
+    found = []
+    for path in sorted(directory.glob("*.md")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        head = lines[0] if lines else ""
+        if "—" not in head or "×" not in head:
+            continue
+        car_part, _, circuit_part = head.split("—", 1)[1].partition("×")
+        wanted_car, wanted_circuit = _tokens(car_part), _tokens(circuit_part)
+        if (wanted_car and wanted_circuit and wanted_car <= car
+                and wanted_circuit <= circuit):
+            found.append(path)
+    return found
+
+
+def open_rows(path: Path) -> list[dict]:
+    """Every ledger row whose outcome is still `open`, from its csv blocks."""
+    text = path.read_text(encoding="utf-8")
+    rows = []
+    for block in re.findall(r"```csv\n(.*?)```", text, re.S):
+        rows.extend(row for row in csv.DictReader(io.StringIO(block))
+                    if (row.get("outcome") or "").strip() == "open")
+    return rows
+
+
+def open_predictions(event, directory: Path = LEDGER_DIR) -> None:
+    _head("OPEN PREDICTIONS — the loop closes here, before the data")
+    paths = ledger_for(event, directory)
+    if not paths:
+        print(f"  no ledger in brain/ledger/ for {event.get('car_name')} at "
+              f"{event.get('track')}, so nothing is open on file.")
+        return
+    for path in paths:
+        rows = open_rows(path)
+        print(f"  {path.name}: {len(rows)} open")
+        for row in rows:
+            print(f"    {row.get('date')}  {row.get('key')} — "
+                  f"{row.get('direction')} ({row.get('delta_pct_range')})")
+            print(f"      predicts:     {row.get('prediction')}")
+            print(f"      falsified by: {row.get('falsifier')}")
+    print("\n  Each is closed in its ledger row after this debrief: confirmed, "
+          "refuted with\n  its direction, or unresolvable — which is not "
+          "refuted.")
+
+
+# ------------------------------------------------------ the practice session
 
 def render(debrief) -> None:
     _head("SESSION")
@@ -126,8 +242,252 @@ def render(debrief) -> None:
         print(f"  - {line}")
     for note in debrief.notes:
         print(f"\n  {note}")
-    print()
 
+
+# ---------------------------------------------------- where a change landed
+
+def change_landed(store, before, after) -> None:
+    _head("WHERE THE CHANGE LANDED — sectors, not the lap time")
+    if not before or not after:
+        print("  no change named. `--before SESSION... --after SESSION...` "
+              "runs")
+        print("  tools/where_the_change_landed.py's sector table here "
+              "(add --bins there for distance).")
+        return
+    tool = _tool("where_the_change_landed")
+    was, now = tool.laps_for(store, before), tool.laps_for(store, after)
+    print(f"  before: sessions {before}, {len(was)} clean laps")
+    print(f"  after : sessions {after}, {len(now)} clean laps")
+    # Whose "clean": a count that differs from another file's is the finding
+    # (SKILL.md refine step 1), and it cannot be seen without the definition.
+    print("  (clean by this tool's own test - counted, and no excursion, crawl "
+          "or spin.\n   A different count elsewhere for the same laps is a "
+          "finding, not a rounding.)")
+    if len(was) < tool.MIN_LAPS_PER_SIDE or len(now) < tool.MIN_LAPS_PER_SIDE:
+        print(f"  not enough clean laps - {tool.MIN_LAPS_PER_SIDE} a side is "
+              "the floor. Nothing is said about the change.")
+        return
+    note = tool.compound_note(was, now)
+    if note:
+        print(f"  ** {note}")
+    tool.sector_table(was, now)
+
+
+# ------------------------------------------------------------ how it was driven
+
+def how_driven(store, sessions) -> None:
+    """Coast share and upshift rpm per session - `driving_style`'s reader and
+    its filter (lap one, pit and out laps left out)."""
+    from pitcrew.analysis.driving import read_frames
+
+    _head("HOW IT WAS DRIVEN — coast share and upshift rpm, per session")
+    if not sessions:
+        print("  no session to read.")
+    for session in sessions:
+        reads = []
+        for row in store.list_laps(session["id"]):
+            if (row.get("is_pit_lap") or row.get("is_out_lap")
+                    or (row.get("lap_num") or 0) <= 1):
+                continue
+            frames = store.get_lap_frames(row["id"])
+            read = read_frames((frames or {}).get("frames") or [])
+            if read.coast_pct is not None:
+                reads.append(read)
+        if not reads:
+            print(f"  s{session['id']:<4} {session.get('kind') or '':<8} "
+                  "no lap with frames to read")
+            continue
+        ups = [r.upshift_rpm for r in reads if r.upshift_rpm is not None]
+        upshift = f"{median(ups):.0f} rpm" if ups else "—"
+        print(f"  s{session['id']:<4} {session.get('kind') or '':<8} "
+              f"coast {median(r.coast_pct for r in reads):4.1f}%   "
+              f"flat {median(r.full_throttle_pct for r in reads):4.1f}%   "
+              f"upshift {upshift}   (n={len(reads)})")
+
+
+# ---------------------------------------------------- the driver as a variable
+
+def driver_variable(store, event_id: int, sessions) -> None:
+    """Plan row 2.11 - here, and in no brief, plan or live call."""
+    from pitcrew.analysis.driver_trends import session_trend
+    from pitcrew.export.build import event_lap_inputs
+
+    _head("THE DRIVER AS A VARIABLE — debrief only")
+    print("  Described, never forecast: incidents are memoryless, so none of "
+          "this is a\n  warning, an allowance in a plan or a line in a brief. "
+          "Scatter is a state, not a loss.")
+    wanted = {session["id"] for session in sessions}
+    by_kind: dict[str, list] = {}
+    for kind in sorted({session.get("kind") for session in sessions
+                        if session.get("kind")}):
+        by_kind[kind] = event_lap_inputs(store, event_id, kind)
+    notes: dict[str, list[int]] = {}
+    for session in sessions:
+        laps = [lap for lap in by_kind.get(session.get("kind"), [])
+                if lap.session_id == session["id"] and lap.session_id in wanted]
+        if not laps:
+            continue
+        trend = session_trend(laps, session_id=session["id"],
+                              kind=session.get("kind"))
+        if trend.incidents is None:
+            incidents = "—"
+        else:
+            incidents = (f"{trend.incidents} in {trend.judged_laps} judged laps "
+                         f"({trend.incident_rate:.0%})")
+        lap_one = ("—" if trend.lap_one_cost_s is None else
+                   f"{trend.lap_one_cost_s:+.1f} s vs lap 5 on "
+                   f"(n={trend.lap_one_reference_n})")
+        spread = ("—" if trend.consistency_sd_s is None else
+                  f"sd {trend.consistency_sd_s:.3f} s")
+        print(f"  s{session['id']:<4} {session.get('kind') or '':<8} "
+              f"incidents {incidents}   lap one {lap_one}   "
+              f"consistency {spread} (n={trend.consistency_n})")
+        for line in trend.silences:
+            notes.setdefault(line, []).append(session["id"])
+    for line, ids in notes.items():
+        print(f"  - {line} (s{', s'.join(str(i) for i in ids)})")
+
+
+# --------------------------------------------------------- George's calls
+
+def call_tally(revisions) -> tuple[Counter, list]:
+    """Counts by what followed each filed call, and the ones he did not act on.
+
+    **A missing verdict is counted, never read as acted** - it is a call
+    recorded before verdicts were kept, or one never settled. Informational
+    lines (the colour tier, the refuel watch) were said and not asked, and
+    are counted as that rather than as instructions declined.
+    """
+    from pitcrew.race.call_outcome import NOT_ACTED
+
+    tally: Counter = Counter()
+    ignored = []
+    for revision in revisions:
+        payload = revision.get("plan") or {}
+        if isinstance(payload, dict) and payload.get("informational"):
+            tally["said, not an instruction"] += 1
+            continue
+        verdict = revision.get("verdict")
+        if not verdict:
+            tally["no verdict on file"] += 1
+            continue
+        tally[verdict] += 1
+        if verdict == NOT_ACTED:
+            ignored.append(revision)
+    return tally, ignored
+
+
+def calls_against_outcome(store, runs) -> None:
+    _head("GEORGE'S CALLS — and what followed each")
+    if not runs:
+        print("  no race run on file for this event.")
+        return
+    for run in runs:
+        revisions = store.list_revisions(run["id"])
+        tally, ignored = call_tally(revisions)
+        print(f"  run {run['id']} (session {run.get('session_id')}): "
+              f"{len(revisions)} filed   "
+              + "   ".join(f"{name} {n}" for name, n in tally.most_common()))
+        for revision in ignored:
+            print(f"    L{revision.get('lap_num'):<3} "
+                  f"{revision.get('reason')!r} — "
+                  f"{revision.get('verdict_detail') or ''}")
+
+
+# ---------------------------------------------------- the race against its plan
+
+def stint_lengths(rows) -> list[int]:
+    """Laps per stint as run: a pit lap closes the stint it ends."""
+    lengths, current = [], 0
+    for row in sorted(rows, key=lambda r: r.get("lap_num") or 0):
+        current += 1
+        if row.get("is_pit_lap"):
+            lengths.append(current)
+            current = 0
+    if current:
+        lengths.append(current)
+    return lengths
+
+
+def pit_loss_line(stop, figure, source) -> str:
+    """One measured stop against the event's own figure, in words that say
+    which each is (rule 13).
+
+    **The event's figure is named by its source, never called "declared"** -
+    at Daytona it IS a measurement, and "72.3 against 72.28 declared" said a
+    measured number was typed. **And a stop with no fill on file is a
+    ceiling**: nothing was taken off, so the lane and the standing time are
+    not separated (`pit_loss.best`), and printing its total as "ex-fuel"
+    claimed a split nobody made.
+    """
+    against = (f"the event's {figure} s ({source or 'no source - the schema default'})"
+               if figure is not None else "no figure on the event")
+    if stop.fuel_added_l is None:
+        return (f"stop on lap {stop.stop_lap}: {stop.total_s:.1f} s in all - no "
+                f"fill on file, so a ceiling and not the ex-fuel figure; "
+                f"against {against}; {stop.method}")
+    return (f"stop on lap {stop.stop_lap}: {stop.ex_fuel_s:.1f} s ex-fuel "
+            f"against {against}; {stop.method}")
+
+
+def against_the_plan(store, event, runs) -> None:
+    """From the data, never from the plan - through the export's own
+    expressions: `audit_line_from_laps` for burn, lap time and wear against
+    `expects`, and `race.pit_loss.measure` for each stop."""
+    from pitcrew.export.build import event_lap_inputs
+    from pitcrew.race import pit_loss
+    from pitcrew.race.expectations import audit_line_from_laps
+
+    _head("THE RACE AGAINST ITS PLAN — from the data, never from the plan")
+    if not runs:
+        print("  no race run on file for this event.")
+        return
+    strategies = {row["id"]: row for row in store.list_strategies(event["id"])}
+    race_laps = event_lap_inputs(store, event["id"], "race")
+    figure = event.get("pit_loss_secs")
+    source = event.get("pit_loss_source")
+    for run in runs:
+        row = strategies.get(run.get("strategy_id"))
+        if row is None:
+            print(f"  run {run['id']}: raced with no plan on file - nothing to "
+                  "score against.")
+            continue
+        plan = row.get("plan") if isinstance(row.get("plan"), dict) else {}
+        laps = [lap for lap in race_laps if lap.session_id == run.get("session_id")]
+        print(f"  run {run['id']} against strategy {row['id']} "
+              f"({row.get('label') or 'unlabelled'}):")
+        line = audit_line_from_laps(plan.get("expects"), laps)
+        print(f"    {line or 'the plan carried no expectation to score against'}")
+        rows = store.list_laps(run["session_id"]) if run.get("session_id") else []
+        planned = [s.get("laps") for s in plan.get("stints") or []
+                   if isinstance(s, dict)]
+        print(f"    stints planned {planned or '—'}   run {stint_lengths(rows) or '—'}")
+        stops = pit_loss.measure(rows, refuel_rate_lps=event.get("refuel_rate_lps"))
+        if not stops:
+            print("    pit loss: no stop these rows can resolve (an in-lap, its "
+                  "out-lap and three clean laps)")
+        for stop in stops:
+            print(f"    {pit_loss_line(stop, figure, source)}")
+
+
+# ------------------------------------------------------------------ the radio
+
+def radio(store, event_id: int) -> None:
+    _head("THE RADIO — what he asked, and what the engineer could not take")
+    tool = _tool("radio_review")
+    rows = tool._rows(store, "WHERE sessions.event_id = ?", (event_id,))
+    for line in tool.report(rows, misses_only=True):
+        print(line)
+
+
+def close() -> None:
+    _head("THEN")
+    print("  Close every open prediction above in its brain/ledger/ row, update "
+          "the\n  car-state file if what is in the car changed, and commit "
+          "brain/ -\n  one commit per debrief.\n")
+
+
+# ------------------------------------------------------------------ one lap
 
 def _gear(value) -> str:
     """Gears are said as words in the copy, not as column headings."""
@@ -213,23 +573,60 @@ def main() -> int:
     parser.add_argument("event_id", type=int)
     parser.add_argument("--sessions", type=int, nargs="*", default=None,
                         help="limit to these session ids")
+    parser.add_argument("--report", default=None, metavar="FILE",
+                        help="his report, printed first")
+    parser.add_argument("--before", type=int, nargs="+", default=None,
+                        metavar="SESSION", help="sessions before a change")
+    parser.add_argument("--after", type=int, nargs="+", default=None,
+                        metavar="SESSION", help="sessions after it")
     parser.add_argument("--lap", type=int, default=None,
                         help="talk through this lap instead of the debrief")
     parser.add_argument("--walk", action="store_true",
                         help="talk through the quickest clean lap")
+    parser.add_argument("--db", default=None,
+                        help="a different archive - a copy, for trying it "
+                             "without opening the live file")
     args = parser.parse_args()
 
-    if args.walk or args.lap is not None:
-        return walk_through(Store(), args.event_id, args.lap)
+    def _store() -> Store:
+        return Store(args.db) if args.db else Store()
 
-    debrief = from_store(Store(), args.event_id, session_ids=args.sessions)
-    if debrief is None:
-        print(f"No debrief for event {args.event_id}: no corner model for the "
-              f"circuit, or no practice laps.\nA model is built from your own "
-              f"laps — see pitcrew/analysis/resolve.py.")
-        return 1
-    render(debrief)
-    return 0
+    if args.walk or args.lap is not None:
+        return walk_through(_store(), args.event_id, args.lap)
+
+    store = _store()
+    try:
+        event = store.get_event(args.event_id)
+        if event is None:
+            print(f"No event {args.event_id}.")
+            return 1
+        driver_first(args.report)
+        open_predictions(event)
+        debrief = from_store(store, args.event_id, session_ids=args.sessions)
+        if debrief is None:
+            _head("SESSION")
+            print("  no practice debrief: no corner model for the circuit, or "
+                  "no practice laps.\n  A model is built from your own laps — "
+                  "see pitcrew/analysis/resolve.py.")
+        else:
+            render(debrief)
+        change_landed(store, args.before, args.after)
+        sessions = sorted(store.list_sessions(args.event_id),
+                          key=lambda s: s.get("started_at") or "")
+        if args.sessions:
+            sessions = [s for s in sessions if s["id"] in set(args.sessions)]
+        how_driven(store, sessions)
+        driver_variable(store, args.event_id, sessions)
+        runs = store.list_race_runs(args.event_id)
+        if args.sessions:
+            runs = [r for r in runs if r.get("session_id") in set(args.sessions)]
+        calls_against_outcome(store, runs)
+        against_the_plan(store, event, runs)
+        radio(store, args.event_id)
+        close()
+        return 0
+    finally:
+        store.close()
 
 
 if __name__ == "__main__":

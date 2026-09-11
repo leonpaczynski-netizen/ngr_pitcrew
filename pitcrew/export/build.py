@@ -102,7 +102,8 @@ def event_lap_inputs(store, event_id: int, kind: str = "practice", *,
     return [replace(lap, lap_num=index) for index, lap in enumerate(laps, 1)]
 
 
-def mark_incidents(laps: list[LapInput]) -> tuple[list[LapInput], dict]:
+def mark_incidents(laps: list[LapInput], *,
+                   evidence_for=stored_or_read) -> tuple[list[LapInput], dict]:
     """Find the laps with an off or a spin in them and mark them.
 
     **Not in place**, despite what this said for a long time: the marked laps
@@ -113,8 +114,12 @@ def mark_incidents(laps: list[LapInput]) -> tuple[list[LapInput], dict]:
     Only laps whose frames were decoded can be judged. A lap without them is
     left alone rather than assumed clean — not measured is not the same as
     nothing happened, and the export says which by carrying the sample count.
+
+    `evidence_for` is `find_incidents`' own accessor, passed through - the
+    debrief's driver trends mark laps through this one expression rather than
+    a copy of it (plan row 2.11).
     """
-    incidents = find_incidents(laps, stored_or_read)
+    incidents = find_incidents(laps, evidence_for)
     marked = [replace(lap, incident=True,
                       incident_note=incidents[lap.lap_num].describe())
               if lap.lap_num in incidents else lap

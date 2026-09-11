@@ -274,6 +274,19 @@ def median_by_bin(store, laps, label):
             {i: st.median(v) for i, v in steer.items()}, counts)
 
 
+def compound_note(before, after) -> str | None:
+    """**The compound is the first confound, not an afterthought.** A softer
+    tyre wearing a setup's clothes is the standing trap here. One expression,
+    read by this tool and by `tools/debrief.py` (plan row 2.5)."""
+    was = {lap["compound"] for lap in before if lap["compound"]}
+    now = {lap["compound"] for lap in after if lap["compound"]}
+    if was == now:
+        return None
+    return ("COMPOUND DIFFERS: %s -> %s. Whatever follows is the change AND "
+            "the tyre, and they cannot be separated here."
+            % (was or "unrecorded", now or "unrecorded"))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Where on the lap a setup change landed.")
@@ -297,14 +310,9 @@ def main():
                   "that is already generous" % MIN_LAPS_PER_SIDE)
             return 1
 
-        # **The compound is the first confound, not an afterthought.** A
-        # softer tyre wearing a setup's clothes is the standing trap here.
-        was = {lap["compound"] for lap in before if lap["compound"]}
-        now = {lap["compound"] for lap in after if lap["compound"]}
-        if was != now:
-            print("\n  ** COMPOUND DIFFERS: %s -> %s. Whatever follows is the "
-                  "change AND the tyre, and they cannot be separated here."
-                  % (was or "unrecorded", now or "unrecorded"))
+        note = compound_note(before, after)
+        if note:
+            print("\n  ** " + note)
 
         lap_before = st.median(lap["lap_time_ms"] for lap in before) / 1000
         lap_after = st.median(lap["lap_time_ms"] for lap in after) / 1000
