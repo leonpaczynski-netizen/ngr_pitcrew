@@ -104,13 +104,15 @@ in a write transaction, every time** - so even a reader touches the database it
 is pointed at. For work that must not, open sqlite with `mode=ro`, or a copy
 that includes the `-wal` file.
 
-**Readers — they answer a question and write nothing else.**
+**Readers — they answer a question and write no database row.** Two write a
+file beside their input: `analyse_m0` a `<capture>.m0.json`, `draw_track_map` a
+PNG.
 
 - `tools/data_health.py` — what may honestly be claimed about one car at one circuit, before claiming it.
 - `tools/axis_board.py` — what has been measured on this car, and which axes nobody has tried.
 - `tools/where_the_change_landed.py` — where on the lap a change landed (above).
 - `tools/where_the_time_went.py` — where 1.71's lap time went, by distance bin.
-- `tools/debrief.py` — the practice debrief for an event, lap by lap.
+- `tools/debrief.py` — the whole debrief, in the protocol's order (row 2.5): his report, the open ledger rows, the session, where a change landed, how it was driven, the driver as a variable, George's calls, the race against its plan, the radio. `--db` points it at a copy.
 - `tools/driving_style.py` — coast share and upshift rpm, per lap and per stint.
 - `tools/brake_bias.py` — what brake balance does, measured off the wheels.
 - `tools/braking_change.py` — whether 1.71 changed braking, and whether later braking pays.
@@ -124,7 +126,7 @@ that includes the `-wal` file.
 - `tools/geometric_corners.py` — corners as fixed places on the earth, from the track's shape.
 - `tools/draw_track_map.py` — the circuit drawn from his telemetry, in GT7's orientation.
 - `tools/analyse_m0.py` — the constants an M0 capture supports.
-- `pitcrew.analysis.wear_rates` (`fit`, `fit_stint`, `worst_corner`) — wear rates fitted from what the gauge read, per compound.
+- `pitcrew.analysis.wear_rates` (`fit`, `fit_stint`, `worst_corner`) — wear rates fitted from what the gauge read, per compound. **Not `carry_into_knowledge`**, which is in the same module and writes: see below.
 - `pitcrew.analysis.refuel` (`measure_refuel_rate`, `refuel_evidence`) — how fast the car takes fuel, measured.
 - `pitcrew.race.temps` (`measured_temp_window`) — the tyre-temperature range from this event's own laps (a range, never an optimum).
 - `pitcrew.race.tyre_split` (`SplitHistory`) — which way a tyre's split against its opposite is going, per lap.
@@ -151,6 +153,7 @@ never as a step of a diagnosis.**
 - `tools/derive_sectors.py` — **writes by default**; `--dry-run` reports only.
 - `tools/series.py` — `--set` writes at once; `--like`/`--car` ask first unless `--yes`.
 - `tools/name_drivers.py` — writes as soon as it is given a name (`old new`, `--me`, `--teammate`).
+- `pitcrew.analysis.wear_rates.carry_into_knowledge` — writes the fitted rates into `race_knowledge` through `store.save_race_knowledge`, whenever it is called.
 
 **Not instruments for this skill** (the app's own health, voice, rig and
 build): `audition_voices`, `render_voice_pack`, `render_voice_ab`,

@@ -210,7 +210,9 @@ role of their own. What survives measurement, and it is worth knowing which:
   of the gap between his worst race and his best. The two clean races are the
   two he won.
 - **Lap one costs time in every race without exception.** It belongs in a
-  pre-race brief, never in a live call.
+  pre-race brief, never in a live call. *(Open for the driver: plan row 2.11
+  says debrief only, never in a brief. The two agree it is never a live call;
+  which governs the brief is his to settle - surfaced, not averaged.)*
 - **Warm-up laps two to four cost a little, and it is gone by lap five.**
 - **Session scatter is reported as a state, never banked** as a loss.
 

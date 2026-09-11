@@ -341,9 +341,12 @@ did not happen.** On a race day, before anything else, run over that event's own
 **`tools/debrief.py <event>` runs the whole list, in this order** (plan row
 2.5), and every section says what it could not see:
 
-1. **His report first** — per corner, the four phases, each scored 1-5, in his
-   words, taken **before** any data is read (`--report FILE` prints it at the
-   top). It is primary evidence; everything after it corroborates.
+1. **His report, unprompted, before he is shown any data** — per corner, the
+   four phases, each scored 1-5, in his words (`--report FILE` prints it at the
+   top). Numbers shown first lead him; his account is primary evidence and
+   everything after it corroborates. **This asks him nothing, so spine step 3
+   still holds:** every question put to him comes after the telemetry has been
+   read, and buys only what the feed cannot carry.
 2. **The open predictions** for this car at this circuit, off `brain/ledger/`.
    That is the loop closing; a debrief that does not is a log. What was
    predicted, what happened, and which of the two was right — including when it
@@ -353,7 +356,10 @@ did not happen.** On a race day, before anything else, run over that event's own
 4. **How it was driven** — coast share and upshift rpm, per session.
 5. **The driver as a variable** (row 2.11) — incident rate, lap-one cost and
    consistency per session, each with its n. **Debrief only**: never in a brief,
-   never priced into a plan, never a warning, never per corner.
+   never priced into a plan, never a warning, never per corner. *(Open for the
+   driver: `race-planner.md` puts lap one's cost in the pre-race brief. The two
+   agree it is never a live call; which of them governs the brief is his to
+   settle - surfaced, not averaged.)*
 6. **George's calls against what followed** — the verdict filed on each.
 7. **Plan versus actual, from the data and never from the plan** — burn, lap
    time and wear against `expects`, stints planned against run, each stop's

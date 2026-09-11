@@ -2052,8 +2052,8 @@ and they are left - removing files is the driver's call.
 
 **2.1 — the experiment ledger lives in `brain/`, and the app writes nothing
 about it.** `brain/ledger/<car>-<circuit>.md` for the four circuits on file,
-plus a README: **117 rows** (Daytona 36, Mount Panorama 11, Sardegna 60, Deep
-Forest 10), every one a key, a direction and a delta in percentage points of
+plus a README: **115 rows** at seeding, **118 after two critic passes** (Daytona 37,
+Mount Panorama 11, Sardegna 60, Deep Forest 10), every one a key, a direction and a delta in percentage points of
 slider range, every block parsing to its 13 columns. Seeded by a read-only
 extraction from the car-state files, which I read in full before a line of
 it went in, and built by slicing that extract rather than retyping it - a
@@ -2125,8 +2125,62 @@ height, natural frequency, compression damping and downforce as one coupled
 set, moved together and with ride height last; trim is one balance slider.
 Eval 14 holds it.
 
-**Still open in Phase 2:** 2.4-2.11 as written; `SKILL.md` is roughly twice
-2.9's 450 lines; six evals short of 2.9's twenty; and **2.12 - the MCP
+**Critic 5, pass 2 (on `8937de0`): NOT AGREED, four majors, fixed.**
+(1) The new debrief order - "his report first, before any data" - flatly
+contradicted the spine's step 3, "Read the telemetry. All of it. Before
+asking him anything", and every mode runs the spine in order. **The answer
+was the merge, not either side:** the driver's own role instruction (23 Aug)
+says the engineer reads the telemetry before *asking him to observe
+anything* and that a question should *buy something the data cannot*; plan
+row 2.5 wants his report *before data*. Those are two acts. His unprompted
+account is taken before he is shown any numbers, because numbers shown first
+lead him; that asks him nothing, so every question still follows the
+telemetry. Step 1 says so, and says the spine holds. (2) `SKILL.md` described
+a `tools/debrief.py` that did not exist at that commit - true; it lands with
+2.5 below. (3) "§9a not touched" - true of `8937de0`; the S1 correction and
+this record went in `85522eb`. (4) **A Daytona row scored a falsified
+threshold as confirmed.** Pass 1 had asked for the `lsd_a` +12 row to carry
+the file's axis verdict; written into the one row, it now claimed the index
+rose above 0.0089 when it read 0.00748. Split the D6 way: the threshold
+refuted (its direction cell says only the threshold is), the axis confirmed.
+Minors fixed: `wear_rates.carry_into_knowledge` writes, so it is listed with
+the writers; "write nothing else" is "write no database row" (`analyse_m0`
+and `draw_track_map` write files); eval 13's Rev B is FEED-confirmed, not
+screen-confirmed; R12's session cell and its uncertainty, which is the
+0.0528 reference's own (±0.0056 over 5-lap runs), not s153's (±0.0006); and
+**the lap-one conflict is now written into both files** - `race-planner.md`
+puts lap one's cost in the pre-race brief, row 2.11 says never; both say
+never live; which governs the brief is the driver's to settle. 118 rows;
+the leak scan over the new diff finds nothing.
+
+**2.5 and 2.11 - `tools/debrief.py` runs the whole list.** In the protocol's
+order: his report (`--report`); the open rows of this car × circuit's
+ledger, matched word-for-word through `slugify` because the ledger's names
+are not the event's ("Huracán GT3 '15" inside "Lamborghini Huracán GT3
+'15"); the practice session; where a named change landed (`--before` /
+`--after`, `where_the_change_landed`'s own functions and its compound
+confound, now one expression); coast share and upshift per session; **the
+driver as a variable** (`analysis/driver_trends.py`: incidents over the laps
+`find_incidents` could judge - a session it could not judge has no count,
+not zero; lap one against lap five on, races only; the counted set's spread;
+each with its n, in the debrief and nowhere else); George's calls against
+the verdict filed on each (a missing verdict counted, never read as acted);
+the race against the plan it ran, through the export's own
+`audit_line_from_laps` and `pit_loss.measure`; the radio. `mark_incidents`
+takes the accessor through, so the trends mark laps through the export's own
+expression. `--db` points it at a copy. **Run on a backup of the archive,
+never the live file, and three lines were wrong on real data before any
+critic saw them:** a measured pit loss called "declared" (Daytona's 72.28 s
+is a measurement); a stop with no fill printed as an "ex-fuel" figure when
+nothing was taken off - a ceiling, by `pit_loss.best`'s own account; and a
+clean-lap count with no definition beside it, where a count that differs
+from another file's is the finding. All three are pinned.
+
+**2.10** is in `8937de0` above; critic 5 checked all 51 tools and found no
+reader that writes.
+
+**Still open in Phase 2:** 2.4 and 2.6-2.9 as written; `SKILL.md` is roughly
+twice 2.9's 450 lines; six evals short of 2.9's twenty; and **2.12 - the MCP
 server is registered nowhere** (no `pitcrew` entry in `~/.claude.json`, no
 project `.mcp.json`), which is a change to the user's configuration and
 waits for his yes.
@@ -2161,12 +2215,40 @@ stop moved late leaves the following stint fuelled for its full plan length
 (over, never under); three reversals in six laps is the fastest the hold
 allows, and whether that is too many is the driver's question.
 
+**Critic 4 on `85522eb`: AGREED.** Nineteen scenarios driven through
+`RaceCoordinator.handle` with `drop_stop` granted, every surface compared
+lap by lap - voice, `laps_to_stop`, the snapshot, the PTT answer, the colour
+tier, `_pending_stops`, the board's fuel block and `_a_stop_is_in_question` -
+and not one disagreement. Retiring takes two judged laps everywhere: at the
+green, after a stop, after a re-plan, in a timed race. Eleven of fourteen
+mutants killed; the three that survive are equivalent (the reason calls only
+fire while the hold keeps the stop). **Carried, as design questions for the
+driver:** a box call inside the first two judged laps is followed by its
+cancellation when the tank already reaches ("Box next lap." on lap 1, "No
+more stops on fuel." on lap 2) - the hysteresis doing its job, and rare,
+because a plan seldom puts a fuel stop that close; "Fuel is fine - the tank
+covers the next stint." reads as reassurance where "No fuel - ..." would read
+as the fill instruction it is (one clip, inside the pack's budget); and a
+timed race's retirement is spoken unhedged before `laps_estimate_firm`.
+
 **Storage pass 6 (critic 2 on `e640384`), one major, fixed.** An armed race
 kept its status line but not its plan line: the desk approving plan B after
 the arm repainted B's box laps under "running to the approved plan" while
 the coordinator held A (rule 13). The armed/running return now sits above
 `set_plan`. Its mutation sweep did not finish - the session limit stopped
 it - and it is re-sent.
+
+**Storage pass 7 (critic 2 on `85522eb`): NOT AGREED, one major, fixed.**
+The guard held the plan line, and the poll went on marking the new plan
+*seen* behind it - so after Stop nothing repainted, and the next Start armed
+plan B under plan A's box laps: the pass-6 wrong line, carried past the
+Stop and into a race that runs it. Three parts: `refresh_plan` records
+nothing as seen while a race is armed or running; `stop_race` refreshes
+once the race is gone (logged, never raised - `shutdown` comes through
+there); and `start_race` paints the plan it arms, because a plan approved
+moments before Start is inside the 15 s poll. The picker is disabled while
+armed (its minor: it could read "No plan" over a race holding plan A). All
+six of its mutants were killed on the earlier guards.
 
 ### Critic pass 7 — 8 Sep 2026, five rounds on critic 6's three defects
 
