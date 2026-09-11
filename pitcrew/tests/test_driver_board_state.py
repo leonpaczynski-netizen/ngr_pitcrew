@@ -266,6 +266,20 @@ def test_on_track_none_of_the_box_figures_are_set():
     assert got.runs_to_flag is False
 
 
+def test_a_retired_stop_takes_its_tyres_off_the_board():
+    """The critic on row 2.6, pass 4 (N5): with the guard off, the running
+    board went back to "fit a set" / "NEW SET" under a stop the fuel had
+    retired - the board half of pass 3's MAJOR 1, which the radio test did
+    not reach."""
+    stub = _Stub()
+    stub.race.state.next_tyres = True
+    got = _state_for(stub)
+    assert (got.tyres_at_stop, got.next_compound) == (True, "RH")
+    stub.race.state._to_stop = None
+    got = _state_for(stub)
+    assert (got.tyres_at_stop, got.next_compound) == (None, None)
+
+
 def test_a_race_that_is_not_running_draws_nothing():
     stub = _Stub()
     stub.race.running = False

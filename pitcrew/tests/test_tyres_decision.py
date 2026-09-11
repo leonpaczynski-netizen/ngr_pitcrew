@@ -176,23 +176,30 @@ def test_a_retired_stop_takes_its_tyres_decision_with_it():
     "Running to the flag, tyres on" - the stop's decision outliving it."""
     from pitcrew.race.calls import STOP_FLIP_LAPS
 
-    plan = {"stints": [
-        {"laps": 10, "compound": "RS", "fuel_l": 60.0, "start_lap": 1},
-        {"laps": 10, "fuel_l": 30.0, "start_lap": 11, "tyres": True}],
-        "binding_constraint": "fuel"}
-    race = _race(plan)
-    race.state.lap, race.state.laps_total = 8, 20
-    race.state.fuel_l, race.state.fuel_per_lap_l = 60.0, 3.0
-    race.state.drop_stop_granted = True
-    for _ in range(STOP_FLIP_LAPS):
-        race.state.note_stop_need()
-    snap = race.snapshot()
-    assert snap["lapsToStop"] is None
-    assert (snap["nextTyres"], snap["nextCompound"]) == (None, None)
-    assert answer(BOX_WHAT, snap).text == "No tyre change planned."
-    assert "tyres on" not in answer(PLAN, snap).text
-    # While the stop stands, the decision is said.
-    assert _race(plan).snapshot()["nextTyres"] is True
+    # With and without a compound named: unnamed, `nextCompound` is None
+    # whether the guard is there or not (pass 4, mutant N1).
+    for compound in (None, "RS"):
+        plan = {"stints": [
+            {"laps": 10, "compound": "RS", "fuel_l": 60.0, "start_lap": 1},
+            {"laps": 10, "compound": compound, "fuel_l": 30.0,
+             "start_lap": 11, "tyres": True}],
+            "binding_constraint": "fuel"}
+        race = _race(plan)
+        race.state.lap, race.state.laps_total = 8, 20
+        race.state.fuel_l, race.state.fuel_per_lap_l = 60.0, 3.0
+        race.state.drop_stop_granted = True
+        for _ in range(STOP_FLIP_LAPS):
+            race.state.note_stop_need()
+        snap = race.snapshot()
+        assert snap["lapsToStop"] is None
+        assert (snap["nextTyres"], snap["nextCompound"]) == (None, None)
+        assert answer(BOX_WHAT, snap).text == "No tyre change planned."
+        summary = answer(PLAN, snap).text
+        assert "tyres on" not in summary and "onto" not in summary, summary
+        # While the stop stands, the decision is said.
+        standing = _race(plan).snapshot()
+        assert standing["nextTyres"] is True
+        assert standing["nextCompound"] == compound
 
 
 def test_a_replan_keeping_the_stop_count_keeps_the_desks_decision():
