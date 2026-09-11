@@ -2529,6 +2529,73 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Critic on 2.8 part 2, pass 8 (`5a01a32`): NOT AGREED - one major, two
+minors, fixed.**
+- **Major: the span rule fixed the examples, not the class.** Pass 7's
+  check scanned the matched span for a disqualifying token, so a claim that
+  named a second slider *while making the claim* cleared itself - "lower
+  the accel **and the initial torque**, and the push goes away". Seven of
+  the critic's eight probes passed through. **The axis is decided from the
+  match now** (`_ACCEL` captures it), and three things are ruled out on
+  their own terms: the matched axis being braking, initial torque or the
+  FWD front diff; the refutation's own sentence ("gives LESS rotation on
+  power", both car-state wordings); and an OVERRUN claim that offers a
+  rotation source rather than a power-on cure. All sixteen probes are
+  pinned.
+- **Minor: "turn" and "point" are the same symptom in his words**, and the
+  windows were too short for a rationale with a clause in the middle. Both
+  widened.
+- **Minor: the commit carried no §9a entry.** This is that entry, with pass
+  7's.
+
+**Critic on 2.7, pass 4 (`858f281`): NOT AGREED - one major, one minor,
+fixed.**
+- **Major: my adopted-link fix was dead code.** `_apply_hub_regulations`
+  only runs for an event that already carries `hub_round_id`, and
+  `_link_round` writes that id *before* the load. `upcoming()` then resolves
+  the event through `known_rounds` rather than inferring it again, so the
+  proposal reaching the apply step never says `adopted`. An inferred link
+  went on stamping regulations onto his own event in silence. The critic
+  proved it three ways, the decisive one being a mutant that forces
+  `adopted` true for every event and changes no test outcome.
+  - The fact is carried from where the inference happens now: `_link_round`
+    remembers the round, and the next apply spends it once.
+- **Minor: that commit changed no test file, and all seven of its mutants
+  survived** - including the ordering fix I had called the important one.
+  Four tests now pin it: the inferred link says what it brings and is not
+  news twice; a first fill on a link he made is not news; a round stating
+  none of the four writes nothing while the boxed comparison still runs;
+  and a write that fails says nothing it did not do.
+- **The inferred-link test was itself mutation-checked**: with the carry
+  removed it fails. That is the check the previous fix never had.
+
+**Critic on 2.8 part 2, pass 7 (`b95c137`): NOT AGREED - one major, one
+minor, fixed.**
+- **Major: the exclusion was tested against the whole line, so a sentence
+  naming a second axis cleared the live claim beside it.** "With initial
+  torque already low, drop the acceleration sensitivity to cure the push"
+  is ordinary writing, and it passed. Nothing in the corpus was wrongly
+  cleared - the critic checked all seven - but the guard failed open for
+  the next thing written, on a claim that has come back four passes
+  running. It is judged on the **matched span** now
+  (`claims_lower_accel`), and the critic's six two-axis sentences are
+  pinned.
+- **Minor: I reported `02` §4's zero-floor hedge as updated and it was
+  not** - only its sibling in `08` was. It said "may no longer be 5" and
+  "confirm it before it changes a single setup" while `range_records` had
+  already answered. Fixed.
+- **What the span-level check then exposed, and the decision it forced.**
+  `_CURE` stopped at "rotat", so the refutation's own "gives LESS rotation"
+  fell outside the span and the check flagged the evidence that refutes the
+  claim. The symptom word is matched whole now. And **"freer differential"
+  had to come out of the exclusion list**: §4.1's Initial Torque bullet and
+  the live claim say it in the same words, so no pattern can separate them.
+  The check flags the wording, and the bullet carries a hand stamp - a test
+  reads the file to hold it there.
+- **The proof script was reading `HEAD`, which already carried this pass's
+  stamps**, so it reported zero and I nearly believed it. Against the
+  correct parent (`e4f2767`) e10 flags 9 lines and e8b's slider-name form 9.
+
 **Critic on 2.7, pass 3 (`5b656db`): AGREED - row 2.7 is done.** All five of
 its break attempts behaved: a hub that goes silent leaves the stored value
 standing (silence is not a change); a Save between a hub change and the next

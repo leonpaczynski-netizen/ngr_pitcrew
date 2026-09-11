@@ -424,11 +424,22 @@ def test_e8_no_live_lsd_band_anywhere_is_left_on_the_old_scale():
 # ("18 → 14") are pinned by hand; these are the worded ones.
 _LESS = (r"(?:lower|reduc\w*|drop\w*|down|decreas\w*|soften\w*|open\w*|freer"
          r"|less|unlock\w*|back\b[^.|]{0,20}?\boff\b)")
-_ACCEL = r"(?:accel\w*|lsd_a\b|diff|lock)"
+_ACCEL = (r"(?:front accel\w*|braking sensitivity|initial torque"
+          r"|accel\w*|lsd_a\b|diff\w*|lock)")
+# **Which axes the match actually names** (the critic on 2.8 part 2, pass
+# 8). Scanning the span for a disqualifying token cleared any live claim
+# that named a second slider while making it - "lower the accel AND the
+# initial torque, and the push goes away". Longest alternative first, so
+# "front accel" and "braking sensitivity" win over the bare words.
+_AXIS_WORD = re.compile(
+    r"front accel\w*|braking sensitivity|initial torque"
+    r"|accel\w*|lsd_a\b|diff\w*|lock", re.IGNORECASE)
+_OTHER_AXIS = ("front accel", "braking sensitivity", "initial torque")
 # The whole word, so the matched span carries it: the refutation says "gives
 # LESS rotation", and a span ending at "rotat" hid that from the exclusion
-# (the critic on 2.8 part 2, pass 7).
-_CURE = r"(?:push\w*|understeer\w*|rotat\w*)"
+# (the critic on 2.8 part 2, pass 7). "turn" and "point" are the same
+# symptom in his words (pass 8, minor 1).
+_CURE = r"(?:push\w*|understeer\w*|rotat\w*|turn\w*|point\w*)"
 # The lowering word and the axis close together, in either order, and the
 # thing it is offered to cure. The mechanism wordings count (pass 6): "a
 # freer diff frees rotation", "less lock under power", "back the accel off".
@@ -439,9 +450,19 @@ _NEAR = (rf"(?:{_LESS}\b[^.|]{{0,30}}?{_ACCEL}"
          # because the phrase swallows the word it is about.
          rf"|back\b[^.|]{{0,20}}?{_ACCEL}[^.|]{{0,10}}?\boff\b"
          rf"|out of the diff)")
+# The windows carry a clause between the change and the symptom - his
+# rationales run long ("soften the accel (leave braking sensitivity high)
+# and the understeer goes"), so 200 rather than 120 (pass 8, minor 1).
 LOWER_ACCEL_FOR_PUSH = re.compile(
-    rf"{_NEAR}[^.|]{{0,120}}?{_CURE}|{_CURE}\w*[^.|]{{0,120}}?{_NEAR}",
+    rf"{_NEAR}[^.|]{{0,200}}?{_CURE}|{_CURE}\w*[^.|]{{0,200}}?{_NEAR}",
     re.IGNORECASE)
+# The refutation's own sentence, in both car-state wordings.
+_REFUTATION = re.compile(r"less rotation on power", re.IGNORECASE)
+# A claim about the OVERRUN diff - the braking axis - which claims a
+# rotation source rather than a cure for a power-on push.
+_OVERRUN = re.compile(r"overrun|off-throttle|on the brakes", re.IGNORECASE)
+_ON_POWER = re.compile(r"on power|on throttle|under throttle|power-on"
+                       r"|push|understeer", re.IGNORECASE)
 # **Not this claim.** s145 tested the ACCELERATION axis on an MR car and
 # found lowering it cost rotation. These are other claims, and stamping them
 # would be a false record: the overrun/braking axis, initial torque, a FWD
@@ -450,22 +471,41 @@ LOWER_ACCEL_FOR_PUSH = re.compile(
 def claims_lower_accel(line: str) -> bool:
     """Whether this line offers lowering the ACCELERATION axis as the cure.
 
-    **Judged on the matched span, not the line** (the critic on 2.8 part 2,
-    pass 7, MAJOR): a rationale naming two axes is ordinary writing - "with
-    initial torque already low, drop the acceleration sensitivity to cure
-    the push" - and a line-wide exclusion cleared the live claim beside it.
+    **Judged on the axis that matched, not on words near it** (the critic on
+    2.8 part 2, pass 8, MAJOR). Scanning the span for a disqualifying token
+    cleared the claim whenever a real rationale named a second slider while
+    making it - "lower the accel AND the initial torque, and the push goes
+    away". Pass 7's span rule only moved that failure inside the match.
+
+    Three things are not this claim, and each is decided on its own terms:
+    the matched axis being the braking, initial-torque or front/FWD one; the
+    refutation's own sentence ("gives LESS rotation on power", both
+    car-state wordings); and a claim about the OVERRUN diff that offers a
+    rotation source rather than a cure for a power-on push.
+
+    **"freer differential" is not excluded** (pass 7): §4.1's Initial Torque
+    bullet and the live claim say it in the same words, so no pattern can
+    tell them apart. That bullet carries a hand stamp instead.
     """
-    return any(not NOT_THIS_CLAIM.search(hit.group(0))
-               for hit in LOWER_ACCEL_FOR_PUSH.finditer(line))
-
-
-NOT_THIS_CLAIM = re.compile(
-    r"overrun|braking sensitivity|initial torque|\bFWD\b|front accel"
-    r"|less rotation|no rotation", re.IGNORECASE)
-# **"freer differential" is NOT excluded** (pass 7): §4.1's Initial Torque
-# bullet and the live claim say it in the same words, so no pattern can tell
-# them apart. The bullet is stamped by hand, like its sibling at `02`:440 -
-# the heading-context blind spot, applied consistently.
+    for hit in LOWER_ACCEL_FOR_PUSH.finditer(line):
+        span = hit.group(0)
+        axes = [word.group(0).lower()
+                for word in _AXIS_WORD.finditer(span)]
+        # Every axis it names is somebody else's: not this claim. One
+        # generic axis among them and it is.
+        if axes and all(axis.startswith(_OTHER_AXIS) for axis in axes):
+            continue
+        # **Against the whole line, not the span** (pass 8): the span ends at
+        # the first symptom word, so "gives LESS rotation on power" is cut at
+        # "rotation" and the refutation reads as the claim - pass 7's
+        # mid-word trap one step along. It is a statement about the
+        # sentence, so the sentence is what it is judged on.
+        if _REFUTATION.search(line):
+            continue
+        if _OVERRUN.search(span) and not _ON_POWER.search(span):
+            continue
+        return True
+    return False
 
 
 def test_e10_lower_accel_for_a_push_always_says_it_is_contested():
@@ -516,9 +556,27 @@ def test_e10_sees_the_claim_and_not_its_neighbours():
         "Car snaps suddenly on power | Lower acceleration sensitivity")
     # And the claims that are somebody else's axis, or the refutation itself.
     for other in ("an open diff on the overrun is a larger rotation source",
+                  "an open diff on the overrun would be a larger rotation "
+                  "source than anything in A4 or C1",
                   "FWD: raise front accel sensitivity for exit understeer",
-                  "On this car LESS acceleration lock gives LESS rotation"):
+                  "On this car LESS acceleration lock gives LESS rotation "
+                  "on power",
+                  "`lsd_a` down gives LESS rotation on power on this car"):
         assert not claims_lower_accel(other), other
+    # **The second axis INSIDE the claim** (pass 8): a rationale names one
+    # while making the other, and that must not clear it.
+    for both in ("lower the accel and the initial torque, and the push goes away",
+                 "less lock on the overrun and on power the push goes away",
+                 "open the diff - braking sensitivity aside - to cure the push",
+                 "drop accel, not initial torque, to fix the push",
+                 "accel down, initial torque unchanged, cures the mid-corner push",
+                 "less accel lock gives less rotation on entry but more on "
+                 "power, so lower it for the push",
+                 "soften the accel (leave braking sensitivity high) and the "
+                 "understeer goes",
+                 "unlike the FWD case, lower accel here for the push",
+                 "open the diff and it will turn better"):
+        assert claims_lower_accel(both), both
     # **"Freer differential" is the live claim's own wording**, so §4.1's
     # Initial Torque bullet cannot be told from it by pattern - it carries a
     # hand stamp instead, and the check is left free to flag the wording.
