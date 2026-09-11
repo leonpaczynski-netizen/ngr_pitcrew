@@ -25,6 +25,8 @@ from pitcrew.race.calls import (
     LOW,
     SAVING_RESPONSE,
     STAY_OUT,
+    STOP_BACK,
+    STOPS_OFF,
     Call,
     RaceState,
     fuel_in_hand,
@@ -451,9 +453,20 @@ class RaceCoordinator:
         # re-plan adopted, at construction - and a retirement of the old stop
         # says nothing about the next one (CLAUDE.md rule 11's shape: state
         # that outlives its subject is read as though it were about this one).
-        self.state.stop_retired = False
-        self.state.stop_back_laps = 0
+        # **All of it, and logged** (critic 4, MAJOR): batch 4 cleared the
+        # latch and left `stops_off_said`, so after a re-plan or a stop the
+        # new stop's countdown flickered and nothing about it could be said.
+        had = self.state.stop_needed_held
+        self.state.stop_needed_held = None
+        self.state.stop_flip_laps = 0
         self.state.stop_back_due = False
+        self.state.stops_off_said = False
+        self.state.forget_said(STOPS_OFF)
+        self.state.forget_said(STOP_BACK)
+        if had is not None:
+            log("race").info("stint %d: the held stop answer (%s) is cleared "
+                             "for the stop this stint ends on", index,
+                             "needed" if had else "not needed")
         # **What the NEXT stint starts on** - not the fill. The litres through
         # the hose are this minus whatever is aboard when we arrive, and
         # `_fill_at_the_stop` does that subtraction. `None` on the last stint:
