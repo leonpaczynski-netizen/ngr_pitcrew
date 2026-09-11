@@ -490,6 +490,19 @@ class Handover:
                     f"stint {index} carries tyres={tyres!r}; it must be true, "
                     f"false or absent - a word in quotes would be read as a "
                     f"set going on")
+            # **Every stop carries its tyres decision** (plan row 2.6, from
+            # Suzuka on). Absent, the box call names the compound as a bare
+            # "RS." - which under a helmet reads as "fit RS" - and only 4 of
+            # 64 stored stints ever carried one. Stint 1 is exempt: the car
+            # starts on what it is on. This door and the CLI are the only
+            # callers, so a plan already stored arms exactly as before.
+            if (index > 1 and isinstance(stint, dict)
+                    and stint.get("tyres") is None):
+                problems.append(
+                    f"stint {index} carries no tyres decision - say true (a "
+                    f"set goes on at the stop before it) or false (fuel "
+                    f"only). Absent, the box call names the compound, which "
+                    f"under a helmet reads as 'fit it'")
         # **Refused, never merged.** The stored payload is the plan's own keys
         # with the handover's alongside under one key, so a plan carrying one
         # of the reserved names would have it silently replaced. `assumptions`

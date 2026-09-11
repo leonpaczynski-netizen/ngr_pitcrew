@@ -281,7 +281,7 @@ def test_a_plan_that_is_not_a_dict_is_refused_not_raised():
 
 def _write(db, event_id, **extra):
     payload = {"stints": [{"laps": 10, "compound": "RS"},
-                          {"laps": 10, "compound": "RS"}],
+                          {"laps": 10, "compound": "RS", "tyres": True}],
                "stops": 1, "playbook": [], **extra}
     return call("write_strategy", {"event_id": event_id,
                                    "plan": json.dumps(payload)}, db=db)

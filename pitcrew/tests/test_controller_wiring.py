@@ -156,7 +156,8 @@ def test_the_regulations_reach_the_coordinator(raced):
 def a_handover() -> Handover:
     return Handover(
         plan={"stints": [{"laps": 12, "compound": "RM", "fuel_l": 80.0},
-                         {"laps": 8, "compound": "RM", "fuel_l": 50.0}],
+                         {"laps": 8, "compound": "RM", "fuel_l": 50.0,
+                          "tyres": True}],
               "stops": 1, "pit_laps": [12], "binding_constraint": "fuel"},
         playbook=[PlaybookEntry(trigger="fuel_short", action="short_shift",
                                 when="more than 0.5 laps short")])

@@ -26,7 +26,7 @@ def a_handover() -> Handover:
         plan={"stints": [{"laps": 15, "compound": "RM", "fuel_l": 92.0,
                           "start_lap": 1},
                          {"laps": 5, "compound": "RM", "fuel_l": 32.0,
-                          "start_lap": 16}],
+                          "start_lap": 16, "tyres": True}],
               "stops": 1, "pit_laps": [15], "binding_constraint": "fuel"},
         playbook=[PlaybookEntry(trigger="fuel_short", action="short_shift",
                                 when="more than 0.5 laps short to the flag",

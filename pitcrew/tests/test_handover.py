@@ -28,7 +28,7 @@ def a_plan() -> dict:
     return {"stints": [{"laps": 14, "compound": "RS", "fuel_l": 90.0,
                         "start_lap": 1},
                        {"laps": 6, "compound": "RS", "fuel_l": 40.0,
-                        "start_lap": 15}],
+                        "start_lap": 15, "tyres": True}],
             "binding_constraint": "evidence"}
 
 
@@ -89,6 +89,28 @@ def test_two_entries_for_one_trigger_are_refused():
 
 
 # ------------------------------------------------------------- the handover
+
+def test_every_stop_carries_its_tyres_decision():
+    """Plan row 2.6: absent, the box call says a bare "RS." - under a helmet,
+    "fit RS" - and only 4 of 64 stored stints ever carried the decision."""
+    two = {"stints": [{"laps": 11, "compound": "RS", "start_lap": 1},
+                      {"laps": 9, "compound": "RS", "start_lap": 12}]}
+    problems = Handover(plan=two).validate()
+    assert any("stint 2 carries no tyres decision" in p for p in problems)
+    for decided in (True, False):
+        stints = [dict(two["stints"][0]), dict(two["stints"][1], tyres=decided)]
+        assert not any("tyres decision" in p
+                       for p in Handover(plan={"stints": stints}).validate())
+    null = [dict(two["stints"][0]), dict(two["stints"][1], tyres=None)]
+    assert any("stint 2 carries no tyres decision" in p
+               for p in Handover(plan={"stints": null}).validate())
+
+
+def test_the_first_stint_needs_no_tyres_decision():
+    """The car starts on what it is on - and a one-stint race has no stop."""
+    one = {"stints": [{"laps": 20, "compound": "RM", "start_lap": 1}]}
+    assert not any("tyres decision" in p for p in Handover(plan=one).validate())
+
 
 def test_a_plan_with_no_stints_is_refused():
     assert "the plan has no stints" in Handover(plan={}).validate()

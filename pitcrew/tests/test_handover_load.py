@@ -37,7 +37,7 @@ def a_handover(**over) -> Handover:
     plan = {"stints": [{"laps": 15, "compound": "RM", "fuel_l": 92.0,
                         "start_lap": 1},
                        {"laps": 5, "compound": "RM", "fuel_l": 32.0,
-                        "start_lap": 16}],
+                        "start_lap": 16, "tyres": True}],
             "stops": 1, "pit_laps": [15], "binding_constraint": "fuel"}
     plan.update(over.pop("plan", {}))
     return Handover(plan=plan,

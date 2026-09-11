@@ -168,9 +168,16 @@ It stores a **candidate** and the driver approves it on the Strategy screen
 `note_engineer_write`). Either way a running app picks the approval up within
 15 s or when the Race screen is next shown.
 
-**A stint carries `tyres: true|false`.** That is the decision the box call
-speaks — "No tyres." or "RS on." — and the board shows. Omit it and George
-names the compound as he always did, which under a helmet reads as "fit RS".
+**Every stint after the first carries `tyres: true|false`, or the plan is
+refused** (both doors, since 11 Sep 2026 - plan row 2.6). That is the decision
+the box call speaks — "No tyres." or "RS on." — and the board shows. Omitted,
+George names the compound as he always did, which under a helmet reads as
+"fit RS"; only 4 of 64 stored stints ever carried it. Stint 1 is exempt: the
+car starts on what it is on.
+
+**The deliverable is three things, from Suzuka on:** the plan (with its tyres
+decisions), the playbook, and the engineering sheet - every `race_knowledge`
+field filled, or a line saying why it cannot be.
 
 Anything outside the playbook is George reporting, not deciding. **He may always
 say "the plan no longer fits and I cannot fix it from here"** — that is a useful
