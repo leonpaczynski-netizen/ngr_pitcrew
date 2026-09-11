@@ -1287,6 +1287,8 @@ def test_a_dropped_stop_is_not_called_late():
                         fuel_l=60.0, fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
                         plan_binding_constraint="fuel", mandatory_stops_left=0,
                         drop_stop_granted=True)
+    for _ in range(C.STOP_FLIP_LAPS):           # the fuel retires it
+        state.note_stop_need()
     assert state.laps_to_stop() is None
     assert C.fuel_in_hand_to_stop(state) == (None, C.NO_STOP_TO_COME)
     # The same state with the drop not granted: the stop stands, and it is.

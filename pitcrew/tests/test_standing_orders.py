@@ -704,6 +704,10 @@ def test_the_contract_quotes_the_calls_it_is_about():
     # tank covers the twelve laps left.
     state.mandatory_stops_left = 0
     state.plan_binding_constraint = "fuel"
+    # And the fuel has said so for the run it takes to retire the plan's stop.
+    from pitcrew.race.calls import STOP_FLIP_LAPS
+    for _ in range(STOP_FLIP_LAPS):
+        state.note_stop_need()
     call = _stops_off(state)
     assert call is not None and call.structural_action == "drop_stop"
     assert call.report_form in lines(a_plan()), call.report_form

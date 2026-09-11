@@ -166,6 +166,11 @@ def _fuelled_to_the_flag(plan) -> RaceCoordinator:
     state.stint_ends_on_lap = 10
     state.fuel_l, state.fuel_per_lap_l = 60.0, 3.0
     state.plan_binding_constraint = "fuel"
+    # Judged the way a race judges it: the plan's stop is retired only after
+    # `STOP_FLIP_LAPS` laps of arithmetic that says so (the latch, critic 4).
+    from pitcrew.race.calls import STOP_FLIP_LAPS
+    for _ in range(STOP_FLIP_LAPS):
+        state.note_stop_need()
     return race
 
 

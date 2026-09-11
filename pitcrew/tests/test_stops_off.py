@@ -21,6 +21,7 @@ from __future__ import annotations
 from pitcrew.race.calls import (
     BOX_NOW,
     BOX_SOON,
+    STOP_FLIP_LAPS,
     STOPS_OFF,
     TO_THE_FLAG,
     TO_THE_STOP,
@@ -40,7 +41,12 @@ def after_the_stop(**overrides) -> RaceState:
                   plan_binding_constraint="fuel", mandatory_stops_left=0,
                   fuel_capacity_l=100.0)
     fields.update(overrides)
-    return RaceState(**fields)
+    state = RaceState(**fields)
+    # A race judges the fuel every lap, and lap 8 is well past the
+    # `STOP_FLIP_LAPS` it takes to retire the plan's stop (the latch, critic 4).
+    for _ in range(STOP_FLIP_LAPS):
+        state.note_stop_need()
+    return state
 
 
 def test_the_fuel_reaches_the_flag():

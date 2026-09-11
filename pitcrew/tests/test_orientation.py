@@ -319,6 +319,10 @@ def test_the_count_stops_being_discounted_once_the_stop_is_off():
     assert race._pending_stops() == 1, \
         "a stop the desk did not let George drop is still a stop"
     race.state.drop_stop_granted = True
+    # Retired the way the race retires it: `STOP_FLIP_LAPS` judged laps.
+    from pitcrew.race.calls import STOP_FLIP_LAPS
+    for _ in range(STOP_FLIP_LAPS):
+        race.state.note_stop_need()
     assert race._pending_stops() == 0, \
         "the discount survived the stop being declared off"
 

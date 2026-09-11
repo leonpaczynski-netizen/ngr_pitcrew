@@ -1149,7 +1149,11 @@ def _a_stop_is_in_question(state) -> bool:
     is no stop in prospect for this to argue against.
     """
     planned = getattr(state, "stint_ends_on_lap", None)
-    return planned is not None and state.lap >= planned - STAY_OUT_WINDOW
+    # **And a stop that is still a stop** (critic 4 on the latch, minor): a
+    # stop the fuel has retired keeps its box lap, and arguing against it
+    # argues against nothing.
+    return (planned is not None and state.lap >= planned - STAY_OUT_WINDOW
+            and stop_still_needed(state))
 
 
 def _burn_of(state, driver: str | None) -> float | None:

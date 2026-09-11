@@ -602,6 +602,28 @@ def test_the_grids_own_refusal_is_taken_down_after_he_fixes_it(raced):
     assert not screen.subtitle.text().startswith("Plan refused")
 
 
+def test_an_armed_race_keeps_its_plan_line_when_another_is_approved(raced):
+    """Critic 2, pass 6 (MAJOR): the desk approved plan B after the arm, and
+    the refresh repainted the plan line with B's box laps under "running to
+    the approved plan" while the coordinator held A (rule 13)."""
+    controller, screen, store, event_id = raced
+    assert controller.start_race() is True
+    shown = screen.plan_line.text()
+    row = store.get_approved_strategy(event_id)
+    plan = dict(row["plan"])
+    stints = [dict(s) for s in plan["stints"]]
+    stints[0]["laps"] -= 1
+    stints[1]["laps"] += 1
+    plan["stints"] = stints
+    store.update_strategy_plan(row["id"], plan)
+    controller._refresh_race_options(store.get_event(event_id))
+    assert screen.plan_line.text() == shown, "the armed plan stays on show"
+    # And with no race armed the same refresh does repaint it.
+    controller.race = None
+    controller._refresh_race_options(store.get_event(event_id))
+    assert screen.plan_line.text() != shown
+
+
 def test_the_refresh_leaves_somebody_elses_status_alone(raced):
     """The mutant that survived pass 4: a refresh that cleared ANY status."""
     controller, screen, store, event_id = raced

@@ -2033,11 +2033,26 @@ cannot leave the stop unheld (minor 8). The race-driven tests go through
 still move the arithmetic on its own; the hysteresis damps it, and "Fuel
 won't reach the flag." is unhedged there as it was before (minor 7).
 
+**Critic pass 3 on the voice batch — AGREED at `0cedbfe`.** Every box line
+in code form plays, the one-lap fills in both frames, a fill to a hundred
+litres, and every `STOP_BACK` shape batch 4b made; the only misses are the
+full-name "X on." family left on the budget, and the critic confirmed the
+budget is a constraint, not a choice (both leftovers take it to about 703).
+Minors, all labelled rather than silent: "am I" overrides a side word he
+named - kept, because "am I far behind" names the car ahead through the
+word "behind", which is the inversion the rule exists for; the phrase table
+wins over the both-sides guard in compound questions; "the leader ahead" is
+answered with the car directly ahead, which the answer names. **The pack is
+rendered**, read off the tool's own summary: `en_GB-alan-medium`, 112 clips
+rendered and 575 unchanged, 687 on disk against 687 declared. Twelve older
+wavs are no longer in the manifest; the tool names them and deletes nothing,
+and they are left - removing files is the driver's call.
+
 ### Phase 2 — rows 2.1 and 2.2, first batch (11 Sep 2026)
 
 **2.1 — the experiment ledger lives in `brain/`, and the app writes nothing
 about it.** `brain/ledger/<car>-<circuit>.md` for the four circuits on file,
-plus a README: **115 rows** (Daytona 34, Mount Panorama 11, Sardegna 60, Deep
+plus a README: **117 rows** (Daytona 36, Mount Panorama 11, Sardegna 60, Deep
 Forest 10), every one a key, a direction and a delta in percentage points of
 slider range, every block parsing to its 13 columns. Seeded by a read-only
 extraction from the car-state files, which I read in full before a line of
@@ -2050,12 +2065,14 @@ prose quoted positions as percentages (*"50 → 70 → 90 %"*, *"dc 20/20"*,
 back through the range record - ten were stripped, each asserted. Items with
 no slider range (gear ratios, shift points, ECU, ballast) are cited by
 location and restated nowhere. **Forty contradictions are surfaced in the
-files, not averaged**; three matter beyond housekeeping and are for Ludo and
-the driver: the Shelby's range record is v1.71 in its car-state file and a
-stale v1.70 in the register, and the car-state percentages fit neither;
-Bathurst's `lsd_a` is justified by a doctrine band its value sits below, on
-a pre-1.71 scale; and a Daytona `lsd_b` "it worked" rests on 5 laps against
-the same file's own 22-lap requirement.
+files, not averaged**; two matter beyond housekeeping and are for Ludo and
+the driver: Bathurst's `lsd_a` is justified by a doctrine band its value is
+outside, on a pre-1.71 scale; and a Daytona `lsd_b` "it worked" rests on 5
+laps against the same file's own 22-lap requirement. **A third, as first
+written here, was wrong** (critic 5): "the Shelby's car-state percentages
+fit neither record". They fit the v1.71 record in `pitcrew.db`, verified
+23 Aug, on every ranged key checked - it is the register that is stale, and
+its LSD spans answer the register's own class-independence question.
 
 `setup_changes` is **read and written by nothing** (206 rows to session 119,
 last written 4 Sep, carrying `from_value`/`to_value`) - `CLAUDE.md` §1a now
@@ -2075,8 +2092,41 @@ two failures the row names - Sardegna's +0.633 g against a no-change +0.411,
 and Deep Forest's 0-and-1 against 4-and-5 clean laps - **written, not yet
 run through an eval harness.**
 
-**Still open in Phase 2:** 2.3-2.11 as written; `SKILL.md` is 869 lines
-against 2.9's 450; eleven evals short of 2.9's twenty; and **2.12 - the MCP
+**Critic 5 on 2.1-2.2: NOT AGREED at `f354419`, fixed in the next commit.**
+Three blockers, all §1a leaks the first strip missed: a Daytona source cell
+quoting the untried `de` setting; Sardegna's "aero to the midpoint" beside
+the front share before and after, which together rebuild every aero
+setting; and the Shelby's `bb` trim written as a value. Majors: "back to
+zero" on toe (with the steps it rebuilds the setting); "no travel left
+upward" on the Shelby (the ceiling, reworded); four rows refuted beside
+directions their files do not refute (Daytona `lsd_a` +12; the `arb_r`
+Bus Stop risk that did not happen; both Daytona `df` steps; Sardegna `arb_r`
++22.2, whose size is refuted and whose direction is confirmed one row on);
+D5 scored confirmed on 0 of 5 laps against its own file's ~22 (open now);
+D9 carrying one row where rule 1 needs two (his report is its own row); and
+S1. **S1 was mine and wrong both ways** - left "not resolvable from files"
+in the ledger and called "fits neither" above. Read read-only,
+`range_records` holds the Shelby at v1.71, verified 23 Aug, and every
+car-state percentage checked reproduces from it; the register is the stale
+file. Its LSD spans (0-30 / 0-100 / 0-100) are the answer the register's
+own class-independence test was waiting for - flagged for Ludo, not edited,
+because the register is not this row's. Minors: `refine` step 6 had lost
+the three-clean-laps minimum (restored); eval 12 denied a change the file
+confirms on his report (it now keeps the change on the report, refuses only
+the number, and the prompt carries a report); eval 13 tested a `refine`
+step with a `debrief` prompt (now a refine prompt, with "no complaints" in
+it); §1a said three things stayed above four bullets; the Daytona `bb` trim
+had no row. **117 rows**, every one 13 columns; a leak scan over the diff
+finds measurements and deltas only.
+
+**2.3 - platform or trim, decided before step 6.** `SKILL.md` `refine`
+now says which a complaint is before a change is written: platform is ride
+height, natural frequency, compression damping and downforce as one coupled
+set, moved together and with ride height last; trim is one balance slider.
+Eval 14 holds it.
+
+**Still open in Phase 2:** 2.4-2.11 as written; `SKILL.md` is roughly twice
+2.9's 450 lines; six evals short of 2.9's twenty; and **2.12 - the MCP
 server is registered nowhere** (no `pitcrew` entry in `~/.claude.json`, no
 project `.mcp.json`), which is a change to the user's configuration and
 waits for his yes.
@@ -2087,6 +2137,36 @@ so a stop that came back and then retired again would never have been
 announced a second time — "told it was back on, he must be told again when it
 is off" failed. Each reversal now clears the other's entry, so each can be
 said once and neither twice in a row.
+
+**Critic 4 on the redesign (`243b9c6`): NOT AGREED, two majors, fixed.**
+(1) The hold started empty, so the first judged lap set it outright and a
+retirement cost ONE lap - at the green, after a stop, after a re-plan -
+where a reinstatement cost two: the asymmetry the redesign existed to
+remove, reachable at every stint boundary. An unjudged stop is now the
+plan's answer: `note_stop_need` starts from True and `_stop_needed_on_fuel`
+reads True for a stop not yet judged, so taking any stop off needs the full
+`STOP_FLIP_LAPS`. (2) Rule 12 across the hold: the box calls decided on the
+held answer and took their reason from the arithmetic, so on a box lap the
+hold still kept he heard "Box this lap." for the reason "Fuel is fine - the
+tank covers the next stint." `_why_the_stop_is_held` gives `_box_now`,
+`_box_soon` and `_stop_back` the reason of the answer that decided - "On
+the plan." where the tank no longer keeps the stop. Minors: the four guards
+that survived its mutation sweep (the reinstatement's `stops_off_said` and
+`said` clears, the retirement's `STOP_BACK` and `stop_back_due` clears) are
+pinned by an off-on-off-on sequence and a retire-before-told test;
+`_a_stop_is_in_question` reads `stop_still_needed` rather than the raw box
+lap. Five older tests built a "retired" stop as a bare state that was never
+judged; they now retire it the way a race does. **Carried, with reasons:** a
+stop moved late leaves the following stint fuelled for its full plan length
+(over, never under); three reversals in six laps is the fastest the hold
+allows, and whether that is too many is the driver's question.
+
+**Storage pass 6 (critic 2 on `e640384`), one major, fixed.** An armed race
+kept its status line but not its plan line: the desk approving plan B after
+the arm repainted B's box laps under "running to the approved plan" while
+the coordinator held A (rule 13). The armed/running return now sits above
+`set_plan`. Its mutation sweep did not finish - the session limit stopped
+it - and it is re-sent.
 
 ### Critic pass 7 — 8 Sep 2026, five rounds on critic 6's three defects
 

@@ -1498,19 +1498,22 @@ class PitCrewController(QObject):
         approved = (self.store.get_approved_strategy(event["id"])
                     if event else None)
         self.race_screen.set_plan_available(approved is not None)
+        # **Not while a race is armed or running** (critic 2, passes 5 and
+        # 6): the page is the race's then. Flipping the picker on a race
+        # armed with no plan replaced "Armed: no plan - fuel calls only" with
+        # a warning about a plan that race is not using; and a plan the desk
+        # approved after the arm repainted the plan line, so "running to the
+        # approved plan" sat under box laps the coordinator was not holding
+        # (rule 13). Above `set_plan`, so the plan line stays the armed one.
+        race = getattr(self, "race", None)
+        if race is not None and (getattr(race, "armed", False)
+                                 or getattr(race, "running", False)):
+            return
         # **And what that plan actually is.** The picker only ever said
         # whether one existed; the stops, the box laps and the compounds were
         # nowhere on the screen the race is started from, so the only way to
         # check the engineer was holding tonight's race was to run it.
         self.race_screen.set_plan(approved)
-        # **Not while a race is armed or running** (critic 2, pass 5): the
-        # status line is the race's then, and flipping the picker on a race
-        # armed with no plan replaced "Armed: no plan - fuel calls only" with
-        # a warning about a plan that race is not using.
-        race = getattr(self, "race", None)
-        if race is not None and (getattr(race, "armed", False)
-                                 or getattr(race, "running", False)):
-            return
         # **Said here, in the week, and not first on the grid** (critic 2 on
         # the storage row): a row approved before plans carried their
         # contract showed as the approved plan with no sign it will not arm.

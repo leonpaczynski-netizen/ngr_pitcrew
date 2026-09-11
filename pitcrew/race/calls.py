@@ -1129,9 +1129,12 @@ class RaceState:
             return
         needed = _fuel_arithmetic_keeps_the_stop(self)
         if self.stop_needed_held is None:
-            self.stop_needed_held = needed
-            self.stop_flip_laps = 0
-            return
+            # **The plan's answer, not the first lap's** (critic 4 on the
+            # redesign, MAJOR). Set outright from the first judged lap, a
+            # retirement cost one lap - at the green, after a stop, after a
+            # re-plan - which is the asymmetry the redesign existed to remove.
+            # The plan put a stop here; taking it off needs the full run.
+            self.stop_needed_held = True
         if needed == self.stop_needed_held:
             self.stop_flip_laps = 0
             return
@@ -1973,13 +1976,33 @@ def _stop_needed_on_fuel(state: RaceState) -> bool:
     board's fuel block, `_pending_stops` and the rival calls read the
     arithmetic directly - "3 laps to the stop" on the colour channel while the
     countdown was blank and push-to-talk said "No stop planned" (rule 13).
-    Once `note_stop_need` has judged a lap, this is its answer; before that,
-    the arithmetic.
+    Once `note_stop_need` has judged a lap, this is its answer. **Before that,
+    the plan's**: a stop the plan put there stands until `STOP_FLIP_LAPS`
+    laps of arithmetic retire it (critic 4 on the redesign) - the same answer
+    `note_stop_need` starts from, so the first judged lap cannot flip it. With
+    no stop ahead there is nothing to hold, and the arithmetic answers.
     """
     held = getattr(state, "stop_needed_held", None)
     if held is not None:
         return held
+    if getattr(state, "stint_ends_on_lap", None) is not None:
+        return True
     return _fuel_arithmetic_keeps_the_stop(state)
+
+
+def _why_the_stop_is_held(state: RaceState) -> str | None:
+    """The reason for the HELD answer, in words, or None if it is off.
+
+    **Rule 12 across the hold** (critic 4 on the redesign, MAJOR). The box
+    calls decided on the hold and took their reason from the arithmetic, so
+    on a box lap the hold still kept, with the tank already reaching, he
+    heard "Box this lap." for the reason "Fuel is fine - the tank covers the
+    next stint." A held stop the arithmetic no longer keeps is the plan's
+    stop, and that is its reason.
+    """
+    if not _stop_needed_on_fuel(state):
+        return None
+    return _why_the_stop_stands(state) or "On the plan."
 
 
 def _fuel_arithmetic_keeps_the_stop(state: RaceState) -> bool:
@@ -2093,7 +2116,7 @@ def _stop_back(state: RaceState) -> Call | None:
     else:
         said = "The stop is back on."
     return Call(STOP_BACK, state.lap, said,
-                _why_the_stop_stands(state) or "On the plan.")
+                _why_the_stop_is_held(state) or "On the plan.")
 
 
 def _tyre_word(state: RaceState) -> str:
@@ -2176,7 +2199,8 @@ def _box_now(state: RaceState) -> Call | None:
     # "Fuel is fine - the tank covers the next stint.", and "Fuel is the
     # constraint. Fuel is fine." was two adjacent sentences making opposite
     # claims, with §5.5 saying he acts on the front of the reason.
-    said = _why_the_stop_stands(state) or ""
+    # And from the HELD answer, which is the one that decided to box him.
+    said = _why_the_stop_is_held(state) or ""
     reason = " ".join(part for part in (said, fuel) if part) or "On the plan."
     return Call(
         BOX_NOW, state.lap,
@@ -2203,7 +2227,7 @@ def _box_soon(state: RaceState) -> Call | None:
     # that fuel or the regulations bound - the rule-12 defect one call over,
     # on the call §5.5's own worked example is shaped like: "Box this lap or
     # next. Fuel is the constraint - you're 1.2 laps short."
-    stands = _why_the_stop_stands(state)
+    stands = _why_the_stop_is_held(state)
     ordinal = f"Stop {state.stint_index + 1}"
     reason = (f"{ordinal}. {stands}" if stands and stands != "On the plan."
               else f"{ordinal}, on the plan.")

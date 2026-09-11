@@ -101,13 +101,19 @@ def test_a_cancelled_stop_stops_being_counted_down_everywhere_at_once():
     all read (rule 12) - and the only test on it was a grep of the source,
     which is why nothing noticed.
     """
-    from pitcrew.race.calls import stop_still_needed
+    from pitcrew.race.calls import STOP_FLIP_LAPS, stop_still_needed
 
     state = _fuelled_to_the_flag()
+    # Retired the way a race retires it: the held answer moves after
+    # `STOP_FLIP_LAPS` judged laps (the latch, critic 4).
+    for _ in range(STOP_FLIP_LAPS):
+        state.note_stop_need()
     assert stop_still_needed(state) is False, "the stop is off"
     assert state.laps_to_stop() is None, "so nothing counts down to it"
-    # And it comes back the moment the stop does.
+    # And it comes back when the fuel has said so for the same run.
     state.fuel_l = 6.0
+    for _ in range(STOP_FLIP_LAPS):
+        state.note_stop_need()
     assert stop_still_needed(state) is True
     assert state.laps_to_stop() == 3
 
@@ -115,8 +121,11 @@ def test_a_cancelled_stop_stops_being_counted_down_everywhere_at_once():
 def test_every_surface_reads_the_one_expression():
     """The four that were missed, each traced to `laps_to_stop`."""
     from pitcrew.engineer.intents import BOX_WHEN, TYRES, answer
+    from pitcrew.race.calls import STOP_FLIP_LAPS
 
     state = _fuelled_to_the_flag()
+    for _ in range(STOP_FLIP_LAPS):                 # the stop is retired
+        state.note_stop_need()
     snapshot = {"lapsToStop": state.laps_to_stop(), "hasPlan": True,
                 "wearWorst": 0.72, "wearCorner": "lr"}
     # The push-to-talk, both answers that carried the countdown.
@@ -315,6 +324,9 @@ def test_a_retired_stop_is_not_overdue_on_the_snapshot():
     state = race.state
     state.lap, state.fuel_l = 13, 60.0        # three laps past a box lap of 10
     state.drop_stop_granted = True            # the desk let it go
+    from pitcrew.race.calls import STOP_FLIP_LAPS
+    for _ in range(STOP_FLIP_LAPS):           # and the fuel retired it
+        state.note_stop_need()
 
     assert state.past_box_lap is True, "he is past the box lap"
     assert state.laps_to_stop() is None, "and the stop is not a stop"
