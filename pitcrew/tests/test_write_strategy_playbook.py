@@ -73,7 +73,10 @@ def test_a_mistyped_action_is_refused_before_anything_is_stored(door):
         playbook=[{"trigger": "incident", "action": "recost_stints",
                    "when": "more than 8 s lost"}]))))
     assert reply["written"] is False
-    assert reply["error"] == "playbook refused"
+    # "plan refused", not "playbook refused" (the critic on row 2.6): the
+    # door refuses for a missing tyres decision too, and a playbook label on
+    # that is false. The problems name what is wrong.
+    assert reply["error"] == "plan refused"
     assert any("recost_stints" in p for p in reply["problems"])
     assert len(Store(path).list_strategies(event_id)) == before
 

@@ -266,6 +266,15 @@ def propose_strategy(event_id: int, plan: str, label: str = "") -> str:
                 "error": "the plan carries keys this tool does not store: "
                          + "; ".join(said)})
         payload = whole_numbers(payload)
+        # **The third door checks what the other two do** (the critic on
+        # row 2.6): a plan with no tyres decision was saved and certified
+        # here, approved in the app, and spoke "Box this lap. RS.".
+        from pitcrew.strategy.handover import stint_tyre_problems
+
+        problems = stint_tyre_problems(payload)
+        if problems:
+            return _dump({"saved": False, "error": "plan refused",
+                          "problems": problems})
         # **Stamped, like the other door.** `write_strategy` stamps and this
         # one did not, so a proposed plan approved in the app armed with no
         # `start_lap` - every stint then ends at `laps`, two stints share a
@@ -444,7 +453,7 @@ def write_strategy(event_id: int, plan: str, label: str = "") -> str:
                 author="race engineer (MCP)",
                 summary="refused: " + "; ".join(problems)[:200],
                 after={"label": label, "problems": problems})
-            return _dump({"written": False, "error": "playbook refused",
+            return _dump({"written": False, "error": "plan refused",
                           "problems": problems})
 
         stamped = stamp(store, event_id, handover.plan)

@@ -169,7 +169,10 @@ It stores a **candidate** and the driver approves it on the Strategy screen
 15 s or when the Race screen is next shown.
 
 **Every stint after the first carries `tyres: true|false`, or the plan is
-refused** (both doors, since 11 Sep 2026 - plan row 2.6). That is the decision
+refused** - by every door: `write_strategy`, `propose_strategy` and the CLI
+(since 11 Sep 2026, plan row 2.6). The app's own optimiser writes `true`,
+because it prices every stop as a fresh set. A fuel-only stop may not change
+compound, and `certify` counts the laps on one set across it. That is the decision
 the box call speaks — "No tyres." or "RS on." — and the board shows. Omitted,
 George names the compound as he always did, which under a helmet reads as
 "fit RS"; only 4 of 64 stored stints ever carried it. Stint 1 is exempt: the

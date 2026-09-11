@@ -735,10 +735,19 @@ def answer(intent: str, snapshot: dict, *,
 
     if intent == BOX_WHAT:
         compound = snapshot.get("nextCompound")
+        decided = snapshot.get("nextTyres")
+        # **The plan's decision, in the box call's own words** (the critic
+        # on row 2.6, BLOCKER). The box call said "No tyres." and this
+        # answered "RS." - under a helmet, "fit RS" (rule 13). The same
+        # three forms `calls._tyre_word` speaks.
+        if decided is False:
+            return Answer("No tyres.", intent)
         if not compound:
             if not _has_plan(snapshot):
                 return Answer(NO_PLAN, intent, answered=False)
             return Answer("No tyre change planned.", intent)
+        if decided is True:
+            return Answer(f"{compound} on.", intent)
         return Answer(f"{compound}.", intent)
 
     if intent == BOX_FUEL:
@@ -894,7 +903,10 @@ def _plan_summary(snapshot: dict) -> str:
         parts.append("Box this lap")
     else:
         parts.append(f"Box in {_laps(to_stop)}")
-    if snapshot.get("nextCompound"):
+    if snapshot.get("nextTyres") is False:
+        # A fuel-only stop is not "onto RS" (the critic on row 2.6).
+        parts.append("no tyres")
+    elif snapshot.get("nextCompound"):
         parts.append(f"onto {snapshot['nextCompound']}")
     remaining = snapshot.get("lapsRemaining")
     if remaining is not None:

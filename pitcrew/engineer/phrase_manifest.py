@@ -278,6 +278,12 @@ def compound_lines() -> tuple[str, ...]:
              for compound in ALL_COMPOUNDS]
     lines += [_text(BOX_WHAT, {"nextCompound": compound.code})
               for compound in ALL_COMPOUNDS]
+    # And the decision forms the radio now gives (the critic on row
+    # 2.6): "RS on." for a set going on, "No tyres." for fuel only.
+    lines += [_text(BOX_WHAT, {"nextCompound": compound.code,
+                               "nextTyres": True})
+              for compound in ALL_COMPOUNDS]
+    lines.append(_text(BOX_WHAT, {"nextCompound": "RS", "nextTyres": False}))
     return tuple(dict.fromkeys(lines))
 
 
@@ -1143,7 +1149,7 @@ def _decompose(text: str) -> tuple[str, ...]:
 # which `plan_single_part_lines` renders whole - deliberately does not count.
 _PLAN_SUMMARY = re.compile(
     r"^(?:Running to the flag|Box this lap|Box in \d+ laps?)"
-    r"(, onto .+?)?(, \d+ laps? to go)?\.$")
+    r"(, onto .+?|, no tyres)?(, \d+ laps? to go)?\.$")
 
 
 def uncovered_reason(text: str) -> str | None:
@@ -1192,6 +1198,8 @@ def plan_summary_examples() -> tuple[str, ...]:
         {"lapsToStop": 4, "nextCompound": "Racing Medium"},
         {"lapsToStop": 4, "lapsRemaining": 1},
         {"lapsToStop": 4, "nextCompound": "Racing Soft", "lapsRemaining": 12},
+        {"lapsToStop": 4, "nextCompound": "RS", "nextTyres": False,
+         "lapsRemaining": 12},
         {"nextCompound": "Racing Hard", "lapsRemaining": 20},
         {"lapsRemaining": 0},
     ]

@@ -728,10 +728,15 @@ class Plan:
         return {
             "stops": self.stops,
             "pit_laps": self.pit_laps,
+            # **Every stop a fresh set, said** (the critic on row 2.6): the
+            # model prices each stop as a new set, and a plan that never
+            # said so made the box call a bare "RS." - Bathurst's approved
+            # strategy 30 is one.
             "stints": [
                 {"laps": s.laps, "compound": s.compound, "fuel_l": s.fuel_l,
-                 "start_lap": s.start_lap}
-                for s in self.stints
+                 "start_lap": s.start_lap,
+                 **({"tyres": True} if index else {})}
+                for index, s in enumerate(self.stints)
             ],
             "total_time_s": self.total_time_s,
             "binding_constraint": self.binding_constraint,

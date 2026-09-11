@@ -2056,8 +2056,18 @@ class RaceCoordinator:
             litres = (fuel_l[offset]
                       if fuel_l is not None and offset < len(fuel_l)
                       else None)
+            # **The tyres decision travels with the stint** (the critic on
+            # row 2.6): rebuilt without it, "No tyres." became a bare "RS."
+            # the moment he accepted a re-plan. A changed compound is a set
+            # going on, whatever the old stint said.
+            previous = fresh[-1] if fresh else (done[-1] if done else None)
+            before = previous.get("compound") if isinstance(previous, dict) else None
+            tyres = was.get("tyres")
+            if compound and before and compound != before:
+                tyres = True
             fresh.append({"laps": laps, "compound": compound,
-                          "fuel_l": litres, "start_lap": start})
+                          "fuel_l": litres, "start_lap": start,
+                          "tyres": tyres})
             start += laps
         self._stints = done + fresh
         self._apply_stint(self.state.stint_index)
@@ -2139,6 +2149,10 @@ class RaceCoordinator:
                 and not self.state.in_pit and not self.state.finished
                 and self.state.stint_ends_on_lap is not None else None),
             "nextCompound": self.state.next_compound,
+            # The plan's tyre decision for that stop, tri-state, so the
+            # radio answers "what tyres" in the box call's own words
+            # (the critic on row 2.6).
+            "nextTyres": self.state.next_tyres,
             "inPit": self.state.in_pit,
             # **The flag, because the box reading has to know about it.**
             # Post-flag with a stop never taken the Race screen read "BOX IN

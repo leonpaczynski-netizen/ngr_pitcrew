@@ -467,6 +467,52 @@ class PlaybookEntry:
                 "when": self.when, "until": self.until, "note": self.note}
 
 
+def stint_tyre_problems(plan) -> list[str]:
+    """The tyres decision on every stint - one expression for every door.
+
+    **Every stop carries its decision** (plan row 2.6, from Suzuka on).
+    Absent, the box call names the compound as a bare "RS." - "fit RS"
+    under a helmet - and only 4 of 64 stored stints ever carried one.
+    Stint 1 is exempt: the car starts on what it is on. **Every door asks
+    this** (the critic on row 2.6): `validate` did and `propose_strategy`
+    did not, so a plan with no decision was saved, certified, approved in
+    the app and spoke "Box this lap. RS.". And a fuel-only stop may not
+    change compound - the coordinator would file that stint's wear
+    under a tyre that never went on.
+    """
+    problems: list[str] = []
+    stints = plan.get("stints") if isinstance(plan, dict) else None
+    previous = None
+    for index, stint in enumerate(stints or [], start=1):
+        if not isinstance(stint, dict):
+            previous = None
+            continue
+        tyres = stint.get("tyres")
+        if tyres is not None and not isinstance(tyres, bool) \
+                and tyres not in (0, 1):
+            problems.append(
+                f"stint {index} carries tyres={tyres!r}; it must be true or "
+                f"false - a word in quotes would be read as a set going on")
+        elif index > 1 and tyres is None:
+            problems.append(
+                f"stint {index} carries no tyres decision - say true (a set "
+                f"goes on at the stop before it) or false (fuel only). "
+                f"Absent, the box call names the compound, which under a "
+                f"helmet reads as 'fit it'")
+        fuel_only = tyres is False or (
+            not isinstance(tyres, bool) and isinstance(tyres, (int, float))
+            and tyres == 0)
+        if index > 1 and fuel_only and previous is not None:
+            was, now = previous.get("compound"), stint.get("compound")
+            if was and now and was != now:
+                problems.append(
+                    f"stint {index} changes compound ({was} to {now}) at a "
+                    f"stop with no tyres - a new compound is a set going "
+                    f"on: say tyres true, or keep {was}")
+        previous = stint
+    return problems
+
+
 @dataclass
 class Handover:
     """Everything Ludo hands George for one race."""
@@ -481,28 +527,7 @@ class Handover:
         problems: list[str] = []
         if not isinstance(self.plan, dict) or not self.plan.get("stints"):
             problems.append("the plan has no stints")
-        for index, stint in enumerate((self.plan or {}).get("stints") or [],
-                                      start=1):
-            tyres = stint.get("tyres") if isinstance(stint, dict) else None
-            if tyres is not None and not isinstance(tyres, bool) \
-                    and tyres not in (0, 1):
-                problems.append(
-                    f"stint {index} carries tyres={tyres!r}; it must be true, "
-                    f"false or absent - a word in quotes would be read as a "
-                    f"set going on")
-            # **Every stop carries its tyres decision** (plan row 2.6, from
-            # Suzuka on). Absent, the box call names the compound as a bare
-            # "RS." - which under a helmet reads as "fit RS" - and only 4 of
-            # 64 stored stints ever carried one. Stint 1 is exempt: the car
-            # starts on what it is on. This door and the CLI are the only
-            # callers, so a plan already stored arms exactly as before.
-            if (index > 1 and isinstance(stint, dict)
-                    and stint.get("tyres") is None):
-                problems.append(
-                    f"stint {index} carries no tyres decision - say true (a "
-                    f"set goes on at the stop before it) or false (fuel "
-                    f"only). Absent, the box call names the compound, which "
-                    f"under a helmet reads as 'fit it'")
+        problems.extend(stint_tyre_problems(self.plan))
         # **Refused, never merged.** The stored payload is the plan's own keys
         # with the handover's alongside under one key, so a plan carrying one
         # of the reserved names would have it silently replaced. `assumptions`

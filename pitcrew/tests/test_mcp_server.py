@@ -156,7 +156,7 @@ def test_a_proposed_plan_is_read_as_whole_numbers(seeded):
                     "stints": [{"laps": 10.0, "compound": "RS",
                                 "start_lap": 1.0},
                                {"laps": 10.0, "compound": "RS",
-                                "start_lap": 11.0}],
+                                "start_lap": 11.0, "tyres": True}],
                     "stops": 1.0, "pit_laps": [10.0]})},
                db=db)
     assert got["saved"] is True
@@ -241,8 +241,8 @@ def test_a_proposed_plan_is_stamped_so_it_can_actually_be_run(seeded):
                {"event_id": event_id,
                 "plan": json.dumps({"stints": [
                     {"laps": 10, "compound": "RS"},
-                    {"laps": 10, "compound": "RS"},
-                    {"laps": 10, "compound": "RS"}]})},
+                    {"laps": 10, "compound": "RS", "tyres": True},
+                    {"laps": 10, "compound": "RS", "tyres": True}]})},
                db=db)
     assert got["saved"] is True, got
 

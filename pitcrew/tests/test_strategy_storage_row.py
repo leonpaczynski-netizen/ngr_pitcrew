@@ -189,13 +189,28 @@ def test_the_mcp_door_stores_an_unreadable_count_and_says_why(seeded):
                {"event_id": event_id,
                 "plan": json.dumps({"stints": [
                     {"laps": "ten", "compound": "RS"},
-                    {"laps": 10, "compound": "RS"}]})},
+                    {"laps": 10, "compound": "RS", "tyres": True}]})},
                db=db)
     assert got["saved"] is True, got
     assert "int()" not in json.dumps(got)
     assert got["certified"] is False
     assert got["refusals"] == [
         "every stint needs a positive whole number of laps"]
+
+
+def test_the_proposing_door_refuses_a_stop_with_no_tyres_decision(seeded):
+    """The critic on row 2.6: the third door saved and certified it, the
+    app approved it, and George said "Box this lap. RS."."""
+    db, event_id = seeded
+    got = call("propose_strategy",
+               {"event_id": event_id,
+                "plan": json.dumps({"stints": [
+                    {"laps": 10, "compound": "RS"},
+                    {"laps": 10, "compound": "RS"}]})},
+               db=db)
+    assert got["saved"] is False and got["error"] == "plan refused", got
+    assert any("stint 2 carries no tyres decision" in p
+               for p in got["problems"])
 
 
 def test_the_mcp_door_keeps_a_garbage_stint_where_it_was(seeded):
@@ -206,7 +221,7 @@ def test_the_mcp_door_keeps_a_garbage_stint_where_it_was(seeded):
                {"event_id": event_id,
                 "plan": json.dumps({"stints": [
                     {"laps": 10, "compound": "RS"}, "x",
-                    {"laps": 10, "compound": "RS"}]})},
+                    {"laps": 10, "compound": "RS", "tyres": True}]})},
                db=db)
     assert got["saved"] is True and got["certified"] is False, got
     assert got["refusals"] == ["stint 2 is 'x', not a stint"]

@@ -255,14 +255,30 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     else:
         limit = tyre_limited_laps(per_lap)
         if limit:
-            for index, count in enumerate(laps, 1):
-                if count > limit:
+            # **A fuel-only stop keeps the set on** (the critic on row
+            # 2.6). The stint after a `tyres: false` stop runs on the tyre
+            # the stint before it wore, so the limit applies to the laps
+            # summed across them - 10 + 10 on one set is twenty - and a
+            # plan stating "no tyres" certified straight past the cliff.
+            # Read through the coordinator's own `_tri`, so "false", 0 and
+            # false are one answer everywhere.
+            from pitcrew.race.coordinator import _tri
+
+            on_set, first = 0, 1
+            for index, (count, stint) in enumerate(zip(laps, stints), 1):
+                if index > 1 and _tri(stint.get("tyres")) is False:
+                    on_set += count
+                else:
+                    on_set, first = count, index
+                span = (f"stint {index}" if first == index else
+                        f"stints {first}-{index} (no tyres at the stop)")
+                if on_set > limit:
                     refusals.append(
-                        f"stint {index} runs {count} laps on a tyre good for "
+                        f"{span} runs {on_set} laps on a tyre good for "
                         f"{limit} at {STINT_SAFETY_FACTOR:g} of its life")
-                elif count == limit:
+                elif on_set == limit:
                     warnings.append(
-                        f"stint {index} runs the tyre to its full modelled "
+                        f"{span} runs the tyre to its full modelled "
                         f"life with no margin")
 
     # ------------------------------------------------------------- the race
