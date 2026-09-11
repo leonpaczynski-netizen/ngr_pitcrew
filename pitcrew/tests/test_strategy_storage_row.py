@@ -585,6 +585,70 @@ def test_a_foreign_plan_is_certified_and_not_approved_without_contradiction(
     assert "Suzuka Circuit" in foreign["builtForAnotherRace"]
 
 
+def test_the_grids_own_refusal_is_taken_down_after_he_fixes_it(raced):
+    """Critic 2, pass 4 (MAJOR): after a failed Start the page carried the
+    grid's "Plan refused: It was approved without...", which the take-down
+    never matched - pass 3's stale message, reached the likelier way."""
+    controller, screen, store, event_id = raced
+    row = store.get_approved_strategy(event_id)
+    store.update_strategy_plan(row["id"], _unstamped(row["plan"]))
+    assert controller.start_race() is False
+    assert screen.subtitle.text().startswith("Plan refused: It was approved")
+    assert controller.approve_stored_strategy(row["id"]) is True
+    assert not screen.subtitle.text().startswith("Plan refused")
+
+
+def test_the_refresh_leaves_somebody_elses_status_alone(raced):
+    """The mutant that survived pass 4: a refresh that cleared ANY status."""
+    controller, screen, store, event_id = raced
+    other = "Not armed - set the OBS projector up and arm again."
+    screen.set_status(other, warn=True)
+    controller._refresh_race_options(store.get_event(event_id))
+    assert screen.subtitle.text() == other
+
+
+def test_no_warning_about_a_plan_he_has_set_aside(raced):
+    controller, screen, store, event_id = raced
+    row = store.get_approved_strategy(event_id)
+    store.update_strategy_plan(row["id"], _unstamped(row["plan"]))
+    controller._refresh_race_options(store.get_event(event_id))
+    assert "will not arm" in screen.subtitle.text()
+    # He chooses "No plan": the screen's own slot, then the controller's.
+    index = screen.plan_picker.findData(False)
+    screen.plan_picker.setCurrentIndex(index)
+    screen.plan_picker.activated.emit(index)
+    assert screen.use_plan() is False
+    assert "will not arm" not in screen.subtitle.text()
+
+
+@pytest.mark.parametrize("over, words", [
+    ({"race_minutes": True}, "race_minutes"),
+    ({"race_minutes": float("inf")}, "race_minutes"),
+    ({"race_minutes": 0}, "race_minutes"),
+    ({"car": None}, "names no car"),
+    ({"track": "  "}, "names no track"),
+])
+def test_a_context_value_that_is_not_one_is_refused(store, event_id, over,
+                                                    words):
+    context = {"car": "RSR", "track": "Monza", "layout": "Full",
+               "race_laps": 20, "race_minutes": None, **over}
+    with pytest.raises(ValueError) as refused:
+        stamp(store, event_id, {**A_PLAN_FOR_CONTEXT, "context": context})
+    assert words in str(refused.value)
+
+
+def test_an_event_with_no_distance_is_refused_at_approval(store):
+    """Critic 2, pass 4: approval stamped a context from an event with no
+    distance, the week said "approval fills those in", and the next approval
+    refused its own stamp."""
+    no_distance = store.create_event(
+        name="No distance", track="Monza", layout="Full", car_id=1,
+        car_name="RSR", race_type="laps", race_laps=0)
+    with pytest.raises(ValueError) as refused:
+        stamp(store, no_distance, A_PLAN_FOR_CONTEXT)
+    assert "the event has no race length" in str(refused.value)
+
+
 def test_pit_laps_on_a_plan_with_no_start_laps_is_not_a_crash():
     """Minor 5's surviving mutant: the `all(s is not None ...)` guard. A raw
     plan carrying `pit_laps` and no start laps would raise TypeError."""

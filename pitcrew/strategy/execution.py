@@ -70,6 +70,13 @@ def _context_problem(context) -> str | None:
         return "is not a set of fields"
     if not all(key in context for key in REQUIRED_CONTEXT):
         return f"does not name {', '.join(REQUIRED_CONTEXT)}"
+    # **The car and the track are values too** (critic 2, pass 4): a null
+    # car passed and read "plan was built for , car is C" - an empty name
+    # compared, and said, as though it were one (rule 3).
+    for key in ("car", "track"):
+        value = context.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return f"names no {key}"
     laps, minutes = context.get("race_laps"), context.get("race_minutes")
     if minutes is not None and (
             isinstance(minutes, bool) or not isinstance(minutes, (int, float))
@@ -275,6 +282,16 @@ def stamp(store, event_id: int, plan: dict, *, inputs=None,
             "layout": context.layout, "race_laps": context.race_laps,
             "race_minutes": context.race_minutes,
         }
+        # **Checked like any other context** (critic 2, pass 4). An event
+        # with no distance stamped a context the next approval refused, while
+        # the week said "approval fills those in" - so approval refuses it
+        # now, and says it is the event that does not know.
+        problem = _context_problem(stamped["context"])
+        if problem is not None:
+            raise ValueError(
+                f"the event {problem.replace('names no', 'has no')} - "
+                f"approval takes what the plan was built for from the event, "
+                f"so set it on the Event page first")
 
     # **An author's `expects` has to be the right shape, or it is not one.**
     # It is left alone when present - it is what THAT plan was costed against

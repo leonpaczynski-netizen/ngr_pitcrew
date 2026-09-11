@@ -1120,6 +1120,16 @@ class PitCrewController(QObject):
             self.race_screen.replan_declined.connect(
                 lambda: self._resolve_replan(accepted=False))
             self.race_screen.stop_requested.connect(self.stop_race)
+            # **His own choice of plan re-asks whether it will arm** (critic
+            # 2, pass 4): choosing "No plan" left "The approved plan will not
+            # arm" up about a plan he had just set aside. The screen's own
+            # slot runs first - it is connected in the screen's constructor -
+            # so `use_plan()` has already moved when this asks.
+            picker = getattr(self.race_screen, "plan_picker", None)
+            if picker is not None:
+                picker.activated.connect(
+                    lambda _index: self._refresh_race_options(
+                        self.active_event()))
         if self.car_screen is not None:
             self.car_screen.car_changed.connect(self.load_car)
             self.car_screen.saved.connect(self.save_ranges)
@@ -1509,11 +1519,18 @@ class PitCrewController(QObject):
         else:
             # **And taken down when it stops being true** (critic 2, pass 3,
             # MAJOR). It was set and never cleared, so after he re-approved
-            # the plan the page still told him it would not arm. Only this
-            # warning is taken down - any other status is somebody else's.
+            # the plan the page still told him it would not arm. **The grid's
+            # own refusal of the same thing too** (pass 4, MAJOR): after a
+            # failed Start the page carried "Plan refused: It was approved
+            # without..." instead, which the prefix never matched. The exact
+            # text the grid wrote, not "anything starting Plan refused" - a
+            # refusal by `certify` is still true after a refresh.
             subtitle = getattr(self.race_screen, "subtitle", None)
-            if subtitle is not None and subtitle.text().startswith(warning):
+            shown = subtitle.text() if subtitle is not None else ""
+            grid = getattr(self, "_grid_plan_refusal", None)
+            if shown.startswith(warning) or (grid and shown == grid):
                 self.race_screen.set_status("No plan armed.")
+                self._grid_plan_refusal = None
 
     @staticmethod
     def _why_it_will_not_arm(plan, event=None) -> str | None:
@@ -4411,7 +4428,10 @@ class PitCrewController(QObject):
         why = (self._why_it_will_not_arm(plan, event) if plan is not None
                else None)
         if why is not None:
-            self.race_screen.set_status(f"Plan refused: {why}", warn=True)
+            # Remembered word for word, so the refresh after he fixes it can
+            # take THIS down and nothing else (critic 2, pass 4).
+            self._grid_plan_refusal = f"Plan refused: {why}"
+            self.race_screen.set_status(self._grid_plan_refusal, warn=True)
             return False
         try:
             inputs, _ = build_inputs(self.store, event["id"])
