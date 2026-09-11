@@ -641,12 +641,19 @@ def _call_states() -> list:
         # box call - so it is the one call in the race whose absence from the
         # pack would be heard as the app having died rather than as the plan
         # having changed. Two shapes: with the spare litres and without.
+        #
+        # **Retired, as a race retires it** (`stop_needed_held=False`). Since
+        # the latch (85522eb) an unjudged stop is the plan's and stands, so a
+        # bare state here never reached `_stops_off` - and "You're fuelled to
+        # the flag." and its litres dropped out of the pack with nothing red.
         _state(lap=8, laps_total=20, fuel_l=82.3, fuel_per_lap_l=6.0,
                position=11, stint_ends_on_lap=10, fuel_capacity_l=100.0,
-               plan_binding_constraint="fuel", mandatory_stops_left=0),
+               plan_binding_constraint="fuel", mandatory_stops_left=0,
+               stop_needed_held=False),
         _state(lap=19, laps_total=20, fuel_l=7.0, fuel_per_lap_l=6.0,
                position=11, stint_ends_on_lap=19, fuel_capacity_l=100.0,
-               plan_binding_constraint="fuel", mandatory_stops_left=0),
+               plan_binding_constraint="fuel", mandatory_stops_left=0,
+               stop_needed_held=False),
         _state(lap=0),                                        # bare green
         _state(lap=0, laps_total=20),                         # green + laps
         _state(lap=6, finished=True),                         # bare chequer
@@ -674,14 +681,19 @@ def _call_states() -> list:
         # fuel-covered race says at the box lap. `stops_off_said` is
         # required or `STOPS_OFF` outranks the box call and the state
         # renders nothing at all.
+        # Retired by the fuel too, or the "not granted" clause is never
+        # reached: it answers "You're fuelled to the flag.", which only a
+        # retired stop says.
         _state(lap=10, laps_total=20, stint_ends_on_lap=10, fuel_l=60.0,
                fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
                plan_binding_constraint="fuel", mandatory_stops_left=0,
-               drop_stop_granted=False, stops_off_said=True),
+               drop_stop_granted=False, stops_off_said=True,
+               stop_needed_held=False),
         _state(lap=8, laps_total=20, stint_ends_on_lap=10, fuel_l=60.0,
                fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
                plan_binding_constraint="fuel", mandatory_stops_left=0,
-               drop_stop_granted=False, stops_off_said=True),
+               drop_stop_granted=False, stops_off_said=True,
+               stop_needed_held=False),
         # **And every stop number, because the ordinal renders whole.** The
         # plain box-soon is already swept over `range(MAX_STOPS)` for exactly
         # that reason; this branch was pinned at stop 1, so "Stop 2, on the
@@ -691,7 +703,7 @@ def _call_states() -> list:
                  fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
                  plan_binding_constraint="fuel", mandatory_stops_left=0,
                  drop_stop_granted=False, stops_off_said=True,
-                 stint_index=index)
+                 stop_needed_held=False, stint_index=index)
           for index in range(1, MAX_STOPS)],
         # Box soon carries the same reason two laps earlier.
         _state(lap=5, laps_total=20, stint_ends_on_lap=6,

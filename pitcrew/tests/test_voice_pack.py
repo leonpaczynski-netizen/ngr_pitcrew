@@ -187,6 +187,49 @@ def test_the_calls_the_review_measured_as_missing_are_covered():
         assert not missing, (line, missing)
 
 
+def test_the_calls_about_a_retired_stop_are_in_the_pack():
+    """**Nine lines fell out of the pack with nothing red** (11 Sep 2026).
+    The latch (85522eb) made an unjudged stop the plan's, and the manifest's
+    bare states then never reached `_stops_off` or the "not granted" clause -
+    while `test_every_proactive_call_can_be_played_from_the_pack` checked the
+    manifest's own examples, so the generator and the check went blind
+    together. Named here, so they cannot quietly go again."""
+    clips = set(manifest.clips())
+    lines = ["You're fuelled to the flag. No more stops on fuel.",
+             "litres more than the flag needs.",
+             "Fuel would reach the flag - dropping the stop was not granted.",
+             *[f"Stop {n}, on the plan. Fuel would reach the flag - dropping "
+               f"the stop was not granted." for n in range(1, 7)]]
+    for line in lines:
+        segments = manifest.segments_for(line)
+        assert segments, line
+        missing = [name for name in segments if name not in clips]
+        assert not missing, (line, missing)
+
+
+@pytest.mark.parametrize("granted", [True, False])
+def test_a_judged_race_says_its_retired_stop_from_the_pack(granted):
+    """The real call path, not the manifest's examples: a race that has
+    judged the fuel for `STOP_FLIP_LAPS` laps, granted and not."""
+    from pitcrew.race.calls import STOP_FLIP_LAPS, RaceState, next_call
+
+    clips = set(manifest.clips())
+    state = RaceState(lap=8, laps_total=20, stint_ends_on_lap=10, fuel_l=60.0,
+                      fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
+                      plan_binding_constraint="fuel", mandatory_stops_left=0,
+                      drop_stop_granted=granted, stops_off_said=not granted)
+    for _ in range(STOP_FLIP_LAPS):
+        state.note_stop_need()
+    call = next_call(state)
+    assert call is not None
+    for line in (call.call, call.reason):
+        if not line:
+            continue
+        segments = manifest.segments_for(line)
+        playable = bool(segments) and all(name in clips for name in segments)
+        assert playable or manifest.uncovered_reason(line), (line, segments)
+
+
 def test_a_number_inside_a_word_is_not_split_out():
     """"P4." is a position and one clip; splitting it would say "P" and then
     "four" as two separate recordings."""
