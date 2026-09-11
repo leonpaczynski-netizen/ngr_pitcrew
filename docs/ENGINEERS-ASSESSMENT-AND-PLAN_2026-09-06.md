@@ -2244,6 +2244,42 @@ next line. **Part 2 is content, and needs Ludo's care:** `02` §10's tags,
 the 1.71 pass on `05`, the Shelby profile in `07`, and setup values still
 restated outside `brain/car-state/` in `11`.
 
+**Critic 5 on 2.8 part 1 (`acd9da7`): NOT AGREED, two majors, fixed.** (1)
+**The retired rule was still in force where sheets are issued**: both
+current car-state sheets headed their differential block "ABSOLUTES, not
+percentages ... the register has not been re-read", both ledgers quoted it,
+and `test_e2` passed because it matched only the two phrasings I had
+rewritten - **a test checking fewer phrasings than the rule was written in
+passes without checking the places that matter.** Both headers are retired
+where they stand; the test now matches every phrasing the rule was written
+in, and on its first run found two more (the archived Red Bull Ring and Deep
+Forest sheets - the Deep Forest car-state sends its reader to the second, so
+both are annotated, not exempted). (2) **The register's "CURRENT" RSR block
+contradicted the database**: dated 21 Aug with `lsd_b` 0-99, where the
+record, updated 5 Sep, reads 0-100; the file still said three cars were
+read, twice told the reader to re-read the RSR's ceiling, and defined
+outcome 1 with the old 99. The block is marked superseded by the 5 Sep
+record and the four lines are closed. Minors fixed: the ledger README and the
+Sardegna ledger's R17 carried the 99 (R17 resolved); my own edit had put a
+v1.71 floor beside a v1.70 percentage (now labelled v1.70); `08`'s and `04`'s
+"until `11` is re-read" gates are marked met; `13` called `SetupSheet.gears`
+"verified end to end", and `test_e1` now catches a live `SetupSheet` as well
+as a dead tool - on its first run, also my own "`SetupSheet` ... went with"
+in `mechanic.md`, which did not say removed. 118 ledger rows, all 13
+columns.
+
+**2.6 - every stop carries its tyres decision.** `Handover.validate` refuses
+a plan whose stints after the first carry no `tyres` (absent or null): the
+box call otherwise names the compound as a bare "RS." - "fit RS" under a
+helmet - and only 4 of 64 stored stints ever carried the decision. Stint 1
+is exempt; a one-stint race has no stop. `validate` has two callers,
+`write_strategy` and the CLI - not the in-app approve, not the arm - so a plan
+already stored arms exactly as before. `race-planner.md` says so, and names
+the deliverable as three things from Suzuka on: the plan with its tyres
+decisions, the playbook, and the engineering sheet (every `race_knowledge`
+field, or a line saying why not). The rule refused 21 fixtures that built a
+stop with no decision; each was given one, and none was loosened.
+
 **Still open in Phase 2:** 2.4 and 2.6-2.9 as written; `SKILL.md` is roughly
 twice 2.9's 450 lines; six evals short of 2.9's twenty; and **2.12 - the MCP
 server is registered nowhere** (no `pitcrew` entry in `~/.claude.json`, no
