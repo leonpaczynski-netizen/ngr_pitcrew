@@ -1467,21 +1467,39 @@ class PitCrewController(QObject):
         except Exception:                                    # noqa: BLE001
             log("pitcrew").warning("could not refresh the loaded plans",
                                    exc_info=True)
-        # **Not recorded as seen while a race is armed** (critic 2, pass 7).
-        # The page is the race's then and did NOT show the new plan, so
-        # marking it seen meant `_poll_plan` never showed it after the race
-        # either - the next Start armed plan B under plan A's box laps.
-        race = getattr(self, "race", None)
-        if race is not None and (getattr(race, "armed", False)
-                                 or getattr(race, "running", False)):
+        # **Not recorded as seen while a race holds the page** (critic 2,
+        # pass 7). The page did NOT show the new plan, so marking it seen
+        # meant `_poll_plan` never showed it after the race either - the next
+        # Start armed plan B under plan A's box laps.
+        if self._race_holds_the_page():
             return
         approved = self.store.get_approved_strategy(event["id"])
         self._seen_plan_id = (approved.get("id") if isinstance(approved, dict)
                               else None)
 
+    def _race_holds_the_page(self) -> bool:
+        """Whether the Race page belongs to a race rather than to the plans.
+
+        **Armed, running, or finished and not yet stopped** - one expression
+        for every guard that asks (critic 2, pass 8). Asked separately, the
+        poll skipped only a running race, the refresh held an armed one, and a
+        finished race - neither armed nor running - had plan B's box laps
+        painted over the race that ran plan A until Stop was pressed.
+        """
+        race = getattr(self, "race", None)
+        if race is None:
+            return False
+        state = getattr(race, "state", None)
+        return bool(getattr(race, "armed", False)
+                    or getattr(race, "running", False)
+                    or getattr(state, "finished", False))
+
     def _poll_plan(self) -> None:
         """Refresh only when the approved plan's id has moved."""
-        if self.race is not None and getattr(self.race, "running", False):
+        # Nothing while a race holds the page - not even the Strategy page's
+        # cards, which were rebuilt on every tick while armed (pass 8).
+        # `stop_race` refreshes once the race is gone.
+        if self._race_holds_the_page():
             return
         try:
             event = self.active_event()
@@ -1513,9 +1531,7 @@ class PitCrewController(QObject):
         # approved after the arm repainted the plan line, so "running to the
         # approved plan" sat under box laps the coordinator was not holding
         # (rule 13). Above `set_plan`, so the plan line stays the armed one.
-        race = getattr(self, "race", None)
-        if race is not None and (getattr(race, "armed", False)
-                                 or getattr(race, "running", False)):
+        if self._race_holds_the_page():
             return
         # **And what that plan actually is.** The picker only ever said
         # whether one existed; the stops, the box laps and the compounds were
@@ -4446,6 +4462,13 @@ class PitCrewController(QObject):
         approved = self.store.get_approved_strategy(event["id"])
         if not self.race_screen.use_plan():
             approved = None
+        # **The plan line is the plan this Start is about** (critic 2, passes 7
+        # and 8), painted before any refusal below: a plan approved moments
+        # ago is inside the 15 s poll, and a refusal naming plan B under plan
+        # A's box laps is two plans on one page. Only when a plan is in play -
+        # with "No plan" chosen, `set_plan(None)` would say none is approved.
+        if approved is not None:
+            self.race_screen.set_plan(approved)
         plan = approved["plan"] if approved else None
         # **Refused where the approved row lacks its execution contract.**
         # Approval stamps it now, but a row approved before that carries none:
@@ -4578,13 +4601,6 @@ class PitCrewController(QObject):
                 f"Plan refused: {self.race.refusal}", warn=True)
             self.race = None
             return False
-        # **The plan line is the plan just armed** (critic 2, pass 7). The page
-        # is refreshed by a 15 s poll, so a plan approved moments before Start
-        # was armed under the previous one's box laps. Only when a plan was
-        # armed: with "No plan" chosen, `set_plan(None)` would say none is
-        # approved, which is false.
-        if approved is not None:
-            self.race_screen.set_plan(approved)
 
         # **Declare the instrument, once, on the grid.** Silence is this
         # app's most-used output and it has never meant one thing - no plan,

@@ -341,12 +341,17 @@ did not happen.** On a race day, before anything else, run over that event's own
 **`tools/debrief.py <event>` runs the whole list, in this order** (plan row
 2.5), and every section says what it could not see:
 
-1. **His report, unprompted, before he is shown any data** — per corner, the
-   four phases, each scored 1-5, in his words (`--report FILE` prints it at the
-   top). Numbers shown first lead him; his account is primary evidence and
-   everything after it corroborates. **This asks him nothing, so spine step 3
-   still holds:** every question put to him comes after the telemetry has been
-   read, and buys only what the feed cannot carry.
+1. **His account, free and unprompted, before he is shown any data** — whatever
+   he says, in his words (`--report FILE` prints it at the top). Numbers shown
+   first lead him; his account is primary evidence and everything after it
+   corroborates. **It asks him nothing, so spine steps 3 and 4 still hold:**
+   the telemetry is read before any question, and then at most four, one at a
+   time, each buying what the feed cannot carry. *(Open for the driver: plan
+   row 2.5 asks for a per-corner grid, each phase scored 1-5, before the data
+   - on a twelve-corner circuit that is some forty prompted answers, which
+   step 4 does not allow. Until he settles it, the grid is taken only if he
+   volunteers it, or inside step 4's four questions. The phases are
+   `driver-model.md`'s: entry, mid, exit.)*
 2. **The open predictions** for this car at this circuit, off `brain/ledger/`.
    That is the loop closing; a debrief that does not is a log. What was
    predicted, what happened, and which of the two was right — including when it

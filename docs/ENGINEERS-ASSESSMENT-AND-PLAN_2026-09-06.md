@@ -2230,6 +2230,13 @@ because a plan seldom puts a fuel stop that close; "Fuel is fine - the tank
 covers the next stint." reads as reassurance where "No fuel - ..." would read
 as the fill instruction it is (one clip, inside the pack's budget); and a
 timed race's retirement is spoken unhedged before `laps_estimate_firm`.
+**The clip is declined, and the earlier pass is why.** `_fuel_instruction`
+chose "Fuel is fine" over "No fuel -" deliberately, and
+`test_a_fill_below_what_is_aboard_is_not_an_instruction` pins it: under a
+helmet a sentence that opens "No fuel" is an emergency until its second
+half lands. Re-read before editing, as the standing order says - the two
+critics were weighing different risks, and the one already paid for (a
+driver hearing "no fuel") outranks a sentence that reads as reassurance.
 
 **Storage pass 6 (critic 2 on `e640384`), one major, fixed.** An armed race
 kept its status line but not its plan line: the desk approving plan B after
@@ -2249,6 +2256,31 @@ there); and `start_race` paints the plan it arms, because a plan approved
 moments before Start is inside the 15 s poll. The picker is disabled while
 armed (its minor: it could read "No plan" over a race holding plan A). All
 six of its mutants were killed on the earlier guards.
+
+**Storage pass 8 (critic 2 on `e4d2486`): AGREED - the storage row is
+done.** A plan approved while armed or running shows after Stop, a refused
+Start paints and locks nothing, and all five mutants on the four new guards
+are killed. Its three minors had one cause - three guards each deciding for
+themselves whether a race owned the page - and are closed by one
+expression, `_race_holds_the_page` (armed, running, or finished and not yet
+stopped), read by the poll, the refresh and the seen-id: the flag no longer
+lets the next poll paint plan B over the race that ran A; Start paints the
+approved row before any refusal, so a refusal about B sits under B's line;
+and the poll no longer rebuilds the Strategy page's cards every 15 s while
+armed.
+
+**Critic 5, pass 3 (on `e4d2486`): NOT AGREED, one major, fixed.** The
+merge said step 1 "asks him nothing" and then asked for every phase of every
+corner scored 1-5 - some forty prompted answers on a twelve-corner circuit,
+before the telemetry, where spine step 4 allows four, after it. Step 1 is his
+free, unprompted account now, which does ask nothing; the plan row's grid is
+written into `SKILL.md` as open for the driver (grid before the data against
+four questions after it), taken meanwhile only if he volunteers it or
+inside step 4's four; and the phases are `driver-model.md`'s - entry, mid,
+exit - where I had written an unnamed "four". Its minor: the tool's line
+"never ... a line in a brief" settled for all three numbers what both skill
+files leave open for lap one; it now says incidents and scatter never go in
+a brief and lap one's place there is open.
 
 ### Critic pass 7 — 8 Sep 2026, five rounds on critic 6's three defects
 

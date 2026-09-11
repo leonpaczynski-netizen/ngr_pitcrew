@@ -7,10 +7,11 @@
     python tools/debrief.py 10 --walk
 
 Plan row 2.5. The order is the protocol's (`SKILL.md`, *debrief*): **his
-report first, unprompted, before he is shown any of this** - per corner, the
-four phases each scored 1-5 - because numbers shown first lead him and his
-account is primary evidence (CLAUDE.md rule 1). It asks him nothing: the
-questions come after the telemetry is read (the spine's step 3). Then the open predictions the ledger holds for this car at
+account first, free and unprompted, before he is shown any of this** -
+because numbers shown first lead him and his account is primary evidence
+(CLAUDE.md rule 1). It asks him nothing: the questions come after the
+telemetry is read, four at most (the spine's steps 3 and 4). The row's
+per-corner grid is open for the driver - see `SKILL.md`. Then the open predictions the ledger holds for this car at
 this circuit; the practice session; where a named change landed; how it was
 driven; the driver as a variable (row 2.11 - here and nowhere else); George's
 calls against what followed them; the race against its plan; the radio. Every
@@ -74,14 +75,13 @@ def _tool(name: str):
 def driver_first(report_path) -> None:
     _head("HIS REPORT FIRST — before he is shown anything below")
     if report_path is None:
-        print("  none given. Take it now, unprompted: per corner, the four "
-              "phases, each")
-        print("  scored 1-5, in his words. It is primary evidence and "
-              "everything below")
-        print("  corroborates it (CLAUDE.md rule 1). It asks him nothing - the "
-              "questions")
-        print("  come after the telemetry is read. `--report FILE` prints it "
-              "here.")
+        print("  none given. Take his account now - free, unprompted, in his "
+              "words. It is")
+        print("  primary evidence and everything below corroborates it "
+              "(CLAUDE.md rule 1).")
+        print("  It asks him nothing: any question comes after the telemetry, "
+              "four at most.")
+        print("  `--report FILE` prints it here.")
         return
     for line in Path(report_path).read_text(encoding="utf-8").splitlines():
         print(f"  {line}")
@@ -313,9 +313,13 @@ def driver_variable(store, event_id: int, sessions) -> None:
     from pitcrew.export.build import event_lap_inputs
 
     _head("THE DRIVER AS A VARIABLE — debrief only")
+    # Not "never in a brief" for all three: whether lap one's cost belongs
+    # in the pre-race brief is open (race-planner.md against row 2.11), and
+    # the tool may not settle what both skill files leave to the driver.
     print("  Described, never forecast: incidents are memoryless, so none of "
-          "this is a\n  warning, an allowance in a plan or a line in a brief. "
-          "Scatter is a state, not a loss.")
+          "this is a\n  warning, a live call or an allowance in a plan. "
+          "Incidents and scatter never go in a\n  brief; whether lap one's "
+          "cost does is open for the driver. Scatter is a state, not a loss.")
     wanted = {session["id"] for session in sessions}
     by_kind: dict[str, list] = {}
     for kind in sorted({session.get("kind") for session in sessions

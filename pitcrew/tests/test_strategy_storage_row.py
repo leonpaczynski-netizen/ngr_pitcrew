@@ -657,6 +657,36 @@ def test_start_shows_the_plan_it_arms(raced):
     assert "approved at the grid" in screen.plan_line.text()
 
 
+def test_a_finished_race_keeps_its_page_until_it_is_stopped(raced):
+    """Critic 2, pass 8: FINISHED is neither armed nor running, so the next
+    poll painted plan B's box laps over the race that ran plan A."""
+    from pitcrew.race.coordinator import RacePhase
+
+    controller, screen, store, event_id = raced
+    assert controller.start_race() is True
+    shown = screen.plan_line.text()
+    controller.race.phase = RacePhase.FINISHED          # as the flag sets it
+    controller.race.state.finished = True
+    _desk_approves_another(store, event_id)
+    controller._poll_plan()
+    controller._refresh_race_options(store.get_event(event_id))
+    assert screen.plan_line.text() == shown
+    controller.stop_race()
+    assert "desk rev B" in screen.plan_line.text()
+
+
+def test_a_refused_start_names_the_plan_on_the_line_above_it(raced):
+    """Critic 2, pass 8: the refusal was about plan B, the line still A's."""
+    controller, screen, store, event_id = raced
+    plan = dict(store.get_approved_strategy(event_id)["plan"])
+    plan["context"] = {**plan["context"], "track": "Suzuka Circuit"}
+    new_id = store.save_strategy(event_id, plan, label="for Suzuka")
+    store.approve_strategy(new_id)
+    assert controller.start_race() is False
+    assert "Suzuka" in screen.subtitle.text()
+    assert "for Suzuka" in screen.plan_line.text()
+
+
 def test_the_plan_choice_is_locked_while_a_race_is_armed(raced):
     """Critic 2, pass 7: the picker could read "No plan" over a race
     holding plan A's stints."""
