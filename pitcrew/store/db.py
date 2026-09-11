@@ -2326,6 +2326,22 @@ class Store:
             return None
         return json.loads(rows[0]["plan_json"])
 
+    def update_strategy_plan(self, strategy_id: int, plan: dict) -> None:
+        """Replace a stored plan's JSON. **The approval stamp, and only it.**
+
+        `controller.approve_stored_strategy` is the one caller: a candidate
+        written before plans carried their execution contract gets it at the
+        moment it is approved, so the row that reaches the grid is the row
+        that was certified. `stamp` only ever adds keys - an author's own
+        values are left - so this is not a second author.
+        """
+        with self._write() as conn:
+            cur = conn.execute(
+                "UPDATE strategies SET plan_json = ? WHERE id = ?",
+                (json.dumps(plan), strategy_id))
+            if cur.rowcount == 0:
+                raise ValueError(f"no strategy with id {strategy_id}")
+
     def approve_strategy(self, strategy_id: int) -> None:
         """Make this the approved plan, demoting whatever held that status."""
         with self._write() as conn:

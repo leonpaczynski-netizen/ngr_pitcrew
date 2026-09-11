@@ -107,7 +107,10 @@ def test_a_plan_that_collides_with_the_handover_s_own_keys_is_refused(
     strategy_id, problems = accept(store, event_id, bad)
 
     assert strategy_id is None
-    assert any("handover's own" in p for p in problems), problems
+    # Answered by its owner (storage row, 11 Sep): put beside the plan, not
+    # "renamed" - renaming a playbook strips George's bounds without a word.
+    assert any("it is the handover's - put it beside the plan" in p
+               for p in problems), problems
 
 
 def test_an_undriveable_plan_is_refused_in_the_certificate_s_own_words(

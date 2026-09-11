@@ -1717,6 +1717,57 @@ every plan on file — **and the storage layer is carried as its own item.**
 two locator misreads still cut the gauge series; the sector map's offset path
 is untested). **Then Phases 2–4.**
 
+### Row 1.8 — merged, and the caption that was left (11 Sep 2026)
+
+**It was already in the tree.** `master` had been fast-forwarded to the
+driver-board merge (`a9c348d`), so there was nothing to merge; the live tree
+sits on `feat/measurement-store`, which is `master` plus fifteen car-state
+commits. The board session's own critic round six (`f0af704`) had already
+replaced the countdown's *"no plan"* with `NO_STOP_TO_COME` wherever
+`has_plan` is set — the last stint of a real plan and a dropped stop both.
+What was left of the note at line ~897 was the caption: every other surface
+says *to the stop* and the countdown said *"laps to box"*. Renamed on the
+block, the spec and the settings tooltip (`612217f`), and the `has_plan`
+branch, which carried a fix and no test, is pinned. Suite before the batch:
+4425 passed, 5 skipped.
+
+### The strategy-storage row — build (11 Sep 2026)
+
+The census first, read-only off the live DB: **10 plans lack `context` and 13
+lack `expects`** (the carried figures hold); of those only **strategy 3**
+(Yas Marina, no `expects`) and **strategy 9** (Spa, neither) are approved. No
+stored plan lacks start laps, and every stored plan's start laps chain.
+
+1. **Approval stamps.** `approve_stored_strategy` runs the row through
+   `stamp` (context = the event *as it stands at approval*, which is the
+   driver saying which race), refuses a context that names another race by
+   `PlanContext.matches`' own words, certifies the stamped plan, and writes it
+   back (`Store.update_strategy_plan`, one caller) before approving — so the
+   row that reaches the grid is the row that was certified.
+2. **The grid refuses a row without its contract** and does not stamp it
+   there: a context taken off the event at the grid is the event checked
+   against itself. `execution.contract_gaps` names every gap (rule 12) and the
+   status says *"Approve a plan on the Strategy page"* — not *"approve it
+   again"*, because the loaded cards list only rows carrying a handover, so an
+   optimiser plan approved before stamping has no card to press. **This
+   refuses strategies 3 and 9 on the grid** — both are past rounds.
+3. **`_with_start_laps` keeps every stint where it was, as it was.** A
+   non-dict stint stays in place; derivation stops at the first stint whose
+   start or length cannot be read; a start of `0` is left for `certify`; no
+   `int()` on anything. So `propose_strategy` now stores `"laps": "ten"` and
+   `certify` refuses it by name — the `except ValueError` now carries only
+   `stamp`'s own messages (a context or `expects` of the wrong shape).
+4. **`certify`** refuses a non-dict stint *by position* (it used to certify
+   over the survivors — the same drop, in the gate), a non-dict plan, and
+   names each start-lap constraint on its own: not a lap number, not a whole
+   lap, before lap 1, past any race. **And the starts must chain**: an
+   overlap shares a box lap (the nine-box-calls shape), a gap leaves laps
+   that belong to no stint.
+5. **`Handover.validate` answers a reserved key by its owner**, the split
+   `propose_strategy` already made: `export` the app builds, `unhandled` and
+   `certificate` the app works out, and the handover's own three go *beside*
+   the plan — not "rename it". The `export` branch is tested on both shapes.
+
 ### Critic pass 7 — 8 Sep 2026, five rounds on critic 6's three defects
 
 **Commits `abcfe1a` → `f8230ca` → `c534de9` → `580addb` → `6d89827` →

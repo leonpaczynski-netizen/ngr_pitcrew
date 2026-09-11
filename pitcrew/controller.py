@@ -97,7 +97,7 @@ from pitcrew.race.quali_fuel import qualifying_fuel
 from pitcrew.race.quali_fuel import refusal as quali_fuel_refusal
 from pitcrew.strategy.certify import certify, certify_for_event
 from pitcrew.strategy.evidence import build_inputs
-from pitcrew.strategy.execution import stamp
+from pitcrew.strategy.execution import contract_gaps, stamp
 from pitcrew.strategy.model import StrategyImpossible, recommend
 from pitcrew.telemetry.selftest import LISTEN_S
 from pitcrew.telemetry.listener import (
@@ -4248,15 +4248,41 @@ class PitCrewController(QObject):
                     "That plan is not on file for this event.", warn=True)
             return False
 
-        certificate = certify_for_event(self.store, event["id"], row["plan"])
-        if not certificate.certified:
+        # **Stamped here, because this is the door a stored row walks through
+        # to the grid.** Both desk doors stamp now, but ten plans on file were
+        # written before they did, and `start_race` arms straight off the
+        # approved row - so strategy 9 (Spa, approved) carried neither a
+        # context nor expects, and `arm(None, actual)` returned True at any
+        # circuit. The context is the event as it stands NOW, at approval,
+        # which is the driver saying "this plan is for this race"; stamped
+        # at the grid it would be the event checked against itself.
+        # `feedback_a_guard_at_each_consumer`, one consumer further on.
+        def refuse(why: str) -> bool:
             if self.strategy is not None:
-                self.strategy.set_status(
-                    f"Not approved. {certificate.describe()}", warn=True)
-            log("strategy").warning("refused %r: %s", row["label"],
-                                    "; ".join(certificate.refusals))
+                self.strategy.set_status(f"Not approved. {why}", warn=True)
+            log("strategy").warning("refused %r: %s", row["label"], why)
             return False
 
+        if not isinstance(row["plan"], dict):
+            return refuse("The stored plan cannot be read.")
+        try:
+            plan = stamp(self.store, event["id"], row["plan"], event=event)
+        except ValueError as exc:
+            return refuse(f"{exc}.")
+        # **A context that names another race is refused here, not on the
+        # grid.** `arm` would refuse it anyway, but only after the Race
+        # screen had spent the week saying "approved" over it.
+        fits, why = context_from_stored(plan["context"], event).matches(
+            self._race_context(event))
+        if not fits:
+            return refuse(f"The {why}.")
+
+        certificate = certify_for_event(self.store, event["id"], plan)
+        if not certificate.certified:
+            return refuse(certificate.describe())
+
+        if plan != row["plan"]:
+            self.store.update_strategy_plan(strategy_id, plan)
         self.store.approve_strategy(strategy_id)
         # **The accepts are logged too, not only the refusals** - CLAUDE.md
         # rule 10. A log that only ever records refusals cannot answer "which
@@ -4307,6 +4333,24 @@ class PitCrewController(QObject):
         if not self.race_screen.use_plan():
             approved = None
         plan = approved["plan"] if approved else None
+        # **Refused where the approved row lacks its execution contract.**
+        # Approval stamps it now, but a row approved before that carries none:
+        # no context arms at any circuit, no expects compares nothing, and no
+        # start laps puts every box lap at `laps`. Not stamped here - a context
+        # taken off the event at the grid is the event checked against itself,
+        # which is the check this exists to make. Approving it again is one
+        # click with the headset off, and is the driver saying which race.
+        gaps = contract_gaps(plan) if plan is not None else []
+        if gaps:
+            self.race_screen.set_status(
+                "Plan refused: it was approved without "
+                + "; and without ".join(gaps)
+                # "a plan", not "it again": the loaded cards list only rows
+                # carrying a handover, so an optimiser plan approved before
+                # stamping has no card to press - approving any plan stamps.
+                + ". Approve a plan on the Strategy page - approval fills "
+                "those in.", warn=True)
+            return False
         try:
             inputs, _ = build_inputs(self.store, event["id"])
         except ValueError:

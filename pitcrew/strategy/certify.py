@@ -106,6 +106,23 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     warnings: list[str] = []
     unchecked: list[str] = []
 
+    from pitcrew.strategy.handover import LAP_CEILING, as_whole_number, short_value
+
+    if not isinstance(plan, dict):
+        return Certificate([f"the plan is {short_value(plan)}, not a plan"])
+    # **A stint that is not a stint is refused by position, not skipped.**
+    # `_stints` filters them out, so every check below ran over the survivors
+    # and a plan with a corrupt middle stint certified as though it had one
+    # stint fewer - the stop count, the race distance and every box lap after
+    # it all computed without it.
+    raw = plan.get("stints")
+    if isinstance(raw, list):
+        unreadable = [f"stint {index} is {short_value(stint)}, not a stint"
+                      for index, stint in enumerate(raw, 1)
+                      if not isinstance(stint, dict)]
+        if unreadable:
+            return Certificate(unreadable)
+
     stints = _stints(plan)
     if not stints:
         return Certificate(["the plan names no stints"])
@@ -116,8 +133,6 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     # one file over from where that was fixed. It fails safe (a refusal, not
     # an accept), and it told the driver a plan lacked whole lap counts when
     # it had them.
-    from pitcrew.strategy.handover import LAP_CEILING, as_whole_number
-
     laps = [as_whole_number(s.get("laps"), LAP_CEILING, minimum=0)
             for s in stints]
     if any(n is None or n <= 0 for n in laps):
@@ -129,12 +144,55 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     # this gate and George said "Box in 8.5 laps." The door reads it as a
     # count where it can; a value it could not read reaches here unchanged,
     # and this is the place that refuses.
+    #
+    # **Each refusal names the constraint it broke** (rule 12). One sentence,
+    # "needs a whole one", used to cover three: not a whole lap, before lap
+    # one, and past any race - and the author fixing a `0` was told to make
+    # it whole.
     starts = [as_whole_number(s.get("start_lap"), LAP_CEILING, minimum=1)
-              for s in stints if s.get("start_lap") is not None]
-    if any(n is None for n in starts):
-        refusals.append(
-            "every stint that names a start lap needs a whole one")
+              if s.get("start_lap") is not None else None for s in stints]
+    for index, stint in enumerate(stints, 1):
+        value = stint.get("start_lap")
+        if value is None or starts[index - 1] is not None:
+            continue
+        shown = short_value(value)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            refusals.append(f"stint {index}'s start lap is {shown}, which is "
+                            f"not a lap number")
+        elif isinstance(value, float) and not value.is_integer():
+            refusals.append(f"stint {index} starts on lap {shown}, which is "
+                            f"not a whole lap")
+        elif value < 1:
+            refusals.append(f"stint {index} starts on lap {shown}; laps count "
+                            f"from 1")
+        else:
+            refusals.append(f"stint {index} starts on lap {shown}, past any "
+                            f"race distance")
+    if refusals:
         return Certificate(refusals)
+
+    # **And the starts have to chain.** Two stints that overlap share a box
+    # lap, which is the nine-box-calls defect `_with_start_laps` exists to
+    # prevent; two with a gap between them leave laps that belong to no stint,
+    # so the box call and the fill are both sized off a stint that is not the
+    # one being driven. Both are arithmetic and neither is negotiable.
+    for index in range(1, len(stints)):
+        before, after = starts[index - 1], starts[index]
+        if before is None or after is None:
+            continue
+        ends = before + laps[index - 1] - 1
+        if after <= ends:
+            refusals.append(
+                f"stint {index + 1} starts on lap {after}, inside stint "
+                f"{index}, which runs to lap {ends}")
+        elif after > ends + 1:
+            first, last = ends + 1, after - 1
+            missing = (f"lap {first} belongs" if first == last else
+                       f"laps {first} and {last} belong" if last == first + 1
+                       else f"laps {first} to {last} belong")
+            refusals.append(
+                f"stint {index + 1} starts on lap {after} but stint {index} "
+                f"ends on lap {ends}, so {missing} to no stint")
 
     # ------------------------------------------------------------- the tank
     capacity = inputs.fuel_capacity_l

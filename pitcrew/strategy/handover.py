@@ -497,10 +497,19 @@ class Handover:
         # and a handover's is a list of prose, and a reader taking the wrong
         # one gets no warning at all.
         for key in sorted(RESERVED_KEYS & set(self.plan or ())):
-            # `export` is the APP's section, not the handover's, and the
-            # answer for it is not "rename it" - the app builds one.
-            owner = ("the app builds that section itself" if key == "export"
-                     else "it is the handover's own - rename it")
+            # **Three ownerships, so the answer is per key** - the same split
+            # `mcp.propose_strategy` makes. `export` is the APP's section.
+            # `unhandled` and `certificate` are recomputed wherever they
+            # arrive. The other three are the handover's and belong BESIDE
+            # the plan: "rename it" was the advice here, and renaming a
+            # `playbook` strips George's bounds without a word.
+            if key == "export":
+                owner = "the app builds that section itself"
+            elif key in ("unhandled", "certificate"):
+                owner = "the app works that out itself"
+            else:
+                owner = ("it is the handover's - put it beside the plan, not "
+                         "inside it")
             problems.append(
                 f"the plan carries {key!r}: {owner}, because storing both "
                 f"would silently keep one")

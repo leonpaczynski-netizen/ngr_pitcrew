@@ -277,7 +277,7 @@ def test_a_start_lap_that_is_not_a_whole_lap_is_refused(seeded):
                              ok["stints"][1]]}
     got = certify(half, inputs())
     assert not got.certified
-    assert any("whole one" in r for r in got.refusals), got.refusals
+    assert any("not a whole lap" in r for r in got.refusals), got.refusals
     assert isinstance(RaceInputs, type)
 
 

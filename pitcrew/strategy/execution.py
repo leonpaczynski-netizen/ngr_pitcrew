@@ -33,6 +33,7 @@ from __future__ import annotations
 # wrong. There were two when this module was written; there is one now.
 from pitcrew.race.coordinator import context_from_event
 from pitcrew.race.expectations import PRACTICE, Expectation
+from pitcrew.strategy.handover import LAP_CEILING, as_whole_number
 
 # The keys `stamp` owns. Named so a caller can ask whether a plan has been
 # through here without knowing what is inside them.
@@ -111,20 +112,64 @@ def _with_start_laps(stints) -> list:
     back to back and the arithmetic has one answer. An author's own value is
     kept - a plan may legitimately start at a lap other than one - and only
     the gaps are filled.
+
+    **Only where the arithmetic HAS one answer.** This used to drop a stint
+    that was not a dict and derive the rest over the survivors, and rewrite a
+    start of `0` to the running lap, and call `int()` on whatever `laps`
+    held. So a garbage stint vanished from the plan with the laps after it
+    re-numbered as if it had never been there, a start the gate should refuse
+    was quietly replaced, and `"ten"` raised `int()`'s own message out of the
+    MCP door. `whole_numbers` states the rule for this layer - what cannot be
+    read is passed through for `certify` to refuse by name - and this is now
+    the same rule: every stint stays where it was, as it was, and derivation
+    stops at the first stint whose start or length cannot be read, because
+    past it the running lap is not known.
     """
-    rows = [s for s in (stints or []) if isinstance(s, dict)]
-    if not rows:
-        return list(stints or [])
-    filled, lap = [], None
-    for stint in rows:
+    if not isinstance(stints, list):
+        return stints
+    filled, next_start = [], 1
+    for stint in stints:
+        if not isinstance(stint, dict):
+            filled.append(stint)
+            next_start = None
+            continue
         row = dict(stint)
-        if row.get("start_lap"):
-            lap = int(row["start_lap"])
+        if row.get("start_lap") is None:
+            if next_start is not None:
+                row["start_lap"] = next_start
+            start = next_start
         else:
-            row["start_lap"] = lap = 1 if lap is None else lap
+            start = as_whole_number(row["start_lap"], LAP_CEILING, minimum=1)
+        laps = as_whole_number(row.get("laps"), LAP_CEILING, minimum=1)
+        next_start = (start + laps
+                      if start is not None and laps is not None else None)
         filled.append(row)
-        lap += int(row.get("laps") or 0)
     return filled
+
+
+def contract_gaps(plan) -> list[str]:
+    """What a stored plan lacks for the race to execute it, in words.
+
+    Empty for a plan that has been through `stamp`. **Every gap is named, not
+    the first** (rule 12): a plan with no context arms at any circuit and a
+    plan with no expects arms and then compares nothing, and those are two
+    different things to have been told.
+    """
+    if not isinstance(plan, dict):
+        return ["a plan the app can read"]
+    gaps = []
+    if not _is_context(plan.get("context")):
+        gaps.append("what it was built for, so it would arm at any circuit")
+    if not _is_execution_contract(plan.get("expects")):
+        gaps.append("what it expects to execute, so no lap would be compared "
+                    "against it")
+    stints = plan.get("stints")
+    if isinstance(stints, list) and any(
+            isinstance(s, dict) and s.get("start_lap") is None
+            for s in stints):
+        gaps.append("the lap each stint starts on, so its box laps are not "
+                    "known")
+    return gaps
 
 
 def stamp(store, event_id: int, plan: dict, *, inputs=None,
