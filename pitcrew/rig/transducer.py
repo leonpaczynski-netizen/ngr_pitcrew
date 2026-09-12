@@ -49,7 +49,11 @@ PER_CHANNEL_SCALE = 0.5
 #     at -18 dBFS was felt as nothing at all while 40 Hz at the same level was
 #     strong. Synthesising below this is excursion spent for no output, and
 #     excursion is what bottoms a piston.
-#   * The high-cut is user-selectable from 40 to 160 Hz. **This rig is set to
+#   * The high-cut is user-selectable from 40 to 160 Hz, on a front-panel
+#     numeric display, with its own engage/disengage push switch. Confirmed
+#     12 Sep 2026 against the BKA-PRO Owner's Manual rev. 2-7-23 p.05/p.07:
+#     "40Hz - 160Hz -3dB User Selectable / Roll-off: -12dB/Octave".
+#     **This rig is set to
 #     160**, read off the amp's own display - the best case, and it means every
 #     band in the driver's SimHub profile fits unchanged, wheel rumble at
 #     112-152 Hz included.
