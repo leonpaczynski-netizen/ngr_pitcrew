@@ -2543,6 +2543,76 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Critic on 2.8 part 2, pass 9 (`9128418`): NOT AGREED - three majors, three
+minors, fixed.**
+- **Major: judging the refutation on the LINE put pass 7's major straight
+  back.** e10 iterates lines and a markdown row is one line of many cells, so
+  a refutation quoted inside a stamp cleared the live claim standing beside
+  it. Not hypothetical: it failed open on `07-car-profiles.md`:609 - the line
+  pass 6 named as one of the two most canonical places - and stripping that
+  line's stamps left e10 seeing nothing at all. **Both wording exemptions are
+  judged on the sentence now** (`_sentence`, bounded by `|` and `. `, the
+  boundaries the claim pattern itself refuses to cross); `_OVERRUN` moved to
+  the same unit, having had no reason to differ.
+- **Major: the proof proved nothing about the pass.** The old script reported
+  the same 9 lines for pass 8's code and pass 9's on every tree in the
+  history - evidence about the corpus, not the change - and hardcoded the
+  live tree's path, so its answer depended on what happened to be checked
+  out. `scratchpad/compare_e10.py` takes the repo and both commits as
+  arguments and runs the two versions over one corpus: **pass 10 gains
+  `07`:609 and loses `04-race-vs-qualifying.md`:258**, the Initial-Torque line
+  the axis rule now correctly rejects. One variable, two intended changes.
+- **Major: what Ludo would actually say, which is the only test that
+  matters.** `08-playbook-leon.md`'s A5 - the section opened for a push on
+  throttle - carried an unstamped **heading** and an unstamped standing rule,
+  both saying *run acceleration sensitivity LOW*, and `08`:144 and `08`:152
+  asserted opposite things about whether that direction survived 1.71. Rule
+  13 inside one document, with the unstamped half being the line a reader
+  scans. The call it produced, *"accel sensitivity down two clicks"*, is the
+  step the axis register records as REFUTED. Heading and rule stamped, and the
+  contradiction resolved by separating A5's two claims: the **mechanism** (a
+  near-spool axle breaks away as a unit) survived 1.71; the **cure** did not.
+- **e11 added, because e10 is not shaped to catch it.** e10 asks whether
+  lowering the axis is offered as the CURE for a push; a standing rule names
+  no symptom, so no cure-shaped check can see one. e11 flags a "run the
+  acceleration axis low" instruction on a line that names a rotation symptom,
+  which caught `01`:247 and `05`:408 and `05`:730 - all three stating that a
+  locked diff pushes you wide. Stamped. **`05`'s traction levers are
+  deliberately out of reach**: "more lock produces more wheelspin, not more
+  drive" is a different claim and was not refuted, and stamping it CONTESTED
+  would be the false record this file exists to prevent.
+- **Minors: 4 of 15 mutants were alive**, including this pass's own stated
+  change. The 200-character window is pinned by a rationale that genuinely
+  needs it; `_ON_POWER` loses "push" and "understeer", which are the two
+  commonest symptoms there are and whose presence killed the overrun
+  exemption for every ordinary wording of it; `\block\b` so the "lock" inside
+  "unlocks" is not read as the axis being lowered; `brain/ledger/` into e10's
+  scope, **and said plainly that it flags nothing today and that a mutant
+  removing it survives** - a door closed on the way in, not a defect caught.
+- **Found by my own mutation run, and the same fault the critic keeps
+  finding:** the axis rule - the whole of what passes 8, 9 and 10 have argued
+  about - was pinned by no probe at all, because every exclusion in the probe
+  list is decided by the refutation or the overrun rule. Three probes added.
+- **Proof:** 7 of 8 mutants killed, the eighth being the ledger scope.
+
+**Critic on 2.7, pass 6 (`1a1bdcd`): AGREED - row 2.7 is done.** Every one of
+pass 5's findings was attacked at runtime and none reproduced: the switch now
+carries the link, the BoP change and the limit alongside the boxed
+comparison; a second switch repeats none of it, the round being spent; and
+`_switch_to_round` appends rather than overwrites. Four minors remain, all
+test gaps rather than wrong behaviour, and all four are pinned in the same
+batch as row 2.8's pass 10:
+- **The unconditional `_calendar_news` assignment is load-bearing and was
+  unpinned.** Moving it inside `if said:` passed every test - and that one
+  line is the whole of what stops one event's news being prefixed to the next
+  event's footer, which is CLAUDE.md rule 11 exactly.
+- **Neither warn flag was pinned**, on the switch footer or on the
+  adopted-link footer - the second being the precise mistake my own first
+  attempt made, so a demoted warning could return unnoticed.
+- **The states-none early return's discard was unpinned**, which would have
+  brought pass 5's staleness back for the rounds the plain league series
+  produces, which is most of them.
+
 **Critic on 2.7, pass 5 (`4cf5dbc`): NOT AGREED - one major, three minors,
 fixed.** The carry itself was verified sound - the critic's corrected mutants
 killed it in both directions - but everything it produces was being destroyed

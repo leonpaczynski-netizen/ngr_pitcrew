@@ -244,7 +244,7 @@ Firm platform support, sufficient rear downforce, stable brake-side differential
 | Stop-start / heavy braking | Monza, parts of Fuji | Brake stability first, kerb compliance, longer 2nd, efficient aero, traction off slow exits |
 | Bumpy / elevation | Bathurst, Sainte-Croix B | Mechanical compliance, rear decel stability, avoid over-stiff bars/rebound, predictable weight transfer |
 | Technical medium speed | Fuji final sector, Brands Hatch | Strong front bite, controlled mid-corner rotation, careful accel-LSD tuning, front tyre management |
-| Low top-speed / short straights | Laguna Seca style | Shorter useful ratio spread, prioritise mechanical grip and rotation over theoretical maximum speed. **Keep accel LSD low — a sequence of on-throttle corners punishes lock far more than one big traction exit rewards it.** |
+| Low top-speed / short straights | Laguna Seca style | Shorter useful ratio spread, prioritise mechanical grip and rotation over theoretical maximum speed. **Keep accel LSD low — a sequence of on-throttle corners punishes lock far more than one big traction exit rewards it.** ⚠️ *[v1.70. The "lock punishes you through linked corners" half is CONTESTED on v1.71 — the one in-house test of lowering accel for a power-on push was refuted (Huracán, Daytona, s145); see `02` §10.5. The traction half stands.]* |
 
 ---
 

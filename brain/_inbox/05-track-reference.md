@@ -405,7 +405,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **One very heavy, three medium.** The **hairpin at the end of the back straight** is the only genuine big stop. **T1** is a fast, light, downhill turn-in. The rest are medium, and several are on descents. **Brake bias: one to two clicks forward** — the downhill sections and the crest-unloading argue for it.
 
-**Traction-limited exits.** **Primarily the hairpin exit**, which feeds the run back to the start of the lap. Most other exits are loaded and fast. **LSD acceleration sensitivity: medium-low, 15–22 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Autopolis' rhythm sections punish a locked diff — you need the car to change direction repeatedly and a high acceleration setting will push you wide at every linked exit. Take the small hairpin loss.
+**Traction-limited exits.** **Primarily the hairpin exit**, which feeds the run back to the start of the lap. Most other exits are loaded and fast. **LSD acceleration sensitivity: medium-low, 15–22 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Autopolis' rhythm sections punish a locked diff — you need the car to change direction repeatedly and a high acceleration setting will push you wide at every linked exit. Take the small hairpin loss. ⚠️ *[The "a locked diff pushes you wide" half is CONTESTED on v1.71 — the one in-house test of lowering accel for a power-on push was refuted (Huracán, Daytona, s145); see `02` §10.5. The traction half stands.]*
 
 **Gearing.** **Gear for the back straight**, with 6th topping out at the hairpin board. Critically, **3rd and 4th must be spaced so the rhythm section can be driven in a single gear per sequence.** Autopolis is a track where drivers lose more time to unnecessary shifting than to ratio choice.
 
@@ -727,7 +727,7 @@ For calibration on what leagues and Sport Mode actually run: a recent Gr.3 daily
 
 **Braking zones.** **One heavy (T1), one medium (T4/5), one light (T9).** That is it — the fewest genuine braking events of any road circuit here. **Brake bias: neutral to one click forward.** With so little braking, this is a low-priority setting; set it for T1 and forget it.
 
-**Traction-limited exits.** **Very few.** T4/5 exit and T9 exit onto the pit straight. Most exits are fast and loaded. **LSD acceleration sensitivity: low-to-medium, 15–22 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Too much lock will push you wide at every sweeper exit and shred the front-left.
+**Traction-limited exits.** **Very few.** T4/5 exit and T9 exit onto the pit straight. Most exits are fast and loaded. **LSD acceleration sensitivity: low-to-medium, 15–22 ⚠️ *[v1.70 5–60 scale: a direction, not a number - see the banner]*.** Too much lock will push you wide at every sweeper exit and shred the front-left. ⚠️ *[The "a locked diff pushes you wide" half is CONTESTED on v1.71 — the one in-house test of lowering accel for a power-on push was refuted (Huracán, Daytona, s145); see `02` §10.5. The traction half stands.]*
 
 **Gearing.** **Gear for the sweepers, not for top speed.** 5th and 6th should be placed so that **T2, T3 and T8 are each taken in a single gear at a comfortable rpm** — this is more important than the final drive because you spend most of the lap at part-throttle through fast corners. A car that needs to shift mid-Sweeper is a slow car.
 

@@ -133,7 +133,7 @@ The catch: **braking sensitivity that is too high makes the car refuse to turn i
 
 **Validated in practice, and now twice.** The Laguna Huracán ran **LSD braking 26** (up from the MR baseline of 20) with **brake balance at 0**, against a heavy downhill stop taken while turning in, on ABS Weak, in a high-yaw-inertia car — no entry-stability complaint across the test programme. The **RSR at Monza** ran **braking 24 at bias 0** across the three heaviest stops in Gr.3, also without complaint. **The stack works — the rear can be stabilised without moving bias forward.** ⚠️ *Both v1.70, and 1.71 adjusted ABS cornering brake behaviour, which is the phase this solves for. Re-establish early — it is one of this document's central claims.*
 
-### A5. A heavily locked diff breaks away as a unit — and it also pushes. Run acceleration sensitivity LOW.
+### A5. A heavily locked diff breaks away as a unit — and it also pushes. Run acceleration sensitivity LOW. ⚠️ *[v1.70, and the "run it LOW" half is CONTESTED on v1.71: the one in-house test of lowering it for a push was refuted (Huracán, Daytona, s145; `02` §10.5). Read the caveat below before acting on this heading.]*
 
 **[SINGLE SOURCE — verified as such, see caveat]** One well-regarded GT7 guide describes the breakaway behaviour directly:
 
@@ -141,9 +141,11 @@ The catch: **braking sensitivity that is too high makes the car refuse to turn i
 
 > **⚠️ Caveat from verification.** Only one source states this, and no other GT7 LSD reference corroborates it. More importantly, **this is not a GT7 anomaly** — a heavily locked diff approaches a spool, and a spool axle breaks away as a unit in every sim and in reality. Treat it as ordinary diff physics, which happens to matter a lot to you because progressive exit traction is a non-negotiable.
 >
-> **⭐ And because it is ordinary physics rather than a GT7 quirk, it is the part of A5 most likely to have survived 1.71 untouched.** The *values* below are the exposed part.
+> **⭐ And because it is ordinary physics rather than a GT7 quirk, the BREAKAWAY half of A5 is the part most likely to have survived 1.71 untouched** — a near-spool axle letting go as a unit is not a GT7 behaviour and no update repeals it.
+>
+> **That is not a licence for the rest of A5, and this sentence used to read as though it were.** Two different claims share A5's words: the *mechanism* (a locked diff breaks away together) and the *cure* (so lower accel when it pushes). Only the mechanism carries. The cure is the third failure mode at the end of this section, and on v1.71 the one in-house test of it was **refuted** — Huracán, Daytona, s145; `02` §10.5 is CONTESTED. The *values* below are exposed too, but they are the smaller half.
 
-**Rule for you: run acceleration sensitivity LOW and prove you need more.** Modern MR baseline is **15**; FR is **25**. Your Fuji RSR change of accel **25 → 20** was moving in the correct direction and matched to the correct symptom.
+**Rule for you: run acceleration sensitivity LOW and prove you need more.** Modern MR baseline is **15**; FR is **25**. Your Fuji RSR change of accel **25 → 20** was moving in the correct direction and matched to the correct symptom. ⚠️ *[v1.70, and CONTESTED on v1.71 — the DIRECTION is the refuted part here, not only the numbers: lowering it for a power-on push gave less rotation, not more (s145; `02` §10.5). "The correct direction" is the v1.70 reading, kept for the record.]*
 
 **Diagnosis before adjustment** — the GT7-specific test:
 
