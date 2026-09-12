@@ -144,12 +144,82 @@ measurement behind it does not yet apply to the car.
 This is the finding that most changes the plan, and it means the re-placement
 may be a smaller job than expected.
 
-- **Frequency JND for touch runs 3-50%**, and masking in touch is channel-bound
-  rather than narrowband. On that axis `driveline` (50 Hz), `impact` (52-60) and
-  `chassis_load` (56-66) are within 20% of each other: **they are one cue.** No
-  amount of re-placing inside 25-160 Hz separates them.
-- **Rhythm identification runs above 90%.** Separation has to be carried on the
-  ENVELOPE - onset, gap, repetition - not the carrier.
+**The measured position is stronger than "frequency is a weak axis". It is that
+frequency does not separate simultaneous cues at all.**
+
+- **The Pacinian channel is ONE critical band, ~65-400 Hz wide** - a single
+  power-integrating filter, not a filter bank (Makous, Friedman & Vierck 1995,
+  *J Neurosci* 15(4):2808). **Everything this rig plays above 65 Hz is summed
+  into one number before it is perceived.**
+- **Superposed components fuse into one percept**, dominated by the LOWEST
+  frequency - which carries about twice the perceptual weight of the higher
+  (Hwang, Seo & Choi 2017, *PLoS ONE* 12(1):e0169570).
+- **Removing a whole high-frequency component from a complex vibration goes
+  unnoticed about half the time** - 44-56% correct against 33% chance, versus
+  88-90% for removing the lowest (Le et al. 2023).
+- **One actuator playing two frequencies is indistinguishable from two
+  actuators playing one each** - d' below 1 in every condition tested
+  (Martinez, Tan & Cholewiak 2022, *Front Virtual Real* 3:894575).
+- **Channel independence does not save us.** It holds near threshold but
+  masking is bidirectional by 20-30 dB SL, and temporal masking is identical in
+  both channels.
+
+**The ceiling, measured:** the best information transfer ever achieved through
+a single vibrotactile actuator is **3.06 bits - about 8 distinguishable
+messages - presented ONE AT A TIME, at 34-39% whole-message accuracy** (Yoo,
+Regimbal & Cooperstock 2021, IEEE WHC). There is no published result close to
+that for seven concurrent cues. **This app asks for more than the literature
+says one actuator can carry.**
+
+**What does work:**
+
+- **Rhythm / pulse count: 90-95%+ identification**, the strongest dimension in
+  every study. Separation must be carried on the ENVELOPE - onset, gap,
+  repetition - not the carrier.
+- **At most TWO levels of any amplitude or roughness dimension.** Three levels
+  scored 57-59%; two scored 82.4% *and transmitted more information despite
+  encoding less* (Brown, Brewster & Purchase 2006).
+- **Body site is the best dimension of all (98.8-99.8%)** - but it needs a
+  second transducer somewhere else on the rig. That is the one change that buys
+  genuine concurrency, and no amount of tuning substitutes for it.
+
+**And the failure mode to fear is not silence.** At short separations two cues
+integrate into a THIRD, WRONG percept that the driver reports confidently
+(Evans & Craig 1986). A cue that is quietly replaced by a plausible wrong one
+is far worse in a race than one that simply drops out.
+
+### Two findings that bear directly on `AM_RANGE_HZ`
+
+The app carries severity on amplitude modulation at **5-16 Hz**. Both halves of
+that choice are now questionable.
+
+- **Peak sensitivity to modulation is at 40 Hz, in a 30-60 Hz band**
+  (Weisenberger 1986, *JASA* 80(6):1707 - the tactile temporal modulation
+  transfer function is BAND-pass, not low-pass). The app modulates at 5-16 Hz,
+  which is below the band the skin resolves modulation best in. There may be
+  real headroom in moving the AM rate up.
+- **Perceived roughness FALLS as modulation rate rises from 20 to 50 Hz** -
+  the OPPOSITE of the audio domain, and the authors explicitly rejected their
+  own hypothesis on finding it (Brown, PhD thesis, Glasgow: ordering was
+  sine < mod50 < mod40 < mod30/mod20). **Any severity mapping that assumes
+  "faster modulation = more urgent" is borrowing an audio intuition that does
+  not hold for touch.** Worth testing directly before the next redesign, since
+  the app's whole severity axis rests on it.
+
+Also relevant to how fine the severity steps can be: the **intensity JND is
+10-34%, i.e. 0.8-2.5 dB**, depending on sensation level and training
+(Gescheider et al. 1990/1996; Morioka & Griffin 2000; Forta et al. 2011).
+Severity steps closer together than about 1 dB are not distinguishable, and
+`min_force` floors interact with this directly.
+
+### One finding that supports the remount
+
+**Above 10 Hz the seated body is most sensitive to VERTICAL vibration**,
+significantly so at every frequency from 10 to 315 Hz (Morioka & Griffin 2006,
+*JSV* 298:755, 36 subjects, 23 frequencies). Below 3.15 Hz vertical is the
+LEAST sensitive axis. The whole band this rig works in sits in the region where
+the vertical axis wins - which is an independent argument for the vertical
+mount, separate from Guitammer's own recommendation.
 
 The app already has one worked example of this and it was arrived at by
 accident: the sausage-kerb strike was 100% masked by the ripple strip's edge
