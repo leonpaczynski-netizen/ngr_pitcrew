@@ -1035,6 +1035,46 @@ def test_e11_sees_the_standing_rule_and_not_the_traction_one():
         "Run acceleration sensitivity LOW, and it pushes. [CONTESTED on v1.71]")
 
 
+def _terminates(statement) -> bool:
+    """Does this statement end its scope outright?
+
+    **The guard's body must END in one** (row 2.10 pass 6 review), not merely
+    contain one somewhere. Walking the whole `If` for any `return` or `raise`
+    blessed four shapes that all leave the tool writing without the flag: a
+    terminator behind a further condition, one inside a nested `def` that is
+    never called, one caught and swallowed by a `try`, and - worst - one in
+    the guard's own `else:`, which returns when `--apply` IS set and falls
+    through to the write when it is not. An inverted guard reading as a guard.
+
+    Checked against every negated guard on disk: seven of the eight end in
+    `return`, and the eighth never relied on this rule - its writes sit inside
+    `if args.apply:` and are caught by the positive shape.
+    """
+    if isinstance(statement, (ast.Return, ast.Raise)):
+        return True
+    # **A block terminates when every way out of it does** (pass 7 review).
+    # Without this, `try: return 0 finally: print(...)` was reported as an
+    # unguarded write - correct code, and the message said something untrue
+    # about the tool. Loops are deliberately left out: a `for` over a possibly
+    # empty iterable cannot be shown to terminate.
+    if isinstance(statement, ast.Try):
+        return (bool(statement.body) and _terminates(statement.body[-1])
+                and all(handler.body and _terminates(handler.body[-1])
+                        for handler in statement.handlers))
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        return bool(statement.body) and _terminates(statement.body[-1])
+    if isinstance(statement, ast.If):
+        return (bool(statement.body) and _terminates(statement.body[-1])
+                and bool(statement.orelse) and _terminates(statement.orelse[-1]))
+    # **The dotted form only.** A local `def exit(message): print(message)`
+    # called as the guard's last statement is not a terminator, and matching
+    # on the last segment of the name accepted it.
+    return (isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and _render(statement.value.func) in ("sys.exit", "os._exit",
+                                                  "os.abort"))
+
+
 def _apply_guard_problems(path) -> dict[str, str]:
     """Writes in an `--apply` tool that are not reached only under the flag.
 
@@ -1094,9 +1134,8 @@ def _apply_guard_problems(path) -> dict[str, str]:
                       scope)
                 visit(statement.orelse, guarded or (mentions and negated),
                       scope)
-                if (mentions and negated
-                        and any(isinstance(step, (ast.Return, ast.Raise))
-                                for step in ast.walk(statement))):
+                if (mentions and negated and statement.body
+                        and _terminates(statement.body[-1])):
                     guarded = True          # everything after it is covered
             elif isinstance(statement, compound):
                 for field in ("test", "iter", "items"):
@@ -1397,6 +1436,22 @@ def _module_writers() -> dict[str, set[str]]:
         # defined inside a `try:`, or as a method on an ordinary class, was
         # invisible - and a class method that writes is a perfectly normal way
         # for one of these modules to grow.
+        # Which class owns each WRITING method, so one imported through its
+        # class can be followed. **Resolved per node, not by name** (pass 7
+        # review): a dict keyed on the bare method name recorded whichever
+        # class was walked last, so two classes with a method of the same name
+        # both hid the writer and accused the reader - one line producing a
+        # false negative and a false positive at once.
+        parent = {child: node for node in ast.walk(tree)
+                  for child in ast.iter_child_nodes(node)}
+
+        def owning_class(node) -> str | None:
+            step = parent.get(node)
+            while step is not None:
+                if isinstance(step, ast.ClassDef):
+                    return step.name
+                step = parent.get(step)
+            return None
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -1404,8 +1459,11 @@ def _module_writers() -> dict[str, set[str]]:
             plain = _without_docstrings(source, ast.parse(source))
             if _DML.search(plain) or _writes_in(node, handles, set()):
                 entry = found.setdefault(node.name, {"modules": set(),
-                                                     "params": set()})
+                                                     "params": set(),
+                                                     "owners": set()})
                 entry["modules"].add(dotted)
+                if (owner := owning_class(node)) is not None:
+                    entry["owners"].add(owner)
                 # **What the callee actually declares** (pass 5 review): the
                 # `remember=False` exemption was honoured on spelling alone,
                 # so a call could silence the check with a keyword the callee
@@ -1435,6 +1493,13 @@ def _imported_writers(tree) -> set[str]:
                 homes = _MODULE_WRITERS.get(alias.name, {}).get("modules", set())
                 if node.module in homes:
                     names.add(alias.asname or alias.name)
+                # **A writer reached through the class that owns it** (pass 6
+                # review): `from X import Filer`, then `Filer.file_it(...)`.
+                # The derivation saw the method; the lookup did not.
+                for writer, entry in _MODULE_WRITERS.items():
+                    if (node.module in entry["modules"]
+                            and alias.name in entry.get("owners", set())):
+                        names.add(writer)
                 from_module(f"{node.module}.{alias.name}")
         elif isinstance(node, ast.Import):
             for alias in node.names:
