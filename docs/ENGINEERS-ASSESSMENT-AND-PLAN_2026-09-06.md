@@ -2662,6 +2662,220 @@ states rather than one.
   defect's obituary. The rule is: **the evals may not contradict a tool that is
   behaving; a tool that is not behaving is reported whatever they say.**
 
+**Row 3.2, 12 Sep: the board reader handed the operator the one picture that
+cannot be read, and I nearly labelled a roster off it.** `read_replay_board`
+clusters name strips by Hamming distance and leaves the naming to a person -
+*"the operator labels each cluster once by looking at it"*. What it wrote to
+disk for them to look at was `group["bits"]`: the 64x16 normalisation, which
+exists so a crop a pixel wider does not read as a different driver. **The name
+column is 142x24 on the canvas.** Squashed to 16 px tall the strokes that
+separate `Seeni` from `Beeni` are gone before the PNG is ever written.
+- **What I was about to do with it.** Session 159 came back as 8 clusters. I
+  upscaled the exemplars 3x, then 8x, then inverted them, and read off
+  provisional names - "Graebs", "Jonas" - against the 50-name hub list, with
+  two clusters still unresolved and four that are plainly noise. That is
+  reading tea leaves and calling it a measurement, against a list short enough
+  that anything vaguely letter-shaped finds a match. The tool refuses to guess
+  at a name at every other step - `UNREADABLE` exists precisely so an
+  illegible cluster does not get one - and I was about to supply the guess by
+  hand at the only step it delegates.
+- **The fix is that the crop was always there and was thrown away.** The native
+  ink crop is computed on the way to the normalisation and discarded one line
+  later. It is now carried beside the bits, and each cluster writes
+  `name-<session>-<n>-raw.png`: its three clearest sightings - ordered by
+  distance from the cluster's own exemplar - stacked, dark-on-light, 6x
+  nearest-neighbour. Three rather than one because a single crop can have a
+  marshal's post through the middle of it and the next two will not have it in
+  the same place. No interpolation, so no stroke appears that GT7 did not draw.
+- **"Pinned, both halves" was written before it was true, and the critic broke
+  seven of the pins.** The first round of tests exercised the new functions as
+  pure functions and never as WIRED: reverting the one line in the reading
+  loop that prunes the rows passed the entire suite. `test_the_roster_points_
+  at_the_readable_png` was a prose pin over `main`'s source text and passed
+  with `_legible` never called at all. And my own first banner test put him at
+  the TOP of the board, where the banner is never adjacent - it proved nothing
+  and passed with the fix ripped out.
+  - The reading loop is now `read_frame()`, extracted from `main` **so that it
+    can be driven by a test**, and the tests build a canvas the real
+    `flag_rows` finds rows in. Seven mutations, each the defect named: the
+    pruning disconnected, one sample instead of three, the render left
+    light-on-dark, the fill ceiling back at 0.60, the step back at 120, the
+    brightness margin removed, the merge pass removed. **All seven now fail a
+    test; all seven passed before.**
+**And the readable crop immediately showed the defect it was hiding: the tool
+named a car that was never in the race, with his own name.** Sardegna session
+159 is a THREE-car rehearsal - `Beeni` P1, `J.Jonas` P2, `K.Graebs` P3 - and the
+reader came back with eight clusters. Cluster 2, 27 sightings, reads `...eeni`.
+- **`flag_rows` cannot tell a flag from a place in the running order.** The
+  fastest-lap banner at the foot of the board carries a country flag and a
+  driver's name in the same font and the same column, so it enters the row
+  grid as a driver row. At 360 s and 400 s he was P3 - last - and the row
+  "behind" him was the banner. **The banner names whoever holds the fastest
+  lap, which was him.** With `--apply` that writes `Beeni` onto 27 of his own
+  traffic contacts as the rival behind him.
+- **This is the failure the tool was written to prevent, arriving through the
+  one door it left open.** `UNREADABLE` exists so an illegible cluster never
+  gets a name; the name join is bounded by the sampling interval so a name is
+  never carried across a pass. Both assume the row was a car. Nothing
+  downstream can tell that this one was not - it is a real driver's name, in
+  the right font, at the right place, on a car that does not exist.
+- **Two rules, both measured over 240 frames of that race, neither reading a
+  digit:**
+
+  | | measured |
+  |---|---|
+  | step between rows on the board | 37-72 px (n=122) |
+  | step to the banner, **three-car board** | 259-291 px (n=54) |
+  | step to the banner, **full board** (s142) | **60 px** |
+  | ink fill of a rival's name | 0.126-0.422 (n=122) |
+  | ink fill of his own white row read as a rival | 0.906-0.918 (n=61) |
+
+  **That third row arrived last and demolished the fix.** I measured the
+  banner's separation on a THREE-CAR board, where it sits 259-291 px below the
+  last row because there is nothing between them, and built the guard out of
+  that number. On a full board it sits **sixty** pixels below the last driver -
+  inside the 66-67 px a gap readout already occupies - so no step threshold
+  separates them at any value, and `MAX_ROW_STEP` would have let the banner
+  through on every league race there is. The measurement was real and the
+  generalisation from it was not: one race, and the one race whose shape made
+  the answer look easy.
+  - **What holds in both layouts is position, not spacing.** The fastest-lap
+    banner is the last thing on the board wearing a flag, and nothing with a
+    flag is drawn below it, so the bottom-most flag is never read as the car
+    behind him. That costs the genuinely last car on the early laps before a
+    fastest lap exists and the banner is absent - a contact dropped, never one
+    invented, which is the only direction this may be wrong in. The step rule
+    stays for the far-separated case and for scenery.
+
+  `board_rows` keeps the run of flags around his own row and drops panels
+  beyond `MAX_ROW_STEP`. And a name is strokes, not a filled rectangle:
+  `NAME_FILL` rejects a crop outside 0.05-0.50, which is what was arriving as
+  the four one- and two-sighting clusters - his white-backed row read with the
+  RIVAL polarity, so the background became the ink.
+  - **Both constants were first set wrong, in the same direction, by the same
+    withdrawn reasoning** - *"err wide, a split is invisible"*. `MAX_ROW_STEP`
+    at 120 sits UNDER the 136 px a doubled gap readout makes when his own flag
+    is missed, so it would split the board through his own row; it is 150.
+    `NAME_FILL`'s ceiling at 0.60 sits ABOVE the 0.595 scenery floor measured
+    in the same sweep - five thousandths from admitting the exact thing the
+    constant exists to reject; it is 0.50, the middle of the 0.422-0.595 gap.
+    Neither error was visible while the justification for them was a sentence
+    the same file withdraws forty lines later.
+  - **The refusals are counted and printed now**, by reason. CLAUDE.md 4.10 is
+    the tyre-gauge ratchet: a band a few thousandths wrong refuses everything
+    for a whole session and is invisible while it does, because only the
+    accepts were ever reported.
+- **Ink fill does NOT separate the banner, and must not be used to try.** The
+  banner filled 0.162-0.267 against a rival's 0.126-0.422 - overlapping,
+  necessarily, because the banner *is* a name in the same font. Only the
+  geometry separates it.
+- **The live pit wall does not have this defect**, and the contrast is the
+  finding. `telemetry/board._ladder` takes *"the longest run of rows at one
+  pitch, allowing two equal wider steps"* and caps a wide step at 2.2x the
+  pitch - about 88 px - so a 288 px jump breaks the run and the banner is
+  never a rung. Verified independently by the critic, running `_ladder`
+  directly on 8 rungs plus a 288 px banner step. **With one thing to say
+  alongside it:** `MIN_LADDER_ROWS = 5`, so on a three-car board the live wall
+  produces nothing at all. It is SILENT on the Sardegna case, not correct on
+  it - a distinction worth keeping, because "the live path is fine" would
+  otherwise be read as cover it has not earned.
+- The careful implementation was built for the thing that talks during a race;
+  the offline tool kept the naive one, and **the offline tool is what feeds the
+  briefing**: `traffic.rival` -> `analysis/rivals.py tendencies()` ->
+  `carry_into_knowledge()` -> `race_knowledge.rivals_json` -> the event
+  briefing the engineer reads before the green. So the concrete wrong output,
+  had `--apply` run on 159, is a line in his own round briefing reading
+  **"Beeni raced him for 27 laps, mostly behind"**. Nothing reads
+  `traffic.rival` on the live path, so no wrong call in his ear - the damage
+  is to the document the calls are planned from.
+- **The stored archive is CLEAR, and it was checked rather than assumed.**
+  Sessions 88 and 112 were named by the unfixed tool, and session 88 has no
+  `video_path` so it can never be re-read. It did not need to be. The banner
+  is only ever adjacent when he is the BOTTOM row of the board, and it is
+  always read as `behind`, because it sits below the last row - so a
+  contaminated row has a fingerprint that needs no video:
+
+  **it carries the name of the race's fastest-lap holder, on the `behind`
+  side, on a lap he spent on the bottom row.** The hub records who set the
+  fastest lap.
+
+  - **Session 112:** 889 traffic rows, **499 named**. He ran P4-P6 throughout,
+    in a field of at least nine. Never the bottom row, so never exposed.
+  - **Session 88:** 626 rows, **334 named**. One lap of twenty at the bottom
+    row (lap 12, P8), and three `behind` contacts on it, all named `Chook`.
+    The hub's Rd4 classification for his race - the one holding all nine names
+    the reader found, him P5 - gives the fastest lap to **`CruisingChaos`**,
+    who appears in that session only as `ahead`, four times, and so cannot be
+    a banner read at all. `Chook` finished **P8** in that same race and was
+    genuinely the car behind him.
+  - **I first wrote 379 and 479 here. Both were wrong** - read off a
+    `GROUP BY` by eye instead of counted, which is the habit
+    `quote-a-count-from-its-own-sweep` already names. The figures above are
+    `COUNT(*)`.
+
+  So the defect reached exactly one session - 159, which was never applied -
+  and was caught before a row was written. That is the outcome the roster step
+  exists for, and it only worked because the crop had been made readable
+  first: on the old exemplar this cluster was the unreadable `...eeni` I was
+  about to label from a 50-name list.
+- **Sessions 88 and 112 are the only two ever labelled this way** - `traffic`
+  has rows for those and no others. I wrote "the four sessions (112, 127)",
+  which is wrong three ways: it says four and lists two, **session 127 has no
+  traffic rows at all**, and session 88 - the subject of the bullet above it -
+  is the one actually in the category and was left out. The module docstring's
+  "for four sessions" carried the same uncounted number and is corrected.
+  Nothing says those names are wrong; it says the evidence they were labelled
+  from was thinner than the tool had.
+
+**OPEN, and bigger than the banner if it holds: 91 of session 88's 334 names
+were written on laps he may not have been on the board for.** The critic
+found them and I confirmed the count twice:
+
+    SELECT COUNT(*) FROM traffic t JOIN laps l ON l.id = t.lap_id
+     WHERE t.rival IS NOT NULL AND l.position > 8;        -- 91
+
+They sit on laps where `laps.position` is 10 or 11, split 52 `ahead` and 39
+`behind`. If GT7 draws only the top eight, his white-backed row was not on
+screen, `own_row` picked a row that was not his, and the names beside it are
+not the cars beside him - 27% of that session, on the one capture that no
+longer exists to re-read.
+
+- **The premise is `reference-gt7-board-truncation`, my own memory file:**
+  *"eight rows, positions 1-8... a driver outside the top eight is not on
+  screen at all,"* measured on the Spa race and confirmed by the driver.
+- **RESOLVED, and the premise is wrong.** The driver handed over a third
+  capture while this was open - Daytona session 143's race, and with it
+  session 142 from the same lobby twenty minutes earlier, where he ran **P10
+  with a video**. That frame reads:
+
+      1 TommyTbone   2 Rocky   3 K.Graebs   8 PUNISHED
+      9 Greenmachine 070   **10 Beeni**   11 Corn_flake   12 Magical daddy
+
+  He is TENTH, on screen, with two cars drawn below him, in a full league
+  lobby. The board keeps the top three and then a window around his own row.
+  So "positions 1-8" was an over-reading of "about eight rows"; **all 91
+  contacts stand, and nothing is retracted.** The memory file is corrected.
+- **A note on the suite, because it failed twice and neither was mine.**
+  `test_e12_every_tool_is_named_or_excluded_by_the_mechanic` failed in two
+  consecutive full runs at the "tools with no line and no exclusion" assert,
+  and passed alone and in its own file both times. **Another Claude session is
+  working in this tree** - `tools/rig_knock_curve.py`,
+  `tools/haptics_bench.py`, `pitcrew/tests/test_haptics_bench_mode.py` and
+  `docs/RIG-SWEEP_2026-09-12.md` all appeared during this batch and none is
+  mine. e12 globs `tools/*.py` against `mechanic.md`, so it reads a tree that
+  is moving: the other session added the tool and its `mechanic.md` line a
+  little apart, and both sweeps went past in between. All 54 tools are
+  accounted for now. CLAUDE.md 7 already says a test that fails in a group and
+  passes alone is about shared state; **a concurrent editor belongs on that
+  list**, and it is why this commit stages its files by name rather than
+  `git add -A`.
+- **And the near miss is the point.** Session 88's capture is deleted. Had I
+  taken the review's conclusion on my own wrong memory and quarantined those
+  rows, 27% of the only Round 4 record would have gone, with nothing left to
+  restore it from. The rule that saved it is the ordinary one: the premise was
+  a claim in a file, not a measurement in front of me, and one frame settled
+  it.
+
 **Row 2.9, final pass: an eval outlived the defect it described, and my own
 commit is what orphaned it.** Eval 17 told Ludo that `build_track_map` *"cannot
 honestly be run at all"* because it updates `corners_json` and never `source`.
@@ -2673,10 +2887,12 @@ opposite things about one file. **That is this row's whole subject, one
 artefact further along**: the fix reached the code and the prose and left the
 copy in the test behind.
 - **The evals were the one artefact in the skill with nothing holding them to
-  the tree.** e12 now asserts that no eval still claims the defect, keyed on
+  the tree.** e12 now asserts that no eval still claims the defect, ~~keyed on
   the same `UPDATE corner_models SET` parse that retires the corner refusal -
   so the day the code changes, the eval that describes it fails too. Pinned and
-  mutation-checked.
+  mutation-checked.~~ **STRUCK — it was keyed on nothing, and "mutation-checked"
+  covered one arm of two.** The correction is the entry above, dated the same
+  day; what is in the tree now is a collected `problems` list asserted once.
 - **And the habit the critic named, which is the same one three times.** I put
   incident history into `SKILL.md`'s refusal pointer (60 words), into
   `dispatch.md` (5 lines) and into `refusals.md` (2.5 lines) - the last while
