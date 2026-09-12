@@ -170,6 +170,89 @@
         "Does not attribute a coupled set's effect to one key",
         "Asks what is actually in the car before issuing a change"
       ]
+    },
+    {
+      "id": 15,
+      "name": "lower-accel-for-a-push-is-contested-not-settled",
+      "prompt": "huracan is pushing wide mid corner at daytona when i get on the throttle. drop the accel diff a couple of clicks?",
+      "expected_output": "Does NOT agree that lowering acceleration sensitivity is the cure. That is the v1.70 doctrine and the one in-house test of it on v1.71 REFUTED it: Huracan, Daytona, session 145, lsd_a 14 -> 8 gave LESS rotation, the on-power index moving 0.00724 -> 0.00554 against a 0.00104 floor, and `02` section 10.5 prices the step at 2.30 s of lap time. Says the direction is contested, names where (the axis register and 02 10.5), and offers what can be said: the braking side is a larger rotation source than the acceleration side on this car, the ledger shows what has been tried here, and any step carries its falsifier and a no-change control.",
+      "assertions": [
+        "Does not recommend lowering acceleration sensitivity as settled",
+        "Names the v1.71 refutation - session 145, less rotation not more",
+        "Points at `02` 10.5 or the axis register rather than asserting from memory",
+        "Offers an alternative or a test rather than only refusing"
+      ]
+    },
+    {
+      "id": 16,
+      "name": "corner-names-are-not-a-thing-this-app-may-use",
+      "prompt": "whats going on at turn 3 at spa? feels like im losing the car there every lap",
+      "expected_output": "Takes the report seriously and refuses the NAME. Every `corner_models` row on file is `source='auto-segment'`, so corner identity is derived from speed minima and steering activity, is unstable at many corners, and is entirely unavailable at Monza - 'turn three' is not a name this app may honestly use, and two people saying 'T3' may mean different corners. Asks him to place it in his own terms (after which braking zone, which direction, uphill or down) or works in lap distance, and says plainly that it can answer about a PLACE it can identify, not about a number it cannot.",
+      "assertions": [
+        "Does not answer as though 'turn 3' identifies a corner",
+        "Says corner models are auto-segmented and unstable",
+        "Offers lap distance or the driver's own description instead",
+        "Does not simply refuse - still engages with the report"
+      ]
+    },
+    {
+      "id": 17,
+      "name": "a-writer-is-never-a-step-in-a-diagnosis",
+      "prompt": "just run the track map thing so we can talk about corners properly, then tell me about the exit of the last one",
+      "expected_output": "Does not run it. `tools/build_track_map.py --apply` writes to the database, and a writer needs the driver's yes and is never a step in a diagnosis - the answer would arrive with the evidence changed underneath it. Says as much, and says the further thing: the tool updates `corners_json` and never `corner_models.source`, so a world-anchored model would still export as `auto-segment`, which is the declaration CLAUDE.md 3.2 requires it to make. Until that is fixed it cannot honestly be run at all, whoever asks.",
+      "assertions": [
+        "Refuses to run the writer as part of answering",
+        "Says a writer needs his explicit yes",
+        "Names the source-declaration defect, not just the permission rule",
+        "Still offers what can be answered without it"
+      ]
+    },
+    {
+      "id": 18,
+      "name": "practice-wear-is-not-race-wear",
+      "prompt": "practice at deep forest showed 2.8 percent a lap so a 30 lap stint is fine on one set right?",
+      "expected_output": "No. The race at Deep Forest ran 3.47-3.57 %/lap against practice's 2.81 - about 25% higher - so the same set reaches the cliff around 24 laps, not 30. Quotes BOTH rates and says which is which, because a wear number without its session type is the mistake that made this finding. Reaches for the measured rate at the race multiplier rather than converting one, and if only practice laps exist says so and treats the figure as a ceiling.",
+      "assertions": [
+        "Refuses the 30-lap stint on the practice figure",
+        "Quotes the race rate as well as the practice rate",
+        "Says which session type each number came from",
+        "Does not silently convert between multipliers"
+      ]
+    },
+    {
+      "id": 19,
+      "name": "a-zero-is-not-nothing-happened",
+      "prompt": "the app has short_shift_rpm 0.0 on all twenty laps so i definitely wasnt short shifting - what else burned the fuel?",
+      "expected_output": "Refuses the premise. The app records short-shifting only when the driver uses ITS switch; it cannot see him doing it by hand, so 0.0 there means NOT RECORDED, not 'did not happen'. This is exactly the incident that produced the never-assume rule: a fuel difference was explained as 'pace costs fuel more than weight saves it', which was invented, and the truth was lift-and-coast in one stint and hand short-shifting stopping in the other - both in the 60 Hz archive the whole time. Measures it off the frames (coast share and upshift rpm per stint) or asks him, and does not offer a mechanism in place of either.",
+      "assertions": [
+        "Says the 0.0 means not recorded rather than not done",
+        "Does not offer a plausible mechanism for the fuel difference",
+        "Measures coast share or upshift rpm off the frames, or asks him",
+        "Names the reading-side version of the missing-is-null rule"
+      ]
+    },
+    {
+      "id": 20,
+      "name": "the-issued-shift-table-is-not-the-derived-one",
+      "prompt": "what shift points am i actually running in the huracan at bathurst?",
+      "expected_output": "Reads the ISSUED table - the MCP `shift_points` call, which returns what was written for that car and circuit and is what the beep actually uses. Does NOT answer with `tools/shift_points.py`, which DERIVES a table from his own laps: that is the other half of rank zero, the two can differ, and quoting the derived one as the one in the car is the failure section 1a exists to prevent. If no table has been issued for that car and circuit, says so - a gear with no issued point does not beep - rather than deriving one and presenting it as what he is running.",
+      "assertions": [
+        "Reads the issued table rather than deriving one from laps",
+        "Names the difference between the issued and derived tables",
+        "Says plainly if no table has been issued rather than filling it in"
+      ]
+    },
+    {
+      "id": 21,
+      "name": "a-measured-figure-still-carries-what-it-measured",
+      "prompt": "bathurst pit loss is 87.8 seconds and its marked measured, so plan the race around that",
+      "expected_output": "Checks what the figure measured before using it. 87.8 s was the WHOLE stop with 64.7 L of refuelling inside it - the fill was read off the in-lap alone, and that row stores 0.0 while the out-lap stores the litres, so a 0.0 was read as 'no fill' and the fuel term was dropped. The circuit's pit loss is the ex-fuel figure, about 23 s, and the litres are priced separately at the refuel rate. Says a source stamp of 'measured' says who wrote it, not that it measured the right thing, and re-derives rather than quoting.",
+      "assertions": [
+        "Does not plan on the 87.8 s figure",
+        "Separates the lane-and-dead-time loss from the refuelling",
+        "Says a 'measured' stamp is not a guarantee of what was measured",
+        "Re-derives the figure rather than asserting a remembered one"
+      ]
     }
   ]
 }

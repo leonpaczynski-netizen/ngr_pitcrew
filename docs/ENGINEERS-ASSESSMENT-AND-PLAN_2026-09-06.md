@@ -2543,6 +2543,97 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Row 2.10 DONE: critic AGREED on pass 7** - every mutant from seven passes
+dead, including every one it wrote. Its own summary of why: every tool and
+every MCP call has its own line in both directions; which side of the writers'
+rule a call belongs on is read from the server's body rather than its name,
+which is how `propose_strategy` was caught writing despite it; a tool that
+writes cannot be filed as not-an-instrument through any binding shape, any
+receiver, raw DML, a derived module-level writer, a `try`-nested def or a
+class method; the claims about `--apply` and about the corner refusal are
+asserted against the code; and **the corner gate retires itself** the day
+`build_track_map` writes `source`. It also found a live product defect on its
+first real run - `build_inputs` writing through two read-only doors.
+
+**Its three residual minors closed in the same batch rather than banked**, one
+of them because it was wrong in both directions at once:
+- `owners` was a dict keyed on the bare METHOD name, so of two classes in a
+  module defining the same method only the last walked was recorded - **hiding
+  a writer and accusing a reader with one line.** Resolved per node now, by
+  walking to the enclosing class.
+- `_terminates` accepted any callee whose last name segment was `exit`, so a
+  local `def exit(message): print(message)` read as a terminator. The dotted
+  form only.
+- And it rejected a guard ending `try: return 0 finally: ...` - correct code,
+  reported as a fault, with the message saying something untrue about the
+  tool. It recurses into `Try`, `With` and `If` now; loops stay out, because a
+  `for` over a possibly empty iterable cannot be shown to terminate.
+- Four mutants: X2 and X3 fail, **X1a and X4 pass** - the two that were
+  correct code being punished.
+
+**Row 2.10 pass 6 (`d5884ae`): NOT AGREED - one major, one minor, fixed.**
+Reachability was the right shape and the call graph works; the major was one
+predicate inside it.
+- **Major: the early-return rule tested for a terminator SOMEWHERE under the
+  `If`,** because it walked the whole statement - nested branches, the
+  `orelse`, `try` bodies, nested `def`s. Four shapes passed while leaving the
+  tool writing without the flag, and the fourth is the one that would arrive
+  by accident: **`if not args.apply: print(...) else: return 0`** returns when
+  the flag IS set and falls through to the write when it is not. **An inverted
+  guard reading as a guard**, on the check whose entire purpose is that a tool
+  cannot write without `--apply`. The guard's body must now END in a
+  terminator - verified against all eight, seven of which end in `return`,
+  while the eighth never relied on the rule.
+- **Minor:** only the DERIVATION of the module writers had been fixed, not the
+  lookup - a writer imported through the class that owns it
+  (`from X import Filer`, then `Filer.file_it(...)`) was still invisible. The
+  owning class is recorded and resolved now.
+- **Two questions answered against my own suspicion, by the critic:**
+  recursion cannot be marked guarded (the fixpoint only ever moves upward from
+  a genuinely guarded site), and the bare-name scope key errs towards flagging.
+- Five mutants: E1-E4 and M2 all fail; G2 still passes.
+
+**Row 2.9's evals, 12 Sep: 14 -> 21, and the "nine documented failures" was an
+artefact.** No such list exists anywhere - the number appears only in the row -
+so on the driver's instruction the count was dropped and the evals written for
+what the record actually supports. Each names an incident in this document, in
+`CLAUDE.md` or in a memory file, **and each would have been answered wrongly
+by this skill before that incident was understood**: lowering the accel diff
+for a push (refuted at s145); naming a corner "turn 3" when every model on
+file is auto-segmented; running a writer as a step in a diagnosis; planning a
+30-lap stint on practice wear when the race ran 25% higher; reading a `0.0` as
+"did not happen"; quoting the derived shift table as the issued one; and
+planning on a pit loss with the refuelling still inside it.
+
+**Row 2.9, 12 Sep: `SKILL.md` 975 -> 463 lines, and the row's own premise was
+wrong.** The scoping said to delete "two blocks duplicating `refusals.md`".
+**Measured, no section of `SKILL.md` duplicates any reference file** - the
+highest overlap between any section and any of the five is 2 lines of 16, and
+the refusal card, the block that premise named, shares 1 line of 53. There was
+nothing to delete, so the only route to the number was to move what the file
+EXPLAINS and keep what it DOES.
+- **Every heading stays.** `debrief`, `The spine` step 1 and `The record` are
+  named anchors other things resolve against, so the heading stays and the
+  body moves, with a pointer that says what is over there.
+- **Four things did not move, because something parses them out of this file:**
+  the `write_shift_points` block (e4 splits `SKILL.md` on it), `The spine` (the
+  17,421-frame figure eval 3 anchors on), the frontmatter, and the six-mode
+  table the frontmatter restates.
+- Six new references: `where-the-change-landed.md` (149), `modes.md` (134, the
+  `refine`/`quali`/`debrief` bodies), `refusal-card.md` (77), `voice.md` (73),
+  `dispatch.md` (64, three blocks), `closing-sheet.md` (53).
+- **The restructure would have forbidden itself.** "If you have opened more
+  than two references, you have read too much" was written when the modes were
+  in this file; with the bodies moved, every mode must open `modes.md` and that
+  rule eats one of its two. It now counts references of JUDGEMENT, and says
+  why - the limit was always about how much evidence you go looking for before
+  deciding, not about how the file is split up.
+- **455 by the cut, 463 after the routing table was told about the six new
+  files.** The row said under 450. Going lower means moving a rule Ludo has to
+  apply every time - the record, or "ask the store first" - which trades eight
+  lines for a behaviour risk, and the driver was shown that trade and took the
+  restructure without it.
+
 **Row 2.10 pass 5 (`7b47de9`): NOT AGREED - one major, two minors, fixed.**
 All four pass-4 fixes landed and hold, and the derived-writers change found a
 live defect on its first run (`build_inputs`, above). The major was inside the

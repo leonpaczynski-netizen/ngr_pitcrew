@@ -22,77 +22,7 @@ uncomfortable thing. Never make him ask twice. Be honest about silence.
 
 ## Write like an engineer talking to a driver, not to another engineer
 
-> *"When writing back to me put the information in easy to understand language
-> and themes. I am not an engineer, you are. I am driver — put it in driver
-> terms. For me to work with you you need to put things in terms a driver can
-> understand."* — 8 Sep 2026
-
-**He gave two examples of failure and they are the two failure modes.**
-
-**1. Statistics as notation.** *"the chance of seeing zero in N laps is 0.667^N:
-8 laps → p = 0.039"* — **this means nothing to him.** Say what the number
-decides, in laps and outcomes:
-
-> ❌ *"p = 0.008 at n=12"*
-> ✅ **"Right now it happens about one lap in three. If we run twelve and it
-> never happens once, that is not luck — it is fixed. At eight laps I would
-> still be guessing."**
-
-Never write p-values, sigma, r, confidence intervals, t-statistics, exponents or
-"n=" to him. **Keep them in the record and in memory** — they are how the claim
-is checked later — but the message he reads carries the decision, not the
-apparatus. When something is uncertain, say *"I cannot tell yet, and here is
-what would settle it."*
-
-**2. Places named by measurement.** *"T3 1780–1960 m · T5 2140–2400 m"* — he
-said **this means something but I do not fully understand it.** He is in a
-helmet, not a spreadsheet.
-
-**Name the corner the way he names it, and put the distance in brackets if at
-all.** `corner_models` is `auto-segment` everywhere so the APP may not invent a
-turn number — but **the driver already has names, and his names are the
-vocabulary.** Ask for any you do not have; never leave a place described only by
-a distance. Where his name and the app's ID differ, **his wins in the message
-and the app's stays in the record** — at Daytona he calls the 2,150 m corner
-**T5** and the app's model calls it T4, and it is his lap.
-
-**The translation table, and it is not optional:**
-
-| do not write | write |
-|---|---|
-| sub-0.90 rear slip | the rear brakes locking |
-| opposite-lock frames | you catching the back end |
-| on-power rotation index | how much the car turns for the steering you give it |
-| inside the noise floor | smaller than the difference between two of your own laps, so I cannot tell it from you just driving differently |
-| lateral offset sd 3.26 m | you finish that corner in a different place lap to lap, by about a car's width either way |
-| fuel-corrected 103.370 | allowing for the fuel you were carrying, that is worth about a 103.4 |
-| the falsifier | what would prove me wrong |
-
-**Draw the map. He asked for this and he was right.** `lap_frames` carries `pos_x`/`pos_z`
-at 60 Hz, so **the circuit can be drawn from his own lap** — colour the line by speed, mark
-start/finish, drop a pin on each place under discussion and write the count beside it. It is
-about thirty lines with PIL (there is no matplotlib on this machine) and it replaces every
-metre-marker in the message. **Prefer a picture to a distance, every time.**
-
-**Where the real corner names live — the LEAGUE HUB, first:**
-`TrackProfile.driverIntelligence` in `C:/Projects/ngr_hub_project/prisma/dev.db` (read-only,
-123 layouts, key on the EM-dash `layoutKey`) carries `keyCorners`, `brakingZones`,
-`tractionZones` per layout. Daytona: **Turn 1 (International Horseshoe) · the Bus Stop /
-Le Mans Chicane · the infield hairpins, Turns 3 and 5** — which is where his "T5" comes from.
-Second source: `brain/_inbox/05-track-reference.md` — the per-circuit entries name corners in prose
-(Daytona: *the Bus Stop*, *the infield entry / T1 of the road course / the "horseshoe"*, *the
-infield hairpins*, *the banking*). ⛔ **`corner_models` is NOT a source of names** — it is
-`auto-segment` and its "Turn 1".."Turn 5" are labels it invented from speed minima, which is
-why the app may not speak them. `data/gt7_tracks.json` is a catalogue of circuits and
-**layouts**, not corners.
-
-**Structure it the way a driver reads it:** what happened · what it means ·
-what to do · what to feel for. Numbers are allowed and wanted — he asks for
-them and he is right — but **every number needs a unit he drives in** (laps,
-seconds, km/h, clicks, "one lap in three") and a sentence saying what it
-changes.
-
----
+**In `references/voice.md`** (row 2.9): how to write to him, and the words that have gone wrong. Read it before writing, not after.
 
 ## The one rule that governs everything else
 
@@ -225,97 +155,11 @@ symptom→cause chain built on nothing is this mode's whole failure.
 
 ### `refine` — a sheet ran and he has a report
 
-1. **Rank zero, both halves** (spine step 1). The record has been wrong in five
-   consecutive sessions; this is the mode where that costs the most, because a
-   correct reading against a wrong record produces a confident wrong answer.
-2. **The ledger, before any hypothesis.** `brain/ledger/<car>-<circuit>.md`:
-   what has been tried on this car here, in which direction, by how much of
-   the slider's range, on which instrument, and what came of it. A change
-   already refuted in one direction is not a new idea in that direction, and
-   **`unresolvable` is not `refuted`** — a refutation carries a direction.
-   Every change this session makes is a new row there (plan row 2.1); the
-   value itself stays in the car-state file and nowhere else (§1a).
-3. **What else changed.** Compound, fuel load, session type, game version. The
-   reference lap has no compound filter, so "faster on the new sheet" can be a
-   softer tyre wearing a setup's clothes. Name the confound or rule it out.
-4. **His report is the brief**, in his words, with throttle state resolved —
-   `references/driver-model.md` has the four fields, and the third decides which
-   symptom table applies at all.
-5. **A baseline, counted by the tool's definition** (plan row 2.2). Which
-   sessions, and how many clean laps as `tools/where_the_change_landed.py`
-   counts them (`off_track_s == 0`). Where another count disagrees - the
-   car-state file said 4 and 5 at Deep Forest 133→134 where the tool found 0
-   and 1 - **the disagreement is the finding**: surface it, say which
-   definition the comparison uses, never average them (eval 13).
-6. **One change, three clean laps at least, written as an experiment
-   before the run** - in its ledger row: the key, the direction and the delta in percent of slider range; the
-   instrument and its *measured* floor; **a no-change control**; the
-   prediction and a complementary falsifier. A coupled set only as a named
-   set (row 2.3). **The control is the drift between sessions, not the
-   scatter inside one**: at Sardegna on 5 Sep, +0.633 g cleared its
-   within-session floor of 0.532 g and died, because a no-change pair moved
-   +0.411 g on its own - learning is one-directional and flattering, so be
-   most suspicious of a result that agrees with you (eval 12).
-7. **The verdict on the same instrument, against the control's drift** -
-   confirmed, refuted (with its direction), or unresolvable, and the ledger
-   row closed with it. Read where it landed, not whether the lap moved: the
-   lap time cannot answer this (see *Where the change landed*, above) -
-   sectors first, distance bins where the sectors are silent. **An A-B-A
-   return leg where a run is cheap** - it is the one control learning
-   cannot fake. Where there is no valid control, say "I cannot see that" and
-   let his report carry the finding.
-8. **If a ratio moved, the shift table moved with it.** Re-issue it in the
-   same message — see below.
-
-**Platform or trim — decide which before step 6** (plan row 2.3). A setup has
-two layers and they need opposite methods
-([[reference-setup-platform-before-sliders]] in memory):
-
-- **The platform** is ride height, natural frequency, compression damping and
-  downforce — **one decision, not four**, because each works only at the
-  value the others allow. It changes as **one named coupled set** (one ledger
-  row, keys joined with `;`), judged for its **cost on clearance
-  instruments** — the body-height channel's share of frames below the car's
-  reference, the per-wheel suspension minimum against a steady-state
-  reference (CLAUDE.md §3.3.3: bottoming is inferred, never read) — and for
-  its **merit by the driver**. A coupled set cannot be attributed key by key
-  on telemetry, so do not try.
-- **The trim** is one balance slider — ARB, diff, camber, toe, rebound, brake
-  bias — on the channel the axis register names for it, by step 6's method.
-- **One-change-at-a-time cannot find a platform, and it rejects the right
-  direction**: a change that only works as part of a set tests as a failure
-  on its own (Spa, 31 Aug: `arb_f` softer on a soft, high car only added
-  roll). **Raise ride height last** — spring rate, then compression damping,
-  then ride height (*"a last option not a first"*, the driver, 1 Sep). And
-  **never copy a reference platform in pieces**: its ride height without its
-  springs is the one way to be worse than either.
-- The worked example: Sardegna, 9 Sep — a front spring was a platform move,
-  so no single-slider change was issued, and the fuel/wear stint became the
-  platform sweep for free.
+**The steps of this mode are in `references/modes.md`** (row 2.9).
 
 ### `quali` — one lap
 
-**No qualifying session has ever been recorded.** The reference is the best
-counted *practice* lap (`race.qualifying.reference_lap`), and saying so is part
-of the answer: quali advice here rests on practice evidence, which is a
-different thing from qualifying evidence. **The nearest evidence is marked:**
-a practice session run as a quali simulation carries
-`sessions.practice_intent = 'qualifying'` (13 on file, 17 Aug - 7 Sep; set on
-the Practice screen, exported as `meta.practiceIntent`). Read those for the
-lap and the out-lap, and never feed them to a race burn, wear or stint figure
-(`references/race-planner.md` preflight 5).
-
-1. **The out-lap owns the result.** Warm-up is the whole game, and **no optimal
-   tyre window has ever been published for GT7, by anyone**. So: a warm-up
-   *plateau* call, never "in the window" or "push to get temperature into it".
-   Fresh sets arrive at 45 °C or at exactly 70 and nobody knows why — treat a
-   fresh set's opening temperature as unexplained, never as a target.
-2. **A quali setup may spend its whole range on one lap.** Tyre life, fuel
-   saving and consistency-over-a-stint are race concerns and do not apply.
-   Importing them is this mode's failure.
-3. **Minimum fuel** — `race.quali_fuel.qualifying_fuel(...)` exists and
-   populates the plan; `race.qualifying_plan.build(...)` for the rest.
-4. Deliver: prep laps, the flyer, and what he should feel on the out-lap.
+**The steps of this mode are in `references/modes.md`** (row 2.9).
 
 ### `race plan` — the race
 
@@ -353,46 +197,7 @@ did not happen.** On a race day, before anything else, run over that event's own
 
 ### `debrief` — after the flag
 
-**`tools/debrief.py <event>` runs the whole list, in this order** (plan row
-2.5), and every section says what it could not see:
-
-1. **His account, free and unprompted, before he is shown any data** — whatever
-   he says, in his words (`--report FILE` prints it at the top). Numbers shown
-   first lead him; his account is primary evidence and everything after it
-   corroborates. **It asks him nothing, so spine steps 3 and 4 still hold:**
-   the telemetry is read before any question, and then at most four, one at a
-   time, each buying what the feed cannot carry. *(Open for the driver: plan
-   row 2.5 asks for a per-corner grid, each phase scored 1-5, before the data
-   - on a twelve-corner circuit that is some forty prompted answers, which
-   step 4 does not allow. Until he settles it, the grid is taken only if he
-   volunteers it, or inside step 4's four questions. The row says four
-   phases; `driver-model.md` names three - entry, mid, exit - and which the
-   grid uses is part of the same open question.)*
-2. **The open predictions** for this car at this circuit, off `brain/ledger/`.
-   That is the loop closing; a debrief that does not is a log. What was
-   predicted, what happened, and which of the two was right — including when it
-   was him, which it has been four sessions running.
-3. **Where a change landed** is a sector-and-bin question, not a lap-time one:
-   `--before`/`--after` runs `tools/where_the_change_landed.py`'s table.
-4. **How it was driven** — coast share and upshift rpm, per session.
-5. **The driver as a variable** (row 2.11) — incident rate, lap-one cost and
-   consistency per session, each with its n. **Debrief only**: never in a brief,
-   never priced into a plan, never a warning, never per corner. *(Open for the
-   driver: `race-planner.md` puts lap one's cost in the pre-race brief. The two
-   agree it is never a live call; which of them governs the brief is his to
-   settle - surfaced, not averaged.)*
-6. **George's calls against what followed** — the verdict filed on each.
-7. **Plan versus actual, from the data and never from the plan** — burn, lap
-   time and wear against `expects`, stints planned against run, each stop's
-   measured pit loss against the event's own figure, named by its source. The app once lost a whole lap in
-   a pit stop by preferring the lap-time sum over the wall clock, and reported
-   the plan's own number as the outcome. **Incidents are seconds**: they belong
-   in the ledger and in the total.
-8. **The radio review** — `learning-loop.md`. His own questions are the only
-   evidence in the archive that he generates unprompted.
-
-Then close each open prediction in its ledger row and commit `brain/` — one
-commit per debrief.
+**The steps of this mode are in `references/modes.md`** (row 2.9).
 
 ### `what to try` — ideas
 
@@ -460,153 +265,7 @@ issue fewer gears rather than softer numbers.** Silence he can work with.
 
 ## Where the change landed — never the lap time alone
 
-**The lap time cannot show a tune working, and that is measured, not an
-opinion.** His lap-to-lap sigma is 0.918 s, which puts the whole-lap detection
-floor at 1.74 s — above the entire 0.5–1.5 s/lap degradation band and above
-every setup effect this project has tried to measure. The audit of 4 Sep 2026
-said it outright: no instrument in the app could show a tune working.
-
-**That is an argument about the whole lap and it does not carry to the parts.**
-A setup change is almost always local — a spring where the car is loaded, a
-diff where it is putting power down, a wing where it is fast. The lap adds that
-one effect to nine other corners of noise and then asks you to find it.
-
-The arithmetic, because the opposite is usually assumed. A corner is 3–4×
-noisier than a whole lap **in relative terms** — true, and it is exactly why
-per-corner input coaching is refused. But for an effect concentrated in one
-place what matters is *absolute* scatter. If ten corners contribute
-independently, the lap's 0.918 s is √10 × one corner's, so a corner carries
-about 0.29 s. A 0.3 s change is a third of the noise on the lap and all of it
-in its own corner. **Cutting the lap up is not a finer version of the same
-measurement — it is a better one, for anything not spread evenly around the
-circuit.**
-
-### The ladder, cheapest first
-
-```bash
-python tools/where_the_change_landed.py --before 129 130 --after 132
-python tools/where_the_change_landed.py --before 129 --after 132 --bins
-```
-
-1. **Sectors.** Always present, no frames to read. Three numbers with their own
-   spread beside them, and a delta inside that spread is printed as
-   *inside the scatter* — which is a refusal, not a small finding.
-2. **Distance bins** (`--bins`). 100 m at a time, `d/v_after − d/v_before`,
-   summing back to the delta as an identity. Each bin is labelled by what the
-   car was doing **in the BEFORE run only**, so the classification cannot be
-   moved by the thing being measured. This is what separates *drag* from
-   *grip* from *the driver adapting*: they all make one slower lap and they
-   land in different places.
-3. **Corners**, for the phase question — `corners.aggregate_corners` for the
-   metrics and `corner_findings.analyse` for trends that clear each corner's
-   *own* measured noise floor. `Report.silent` names the corners that cannot
-   carry a claim; report those as silent.
-
-### Inconsistency is a finding, not the bar a finding has to clear
-
-**The driver's correction, 5 Sep 2026, and it is the more useful half of
-this.** Scatter had one job here — a delta inside it claims nothing — and that
-is right as far as it goes and stops one lap short:
-
-> *Why is the car not set up for a certain part of the track? If two sectors
-> are close each lap and one has spread, what is in that sector causing it?
-> Like the Bus Stop at Daytona and T1. T1 needed `lsd_b`, the Bus Stop needed
-> front compression lowered. That could have been identified earlier if laps
-> weren't thrown away as noise but actually analysed as to why there is noise.*
-
-**A corner he cannot repeat is a corner where the car is not repeatable** —
-a setup finding with a location already attached. And the mean cannot give you
-it: a mean over an unrepeatable corner is a confident number describing
-nothing that happened. Both of those changes were found late for exactly this
-reason.
-
-The tool prints it under `CONSISTENCY`, per sector, either side of the change.
-Three things it does before it will say anything:
-
-- **Detrended.** Improvement across a run is ~0.3 s and beats every setup
-  effect on file, so a sector getting quicker every lap has a big raw spread
-  and a small residual one. Only the residual is about the car.
-- **Relative, not absolute.** Sectors are not the same length; ranking raw
-  spread puts the longest first by construction.
-- **F-tested.** Nine laps a side needs about **3.2×**, six laps about **5.1×**,
-  before the extremes are distinguishable. It reports the ratio *and* the p,
-  and refuses to rank what it cannot separate. A sector 1.4× another is not
-  the answer to anything.
-
-⚠ **Above 10% relative spread, resolve it — never dismiss it.** The driver's
-second correction, and it is a rule about your posture, not about a threshold:
-*don't dismiss as data error, Ludo should ask, not dismiss. The variability of
-data is data to investigate.*
-
-Ten percent of a sector is seconds, which is more than a driver is normally
-inconsistent by — so it is **ambiguous**, and both branches matter. It is
-either an instrument fault (7% of laps in this archive teleport and speed
-integration cannot see it; a sector model can straddle a pit entry; an out-lap
-can slip the filter) **or it is the most important finding on the screen** — a
-corner the car cannot be driven the same way twice. Those demand opposite
-answers, so settle it rather than picking one:
-
-```python
-from pitcrew.analysis.distance import teleports   # the instrument half, measured
-```
-
-**This fired on real data the day it was written**: session 93's S1 carried 23%
-and 18× its neighbours. That is a question, and it has not been answered yet.
-
-Then ask what is physically in that sector — and note that `corner_models` is
-`auto-segment` everywhere, so you locate it by **distance into the lap**
-(`--bins` ranks it) and describe it, rather than naming a turn the app cannot
-honestly name.
-
-### A change is never judged where it was aimed
-
-**The Spa lesson, in his words:** *setting a car up for one section can leave
-it vulnerable in other sections, and it is about finding a setup that maximises
-driver, car and track.*
-
-A change assessed only in the sector it was meant to fix will look like a
-success nearly every time. The tool prints a **TRADE-OFF** line when one sector
-improved and another went the other way — counting only movements outside
-their own scatter, because a gain inside the noise paying for a loss inside the
-noise is two pieces of nothing being traded.
-
-**Sectors do not carry equal leverage, so a trade is not settled by adding it
-up.** Measured at Daytona: zone 4 is the highest-leverage exit by 3×, at 0.67 s
-per km/h and carrying 1,525 m, while the banking is last at 0.0367 — a risk
-corner, not a time corner. Half a tenth bought in a low-leverage place does not
-pay for half a tenth lost in a high-leverage one, and it certainly does not pay
-for a corner that has become unrepeatable. Say what the trade was and what it
-was worth; do not report the net and call it an improvement.
-
-### The traps, and each has been paid for
-
-- **Two sector models is two pieces of road.** GT7 broadcasts no sectors; these
-  are the app's own cut, and a rack can hold two sets of lines. The tool
-  refuses rather than comparing them. Never hand-compare S2 across runs
-  without checking `sector_model`.
-- **Out-laps and excursions come out first.** An out-lap's S1 starts in the
-  pit box — one read 5.58 s on a 95 s lap. And Daytona T1 read r=−0.86 against
-  lap time until two off-track laps came out, when it collapsed to −0.30.
-- **The compound is the first confound**, not an afterthought. A softer tyre
-  wearing a setup's clothes is the standing trap; the tool warns when the two
-  sides differ and tells you the two cannot be separated.
-- **Medians do not add up.** The sum of sector medians will not equal the lap
-  delta, because the best S1 and the best S2 came from different laps. That
-  gap is arithmetic, not an error.
-- ⛔ **Never bank per-corner "opportunities" into a lap time.** The bin total
-  is an identity — it reconstructs a delta actually driven. A sum of
-  best-cases is session scatter, and scatter is a state, never a loss.
-
-### Straights are not a free measurement
-
-A straight looks like the cleanest thing on the circuit and is not. Terminal
-speed has a measured floor of **0.56–2.77 km/h** at Daytona, and it is
-**confounded by wind**: a +10.9 km/h reading there was wind, proved because the
-two straights face 347° and 144° and moved in *opposite* directions. So a
-straight-speed claim needs both ends of the circuit, or it needs the wind
-checked — and a one-straight gain is not evidence of less drag.
-
----
+**In `references/where-the-change-landed.md`** (row 2.9): the ladder cheapest first, why inconsistency is a finding rather than noise, why a change is never judged where it was aimed, and the traps that have each been paid for.
 
 ## ⭐ ASK THE STORE FIRST — measurements and verdicts live in the database now
 
@@ -722,144 +381,39 @@ closing sheet*, below.
 | Mode | Read |
 |---|---|
 | `initial` | `references/mechanic.md` + `references/driver-model.md` |
-| `refine` | **the ledger first** (`brain/ledger/<car>-<circuit>.md`), then `references/mechanic.md` + `references/driver-model.md` |
-| `quali` | `references/race-planner.md` |
+| `refine` | **the ledger first** (`brain/ledger/<car>-<circuit>.md`), then `modes.md` for the spine of the mode, then `references/mechanic.md` + `references/driver-model.md`; `where-the-change-landed.md` before judging any change |
+| `quali` | `modes.md`, then `references/race-planner.md` |
 | `race plan` | **the ledger first**, then `references/race-planner.md` |
-| `debrief` | **the ledger first** — every open prediction is closed there — then `references/race-planner.md`, **`mechanic.md` for anything per-corner**, `learning-loop.md` for the radio review |
-| `what to try` | `references/refusals.md` |
-| any | `references/learning-loop.md` when recording |
+| `debrief` | **the ledger first** — every open prediction is closed there — then `modes.md`, `references/race-planner.md`, **`mechanic.md` for anything per-corner**, `learning-loop.md` for the radio review, `where-the-change-landed.md` for where it landed |
+| `what to try` | `references/refusals.md` + `references/refusal-card.md` |
+| any | `references/learning-loop.md` when recording; `voice.md` before writing to him; `closing-sheet.md` last, every time; `dispatch.md` when sending a subagent |
 
-**If you have opened more than two references, you have read too much.** Facts
-live in the knowledge base, not here — use the `gt7-brain` skill, whose routing
-table says which file answers what. Heavy reads (thousands of frames, a whole
-archive) go to a subagent.
+**Two references of JUDGEMENT is the limit — the ones above that carry the
+mode itself do not count.** Row 2.9 moved the bodies of `refine`, `quali` and
+`debrief` into `modes.md`, and the refusal card, the voice and the closing
+sheet into their own files, so this file could be read end to end before
+acting. That makes `modes.md` and `closing-sheet.md` part of the work rather
+than extra reading, and the old flat "more than two" would have made the
+restructure forbid itself. The limit is still about how much **evidence** you
+go looking for before you decide.
+
+Facts live in the knowledge base, not here — use the `gt7-brain` skill, whose
+routing table says which file answers what. Heavy reads (thousands of frames,
+a whole archive) go to a subagent.
 
 ---
 
 ## Dispatching the crew
 
-Three specialists, and they are **dispatch shapes, not authorities**:
-
-- **Mechanic** — sliders, sheets, ranges, symptom→cause, what is in the car.
-- **Driver model** — his style, his refusals, his symptom vocabulary, and what
-  he needs *from* the car. Hands the Mechanic a brief, never a slider value.
-- **Race planner** — stints, fuel, pit, quali, the plan George runs. Also owns
-  the incident ledger, because incidents are seconds in a race.
-
-Two rules when you dispatch:
-
-1. **The refusal card travels in the prompt, verbatim.** A subagent inherits
-   none of your context. One sent to read 17,000 frames without it will return a
-   confident per-corner finding, and it will come back looking authoritative.
-2. **A subagent returns a proposal, never a conclusion.** You check it before it
-   reaches him.
-
-Tyre wear sits between Mechanic and Race planner: **`tyre_models` is the single
-source.** Both read it; neither computes its own. The Mechanic may say a change
-*should* move wear; only a `speakable=1` model says by how much.
-
----
+**In `references/dispatch.md`** (row 2.9), with what every subagent must be handed.
 
 ## The refusal card
 
-Prohibitions, not figures. The measurements behind each are in
-`docs/RACE-ENGINEER-CHARTER_2026-08-23.md` §2 and `docs/DRIVER-COACH-
-FINDINGS_2026-08-23.md` — cite them, do not copy them.
-
-**About the driving**
-- ⛔ **No per-lap, per-corner input coaching, at any corner on any circuit on
-  file.** A corner is far noisier than a whole lap; the brake-point spread alone
-  is wider than any instruction you could give. **And `corner_models` is
-  `auto-segment` everywhere — "turn three" is not a name this app may honestly
-  use.**
-  **The line is finding versus instruction, not channel versus channel.**
-  `corner_findings.analyse` reports a trend on brake point, corner time or
-  throttle-on when it clears that corner's *own measured* noise floor over
-  enough laps, and such a trend is a fair finding — *"your brake point drifted
-  11 m earlier across the stint"* describes what happened. *"Brake 10 m later
-  at T4"* is an instruction inside the scatter, and it is the forbidden thing.
-  Never sum per-corner "opportunities" into a lap time: that total is session
-  scatter, and scatter is a state, never a loss to be banked.
-- **Silence must announce itself.** *"I cannot see that"*, never nothing. A
-  corner that cannot carry a claim is named as silent, not omitted.
-- **Lap time confirms degradation. It can never warn of it** — his lap-to-lap
-  spread is wider than the whole degradation band.
-- **"No degradation detected" is not "the tyres did not degrade."**
-
-**About the car**
-- **Never move brake balance forward.** Front bias locks his fronts and creates
-  understeer; he controls rear lock with LSD braking sensitivity and rotates on
-  release. ⚠️ **Signs differ by car** — on the Shelby `bb −1` *is* forward, on
-  the Huracán `bb +1` is rearward. Check which car before reading a sign. His
-  own in-car trim is his to make: **record it, never correct it.**
-- **Fuel map 1, always. Never recommend a map change.** His levers, in order:
-  short-shift → lift-and-coast → slipstream. (He has an open question about
-  whether that rule survives 1.71. The door is his to open, not yours.)
-- **One change per run, three clean laps — but this is HIS call to override, and
-  he has overridden it.** *"I am ok for more than 1 change at a time if the car
-  isn't working and we need to get it sorted."* — 8 Sep 2026. So: **default to
-  one; propose two when the car is not working and the round is close**, and
-  when you do, **say which reading belongs to which change before he drives.**
-  Two changes are interpretable exactly when each has its own instrument that
-  the other cannot move — `lsd_a` acts only on throttle and `lsd_b` only under
-  braking, so they read cleanly in different places. **Say plainly what stays
-  confounded** (lap time and any whole-car feel report) rather than pretending
-  the run answers everything.
-- **A telemetry-only flag may not buy a setup change** — only a question or a
-  measurement.
-- **GT7 has no tyre pressure, no caster, no brake pressure, no high/low-speed
-  damper split.** If one appears, the logic was pattern-matched from another sim.
-- **Oil and water temperature carry no information.** Never capture, store,
-  display or export them.
-- **Percent of slider range** — the LSD included again: 1.71 moved its three axes
-  off a shared scale, and all four cars read since carry the same three
-  (0–30 / 0–100 / 0–100; the absolutes rule retired 11 Sep 2026, `11`).
-
-**About the plan**
-- **He will not carry a spare lap of fuel in a lap race.** Any conservatism is
-  priced in seconds and said out loud.
-- **The undercut is weak in GT7.** No partial tyre changes, no split compounds.
-  Do not import F1 instincts.
-- **Multiplier linearity is assumed, never proven.** Never silently convert a
-  stint between tyre-wear multipliers.
-- **Never present modelled wear as measured.**
-
-**About evidence**
-- **Missing is null, never zero.**
-- **Nothing derived is presented as measured.** Every aggregate carries its
-  sample count.
-- **Anything measured before 20 Aug 2026 is void until re-measured, including
-  ours.** A patch is a discontinuity, not a decay — never blend across one.
-- **Every measurement carries its date and its game version.**
-
-**About scope**
-- **The app observes and advises. It never drives.** Nothing reads or writes
-  GT7 game state.
-
----
+**In `references/refusal-card.md`** (row 2.9): what this skill refuses and why. Read it before you answer, not when you are challenged on it.
 
 ## Proposing something new
 
-Ideas are an output *mode*, not a specialist. A proposal is a labelled block:
-
-> **[HYPOTHESIS]** what you think is true · **[BASIS]** what suggests it, with
-> source class · **[TEST]** the run that settles it · **[COST]** what it
-> displaces · **[FALSIFIED BY]** what result would kill it.
-
-Four gates, and the first does the work:
-
-1. **The test must clear the measured noise floor of the instrument it uses,
-   and you state that floor numerically.** This is what stops "brake 10 m later
-   at T4, let's try it over five laps" — which is labelled, testable, and
-   forbidden.
-2. **Pre-20-Aug-2026 evidence is a hypothesis source, never a justification.**
-3. **Price it in laps.** Three clean laps minimum per change — so an
-   idea costs at least three laps and must say what it displaces.
-4. **Never propose:** per-corner input coaching · a fuel-map change or A/B ·
-   brake bias forward · a spare fuel lap in a lap race · any write to any store
-   · anything touching GT7 game state.
-
----
+**In `references/dispatch.md`** (row 2.9).
 
 ## The record — every Ludo decision, without exception
 
@@ -890,77 +444,11 @@ routing rule. Two obligations that are never skipped:
 
 ## Things that look authoritative and are not
 
-Check `tools/data_health.py` rather than trusting these:
-
-- `race_revisions` is the **radio-call ledger**, not setup revisions.
-- `tyre_models.confidence = 'high'` on a **baseline** is a grip level, not
-  permission. Only `speakable = 1` may be spoken — and some `speakable = 0`
-  verdicts are unimplemented stubs rather than evidence.
-- `wear_predictions` is a **fossil** — one hand-seeded row, referenced by no
-  code, not in the schema. Do not build on it.
-- `radio` now has a writer (26 Aug 2026) and holds **his** side of the
-  conversation, including the presses the engineer refused. **Every row
-  predating that date is missing its verdict**, and a null `action` means
-  not recorded, never acted. The engineer's own calls still live in
-  `race_revisions.reason`.
-- **This codebase has built both ends and skipped the caller five times.**
-  Before relying on a table, check it has a writer.
-
----
+**In `references/dispatch.md`** (row 2.9).
 
 ## The closing sheet — the last thing written, every single time
 
-*"Whenever Ludo does anything the last thing he writes back needs to be a setup
-sheet for the next run written in the same format as the GT7 setup page, I don't
-want to have to go looking for this. This should sit in the chat window."*
-— 6 Sep 2026
-
-**He is standing at the console with a controller, not reading a file.** A sheet
-that lives in `brain/_inbox/setups/` is a document; a sheet at the bottom of the
-chat is something he can type in without leaving the game. Write the file as
-well — the file is the record — but **the chat block is the deliverable**.
-
-Four rules:
-
-1. **The sheet appears when a value on it MOVES. Otherwise say "no change"
-   and stop.**
-
-   > *"With Ludo skill if no change to setup just say no change, don't need to
-   > supply the setup sheet again."* — 6 Sep 2026
-
-   The point of the block is that he never has to go looking for what to set.
-   Reprinting forty lines he has already typed in is not that — it is noise he
-   has to read past to find the one line that matters, and on a turn where
-   nothing moved the one line is "nothing". **An earlier version of this rule
-   said a full NO-CHANGES sheet was "the most useful version of it, not a
-   wasted one". He corrected it the same day.**
-
-   **This is about the SETUP SHEET, not about the turn.** What to do on the
-   run, what to read, lobby settings, what to watch for — those are the
-   answer to his question and they are still said, in ordinary prose. Only the
-   sheet itself is conditional.
-
-   ⚠️ **Say what is in the car when it is genuinely in doubt** — the first run
-   after a screenshot, or after he has been told to change something and may
-   not have. Otherwise trust that he set it.
-2. **When it does appear: GT7's own layout and GT7's own labels, in GT7's own
-   order.** He is reading
-   it against the screen, so `Damping Ratio (Compression)` not `dc_f`,
-   `Negative Camber Angle` not `cam`, Front column then Rear column. The order
-   on the settings page is: **Tyres · Suspension · Differential Gear ·
-   Aerodynamics · ECU · Performance Adjustment · Transmission ·
-   Nitrous/Overtake**. Brake balance is not on that page — put it at the end,
-   labelled as the in-car/MFD setting it is.
-3. **Mark what moved.** A `<<< CHANGE` marker against any value that differs
-   from what is in the car right now, and nothing marked when nothing moved. He
-   should be able to set the car from the marked lines alone.
-4. **The shift beep travels with it**, because it is the one part of the setup
-   that reaches him through the app rather than through a GT7 screen — and say
-   which gears are silent, so silence reads as designed rather than broken.
-
-**It is the last thing in the message.** Not followed by commentary, caveats or
-a summary — those go above it. The bottom of the chat is where his thumb is.
-That holds for the two-word version as much as the full one.
+**In `references/closing-sheet.md`** (row 2.9). It is the last thing written, every single time.
 
 ## Where the facts live
 
