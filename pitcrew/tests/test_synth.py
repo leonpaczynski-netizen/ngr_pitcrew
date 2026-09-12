@@ -139,14 +139,27 @@ def test_the_two_limit_cues_are_an_octave_apart():
             f"tyre slip")
 
 
-def test_nothing_is_placed_in_the_null():
-    """70 Hz measured 1 of 3 with 50 and 85 either side measuring 3 and 2."""
-    assert transducer.felt_response(transducer.FELT_NULL_HZ) < 1.5
-    for spec in PROFILE:
-        top = spec.freq_hi or spec.freq_lo
-        assert not spec.freq_lo < transducer.FELT_NULL_HZ < top, (
-            f"{spec.name} spans {spec.freq_lo:.0f}-{top:.0f} Hz, across the "
-            f"null - it would fade as it got louder")
+def test_there_is_no_null_to_route_around():
+    """The 70 Hz null was the SEAT BRACKETS, and the remount removed it.
+
+    It measured 1 of 3 in August with 50 and 85 either side at 3 and 2, and
+    the whole spectral plan was laid out around avoiding it. Re-measured on
+    12 Sep 2026 after the transducer was turned vertical, 70 Hz reads 2 - the
+    same as everything from 70 to 140 - because the drive moved onto the
+    stiff axis of the brackets and their antiresonance stopped shaping the
+    response.
+
+    Pinned in both directions. A null that is re-introduced as a constant
+    without being re-measured would silently re-impose a constraint on every
+    placement decision; and if a future rig really does have one, this test
+    is where that gets stated rather than assumed.
+    """
+    assert transducer.FELT_NULL_HZ is None, (
+        "a null is back in the facts - it must come from a measured sweep, "
+        "and every effect band has to be re-checked against it")
+    assert transducer.felt_response(70.0) >= 2.0, (
+        "70 Hz no longer measures as a dead spot; if it does again, the rig "
+        "changed and docs/RIG-SWEEP_2026-09-12.md is stale")
 
 
 def test_every_effect_fits_inside_what_this_amplifier_passes():

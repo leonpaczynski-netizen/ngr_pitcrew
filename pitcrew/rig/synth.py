@@ -32,6 +32,7 @@ restate them: no allocation, no logging, no locks, no I/O inside a callback.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -789,6 +790,48 @@ class HapticMix:
             [spec.gain / loudest * transducer.SUSTAINED_CEILING
              * spec.felt_trim
              for spec in self.specs], dtype=np.float32)
+        # **And then capped by what the rig can deliver THERE without knock.**
+        #
+        # `SUSTAINED_CEILING` is one number for the whole band, and since the
+        # remount the real ceiling moves by 15 dB across it - the reaction mass
+        # sits off-centre under gravity and reaches its stop at 60 Hz some
+        # 12 dB earlier than at 120. Replayed over twelve of his own laps the
+        # flat ceiling put `impact` at 0.489 at 56 Hz, about 13 dB past where
+        # that frequency runs out of travel, on every kerb strike of every lap.
+        # The limiter never saw a problem because it was measuring the one
+        # thing that was in budget.
+        #
+        # This is a CAP, never a boost: an effect already inside its ceiling is
+        # untouched, and his gains and trims keep deciding the balance
+        # everywhere the hardware can honour them.
+        #
+        # **OFF by default, and it must stay off until it is calibrated.** Two
+        # reasons, both found in the seat on 12 Sep 2026:
+        #
+        # 1. **It caps the wrong quantity.** `_scale` is a gain coefficient,
+        #    not the emitted amplitude - measured, the rendered peak runs about
+        #    HALF the scale (scale 0.4886 -> peak 0.2306; scale 0.0891 -> peak
+        #    0.0500). So capping the scale at the knock amplitude lands about
+        #    6 dB below what the constraint actually requires. The cap has to
+        #    be derived from the peak an effect really emits, which depends on
+        #    its own shaping (gamma, threshold, min_force, noise, AM) and is
+        #    not knowable from the spec alone.
+        # 2. **Correct or not, it broke the cue.** At the capped level the
+        #    driver's verdict on the kerb strike was "didn't feel like a kerb
+        #    strike". Relocating it to 120-140 Hz - where the ceiling is high
+        #    enough to need no cap at all - failed differently: "no way, it's
+        #    more like ABS or traction control". **Frequency carries learned
+        #    meaning**, so the spectral plan is constrained by what a band
+        #    MEANS to him and not only by what the rig can deliver there.
+        #
+        # Enabling this before it is calibrated trades a mechanical problem for
+        # a driver who cannot read his own kerbs, which is the worse of the two.
+        if os.environ.get("PITCREW_KNOCK_CEILING"):
+            for i, spec in enumerate(self.specs):
+                ceiling = transducer.knock_ceiling_for_band(
+                    spec.freq_lo, spec.freq_hi)
+                if self._scale[i] > ceiling:
+                    self._scale[i] = np.float32(ceiling)
         # **How far the bed gets out of the way when an event fires.**
         #
         # With one piston every effect sums into one signal, so an event is

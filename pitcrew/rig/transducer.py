@@ -88,14 +88,79 @@ AMP_HIGH_CUT_HZ = 160.0
 # gains are a compensation curve for THIS response, arrived at by feel over
 # eight days - which is why a systematic 1/f-squared weighting on top of them
 # was rightly rejected, though not for the reason given at the time.
-FELT_RESPONSE = ((30.0, 2.0), (40.0, 3.0), (50.0, 3.0), (60.0, 2.0),
-                 (70.0, 1.0), (85.0, 2.0), (100.0, 2.0), (120.0, 1.0),
-                 (140.0, 0.5))
-# Where the rig actually delivers. Anything an effect needs felt belongs in
-# one of these; anything placed between them is spent for nothing.
-FELT_PEAK_LOW = (40.0, 55.0)
-FELT_PEAK_HIGH = (85.0, 105.0)
-FELT_NULL_HZ = 70.0
+# **Re-measured 12 Sep 2026 after the vertical remount.** Same method - nine
+# tones at -18 dBFS, one per invocation, rated 0-3 in the seat, endpoint
+# metered 0.124-0.125 for every one so the digital side was identical and
+# every difference is the rig. Amp 35. Control (50 Hz) re-run at the end and
+# came back unchanged, so the run stands. `docs/RIG-SWEEP_2026-09-12.md`.
+#
+#     Aug (horizontal)          Sep (vertical)
+#     30 Hz 2                   30 Hz 2
+#     40 Hz 3                   40 Hz 2
+#     50 Hz 3                   50 Hz 3
+#     60 Hz 2                   60 Hz 4  <- off the top of the scale
+#     70 Hz 1  <- null          70 Hz 2  <- the null is GONE
+#     85 Hz 2                   85 Hz 2
+#    100 Hz 2                  100 Hz 2
+#    120 Hz 1                  120 Hz 2
+#    140 Hz 0.5                140 Hz 2
+#
+# **The 4 at 60 Hz is a real reading, not a typo.** The 0-3 scale ran out and
+# the driver said so; it was confirmed scale-free by paired comparison against
+# 50 Hz ("60 is stronger") and corroborated acoustically - 60 Hz showed the
+# loudest fundamental of the set by 18 dB.
+#
+# **What changed and why it matters more than the numbers.** The old table was
+# two narrow peaks either side of a dead spot, which is the signature of a
+# COMPLIANT path: the seat brackets' bending modes gave resonant gain at
+# 40-55 and an antiresonance at 70. Turning the transducer vertical moved the
+# drive from those brackets' weak axis onto their stiff one (75x6 flat bar
+# bends 156x more easily one way than the other), so the bracket modes stopped
+# shaping the response. What is left is flat-at-2 from 70 to 140 plus the
+# transducer's OWN resonance at 60, previously masked.
+#
+# So the constraint that shaped every placement decision before this - "two
+# narrow usable regions, so frequency separates nothing" - no longer holds.
+FELT_RESPONSE = ((30.0, 2.0), (40.0, 2.0), (50.0, 3.0), (60.0, 4.0),
+                 (70.0, 2.0), (85.0, 2.0), (100.0, 2.0), (120.0, 2.0),
+                 (140.0, 2.0))
+# The one remaining peak is the reaction mass's own resonance - and it is the
+# LEAST usable frequency on the rig, not the most, because excursion peaks
+# there too and it runs out of travel 12 dB before anywhere else. Felt
+# response and usable range point in opposite directions here; see
+# `KNOCK_ONSET_DBFS` and `PERCEPTION_FLOOR_DBFS` below, which together are
+# what placement should actually be decided on.
+FELT_PEAK_LOW = (50.0, 60.0)
+FELT_PEAK_HIGH = (70.0, 140.0)
+# **There is no null any more.** `FELT_NULL_HZ` was 70.0 and is deliberately
+# not replaced: it was the brackets' antiresonance, not a property of the
+# transducer, and the stiff path does not have one. Nothing may route around
+# a dead spot that no longer exists.
+FELT_NULL_HZ = None
+
+# **What the driver can FEEL, by frequency** - measured 12 Sep 2026 by adaptive
+# staircase, binary felt/not-felt, amp 35, driver in the seat. Nine catch
+# trials (silent, presented at random) drew zero false alarms, so these came
+# from sensation rather than expectation. Biased about 1 dB low by the method.
+#
+# Only four frequencies were measured; the rest of the band is unknown and is
+# deliberately not interpolated here, because a floor is the kind of number
+# that gets quoted as though it were measured everywhere.
+PERCEPTION_FLOOR_DBFS = ((40.0, -25.0), (60.0, -35.0), (100.0, -27.5),
+                         (120.0, -28.5))
+
+# **Usable range = knock ceiling - perception floor, and THIS is what an effect
+# needs, not loudness.** A cue with 3 dB of range is a switch; one with 25 dB
+# is an instrument.
+#
+#     40 Hz   19 dB
+#     60 Hz   17 dB   <- the most SENSITIVE frequency, and the least usable
+#    100 Hz   22 dB
+#    120 Hz   25.5 dB <- the best, and August's table called it dead
+#
+# 60 Hz is felt 10 dB earlier than anywhere else and has the narrowest range
+# on the rig, because it runs out of travel almost immediately. Every
+# placement decision made before 12 Sep 2026 was made on sensitivity alone.
 
 
 def felt_response(frequency: float) -> float:
@@ -213,6 +278,30 @@ CALIBRATION_AMPLITUDE = 0.5
 AMP_VOLUME_AT_CALIBRATION = 35
 AMP_VOLUME_MAX = 50
 
+# **The knob had to come down after the remount: 35 -> 29.** Measured in the
+# seat on 12 Sep 2026, not derived. At 35 the vertical mount put `impact` into
+# the transducer's end stops on every hard kerb - the driver heard it, and a
+# replay of twelve of his own laps put that effect at 0.489 at 56 Hz against a
+# knock onset near -18 dBFS there.
+#
+# 29 was chosen as roughly 6 dB down and then CONFIRMED by test rather than by
+# arithmetic: `impact` at full intensity and `rear_traction` at full severity
+# were each played through the real mix and reported clean, the latter
+# "feels good".
+#
+# What it costs, and it is worth saying because it will be felt: about 6 dB off
+# everything. The event cues keep 9-16 dB over the measured perception floors
+# and survive. The BEDS do not - `road`, `engine` and `chassis_load` were
+# already sitting at or below the floor at 35 and go under it at 29. The rig
+# reads sparse: events without a bed beneath them.
+#
+# That is a stopgap for one race, not a setting to build on. The real answer is
+# a spectral plan that puts each effect where the rig has range for it, which
+# needs `docs/RESEARCH-VEHICLE-FREQUENCIES_2026-09-12.md` first, because the
+# 130 Hz trial showed placement is bounded by what a band MEANS to the driver
+# and not only by what the hardware can deliver there.
+AMP_VOLUME_RACE_2026_09_13 = 29
+
 # What is left above the reference, and it is deliberate rather than spare.
 # Sustained content sits at or below -6 dBFS; a discrete event may use the
 # 6 dB above it. That reserve is what makes a kerb strike read as an EVENT
@@ -226,6 +315,85 @@ TRANSIENT_CEILING = 0.71                       # -3 dBFS
 # hardware from damage, it is about not having the transducer mute itself
 # mid-race.
 HARD_LIMIT = 0.89                              # -1 dBFS
+
+# **The ceiling is a CURVE, not a number, and this is the constraint that
+# actually binds this rig.** Measured 12 Sep 2026, amp 35, driver in the seat,
+# after the transducer was remounted vertically - see
+# `docs/RIG-SWEEP_2026-09-12.md`.
+#
+# Mounted vertically the reaction mass sits off-centre under gravity, so the
+# travel available in one direction is reduced and the mass reaches its stop
+# at levels the horizontal mount never approached. Where that happens depends
+# entirely on frequency, because excursion peaks at the mass's own resonance
+# (60 Hz here) and falls away either side.
+#
+# Each entry is the level at which knock began, in dBFS. `knock_ceiling()`
+# applies a safety margin below it.
+#
+#     30 Hz  none to -3      85 Hz  -6
+#     40 Hz  none to -3 *   100 Hz  -6
+#     50 Hz  -6             120 Hz  none to -3
+#     60 Hz  -18            150 Hz  none to -3
+#     70 Hz  -9
+#
+# * 40 Hz shows no SUSTAINED knock, but the driver heard two discrete thuds in
+#   a ten-second tone at -12 dBFS. Intermittent contact is not measurable by
+#   the instrument built for this (its impulse detector fired on ~70% of all
+#   rows and was withdrawn), so 40 Hz carries the driver's figure, not a
+#   machine's, and is the one entry here that is an ear rather than a curve.
+#
+# **Why this exists at all.** `SUSTAINED_CEILING` is one scalar and the
+# limiter was frequency-blind, so it drove `impact` to 0.489 at 56 Hz while
+# believing it was inside budget - about 13 dB past where that frequency runs
+# out of travel, on every kerb strike of every lap. A single ceiling cannot
+# express a constraint that moves by 15 dB across the band.
+KNOCK_ONSET_DBFS = ((30.0, -3.0), (40.0, -12.0), (50.0, -6.0), (60.0, -18.0),
+                    (70.0, -9.0), (85.0, -6.0), (100.0, -6.0), (120.0, -3.0),
+                    (150.0, -3.0))
+# Knock is a cliff, not a slope - 6 dB separated clean from knocking at 60 Hz -
+# so the margin is small on purpose. Bigger would cost real output everywhere
+# to buy nothing.
+KNOCK_MARGIN_DB = 3.0
+
+
+def knock_ceiling(frequency: float) -> float:
+    """The largest amplitude this rig can deliver at `frequency` without knock.
+
+    Interpolated in dB between measured points, with `KNOCK_MARGIN_DB` of
+    margin, and never above `TRANSIENT_CEILING` - this is a cap, not a target.
+
+    Measured, not modelled. Outside the measured span it holds the end value
+    rather than extrapolating: below 30 Hz the amplifier's 25 Hz low-cut makes
+    the question moot, and above 150 Hz nothing is placed.
+    """
+    points = KNOCK_ONSET_DBFS
+    if frequency <= points[0][0]:
+        onset = points[0][1]
+    elif frequency >= points[-1][0]:
+        onset = points[-1][1]
+    else:
+        onset = points[-1][1]
+        for (lo_hz, lo), (hi_hz, hi) in zip(points, points[1:]):
+            if lo_hz <= frequency <= hi_hz:
+                span = hi_hz - lo_hz
+                onset = lo + (hi - lo) * (frequency - lo_hz) / span
+                break
+    return min(TRANSIENT_CEILING, float(10 ** ((onset - KNOCK_MARGIN_DB) / 20)))
+
+
+def knock_ceiling_for_band(freq_lo: float, freq_hi: float) -> float:
+    """The safe amplitude for an effect occupying `freq_lo`..`freq_hi`.
+
+    **Evaluated at the TOP of the band, not the worst point in it**, because
+    in this synth pitch rises with the effect's own intensity: an effect is
+    only down at `freq_lo` when it is quiet, and only reaches full amplitude
+    at `freq_hi`. The worst frequency and the worst amplitude never coincide.
+
+    Taking the minimum across the band instead - the obvious reading, and the
+    first thing written here - would have throttled `brake_limit` by 4.6 dB to
+    protect it at 40 Hz, a level it only ever visits at a whisper.
+    """
+    return knock_ceiling(float(freq_hi) if freq_hi else float(freq_lo))
 
 # Whether the amplifier has anything left. It has: 35 of 50, about 3 dB.
 #

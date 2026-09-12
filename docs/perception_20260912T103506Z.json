@@ -1,0 +1,34 @@
+{
+  "measured_utc": "20260912T103506Z",
+  "amp_volume": 35,
+  "results": [
+    {
+      "freq": 60.0,
+      "threshold_db": -35.0,
+      "trials": 11,
+      "catches": 2,
+      "false_alarms": 0
+    },
+    {
+      "freq": 120.0,
+      "threshold_db": -28.5,
+      "trials": 13,
+      "catches": 2,
+      "false_alarms": 0
+    },
+    {
+      "freq": 100.0,
+      "threshold_db": -27.5,
+      "trials": 9,
+      "catches": 2,
+      "false_alarms": 0
+    },
+    {
+      "freq": 40.0,
+      "threshold_db": -25.0,
+      "trials": 9,
+      "catches": 3,
+      "false_alarms": 0
+    }
+  ]
+}

@@ -104,8 +104,18 @@ def _play(block: np.ndarray, *, exclusive: bool = False) -> str:
     return how
 
 
-def _play_metered(block: np.ndarray, *, exclusive: bool = True) -> str:
+def _play_metered(block: np.ndarray, *, exclusive: bool = False) -> str:
     """Play, and ask Windows whether the card actually rendered it.
+
+    **Shared by default, because exclusive renders NOTHING on this device.**
+    This defaulted to exclusive until 12 Sep 2026, which put every tone it
+    played into the one mode `transducer.EXCLUSIVE = False` exists to record as
+    broken: the stream opens, reports a sensible latency, and the piston stays
+    dead. A whole response sweep would have come back rated 0 with the rig
+    working perfectly - and the endpoint meter below would have said so, in a
+    line nobody reads until the ratings make no sense. Caught before the first
+    tone of the post-remount sweep; the default is the measured fact now, and
+    exclusive is opt-in for the day a different device behaves differently.
 
     Added after a bench session went sideways: a 40 Hz tone rated "strong"
     read as nothing a few minutes later, and there was no way to tell whether
@@ -226,7 +236,9 @@ def cmd_band(args) -> int:
           f"for {args.seconds:.0f}s.")
     block = _tone(args.freq, args.seconds, args.amplitude,
                   left=True, right=True)
-    print(f"  {_play_metered(block, exclusive=not args.shared)}")
+    if getattr(args, "shared", False):
+        print("  (--shared is the default now; the flag does nothing)")
+    print(f"  {_play_metered(block, exclusive=args.exclusive)}")
     print("  0 nothing, 1 faint, 2 clear, 3 strong?")
     return 0
 
@@ -368,8 +380,15 @@ def main() -> int:
     band.add_argument("--freq", type=float, required=True)
     band.add_argument("--seconds", type=float, default=3.0)
     band.add_argument("--amplitude", type=float, default=DEFAULT_AMPLITUDE)
+    band.add_argument("--exclusive", action="store_true",
+                      help="exclusive mode - renders NOTHING on this rig, "
+                           "kept only for testing a different device")
+    # Accepted and ignored: shared is the default now, and the sweep of
+    # 12 Sep 2026 is written up as having been run with this flag. Erroring
+    # on it would make that record look wrong; ignoring it silently would be
+    # its own trap, so it says so.
     band.add_argument("--shared", action="store_true",
-                      help="shared mode, where the endpoint meter is valid")
+                      help=argparse.SUPPRESS)
     band.set_defaults(run=cmd_band)
 
     cal = subs.add_parser("calibrate", help="set the amp against a reference")
