@@ -2543,6 +2543,25 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Row 2.4 re-lit, 12 Sep, with the driver's authorisation.** The substrate was
+frozen exactly where the row said: **3961 grip observations, none past session
+88**, nothing at all for Daytona, Sardegna, Mount Panorama, Spa's full course
+or the Red Bull Ring, and **Deep Forest at zero**.
+- **6395 observations now** from 1094 laps, 715 counting toward a fit, and
+  **140 tyre models replacing 84**. Deep Forest reports `n=43` on RS with one
+  speakable scope where it had nothing.
+- **Corner models built for two of the three.** Sardegna and Deep Forest
+  segmented from their fastest counted lap carrying frames - the same
+  reference `export/build.py` and the controller choose, because that lap
+  defines the corner identities and two choices give two models. Six corners
+  each, `source='auto-segment'`, which is the honest declaration and leaves
+  `refusals.md` true. **Suzuka has no counted lap carrying frames at all**, so
+  it has no model and gets none: an invented one is worse than none.
+- **Order matters and I had it wrong first.** The derivation ran before the
+  corner models existed, so it wrote lap observations and no CORNER
+  observations - `data_health` then read "corner model stored; no observations
+  derived yet". Re-derived after, which is the only order that works.
+
 **The corner-source defect fixed, 12 Sep - and the gate retired itself as
 designed.** `build_track_map.py` updated `corners_json` and never `source`, so
 a world-anchored model still exported as `auto-segment`, which is the one
