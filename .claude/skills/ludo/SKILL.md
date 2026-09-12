@@ -416,7 +416,7 @@ a whole archive) go to a subagent.
 
 ## Proposing something new
 
-**In `references/dispatch.md`** (row 2.9).
+**The four gates are in `references/refusals.md`** — gate 1 does the work. The block shape a proposal takes is in `references/dispatch.md`.
 
 ## The record — every Ludo decision, without exception
 

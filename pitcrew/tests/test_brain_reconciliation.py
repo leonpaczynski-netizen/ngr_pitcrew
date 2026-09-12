@@ -1668,22 +1668,39 @@ def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
     # changed, because that is the day the refusal stopped being true. It did,
     # the block was rewritten in the same commit, and the check now holds the
     # tool to the declaration instead.
-    assert "source" in columns, (
-        "build_track_map no longer writes corner_models.source - a "
-        "world-anchored model would export as `auto-segment`, which is the "
-        "one declaration CLAUDE.md 3.2 requires it to make")
-    # **And no eval may still assert the defect it fixed.** Eval 17 told Ludo
-    # the tool "cannot honestly be run at all" because it never wrote
-    # `source` - true when written, false two commits later, and a Ludo
-    # answering CORRECTLY then failed its own eval and was pushed to tell the
-    # driver something false about his own tooling. The evals are the one
-    # artefact in this skill with nothing holding them to the tree; this is
-    # that check for the claim that has already gone stale once.
+    # **Both directions, and ONE assertion, so neither latches.** Eval 17 told
+    # Ludo the tool "cannot honestly be run at all" because it never wrote
+    # `source` - true when written, false two commits later, so a Ludo
+    # answering CORRECTLY failed its own eval. The first fix for that was an
+    # unconditional deny-list sitting under an eager `assert "source" in
+    # columns`, which is rule 10's defect with the working example three lines
+    # above it: in the direction the guard exists for - the code losing the
+    # declaration again - the assert above fired first and the eval's
+    # staleness was never reached, and there was no green state in which the
+    # tool lacked `source` and an eval truthfully said so. Collected and
+    # asserted once, it turns over the way the `source` check itself did.
+    declares = "source" in columns
     evals = (ROOT / ".claude/skills/ludo/evals/evals.json").read_text(
         encoding="utf-8")
+    problems = []
+    if not declares:
+        problems.append(
+            "build_track_map no longer writes corner_models.source - a "
+            "world-anchored model would export as `auto-segment`, which is "
+            "the one declaration CLAUDE.md 3.2 requires it to make")
     for dead in ("never `corner_models.source`", "cannot honestly be run"):
-        assert dead not in evals, (
-            f"an eval still asserts a defect the code has fixed: {dead!r}")
+        if declares and dead in evals:
+            problems.append(
+                f"an eval still asserts a defect the code has fixed: {dead!r}")
+    # **No arm requires an eval to DOCUMENT the defect.** The obvious
+    # symmetry - "the tool stopped declaring and no eval says so" - would
+    # make a broken tool green as soon as an eval described it, and would
+    # oblige the evals to carry a defect's obituary. Losing the declaration
+    # is a fault in its own right (§3.2), so it is reported whatever the
+    # evals say; what the evals may not do is contradict a tool that is
+    # behaving. The two are reported together rather than one short-
+    # circuiting the other, which is the part that was wrong.
+    assert not problems, problems
 
     # **A backstop, and only that.** A deny-list cannot referee contradiction
     # in general - but absolution is the one class of edit that has now been

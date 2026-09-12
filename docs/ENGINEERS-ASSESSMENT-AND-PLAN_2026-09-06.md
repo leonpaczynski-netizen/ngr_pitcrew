@@ -2644,6 +2644,24 @@ file is auto-segmented; running a writer as a step in a diagnosis; planning a
 "did not happen"; quoting the derived shift table as the issued one; and
 planning on a pit loss with the refuelling still inside it.
 
+**And the guard I wrote for that was rule 10 again, with the working example
+three lines above it.** I told the critic the eval check was *"keyed on the
+same `UPDATE corner_models SET` parse"*. **It never read the parse at all** - an
+unconditional deny-list on two literals, sitting under an eager `assert
+"source" in columns`. So in the one direction it existed for - the code losing
+the declaration again - the assert fired first and the eval's staleness was
+never reached. **And my mutation had tested only the arm that works**, which is
+the same failure this whole chain has been correcting. Collected into one
+assertion now, so neither short-circuits the other, and checked in all four
+states rather than one.
+- **Where I did not take the critic's shape, and why.** It wanted the state
+  "tool stops declaring, an eval says so" to go GREEN. It should not: losing
+  the declaration is a §3.2 fault in its own right, and the symmetric arm -
+  *"the tool stopped declaring and no eval says so"* - would make a broken tool
+  green the moment an eval described it, and would oblige the evals to carry a
+  defect's obituary. The rule is: **the evals may not contradict a tool that is
+  behaving; a tool that is not behaving is reported whatever they say.**
+
 **Row 2.9, final pass: an eval outlived the defect it described, and my own
 commit is what orphaned it.** Eval 17 told Ludo that `build_track_map` *"cannot
 honestly be run at all"* because it updates `corners_json` and never `source`.
