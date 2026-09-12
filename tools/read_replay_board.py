@@ -171,14 +171,35 @@ NAME_SHAPE = (64, 16)
 # populations very nearly touch, so no threshold separates them reliably and
 # raising this one buys a merge of two real drivers.
 #
-# **It is left where it is, and the old reasoning for widening it is
-# withdrawn.** That reasoning - *"a split invents a driver and is
-# invisible"* - was true when the operator was handed the unreadable 64x16
-# exemplar. They are now handed the native crop, where `J.Jonas` twice is
-# plain, gets the same label twice, and costs nothing. A MERGE is the
-# expensive direction now: it puts one driver's name on another's car with
-# nothing left to notice it by.
-SAME_NAME_MAX_DIFF = 0.25
+# **And on a FULL GRID the populations do not merely touch - they overlap,
+# and 0.25 was on the wrong side of the overlap.** Every measurement above
+# comes from a race with two or three rivals. Daytona 143 has eleven, and five
+# names read off it by eye measure:
+#
+#     Magical daddy / Magical daddy  0.017   SAME driver, twelve laps apart
+#     Magical daddy / ZenPhilosopher 0.229   different drivers
+#     CruisingChaos / Magical daddy  0.250   different drivers
+#     K.Graebs / ZenPhilosopher      0.253   different drivers
+#
+# Three of the fifteen different-driver pairs fall under 0.25. A same-driver
+# pair sits at 0.017 and a different-driver pair at 0.229, so **no threshold
+# separates the two populations** - the nearest different pair is now BELOW
+# the 0.244 that two crops of one driver reached on Sardegna.
+#
+# **0.15, and the direction of the error is the whole argument.** The choice
+# is not between right and wrong, it is between splitting one driver into two
+# clusters and merging two drivers into one. A split is handed to the operator
+# as two readable crops carrying the same name, and costs a second line in the
+# roster. A merge puts one driver's name on another's car, is invisible from
+# that point on, and reaches the pre-race briefing as fact. So the bound sits
+# well below the closest different pair measured (0.229) and accepts that a
+# driver whose crops drift will arrive as two clusters.
+#
+# The old reasoning for widening it - *"a split invents a driver and is
+# invisible"* - is withdrawn. It was true when the operator was handed the
+# unreadable 64x16 exemplar and could not tell two clusters were one name.
+# They are handed the native crop now.
+SAME_NAME_MAX_DIFF = 0.15
 # **What to write against a cluster nobody can read.** The board reorders
 # between frames and a sample caught mid-reorder has two names rendered over
 # each other. Marking it explicitly leaves those contacts unnamed and lets the
@@ -454,31 +475,32 @@ def cluster(bitmaps: list) -> list[dict]:
         else:
             groups.append({"bits": bits, "sum": bits.astype(float),
                            "seen": [key]})
-    # **A pass over the finished exemplars, because one streaming pass is
-    # order-dependent and that is what actually splits a driver in two.**
-    # Each bitmap is compared against an average that has not converged yet,
-    # so a cluster founded early on an atypical crop never gets re-examined -
-    # nothing re-compares two groups once both exist. Sardegna 159 ended with
-    # `J.Jonas` as two clusters whose FINAL exemplars are 0.244 apart, inside
-    # this same threshold: by the end the evidence said one driver and the
-    # answer still said two. Repeating to a fixed point makes the result
-    # independent of the order the frames arrived in.
-    merged = True
-    while merged and len(groups) > 1:
-        merged = False
-        for i in range(len(groups)):
-            for j in range(i + 1, len(groups)):
-                if (groups[i]["bits"] != groups[j]["bits"]).mean() \
-                        < SAME_NAME_MAX_DIFF:
-                    groups[i]["seen"].extend(groups[j]["seen"])
-                    groups[i]["sum"] = groups[i]["sum"] + groups[j]["sum"]
-                    groups[i]["bits"] = (
-                        groups[i]["sum"] / len(groups[i]["seen"])) > 0.5
-                    del groups[j]
-                    merged = True
-                    break
-            if merged:
-                break
+    # **There is deliberately NO merge pass over the finished exemplars, and
+    # the one that was here for a day is the reason this paragraph exists.**
+    #
+    # It was added for a real defect: one streaming pass compares each bitmap
+    # against an average that has not converged, so Sardegna 159 ended with
+    # `J.Jonas` as two clusters whose final exemplars were 0.244 apart, inside
+    # this threshold. Repeating to a fixed point fixed that - on a race with
+    # two rivals.
+    #
+    # **On a twelve-car grid it collapsed the field.** Daytona 143 came back
+    # with 856 of 1,078 sightings in ONE cluster, because different drivers'
+    # names are not 0.28 apart once there are more than a few of them:
+    #
+    #     Magical daddy / ZenPhilosopher   0.229   DIFFERENT drivers
+    #     CruisingChaos / Magical daddy    0.250   DIFFERENT drivers
+    #     Magical daddy / Magical daddy    0.017   same driver, two laps apart
+    #
+    # Three of fifteen different-driver pairs fell under the threshold, and a
+    # transitive closure over those merges the grid: A joins B, B joins C, and
+    # nothing ever compared A with C. The streaming pass is spared this only
+    # because it asks "which EXISTING group is nearest" one bitmap at a time,
+    # which is not transitive and cannot chain.
+    #
+    # So the order-dependence is real and is left unfixed on purpose: it costs
+    # a split, which the operator sees and labels twice. A chain costs a
+    # driver's identity, silently.
     groups.sort(key=lambda group: -len(group["seen"]))
     return groups
 

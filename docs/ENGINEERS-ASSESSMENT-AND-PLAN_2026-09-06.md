@@ -2876,6 +2876,49 @@ longer exists to re-read.
   a claim in a file, not a measurement in front of me, and one frame settled
   it.
 
+**Row 3.2, 12 Sep, later: I made the SAME over-generalisation twice in one
+batch, and the second one shipped.** The paragraph above records measuring the
+banner's spacing on a three-car board and building a guard from it, then having
+that falsified by a full board. In the same commit I added a merge pass to
+`cluster()` - justified on the same three-car race - and it collapsed a
+twelve-car grid.
+- **What it did.** Daytona session 143, the Round 6 league race, came back with
+  **856 of 1,078 sightings in ONE cluster**. The reader itself was faultless:
+  probed at nine points it tracked his row correctly the whole way from P2 to
+  P7, reading `CruisingChaos` ahead early, then `Magical daddy` /
+  `ZenPhilosopher`, then `PUNISHED` / `K.Graebs`. The clustering then threw
+  those distinctions away.
+- **Why.** Every distance in this file's history was measured on a race with
+  two or three rivals. On eleven, five names read off the crops by eye measure:
+
+      Magical daddy / Magical daddy   0.017   SAME driver, twelve laps apart
+      Magical daddy / ZenPhilosopher  0.229   different drivers
+      CruisingChaos / Magical daddy   0.250   different drivers
+      K.Graebs / ZenPhilosopher       0.253   different drivers
+
+  **Three of fifteen different-driver pairs fall under 0.25**, and a transitive
+  closure over those merges the grid: A joins B, B joins C, and nothing ever
+  compares A with C. The streaming pass is spared only because "which existing
+  group is nearest" is asked one bitmap at a time and cannot chain.
+- **Both changes are reverted, and the threshold moves with them.** No merge
+  pass, and `SAME_NAME_MAX_DIFF` 0.25 -> **0.15**. The populations genuinely
+  overlap - a same-driver pair at 0.017 and a different-driver pair at 0.229,
+  which is *below* the 0.244 two crops of one driver reached on Sardegna - so
+  **no threshold is correct** and the only choice is the direction of the
+  error. A split is two readable crops carrying one name and costs a line in
+  the roster; a merge puts one driver's name on another's car, is invisible
+  from then on, and arrives in the briefing as fact.
+- **The cost, measured, and it is the right cost.** 143 now returns 21 clusters
+  for 7 drivers - `PUNISHED` alone splits eight ways. Every one is legible and
+  labelled, and the seven are exactly the cars that finished P1-P6 and P8
+  around his P7, confirmed against the hub's own classification. That is the
+  doctrine working: the split is visible and cheap precisely because the crop
+  is readable, which is what the first half of this row bought.
+- **And the reason it was caught at all is that the driver handed over a
+  twelve-car race.** Both errors survived every test, both critics and my own
+  mutation sweep, because every artefact I had to measure against was a small
+  field. A guard measured on one race is a guard measured on one race.
+
 **Row 2.9, final pass: an eval outlived the defect it described, and my own
 commit is what orphaned it.** Eval 17 told Ludo that `build_track_map` *"cannot
 honestly be run at all"* because it updates `corners_json` and never `source`.

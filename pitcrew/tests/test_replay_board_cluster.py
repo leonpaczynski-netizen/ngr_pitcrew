@@ -41,10 +41,18 @@ def a_name(seed: int, shape=(16, 64), noise: float = 0.0):
 
 
 def test_the_same_name_seen_twice_is_one_cluster(board):
-    """The Spa 112 defect: PUNISHED came back as cluster 0 with 591 sightings
-    and cluster 9 with one, 0.205 apart against a threshold of 0.18."""
+    """Two crops of one driver a few frames apart measure 0.017 on Daytona
+    143 — the ordinary case, and it must not split.
+
+    This used to assert the same thing at 0.20, for the Spa 112 defect where
+    PUNISHED came back as two clusters 0.205 apart. That promise is withdrawn:
+    on a full grid, two DIFFERENT drivers measure 0.229, so a threshold able
+    to join a 0.205 pair also joins drivers who are not the same person. The
+    tool now splits rather than merges and the operator labels both.
+    """
     a = a_name(1)
-    b = a_name(1, noise=0.20)          # a little further apart than 0.205
+    b = a_name(1, noise=0.05)
+    assert (a != b).mean() < board.SAME_NAME_MAX_DIFF
     groups = board.cluster([("first", a), ("second", b)])
     assert len(groups) == 1
     assert len(groups[0]["seen"]) == 2
@@ -57,17 +65,19 @@ def test_two_different_names_stay_apart(board):
 
 
 def test_the_threshold_stays_below_the_nearest_different_pair_measured(board):
-    """Spa 112: same driver 0.205, nearest different pair 0.289. Sardegna 159
-    narrowed that to 0.244 and 0.283 — 0.039 apart in total.
+    """Spa 112 gave same-driver 0.205 / nearest different 0.289, Sardegna 159
+    gave 0.244 / 0.283 — both races with two or three rivals.
 
-    The binding constraint is the UPPER one. A merge puts one driver's name on
-    another's car and there is nothing left to notice it by; a split is now
-    cheap, because the operator is handed a readable crop and gives both
-    clusters the same label.
+    Daytona 143 has eleven, and two DIFFERENT drivers measure **0.229** there,
+    below the 0.244 that two crops of one driver reached on Sardegna. The
+    populations overlap, so no threshold is correct and the only choice is
+    which way to be wrong. A split is two readable crops carrying one name; a
+    merge is one driver's name on another's car, invisible from then on and
+    carried into the pre-race briefing.
     """
-    assert board.SAME_NAME_MAX_DIFF < 0.283, (
-        "above the nearest different pair measured, two real drivers merge")
-    assert board.SAME_NAME_MAX_DIFF > 0.205
+    assert board.SAME_NAME_MAX_DIFF < 0.229, (
+        "at or above the closest DIFFERENT pair measured, two real drivers "
+        "merge into one cluster and nothing downstream can tell")
 
 
 def test_a_bitmap_joins_its_NEAREST_cluster_not_the_first_one(board):
@@ -107,44 +117,46 @@ def test_nothing_at_all_clusters_to_nothing(board):
     assert board.cluster([]) == []
 
 
-def test_clustering_does_not_depend_on_the_order_frames_arrived(board):
-    """One streaming pass compares each bitmap against an average that has
-    not converged, so a cluster founded early on an atypical crop is never
-    re-examined — nothing re-compares two groups once both exist.
+def test_clustering_never_joins_two_names_through_a_third(board):
+    """**No transitive closure over the exemplars.**
 
-    Sardegna 159 ended with `J.Jonas` as two clusters whose final exemplars
-    were 0.244 apart, inside the threshold: by the end the evidence said one
-    driver and the answer still said two.
+    A merge pass to a fixed point was added on 12 Sep for a real defect — one
+    streaming pass left `J.Jonas` as two clusters on Sardegna — and it
+    collapsed a twelve-car grid the same day: Daytona 143 returned 856 of
+    1,078 sightings in ONE cluster holding CruisingChaos, Magical daddy and
+    ZenPhilosopher together. Different drivers measure 0.229 there, so A joins
+    B, B joins C, and nothing ever compared A with C.
+
+    The streaming pass asks "which EXISTING group is nearest" one bitmap at a
+    time. That is not transitive and cannot chain, and this pins it.
     """
     numpy = pytest.importorskip("numpy")
-    # Distances built exactly rather than sampled, so the split is forced
-    # rather than hoped for. Flat `true` is the name as it settles; `first`
-    # and `odd` are two early crops of it.
-    true = numpy.zeros((16, 64), dtype=bool)
-    first = true.copy()
-    first.reshape(-1)[:123] = True                     # 0.120 from `true`
-    odd = true.copy()
-    odd.reshape(-1)[123:328] = True                    # 0.200 from `true`
-    assert (first != odd).mean() > board.SAME_NAME_MAX_DIFF, (
-        "the two early crops must be far enough apart to split")
-    assert (true != odd).mean() < board.SAME_NAME_MAX_DIFF, (
-        "...and the settled exemplars close enough to belong together")
-
-    seen = [("first", first), ("odd", odd)] + [(f"t{i}", true)
-                                               for i in range(6)]
-    groups = board.cluster(seen)
-    assert len(groups) == 1, (
-        "the same driver came back as two clusters: `odd` arrived while the "
-        "running average was still `first`, and nothing re-compared them "
-        "once both groups existed")
-    assert len(groups[0]["seen"]) == 8
+    below = board.SAME_NAME_MAX_DIFF * 0.6
+    a = numpy.zeros((16, 64), dtype=bool)
+    b = a.copy()
+    b.reshape(-1)[:int(1024 * below)] = True
+    c = a.copy()
+    c.reshape(-1)[int(1024 * below):int(1024 * below * 2)] = True
+    # A-B and A-C are each inside the threshold; B-C is outside it.
+    assert (a != b).mean() < board.SAME_NAME_MAX_DIFF
+    assert (a != c).mean() < board.SAME_NAME_MAX_DIFF
+    assert (b != c).mean() > board.SAME_NAME_MAX_DIFF, (
+        "the fixture must make B and C genuinely different drivers")
+    groups = board.cluster([("b", b), ("c", c), ("a", a)])
+    assert len(groups) >= 2, (
+        "B and C were joined through A — a chain, which is how a grid "
+        "collapses into one driver")
 
 
-def test_two_real_drivers_are_not_merged_by_that_pass(board):
-    """The merge uses the same threshold, so it can only join what the
-    threshold already calls one name. Jonas and Graebs measured 0.283."""
-    groups = board.cluster([("a", a_name(12)), ("b", a_name(13))])
-    assert len(groups) == 2
+def test_two_different_drivers_measured_apart_stay_apart(board):
+    """Magical daddy and ZenPhilosopher measured 0.229 on Daytona 143."""
+    numpy = pytest.importorskip("numpy")
+    x = numpy.zeros((16, 64), dtype=bool)
+    y = x.copy()
+    y.reshape(-1)[:int(1024 * 0.229)] = True
+    groups = board.cluster([("x", x), ("y", y)])
+    assert len(groups) == 2, (
+        "two drivers measured 0.229 apart were merged into one")
 
 
 # ------------------------------------------- what the operator is handed to read
