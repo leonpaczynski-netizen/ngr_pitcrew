@@ -250,6 +250,21 @@ def test_the_reading_path_never_returns_the_banner(board):
         "last on the board: the car ahead, and nobody behind")
 
 
+def test_the_purple_lap_time_bar_is_not_a_row(board):
+    """GT7 draws a fastest-lap TIME bar about 22 px under the banner, and it
+    passes the flag test — measured RGB (100, 78, 153) on a Daytona frame.
+
+    So the banner is routinely NOT the bottom-most flag, and a rule that
+    looked for the bottom-most flag sailed straight past it. Real geometry
+    from session 143: board, banner at 593, time bar at 615, track paint
+    at 645.
+    """
+    flags = [196, 265, 330, 371, 411, 451, 493, 533, 593, 615, 645]
+    board_only = [196, 265, 330, 371, 411, 451, 493, 533]
+    assert board._rungs(flags, 265) == board_only, (
+        "the banner, its time bar, or the track below them became rungs")
+
+
 def test_a_close_banner_is_refused_too(board):
     """The step rule does not catch this one and cannot.
 
@@ -413,11 +428,21 @@ def test_the_board_keeps_the_run_holding_his_own_row(board):
 
 
 def test_a_gap_row_step_still_counts_as_one_board(board):
-    """67-72 px is a gap row, not another panel. Splitting there would cut the
-    board in half and lose the cars below the split."""
+    """67-72 px is a gap readout, not another panel. Splitting there would cut
+    the board in half and lose the cars past the split.
+
+    **He must sit BETWEEN the two wide steps**, because that is the only place
+    GT7 draws them — one readout above his row and one below. A fixture with
+    both wide steps on the same side of him is not a board GT7 can draw, and
+    asserting against it tests nothing real.
+    """
     numpy = pytest.importorskip("numpy")
-    order = [197, 265, 304, 371]
+    order = [197, 265, 304, 371]        # wide 68, plain 39, wide 67
     pixels = _rows_with_a_banner(numpy, board, order, 700)
+    # `_rows_with_a_banner` makes the FIRST row his; put him on the second so
+    # one readout falls above him and one below.
+    pixels[197 - 13:197 + 13, board.NAME_X[0]:board.NAME_X[1]] = 90
+    pixels[265 - 13:265 + 13, board.NAME_X[0]:board.NAME_X[1]] = 200
     assert board.board_rows(pixels, order) == order
 
 
@@ -440,6 +465,51 @@ def test_no_rows_and_one_row_are_handled(board):
     pixels = numpy.zeros((800, 400, 3), dtype=numpy.uint8) + 30
     assert board.board_rows(pixels, []) == []
     assert board.board_rows(pixels, [200]) == []
+
+
+@pytest.mark.parametrize("label,flags,anchor,want", [
+    # Sardegna 159: he LEADS, sky 34 px above the top row, banner 288 below.
+    # The sky was being returned as "the car ahead" of the race leader.
+    ("s159 leading, sky above",
+     [162, 196, 261, 304, 592], 196, [196, 261, 304]),
+    # ...and the same board with him LAST, where the banner is the next row.
+    ("s159 last", [196, 261, 304, 592], 304, [196, 261, 304]),
+    # Daytona 142, a FULL board: the banner is 60 px below the last car,
+    # closer than the 66-67 px gap readouts. No step threshold separates it.
+    ("s142 full board, banner 60 px down",
+     [196, 235, 276, 316, 356, 423, 489, 529, 589], 423,
+     [196, 235, 276, 316, 356, 423, 489, 529]),
+    # Daytona 143, him near the top and then mid-board.
+    ("s143 near the top",
+     [193, 264, 331, 369, 411, 452, 491, 529, 593], 264,
+     [193, 264, 331, 369, 411, 452, 491, 529]),
+    ("s143 mid-board",
+     [193, 234, 276, 314, 356, 424, 491, 529, 589], 424,
+     [193, 234, 276, 314, 356, 424, 491, 529]),
+])
+def test_the_board_is_the_rungs_at_one_pitch_around_his_row(
+        board, label, flags, anchor, want):
+    """Real row geometries, read off four captures.
+
+    Two absolute thresholds were tried before this and both were wrong, for
+    the same reason: the banner's distance from the board is not a constant.
+    259-291 px on a three-car board, **60 px** on a full one — closer than the
+    gap readout above his own row.
+    """
+    assert board._rungs(flags, anchor) == want, label
+
+
+def test_scenery_closer_than_a_pitch_cannot_become_the_pitch(board):
+    """`MIN_PITCH` is a floor on what may be PROPOSED as the pitch.
+
+    On a short board the anchor tie-break is not enough: with sky 34 px above
+    a two-car board at a 40 px pitch, a pitch of 34 builds a THREE-rung run
+    (sky, him, the car below as a wide step) and beats the real board's two.
+    The floor is what stops 34 being a candidate at all.
+    """
+    assert board.MIN_PITCH > 34, "the measured sky gap must not be a pitch"
+    assert board._rungs([162, 196, 236], 196) == [196, 236], (
+        "scenery 34 px above a two-car board became a rung")
 
 
 def test_the_step_threshold_clears_a_doubled_gap_row(board):

@@ -109,6 +109,17 @@ FLAG_MAX_H = 34
 # board splits at exactly his row and a row at the split boundary is read as a
 # neighbour.
 MAX_ROW_STEP = 150
+# The closest two rungs of a real board have ever been, and it is a floor on
+# what may be PROPOSED as the pitch, not merely on what may be accepted.
+# Measured 37-72 px between rows; the sky that was being read as the car ahead
+# of the race leader sat 34 px above the top row, and at 30 that 34 became a
+# candidate pitch under which the sky was a rung and the real board was not.
+MIN_PITCH = 37
+# ...and the widest a real pitch has ever been. **A two-row run always
+# validates at its own step**, so without a ceiling the board and the banner
+# 288 px below it form a perfectly good "board of two" at a pitch of 288.
+# Measured 37-72 between rows, gap readouts included; 80 clears that.
+MAX_PITCH = 80
 # How far his white-backed row must out-shine every other flag in the picture,
 # and how bright it must be in absolute terms. Measured 171-203 for his row
 # against 75-147 for the brightest other; the banner sits at 15-27.
@@ -276,6 +287,71 @@ def _brightness(pixels, rows: list[int]) -> list[float]:
     return [pixels[y - 13:y + 13, NAME_X[0]:NAME_X[1]].mean() for y in rows]
 
 
+def _walk(rows: list[int], anchor: int, pitch: int, tol: int, wide: list[int]):
+    """Rungs reachable from `anchor` in one direction at this pitch."""
+    out, here = [], anchor
+    order = [y for y in rows if y > anchor]
+    for y in order:
+        step = y - here
+        if abs(step - pitch) <= tol:
+            pass
+        elif step < pitch - tol:
+            continue                    # closer than the pitch: not a rung
+        elif pitch < step <= 2.2 * pitch and not wide:
+            wide.append(step)
+        else:
+            break
+        out.append(y)
+        here = y
+    return out
+
+
+def _rungs(rows: list[int], anchor: int, tol: int = 5) -> list[int]:
+    """The board, as the rungs that sit at one pitch around HIS row.
+
+    **Two absolute thresholds were tried here first and both were wrong**, and
+    the reason each failed is the same: the fastest-lap banner's distance from
+    the board is not a constant. On a three-car board it is 259-291 px away
+    because nothing is between them; on a full board it is **60 px**, closer
+    than the gap readout above his own row. No single number separates them.
+
+    What does is the shape GT7 actually draws: rows at one pitch, with a gap
+    readout - the pitch plus a constant - above AND below his own row, and
+    never anywhere else. So a board admits at most TWO wider steps and they
+    are equal to each other. On Daytona 142 that is exactly what excludes the
+    banner: walking down from his row the two wide steps are spent on the gap
+    readouts (67 and 66), and the banner's 60 px step has no allowance left.
+    The same walk refuses scenery 34 px above the top row, because 34 is
+    closer together than the 40 px pitch and nothing is drawn that close.
+
+    This is `telemetry/board._ladder`'s rule, which was measured over 73 frames
+    for the live pit wall. The one thing added is the anchor: his row is known
+    here, so a tie between two equally long runs is broken by the LARGER
+    pitch - a stray row nearer than the true pitch manufactures a smaller
+    candidate, and that is precisely the case to reject.
+    """
+    if len(rows) < 2:
+        return list(rows)
+    steps = sorted({b - a for a, b in zip(rows, rows[1:])
+                    if MIN_PITCH <= b - a <= MAX_PITCH})
+    if not steps:
+        return [anchor]
+    best: list[int] = []
+    for pitch in steps:                        # ascending; larger wins ties
+        # **One wide step each way, not two shared.** GT7 draws a gap readout
+        # above his row AND below it - one per side - so a budget shared
+        # between the walks is spent by whichever runs first. It was, on the
+        # banner, and the walk back up the board then died at the real gap
+        # readout and lost every row above him.
+        below = _walk(rows, anchor, pitch, tol, [])
+        above = [-y for y in _walk([-y for y in reversed(rows)], -anchor,
+                                   pitch, tol, [])]
+        run = sorted(above) + [anchor] + below
+        if len(run) >= len(best):
+            best = run
+    return best
+
+
 def board_rows(pixels, rows: list[int]) -> list[int]:
     """Of everything wearing a flag, the rows that are the running order.
 
@@ -311,23 +387,13 @@ def board_rows(pixels, rows: list[int]) -> list[int]:
     if lit[best] < OWN_ROW_MIN_LUM:
         return []
     anchor = rows[best]
-    runs, run = [], [rows[0]]
-    for previous, y in zip(rows, rows[1:]):
-        if y - previous <= MAX_ROW_STEP:
-            run.append(y)
-        else:
-            runs.append(run)
-            run = [y]
-    runs.append(run)
-    for candidate in runs:
-        if anchor in candidate:
-            # **A lone row is not a running order.** A run of one means his
-            # row was found with no neighbour inside a board's pitch of it -
-            # there is nobody to name, and saying so here means the frame is
-            # COUNTED as one his row could not be told apart rather than
-            # passing silently on index arithmetic that falls off both ends.
-            return candidate if len(candidate) > 1 else []
-    raise AssertionError("the anchor is one of the rows the runs partition")
+    kept = _rungs(rows, anchor)
+    # **A lone row is not a running order.** A run of one means his row was
+    # found with no neighbour at the board's own pitch - there is nobody to
+    # name, and saying so here means the frame is COUNTED as one his row could
+    # not be told apart rather than passing silently on index arithmetic that
+    # falls off both ends.
+    return kept if len(kept) > 1 else []
 
 
 def own_row(pixels, rows: list[int]) -> int | None:
@@ -431,7 +497,39 @@ def read_frame(pixels, tally=None):
     # as a `behind` contact on the early laps before anyone has set a fastest
     # lap and the banner is absent - a contact dropped, never a contact
     # invented, which is the only direction this defect may be wrong in.
-    bottom = flags[-1] if flags else None
+    # **Only the bottom row reached by a WIDE step is refused**, not every
+    # bottom row. The pitch walk above already excludes the banner whenever a
+    # car sits below him, because the two gap readouts have spent the wide
+    # allowance. What it cannot settle is the case where he IS last: the step
+    # down to the banner then looks exactly like the step down to a car below
+    # a gap readout, and geometry has nothing left to say.
+    #
+    # Refusing every bottom row cost 9 real cars and caught 0 banners across
+    # 112 full-board frames, because most bottom rows sit at the plain pitch -
+    # a car below a car, with no readout between - and the banner never does.
+    # So the plain-pitch case is kept and only the ambiguous wide step is
+    # refused, where the safe direction is to lose a contact rather than
+    # invent a driver.
+    # **Keyed on the BOARD's last step, not on being last in the picture.**
+    # Keying it on `flags[-1]` was wrong twice over: GT7 draws a purple
+    # fastest-lap TIME bar about 22 px under the banner - measured RGB
+    # (100, 78, 153), which passes the flag test - and below that whatever the
+    # track is. So the banner is routinely NOT the bottom-most flag, and a
+    # rule that looked for the bottom-most flag sailed straight past it.
+    #
+    # The pitch walk drops both of those (22 px is closer than any pitch) and
+    # drops the banner too whenever a car sits below him, because the gap
+    # readouts have spent the wide allowance. The one case left is him LAST on
+    # the board, where the step down to the banner is indistinguishable from
+    # the step down to a car below a gap readout. Measured cost of refusing
+    # it: 9 real contacts across 270 full-board frames, all on an opening lap
+    # before any fastest lap existed. Measured cost of keeping it: a real
+    # driver's name on a car that was never there, invisible thereafter.
+    bottom = None
+    if len(rows) > 2:
+        span = [b - a for a, b in zip(rows, rows[1:])]
+        if span[-1] > min(span) + 5:
+            bottom = rows[-1]
     found = []
     for offset, side in ((-1, "ahead"), (1, "behind")):
         j = index + offset
@@ -644,13 +742,17 @@ def main() -> int:
             f"blocking the rest.")
 
     # Which name was beside him at each sample, by side.
-    named: dict[tuple[float, str], str] = {}
+    # **An unreadable sighting stays in this map, as `None`.** Dropping it
+    # entirely is not "those contacts stay unnamed", which is what `--apply`
+    # promises and what `UNREADABLE` exists for - it deletes the sighting, so
+    # the contact then matches the NEXT readable reading within the sampling
+    # interval and quietly inherits a neighbour's name. The one case the
+    # operator explicitly marked as unknowable is the one that got an answer.
+    named: dict[tuple[float, str], str | None] = {}
     for n, group in enumerate(groups):
         name = out[str(n)]["name"]
-        if name == UNREADABLE:
-            continue
         for key in group["seen"]:
-            named[key] = name
+            named[key] = None if name == UNREADABLE else name
 
     rows = store.list_traffic(args.session)
     if not rows:
@@ -671,7 +773,7 @@ def main() -> int:
     for side in by_side:
         by_side[side].sort()
 
-    written = 0
+    written, unreadable, far = 0, 0, 0
     for row in rows:
         candidates = by_side.get(row["side"] or "", [])
         best = None
@@ -679,11 +781,18 @@ def main() -> int:
             gap = abs(when - row["video_s"])
             if best is None or gap < best[0]:
                 best = (gap, name)
-        if best is not None and best[0] <= args.every:
-            store.name_traffic(row["id"], best[1])
-            written += 1
+        if best is None or best[0] > args.every:
+            far += 1
+            continue
+        if best[1] is None:
+            unreadable += 1          # nearest reading was marked `-`
+            continue
+        store.name_traffic(row["id"], best[1])
+        written += 1
     print(f"named {written} of {len(rows)} contact(s), matched within "
           f"{args.every:g} s of a board reading")
+    print(f"  {unreadable} left unnamed - the nearest reading was marked "
+          f"'{UNREADABLE}'; {far} had no reading within {args.every:g} s")
     return 0
 
 

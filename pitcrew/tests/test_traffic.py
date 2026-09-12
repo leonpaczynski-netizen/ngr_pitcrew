@@ -169,9 +169,18 @@ def test_a_name_is_never_carried_further_than_the_board_was_read():
     """Beyond one sampling interval the order may have changed in between,
     and a name carried across a pass names the wrong driver."""
     store_module = _board()
-    # The rule is expressed as `gap <= args.every` in the join; this asserts
-    # the tool exposes the interval it was read at rather than hard-coding a
-    # tolerance that could outlive its sampling.
+    # **The bound is the sampling interval, whatever it was set to** — not a
+    # tolerance of its own that could outlive the sampling. This used to grep
+    # `main` for the literal `best[0] <= args.every`, which is a pin on the
+    # prose: the guard was rewritten as `best[0] > args.every: continue`, the
+    # property unchanged, and the test failed anyway.
     import inspect
     source = inspect.getsource(store_module.main)
-    assert "best[0] <= args.every" in source
+    assert "args.every" in source, "the join no longer references the interval"
+    joined = [line for line in source.splitlines()
+              if "best[0]" in line and "args.every" in line]
+    assert joined, "no comparison of the match distance against the interval"
+    # And an unreadable reading must not be replaced by a readable neighbour.
+    assert "best[1] is None" in source, (
+        "a contact whose nearest reading was marked unreadable must stay "
+        "unnamed rather than inherit the next name within the interval")

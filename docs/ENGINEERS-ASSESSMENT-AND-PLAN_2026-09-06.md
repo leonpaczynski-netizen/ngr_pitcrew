@@ -2919,6 +2919,61 @@ twelve-car grid.
   mutation sweep, because every artefact I had to measure against was a small
   field. A guard measured on one race is a guard measured on one race.
 
+**Row 3.2, 12 Sep, third pass: the geometry is now the SHAPE GT7 draws, not a
+threshold, and the third attempt is the one that holds.** Two absolute rules
+were tried and both were wrong for the same reason - the fastest-lap banner's
+distance from the board is not a constant. 259-291 px on a three-car board;
+**60 px** on a full one, closer than the gap readout above his own row.
+- **And the bottom-most flag is not the banner either.** GT7 draws a purple
+  fastest-lap TIME bar about 22 px below the banner - measured RGB
+  (100, 78, 153) on a session 143 frame - and it passes the flag test, with
+  track paint below that. So `bottom = flags[-1]` looked straight past the
+  banner on the very frames it existed for. Session 143 has the banner inside
+  the board run on **162 of 181** readable frames.
+- **What holds is the pattern.** Rows at one pitch, with a gap readout - the
+  pitch plus a constant - above his row and below it and nowhere else. So a
+  board admits ONE wider step each way. `_rungs` walks outward from his own
+  row on that rule and it settles every case measured: the banner at 60 px
+  (the wide allowance is spent on the readouts), the banner at 288 px, the
+  time bar at 22 px, the track below it, and scenery 34 px above the top row
+  that was being returned as *"the car ahead"* of the race leader.
+  **This is `telemetry/board._ladder`'s rule**, measured over 73 frames for
+  the live pit wall, and I should have reused it two attempts earlier instead
+  of inventing geometry twice. The one thing added is the anchor: his row is
+  known here, so a tie between equally long runs breaks toward the larger
+  pitch - a stray nearer than the true pitch manufactures a smaller candidate.
+- **The one case geometry cannot settle** is him LAST on the board, where the
+  step down to the banner is the step down to a car below a gap readout.
+  Measured cost of refusing it: 9 real contacts across 270 full-board frames,
+  all on an opening lap before a fastest lap existed. Cost of keeping it: a
+  real driver's name on a car that was never there. Refused.
+- **An unreadable cluster was being answered.** `UNREADABLE` dropped its
+  sightings from the join, so a contact then matched the NEXT readable reading
+  within the interval and inherited a neighbour's name - the one case the
+  operator marked unknowable was the one that got an answer. They stay in the
+  map as `None` now and block the match, and the count is printed.
+- Ten mutations, all caught - including one that exposed a hole in my own
+  harness, which was running one of the two test files and so reported the
+  `UNREADABLE` fix as pinned when nothing pinned it.
+
+**Row 3.2 is BLOCKED on the traffic reader, and the block is measured.**
+Session 143's names are read, verified against the hub and written to the
+roster - 22 clusters, 8 drivers, sightings summing to 1,096 - and they cannot
+be applied, because `read_replay_traffic` returned **0 contacts from 595
+samples** with the radar unreadable on nearly every one.
+- **The radar is somewhere else on this capture.** The tool reads
+  `(1620, 830)-(1900, 1000)`; on session 143 that is bare tarmac and the radar
+  is centre-bottom between the dials. `OWN_XY = (1750, 907)` was measured to
+  +/- 0.23 px across 36 frames and **its y is exactly right here** - same
+  widget, same scale, moved horizontally. A HUD-layout difference, not a bad
+  measurement.
+- **Not bodged.** Auto-detection is not a constant change: the own marker is
+  ~37 red pixels and the rev counter and gear indicator are far larger red
+  elements in the same band, so a naive red search finds those. Picking a
+  number and hoping is the failure this row has already corrected twice.
+  Needs its own measurement across captures, and until then no session whose
+  capture uses this layout can be named.
+
 **Row 2.9, final pass: an eval outlived the defect it described, and my own
 commit is what orphaned it.** Eval 17 told Ludo that `build_track_map` *"cannot
 honestly be run at all"* because it updates `corners_json` and never `source`.
