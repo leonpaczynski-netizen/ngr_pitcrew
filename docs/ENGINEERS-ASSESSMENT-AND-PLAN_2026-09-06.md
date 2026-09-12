@@ -2543,6 +2543,51 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Row 2.10 pass 3 (`245f6c7`): NOT AGREED - three majors, fixed. Every mutant
+from the two earlier reviews was dead; all three attacks I had asked for
+landed.** The review's own diagnosis is the thing worth keeping: **`_WRITERS_
+RULE`, `_APPLY_RULE` and `_CORNER_REFUSAL` each assert that a word sequence is
+PRESENT, and a word sequence cannot be true or false.** That is why both a
+contradiction placed beside a rule and a rewrite around it got through.
+- **Major: seven false negatives in the AST write-detection, one a
+  regression.** Binding only bare `Name` targets lost `self.store = Store()`,
+  which the regex it replaced had caught - and with it `with Store() as db`,
+  the walrus, a tuple target and a local factory. Worse, **`carry_into_
+  knowledge`** - the module-level writer `mechanic.md` documents itself - was
+  invisible, so a tool calling it could be filed under "not instruments" with
+  the suite green.
+- **The move that closed the class: key on the METHOD, not the receiver.** A
+  `Store` handed in as `handle` binds to nothing a single file can see, and no
+  widening of the binding rules reaches it. `Store`'s own write methods are
+  read off `store/db.py` (`self._write(`, raw DML, or calling another such
+  method, to a fixpoint) and a call to any of them counts wherever it appears.
+  They are distinctive: nothing else has a `save_strategy`.
+- **Major: the MCP side-detection knew three write verbs where the tool check
+  knew nine**, so a call whose only write was `store.set_teammate(...)` read
+  as a reader; and splitting the server on `@mcp.tool()` threw away the module
+  head, where helpers live - a tool whose body was `_persist(plan)` read as a
+  reader, and a helper BETWEEN two tools made the check fail **naming the
+  innocent tool before it**, which is worse than a miss because the obvious
+  fix is to move the innocent one. One verb set now, and helpers resolved to a
+  fixpoint over the whole module.
+- **Major: the corner refusal could be rewritten to mean its opposite** - the
+  critic supplied a block containing every anchor phrase, in order, telling
+  Ludo that corner names are reliable and running the writer first is routine.
+  **Answered by pinning the property instead of the prose:** each `--apply`
+  tool must declare `--apply` and branch on it, and `build_track_map`'s
+  `UPDATE corner_models SET` must not include `source` - which holds today and
+  **fails the day the gate is fixed, which is exactly when the refusal has to
+  be rewritten.** The block retires itself. A short deny-list of absolution
+  phrases backs it up, kept because that edit has now been observed twice and
+  not because a deny-list is a principle.
+- **Minor:** the raw-DML pre-check read docstrings, so a reader quoting SQL in
+  prose became a writer - safe direction, wrong reason. Docstrings are
+  stripped first.
+- **Ten mutants, all killed**: A1-A7, B1, B3 and C. Two took a second go - the
+  tuple target, because `db, _ = Store(), None` has a TUPLE on the right and
+  the binding test wanted a call; and the handed-in Store, which is what
+  method-keying was built for.
+
 **Row 2.10 pass 2 (`0fd4518`): NOT AGREED - three majors, fixed. All three
 were the row's own thesis turned back on me.**
 - **Major: I fixed the `tools/` half and left the MCP half on a NAME.** The

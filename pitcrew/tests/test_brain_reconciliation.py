@@ -24,6 +24,7 @@ telling a race engineer to work around something that no longer happens.
 """
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import re
@@ -1088,44 +1089,206 @@ def _mechanic() -> tuple[str, str]:
     return text[marks[0]:marks[1]], text[marks[1]:end]
 
 
+# **One verb set, shared by the tool check and the MCP check** (row 2.10 pass
+# 3 review): the MCP side knew three of these, so a call whose only write was
+# `store.set_teammate(...)` read as a reader - and `Store.set_driver_name`,
+# `set_lap_flags`, `set_lap_wear` and `approve_strategy` are all real writes.
+_WRITE_VERB = re.compile(
+    r"^(?:save|record|link|note|update|create|delete|set|write|approve)_"
+    r"|^_write$")
+# Module-level callables that write, which no single file can see into.
+# `mechanic.md` names this one itself, and a tool calling it was invisible.
+_MODULE_WRITERS = ("carry_into_knowledge",)
+_DML = re.compile(r"INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM",
+                  re.IGNORECASE)
+
+
+def _render(node) -> str:
+    """The dotted name a node spells - `store`, `self.store`, `a.b.c`."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f"{base}.{node.attr}" if (base := _render(node.value)) else ""
+    return ""
+
+
+def _store_handles(tree) -> set[str]:
+    """Every expression in this module that holds a `Store`.
+
+    **Bare names were all the first version bound** (row 2.10 pass 3 review),
+    which lost `self.store = Store()` - a regression on the regex it replaced
+    - and with it `with Store() as db`, the walrus, and a tuple target. A
+    parameter called `store` or annotated `Store` counts, and so does a local
+    factory returning one, which is how `server.py`'s own `_store()` is
+    followed.
+
+    **Seeded with `"store"`**, so a handle this cannot trace still counts.
+    That is a naming convention standing in for a binding, deliberately, and
+    it errs towards calling something a writer.
+    """
+    factories = {node.name for node in ast.walk(tree)
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and any(isinstance(step, ast.Return)
+                         and isinstance(step.value, ast.Call)
+                         and _render(step.value.func).split(".")[-1] == "Store"
+                         for step in ast.walk(node))}
+
+    def binds(value) -> bool:
+        if not isinstance(value, ast.Call):
+            return False
+        spelled = _render(value.func)
+        return spelled.split(".")[-1] == "Store" or spelled in factories
+
+    handles = {"store"}
+
+    def keep(target) -> None:
+        for leaf in (target.elts if isinstance(target, (ast.Tuple, ast.List))
+                     else [target]):
+            if (spelled := _render(leaf)):
+                handles.add(spelled)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and binds(node.value):
+            for target in node.targets:
+                keep(target)
+        elif isinstance(node, ast.Assign):
+            # `db, _ = Store(), None` - the VALUE is a tuple, not a call, so
+            # the test above never fires. Paired element-wise instead.
+            for target in node.targets:
+                if (isinstance(target, (ast.Tuple, ast.List))
+                        and isinstance(node.value, (ast.Tuple, ast.List))):
+                    for leaf, value in zip(target.elts, node.value.elts):
+                        if binds(value):
+                            keep(leaf)
+        elif (isinstance(node, (ast.AnnAssign, ast.NamedExpr))
+                and binds(node.value)):
+            keep(node.target)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None and binds(item.context_expr):
+                    keep(item.optional_vars)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for arg in (*node.args.posonlyargs, *node.args.args,
+                        *node.args.kwonlyargs):
+                named = (_render(arg.annotation).split(".")[-1]
+                         if arg.annotation is not None else "")
+                if arg.arg == "store" or named == "Store":
+                    handles.add(arg.arg)
+    return handles
+
+
+def _store_write_methods() -> set[str]:
+    """The `Store` methods that change the database, read off `store/db.py`.
+
+    **Keyed on the METHOD, not the receiver** (row 2.10 pass 4). A `Store`
+    handed into a function under any other name - `def main(handle)` - binds
+    to nothing this file can see, and `handle.save_strategy(...)` was
+    invisible however far the binding rules were widened. The method names
+    are knowable and they are distinctive: no argument parser or serial port
+    has a `save_strategy`.
+    """
+    tree = ast.parse((ROOT / "pitcrew/store/db.py").read_text(encoding="utf-8"))
+    store = next((node for node in ast.walk(tree)
+                  if isinstance(node, ast.ClassDef) and node.name == "Store"),
+                 None)
+    if store is None:                      # pragma: no cover - the class moved
+        return set()
+    bodies = {node.name: ast.unparse(node) for node in store.body
+              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    writers: set[str] = set()
+    moved = True
+    while moved:
+        moved = False
+        for name, body in bodies.items():
+            if name in writers:
+                continue
+            if (_DML.search(body) or "self._write(" in body
+                    or any(f"self.{other}(" in body for other in writers)):
+                writers.add(name)
+                moved = True
+    return writers
+
+
+_STORE_METHODS = _store_write_methods()
+
+
+def _writes_in(node, handles: set[str], writers: set[str]) -> str:
+    """Why this subtree writes the database, or ""."""
+    for call in ast.walk(node):
+        if not isinstance(call, ast.Call):
+            continue
+        if (isinstance(call.func, ast.Attribute)
+                and call.func.attr in _STORE_METHODS):
+            return f"{call.func.attr}(), a Store write"
+        if (isinstance(call.func, ast.Attribute)
+                and _render(call.func.value) in handles
+                and _WRITE_VERB.search(call.func.attr)):
+            return f"{_render(call.func.value)}.{call.func.attr}()"
+        spelled = _render(call.func)
+        if spelled and spelled.split(".")[-1] in writers:
+            return f"{spelled}()"
+    return ""
+
+
+def _writing_functions(tree, handles: set[str]) -> set[str]:
+    """Which functions in this module write, directly or through each other.
+
+    To a fixpoint, because a helper may call a helper. **The first version
+    split the server on `@mcp.tool()` and threw the module head away** - which
+    is where helpers live - so a tool whose whole body was `_persist(plan)`
+    read as a reader, and a helper sitting BETWEEN two tools made the check
+    fail while naming the innocent tool before it.
+    """
+    writers = set(_MODULE_WRITERS)
+    functions = [node for node in ast.walk(tree)
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    moved = True
+    while moved:
+        moved = False
+        for function in functions:
+            if function.name in writers:
+                continue
+            if _writes_in(function, handles, writers):
+                writers.add(function.name)
+                moved = True
+    return writers
+
+
+def _without_docstrings(text: str, tree) -> str:
+    """The source with its docstrings removed.
+
+    The raw-DML check reads prose otherwise, so a reader whose docstring
+    quotes a SQL statement is reclassified a writer - the safe direction, for
+    the wrong reason.
+    """
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                              ast.AsyncFunctionDef))
+                and node.body and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)
+                and isinstance(node.body[0].value.value, str)):
+            text = text.replace(node.body[0].value.value, "")
+    return text
+
+
 def _writes_the_database(path) -> str:
-    """Why this tool is a writer, or "" - decided by structure, not by name.
+    """Why this tool is a writer, or "" - by structure, not by name.
 
     A regex cannot tell `store.set_lap_flags(...)` from
     `parser.set_defaults(...)` or a serial port's `_write(...)`, and reads
-    `write_text` and `write_wav` as database writes. So names bound to
-    `Store(...)` are found first, and raw DML counts wherever it appears -
-    which is how `build_track_map`, `repair_dropped_laps` and
-    `stamp_game_versions` are caught, none of which calls a store method
-    (row 2.10 pass 2: the old guard forced 8 of 14 into place and a writer
-    using raw SQL walked into the exclusion list).
+    `write_text` and `write_wav` as database writes. Raw DML counts wherever
+    it appears, which is how `build_track_map`, `repair_dropped_laps` and
+    `stamp_game_versions` are caught - none of them calls a store method.
     """
-    import ast
-
     text = path.read_text(encoding="utf-8", errors="replace")
-    if (dml := re.search(r"INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM",
-                         text, re.IGNORECASE)):
-        return f"raw DML: {dml.group(0)}"
     try:
         tree = ast.parse(text)
     except SyntaxError:
         return ""
-    names = {"store"}
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
-                and getattr(node.value.func, "id",
-                            getattr(node.value.func, "attr", "")) == "Store"):
-            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
-    verb = re.compile(r"^(?:save|record|link|note|update|create|delete|set"
-                      r"|write)_|^_write$")
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id in names
-                and verb.search(node.func.attr)):
-            return f"{node.func.value.id}.{node.func.attr}()"
-    return ""
+    if (dml := _DML.search(_without_docstrings(text, tree))):
+        return f"raw DML: {dml.group(0)}"
+    handles = _store_handles(tree)
+    return _writes_in(tree, handles, _writing_functions(tree, handles))
 
 
 def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
@@ -1179,16 +1342,71 @@ def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
     # relabelled read-only with the suite green - the roster check this row
     # had just replaced for `tools/`, left standing on the higher-stakes half,
     # where one of the writes is the shift table that beeps in his ear.
-    server = (ROOT / "pitcrew/mcp/server.py").read_text(encoding="utf-8")
-    for part in re.split(r"@mcp\.tool\(\)", server)[1:]:
-        call = re.search(r"def (\w+)", part).group(1)
-        writes = re.search(r"store\.(?:save|record|note)_\w*\(", part)
-        assert call in _MCP_LINE.findall(instruments), (
-            f"MCP tool with no line of its own: {call}")
-        side = writers if writes else readers
-        assert f"`{call}` (MCP)" in side, (
-            f"`{call}` is on the wrong side of the writers' rule - it "
-            f"{'writes' if writes else 'only reads'}")
+    server = ast.parse(
+        (ROOT / "pitcrew/mcp/server.py").read_text(encoding="utf-8"))
+    handles = _store_handles(server)
+    helpers = _writing_functions(server, handles)
+    lined_mcp = set(_MCP_LINE.findall(instruments))
+    for node in ast.walk(server):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not any(_render(mark).endswith("mcp.tool")
+                   or (isinstance(mark, ast.Call)
+                       and _render(mark.func).endswith("mcp.tool"))
+                   for mark in node.decorator_list):
+            continue
+        assert node.name in lined_mcp, (
+            f"MCP tool with no line of its own: {node.name}")
+        why = _writes_in(node, handles, helpers - {node.name})
+        side, verdict = (writers, why) if why else (readers, "only reads")
+        assert f"`{node.name}` (MCP)" in side, (
+            f"`{node.name}` is on the wrong side of the writers' rule: "
+            f"{verdict}")
+
+    # **Pin the property, not the prose** (row 2.10 pass 3 review, and it is
+    # the review's own diagnosis): `_WRITERS_RULE`, `_APPLY_RULE` and
+    # `_CORNER_REFUSAL` each assert that a word sequence is PRESENT, and a
+    # word sequence cannot be true or false. That is why a contradiction
+    # placed beside the sentence and a rewrite around it both got through -
+    # the refusal was re-hosted in prose that inverted every clause while
+    # keeping every anchor phrase, in order.
+    for tool in _INSTRUMENT_LINE.findall(writers):
+        if f"`tools/{tool}.py --apply`" not in writers:
+            continue
+        source = (ROOT / "tools" / f"{tool}.py").read_text(
+            encoding="utf-8", errors="replace")
+        assert '"--apply"' in source or "'--apply'" in source, (
+            f"{tool} is listed as taking `--apply` and never declares it")
+        assert "args.apply" in source, (
+            f"{tool} declares `--apply` and never branches on it")
+
+    # **The corner refusal's own claim, asserted against the code - and it
+    # retires itself.** This fails the day `build_track_map` writes `source`,
+    # which is exactly the day the refusal stops being true and the block has
+    # to be rewritten. No pattern over the prose can do that.
+    mapper = (ROOT / "tools/build_track_map.py").read_text(encoding="utf-8")
+    update = re.search(r"UPDATE\s+corner_models\s+SET\s+(.*?)\s+WHERE",
+                       mapper, re.IGNORECASE | re.DOTALL)
+    assert update, "build_track_map no longer updates corner_models"
+    columns = {part.split("=")[0].strip().strip("\"'`")
+               for part in update.group(1).split(",")}
+    assert "source" not in columns, (
+        "build_track_map writes corner_models.source now - the corner "
+        "refusal's gate has opened, and the block must be rewritten")
+
+    # **A backstop, and only that.** A deny-list cannot referee contradiction
+    # in general - but absolution is the one class of edit that has now been
+    # observed twice: a sentence appended beside the `--apply` rule saying
+    # none of it matters, and a rewrite of the corner refusal saying the
+    # caution has lapsed and running the writer first is routine. Both kept
+    # every anchor phrase, in order. These strings are here because those
+    # edits happened, not because the list is a principle.
+    for absolution in ("run them freely", "safe to run unattended",
+                       "none of this matters", "no longer applies",
+                       "caution has lapsed", "may use freely",
+                       "is now routine", "without asking"):
+        assert absolution not in instruments.lower(), (
+            f"the instrument list absolves its own rules: {absolution!r}")
 
     # **A tool the skill sends itself to is an instrument**, whatever else it
     # is - so one cannot be quietly reclassified out of the safety rules.
