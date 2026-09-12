@@ -2543,6 +2543,56 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Critic on 2.8 part 2, pass 10 (`202b26a`): NOT AGREED - two majors, five
+minors, fixed.** It granted the substance of all three pass-9 majors: the
+sentence is the right unit and not a third wrong one, the proof script is
+sound, `08` A5 is properly resolved, and it checked each of the three new
+stamps on its merits and agreed with all three (and that `05`'s traction
+levers are rightly left alone). **The defects were in the execution.**
+- **Major: the right unit, the wrong splitter.** `_sentence` broke on `". "`,
+  and **29.6% of the sentence ends in e10's own scope are `.**`, `.)` or
+  `."`** - the house style, 173 times in `07-car-profiles.md` alone. Where one
+  is missed the function degrades silently back to the line, which is the
+  defect it was written to fix. The critic proved it by rewriting a single
+  full stop on the real `07`:609 and watching e10 go blind on the exact line
+  the pass was about.
+- **Major: the FWD exclusion wanted the literal string `front `**, so
+  `**front** accel` - which is how `02` §10.5's own AWD and FWD lines are
+  written - turned off the guard added in the same commit to provide it.
+- **One fix for both: take the emphasis out before matching anything.** A
+  guard resting on a formatting choice nobody knows is load-bearing is not a
+  guard, and six patterns each guessing at the house style is six chances to
+  guess wrong.
+- **The back-reference rule, which closed three findings at once.** `diff` and
+  `lock` name no particular slider, so once a sentence has named one and had
+  it rejected, the bare word is that same slider described again. It settles
+  the FWD line carrying a second lowering verb, "Braking sensitivity down
+  unlocks the diff", and §4.1's Initial Torque bullet - which pass 7 had to
+  hand-stamp precisely because no pattern could separate them. The stamp stays
+  and still documents it; the check no longer rests on it.
+- **Minors.** e11's symptom set was `_CURE` with no proximity bound at all, so
+  "out of every turn" and "Turn 4 is the reference corner" counted as
+  evidence - the traction levers were out of reach by an accident of wording
+  rather than by the distinction the check claims to draw. Narrowed to the
+  rotation family. e11's scope was 18 files narrower than e10's with no reason
+  given, including the ledger this very commit had argued into e10; they share
+  one constant now. `low` came out of the lowering words. `05`:730's stamp
+  called a wear claim a traction one. And a comment claimed `\block\b` fixed a
+  line it does not fix.
+- **Minor, and the lesson: my mutants were chosen against my probe list, not
+  against my diff**, so five of the critic's nine survived - two of them
+  changes this commit's own message announced. Twelve against the diff this
+  time: **nine killed**, one anchor gone with the dead code it named, and
+  **two survive and are written down as surviving** - `low`'s removal, now
+  redundant beside the back-reference rule, and e11's normalisation, which is
+  precautionary.
+- **A robustness change cannot be proved by a corpus diff**, and pass 11
+  returns exactly the same ten lines. `scratchpad/prove_pass11.py` perturbs
+  the corpus into the house style the critic measured instead: under it
+  **pass 10 loses `07`:609 and pass 11 loses nothing**, and with the front
+  axis bolded pass 10 flags eleven lines to pass 11's ten - the extra being
+  the FWD line it is supposed to exclude.
+
 **Row 2.7's pins confirmed (`d40c4c8`), and row 2.10 pinned.** The critic
 re-ran its four pass-6 mutants against the new tests: **all four killed, each
 by the test written for it** rather than by incidental collateral. It then

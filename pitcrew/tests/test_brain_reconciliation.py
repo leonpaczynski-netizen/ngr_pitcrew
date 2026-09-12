@@ -422,17 +422,65 @@ def test_e8_no_live_lsd_band_anywhere_is_left_on_the_old_scale():
 # "Lower the accel" offered as the cure for a push, understeer or lost
 # rotation - the claim the v1.71 Huracán test refuted (s145). Arrow forms
 # ("18 → 14") are pinned by hand; these are the worded ones.
+# **The house style comes out before anything is matched** (the critic on 2.8
+# part 2, pass 10, and it is both of that pass's majors at once). These files
+# bold mid-sentence and end sentences with `.**`: **29.6% of the sentence
+# ends in e10's own scope are `.**`, `.)` or `."` rather than `. `**, and
+# `**front** accel` is how the two `02` §10.5 lines the FWD exclusion exists
+# for are actually written. Every pattern here was fragile to that, and a
+# guard held up by a formatting choice nobody knows is load-bearing is not a
+# guard. Taken out once, here, rather than guessed at in six patterns.
+# Underscores are left alone: `lsd_a` is a slider's name.
+_MARKUP = re.compile(r"[*`]+")
+# A full stop that ends a sentence, through whatever closes the quote or the
+# bracket after it.
+_SENTENCE_END = re.compile(r"\.[)\"'”]*\s")
+
+
+def _plain(line: str) -> str:
+    """The line with the emphasis markup taken out.
+
+    For judging text, never for offsets into the original: the length changes.
+    """
+    return _MARKUP.sub("", line)
+
+
+def _axis_name(text: str) -> str:
+    """A matched axis as the plain slider name it is.
+
+    `front-accel`, `front's accel` and `front accel` are one axis, and the
+    exclusion compares by name - so without this the two hyphenated forms
+    walked straight through the guard written to stop them.
+    """
+    return re.sub(r"[^a-z0-9]+", " ",
+                  re.sub(r"['’]s\b", "", text.lower())).strip()
+
+
+# **`low` is NOT a lowering word here** (pass 10 review). It was added on the
+# guess that e10 might reach "run it LOW" - which e11 does properly - and the
+# corpus comparison shows it gained no line at all, while it made "With
+# initial torque low, the diff still pushes on turn-in" read as this claim.
+# **A mutant putting it back survives**, and that is worth saying rather than
+# leaving to be found: the back-reference rule below fixes that sentence on
+# its own terms, so `low` is out because it earns nothing, not because
+# anything now depends on its absence.
 _LESS = (r"(?:lower|reduc\w*|drop\w*|down|decreas\w*|soften\w*|open\w*|freer"
-         r"|less|unlock\w*|\blow\b|back\b[^.|]{0,20}?\boff\b)")
-# **`\block\b`, not `lock`** (pass 9, minor): "unlocks" is a LOWERING word,
-# and reading the "lock" inside it as an axis being lowered is how "Braking
-# sensitivity down unlocks the diff and the car turns in better" - a claim
-# about somebody else's slider - came to be flagged as this one.
-_ACCEL = (r"(?:front accel\w*|braking sensitivity|initial torque"
-          r"|accel\w*|lsd_a\b|diff\w*|\block\b)")
+         r"|less|unlock\w*|back\b[^.|]{0,20}?\boff\b)")
+# **`\block\b`, not `lock`** (pass 9): "unlocks" is a LOWERING word, and
+# reading the "lock" inside it as an axis being lowered was one of the two
+# reasons "Braking sensitivity down unlocks the diff and the car turns in
+# better" was flagged. **It does not fix that line, and this comment used to
+# claim it did**: the scan rejects `braking sensitivity`, then finds
+# `down ... diff ... turns` as a fresh claim on the generic word. That false
+# positive stands - see `lower_accel_axis`.
+_ACCEL = (r"(?:front(?:['’]s)?[\s-]*accel\w*|braking sensitivity"
+          r"|initial torque|accel\w*|lsd_a\b|diff\w*|\block\b)")
 # The sliders this claim is NOT about. A match on one of these is somebody
 # else's axis; `diff` and `lock` name no particular one and settle nothing.
 _OTHER_AXIS = ("front accel", "braking sensitivity", "initial torque")
+# Words that name no particular slider, and so cannot carry a claim on their
+# own once the sentence has already named one.
+_GENERIC = ("diff", "lock")
 # The whole word, so the matched span carries it: the refutation says "gives
 # LESS rotation", and a span ending at "rotat" hid that from the exclusion
 # (the critic on 2.8 part 2, pass 7). "turn" and "point" are the same
@@ -540,10 +588,14 @@ def _sentence(line: str, start: int, end: int) -> str:
     what they are both judged on now - `_OVERRUN` included, which had no
     reason to differ.
     """
-    left = max(line.rfind("|", 0, start), line.rfind(". ", 0, start) + 1) + 1
-    after = [where for where in (line.find("|", end), line.find(". ", end))
-             if where != -1]
-    return line[left:min(after) if after else len(line)]
+    left = 0
+    for ends in _SENTENCE_END.finditer(line, 0, start):
+        left = ends.end()
+    left = max(left, line.rfind("|", 0, start) + 1)
+    after = _SENTENCE_END.search(line, end)
+    right = after.start() + 1 if after else len(line)
+    bar = line.find("|", end)
+    return line[left:min(right, bar) if bar != -1 else right]
 
 
 def lower_accel_axis(line: str) -> str | None:
@@ -552,11 +604,13 @@ def lower_accel_axis(line: str) -> str | None:
     The axis comes from the matched group, so it is the slider the lowering
     word actually belongs to - see `_near`.
     """
+    line = _plain(line)
+    named: set[str] = set()
     at = 0
     while (hit := LOWER_ACCEL_FOR_PUSH.search(line, at)) is not None:
         found = {name: text for name, text in hit.groupdict().items() if text}
-        axis = next((text.lower() for name, text in found.items()
-                     if not name.startswith("n")), "")
+        axis = _axis_name(next((text for name, text in found.items()
+                                if not name.startswith("n")), ""))
         # **Resume just past the rejected AXIS.** `finditer` is
         # non-overlapping and a match runs on to the symptom, so a rejected
         # claim swallowed the live one starting inside it: "with initial
@@ -573,15 +627,43 @@ def lower_accel_axis(line: str) -> str | None:
         axis_at = next((name for name, text in found.items()
                         if text and not name.startswith("n")), None)
         at = max(hit.end(axis_at) if axis_at else hit.end(), hit.start() + 1)
-        if axis.startswith(_OTHER_AXIS):
-            continue
         sentence = _sentence(line, hit.start(), hit.end())
+        if axis.startswith(_OTHER_AXIS):
+            named.add(sentence)
+            continue
+        # **A generic word after a named axis is a BACK-REFERENCE to it, not
+        # a fresh claim** (pass 10 review). "diff" and "lock" name no
+        # particular slider, so once a sentence has named one and had it
+        # thrown out, the bare word is that same slider being described
+        # again: "Braking sensitivity down unlocks the diff and the car turns
+        # in better" and "FWD: open the front accel diff to reduce the exit
+        # push" both read as this claim on the word "diff" alone. A SPECIFIC
+        # axis later in the sentence is a second claim and still counts -
+        # "keep braking sensitivity high and lower accel to free rotation".
+        # The cost is a sentence that names the other axis first and then
+        # makes this claim generically; §4.1's Initial Torque bullet is that
+        # shape, and it carries a hand stamp.
+        if axis.startswith(_GENERIC) and sentence in named:
+            continue
         if _REFUTATION.search(sentence):
             continue
         if _OVERRUN.search(sentence) and not _ON_POWER.search(sentence):
             continue
         return axis or "diff"
     return None
+
+
+# **Everywhere Ludo reasons from, and the SAME everywhere for every check**
+# (pass 10 review): e11 was scanning 18 files fewer than e10, with no reason
+# given, and among them the ledger that e10's own comment had just argued in.
+# `brain/ledger/` is here because `SKILL.md`:725 has `refine`, `race plan` and
+# `debrief` open it FIRST, so it is as much a source as the dossiers are. **It
+# flags nothing today and a mutant removing it survives** - said plainly
+# rather than left to be discovered: the five files hold one band and that
+# band corrects itself. A door closed on the way in, not a defect caught.
+DOCTRINE_SCOPE = (".claude/skills/**/*.md", "brain/_inbox/0*.md",
+                  "brain/_inbox/1[0-7]-*.md", "brain/car-state/*.md",
+                  "brain/ledger/*.md")
 
 
 def test_e10_lower_accel_for_a_push_always_says_it_is_contested():
@@ -598,17 +680,7 @@ def test_e10_lower_accel_for_a_push_always_says_it_is_contested():
     So `02`:440, `08`:530, `01` §11, `01`:163 and `08`:274 are pointed by
     hand, and `NOT_THIS_CLAIM` keeps the other axes out.
     """
-    # **`brain/ledger/` is in scope** (pass 9, minor): `SKILL.md`:725 has
-    # `refine`, `race plan` and `debrief` open the ledger FIRST, so it is as
-    # much a place Ludo reasons from as the dossiers are. It was in no
-    # check's scope and, unlike `11`/`16`/`17`, no reason was ever given.
-    # **It flags nothing today and a mutant removing it survives** - said
-    # plainly rather than left to be discovered: the five files hold one band
-    # and that band corrects itself. This is a door left open on the way in,
-    # not a defect caught.
-    scope = (".claude/skills/**/*.md", "brain/_inbox/0*.md",
-             "brain/_inbox/1[0-7]-*.md", "brain/car-state/*.md",
-             "brain/ledger/*.md")
+    scope = DOCTRINE_SCOPE
     marked = ("CONTESTED", "§10.5", "v1.70")
     bare = []
     for pattern in scope:
@@ -665,7 +737,22 @@ def test_e10_sees_the_claim_and_not_its_neighbours():
                   # The FWD front diff: the critic's pass-9 false positive,
                   # which the span rule flagged on the word "diff" standing
                   # beside the axis actually being opened.
-                  "FWD: open the front accel diff to stop the exit push"):
+                  "FWD: open the front accel diff to stop the exit push",
+                  # **The three spellings this corpus actually uses** (pass 10
+                  # review): the exclusion wanted the literal string
+                  # "front ", so the bold form - which is how `02` §10.5's
+                  # own AWD and FWD lines are written - walked through the
+                  # guard added to stop it.
+                  "FWD: open the **front** accel diff to cure the exit push",
+                  "AWD: lower the front's accel sensitivity to kill the "
+                  "exit understeer",
+                  "FWD: open the front-accel diff to stop the exit push",
+                  # And with a second lowering verb, which is what the old
+                  # "'open' is behind us" reasoning did not survive.
+                  "FWD: open the front accel diff to reduce the exit push",
+                  # The back-reference: one named axis, then the generic word.
+                  "Braking sensitivity down unlocks the diff and the car "
+                  "turns in better"):
         assert not claims_lower_accel(other), other
     # **The refutation quoted beside the claim it refutes** (the critic on
     # 2.8 part 2, pass 9, MAJOR): this is `07-car-profiles.md`:609's shape,
@@ -677,6 +764,37 @@ def test_e10_sees_the_claim_and_not_its_neighbours():
         "tyres last, because less acceleration lock means less rear scrub. "
         "The rotation half is disputed: on this car LESS acceleration lock "
         "gives LESS rotation on power")
+    # **The same line, ended the way this corpus ends its sentences** (pass 10
+    # review). `.**` closes 29.6% of the sentence ends in e10's own scope and
+    # appears 173 times in `07-car-profiles.md` alone; a splitter that cannot
+    # see it degrades silently back to the line, which IS the defect.
+    assert claims_lower_accel(
+        "the setting that makes it rotate is also the setting that makes the "
+        "tyres last, because less acceleration lock means less rear scrub.** "
+        "The rotation half is disputed: on this car LESS acceleration lock "
+        "gives LESS rotation on power")
+    # The overrun exemption leaked across the same boundary: an overrun
+    # sentence clearing a live claim in the one after it.
+    assert claims_lower_accel(
+        "An open diff on the overrun is the bigger rotation source.** Lower "
+        "the accel and the mid-corner push goes")
+    # **The cell boundary, which is the other half of the same rule**: a
+    # table row is one line, so a refutation quoted in a neighbouring cell
+    # must not clear the claim standing in this one.
+    assert claims_lower_accel(
+        "| less accel lock cures the push | on this car LESS acceleration "
+        "lock gives LESS rotation on power |")
+    # **And the boundary on the other side of the claim**, which the probe
+    # above cannot reach: the refutation in the cell BEFORE this one.
+    assert claims_lower_accel(
+        "| on this car LESS acceleration lock gives LESS rotation on power "
+        "| less accel lock cures the push |")
+    # A quoted sentence end. `_plain` takes out emphasis, so `.**` is already
+    # a plain full stop by the time the splitter sees it - but a quote is not
+    # emphasis and stays, which is what the splitter's own pattern is for.
+    assert claims_lower_accel(
+        'The bigger rotation source is an open diff on the overrun." Lower '
+        'the accel and the mid-corner push goes')
     # **The second axis INSIDE the claim** (pass 8): a rationale names one
     # while making the other, and that must not clear it.
     for both in ("lower the accel and the initial torque, and the push goes away",
@@ -695,13 +813,13 @@ def test_e10_sees_the_claim_and_not_its_neighbours():
     # Initial Torque bullet cannot be told from it by pattern - it carries a
     # hand stamp instead, and the check is left free to flag the wording.
     #
-    # **Pass 10 tried to be cleverer here and pass 7 was right.** Reading the
-    # axis off the match does reject this line's first match, `Initial Torque
-    # decrease`. But "freer differential, more rotation" is a whole claim
-    # standing after it with its own lowering word, and the scan resumes in
-    # time to see it - correctly, because that is how the live claim is
-    # worded too. The hand stamp stays load-bearing.
-    assert claims_lower_accel(
+    # **The back-reference rule settles it** (pass 10 review). This sentence
+    # names Initial Torque, so the bare "differential" after it is that same
+    # slider being described again, not a second claim. Pass 7's hand stamp
+    # stays - the assertion below still reads the file for it - but the check
+    # no longer rests on it. The same wording with NO other axis named is
+    # still this claim and still flags, which is the line after this one.
+    assert not claims_lower_accel(
         "Initial Torque decrease → freer differential, more rotation")
     assert claims_lower_accel("a freer differential gives more rotation")
     bullet = [line for line in (ROOT / "brain/_inbox/02-gt7-setup-parameters.md")
@@ -738,11 +856,26 @@ def test_e10_sees_the_claim_and_not_its_neighbours():
 # question, and a line-level check on the loose one flagged four lines that
 # are about somebody else's slider entirely - braking sensitivity at
 # `02`:477, initial torque at `02`:888, the AWD front diff at `02`:914.
-_ACCEL_ONLY = r"(?:(?<!front )accel\w*|lsd_a\b)"
+# The front forms are excluded in each spelling this corpus uses, because a
+# lookbehind must be a fixed width and so cannot be written once (pass 10
+# review: `**front** accel` normalises to `front accel`, but `front-accel`
+# and `front's accel` are still their own spellings).
+_ACCEL_ONLY = (r"(?:(?<!front )(?<!front-)(?<!ront's )(?<!ront’s )"
+               r"accel\w*|lsd_a\b)")
+# One alternative, not two: a `run|keep|set ... low` arm was here and was
+# dead, because the axis-then-low arm already matches every wording of it
+# ("Run acceleration sensitivity LOW", "keep accel sensitivity low"). A
+# mutant deleting it changed no outcome, which is how it was found.
 _RUN_LOW = re.compile(
-    rf"{_ACCEL_ONLY}[^.|]{{0,40}}?\b(?:low|lower)\b"
-    rf"|\b(?:run|keep|set)\b[^.|]{{0,30}}?{_ACCEL_ONLY}[^.|]{{0,40}}?\blow\b",
-    re.IGNORECASE)
+    rf"{_ACCEL_ONLY}[^.|]{{0,40}}?\b(?:low|lower)\b", re.IGNORECASE)
+# **Narrower than `_CURE`** (pass 10 review). e11 asks only whether a symptom
+# is somewhere on the line, with no proximity bound at all - so `turn\w*` and
+# `point\w*`, which are fine inside e10's 200-character window, turned "out
+# of every turn" and "Turn 4 is the reference corner" into evidence of the
+# refuted claim. The traction levers are meant to be out of reach BECAUSE
+# they name no rotation symptom; with `turn` in the set they were out of
+# reach only by an accident of how they happen to be worded.
+_ROTATION = re.compile(r"push\w*|understeer\w*|rotat\w*", re.IGNORECASE)
 
 
 def test_e11_a_standing_rule_to_run_accel_low_carries_the_contest():
@@ -767,12 +900,17 @@ def test_e11_a_standing_rule_to_run_accel_low_carries_the_contest():
     """
     marked = ("CONTESTED", "§10.5")
     bare = []
-    for pattern in ("brain/_inbox/0*.md", ".claude/skills/**/*.md"):
+    for pattern in DOCTRINE_SCOPE:
         for path in sorted(ROOT.glob(pattern)):
             for number, line in enumerate(
                     path.read_text(encoding="utf-8").splitlines(), 1):
-                if (_RUN_LOW.search(line)
-                        and re.search(_CURE, line, re.IGNORECASE)
+                # Normalised for the same reason e10 is, though **a mutant
+                # reading the raw line survives**: no line in scope writes
+                # this instruction with emphasis inside the phrase today.
+                # Precautionary, and said to be so.
+                said = _plain(line)
+                if (_RUN_LOW.search(said)
+                        and _ROTATION.search(said)
                         and not any(mark in line for mark in marked)):
                     bare.append(f"{path.relative_to(ROOT).as_posix()}:{number}")
     assert not bare, f"'run accel low' with a push on the line, uncontested, at {bare}"
@@ -794,8 +932,18 @@ def test_e11_sees_the_standing_rule_and_not_the_traction_one():
     # And the rotation wording, which is the refuted one.
     rotation = ("A heavily locked diff breaks away as a unit - and it also "
                 "pushes. Run acceleration sensitivity LOW.")
-    assert _RUN_LOW.search(rotation) and re.search(_CURE, rotation,
-                                                   re.IGNORECASE)
+    assert _RUN_LOW.search(rotation) and _ROTATION.search(rotation)
+    # **Somebody else's axis, in this corpus's spellings** (pass 10 review):
+    # the front/FWD diff is not this claim, and `**front**` is how `02`
+    # §10.5's own lines are written.
+    for front in ("FWD: front-accel sensitivity low will not cure the push",
+                  "FWD: keep the front's accel sensitivity low for the push",
+                  "FWD: **front** accel sensitivity low for the exit push"):
+        assert not _RUN_LOW.search(_plain(front)), front
+    # **"turn" and "point" are not symptoms for THIS check** - it has no
+    # proximity bound, so they made a reference corner into evidence.
+    assert not _ROTATION.search(
+        "Keep accel sensitivity low here; Turn 4 is the reference corner")
 
 
 def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
