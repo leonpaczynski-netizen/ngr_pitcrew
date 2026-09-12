@@ -67,15 +67,29 @@ class Rival:
 def tendencies(store, session_id: int) -> list[Rival]:
     """Who was near him in this session, in order of time spent together.
 
-    Rows with no rival name are skipped rather than counted as one driver.
-    **The board pass is what supplies names** and it is a separate, operator-
-    assisted step - so a traffic pass run on its own leaves most rows unnamed,
-    and lumping them together would report a phantom who was everywhere.
+    Rows with no name are skipped rather than counted as one driver. **The
+    board pass is what supplies names** and it is a separate, operator-assisted
+    step, so lumping the unnamed together would report a phantom who was
+    everywhere.
+
+    **Read off the board, and off the radar only where there is no board.**
+    The radar sees about a second in each direction and only while the driver
+    has that page up: on the Daytona league race it produced 2 contacts from
+    595 samples, neither placeable, because he was never closer than 1.2 s to
+    anyone and spent the last laps 25 s clear. The board, on the same capture,
+    gave 1,096 readings of who was either side of him. A tendency is about
+    time spent together, and the board is the instrument that measures it.
     """
-    rows = store.list_traffic(session_id)
+    rows = [{"name": row["driver"], "side": row["side"],
+             "lap_num": row["lap_num"]}
+            for row in store.list_board_sightings(session_id)]
+    if not rows:
+        rows = [{"name": row["rival"], "side": row["side"],
+                 "lap_num": row["lap_num"]}
+                for row in store.list_traffic(session_id)]
     seen: dict[str, dict[str, set]] = {}
     for row in rows:
-        name = row["rival"]
+        name = row["name"]
         if not name:
             continue
         side = row["side"] or "unknown"

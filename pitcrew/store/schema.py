@@ -128,6 +128,13 @@ Versions, and what upgrading means here:
   as the DDL line** - they are ordinary tables from the next open onward, and
   `CREATE TABLE IF NOT EXISTS` will not touch them again.
 
+**v19 adds `board_sightings` and nothing else** - one new table, so like v6,
+  v12, v16 and v18 there is no migration function and the version moves only
+  so `Store._init_schema` still refuses a file this build predates.  It exists
+  because the board's reading was being stored as a column on `traffic`, which
+  made it conditional on the radar; see the block above the table.  **A column
+  added to it later needs an `ADDED_COLUMNS` entry as well as the DDL line.**
+
 `CREATE ... IF NOT EXISTS` plus `ADDED_COLUMNS` covers anything additive, and
 that carried v1 -> v2.  **v3 is the first change it cannot express** — it drops
 two columns and back-fills four — so `MIGRATIONS` below exists, and anything
@@ -139,7 +146,7 @@ from __future__ import annotations
 import datetime
 import sqlite3
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 DDL = """
 -- Small key/value store for things like which event is active. Not a settings
@@ -366,6 +373,49 @@ CREATE TABLE IF NOT EXISTS traffic (
 );
 
 CREATE INDEX IF NOT EXISTS traffic_by_lap ON traffic(session_id, lap_num);
+
+-- **Who was either side of him on the leaderboard, kept in its own right.**
+--
+-- The names off the board used to exist only as a column on `traffic`, and
+-- `traffic` is radar contacts. That made the board's answer conditional on the
+-- radar having something to say, and on the Daytona league race the radar had
+-- almost nothing: GT7 draws it only a second or so deep, the driver had the
+-- multi-function display on the fuel page for much of the race, and he ran
+-- most of it alone. 595 samples produced 2 contacts, neither placeable.
+--
+-- The same capture gave the board reader **1,096 sightings** of the cars
+-- either side of him - eight drivers, every four seconds, whether they were
+-- one second away or thirty - and all but the two were discarded for want of
+-- a radar contact to hang on. The richest source in the pipeline was being
+-- filtered through the poorest.
+--
+-- So the board's reading is stored as the reading it is. `traffic` keeps the
+-- close-quarters question it is good at; this answers "who was he racing",
+-- which is the one the rival profiles are built from.
+CREATE TABLE IF NOT EXISTS board_sightings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER REFERENCES sessions(id) ON DELETE CASCADE,
+    -- Null where the sighting fell outside any counted lap: the formation
+    -- lap, or a replay that runs past the flag. A reading with no lap is
+    -- still a reading; it is not attributed to a lap it did not happen on.
+    lap_id      INTEGER REFERENCES laps(id) ON DELETE CASCADE,
+    lap_num     INTEGER,
+    -- Where in the capture, so any row can be gone back to and looked at.
+    video_s     REAL NOT NULL,
+    -- 'ahead' or 'behind', from the row above or below his own on the board.
+    -- Never null: the board says which side, where the radar sometimes cannot.
+    side        TEXT NOT NULL,
+    -- The name as the board drew it. **Null where the operator marked the
+    -- cluster unreadable** - two rows rendered over each other as the board
+    -- reorders - and null is the honest answer there. Never guessed from the
+    -- position, which is a place in the order and not an identity.
+    driver      TEXT,
+    source      TEXT NOT NULL,
+    read_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS board_sightings_by_lap
+    ON board_sightings(session_id, lap_num);
 
 CREATE TABLE IF NOT EXISTS range_records (
     car_name      TEXT PRIMARY KEY,

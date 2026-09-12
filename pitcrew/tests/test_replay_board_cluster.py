@@ -351,6 +351,37 @@ def test_legible_writes_nothing_rather_than_an_empty_image(board, tmp_path):
     assert not out.exists()
 
 
+def test_a_label_follows_the_bitmap_not_its_place_in_the_list(board):
+    """Cluster indices are not stable between runs, and the roster was keyed
+    by them.
+
+    It cost a row: the fastest-lap guard refused `Greenmachine 070`'s single
+    sighting, the list went from 22 clusters to 21, and every index past it
+    shifted up one — so the label written against index 20 was applied to
+    `ZenPhilosopher`. One row of 1,094, wrong, and nothing said so.
+    """
+    numpy = pytest.importorskip("numpy")
+    one, two = a_name(31), a_name(32)
+    assert board.fingerprint(one) != board.fingerprint(two)
+    # Stable across an identical re-derivation, and independent of order.
+    assert board.fingerprint(one) == board.fingerprint(a_name(31))
+    assert board.fingerprint(one) == board.fingerprint(one.copy())
+    # And a single flipped pixel is a different bitmap, so a label never
+    # carries silently onto a cluster that is not the one it was typed for.
+    changed = one.copy()
+    changed[0, 0] = ~changed[0, 0]
+    assert board.fingerprint(changed) != board.fingerprint(one)
+
+
+def test_the_roster_carries_the_fingerprint_it_is_matched_on(board):
+    """A roster written without one cannot survive a re-run, so the field has
+    to be emitted, not merely read."""
+    import inspect
+    source = inspect.getsource(board.main)
+    assert '"fingerprint": mark' in source
+    assert "by_print" in source, "labels must be looked up by fingerprint"
+
+
 def test_more_than_one_sighting_is_shown(board):
     """One crop can have a marshal's post through the middle of it; the point
     of showing several is that the next will not have it in the same place."""

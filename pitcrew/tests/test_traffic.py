@@ -275,3 +275,95 @@ def test_an_explicit_radar_x_is_taken_as_given():
     from pathlib import Path as _P
     assert tool.locate_radar(_P("x.mp4"), 0.0, 1.0, _P("y.png"), 961) == (
         961, tool.OWN_XY[1])
+
+
+# --------------------------------- the board's reading, kept in its own right
+
+def _sighting(**kw) -> dict:
+    base = dict(lap_id=None, lap_num=4, video_s=200.0, side="ahead",
+                driver="K.Graebs", source="replay-board")
+    base.update(kw)
+    return base
+
+
+def _race(store: Store) -> int:
+    return store.start_session(
+        store.create_event(name="e", track="Fuji Speedway",
+                           layout="Full Course"), "race")
+
+
+def test_board_sightings_round_trip(store: Store):
+    session = _race(store)
+    store.record_board_sightings(session, [
+        _sighting(), _sighting(video_s=204.0, side="behind", driver="Rocky")])
+    rows = store.list_board_sightings(session)
+    assert [(r["side"], r["driver"]) for r in rows] == [
+        ("ahead", "K.Graebs"), ("behind", "Rocky")]
+    assert rows[0]["source"] == "replay-board"
+
+
+def test_a_re_read_of_the_board_replaces_rather_than_accumulates(store: Store):
+    """The same capture read again is a better answer to the same question,
+    not a second set of cars."""
+    session = _race(store)
+    store.record_board_sightings(session, [_sighting(), _sighting(video_s=8.0)])
+    store.record_board_sightings(session, [_sighting(video_s=12.0)])
+    rows = store.list_board_sightings(session)
+    assert len(rows) == 1 and rows[0]["video_s"] == 12.0
+
+
+def test_an_unreadable_sighting_is_filed_with_no_driver(store: Store):
+    """Two rows drawn over each other mid-reorder is a fact about the capture.
+
+    Dropping those rows would make "nobody was there" and "the board could not
+    be read" the same answer — the reading that gets a driver told he was
+    alone when he was not.
+    """
+    session = _race(store)
+    store.record_board_sightings(session, [_sighting(driver=None)])
+    row = store.list_board_sightings(session)[0]
+    assert row["driver"] is None
+    assert row["side"] == "ahead", "the side is known even when the name is not"
+
+
+def test_a_sighting_outside_the_counted_laps_keeps_a_null_lap(store: Store):
+    """The formation lap, or a replay running past the flag. It happened; it
+    did not happen on a lap, and saying it did puts a car beside him on a lap
+    he was not on."""
+    session = _race(store)
+    store.record_board_sightings(session, [_sighting(lap_num=None)])
+    assert store.list_board_sightings(session)[0]["lap_num"] is None
+
+
+def test_tendencies_read_the_board_in_preference_to_the_radar(store: Store):
+    """The radar sees about a second each way and only while that page is up:
+    595 samples of the Daytona league race gave 2 contacts, neither placeable,
+    against 1,096 board readings of the same capture."""
+    from pitcrew.analysis.rivals import tendencies
+    session = _race(store)
+    store.record_traffic(session, [
+        contact(lap_num=lap, rival="PUNISHED", side="behind")
+        for lap in (1, 2, 3, 4)])
+    store.record_board_sightings(session, [
+        _sighting(lap_num=lap, driver="CruisingChaos", side="ahead")
+        for lap in (1, 2, 3, 4, 5)])
+    found = tendencies(store, session)
+    assert [one.name for one in found] == ["CruisingChaos"], (
+        "the radar's answer was preferred over the board's")
+    assert found[0].laps_together == 5
+
+
+def test_tendencies_still_read_the_radar_where_no_board_pass_was_run(store: Store):
+    """The sessions already in the archive were named this way and must keep
+    answering."""
+    from pitcrew.analysis.rivals import tendencies
+    session = _race(store)
+    store.record_traffic(session, [
+        contact(lap_num=lap, side="behind") for lap in (1, 2, 3, 4)])
+    # `record_traffic` does not write the name — the board pass applies it
+    # afterwards, one contact at a time, which is the whole point of it being
+    # operator-assisted.
+    for row in store.list_traffic(session):
+        store.name_traffic(row["id"], "TommyTbone")
+    found = tendencies(store, session)
+    assert [one.name for one in found] == ["TommyTbone"]

@@ -603,6 +603,33 @@ def cluster(bitmaps: list) -> list[dict]:
     return groups
 
 
+def fingerprint(bits) -> str:
+    """A short, stable name for a cluster's exemplar.
+
+    The label a person typed belongs to the BITMAP they looked at, not to the
+    position that bitmap held in a sorted list. Keyed by content, a roster
+    survives a re-run that drops or reorders clusters; keyed by index it does
+    not, and the failure is silent.
+    """
+    import hashlib
+    packed = bytes(bits.astype("uint8").tobytes())
+    return hashlib.sha1(packed).hexdigest()[:12]
+
+
+def lap_at(marks, seconds: float):
+    """The lap a capture second falls in, or None outside the counted laps.
+
+    None is a real answer: a sighting during the formation lap, or after the
+    flag while the replay runs on, happened - it just did not happen on a lap,
+    and attributing it to one would put a car beside him on a lap he was not
+    on.
+    """
+    for at, row in marks:
+        if seconds <= at:
+            return row
+    return None
+
+
 def crossings(store: Store, session_id: int, offset_s: float):
     laps = store.list_laps(session_id)
     if not laps:
@@ -679,6 +706,17 @@ def main() -> int:
     labels = {}
     if roster_path.exists():
         labels = json.loads(roster_path.read_text(encoding="utf-8"))
+    # **Labels follow the bitmap, not the row it happened to land on.** The
+    # roster was keyed by cluster index, and cluster indices are not stable
+    # between runs: a threshold change, or two strips newly refused, drops a
+    # cluster and every index past it shifts up one. That happened - the
+    # fastest-lap guard refused `Greenmachine 070`'s single sighting, the list
+    # went from 22 clusters to 21, and the label written against index 20 was
+    # applied to `ZenPhilosopher`. One row of 1,094, wrong, and nothing in the
+    # tool would have said so.
+    by_print = {entry["fingerprint"]: entry
+                for entry in labels.values()
+                if isinstance(entry, dict) and entry.get("fingerprint")}
 
     out = {}
     for n, group in enumerate(groups):
@@ -710,12 +748,17 @@ def main() -> int:
         crops = [raw_by_key[k] for k in picked]
         raw_png = scratch / f"name-{args.session}-{n}-raw.png"
         _legible(crops, raw_png)
-        name = labels.get(key, {}).get("name") if isinstance(
-            labels.get(key), dict) else labels.get(key)
+        mark = fingerprint(group["bits"])
+        if mark in by_print:
+            name = by_print[mark].get("name")
+        else:
+            name = labels.get(key, {}).get("name") if isinstance(
+                labels.get(key), dict) else labels.get(key)
         # `read_this` first, and the exemplar named for what it is. The roster
         # is the file the operator opens, and a key called `bitmap` sitting
         # above it is an invitation to open the one thing that cannot be read.
         out[key] = {"name": name, "read_this": raw_png.name,
+                    "fingerprint": mark,
                     "sightings": len(group["seen"]),
                     "exemplar_do_not_read": png.name}
         print(f"  {n:>2}  {len(group['seen']):>3} sighting(s)  "
@@ -754,10 +797,33 @@ def main() -> int:
         for key in group["seen"]:
             named[key] = None if name == UNREADABLE else name
 
+    # **The board's own reading, filed as the reading it is.** This used to be
+    # written only as a name on a radar contact, which made it conditional on
+    # the radar having something to say. On the Daytona league race the radar
+    # had almost nothing - 595 samples, 2 contacts, neither placeable - while
+    # the board gave 1,096 sightings of the cars either side of him over the
+    # same capture. All but two were being thrown away for want of something
+    # to hang on.
+    sightings = []
+    for (when, side), name in sorted(named.items()):
+        row = lap_at(marks, when)
+        sightings.append({
+            "lap_id": row["id"] if row is not None else None,
+            "lap_num": row["lap_num"] if row is not None else None,
+            "video_s": when, "side": side, "driver": name,
+            "source": "replay-board"})
+    filed = store.record_board_sightings(args.session, sightings)
+    known = sum(1 for s in sightings if s["driver"])
+    print(f"filed {filed} board sighting(s), {known} with a name and "
+          f"{filed - known} from a cluster marked '{UNREADABLE}'")
+
     rows = store.list_traffic(args.session)
     if not rows:
-        raise SystemExit(f"session {args.session} has no `traffic` rows - run "
-                         f"tools/read_replay_traffic.py --apply first")
+        print(f"session {args.session} has no `traffic` rows, so no radar "
+              f"contact was named - run tools/read_replay_traffic.py --apply "
+              f"if you want the close-quarters rows too. The board sightings "
+              f"above are filed and are what the rival profiles read.")
+        return 0
 
     # **Nearest board reading on the same side, not the same timestamp.** The
     # radar is worth sampling faster than the board - a pass is over in

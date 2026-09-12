@@ -3019,6 +3019,36 @@ being filtered through the poorest.
   leaving `traffic` to the close-quarters question it is actually good at.
   A schema change, so it is put here rather than taken.
 
+**Row 3.2 DONE, 13 Sep: the board's reading is stored as the reading it is,
+and session 143 is named.** `board_sightings` (schema v19, additive) holds
+`(video_s, lap, side, driver)` per sighting. `side` is never null - the board
+always says which side, where the radar often cannot - and `driver` is null
+where the operator marked the cluster unreadable, which is the honest answer.
+`tendencies()` reads the board and falls back to `traffic` where no board pass
+was run, so sessions 88 and 112 keep answering; both paths are pinned.
+- **Session 143: 1,094 sightings, 8 drivers**, and the distribution checks out
+  against the hub's own classification of that race - `CruisingChaos` ahead
+  231 (he ran P2 behind him for seven laps), `K.Graebs` behind 223 (P8 to his
+  P7), `PUNISHED` ahead 218. This is what row 3.2 was for.
+- **And the first apply put one row in wrong.** The roster was keyed by
+  cluster INDEX. This run refused two strips as the fastest-lap banner - the
+  guard working - which removed `Greenmachine 070`'s single sighting, took the
+  list from 22 clusters to 21, and shifted every index past it up one. The
+  label written against index 20 was applied to `ZenPhilosopher`. One row of
+  1,094, and the tool's own output read `20 -> Greenmachine 070` beside a
+  bitmap that plainly says otherwise.
+  - Found by checking the stored rows against the images rather than trusting
+    the print-out, and fixed at the root: each cluster now carries a
+    `fingerprint` of its exemplar and the roster is matched on that, index
+    only as a fallback for rosters written before. **A label belongs to the
+    bitmap someone looked at, not to the position it held in a sorted list.**
+  - Verified 15-19 as well rather than assuming only one had moved.
+- **Third time tonight for one shape of error**: something measured or indexed
+  under one set of conditions, generalised, and wrong when the conditions
+  moved. Banner spacing, the cluster merge threshold, and now list position.
+  The correction each time is the same - key on what the thing IS, not where
+  it happened to sit.
+
 **Row 2.9, final pass: an eval outlived the defect it described, and my own
 commit is what orphaned it.** Eval 17 told Ludo that `build_track_map` *"cannot
 honestly be run at all"* because it updates `corners_json` and never `source`.

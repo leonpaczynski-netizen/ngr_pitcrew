@@ -2421,6 +2421,38 @@ class Store:
                   stamp) for r in rows])
         return len(rows)
 
+    def record_board_sightings(self, session_id: int, rows: list[dict]) -> int:
+        """File one session's leaderboard readings, replacing what was there.
+
+        Replaced rather than appended for the same reason as `traffic`: a
+        re-read of the same capture is a better answer to the same question,
+        not a second set of cars.
+
+        **A sighting with no driver is still filed.** The operator marks a
+        cluster unreadable when two rows are drawn over each other mid-reorder,
+        and that is a fact about the capture - dropping those rows would make
+        "nobody was there" and "the board could not be read" the same answer,
+        which is the reading that gets a driver told he was alone.
+        """
+        stamp = datetime.datetime.now().replace(microsecond=0).isoformat()
+        with self._write() as conn:
+            conn.execute("DELETE FROM board_sightings WHERE session_id = ?",
+                         (session_id,))
+            conn.executemany(
+                "INSERT INTO board_sightings (session_id, lap_id, lap_num, "
+                "video_s, side, driver, source, read_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [(session_id, r.get("lap_id"), r.get("lap_num"), r["video_s"],
+                  r["side"], r.get("driver"),
+                  r.get("source", "replay-board"), stamp) for r in rows])
+        return len(rows)
+
+    def list_board_sightings(self, session_id: int) -> list:
+        """Every board reading for a session, in capture order."""
+        return self._query(
+            "SELECT * FROM board_sightings WHERE session_id = ? "
+            "ORDER BY video_s", (session_id,))
+
     def name_traffic(self, traffic_id: int, rival: str) -> None:
         """Put a name to one contact. Only ever from a labelled cluster."""
         with self._write() as conn:
