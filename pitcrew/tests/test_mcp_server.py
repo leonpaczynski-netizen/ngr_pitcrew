@@ -144,6 +144,36 @@ def test_a_proposed_plan_is_saved_unapproved(seeded):
         store.close()
 
 
+def test_a_proposed_plan_leaves_a_row_in_the_journal(seeded):
+    """Plan row 2.12: `engineer_writes` has a row per candidate.
+
+    **It did not, and the tool's name is why nobody noticed.**
+    `propose_strategy` reads like a proposal and saves a strategy row through
+    `store.save_strategy`, so a plan written over this seam was
+    indistinguishable from one the driver built in the app - which is the one
+    thing the journal exists to tell apart. A refusal on the way in already
+    left a trace; the write itself did not.
+    """
+    from pitcrew.store.db import Store
+
+    db, event_id = seeded
+    got = call("propose_strategy",
+               {"event_id": event_id, "plan": json.dumps({"stints": [10, 10]}),
+                "label": "a candidate"}, db=db)
+    assert got["saved"] is True
+
+    store = Store(db)
+    try:
+        written = store.list_engineer_writes(kind="strategy")
+    finally:
+        store.close()
+    mine = [row for row in written
+            if row.get("target_id") == got["strategyId"]]
+    assert mine, f"no journal row for strategy {got['strategyId']}: {written}"
+    assert "proposed a candidate plan" in (mine[0].get("summary") or "")
+    assert mine[0].get("author") == "race engineer (MCP)"
+
+
 def test_a_proposed_plan_is_read_as_whole_numbers(seeded):
     """**This tool stored whatever JSON arrived.** `write_strategy` goes
     through `from_dict`, which reads a plan's counts once - JSON has no

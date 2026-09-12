@@ -301,6 +301,20 @@ def propose_strategy(event_id: int, plan: str, label: str = "") -> str:
                       "refusals": certificate.refusals,
                       "warnings": certificate.warnings,
                       "unchecked": certificate.unchecked})
+        # **Journalled, like every other write through this seam** (plan row
+        # 2.12). This one was not, and its name is why it was missed: a tool
+        # called `propose_strategy` reads like a proposal, and it saves a row
+        # - so a plan written from here was indistinguishable from one the
+        # driver built in the app, which is the whole reason the journal
+        # exists. A refusal above already leaves a trace; the write did not.
+        store.note_engineer_write(
+            "strategy", target_id=strategy_id, event_id=event_id,
+            author="race engineer (MCP)",
+            summary=("proposed a candidate plan - "
+                     + ("certified" if certificate.certified
+                        else "NOT certified")),
+            after={"label": label or "proposed over MCP",
+                   "certified": certificate.certified})
         return _dump({
             "saved": True, "strategyId": strategy_id, "approved": False,
             "certified": certificate.certified,
