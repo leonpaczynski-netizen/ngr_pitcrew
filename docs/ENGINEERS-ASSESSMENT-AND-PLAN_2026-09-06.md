@@ -2543,6 +2543,27 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Row 2.7's pins confirmed (`d40c4c8`), and row 2.10 pinned.** The critic
+re-ran its four pass-6 mutants against the new tests: **all four killed, each
+by the test written for it** rather than by incidental collateral. It then
+named the seam those tests do not cover - a mutant inking `CHALK`
+unconditionally, so that the widget stops honouring `warn`, survives every one
+of them, because they pin what the controller ASKS for and not what is
+painted. Pinned on the other side too, the way `test_banner.py` already does
+it; and both warn assertions now select their note by what it says instead of
+by being last, which would otherwise follow a later note in silence.
+
+**Row 2.10 was built and was kept true by nothing.** `mechanic.md` already
+names every instrument and, separately, every tool that is deliberately not
+one - the app's own health, voice, rig and build. Nothing stopped that going
+stale, and a tool added without a line reads exactly like a tool that was
+never written, which is the finding the row came from: ten tools existed and
+were re-derived by hand because nothing named them. **e12 checks both
+directions**, the second being row 2.8's stale-citation defect from the other
+end - a line for a tool that no longer exists sends the skill to run something
+that is not there. Three mutants, all killed: a tool losing its line, a
+citation to a tool that does not exist, and the footer ignoring its warning.
+
 **Critic on 2.8 part 2, pass 9 (`9128418`): NOT AGREED - three majors, three
 minors, fixed.**
 - **Major: judging the refutation on the LINE put pass 7's major straight

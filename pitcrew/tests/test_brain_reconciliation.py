@@ -798,6 +798,36 @@ def test_e11_sees_the_standing_rule_and_not_the_traction_one():
                                                    re.IGNORECASE)
 
 
+def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
+    """Plan row 2.10: name every tool the skill may use, one line each.
+
+    `mechanic.md` does, in two lists - the instruments, and the ones that
+    belong to the app's own health, voice, rig and build. **Nothing kept it
+    that way.** Ten tools existed and were re-derived by hand because nothing
+    named them, which is the finding the row comes from, and a tool added
+    without a line puts the file back into that state silently: a name that
+    is missing reads exactly like a tool that was never written.
+
+    **Both directions**, because the file has failed both ways. A tool with
+    no line is work done twice; a line for a tool that no longer exists sends
+    the skill to run something that is not there, which is the stale-citation
+    defect row 2.8 had to clear by hand.
+    """
+    mechanic = (ROOT / ".claude/skills/ludo/references/mechanic.md").read_text(
+        encoding="utf-8")
+    tools = {path.stem for path in (ROOT / "tools").glob("*.py")}
+    unnamed = sorted(stem for stem in tools
+                     if f"tools/{stem}.py" not in mechanic
+                     and f"`{stem}`" not in mechanic)
+    assert not unnamed, (
+        f"tools named nowhere in mechanic.md - neither an instrument nor "
+        f"excluded: {unnamed}")
+    cited = set(re.findall(r"tools/(\w+)\.py", mechanic))
+    assert not sorted(cited - tools), (
+        f"mechanic.md sends the skill to tools that do not exist: "
+        f"{sorted(cited - tools)}")
+
+
 def test_e7_the_register_restates_no_setup_value():
     """§1a: a setup value is written in one place, `brain/car-state/`. `11`
     quoted sheets' diff, rebound, ride height and spring values as absolutes;
