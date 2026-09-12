@@ -725,8 +725,11 @@ def test_the_hub_news_reaches_the_switch_footer_as_a_warning(
 
     controller.switch_event(mine)
 
-    text, warn = said[-1]
-    assert "BoP is now on" in text and warn, said[-1]
+    # **Selected by what it says, not by being last** (pass 6 review): a note
+    # appended after this one would make `said[-1]` follow it silently
+    # instead of failing.
+    text, warn = next(note for note in said if "Working on" in note[0])
+    assert "BoP is now on" in text and warn, (text, warn)
 
 
 def test_the_adopted_link_footer_keeps_its_warning(
@@ -743,8 +746,7 @@ def test_the_adopted_link_footer_keeps_its_warning(
 
     controller.switch_event("r1")            # the calendar's own route in
 
-    text, warn = said[-1]
-    assert "not a second copy" in text, text
+    text, warn = next(note for note in said if "not a second copy" in note[0])
     assert "BoP is now on" in text, "the news the append was writing over"
     assert warn, "a warning, appended to, is still a warning"
 
@@ -763,6 +765,25 @@ def test_a_round_stating_none_of_the_four_still_spends_its_link(
     controller.load_active_event()
 
     assert controller._adopted_rounds == set()
+
+
+def test_the_footer_paints_a_warning_as_a_warning(qt_app):
+    """**The other side of the seam** (the pass-6 review's own limit).
+
+    Every test above pins what the controller ASKS the footer for, which is
+    where all three defects of this class happened. None of them would notice
+    a widget that stopped honouring `warn` - the critic proved it with a
+    mutant inking `CHALK` unconditionally, which survived the lot. So the
+    rendering is pinned too, the way `test_banner.py` pins its side.
+    """
+    from pitcrew.ui import theme
+
+    screen = EventScreen()
+    screen.note("Working on Mine A. No practice laps recorded yet.")
+    assert theme.WARNING not in screen.footer_note.styleSheet()
+
+    screen.note("From the hub: BoP is now on for this round.", warn=True)
+    assert theme.WARNING in screen.footer_note.styleSheet()
 
 
 def _bop_hub(tmp_path, monkeypatch, *, bop=True, tuning=True, power=None,
