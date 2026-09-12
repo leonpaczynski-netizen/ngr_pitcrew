@@ -29,32 +29,59 @@ and the boundary condition on both sides of that structure. **Assume the peaks
 and the null have moved until measured.** They may have moved a little; the
 null may have split; there may now be two.
 
-### The mount as built (12 Sep 2026, from the driver)
+### What changed, exactly (12 Sep 2026, from the driver)
 
-- **25 x 25 x 2.5 RHS**, welded into a C, carrying the transducer.
-- Welded to the **75 x 6 mm flat bar** seat bracket mounts.
-- The ButtKicker's **factory bracket** bolted to the RHS. There is no other
-  mounting interface on this unit - do not propose one.
+**The structure did not change. Only the drive axis did.** Same mount, same
+25 x 25 x 2.5 RHS welded into a C, same welds to the **75 x 6 mm flat bar**
+seat bracket mounts, same factory bracket, same bolt holes, same seat. The
+transducer was turned from horizontal to vertical and nothing else moved.
 
-This is a stiff closed section, not a compliant strap, and it is welded rather
-than clamped: no joint compliance, no fretting, and torsionally stiff enough
-that the seat pan should translate rather than rock.
+So the structure's mechanical impedance is unchanged, and the question is not
+"what did the new frame do" but **"which axis of the existing frame is the
+reaction force now going into."**
 
-**So the expectation is a FLATTER, better-coupled response than the old mount,
-not a peakier one.** 25 x 25 x 2.5 is about 1.9e4 mm^4; with the transducer's
-mass at midspan of a short run fixed both ends, first bending lands above
-150 Hz - past the amp's 160 high-cut and clear of every effect band. The frame
-stops being a filter and the seat shell becomes the shaping element.
+### The 156:1 difference
 
-**The one structural unknown that would change this: whether the RHS leg
-carrying the unit is welded at both ends or has a free end.** The same section
-cantilevered rather than spanning drops that mode by roughly 4x - to around
-40 Hz, directly on the old low peak. Spanning, the frame is out of the band;
-cantilevered, it is the dominant feature of the new response.
+A 75 x 6 flat bar bends about its 75 mm dimension at ~211,000 mm^4 and about
+its 6 mm dimension at ~1,350 - a factor of 156. Seat brackets are conventionally
+on edge, stiff vertically because that is what carries the driver. If that holds
+here:
 
-With everything else welded steel, **the factory bracket is now the softest
-thing in the load path**, so any surprise below 40 Hz in the sweep is coming
-from there. Characterise it; do not hunt it.
+- **Before:** horizontal drive went into the brackets' **weak** axis. A
+  compliant path - real mode structure, energy spent flexing steel.
+- **Now:** vertical drive goes into the **stiff** axis. Very little structural
+  compliance left in the path.
+
+**This reframes the old table.** Peaks of 3 either side of a null of 1 is the
+signature of a *compliant* path: resonant gain at the modes, antiresonance
+between them. A stiff path does not do that - it gives `a = F/M` across the
+band, which is flat.
+
+### Therefore: expect flat, and do not misread it as worse
+
+**The sweep may come back reading 2 almost everywhere, with no 3 and no null.**
+At 40-55 that will *feel* like a downgrade, because the resonant amplification
+that was doing free work is gone.
+
+It is not a downgrade. Flat-at-2 is worth more than 3/1/3, because the whole
+reason the spectral plan is cramped is that there were only two narrow regions
+worth using - *"six effects, one transducer, two narrow usable regions, so
+frequency separates nothing"* - which is why the design leans on ducking and
+contrast to keep events legible. **If the response is genuinely flat, frequency
+starts separating things again**, and the seven effects can be spread properly
+instead of stacked two-deep in the same twelve hertz. Treat that as the
+opportunity this remount opened, not as a loss to be trimmed back.
+
+### The sweep now answers a question it could not before
+
+Same structure, different drive axis, so the old table splits into its two
+causes:
+
+- **Features that VANISH** were the seat brackets' weak-axis bending modes.
+- **Features that SURVIVE** are the seat shell, whose panel modes sit in
+  40-120 Hz and are excited either way.
+
+Record which is which. It is the first time the two have been separable.
 
 ### What rests on it, and therefore is now unverified
 
@@ -164,11 +191,16 @@ python tools/haptics_bench.py calibrate
 ```
 
 40 Hz at -6 dBFS, 10 s. Find the amp position that is "very strong, no knock"
-and record it. **If the amp needs to come down from 35, that is good news** -
-a stiff welded path delivers more of the same excursion into the seat, so
-"very strong" arrives at less drive. It also makes the end-stop question less
-live rather than more, because knock is set by excursion and excursion is set
-by drive.
+and record it.
+
+**Do not be surprised if the amp needs to go UP rather than down.** 40 Hz sat
+on a resonant peak of the old compliant path, and a stiff path trades that peak
+for level everywhere else. The right question at this step is not "is 40 Hz as
+strong as it was" but **"is the amp position that makes 40 Hz very strong still
+inside the knob's range, and does it knock."** The knob has headroom - 35 of
+50, about 3 dB - and the knob is the right answer when it is not strong enough,
+because the digital master drives the limiter, the duty cycle and the pitch of
+every effect, and the knob drives none of those.
 
 ---
 
