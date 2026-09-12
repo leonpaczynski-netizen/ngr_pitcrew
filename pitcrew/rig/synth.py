@@ -32,6 +32,7 @@ restate them: no allocation, no logging, no locks, no I/O inside a callback.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 from dataclasses import dataclass, field
 
@@ -234,12 +235,12 @@ class EffectSpec:
 # 0.70 is about 10 dB at full - and a kerb thump does not shape to full, so the
 # bed measured over his laps drops by nearer 7, which is what turns a gear
 # shift from 8.5 dB under the road into 4 above it.
-DUCK_DEPTH = 0.70
+DUCK_DEPTH = 0.80 if os.environ.get("PITCREW_RIG_REV_A") else 0.70
 # A limit cue gets more, because it lasts longer and matters more: 0.82 is
 # about 15 dB. The point is not to make the cue loud - it is to make it the
 # only thing happening, which is a different and much cheaper way to be
 # noticed.
-DUCK_CRITICAL = 0.82
+DUCK_CRITICAL = 0.88 if os.environ.get("PITCREW_RIG_REV_A") else 0.82
 DUCK_ATTACK_S = 0.02
 DUCK_RELEASE_S = 0.18
 
@@ -504,6 +505,83 @@ PROFILE = (
 # nothing that imports it breaks; it is the same object.
 PORSCHE_RSR_17 = PROFILE
 
+# **Rev A - the first tune built from measurement rather than from feel.**
+#
+# Measured 12 Sep 2026 (`docs/RIG-SWEEP_2026-09-12.md`): the knock ceiling and
+# the driver's perception floor, by frequency. Laying every effect's real
+# in-car level against both - replayed over twelve of his own laps - says
+# something nobody had seen, because until now only one of the two curves
+# existed:
+#
+#     amp 35        level   vs FLOOR   vs KNOCK
+#     engine        -28.4     -3.4      -24.5      inaudible
+#     road          -25.8     -0.8      -15.6      inaudible
+#     chassis_load  -26.1     +8.7       -9.0
+#     brake_limit   -10.4    +17.1       -1.4      no margin
+#     driveline     -11.4    +18.6       -5.4
+#     impact         -6.2    +26.8       +7.0      KNOCKS
+#     rear_traction  -6.0    +22.4        0.0      ON the limit
+#
+# **The beds are not quiet, they are absent** - below the level at which he can
+# detect them at all - while the two events run past the point where the
+# transducer runs out of travel. The rig's whole dynamic range is allocated to
+# one end. At amp 29 it is worse: engine -9.4 and road -6.8 below the floor.
+#
+# So Rev A brings the offenders DOWN and the beds UP, and keeps amp 35, which
+# is the only position where the beds get close to audible at all.
+#
+# Every number below is one of those two measured curves, not a preference:
+#
+#   * `impact` -9 dB     -> 2 dB inside the knock threshold, still +17.8 over
+#                           the floor. It stays at 52-60 Hz ON PURPOSE: 60 Hz
+#                           is the most SENSITIVE frequency on the rig, moving
+#                           it down to 30-42 costs ~10 dB the trim cannot buy
+#                           back inside the ceiling, and moving it up to
+#                           120-140 was tried in the seat and read as "more
+#                           like ABS or traction control".
+#   * `rear_traction` -4 dB -> off the limit it was sitting exactly on.
+#   * `brake_limit` -3 dB   -> from 1.4 dB of margin to 4.4.
+#   * `driveline` -2 dB     -> sits with the other two transients.
+#   * `road` +7 dB       -> +6.2 over the floor. Audible for the first time.
+#   * `chassis_load` +3 dB
+#   * `engine` +6 dB     -> only +2.6 over the floor, deliberately the quietest
+#                           thing here. It is the LOWEST band and it is always
+#                           on, and salience is set by the ratio to the lowest
+#                           component present (Le et al. 2023) - an always-on
+#                           bed at the bottom anchors everything above it.
+#
+# **The duck has to deepen with them.** Raising a bed raises what every event
+# must beat, and that is exactly how the kerb thump came to fire 11.3 dB BELOW
+# the road bed once before. See `DUCK_DEPTH` / `DUCK_CRITICAL`.
+#
+# Opt in with `PITCREW_RIG_REV_A=1`. Not the default until it has run laps.
+_REV_A_TRIM = {
+    # +4.1 dB, and it wanted +6.0. **`felt_trim` is capped at 4 and the cap
+    # binds here** - engine's own gain is 9.52, the lowest in the profile by a
+    # factor of four, so no trim inside the allowed range lifts it clear of the
+    # floor. It lands about +0.7 dB over, i.e. right ON the threshold. Raising
+    # it further means raising the GAIN, which is the driver's number, not a
+    # correction - so it is left for him to decide after he has felt this.
+    "engine": 4.000,
+    "road": 1.792,            # +7.0 dB
+    "brake_limit": 0.601,     # -3.0 dB
+    "driveline": 0.755,       # -2.0 dB
+    "impact": 1.349,          # -9.0 dB
+    "chassis_load": 1.200,    # +3.0 dB
+    "rear_traction": 0.631,   # -4.0 dB
+}
+PORSCHE_RSR_17_REV_A = tuple(
+    dataclasses.replace(spec, felt_trim=_REV_A_TRIM[spec.name])
+    if spec.name in _REV_A_TRIM else spec
+    for spec in PROFILE)
+
+
+def default_profile():
+    """The profile a `HapticMix` uses when none is named."""
+    if os.environ.get("PITCREW_RIG_REV_A"):
+        return PORSCHE_RSR_17_REV_A
+    return PORSCHE_RSR_17
+
 # Values that arrive alongside the effects and render nothing. See
 # `HapticMix.render` and `effects.EffectDeriver.MODIFIERS` - the two lists have
 # to agree, and a test says so.
@@ -731,10 +809,10 @@ class HapticMix:
     smoothing above swallows it.
     """
 
-    def __init__(self, specs=PORSCHE_RSR_17, *,
+    def __init__(self, specs=None, *,
                  rate: int = transducer.SAMPLE_RATE,
                  block: int = 2048, master: float = 1.0) -> None:
-        self.specs = tuple(specs)
+        self.specs = tuple(specs if specs is not None else default_profile())
         # One number over the whole mix, for the driver to turn.
         #
         # The relative balance between effects is his, tuned over eight days,
