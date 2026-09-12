@@ -122,12 +122,20 @@ the point of the dry run: it is the roster you then label by hand.
 
 > ⛔ **The three corner tools do not give you corner names, and one of them
 > can make the refusal card false.** Every `corner_models` row on file is
-> `source='auto-segment'` — nine of nine — which is why `references/
-> refusals.md` says there is no track map and *"turn three" is not a name this
-> app may honestly use*. `build_track_map.py --apply` is the thing that would
-> change that. It is a writer, so it is his call and never a step in a
-> diagnosis; and until he has asked for it **and** the export declares the new
-> source, corner identity stays auto-segmented, unstable at many corners and
+> `source='auto-segment'`, which is why `refusals.md` says there is no track
+> map and *"turn three" is not a name this app may honestly use*. **No count
+> is written here on purpose:** that file's own header says a number copied
+> into a refusal becomes a competing answer nobody re-queries. Query it —
+> `SELECT circuit_key, source FROM corner_models` on a read-only handle — and
+> note that several circuits he races have **no row at all**, which is a
+> stronger refusal than any of them, not a weaker one.
+>
+> `tools/build_track_map.py --apply` is the thing that would change it. It is
+> a writer, so it is his call and never a step in a diagnosis — **and it
+> cannot honestly be run yet at all**: it updates `corners_json` and never
+> `source`, so a world-anchored model would still export as `auto-segment`,
+> which is the declaration `CLAUDE.md` §3.2 requires it to make. Until that is
+> fixed, corner identity stays auto-segmented, unstable at many corners and
 > unavailable at Monza.
 
 - `tools/data_health.py` — what may honestly be claimed about one car at one circuit, before claiming it.
@@ -138,7 +146,7 @@ the point of the dry run: it is the roster you then label by hand.
 - `tools/driving_style.py` — coast share and upshift rpm, per lap and per stint.
 - `tools/brake_bias.py` — what brake balance **does**, measured off the wheels. GT7 sends no brake-bias channel, so the bias itself is DECLARED, never measured; this reads its effect. Four lines above is the list of what telemetry can verify, and the bias is not on it.
 - `tools/braking_change.py` — whether 1.71 changed braking, and whether later braking pays.
-- `tools/shift_points.py` — where to shift, per car and gear, off his own laps (the table is still issued, never typed).
+- `tools/shift_points.py` — where to shift, per car and gear, **derived from his own laps** (the table is still issued, never typed). **Not the MCP `shift_points`**, which is the table already ISSUED and in the car: two different things under one word, and quoting the derived one as the issued one is the §1a failure this programme is built around.
 - `tools/shift_target.py` — how far to short-shift for a given race, and where it turns against him.
 - `tools/shortshift_trade.py` — what short-shifting costs and saves, off laps he drove.
 - `tools/find_penalties.py` — which laps served a track-limit penalty, off the frames.
@@ -158,9 +166,20 @@ the point of the dry run: it is the roster you then label by hand.
 **Over MCP** (`pitcrew/mcp/server.py`, eighteen tools). **This section left the
 whole seam out**, so the standing rule below reached fourteen scripts and none
 of the seven MCP calls that write — while `SKILL.md` sends you to four of them
-by name. Read-only, eleven: `list_events`, `slider_ranges`, `event_export`,
-`laps`, `strategy_evidence`, `car_context`, `shift_points`, `measurements`,
-`axis_status`, `prompt_log`, `engineer_writes`.
+by name. Eleven read and seven write, and **which side a call is on is the
+whole of what this list is for** — so each gets its own line.
+
+- `list_events` (MCP) — the events on file, with the regulations each carries.
+- `slider_ranges` (MCP) — the car's own slider minima and maxima, from `range_records`.
+- `event_export` (MCP) — the `gt7-pitcrew` payload for one event, as the tune builder reads it.
+- `laps` (MCP) — a session's recorded laps, aggregated, each figure with its sample count.
+- `strategy_evidence` (MCP) — what a plan may honestly be built on, and what is missing.
+- `car_context` (MCP) — the car as the app holds it, for the event in front of you.
+- `shift_points` (MCP) — the upshift tables **issued** for a car, which is the one the beep actually uses. **Not `tools/shift_points.py`**, which derives a table from his laps: the same word for the two halves of rank zero, and they can differ.
+- `measurements` (MCP) — the measurement rows on file for a car and circuit.
+- `axis_status` (MCP) — where each axis stands: tried, confirmed, refuted, untouched.
+- `prompt_log` (MCP) — what was asked of the engineer, and when.
+- `engineer_writes` (MCP) — the journal of what was written, and through which door.
 
 **Writers — each changes the database. Run one only with the driver's yes, and
 never as a step of a diagnosis.**
@@ -172,13 +191,14 @@ never as a step of a diagnosis.**
   the app**, as a beep at 60 Hz. It also refuses a fuel-saving rpm at or above
   its performance rpm, but that refusal is a property of the write, not a check
   to run during a diagnosis.
-- `write_strategy`, `write_race_knowledge`, `write_qualifying_plan` (MCP) — the
-  plan, the circuit's knowledge row, the qualifying plan.
-- `write_measurement`, `write_verdict` (MCP) — `store.record_measurement` and
-  `record_verdict`, each also journalled through `note_engineer_write`.
+- `write_strategy` (MCP) — the race plan, stamped with the context it was approved for.
+- `write_race_knowledge` (MCP) — the circuit's knowledge row: pit loss, burn, wear.
+- `write_qualifying_plan` (MCP) — the qualifying plan, through `save_qualifying_plan`.
+- `write_measurement` (MCP) — a measurement row, through `store.record_measurement`, journalled with `note_engineer_write`.
+- `write_verdict` (MCP) — a verdict row, through `store.record_verdict`, journalled the same way.
 
 - `tools/backfill_measurements.py --apply` — numbers written into prose, as measurement and verdict rows.
-- `tools/build_track_map.py --apply` — anchors each corner to a place on the earth.
+- `tools/build_track_map.py --apply` — anchors each corner to a place on the earth. **Read the corner refusal above before this is so much as mentioned to him:** it is the one tool here that can make `refusals.md` false, and it cannot do so honestly until it writes `corner_models.source` as well as `corners_json`.
 - `tools/derive_grip_observations.py --apply` — grip observations from sessions on disk.
 - `tools/fit_tyre_models.py --apply` — clears and refits the tyre models from those observations.
 - `tools/flag_out_laps.py --apply` — re-judges each session's opening lap as an out-lap or not.

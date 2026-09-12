@@ -1028,17 +1028,27 @@ _MECHANIC = ".claude/skills/ludo/references/mechanic.md"
 # satisfied by any backticked identifier, so a `tools/fit.py` or a
 # `tools/judge.py` would have passed undocumented on the strength of `fit` and
 # `judge` being callables named in a different list.
-_INSTRUMENT_LINE = re.compile(r"^\s*- `tools/(\w+)\.py[^`]*`\s*[—-]\s*\S",
+# **At column zero**, so a bullet indented under something else, or sitting
+# inside a fence, is not a tool's listing (row 2.10, pass 2 review).
+_INSTRUMENT_LINE = re.compile(r"^- `tools/(\w+)\.py[^`]*`\s*[—-]\s*\S",
                               re.MULTILINE)
+_MCP_LINE = re.compile(r"^- `(\w+)` \(MCP\)\s*[—-]\s*\S", re.MULTILINE)
 _BACKTICKED = re.compile(r"`([A-Za-z_]\w*)`")
-_STORE_WRITE = re.compile(
-    r"store\.(?:save_|record_|link_|update_|create_|set_|delete_|note_)\w*")
-# The two sentences the section turns on. Deleting the first, or inverting it
-# to "harmless, run them freely", left every assertion green.
+# The three passages the section turns on. Each was deletable, or could be
+# paraphrased into its opposite, with every assertion green.
 _WRITERS_RULE = re.compile(
     r"\*\*Writers\b[^*]*?each changes the database[^*]*?"
     r"never as a step of a diagnosis\.\*\*", re.DOTALL)
-_APPLY_RULE = "leaves the DATABASE alone without `--apply`"
+_APPLY_RULE = re.compile(
+    r"leaves the DATABASE alone without `--apply`[^.]*?not the\s+disk",
+    re.DOTALL)
+# **The corner refusal**, which is the finding here that reaches the driver.
+# Pinned by what it must keep saying, not by a substring: it was deletable,
+# and "nine of nine" could be changed to "three of nine", untested.
+_CORNER_REFUSAL = re.compile(
+    r"⛔[^⛔]*?corner_models[^⛔]*?auto-segment[^⛔]*?"
+    r"build_track_map\.py --apply[^⛔]*?never a step in a diagnosis",
+    re.DOTALL)
 
 
 def _mechanic() -> tuple[str, str]:
@@ -1047,11 +1057,63 @@ def _mechanic() -> tuple[str, str]:
     **Read apart, because reading the whole file cannot tell an instrument
     from a tool that is explicitly not one** (row 2.10 review): a mutant
     moving `debrief` from one list to the other left every assertion green.
+
+    Fenced blocks and HTML comments come out first - a line that reads like a
+    bullet inside one is an example or a note, not a listing, and both passed
+    as a tool's line.
     """
     text = (ROOT / _MECHANIC).read_text(encoding="utf-8")
-    head = text.index("## Every instrument, one line each")
-    split = text.index("**Not instruments for this skill**", head)
-    return text[head:split], text[split:text.index("\n---", split)]
+    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    marks, at = [], 0
+    for mark in ("## Every instrument, one line each",
+                 "**Not instruments for this skill**"):
+        assert mark in text[at:], f"mechanic.md no longer has: {mark}"
+        at = text.index(mark, at)
+        marks.append(at)
+    end = text.find("\n---", marks[1])
+    assert end != -1, "the exclusion block runs to the end of the file"
+    return text[marks[0]:marks[1]], text[marks[1]:end]
+
+
+def _writes_the_database(path) -> str:
+    """Why this tool is a writer, or "" - decided by structure, not by name.
+
+    A regex cannot tell `store.set_lap_flags(...)` from
+    `parser.set_defaults(...)` or a serial port's `_write(...)`, and reads
+    `write_text` and `write_wav` as database writes. So names bound to
+    `Store(...)` are found first, and raw DML counts wherever it appears -
+    which is how `build_track_map`, `repair_dropped_laps` and
+    `stamp_game_versions` are caught, none of which calls a store method
+    (row 2.10 pass 2: the old guard forced 8 of 14 into place and a writer
+    using raw SQL walked into the exclusion list).
+    """
+    import ast
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if (dml := re.search(r"INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM",
+                         text, re.IGNORECASE)):
+        return f"raw DML: {dml.group(0)}"
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ""
+    names = {"store"}
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "id",
+                            getattr(node.value.func, "attr", "")) == "Store"):
+            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+    verb = re.compile(r"^(?:save|record|link|note|update|create|delete|set"
+                      r"|write)_|^_write$")
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in names
+                and verb.search(node.func.attr)):
+            return f"{node.func.value.id}.{node.func.attr}()"
+    return ""
 
 
 def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
@@ -1072,12 +1134,14 @@ def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
     instruments, excluded_block = _mechanic()
     rule = _WRITERS_RULE.search(instruments)
     assert rule, "the writers' standing rule is gone, or no longer says it"
-    writers = instruments[rule.end():]
-    assert _APPLY_RULE in instruments, "the --apply sentence is gone"
+    readers, writers = instruments[:rule.start()], instruments[rule.end():]
+    assert _APPLY_RULE.search(instruments), "the --apply sentence is gone"
+    assert _CORNER_REFUSAL.search(instruments), (
+        "the corner refusal is gone, or no longer refuses - it is the one "
+        "thing in this file that stops a tool making refusals.md false")
 
     tools = {path.stem for path in (ROOT / "tools").glob("*.py")}
-    lined = {hit.group(1) for line in instruments.splitlines()
-             if (hit := _INSTRUMENT_LINE.match(line.strip()))}
+    lined = set(_INSTRUMENT_LINE.findall(instruments))
     excluded = set(_BACKTICKED.findall(excluded_block))
 
     assert not lined & excluded, f"both an instrument and not: {lined & excluded}"
@@ -1090,19 +1154,29 @@ def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
 
     # **A tool that writes belongs under the writers' rule**, not in a bare
     # exclusion list where the rule cannot reach it.
-    writing = {path.stem for path in (ROOT / "tools").glob("*.py")
-               if _STORE_WRITE.search(path.read_text(encoding="utf-8",
-                                                     errors="replace"))}
-    assert not writing - set(_INSTRUMENT_LINE.findall(writers)), (
-        f"tools that write the store, not listed with the writers: "
-        f"{sorted(writing - set(_INSTRUMENT_LINE.findall(writers)))}")
+    writing = {path.stem: why
+               for path in sorted((ROOT / "tools").glob("*.py"))
+               if (why := _writes_the_database(path))}
+    under_the_rule = set(_INSTRUMENT_LINE.findall(writers))
+    astray = {name: why for name, why in writing.items()
+              if name not in under_the_rule}
+    assert not astray, f"tools that write and are not with the writers: {astray}"
 
-    # **The MCP surface, which this list omitted entirely** (row 2.10 review):
-    # eighteen tools, seven of them writers, and the standing rule reached
-    # none of them while `SKILL.md` sends the skill to four by name.
+    # **The MCP surface, and which SIDE of the rule each call is on** (row
+    # 2.10 pass 2). Naming them was not enough: all seven writers could be
+    # relabelled read-only with the suite green - the roster check this row
+    # had just replaced for `tools/`, left standing on the higher-stakes half,
+    # where one of the writes is the shift table that beeps in his ear.
     server = (ROOT / "pitcrew/mcp/server.py").read_text(encoding="utf-8")
-    for call in re.findall(r"@mcp\.tool\(\)\s*\ndef (\w+)", server):
-        assert f"`{call}`" in instruments, f"MCP tool not named: {call}"
+    for part in re.split(r"@mcp\.tool\(\)", server)[1:]:
+        call = re.search(r"def (\w+)", part).group(1)
+        writes = re.search(r"store\.(?:save|record|note)_\w*\(", part)
+        assert call in _MCP_LINE.findall(instruments), (
+            f"MCP tool with no line of its own: {call}")
+        side = writers if writes else readers
+        assert f"`{call}` (MCP)" in side, (
+            f"`{call}` is on the wrong side of the writers' rule - it "
+            f"{'writes' if writes else 'only reads'}")
 
     # **A tool the skill sends itself to is an instrument**, whatever else it
     # is - so one cannot be quietly reclassified out of the safety rules.

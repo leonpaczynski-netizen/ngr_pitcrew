@@ -2543,6 +2543,44 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Row 2.10 pass 2 (`0fd4518`): NOT AGREED - three majors, fixed. All three
+were the row's own thesis turned back on me.**
+- **Major: I fixed the `tools/` half and left the MCP half on a NAME.** The
+  new check asked only that each `@mcp.tool()` appeared somewhere in the
+  section - the roster check I had just replaced, left standing on the
+  higher-stakes half. **All seven writers could be relabelled read-only with
+  the suite green**, including the write that beeps in his ear at 60 Hz, the
+  approved race plan, and the measurement store. Each MCP call now needs its
+  own line, and the check asserts **which side of the writers' rule it is on**,
+  read from the server's own body.
+- **Major: the corner refusal was deletable, falsifiable and detachable.**
+  Deleting the whole block, changing "nine of nine" to "three of nine", and
+  moving `build_track_map` out of the writers all passed. Worse, the count was
+  a **copied figure inside a refusal**, which `refusals.md`'s own header
+  forbids - *"a number copied here becomes a competing answer that nobody
+  re-queries"* - and the critic found **four circuits with no corner model at
+  all**, two of them current programme circuits, which the number hid. The
+  count is gone, replaced by the query; the block is pinned by what it must
+  keep saying; and the tool's own line points back at it (a guard at each
+  consumer). **The gate it named could never open**, since `build_track_map`
+  writes `corners_json` and never `source` - so it now says the tool cannot
+  honestly be run at all until that is fixed.
+- **Major: `shift_points` meant two things in one section** - the tool that
+  DERIVES a table from his laps, and the MCP call that returns the one ISSUED
+  and in the car. Rule 13 on the two halves of rank zero, with a line on only
+  one of them. Both lines now name the other and say they can differ.
+- **Minors:** the store-write guard forced 8 of 14 writers into place and a
+  writer using raw SQL walked into the exclusion list; it is decided by the
+  AST now - names bound to `Store(...)`, plus raw DML - which catches the
+  three that call no store method at all. A bullet inside a fence, inside an
+  HTML comment, or indented as a sub-bullet counted as a tool's line. The
+  `--apply` sentence was pinned by a substring. A code span wrapped across a
+  line, rendering `references/ refusals.md`. And `_mechanic()`'s heading
+  failures were messageless `ValueError`s.
+- **Ten mutants, all killed**, including all seven the pass-2 review left
+  alive. **And it confirmed by AST what I had found by body: seven MCP
+  writers, not six** - `propose_strategy` saves the strategy it proposes.
+
 **Row 2.10: NOT AGREED on `5b351c1`, fixed - three majors.** e12 made the row
 **checkable, not met**, and the two things that actually endanger the driver
 sat in its blind spot.
