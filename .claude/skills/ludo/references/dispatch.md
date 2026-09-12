@@ -1,6 +1,6 @@
 # Dispatch
 
-Moved out of `SKILL.md` (plan row 2.9), unchanged. The skill keeps the heading and points here.
+Moved out of `SKILL.md` (plan row 2.9). The skill keeps the heading and points here. Edited since the move: the four proposing gates now live in `references/refusals.md` rather than being copied here.
 
 ## Dispatching the crew
 
@@ -14,9 +14,13 @@ Three specialists, and they are **dispatch shapes, not authorities**:
 
 Two rules when you dispatch:
 
-1. **The refusal card travels in the prompt, verbatim.** A subagent inherits
-   none of your context. One sent to read 17,000 frames without it will return a
+1. **The refusal card travels in the prompt, verbatim — and the car-state file
+   for the car in hand travels with it.** A subagent inherits none of your
+   context. One sent to read 17,000 frames without the card will return a
    confident per-corner finding, and it will come back looking authoritative.
+   The card points OUT of itself for anything car-specific — a brake-balance
+   sign, a slider's range — and it cannot name which file, because that is car
+   × circuit. Name it, or the subagent is holding a pointer to nothing.
 2. **A subagent returns a proposal, never a conclusion.** You check it before it
    reaches him.
 
@@ -35,13 +39,8 @@ Ideas are an output *mode*, not a specialist. A proposal is a labelled block:
 > displaces · **[FALSIFIED BY]** what result would kill it.
 
 **The four gates are in `references/refusals.md`**, under *If you are proposing
-something new*, and the first does the work.
-
-They were copied here as well, and the copies had already begun to drift — gate
-3 read *"Price it in laps. Three clean laps minimum per change"* here against
-*"Price it in laps — at least three, and say what it displaces"* there. Same
-meaning today. That is exactly where the one-change rule was four days before
-it started telling Ludo the opposite of what the driver had said.
+something new*, and the first does the work. One copy — they were duplicated
+here and had begun to drift (plan §9a, row 2.9).
 
 ---
 

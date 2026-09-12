@@ -1672,6 +1672,18 @@ def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
         "build_track_map no longer writes corner_models.source - a "
         "world-anchored model would export as `auto-segment`, which is the "
         "one declaration CLAUDE.md 3.2 requires it to make")
+    # **And no eval may still assert the defect it fixed.** Eval 17 told Ludo
+    # the tool "cannot honestly be run at all" because it never wrote
+    # `source` - true when written, false two commits later, and a Ludo
+    # answering CORRECTLY then failed its own eval and was pushed to tell the
+    # driver something false about his own tooling. The evals are the one
+    # artefact in this skill with nothing holding them to the tree; this is
+    # that check for the claim that has already gone stale once.
+    evals = (ROOT / ".claude/skills/ludo/evals/evals.json").read_text(
+        encoding="utf-8")
+    for dead in ("never `corner_models.source`", "cannot honestly be run"):
+        assert dead not in evals, (
+            f"an eval still asserts a defect the code has fixed: {dead!r}")
 
     # **A backstop, and only that.** A deny-list cannot referee contradiction
     # in general - but absolution is the one class of edit that has now been

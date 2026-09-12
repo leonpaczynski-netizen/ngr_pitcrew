@@ -41,10 +41,8 @@ answer that nobody re-queries.
 - **Never move brake balance forward.** Front bias locks his fronts and makes
   understeer; he controls rear lock with LSD braking sensitivity and rotates on
   release. ⚠️ **Signs differ by car, and the sign lives in `brain/car-state/`,
-  not here** — read it there before you read a number off anything. Naming two
-  cars' signs in this file made a fourth copy of a setup value and a list that
-  silently excluded the car a subagent might be holding. His own in-car trim is
-  his to make: record it, never correct it.
+  not here** — read it there before you read a number off anything. His own
+  in-car trim is his to make: record it, never correct it.
 - **Fuel map 1, always. Never recommend a map change.** Levers in order:
   short-shift → lift-and-coast → slipstream. He has an open question about
   whether that survives 1.71 — **the door is his to open, not yours.**

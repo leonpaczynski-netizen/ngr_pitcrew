@@ -2644,6 +2644,33 @@ file is auto-segmented; running a writer as a step in a diagnosis; planning a
 "did not happen"; quoting the derived shift table as the issued one; and
 planning on a pit loss with the refuelling still inside it.
 
+**Row 2.9, final pass: an eval outlived the defect it described, and my own
+commit is what orphaned it.** Eval 17 told Ludo that `build_track_map` *"cannot
+honestly be run at all"* because it updates `corners_json` and never `source`.
+True when it was written; **false two commits later**, when the source fix
+landed and rewrote `mechanic.md` in the same breath. So a Ludo answering
+CORRECTLY failed its own eval, and the eval pushed it to tell the driver
+something false about his own tooling - `mechanic.md` and `evals.json` saying
+opposite things about one file. **That is this row's whole subject, one
+artefact further along**: the fix reached the code and the prose and left the
+copy in the test behind.
+- **The evals were the one artefact in the skill with nothing holding them to
+  the tree.** e12 now asserts that no eval still claims the defect, keyed on
+  the same `UPDATE corner_models SET` parse that retires the corner refusal -
+  so the day the code changes, the eval that describes it fails too. Pinned and
+  mutation-checked.
+- **And the habit the critic named, which is the same one three times.** I put
+  incident history into `SKILL.md`'s refusal pointer (60 words), into
+  `dispatch.md` (5 lines) and into `refusals.md` (2.5 lines) - the last while
+  removing a duplication from that very file, and `refusals.md` is what travels
+  verbatim into every subagent prompt. A subagent needs to know where the sign
+  is, not why the card no longer holds it. All three are out; §9a holds them.
+  **This is also where the line count went**: 455 by the cut, 466 now.
+- Two reference headers claimed "unchanged" after being edited; both now say
+  what changed. `dispatch.md` rule 1 says the car-state file travels with the
+  card - the card points out of itself for anything car-specific and cannot
+  name which file, that being car x circuit.
+
 **Row 2.9, 12 Sep: `SKILL.md` 975 -> 463 lines. THE PREMISE WAS RIGHT AND I
 MEASURED IT WRONG - corrected below, and this paragraph is the correction.**
 The scoping said to delete "two blocks duplicating `refusals.md`". I compared

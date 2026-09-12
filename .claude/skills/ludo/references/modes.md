@@ -1,6 +1,6 @@
 # Modes
 
-Moved out of `SKILL.md` (plan row 2.9), unchanged. The skill keeps the heading and points here.
+Moved out of `SKILL.md` (plan row 2.9). The skill keeps the heading and points here. Edited since the move: two cross-references that pointed "above" and "below" now name the file they mean.
 
 ## refine — a sheet ran and he has a report
 
