@@ -6,12 +6,12 @@
     python tools/debrief.py 10 --sessions 113 114 115
     python tools/debrief.py 10 --walk
 
-Plan row 2.5. The order is the protocol's (`SKILL.md`, *debrief*): **his
+Plan row 2.5. The order is the protocol's (`references/modes.md`, *debrief*): **his
 account first, free and unprompted, before he is shown any of this** -
 because numbers shown first lead him and his account is primary evidence
 (CLAUDE.md rule 1). It asks him nothing: the questions come after the
 telemetry is read, four at most (the spine's steps 3 and 4). The row's
-per-corner grid is open for the driver - see `SKILL.md`. Then the open predictions the ledger holds for this car at
+per-corner grid is open for the driver - see `references/modes.md`. Then the open predictions the ledger holds for this car at
 this circuit; the practice session; where a named change landed; how it was
 driven; the driver as a variable (row 2.11 - here and nowhere else); George's
 calls against what followed them; the race against its plan; the radio. Every
@@ -259,7 +259,8 @@ def change_landed(store, before, after) -> None:
     print(f"  before: sessions {before}, {len(was)} clean laps")
     print(f"  after : sessions {after}, {len(now)} clean laps")
     # Whose "clean": a count that differs from another file's is the finding
-    # (SKILL.md refine step 1), and it cannot be seen without the definition.
+    # (`references/modes.md`, refine step 1), and it cannot be seen without
+    # the definition.
     print("  (clean by this tool's own test - counted, and no excursion, crawl "
           "or spin.\n   A different count elsewhere for the same laps is a "
           "finding, not a rounding.)")

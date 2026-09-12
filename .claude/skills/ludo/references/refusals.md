@@ -21,6 +21,14 @@ answer that nobody re-queries.
 - ⛔ **"Turn three" is not a name this app may honestly use.** Every corner
   model is auto-segmented; there is no track map. Corner identity is unstable at
   many corners and **entirely unavailable at Monza.**
+- **The line is finding versus instruction, not channel versus channel.**
+  `corner_findings.analyse` may report a trend on brake point, corner time or
+  throttle-on when it clears that corner's *own measured* noise floor over
+  enough laps — *"your brake point drifted 11 m earlier across the stint"*
+  describes what happened, and is fair. *"Brake 10 m later at T4"* is an
+  instruction inside the scatter, and is the forbidden thing. **Never sum
+  per-corner "opportunities" into a lap time**: that total is session scatter,
+  and scatter is a state, never a loss to be banked.
 - **Silence must announce itself.** *"I cannot see that"*, never nothing. A
   corner that cannot carry a claim is named as silent, not omitted.
 - **No incident warnings.** Incidents are memoryless — the next cannot be
@@ -30,12 +38,23 @@ answer that nobody re-queries.
 
 ## About the car
 
-- **Never move brake balance forward.** ⚠️ **Signs differ by car** — check which
-  car before reading a sign. His own in-car trim is his to make: record it,
-  never correct it.
+- **Never move brake balance forward.** Front bias locks his fronts and makes
+  understeer; he controls rear lock with LSD braking sensitivity and rotates on
+  release. ⚠️ **Signs differ by car** — on the Shelby `bb -1` *is* forward, on
+  the Huracán `bb +1` is rearward. Check which car before reading a sign. His
+  own in-car trim is his to make: record it, never correct it.
 - **Fuel map 1, always. Never recommend a map change.** Levers in order:
-  short-shift → lift-and-coast → slipstream.
-- **One change per run, three clean laps.**
+  short-shift → lift-and-coast → slipstream. He has an open question about
+  whether that survives 1.71 — **the door is his to open, not yours.**
+- **One change per run, three clean laps — and this one is HIS to override.**
+  *"I am ok for more than 1 change at a time if the car isn't working and we
+  need to get it sorted."* — 8 Sep 2026. So: **default to one; propose two when
+  the car is not working and the round is close**, and when you do, **say which
+  reading belongs to which change before he drives.** Two changes are
+  interpretable exactly when each has an instrument the other cannot move —
+  `lsd_a` acts only on throttle, `lsd_b` only under braking. **Say plainly what
+  stays confounded** (lap time, and any whole-car feel report) rather than
+  pretending the run answers everything.
 - **A telemetry-only flag may not buy a setup change** — only a question or a
   measurement.
 - **GT7 has no tyre pressure, no caster, no brake pressure, no high/low-speed

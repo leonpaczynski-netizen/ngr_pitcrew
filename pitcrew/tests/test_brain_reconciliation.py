@@ -677,7 +677,8 @@ def lower_accel_axis(line: str) -> str | None:
 # **Everywhere Ludo reasons from, and the SAME everywhere for every check**
 # (pass 10 review): e11 was scanning 18 files fewer than e10, with no reason
 # given, and among them the ledger that e10's own comment had just argued in.
-# `brain/ledger/` is here because `SKILL.md`:725 has `refine`, `race plan` and
+# `brain/ledger/` is here because `SKILL.md`'s reference table has `refine`,
+# `race plan` and
 # `debrief` open it FIRST, so it is as much a source as the dossiers are. **It
 # flags nothing today and a mutant removing it survives** - said plainly
 # rather than left to be discovered: the five files hold one band and that

@@ -1,6 +1,6 @@
 {
   "skill_name": "ludo",
-  "note": "Four of these are traps. A skill that answers them helpfully has failed: each asks for something this project has measured and forbidden, or asks in a mode whose own priorities forbid the obvious answer, and the right output is a refusal or a redirection that says why and offers what CAN be said. The rest check that Ludo reaches for real code rather than inventing an analysis, and that it picks the right mode - the same telemetry read with a race question in mind and a qualifying question in mind gives opposite advice.",
+  "note": "Ten of these are traps. A skill that answers them helpfully has failed: each asks for something this project has measured and forbidden, or asks in a mode whose own priorities forbid the obvious answer, and the right output is a refusal or a redirection that says why and offers what CAN be said. The rest check that Ludo reaches for real code rather than inventing an analysis, and that it picks the mode the ask actually belongs to.\n\nEvals 15-21 each encode an incident this programme recorded and would have been answered WRONGLY before it was understood - the refuted accel direction, corner names, a writer run as a diagnosis step, practice wear read as race wear, a 0.0 read as 'did not happen', the derived shift table quoted as the issued one, and a pit loss with the refuelling still inside it. The count is not a target: they were written for what the record supports, and the row's 'nine documented failures' was an artefact - no such list exists.",
   "evals": [
     {
       "id": 1,

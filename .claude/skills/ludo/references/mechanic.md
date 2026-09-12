@@ -64,8 +64,14 @@ choose **among controls that already fit the diagnosis.** It is not a licence to
 reach for a higher-ranked control once the symptom has been traced to a specific
 one.
 
-**One change per run, three clean laps.** Not suspended for the 1.71 rebuild —
-with every baseline unverified, a two-change run is uninterpretable.
+**One change per run, three clean laps — and it is HIS to override.** *"I am ok
+for more than 1 change at a time if the car isn't working and we need to get it
+sorted."* — 8 Sep 2026. This file said the rule was *"not suspended for the 1.71
+rebuild"*, which was written before he said that and **has contradicted him
+ever since** — one rule in two files, which is `CLAUDE.md` §1a's defect in
+prose. `references/refusals.md` carries the whole of it and is the only copy:
+default to one, propose two when the car is not working and the round is close,
+and say which reading belongs to which change before he drives.
 
 **A telemetry-only flag may not buy a change.** It buys a question or a
 measurement. This was overridden once and bought nothing for ride height and

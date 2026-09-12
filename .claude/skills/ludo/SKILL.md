@@ -385,17 +385,18 @@ closing sheet*, below.
 | `quali` | `modes.md`, then `references/race-planner.md` |
 | `race plan` | **the ledger first**, then `references/race-planner.md` |
 | `debrief` | **the ledger first** — every open prediction is closed there — then `modes.md`, `references/race-planner.md`, **`mechanic.md` for anything per-corner**, `learning-loop.md` for the radio review, `where-the-change-landed.md` for where it landed |
-| `what to try` | `references/refusals.md` + `references/refusal-card.md` |
+| `what to try` | `references/refusals.md` |
 | any | `references/learning-loop.md` when recording; `voice.md` before writing to him; `closing-sheet.md` last, every time; `dispatch.md` when sending a subagent |
 
-**Two references of JUDGEMENT is the limit — the ones above that carry the
-mode itself do not count.** Row 2.9 moved the bodies of `refine`, `quali` and
-`debrief` into `modes.md`, and the refusal card, the voice and the closing
-sheet into their own files, so this file could be read end to end before
-acting. That makes `modes.md` and `closing-sheet.md` part of the work rather
-than extra reading, and the old flat "more than two" would have made the
-restructure forbid itself. The limit is still about how much **evidence** you
-go looking for before you decide.
+**The limit counts what you open BEYOND this table, and it is two.** The row
+above is the mode's procedure, not evidence-seeking — `where-the-change-landed`
+is listed for `refine` because you may not judge a change without it, and the
+first version of this amendment exempted `modes.md` by name while leaving that
+one to be counted, so the rule forbade the table printed directly above it.
+
+It is the rule it always was: **how much evidence you go looking for before you
+decide**, not how the files happen to be split. Two beyond the row — and if you
+want a third, say what question it is for.
 
 Facts live in the knowledge base, not here — use the `gt7-brain` skill, whose
 routing table says which file answers what. Heavy reads (thousands of frames,
@@ -409,7 +410,7 @@ a whole archive) go to a subagent.
 
 ## The refusal card
 
-**In `references/refusal-card.md`** (row 2.9): what this skill refuses and why. Read it before you answer, not when you are challenged on it.
+**In `references/refusals.md`** — the one card, which is also what travels verbatim in every subagent dispatch. Read it before you answer, not when you are challenged on it. *(Row 2.9 first moved this section to a second file; re-measured, 23 of its 72 lines were already in `refusals.md` word for word, and the two copies had diverged on a rule he had personally overridden. One card.)*
 
 ## Proposing something new
 

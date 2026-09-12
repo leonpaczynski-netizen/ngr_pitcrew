@@ -2619,13 +2619,36 @@ file is auto-segmented; running a writer as a step in a diagnosis; planning a
 "did not happen"; quoting the derived shift table as the issued one; and
 planning on a pit loss with the refuelling still inside it.
 
-**Row 2.9, 12 Sep: `SKILL.md` 975 -> 463 lines, and the row's own premise was
-wrong.** The scoping said to delete "two blocks duplicating `refusals.md`".
-**Measured, no section of `SKILL.md` duplicates any reference file** - the
-highest overlap between any section and any of the five is 2 lines of 16, and
-the refusal card, the block that premise named, shares 1 line of 53. There was
-nothing to delete, so the only route to the number was to move what the file
-EXPLAINS and keep what it DOES.
+**Row 2.9, 12 Sep: `SKILL.md` 975 -> 463 lines. THE PREMISE WAS RIGHT AND I
+MEASURED IT WRONG - corrected below, and this paragraph is the correction.**
+The scoping said to delete "two blocks duplicating `refusals.md`". I compared
+sections to reference files line for line, found a highest overlap of 2 lines
+of 16, wrote "nothing duplicates" into this document, and moved the refusal
+card to a file of its own instead of deleting it.
+- **An exact-line diff over rewrapped prose measures line breaks, not
+  content** - and this repo already knew that: `test_brain_reconciliation.py`
+  has `_live_paragraphs()` for exactly this reason, *"a rule and the note that
+  retires it are often a wrapped line apart"*. Re-measured on stripped lines,
+  **23 of the refusal card's 72 lines are verbatim in `refusals.md`**, 8 of 22
+  bullets are byte-identical once unwrapped, and 6 sentences match at ratio
+  1.00. The second block the row named - the four proposing gates - is
+  `refusals.md`:88-99 word for word.
+- **And the two copies had already diverged, against the driver.** Three
+  copies of the one-change rule existed; `refusals.md` and `mechanic.md` both
+  said one change per run, while the third carried his own override of it -
+  *"I am ok for more than 1 change at a time if the car isn't working"*, 8 Sep
+  - and `mechanic.md` said flatly that the rule was *"not suspended"*. **Ludo
+  was told a rule the driver had personally lifted, for four days.** That is
+  `CLAUDE.md` §1a in prose: two copies, so two rules.
+- **Fixed as the row asked in the first place.** The unique half of the card
+  is merged into `refusals.md` - which is the copy that travels verbatim in
+  every dispatch - the duplicate file is deleted, and `mechanic.md` now defers
+  to it and records that it was wrong. One card.
+- **The lesson is about the instrument, not the file.** I priced a trade for
+  the driver - thirteen lines against a behaviour risk - on a measurement that
+  was an artefact of my own tooling, and wrote the artefact into this document
+  as settled. **Measure the way the thing is written, not the way it is
+  stored.**
 - **Every heading stays.** `debrief`, `The spine` step 1 and `The record` are
   named anchors other things resolve against, so the heading stays and the
   body moves, with a pointer that says what is over there.

@@ -38,13 +38,15 @@ Moved out of `SKILL.md` (plan row 2.9), unchanged. The skill keeps the heading a
 7. **The verdict on the same instrument, against the control's drift** -
    confirmed, refuted (with its direction), or unresolvable, and the ledger
    row closed with it. Read where it landed, not whether the lap moved: the
-   lap time cannot answer this (see *Where the change landed*, above) -
+   lap time cannot answer this (see `references/where-the-change-landed.md`) -
    sectors first, distance bins where the sectors are silent. **An A-B-A
    return leg where a run is cheap** - it is the one control learning
    cannot fake. Where there is no valid control, say "I cannot see that" and
    let his report carry the finding.
 8. **If a ratio moved, the shift table moved with it.** Re-issue it in the
-   same message — see below.
+   same message — the recipe and the `write_shift_points` call are in
+   `SKILL.md`, under *Every sheet carries its shift table*, which is the one
+   step of these modes you cannot execute from this file alone.
 
 **Platform or trim — decide which before step 6** (plan row 2.3). A setup has
 two layers and they need opposite methods
