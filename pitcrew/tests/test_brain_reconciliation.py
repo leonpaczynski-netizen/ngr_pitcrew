@@ -927,7 +927,11 @@ _RUN_LOW = re.compile(
 # every turn" and "Turn 4 is the reference corner" into evidence of the
 # refuted claim. The distinction is the phrase, not the distance: e11 has no
 # proximity bound to tighten.
-_ROTATION = re.compile(r"push\w*|understeer\w*|rotat\w*|turns?[-\s]in\b",
+# **A leading `\b` too.** Without it the phrase matches inside "return in"
+# and "returns in" - two live in the corpus today, neither on a line that also
+# carries the instruction, so it flagged nothing wrongly and would have
+# eventually demanded a CONTESTED stamp for a line naming no symptom at all.
+_ROTATION = re.compile(r"push\w*|understeer\w*|rotat\w*|\bturns?[-\s]in\b",
                        re.IGNORECASE)
 
 
@@ -1017,6 +1021,14 @@ def test_e11_sees_the_standing_rule_and_not_the_traction_one():
     # **His own word for it**, which the narrowing had lost.
     assert _standing_rule_unstamped(
         "Run acceleration sensitivity LOW or the car will not turn in")
+    # **"return in" is not "turn in".** The leak was a common English word,
+    # not a circuit name - `Turn 4`, "out of every turn" and "the turn-in
+    # point at T4" all behaved, while "the losses return in the last stint"
+    # made a line with no rotation symptom at all look like this claim.
+    assert not _standing_rule_unstamped(
+        "Rule: run acceleration sensitivity LOW; the losses return in the "
+        "last stint")
+    assert not _ROTATION.search("the wheel returns in a controlled way")
     # A stamp clears it, which is the whole point of the check.
     assert not _standing_rule_unstamped(
         "Run acceleration sensitivity LOW, and it pushes. [CONTESTED on v1.71]")
