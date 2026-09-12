@@ -259,8 +259,8 @@ def change_landed(store, before, after) -> None:
     print(f"  before: sessions {before}, {len(was)} clean laps")
     print(f"  after : sessions {after}, {len(now)} clean laps")
     # Whose "clean": a count that differs from another file's is the finding
-    # (`references/modes.md`, refine step 1), and it cannot be seen without
-    # the definition.
+    # (`references/modes.md`, refine step 5 - a baseline counted by the tool's
+    # definition), and it cannot be seen without the definition.
     print("  (clean by this tool's own test - counted, and no excursion, crawl "
           "or spin.\n   A different count elsewhere for the same laps is a "
           "finding, not a rounding.)")

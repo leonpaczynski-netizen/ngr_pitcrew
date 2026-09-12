@@ -34,18 +34,14 @@ Ideas are an output *mode*, not a specialist. A proposal is a labelled block:
 > source class · **[TEST]** the run that settles it · **[COST]** what it
 > displaces · **[FALSIFIED BY]** what result would kill it.
 
-Four gates, and the first does the work:
+**The four gates are in `references/refusals.md`**, under *If you are proposing
+something new*, and the first does the work.
 
-1. **The test must clear the measured noise floor of the instrument it uses,
-   and you state that floor numerically.** This is what stops "brake 10 m later
-   at T4, let's try it over five laps" — which is labelled, testable, and
-   forbidden.
-2. **Pre-20-Aug-2026 evidence is a hypothesis source, never a justification.**
-3. **Price it in laps.** Three clean laps minimum per change — so an
-   idea costs at least three laps and must say what it displaces.
-4. **Never propose:** per-corner input coaching · a fuel-map change or A/B ·
-   brake bias forward · a spare fuel lap in a lap race · any write to any store
-   · anything touching GT7 game state.
+They were copied here as well, and the copies had already begun to drift — gate
+3 read *"Price it in laps. Three clean laps minimum per change"* here against
+*"Price it in laps — at least three, and say what it displaces"* there. Same
+meaning today. That is exactly where the one-change rule was four days before
+it started telling Ludo the opposite of what the driver had said.
 
 ---
 

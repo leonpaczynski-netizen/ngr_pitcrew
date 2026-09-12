@@ -201,8 +201,9 @@ did not happen.** On a race day, before anything else, run over that event's own
 
 ### `what to try` — ideas
 
-1. **The falsifier first**, then the test, then the cost. See *Proposing
-   something new*, below — gate 1 does the work.
+1. **The falsifier first**, then the test, then the cost. The four gates are in
+   `references/refusals.md` — gate 1 does the work; the block shape a proposal
+   takes is in `references/dispatch.md`.
 2. `references/refusals.md`.
 
 ---
@@ -394,9 +395,10 @@ is listed for `refine` because you may not judge a change without it, and the
 first version of this amendment exempted `modes.md` by name while leaving that
 one to be counted, so the rule forbade the table printed directly above it.
 
-It is the rule it always was: **how much evidence you go looking for before you
-decide**, not how the files happen to be split. Two beyond the row — and if you
-want a third, say what question it is for.
+**A change of scope, not a restatement** — the original counted references, and
+every reference file is now named in that table. What binds is the closing
+clause: **two beyond the row, and if you want a third, say what question it is
+for.**
 
 Facts live in the knowledge base, not here — use the `gt7-brain` skill, whose
 routing table says which file answers what. Heavy reads (thousands of frames,
@@ -410,7 +412,7 @@ a whole archive) go to a subagent.
 
 ## The refusal card
 
-**In `references/refusals.md`** — the one card, which is also what travels verbatim in every subagent dispatch. Read it before you answer, not when you are challenged on it. *(Row 2.9 first moved this section to a second file; re-measured, 23 of its 72 lines were already in `refusals.md` word for word, and the two copies had diverged on a rule he had personally overridden. One card.)*
+**In `references/refusals.md`** — the one card, and what travels verbatim in every subagent dispatch. Read it before you answer, not when you are challenged on it.
 
 ## Proposing something new
 

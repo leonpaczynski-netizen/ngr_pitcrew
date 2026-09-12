@@ -442,8 +442,14 @@ the only one of the four that can land before it.
 - **"`DriverView` is built only from its test file" is stale.** Instantiated at
   `controller.py:4845`, pushed at 4 Hz. Memory `reference_tyre_temps_on_a_dashboard`
   needs amending.
-- **"No qualifying session has ever been recorded"** (`SKILL.md:162`) is wrong by the
-  column the skill does not know: `practice_intent='qualifying'` marks 12 sessions.
+- ~~**"No qualifying session has ever been recorded"** is wrong by the column
+  the skill does not know: `practice_intent='qualifying'` marks 12 sessions.~~
+  **STRUCK 12 Sep - this correction was wrong twice, and the skill was right.**
+  `sessions.kind` holds only `practice` (140) and `race` (19): no qualifying
+  session has ever been recorded, literally. And the marked count is **13**,
+  not 12 - all `kind='practice'`, 17 Aug to 7 Sep. The skill now says both,
+  correctly (`references/modes.md`, `quali`), which is row 2.9's
+  "`practice_intent` known".
 - ⟂ **"Damage: no channel"** was wrong in revision 1 of this document. The car icon
   on the wear panel goes red and the panel is already captured.
 - ⟂ **The "undercut is strong here" lines are ours**, in `05-track-reference.md`, not
@@ -2675,19 +2681,28 @@ card to a file of its own instead of deleting it.
   the `write_shift_points` block (e4 splits `SKILL.md` on it), `The spine` (the
   17,421-frame figure eval 3 anchors on), the frontmatter, and the six-mode
   table the frontmatter restates.
-- Six new references: `where-the-change-landed.md` (149), `modes.md` (134, the
-  `refine`/`quali`/`debrief` bodies), `refusal-card.md` (77), `voice.md` (73),
-  `dispatch.md` (64, three blocks), `closing-sheet.md` (53).
+- **Five new references** (`wc -l`, after the correction below):
+  `where-the-change-landed.md` 153, `modes.md` 142, `voice.md` 77,
+  `dispatch.md` 66, `closing-sheet.md` 57. A sixth, `refusal-card.md`, was
+  created and then **deleted** - it duplicated `refusals.md` and is the
+  blocker recorded above.
 - **The restructure would have forbidden itself.** "If you have opened more
   than two references, you have read too much" was written when the modes were
   in this file; with the bodies moved, every mode must open `modes.md` and that
-  rule eats one of its two. It now counts references of JUDGEMENT, and says
-  why - the limit was always about how much evidence you go looking for before
-  deciding, not about how the file is split up.
-- **455 by the cut, 463 after the routing table was told about the six new
-  files.** The row said under 450. Going lower means moving a rule Ludo has to
-  apply every time - the record, or "ask the store first" - which trades eight
-  lines for a behaviour risk, and the driver was shown that trade and took the
+  rule eats one of its two. **Two wordings were wrong before the third stuck.**
+  "Counts references of JUDGEMENT" exempted `modes.md` by name and left
+  `where-the-change-landed.md` to be counted - which the same commit had just
+  made mandatory for `refine`, so the rule forbade the table printed directly
+  above it. It counts what is opened BEYOND the table now, **and says that this
+  is a change of scope rather than a restatement**: every reference file is
+  named in that table, so the clause that still binds is "two beyond the row,
+  and if you want a third, say what question it is for".
+- **466 lines, against the row's under-450.** 455 by the cut; the routing table,
+  the corrections above and this record's own honesty cost the rest. **Deleting
+  the duplication does not buy any of it** - that lived in the reference layer,
+  and the commit that removed 81 duplicated lines took `SKILL.md` from 463 to
+  464. Going under 450 means moving a rule Ludo applies every time, which is a
+  behaviour risk for a line count; the driver was shown that trade and took the
   restructure without it.
 
 **Row 2.10 pass 5 (`7b47de9`): NOT AGREED - one major, two minors, fixed.**
