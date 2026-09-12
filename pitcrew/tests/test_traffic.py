@@ -184,3 +184,94 @@ def test_a_name_is_never_carried_further_than_the_board_was_read():
     assert "best[1] is None" in source, (
         "a contact whose nearest reading was marked unreadable must stay "
         "unnamed rather than inherit the next name within the interval")
+
+
+# ------------------------------------------- finding the radar, not assuming it
+
+def _traffic():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "read_replay_traffic",
+        Path(__file__).resolve().parents[2] / "tools" / "read_replay_traffic.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _red_blob(numpy, pixels, cx, cy, w, h):
+    """Draw a red rectangle centred on (cx, cy).
+
+    Odd sizes only where the test asserts the centre back: an even-height
+    block has no integer centre and the half-pixel comes back as an off-by-one
+    that looks like a tool defect and is not one.
+    """
+    pixels[cy - h // 2:cy + h // 2 + 1, cx - w // 2:cx + w // 2 + 1] = (200, 30, 30)
+
+
+def test_the_radar_box_keeps_the_offsets_the_old_geometry_had():
+    """The widget did not change size when it moved — only where it sits. So
+    the box around a found marker is the old box's own offsets."""
+    tool = _traffic()
+    assert tool.radar_box(tool.OWN_XY) == tool.RADAR
+
+
+def test_the_own_marker_is_found_by_shape_and_place():
+    """A small upright red blob near y 907. Measured 6-15 x 5-14 px."""
+    numpy = pytest.importorskip("numpy")
+    tool = _traffic()
+    pixels = numpy.zeros((1080, 1920, 3), dtype=numpy.uint8) + 20
+    _red_blob(numpy, pixels, 960, 907, 7, 13)
+    assert tool.find_own_marker(pixels) == (960, 907)
+
+
+def test_the_rev_counter_and_the_gear_are_not_the_marker():
+    """Both are red and both live in the same band. The rev counter measured
+    38x80 at y 951-959 and the gear number 40x150 at y 915 — it was the gear
+    number's edge that once put the radar four hundred pixels away."""
+    numpy = pytest.importorskip("numpy")
+    tool = _traffic()
+    pixels = numpy.zeros((1080, 1920, 3), dtype=numpy.uint8) + 20
+    _red_blob(numpy, pixels, 1164, 915, 40, 150)      # the gear number
+    _red_blob(numpy, pixels, 1377, 955, 38, 80)       # the rev counter
+    assert tool.find_own_marker(pixels) is None
+
+
+def test_a_flat_bar_beside_the_marker_is_not_the_marker():
+    """Measured at y 902, 15 px wide and 6 tall — the one red thing close
+    enough in y to matter, and twice as wide as tall where the marker at its
+    flattest was 6x5."""
+    numpy = pytest.importorskip("numpy")
+    tool = _traffic()
+    pixels = numpy.zeros((1080, 1920, 3), dtype=numpy.uint8) + 20
+    _red_blob(numpy, pixels, 789, 902, 15, 6)
+    assert tool.find_own_marker(pixels) is None
+
+
+def test_the_tyre_pips_sit_below_the_band():
+    """12-14 px wide and as tall, so shape alone will not separate them —
+    their y is what does. Measured at 961-968 against the marker's 907-910."""
+    numpy = pytest.importorskip("numpy")
+    tool = _traffic()
+    pixels = numpy.zeros((1080, 1920, 3), dtype=numpy.uint8) + 20
+    _red_blob(numpy, pixels, 392, 965, 14, 12)
+    _red_blob(numpy, pixels, 476, 967, 14, 15)
+    assert tool.find_own_marker(pixels) is None
+
+
+def test_a_capture_with_no_radar_is_refused_not_guessed():
+    """The legacy box belongs to a HUD layout that is not recorded any more.
+    Falling back to it puts the search on bare tarmac and reports an empty
+    race — which is what happened, silently, for a whole league round."""
+    from pathlib import Path as _P
+    tool = _traffic()
+    with pytest.raises(SystemExit) as raised:
+        tool.locate_radar(_P("no-such-capture.mp4"), 0.0, 100.0,
+                          _P("no-such-frame.png"), None)
+    assert "radar" in str(raised.value).lower()
+
+
+def test_an_explicit_radar_x_is_taken_as_given():
+    tool = _traffic()
+    from pathlib import Path as _P
+    assert tool.locate_radar(_P("x.mp4"), 0.0, 1.0, _P("y.png"), 961) == (
+        961, tool.OWN_XY[1])

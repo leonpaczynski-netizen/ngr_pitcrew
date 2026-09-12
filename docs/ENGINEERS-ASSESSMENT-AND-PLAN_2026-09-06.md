@@ -2974,6 +2974,51 @@ samples** with the radar unreadable on nearly every one.
   Needs its own measurement across captures, and until then no session whose
   capture uses this layout can be named.
 
+**Row 3.2, 12 Sep, fourth pass: the radar is FOUND now, and finding it proved
+the radar is the wrong instrument for this row.**
+- **The fix.** `read_replay_traffic` read a fixed box and returned 0 contacts
+  from 595 samples on the Daytona league race, because that box is bare
+  tarmac on a capture whose radar sits centre-bottom. The marker is located
+  from the capture now, and the route matters: **not by colour.** The HUD is
+  translucent, so over dark tarmac the red arrow separates and over Daytona's
+  concrete it washes out - found on 2 frames of 16. What does not vary is that
+  the widget is STATIC and the track is not, so a per-pixel median over a
+  dozen frames keeps the HUD and averages the scenery flat, and on that image
+  the radar's crosshair is a 248 px bright run through the marker. Located on
+  s143 (959, 908), s160 (959, 908), s159 (964, 909); **refused** on the s142
+  practice capture, which is the point - the legacy box would have put the
+  search on tarmac and reported an empty race, silently, as it already had.
+- **A measurement of mine that was fake, and I published it.** I reported the
+  red-marker detector hitting "17 of 21 frames". It was one frame read
+  twenty-one times: `Image.open` held the file, ffmpeg could not overwrite it,
+  and every later grab failed without saying so. Sixteen readings identical to
+  the pixel, which I read as consistency. The real rate is about 2 in 16.
+- **And a second artefact of my own sampling.** Daytona laps run ~103 s and I
+  sampled every 132.9 s, so successive samples drift only ~30 s round the lap
+  and sit in the same bright banking sector where the marker washes out. That
+  is why 2/16 and 50/70 disagreed on the same capture.
+- **What it yields on s143: 2 contacts, both unplaced - and that is the race,
+  not the reader.** Three measured reasons. The MFD cycles pages, so the radar
+  is up on ~71% of sampled frames against Fuel Map ~17%, the pit menu and a
+  telemetry overlay. GT7's radar range is short: at 700 s he is P2 with
+  **+1.712 ahead and -1.264 behind** and the radar shows nothing but his own
+  marker. And he spent most of that race alone - +1:18 and -25.8 by lap 19.
+
+**Row 3.2's carrier is wrong, and this is the recommendation.** The board
+reader takes **1,096 sightings** of who was either side of him across that
+race - eight drivers, continuous, every 4 s, cross-checked against the hub -
+and then **throws all of it away except the names it can pin onto radar
+contacts**, of which there are two. The richest source in the pipeline is
+being filtered through the poorest.
+- Everything row 3.2 exists to answer - gap to the leader, who is ahead and
+  behind, when they pit, what fuel they took, whether they must stop again -
+  is board and packet data. None of it needs the radar, which answers only
+  *"is somebody alongside me right now"*.
+- **Proposed:** persist the board readings in their own right -
+  `(video_s, lap, side, driver)` - and build the rival derivation on those,
+  leaving `traffic` to the close-quarters question it is actually good at.
+  A schema change, so it is put here rather than taken.
+
 **Row 2.9, final pass: an eval outlived the defect it described, and my own
 commit is what orphaned it.** Eval 17 told Ludo that `build_track_map` *"cannot
 honestly be run at all"* because it updates `corners_json` and never `source`.

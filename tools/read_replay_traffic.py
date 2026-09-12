@@ -75,9 +75,68 @@ from pitcrew.store.db import Store                              # noqa: E402
 # sits at (1750.3, 907.0) with a standard deviation of 0.23 px across 36
 # frames spread over a whole race, so the geometry is fixed and the own car
 # needs no detection at all - it is a constant.
+# **LEGACY.** Where the radar sat on the captures this tool was written
+# against. Those captures are gone - session 88 has no `video_path` and the
+# file at session 112's path today is a PS5 share-viewer recording with no HUD
+# on it at all - and the driver has since stopped racing in VR and records
+# every practice and race on the layout below. Kept as the fallback seed and
+# as the source of `RADAR_OFFSETS`; nothing should rely on it being right.
 RADAR = (1620, 830, 1900, 1000)
 OWN_XY = (1750, 907)
 CANVAS = (1920, 1080)
+
+# **The radar is not always there, and a fixed box is why this returned
+# nothing on a whole league race.** Daytona session 143 read 0 contacts from
+# 595 samples: that box is bare tarmac on its capture, and the radar sits
+# centre-bottom between the dials. The widget is the same size in both - the
+# marker's y is 907 either way - so only x moves, with the HUD layout.
+#
+# The own marker is found instead of assumed. Measured over frames of Sardegna
+# 159 and Daytona 143, every red thing in the band below the screen centre:
+#
+#     the marker        6-15 x 5-14 px, area 26-76, centre y 907-910
+#     the gear number   40 x 150, centre y 915
+#     the rev counter   38 x 80,  centre y 951-959
+#     the tyre RS pips  12-14 x 2-15, centre y 961-968
+#     a flat bar        15 x 6 at y 902 - the one thing close in y, and it is
+#                       twice as wide as tall where the marker never is
+#
+# So: a small, roughly upright red blob whose centre sits within a few pixels
+# of 907. The bar is excluded by shape and everything else by size or by y.
+# The marker's centre y measured 907-910 across both captures, n=9. The band
+# is kept tight on purpose: at 918 the detector picked up the top edge of the
+# REV COUNTER on a Daytona practice capture and reported the radar as being
+# four hundred pixels away.
+OWN_MARKER_BAND = (890, 926)
+OWN_MARKER_Y = (902, 914)
+OWN_MARKER_AREA = (20, 150)
+OWN_MARKER_MAX_SIDE = 24
+# Height over width. The marker measured 0.83 at its flattest; the bar at y
+# 902 measured 0.40.
+OWN_MARKER_MIN_ASPECT = 0.6
+# The box around the marker, kept at the offsets the original geometry had:
+# `RADAR` less `OWN_XY` is 130 left, 150 right, 77 up, 93 down.
+RADAR_OFFSETS = (130, 77, 150, 93)
+
+# **The marker is not reliably red, and the crosshair always is bright.** The
+# HUD is translucent: over dark tarmac the red arrow separates cleanly, over
+# the bright concrete at Daytona it washes out and the colour test finds
+# nothing. Measured on the race capture, the arrow was found on 2 frames of
+# 16.
+#
+# What does not vary is that the widget is STATIC and the track is not. A
+# per-pixel median over a dozen frames keeps the HUD and averages the scenery
+# into a flat grey, and on that image the radar's horizontal crosshair is a
+# long bright run straight through the marker:
+#
+#     longest run 248 px at y=908, x 836-1083, centre x 960
+#
+# which is the marker's own position, found by a route that does not depend on
+# what the car is driving over.
+RADAR_SAMPLE_FRAMES = 12
+CROSSHAIR_BAND = (860, 960)
+CROSSHAIR_LUM = 60
+CROSSHAIR_MIN_RUN = 120
 
 # The ribbon is the bright tail of the box's luminance: the road behind it
 # sits at a median of 50 and the 99th percentile is 203. Grey rather than
@@ -135,10 +194,64 @@ def frame_at(video: Path, seconds: float, out: Path) -> bool:
     return result.returncode == 0 and out.exists()
 
 
-def masks(pixels):
+def find_own_marker(pixels):
+    """`(x, y)` of the driver's own marker on the radar, or None.
+
+    Searched rather than assumed, because the widget moves with the HUD
+    layout - see `OWN_MARKER_BAND`. Returns the blob nearest the measured y,
+    so a frame carrying two candidates picks the one on the radar.
+    """
+    import numpy as np
+    top, bottom = OWN_MARKER_BAND
+    band = pixels[top:bottom].astype(int)
+    r, g, b = band[:, :, 0], band[:, :, 1], band[:, :, 2]
+    red = (r > 110) & (r - g > 55) & (r - b > 55)
+    best = None
+    seen = np.zeros(red.shape, dtype=bool)
+    height, width = red.shape
+    for sy in range(height):
+        for sx in range(width):
+            if not red[sy, sx] or seen[sy, sx]:
+                continue
+            stack, cells = [(sy, sx)], []
+            seen[sy, sx] = True
+            while stack:
+                y, x = stack.pop()
+                cells.append((y, x))
+                for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    ny, nx = y + dy, x + dx
+                    if (0 <= ny < height and 0 <= nx < width
+                            and red[ny, nx] and not seen[ny, nx]):
+                        seen[ny, nx] = True
+                        stack.append((ny, nx))
+            if not OWN_MARKER_AREA[0] <= len(cells) <= OWN_MARKER_AREA[1]:
+                continue
+            ys = [c[0] for c in cells]
+            xs = [c[1] for c in cells]
+            w, h = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
+            if w > OWN_MARKER_MAX_SIDE or h > OWN_MARKER_MAX_SIDE:
+                continue
+            if h / w < OWN_MARKER_MIN_ASPECT:
+                continue                      # a flat bar is not the marker
+            cy = sum(ys) / len(ys) + top
+            if not OWN_MARKER_Y[0] <= cy <= OWN_MARKER_Y[1]:
+                continue
+            off = abs(cy - (OWN_MARKER_Y[0] + OWN_MARKER_Y[1]) / 2)
+            if best is None or off < best[0]:
+                best = (off, int(round(sum(xs) / len(xs))), int(round(cy)))
+    return None if best is None else (best[1], best[2])
+
+
+def radar_box(own):
+    """The search box around a found marker, at the measured offsets."""
+    left, up, right, down = RADAR_OFFSETS
+    return (own[0] - left, own[1] - up, own[0] + right, own[1] + down)
+
+
+def masks(pixels, box=RADAR):
     """Ribbon, own marker and rival arrows, as boolean arrays."""
     import numpy as np
-    box = pixels[RADAR[1]:RADAR[3], RADAR[0]:RADAR[2]].astype(int)
+    box = pixels[box[1]:box[3], box[0]:box[2]].astype(int)
     r, g, b = box[:, :, 0], box[:, :, 1], box[:, :, 2]
     lum = (r + g + b) / 3
     ribbon = (lum > RIBBON_LUM) & (np.abs(r - b) < RIBBON_MAX_TINT)
@@ -211,14 +324,19 @@ def blobs(mask, min_px: int):
     return found
 
 
-def contacts(pixels) -> list[dict] | None:
+def contacts(pixels, own_xy=OWN_XY) -> list[dict] | None:
     """Every rival arrow on the radar this frame, with side and ribbon distance.
 
     None where the ribbon could not be found at all - which is not the same as
     "nobody was there", and the caller says so rather than filing an empty lap.
+
+    `own_xy` is where the driver's own marker sits on THIS capture; the box is
+    taken around it. It used to be a constant, and the constant was wrong for
+    a whole league race.
     """
     import numpy as np
-    ribbon, own, rival = masks(pixels)
+    box = radar_box(own_xy)
+    ribbon, own, rival = masks(pixels, box)
     if ribbon.sum() < 60:
         return None
     passable = ribbon | own
@@ -303,6 +421,102 @@ def resolve_offset(store, session_id: int, given):
                  "capture does not begin at the first crossing")
 
 
+def locate_radar(video, start: float, end: float, shot, given):
+    """Where the own marker sits on THIS capture, from the capture itself.
+
+    Sampled at several points rather than one, and the answer has to agree:
+    the widget does not move during a race, so two readings that disagree mean
+    the detector has found something else and the number cannot be trusted.
+
+    **Refuses rather than falling back.** The old constant belongs to a HUD
+    layout that is not recorded any more, and using it when detection fails
+    would put the box on bare tarmac and report an empty race - which is
+    exactly what happened, silently, for a whole league round.
+    """
+    import numpy as np
+    from PIL import Image
+
+    if given is not None:
+        return (given, OWN_XY[1])
+
+    # **The crosshair on a median image**, which is the reading that holds.
+    top, bottom = CROSSHAIR_BAND
+    stack = []
+    for index in range(RADAR_SAMPLE_FRAMES):
+        at = start + (end - start) * (index + 1) / (RADAR_SAMPLE_FRAMES + 1)
+        if not frame_at(video, at, shot):
+            continue
+        with Image.open(shot) as image:
+            stack.append(np.asarray(image.convert("RGB"))[top:bottom])
+    if len(stack) >= 4:
+        lum = np.median(np.stack(stack), axis=0).mean(axis=2)
+        best = (0, 0, 0)
+        for row in range(lum.shape[0]):
+            run, x0 = 0, 0
+            for x, on in enumerate(lum[row] > CROSSHAIR_LUM):
+                if not on:
+                    run = 0
+                    continue
+                if run == 0:
+                    x0 = x
+                run += 1
+                if run > best[0]:
+                    best = (run, row, x0)
+        length, row, x0 = best
+        centre_y = row + top
+        if (length >= CROSSHAIR_MIN_RUN
+                and OWN_MARKER_Y[0] <= centre_y <= OWN_MARKER_Y[1]):
+            return (x0 + length // 2, centre_y)
+
+    # Falls back to the red arrow, which is what the crosshair reading was
+    # measured against and which works wherever the HUD sits over dark tarmac.
+    seen = []
+    for share in [(index + 1) / 17 for index in range(16)]:
+        at = start + (end - start) * share
+        if not frame_at(video, at, shot):
+            continue
+        # **Closed before the next write.** `Image.open` holds the file until
+        # it is collected, and on Windows ffmpeg cannot then overwrite it - so
+        # every later grab failed silently and sixteen samples came back as
+        # two. It looked like the marker being absent; it was the frame never
+        # being replaced.
+        with Image.open(shot) as image:
+            found = find_own_marker(np.asarray(image.convert("RGB")))
+        if found is not None:
+            seen.append(found)
+    if not seen:
+        raise SystemExit(
+            "could not find the radar's own marker on this capture. It is a "
+            "small upright red blob at the centre of the radar; if this "
+            "recording has no radar on screen there is nothing to read, and "
+            "if it has one somewhere unexpected pass --radar-x with its x.")
+    # **The agreeing majority, not unanimity.** One frame in eight catches a
+    # brake light or a kerb through the panel and reports a marker somewhere
+    # else; demanding every reading agree turns that into a refusal on a
+    # capture that is perfectly readable. The widget does not move, so the
+    # true x is the one most frames land on.
+    best, votes = None, 0
+    for x, _ in seen:
+        agree = [v for v in seen if abs(v[0] - x) <= 3]
+        if len(agree) > votes:
+            best, votes = agree, len(agree)
+    if votes < 3:
+        raise SystemExit(
+            f"the marker was found on only {votes} frame(s) of "
+            f"{len(seen)} read, at x {sorted(x for x, _ in seen)} - too few "
+            f"to trust. Pass --radar-x with the x of the red marker at the "
+            f"centre of the radar.")
+    if votes * 2 < len(seen):
+        raise SystemExit(
+            f"the marker was found in {len(seen)} frame(s) at x values "
+            f"{sorted(x for x, _ in seen)} and no x holds a majority - it "
+            f"does not move during a race, so something else is being "
+            f"matched. Pass --radar-x with the x of the red marker at the "
+            f"centre of the radar.")
+    return (sorted(x for x, _ in best)[votes // 2],
+            sorted(y for _, y in best)[votes // 2])
+
+
 def main() -> int:
     import numpy as np
     from PIL import Image
@@ -328,6 +542,11 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true",
                     help="write the contacts to `traffic`, replacing "
                          "whatever that session already had")
+    ap.add_argument("--radar-x", type=int, default=None,
+                    help="x of the driver's own marker on the radar. Found "
+                         "from the capture itself; pass this only when it "
+                         "cannot be, which the tool says rather than "
+                         "falling back to a number from another layout")
     ap.add_argument("--scratch", default=None,
                     help="where to put the extracted frames")
     args = ap.parse_args()
@@ -346,6 +565,10 @@ def main() -> int:
     print(f"sampling {video.name} every {args.every:g} s over "
           f"{start:.0f}-{end:.0f} s")
 
+    own_xy = locate_radar(video, start, end, scratch / "locate.png",
+                          args.radar_x)
+    print(f"radar own marker at {own_xy}, box {radar_box(own_xy)}")
+
     per_lap: dict[int, list] = collections.defaultdict(list)
     filed: list[dict] = []
     blind = collections.Counter()
@@ -362,7 +585,7 @@ def main() -> int:
                     f"and does not scale")
             row = lap_at(marks, at)
             if row is not None:
-                found = contacts(pixels)
+                found = contacts(pixels, own_xy)
                 samples += 1
                 if found is None:
                     blind[row["lap_num"]] += 1
