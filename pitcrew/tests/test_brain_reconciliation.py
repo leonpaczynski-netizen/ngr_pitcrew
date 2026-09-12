@@ -1035,6 +1035,108 @@ def test_e11_sees_the_standing_rule_and_not_the_traction_one():
         "Run acceleration sensitivity LOW, and it pushes. [CONTESTED on v1.71]")
 
 
+def _apply_guard_problems(path) -> dict[str, str]:
+    """Writes in an `--apply` tool that are not reached only under the flag.
+
+    **Reachability, not "the scope mentions the flag"** (row 2.10 pass 5
+    review). Asking whether the enclosing function contained ANY apply-branch
+    was wrong in both directions: `if args.apply: print("applying")` blessed
+    every write after it, and moving a write into a helper called only from
+    under the guard turned the suite red while naming a tool that was
+    behaving correctly - the same misdirection as the docstring defect, one
+    layer along.
+
+    **Two shapes, because the eleven are split.** Eight bail early -
+    `if not args.apply: return` - where the write is a SIBLING after a
+    terminating guard rather than a descendant of one, so ancestry alone
+    cannot see it. Three write inside `if args.apply:`, where ancestry is
+    exactly right. **And a helper is guarded when every one of its call sites
+    is**, which needs the call graph and not the tree.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    handles = _store_handles(tree)
+    # **Imported writers only, not the module's own functions.** A call to a
+    # local function is not a write site here: its writes are recorded in its
+    # own scope and carried by the call graph below. Counting the call too
+    # made every tool's `main()` a write at module level, under the
+    # `if __name__` line, where no flag can reach.
+    known = _imported_writers(tree)
+    writes: list[tuple[str, str, bool]] = []
+    calls: list[tuple[str, str, bool]] = []
+    compound = (ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith,
+                ast.Try)
+
+    def about_the_flag(test) -> tuple[bool, bool]:
+        said = ast.unparse(test)
+        if "apply" not in said or re.search(r"\b(?:True|False)\b", said):
+            return False, False
+        return True, bool(re.match(r"\s*not\b", said))
+
+    def scan(node, guarded: bool, scope: str) -> None:
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            if (why := _writes_in(sub, handles, known)):
+                writes.append((scope, why, guarded))
+            if (name := _render(sub.func).split(".")[-1]):
+                calls.append((scope, name, guarded))
+
+    def visit(body, guarded: bool, scope: str) -> None:
+        for statement in body:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                visit(statement.body, False, statement.name)
+            elif isinstance(statement, ast.ClassDef):
+                visit(statement.body, guarded, scope)
+            elif isinstance(statement, ast.If):
+                scan(statement.test, guarded, scope)
+                mentions, negated = about_the_flag(statement.test)
+                visit(statement.body, guarded or (mentions and not negated),
+                      scope)
+                visit(statement.orelse, guarded or (mentions and negated),
+                      scope)
+                if (mentions and negated
+                        and any(isinstance(step, (ast.Return, ast.Raise))
+                                for step in ast.walk(statement))):
+                    guarded = True          # everything after it is covered
+            elif isinstance(statement, compound):
+                for field in ("test", "iter", "items"):
+                    part = getattr(statement, field, None)
+                    for piece in (part if isinstance(part, list) else [part]):
+                        if isinstance(piece, ast.AST):
+                            scan(piece, guarded, scope)
+                for field in ("body", "orelse", "finalbody"):
+                    block = getattr(statement, field, None)
+                    if isinstance(block, list):
+                        visit(block, guarded, scope)
+                for handler in getattr(statement, "handlers", []) or []:
+                    visit(handler.body, guarded, scope)
+            else:
+                scan(statement, guarded, scope)
+
+    visit(tree.body, False, "")
+    functions = {node.name for node in ast.walk(tree)
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    sites: dict[str, list[tuple[str, bool]]] = {}
+    for scope, callee, guarded in calls:
+        if callee in functions:
+            sites.setdefault(callee, []).append((scope, guarded))
+    # A function is reached only under the flag when every call of it is -
+    # to a fixpoint, because a helper may call a helper.
+    always = dict.fromkeys(functions, False)
+    moved = True
+    while moved:
+        moved = False
+        for name in functions:
+            here = sites.get(name, [])
+            covered = bool(here) and all(guarded or always.get(caller, False)
+                                         for caller, guarded in here)
+            if covered != always[name]:
+                always[name] = covered
+                moved = True
+    return {scope: why for scope, why, guarded in writes
+            if not guarded and not always.get(scope, False)}
+
+
 _MECHANIC = ".claude/skills/ludo/references/mechanic.md"
 # A tool's own LINE - the path, a dash, and something after it. **Not merely
 # its name somewhere in the file** (the critic on row 2.10): the old check was
@@ -1256,10 +1358,13 @@ def _writes_in(node, handles: set[str], writers: set[str]) -> str:
             # the two doors documented as read-only pass `remember=False` -
             # which this cannot see from the name alone. Only an explicit
             # literal counts; a variable could be anything.
-            if any(keyword.arg == "remember"
-                   and isinstance(keyword.value, ast.Constant)
-                   and keyword.value.value is False
-                   for keyword in call.keywords):
+            declared = _MODULE_WRITERS.get(spelled.split(".")[-1],
+                                           {}).get("params", set())
+            if "remember" in declared and any(
+                    keyword.arg == "remember"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is False
+                    for keyword in call.keywords):
                 continue
             return f"{spelled}()"
     return ""
@@ -1278,7 +1383,7 @@ def _module_writers() -> dict[str, set[str]]:
     are words a tool may well use for something of its own, so a caller only
     counts when it has imported the name from the module that defines it.
     """
-    found: dict[str, set[str]] = {}
+    found: dict[str, dict] = {}
     for path in sorted((ROOT / "pitcrew").rglob("*.py")):
         if "tests" in path.parts:
             continue
@@ -1288,13 +1393,26 @@ def _module_writers() -> dict[str, set[str]]:
             continue
         handles = _store_handles(tree)
         dotted = ".".join(path.relative_to(ROOT).with_suffix("").parts)
-        for node in tree.body:
+        # **The whole tree, not `tree.body`** (pass 5 review): a writer
+        # defined inside a `try:`, or as a method on an ordinary class, was
+        # invisible - and a class method that writes is a perfectly normal way
+        # for one of these modules to grow.
+        for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             source = ast.unparse(node)
             plain = _without_docstrings(source, ast.parse(source))
             if _DML.search(plain) or _writes_in(node, handles, set()):
-                found.setdefault(node.name, set()).add(dotted)
+                entry = found.setdefault(node.name, {"modules": set(),
+                                                     "params": set()})
+                entry["modules"].add(dotted)
+                # **What the callee actually declares** (pass 5 review): the
+                # `remember=False` exemption was honoured on spelling alone,
+                # so a call could silence the check with a keyword the callee
+                # has never heard of.
+                entry["params"] |= {arg.arg for arg in
+                                    (*node.args.posonlyargs, *node.args.args,
+                                     *node.args.kwonlyargs)}
     return found
 
 
@@ -1305,16 +1423,16 @@ def _imported_writers(tree) -> set[str]:
     """Which of those a module has actually imported, under whatever name."""
     names: set[str] = set()
 
-    def from_module(dotted: str, asname: str | None = None) -> None:
-        for writer, homes in _MODULE_WRITERS.items():
-            if dotted in homes:
+    def from_module(dotted: str) -> None:
+        for writer, entry in _MODULE_WRITERS.items():
+            if dotted in entry["modules"]:
                 names.add(writer)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
                 "pitcrew"):
             for alias in node.names:
-                homes = _MODULE_WRITERS.get(alias.name, set())
+                homes = _MODULE_WRITERS.get(alias.name, {}).get("modules", set())
                 if node.module in homes:
                     names.add(alias.asname or alias.name)
                 from_module(f"{node.module}.{alias.name}")
@@ -1458,41 +1576,10 @@ def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
         source = tool.read_text(encoding="utf-8", errors="replace")
         if '"--apply"' not in source and "'--apply'" not in source:
             continue
-        tree = ast.parse(source)
-        handles = _store_handles(tree)
-        known = _writing_functions(tree, handles)
-        parents = {child: node for node in ast.walk(tree)
-                   for child in ast.iter_child_nodes(node)}
-
-        def guarded(node) -> bool:
-            """Is this write inside a scope that branches on the flag?
-
-            **The scope, not the file** - and a test carrying a boolean
-            literal is not a branch. `if False and not args.apply:` reads as
-            a guard to any check that only looks for the words.
-            """
-            scope = node
-            while (scope in parents
-                   and not isinstance(scope, (ast.FunctionDef,
-                                              ast.AsyncFunctionDef))):
-                scope = parents[scope]
-            for branch in ast.walk(scope):
-                if not isinstance(branch, ast.If):
-                    continue
-                test = ast.unparse(branch.test)
-                if "apply" in test and not re.search(r"\b(?:True|False)\b",
-                                                     test):
-                    return True
-            return False
-
-        for call in ast.walk(tree):
-            if not isinstance(call, ast.Call):
-                continue
-            why = _writes_in(call, handles, known)
-            if why and not guarded(call):
-                unguarded.setdefault(tool.stem, why)
+        for scope, why in _apply_guard_problems(tool).items():
+            unguarded[f"{tool.stem}:{scope or 'module level'}"] = why
     assert not unguarded, (
-        f"tools that take `--apply` and write outside a branch on it: "
+        f"tools that take `--apply` and write where the flag does not reach: "
         f"{unguarded}")
 
     # **The corner refusal's own claim, asserted against the code - and it

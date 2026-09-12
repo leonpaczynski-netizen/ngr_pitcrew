@@ -2543,6 +2543,56 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Row 2.10 pass 5 (`7b47de9`): NOT AGREED - one major, two minors, fixed.**
+All four pass-4 fixes landed and hold, and the derived-writers change found a
+live defect on its first run (`build_inputs`, above). The major was inside the
+one thing that pass added.
+- **Major: `guarded()` asked the wrong question, and was wrong in BOTH
+  directions.** It climbed to the enclosing function and asked whether that
+  scope contained any branch mentioning the flag - which is not the same as
+  the write being REACHED under it. So `if args.apply: print("applying")`
+  blessed every write after it (these tools already print under the flag, so
+  it is the more natural shape, and it needs no boolean literal); and moving a
+  write into a helper called only from under the guard - behaviour identical -
+  **turned the suite red while naming a tool that was behaving correctly.**
+  That is the misdirection class again, one layer along.
+- **Reachability, with the two shapes the eleven actually split into.** Eight
+  bail early (`if not args.apply: return`), where the write is a SIBLING after
+  a terminating guard and ancestry cannot see it; three write inside
+  `if args.apply:`, where ancestry is exactly right. **A helper is guarded
+  when every one of its call sites is** - the call graph, to a fixpoint, not
+  the tree. A behaviour-preserving refactor now passes, which is the test that
+  matters.
+- **My own false positive on the way:** counting a call to a local function as
+  a write made every tool's `main()` a write at module level, under the
+  `if __name__` line where no flag can reach. The function's own writes are
+  recorded in its own scope; the call graph carries them.
+- **Minors:** `remember=False` silenced the check on spelling alone, so a
+  callee with no such parameter could be exempted - it is honoured now only
+  when the callee declares it. And `_module_writers` read `tree.body`, so a
+  writer defined inside a `try:` or as a class method was invisible; it walks
+  the tree.
+- **Six mutants**: G1, R1, R2 and M2 fail as they should, and **G2 passes** -
+  the refactor that used to be punished.
+
+**Row 2.12 DONE, 12 Sep, with the driver's authorisation.** The server is
+registered in `~/.claude.json` under both spellings of this project's path -
+project-scoped, not global, because it opens one app's database - with the
+interpreter named absolutely, since an MCP client is not launched from a shell.
+- **`propose_strategy` was not journalled, and its name is why nobody
+  noticed.** It reads like a proposal and saves a strategy row, so a plan
+  written over this seam was indistinguishable from one the driver built in
+  the app, which is the one thing the journal exists to tell apart. A refusal
+  on the way in already left a trace; the write did not. Pinned, and the pin
+  mutation-checked.
+- **`MCP-SEAM.md` was not stale but wrong.** It said *"Writes propose. They
+  never apply"* when seven of the eighteen tools write directly; it led with
+  `propose_setup_sheet`, which does not exist and cannot - §1a removed the
+  app's setup record altogether; and it gave the cwd as `C:\Projects\Pit_Crew`,
+  which is not where this project is, so anyone following it registered a
+  server that could not start. Rewritten to the seven writers and the eleven
+  readers, with `strategy_evidence`'s own former write named.
+
 **Row 2.10 pass 4 (`0ecddce`): NOT AGREED - two majors, four minors, fixed.**
 Every mutant from three reviews was dead and keying on the method was
 confirmed sound (134 `Store` methods swept; no read-ish name among the 66 that
