@@ -2601,6 +2601,27 @@ untested; e11's fixed-width lookbehinds miss `front  accel` where e10's
 "the car will not turn in" is no longer seen, when the looseness was distance,
 not vocabulary.
 
+**Row 2.8's seven residual minors, closed.** `_SENTENCE_END` takes `]` and
+`}`; `_plain` evens the spacing, which fixes e11's double-space gap for every
+pattern instead of teaching four lookbehinds to count spaces; the backtick
+came out of `_MARKUP`, the critic having shown it earned nothing; e11's corpus
+check and its probes go through one expression, so the call site is pinned and
+not only the patterns it is built from; `_axis_name`'s note says it flattens
+underscores where `_plain` does not; and **his own word for the symptom is
+back** - "the car will not turn in" is seen again, while "out of every turn"
+and "Turn 4" are not, the distinction being the phrase rather than the
+distance.
+- **The one that mattered took two goes.** `named.add(sentence)` →
+  `named.add(line)` survived even the two probes written for it, and working
+  out why corrected the finding: the mutant stores the LINE and looks up the
+  SENTENCE, so the two never match and the rule goes **inert** rather than
+  line-scoped - identical on a single-sentence line, and on a multi-sentence
+  one it simply stops suppressing. Every probe in the file is one sentence or
+  expects a flag, so none could see it. The shape that separates them is two
+  sentences with both claims in the second. **A mutant that survives is worth
+  more read than re-killed:** its survival said the finding's stated
+  consequence was wrong.
+
 **Critic on 2.8 part 2, pass 10 (`202b26a`): NOT AGREED - two majors, five
 minors, fixed.** It granted the substance of all three pass-9 majors: the
 sentence is the right unit and not a third wrong one, the proof script is

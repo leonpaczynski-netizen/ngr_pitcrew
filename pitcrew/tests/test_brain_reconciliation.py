@@ -431,18 +431,32 @@ def test_e8_no_live_lsd_band_anywhere_is_left_on_the_old_scale():
 # guard held up by a formatting choice nobody knows is load-bearing is not a
 # guard. Taken out once, here, rather than guessed at in six patterns.
 # Underscores are left alone: `lsd_a` is a slider's name.
-_MARKUP = re.compile(r"[*`]+")
+# **Asterisks only.** Backticks were here too and earned nothing - a mutant
+# dropping them changed no outcome, because every pattern already matches
+# through a backtick (`` drop `lsd_a` `` matches either way: the backtick is
+# inside `[^.|]` and `lsd_a\b` closes on it). Underscores are left in, because
+# `lsd_a` is a slider's name.
+_MARKUP = re.compile(r"\*+")
+_SPACES = re.compile(r"[^\S\n]{2,}")
 # A full stop that ends a sentence, through whatever closes the quote or the
-# bracket after it.
-_SENTENCE_END = re.compile(r"\.[)\"'”]*\s")
+# bracket after it. **`]` and `}` included** (pass 11 review): every stamp in
+# this corpus closes `]*`, and without them "…LESS rotation on power.]* Lower
+# the accel and the push goes" read as one sentence. Rarer than the `.**` form
+# that was the major - 16 sentence ends against 13,137 - and one character.
+_SENTENCE_END = re.compile(r"\.[)\]}\"'”]*\s")
 
 
 def _plain(line: str) -> str:
-    """The line with the emphasis markup taken out.
+    """The line with the emphasis markup taken out, and its spacing evened.
 
     For judging text, never for offsets into the original: the length changes.
+
+    **The spacing matters** (pass 11 review): e11 excludes the front axis with
+    fixed-width lookbehinds, which one double space defeats - while e10's
+    `[\\s-]*` handles it. Evening the spacing once fixes that for every
+    pattern instead of teaching each one to count spaces.
     """
-    return _MARKUP.sub("", line)
+    return _SPACES.sub(" ", _MARKUP.sub("", line))
 
 
 def _axis_name(text: str) -> str:
@@ -451,6 +465,12 @@ def _axis_name(text: str) -> str:
     `front-accel`, `front's accel` and `front accel` are one axis, and the
     exclusion compares by name - so without this the two hyphenated forms
     walked straight through the guard written to stop them.
+
+    **This one does flatten underscores**, unlike `_plain`: `lsd_a` becomes
+    `lsd a` here. Harmless, because the result is only ever compared by
+    `startswith` against `_OTHER_AXIS` and `_GENERIC`, neither of which
+    contains an underscore - but `_plain`'s note about leaving underscores
+    alone is about `_plain`, not about this.
     """
     return re.sub(r"[^a-z0-9]+", " ",
                   re.sub(r"['’]s\b", "", text.lower())).strip()
@@ -752,7 +772,16 @@ def test_e10_sees_the_claim_and_not_its_neighbours():
                   "FWD: open the front accel diff to reduce the exit push",
                   # The back-reference: one named axis, then the generic word.
                   "Braking sensitivity down unlocks the diff and the car "
-                  "turns in better"):
+                  "turns in better",
+                  # **Both claims in the SECOND sentence of a two-sentence
+                  # line.** The only shape that can tell `named.add(sentence)`
+                  # from `named.add(line)`: with the line stored and the
+                  # sentence looked up the two never match, so the rule goes
+                  # inert rather than line-scoped, and on a single-sentence
+                  # line the two are identical. Every other probe here is one
+                  # sentence, or expects a flag, so none of them could see it.
+                  "Entry is fine on this car. Lower the braking sensitivity "
+                  "and open the diff and the push goes away"):
         assert not claims_lower_accel(other), other
     # **The refutation quoted beside the claim it refutes** (the critic on
     # 2.8 part 2, pass 9, MAJOR): this is `07-car-profiles.md`:609's shape,
@@ -795,6 +824,23 @@ def test_e10_sees_the_claim_and_not_its_neighbours():
     assert claims_lower_accel(
         'The bigger rotation source is an open diff on the overrun." Lower '
         'the accel and the mid-corner push goes')
+    # **The back-reference rule is held to the SENTENCE** (pass 11 review):
+    # `named.add(line)` in place of `named.add(sentence)` failed no test, and
+    # it would let a rejected axis in one sentence - or one table cell - clear
+    # a live claim in the next, which is the fail-open shape this row has
+    # fought since pass 7.
+    assert claims_lower_accel(
+        "Lower the braking sensitivity for entry. Now open the diff and the "
+        "mid-corner push goes away")
+    assert claims_lower_accel(
+        "| Lower the braking sensitivity for entry | open the diff and the "
+        "mid-corner push goes away |")
+    # **The stamp's own closing bracket.** Every stamp in this corpus ends
+    # `]*`, and without `]` in the splitter the refutation quoted inside one
+    # sits in the same sentence as the claim after it.
+    assert claims_lower_accel(
+        "[CONTESTED: on this car LESS acceleration lock gives LESS rotation "
+        "on power.]* Lower the accel and the mid-corner push goes")
     # **The second axis INSIDE the claim** (pass 8): a rationale names one
     # while making the other, and that must not clear it.
     for both in ("lower the accel and the initial torque, and the push goes away",
@@ -875,7 +921,27 @@ _RUN_LOW = re.compile(
 # refuted claim. The traction levers are meant to be out of reach BECAUSE
 # they name no rotation symptom; with `turn` in the set they were out of
 # reach only by an accident of how they happen to be worded.
-_ROTATION = re.compile(r"push\w*|understeer\w*|rotat\w*", re.IGNORECASE)
+# **"turn in" is his word and stays; a bare "turn" is a place** (pass 11
+# review). Narrowing this to the rotation family lost "the car will not turn
+# in", which is exactly how he reports it - while `turn\w*` had made "out of
+# every turn" and "Turn 4 is the reference corner" into evidence of the
+# refuted claim. The distinction is the phrase, not the distance: e11 has no
+# proximity bound to tighten.
+_ROTATION = re.compile(r"push\w*|understeer\w*|rotat\w*|turns?[-\s]in\b",
+                       re.IGNORECASE)
+
+
+def _standing_rule_unstamped(line: str) -> bool:
+    """A "run the accel axis low" rule, with a rotation symptom, unstamped.
+
+    **One expression, used by the corpus check and by the probes** (pass 11
+    review): `_ROTATION` was pinned as a pattern while e11's call site could
+    revert to `_CURE` with no test failing, which is the whole of what keeps
+    the traction levers out of reach.
+    """
+    said = _plain(line)
+    return bool(_RUN_LOW.search(said) and _ROTATION.search(said)
+                and not any(mark in line for mark in ("CONTESTED", "§10.5")))
 
 
 def test_e11_a_standing_rule_to_run_accel_low_carries_the_contest():
@@ -898,20 +964,12 @@ def test_e11_a_standing_rule_to_run_accel_low_carries_the_contest():
     and was not refuted. Stamping those CONTESTED would be the false record
     this file exists to prevent, so they are deliberately out of reach.
     """
-    marked = ("CONTESTED", "§10.5")
     bare = []
     for pattern in DOCTRINE_SCOPE:
         for path in sorted(ROOT.glob(pattern)):
             for number, line in enumerate(
                     path.read_text(encoding="utf-8").splitlines(), 1):
-                # Normalised for the same reason e10 is, though **a mutant
-                # reading the raw line survives**: no line in scope writes
-                # this instruction with emphasis inside the phrase today.
-                # Precautionary, and said to be so.
-                said = _plain(line)
-                if (_RUN_LOW.search(said)
-                        and _ROTATION.search(said)
-                        and not any(mark in line for mark in marked)):
+                if _standing_rule_unstamped(line):
                     bare.append(f"{path.relative_to(ROOT).as_posix()}:{number}")
     assert not bare, f"'run accel low' with a push on the line, uncontested, at {bare}"
 
@@ -938,12 +996,30 @@ def test_e11_sees_the_standing_rule_and_not_the_traction_one():
     # §10.5's own lines are written.
     for front in ("FWD: front-accel sensitivity low will not cure the push",
                   "FWD: keep the front's accel sensitivity low for the push",
-                  "FWD: **front** accel sensitivity low for the exit push"):
+                  "FWD: **front** accel sensitivity low for the exit push",
+                  # A double space, which the fixed-width lookbehinds cannot
+                  # see and `_plain`'s evened spacing hands them anyway.
+                  "FWD: keep the front  accel sensitivity low for the push"):
         assert not _RUN_LOW.search(_plain(front)), front
     # **"turn" and "point" are not symptoms for THIS check** - it has no
     # proximity bound, so they made a reference corner into evidence.
     assert not _ROTATION.search(
         "Keep accel sensitivity low here; Turn 4 is the reference corner")
+    # **Through the one expression the corpus check uses**, so the call site
+    # is pinned and not only the patterns it is built from.
+    assert _standing_rule_unstamped(rotation)
+    assert not _standing_rule_unstamped(traction)
+    assert not _standing_rule_unstamped(
+        "LSD acceleration sensitivity: LOW, 12-18 - more lock produces "
+        "wheelspin out of every turn")
+    assert not _standing_rule_unstamped(
+        "Keep accel sensitivity low here; Turn 4 is the reference corner")
+    # **His own word for it**, which the narrowing had lost.
+    assert _standing_rule_unstamped(
+        "Run acceleration sensitivity LOW or the car will not turn in")
+    # A stamp clears it, which is the whole point of the check.
+    assert not _standing_rule_unstamped(
+        "Run acceleration sensitivity LOW, and it pushes. [CONTESTED on v1.71]")
 
 
 _MECHANIC = ".claude/skills/ludo/references/mechanic.md"
