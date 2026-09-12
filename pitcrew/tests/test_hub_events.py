@@ -669,6 +669,102 @@ def test_spending_one_inferred_round_does_not_spend_the_other(
     assert "linked to" not in event_screen.footer_note.text(), "said once"
 
 
+def _notes(event_screen):
+    """What the controller asks the footer to say, and how.
+
+    The warning is written straight through `set_ink` and cannot be read back
+    off the widget, so the flag is pinned where it is decided.
+    """
+    said = []
+    wrote = event_screen.note
+
+    def spy(text, *, warn=False):
+        said.append((text, warn))
+        wrote(text, warn=warn)
+
+    event_screen.note = spy
+    return said
+
+
+def test_the_hub_news_does_not_leak_onto_the_next_event(
+        wired, tmp_path, monkeypatch):
+    """**The critic on row 2.7, pass 6, minor 1.** `_calendar_news` is
+    assigned unconditionally, `([], False)` included, and that assignment is
+    the whole of what stops one event's news being prefixed to the next
+    event's footer. Moving it inside `if said:` passes every other test - and
+    it is CLAUDE.md rule 11 exactly: state that outlives what it describes,
+    read as if it belonged to this event."""
+    _hub_stating(tmp_path, monkeypatch, (("r1", COMPLETE),),
+                 bopEnabled=True, powerLimitBhp=509)
+    controller, event_screen, _, store = wired
+    mine = _mine(controller, store, "Mine A", COMPLETE)
+    controller._on_event_saved(an_event(name="Hand typed B"))
+    hand = store.active_event_id()
+    _link_all(controller)
+    controller.switch_event(mine)
+    assert "BoP is now on" in event_screen.footer_note.text()
+
+    controller.switch_event(hand)
+
+    footer = event_screen.footer_note.text()
+    assert "Working on Hand typed B" in footer
+    assert "BoP is now" not in footer, "the last event's news, on this one"
+    assert "linked to" not in footer
+
+
+def test_the_hub_news_reaches_the_switch_footer_as_a_warning(
+        wired, tmp_path, monkeypatch):
+    """**Pass 6, minor 2.** A BoP change arriving on the switch path styled
+    as an ordinary note is the news the driver scrolls past."""
+    _hub_stating(tmp_path, monkeypatch, (("r1", COMPLETE),),
+                 bopEnabled=True, powerLimitBhp=509)
+    controller, event_screen, _, store = wired
+    mine = _mine(controller, store, "Mine A", COMPLETE)
+    _link_all(controller)
+    said = _notes(event_screen)
+
+    controller.switch_event(mine)
+
+    text, warn = said[-1]
+    assert "BoP is now on" in text and warn, said[-1]
+
+
+def test_the_adopted_link_footer_keeps_its_warning(
+        wired, tmp_path, monkeypatch):
+    """**Pass 6, minor 3** - and the mistake my own first attempt made. The
+    adopted branch appends to the switch's footer; appending without carrying
+    `warn` demotes a warning to a note, which is the same loss of the news in
+    a quieter form."""
+    _hub_stating(tmp_path, monkeypatch, (("r1", COMPLETE),),
+                 bopEnabled=True, powerLimitBhp=509)
+    controller, event_screen, _, store = wired
+    _mine(controller, store, "Mine A", COMPLETE)
+    said = _notes(event_screen)
+
+    controller.switch_event("r1")            # the calendar's own route in
+
+    text, warn = said[-1]
+    assert "not a second copy" in text, text
+    assert "BoP is now on" in text, "the news the append was writing over"
+    assert warn, "a warning, appended to, is still a warning"
+
+
+def test_a_round_stating_none_of_the_four_still_spends_its_link(
+        wired, hub_at):
+    """**Pass 6, minor 4.** The states-none early return discards too, and
+    nothing asserted it - so pass 5's staleness could come back for exactly
+    the rounds the plain league series produces, which is most of them."""
+    hub_at((("r1", SOON, COMPLETE),))         # GR3 states none of the four
+    controller, event_screen, _, store = wired
+    _mine(controller, store, "Mine A", COMPLETE)
+    _link_all(controller)
+    assert controller._adopted_rounds == {"r1"}
+
+    controller.load_active_event()
+
+    assert controller._adopted_rounds == set()
+
+
 def _bop_hub(tmp_path, monkeypatch, *, bop=True, tuning=True, power=None,
              weight=None, name="bop-league.db"):
     """A one-round hub with these car regulations."""
