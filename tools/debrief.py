@@ -372,6 +372,71 @@ def driver_variable(store, event_id: int, sessions, *, start_type=None) -> None:
         print(f"  - {line} (s{', s'.join(str(i) for i in ids)})")
 
 
+def who_he_raced(store, sessions) -> None:
+    """Plan row 3.2 - the named cars either side of him, per race session.
+
+    **This is the step that was missing, not the data.** `analysis/rivals`
+    had `tendencies` and `carry_into_knowledge` for weeks and `wiring_audit`
+    listed the module under *no production code imports* - the chain from a
+    read name to anything a person sees was never closed, so a board pass
+    filed its readings and they stopped there. This call is what removed it
+    from that list.
+
+    **`carry_into_knowledge` is still on it**, and deliberately: writing the
+    tendencies into `race_knowledge` changes what the next brief says, so it
+    is a separate act and not a side effect of reading a debrief.
+    """
+    from pitcrew.analysis.rivals import MIN_LAPS_TOGETHER, tendencies
+
+    races = [s for s in sessions if s.get("kind") == "race"]
+    if not races:
+        return
+    _head("WHO HE RACED")
+    said = False
+    for session in races:
+        found = tendencies(store, session["id"])
+        sightings = store.list_board_sightings(session["id"])
+        label = session_label(session.get("kind"), session.get("rehearsal"))
+        named = sum(1 for row in sightings if row["driver"])
+        # **A missing board pass is not a missing answer.** This printed
+        # "no board pass on file" and dropped `found` on the floor, so
+        # sessions named the old way - 334 and 499 rows on s88 and s112 -
+        # reported nothing at all. The radar's answer is thinner and it is
+        # still an answer; what it must not do is arrive unlabelled.
+        if not sightings:
+            if found:
+                said = True
+                print(f"  {label} s{session['id']}: no board pass — from the "
+                      f"radar only, which sees about a second each way:")
+                _rival_lines(found)
+            else:
+                print(f"  {label} s{session['id']}: nothing on file — run "
+                      f"tools/read_replay_board.py")
+            continue
+        said = True
+        unreadable = len(sightings) - named
+        print(f"  {label} s{session['id']}: {len(sightings)} board reading(s)"
+              + (f", {unreadable} from a cluster nobody could read"
+                 if unreadable else ""))
+        if not found:
+            print(f"    nobody was beside him for {MIN_LAPS_TOGETHER}+ laps — "
+                  f"one overtake is not a tendency")
+            continue
+        _rival_lines(found)
+    if said:
+        print("  Time spent beside him, and nothing more: not a gap, not a "
+              "closing rate,\n  and not a prediction of anyone's stop — none "
+              "of those are in a reading of the order.")
+
+
+def _rival_lines(found) -> None:
+    for one in found:
+        print(f"    {one.name:<18} {one.laps_together:>2} lap(s) together,"
+              f" mostly {one.mostly}"
+              f"  (ahead {one.laps_ahead}, behind {one.laps_behind})"
+              f"  [{one.source}]")
+
+
 # --------------------------------------------------------- George's calls
 
 def call_tally(revisions) -> tuple[Counter, list]:
@@ -755,6 +820,7 @@ def main() -> int:
         how_driven(store, sessions)
         driver_variable(store, args.event_id, sessions,
                         start_type=event.get("start_type"))
+        who_he_raced(store, sessions)
         all_runs = store.list_race_runs(args.event_id)
         runs = all_runs
         if args.sessions:

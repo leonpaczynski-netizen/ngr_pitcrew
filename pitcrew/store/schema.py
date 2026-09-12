@@ -409,6 +409,14 @@ CREATE TABLE IF NOT EXISTS board_sightings (
     -- cluster unreadable** - two rows rendered over each other as the board
     -- reorders - and null is the honest answer there. Never guessed from the
     -- position, which is a place in the order and not an identity.
+    --
+    -- **This does not join to the league.** GT7 draws a shortened form, and
+    -- the hub stores its own: session 143 holds `K.Graebs` on 231 rows
+    -- against the hub's `K_Graebs`, and neither is the PSN id
+    -- (`Da_SCOTTY_420`). So these are strings read off a screen, matched to a
+    -- league identity by nothing yet - that is plan row 3.2's `drivers`
+    -- table, and until it exists a name here is evidence about a race and not
+    -- a key into the championship.
     driver      TEXT,
     source      TEXT NOT NULL,
     read_at     TEXT NOT NULL

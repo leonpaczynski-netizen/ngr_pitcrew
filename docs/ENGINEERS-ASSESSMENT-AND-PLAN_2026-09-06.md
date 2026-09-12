@@ -2780,14 +2780,16 @@ reader came back with eight clusters. Cluster 2, 27 sightings, reads `...eeni`.
   it - a distinction worth keeping, because "the live path is fine" would
   otherwise be read as cover it has not earned.
 - The careful implementation was built for the thing that talks during a race;
-  the offline tool kept the naive one, and **the offline tool is what feeds the
-  briefing**: `traffic.rival` -> `analysis/rivals.py tendencies()` ->
-  `carry_into_knowledge()` -> `race_knowledge.rivals_json` -> the event
-  briefing the engineer reads before the green. So the concrete wrong output,
-  had `--apply` run on 159, is a line in his own round briefing reading
-  **"Beeni raced him for 27 laps, mostly behind"**. Nothing reads
-  `traffic.rival` on the live path, so no wrong call in his ear - the damage
-  is to the document the calls are planned from.
+  the offline tool kept the naive one. ~~And the offline tool is what feeds the
+  briefing: `traffic.rival` -> `tendencies()` -> `carry_into_knowledge()` ->
+  `race_knowledge.rivals_json` -> the event briefing.~~ **STRUCK — that chain
+  was not wired, and I asserted it as fact.** It came from a code review, I
+  took it without checking, and `tools/wiring_audit.py` lists
+  `pitcrew.analysis.rivals` under *modules no production code imports*:
+  nothing outside the tests called either function. A wrong name would have
+  sat in `traffic` reaching nobody, which is a smaller harm than I described
+  and a larger defect than I noticed. **Closed 13 Sep** - the debrief now
+  prints who he raced, and the module is off the orphan list.
 - **The stored archive is CLEAR, and it was checked rather than assumed.**
   Sessions 88 and 112 were named by the unfixed tool, and session 88 has no
   `video_path` so it can never be re-read. It did not need to be. The banner
@@ -3048,6 +3050,65 @@ was run, so sessions 88 and 112 keep answering; both paths are pinned.
   moved. Banner spacing, the cluster merge threshold, and now list position.
   The correction each time is the same - key on what the thing IS, not where
   it happened to sit.
+
+**Row 3.2, 13 Sep: the chain reaches a person, and the critic caught me making
+the same mistake one layer out.** `tools/wiring_audit.py` listed
+`pitcrew.analysis.rivals` under *no production code imports* - `tendencies`
+and `carry_into_knowledge` had existed for weeks with no caller but the tests.
+So the 1,094 sightings filed the night before reached nobody, and the chain I
+had asserted in this document was never wired at all (struck above).
+- **`tools/debrief.py who_he_raced`** closes it: the named cars either side of
+  him, per race session, with the count of clusters nobody could read. The
+  module is off the orphan list; `carry_into_knowledge` stays on it on
+  purpose, because writing tendencies into `race_knowledge` changes the next
+  brief and is not a side effect of reading a debrief.
+- **And in that new function I repeated the error I had just corrected.** It
+  computed `tendencies()` and then discarded it when a session had no board
+  sightings - so s88 and s112, the only sessions named the old way, with 334
+  and 499 named rows, would have printed *"no board pass on file"* and nothing
+  else. Twenty minutes after striking the same shape of claim.
+- **Rule 3 again, in the fallback.** The switch tested row count, and a row
+  with `driver` NULL counts - that being the whole point of the column. An
+  all-unreadable board pass therefore reported *nobody was beside him* over a
+  radar pass that had named eight laps. It switches on NAMES now.
+- **A tendency carries its instrument.** Three laps off the board and three
+  off the radar are different claims (rule 13) - the board reads the order
+  whatever the gap, the radar about a second each way and only while that page
+  is up - and they rendered identically.
+
+**And the fingerprint from 12 Sep did NOT do what I said it did.** I reported
+that labels now follow the bitmap. They follow it when a whole cluster is
+dropped, which is what I tested; they do not when ONE sighting leaves a
+surviving cluster, because the exemplar is a re-thresholded running mean.
+Measured over single-member drops:
+
+    2-5 members   the fingerprint changed on 100% of drops
+    8+ members    on none
+
+**Exactly backwards.** The large clusters were never at risk - they do not
+vanish - and the one- and two-sighting clusters are what the banner and
+bottom-of-board guards remove readings from. `Greenmachine 070`, the cluster
+whose loss caused the wrong row, had one. Labels are matched by **distance**
+now, against the exemplar stored in the roster, which is the same question the
+clustering itself asks; an index carry warns and `--apply` refuses it without
+`--trust-positions`.
+- Nine mutations, eight caught. The ninth is a genuine no-op - `tendencies`
+  passes `source` explicitly and nothing else constructs that `Rival` - so it
+  is left untested rather than given a test for an unreachable path.
+
+**Two of the critic's findings are NOT taken, and both for the same reason.**
+- **A refused bottom-of-board reading is not filed as `driver IS NULL`.** NULL
+  means *a car was there and its name could not be read*; that refusal means
+  *we could not tell whether that row was a car or the banner*. Filing one as
+  the other asserts somebody was there, which is the one thing the refusal
+  says we do not know. The refusal tally already reports it.
+- **Session 143's "sustained side inversion" on lap 8 is not one.** It was
+  measured against FINISHING order - `K.Graebs` finished P8 - and the frame at
+  video second 872 shows the running order: `1 CruisingChaos, 2 Rocky,
+  3 Magical daddy, 4 K.Graebs, 5 Beeni, 6 ZenPhilosopher, 7 PUNISHED,
+  8 TommyTbone`. He is P5 with K.Graebs ahead and ZenPhilosopher behind,
+  exactly as stored, and the packet's own `laps.position` says P5 for that lap
+  - two independent instruments agreeing.
 
 **Row 2.9, final pass: an eval outlived the defect it described, and my own
 commit is what orphaned it.** Eval 17 told Ludo that `build_track_map` *"cannot

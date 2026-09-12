@@ -604,16 +604,79 @@ def cluster(bitmaps: list) -> list[dict]:
 
 
 def fingerprint(bits) -> str:
-    """A short, stable name for a cluster's exemplar.
+    """A short id for a cluster's exemplar, for a person to read.
 
-    The label a person typed belongs to the BITMAP they looked at, not to the
-    position that bitmap held in a sorted list. Keyed by content, a roster
-    survives a re-run that drops or reorders clusters; keyed by index it does
-    not, and the failure is silent.
+    **Not what labels are matched on, and the first version of this was.** A
+    hash is exact, and the exemplar it hashes is a re-thresholded running mean
+    - so removing ONE sighting from a surviving cluster changes it. Measured
+    over single-member drops: the hash changed on 100% of trials at 5 members
+    or fewer, and on none at 8 or more. That is precisely backwards. The big
+    clusters were never at risk, because they do not vanish; the one- and
+    two-sighting clusters are what the banner and bottom-of-board guards
+    remove readings from, and `Greenmachine 070` - the cluster whose loss
+    caused the wrong row - had exactly one.
     """
     import hashlib
     packed = bytes(bits.astype("uint8").tobytes())
     return hashlib.sha1(packed).hexdigest()[:12]
+
+
+def pack_bits(bits) -> str:
+    """A cluster's exemplar, small enough to keep in the roster."""
+    import base64
+    import numpy as np
+    return base64.b64encode(
+        np.packbits(bits.astype(bool)).tobytes()).decode("ascii")
+
+
+def unpack_bits(text: str):
+    """...and back, to the shape the clustering compares."""
+    import base64
+    import numpy as np
+    raw = np.frombuffer(base64.b64decode(text), dtype="uint8")
+    flat = np.unpackbits(raw)[:NAME_SHAPE[0] * NAME_SHAPE[1]]
+    return flat.reshape(NAME_SHAPE[1], NAME_SHAPE[0]).astype(bool)
+
+
+def carried_by_position(name, stored, apart, key, seen: int, raw: str):
+    """The warning for a label that only its place in the list could supply.
+
+    `None` when there is nothing to warn about - no label, or no stored
+    bitmaps to have matched against in the first place, which is simply a
+    roster being written for the first time.
+    """
+    if not name or not stored:
+        return None
+    near = f"{apart:.3f}" if apart is not None else "none stored"
+    return (f"cluster {key} ({seen} sighting(s)): no stored bitmap within "
+            f"{SAME_NAME_MAX_DIFF} (nearest {near}) - carrying '{name}' by "
+            f"POSITION, which is the keying that mislabelled a row before. "
+            f"Open {raw} and confirm it.")
+
+
+def label_for(bits, stored) -> tuple[str | None, float | None]:
+    """The name already typed for this bitmap, by distance not by identity.
+
+    `stored` is `[(bits, name)]` off the roster. The nearest exemplar inside
+    the clustering's own threshold wins, which is the same question the
+    clustering asks - *is this the same name?* - and the same answer.
+
+    **Distance, because the exemplar moves.** It is an average over the
+    sightings that joined, so one reading more or fewer shifts it; an exact
+    key over a moving value is a key that misses exactly when a guard has
+    just done its job. Returns `(None, None)` when nothing is close enough,
+    so the caller can say so rather than fall back in silence.
+    """
+    best, closest = None, None
+    for other, name in stored:
+        if other.shape != bits.shape:
+            continue
+        apart = (other != bits).mean()
+        if closest is None or apart < closest:
+            best, closest = name, apart
+    if closest is None or closest >= SAME_NAME_MAX_DIFF:
+        return None, closest
+    return best, closest
 
 
 def lap_at(marks, seconds: float):
@@ -655,6 +718,10 @@ def main() -> int:
                          "(default: beside the capture)")
     ap.add_argument("--apply", action="store_true",
                     help="write the labelled names onto `traffic.rival`")
+    ap.add_argument("--trust-positions", action="store_true",
+                    help="write labels that could only be matched by their "
+                         "position in the cluster list. Only after opening "
+                         "the `-raw.png` of each one the run names")
     ap.add_argument("--scratch", default=None)
     args = ap.parse_args()
 
@@ -714,9 +781,11 @@ def main() -> int:
     # went from 22 clusters to 21, and the label written against index 20 was
     # applied to `ZenPhilosopher`. One row of 1,094, wrong, and nothing in the
     # tool would have said so.
-    by_print = {entry["fingerprint"]: entry
-                for entry in labels.values()
-                if isinstance(entry, dict) and entry.get("fingerprint")}
+    stored = [(unpack_bits(entry["exemplar"]), entry.get("name"))
+              for entry in labels.values()
+              if isinstance(entry, dict) and entry.get("exemplar")
+              and entry.get("name")]
+    carried: list[str] = []
 
     out = {}
     for n, group in enumerate(groups):
@@ -749,23 +818,43 @@ def main() -> int:
         raw_png = scratch / f"name-{args.session}-{n}-raw.png"
         _legible(crops, raw_png)
         mark = fingerprint(group["bits"])
-        if mark in by_print:
-            name = by_print[mark].get("name")
-        else:
+        name, apart = label_for(group["bits"], stored)
+        if name is None:
+            # **The index fallback announces itself.** It is the keying that
+            # put a driver's name on another driver's cluster, and a silent
+            # fallback to it prints the same confident wrong line as before.
             name = labels.get(key, {}).get("name") if isinstance(
                 labels.get(key), dict) else labels.get(key)
+            warning = carried_by_position(name, stored, apart, key,
+                                          len(group["seen"]), raw_png.name)
+            if warning:
+                carried.append(warning)
         # `read_this` first, and the exemplar named for what it is. The roster
         # is the file the operator opens, and a key called `bitmap` sitting
         # above it is an invitation to open the one thing that cannot be read.
         out[key] = {"name": name, "read_this": raw_png.name,
                     "fingerprint": mark,
                     "sightings": len(group["seen"]),
+                    # What a label is matched on next time - the bitmap
+                    # itself, compared by distance, never an exact key over
+                    # a value that moves when one sighting joins or leaves.
+                    "exemplar": pack_bits(group["bits"]),
                     "exemplar_do_not_read": png.name}
         print(f"  {n:>2}  {len(group['seen']):>3} sighting(s)  "
               f"{raw_png.name}  -> {name or '<unnamed>'}")
 
     roster_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
     print(f"\nroster: {roster_path}")
+    for line in carried:
+        print(f"  ** {line}")
+
+    if carried and args.apply and not args.trust_positions:
+        raise SystemExit(
+            f"{len(carried)} label(s) above are being carried by POSITION "
+            f"rather than matched to a bitmap, which is how a driver's name "
+            f"reached another driver's cluster once already. Open the "
+            f"`-raw.png` each one names, correct the roster, and re-run. If "
+            f"they are right as they stand, pass --trust-positions.")
 
     if not args.apply:
         print(f"Open each `-raw.png` - NOT the {NAME_SHAPE[0]}x{NAME_SHAPE[1]} "

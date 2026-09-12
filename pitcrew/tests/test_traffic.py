@@ -286,9 +286,15 @@ def _sighting(**kw) -> dict:
     return base
 
 
+_RACES = [0]
+
+
 def _race(store: Store) -> int:
+    """A race session under its own event — `events.name` is UNIQUE, so a
+    test needing two races cannot reuse one name."""
+    _RACES[0] += 1
     return store.start_session(
-        store.create_event(name="e", track="Fuji Speedway",
+        store.create_event(name=f"e{_RACES[0]}", track="Fuji Speedway",
                            layout="Full Course"), "race")
 
 
@@ -367,3 +373,51 @@ def test_tendencies_still_read_the_radar_where_no_board_pass_was_run(store: Stor
         store.name_traffic(row["id"], "TommyTbone")
     found = tendencies(store, session)
     assert [one.name for one in found] == ["TommyTbone"]
+
+
+def test_which_side_he_was_on_is_not_reversible(store: Store):
+    """**"Mostly ahead" and "mostly behind" are opposite driving**, and the
+    two counts can be swapped in one expression with nothing to say so."""
+    from pitcrew.analysis.rivals import tendencies
+
+    session = _race(store)
+    store.record_board_sightings(session, [
+        _sighting(lap_num=lap, side="ahead", driver="CruisingChaos")
+        for lap in range(1, 9)])
+    one = tendencies(store, session)[0]
+    assert one.laps_ahead == 8 and one.laps_behind == 0
+    assert one.mostly == "ahead"
+    assert "mostly ahead" in one.describe()
+
+
+def test_the_tendency_carries_the_instrument_that_read_it(store: Store):
+    """Three laps off the board and three off the radar describe different
+    races; rendered identically nobody can tell which they are looking at."""
+    from pitcrew.analysis.rivals import tendencies
+
+    session = _race(store)
+    store.record_board_sightings(session, [
+        _sighting(lap_num=lap, driver="Rocky") for lap in (1, 2, 3, 4)])
+    assert tendencies(store, session)[0].source == "board"
+
+    other = _race(store)
+    store.record_traffic(other, [
+        contact(lap_num=lap, side="behind") for lap in (1, 2, 3, 4)])
+    for row in store.list_traffic(other):
+        store.name_traffic(row["id"], "PUNISHED")
+    assert tendencies(store, other)[0].source == "radar"
+
+
+def test_a_side_the_board_never_writes_is_counted_as_unknown(store: Store):
+    """It used to `setdefault` any string into the map, so a stray value made
+    a rival vanish entirely rather than count as a lap together."""
+    from pitcrew.analysis.rivals import tendencies
+
+    session = _race(store)
+    store.record_board_sightings(session, [
+        _sighting(lap_num=lap, side="alongside", driver="Jubby")
+        for lap in (1, 2, 3, 4)])
+    found = tendencies(store, session)
+    assert [one.name for one in found] == ["Jubby"]
+    assert found[0].laps_together == 4
+    assert found[0].mostly == "either side"

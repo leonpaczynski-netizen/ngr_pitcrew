@@ -346,3 +346,189 @@ def test_a_missing_verdict_is_counted_and_never_read_as_acted():
     assert tally["no verdict on file"] == 1
     assert tally["said, not an instruction"] == 1
     assert [r["lap_num"] for r in ignored] == [10]
+
+
+def _contact(**kw) -> dict:
+    """A radar contact, as `record_traffic` takes them."""
+    base = dict(lap_id=None, lap_num=3, video_s=120.0, side="behind",
+                ribbon_px=7.0, near_m=23.8, rival_position=6,
+                source="replay-radar")
+    base.update(kw)
+    return base
+
+# ------------------------------------------- who he raced, read off the board
+
+def _named_race(store):
+    """A race session with board readings on file."""
+    event = store.create_event(name="e", track="Fuji Speedway",
+                               layout="Full Course")
+    session = store.start_session(event, "race")
+    rows = []
+    for lap in range(1, 12):
+        rows.append({"lap_num": lap, "video_s": float(lap) * 10, "side": "ahead",
+                     "driver": "CruisingChaos", "source": "replay-board"})
+        rows.append({"lap_num": lap, "video_s": float(lap) * 10 + 2,
+                     "side": "behind", "driver": "K.Graebs",
+                     "source": "replay-board"})
+    store.record_board_sightings(session, rows)
+    return event, session
+
+
+def test_the_debrief_names_who_he_raced(store, capsys):
+    """**The step that was missing, not the data.** `analysis/rivals` has had
+    `tendencies` for weeks and the wiring audit listed the module under *no
+    production code imports* — a board pass filed its readings and they
+    stopped there."""
+    from tools.debrief import who_he_raced
+
+    _event, session = _named_race(store)
+    who_he_raced(store, [dict(store.get_session(session))])
+    printed = capsys.readouterr().out
+    assert "WHO HE RACED" in printed
+    assert "CruisingChaos" in printed and "K.Graebs" in printed
+    assert "1094" not in printed
+    assert "22 board reading(s)" in printed
+
+
+def test_a_race_with_nothing_on_file_says_so_rather_than_nothing(store, capsys):
+    """Silence would read as "he raced nobody", which is a different claim
+    from "neither instrument was read"."""
+    from tools.debrief import who_he_raced
+
+    event = store.create_event(name="e", track="Fuji Speedway",
+                               layout="Full Course")
+    session = store.start_session(event, "race")
+    who_he_raced(store, [dict(store.get_session(session))])
+    printed = capsys.readouterr().out
+    assert "nothing on file" in printed
+
+
+def test_a_race_named_from_the_radar_still_reports_its_rivals(store, capsys):
+    """**It printed "no board pass" and threw the answer away.** Sessions 88
+    and 112 carry 334 and 499 named `traffic` rows and no board rows at all,
+    so the only sessions named the old way reported nothing — the same mistake
+    as the chain that was never wired, one layer further out."""
+    from tools.debrief import who_he_raced
+
+    event = store.create_event(name="e", track="Fuji Speedway",
+                               layout="Full Course")
+    session = store.start_session(event, "race")
+    store.record_traffic(session, [
+        _contact(lap_num=lap, side="behind") for lap in range(1, 9)])
+    for row in store.list_traffic(session):
+        store.name_traffic(row["id"], "TommyTbone")
+    who_he_raced(store, [dict(store.get_session(session))])
+    printed = capsys.readouterr().out
+    assert "TommyTbone" in printed, "the radar's answer was suppressed"
+    assert "radar" in printed, "and it must say which instrument said so"
+
+
+def test_an_all_unreadable_board_pass_falls_through_to_the_radar(store, capsys):
+    """Rows with a NULL driver are the board saying it could not be read.
+
+    Counting them as "the board answered" reported *nobody was beside him*
+    over a radar pass that had named eight laps — CLAUDE.md rule 3, with the
+    two answers collapsed into one.
+    """
+    from tools.debrief import who_he_raced
+
+    event = store.create_event(name="e", track="Fuji Speedway",
+                               layout="Full Course")
+    session = store.start_session(event, "race")
+    store.record_traffic(session, [
+        _contact(lap_num=lap, side="behind") for lap in range(1, 9)])
+    for row in store.list_traffic(session):
+        store.name_traffic(row["id"], "PUNISHED")
+    store.record_board_sightings(session, [
+        {"lap_num": lap, "video_s": float(lap), "side": "ahead",
+         "driver": None, "source": "replay-board"} for lap in (1, 2, 3)])
+    who_he_raced(store, [dict(store.get_session(session))])
+    printed = capsys.readouterr().out
+    assert "PUNISHED" in printed, (
+        "an unreadable board pass reported 'nobody' over eight named laps")
+
+
+def test_an_unreadable_cluster_is_counted_in_the_debrief(store, capsys):
+    """Filed with no driver, and said out loud — the operator marked it
+    unknowable and the debrief must not quietly drop it."""
+    from tools.debrief import who_he_raced
+
+    event = store.create_event(name="e", track="Fuji Speedway",
+                               layout="Full Course")
+    session = store.start_session(event, "race")
+    store.record_board_sightings(session, [
+        {"lap_num": 1, "video_s": 4.0, "side": "ahead", "driver": None,
+         "source": "replay-board"}])
+    who_he_raced(store, [dict(store.get_session(session))])
+    printed = capsys.readouterr().out
+    assert "nobody could read" in printed
+
+
+def test_one_overtake_is_not_a_tendency(store, capsys):
+    """Below the floor the debrief says why it is quiet, rather than listing
+    a driver who was alongside for a corner."""
+    from tools.debrief import who_he_raced
+
+    event = store.create_event(name="e", track="Fuji Speedway",
+                               layout="Full Course")
+    session = store.start_session(event, "race")
+    store.record_board_sightings(session, [
+        {"lap_num": 1, "video_s": 4.0, "side": "ahead", "driver": "Rocky",
+         "source": "replay-board"}])
+    who_he_raced(store, [dict(store.get_session(session))])
+    printed = capsys.readouterr().out
+    assert "not a tendency" in printed
+    assert "Rocky" not in printed
+
+
+def test_main_asks_who_he_raced_about_the_sessions_it_found(monkeypatch):
+    """**The wiring, not the function.** The existing `main` test stubs
+    `list_sessions` to `[]`, so the call this whole change exists for was
+    unpinned — removing it from `main()` passed everything."""
+    import tools.debrief as debrief
+
+    sessions = [{"id": 143, "kind": "race", "rehearsal": 0,
+                 "started_at": "2026-09-07T20:17:57"}]
+    asked = {}
+
+    class Store:
+        def __init__(self, *args):
+            pass
+
+        def get_event(self, event_id):
+            return {"id": event_id, "start_type": None}
+
+        def list_sessions(self, event_id):
+            return list(sessions)
+
+        def list_race_runs(self, event_id):
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(debrief, "Store", Store)
+    monkeypatch.setattr(debrief, "who_he_raced",
+                        lambda store, given: asked.setdefault("given", given))
+    for name in ("driver_first", "open_predictions", "render", "change_landed",
+                 "how_driven", "driver_variable", "calls_against_outcome",
+                 "against_the_plan", "radio", "close", "_head"):
+        monkeypatch.setattr(debrief, name, lambda *a, **k: None)
+    monkeypatch.setattr(debrief, "from_store", lambda *a, **k: None)
+    monkeypatch.setattr(sys, "argv", ["debrief.py", "10"])
+    assert debrief.main() == 0
+    assert [s["id"] for s in asked.get("given", [])] == [143], (
+        "main() did not ask who he raced about the sessions it found")
+
+
+def test_the_debrief_says_which_instrument_named_them(store, capsys):
+    """A board line and a radar line are different claims (rule 13): the board
+    reads the running order whatever the gap, the radar sees about a second
+    each way and only while that page is up."""
+    from tools.debrief import who_he_raced
+
+    _event, session = _named_race(store)
+    who_he_raced(store, [dict(store.get_session(session))])
+    printed = capsys.readouterr().out
+    assert "[board]" in printed
+    assert "[radar]" not in printed

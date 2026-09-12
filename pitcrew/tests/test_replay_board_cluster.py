@@ -363,23 +363,109 @@ def test_a_label_follows_the_bitmap_not_its_place_in_the_list(board):
     numpy = pytest.importorskip("numpy")
     one, two = a_name(31), a_name(32)
     assert board.fingerprint(one) != board.fingerprint(two)
-    # Stable across an identical re-derivation, and independent of order.
-    assert board.fingerprint(one) == board.fingerprint(a_name(31))
     assert board.fingerprint(one) == board.fingerprint(one.copy())
-    # And a single flipped pixel is a different bitmap, so a label never
-    # carries silently onto a cluster that is not the one it was typed for.
+    # A single flipped pixel is a different bitmap, so a label never carries
+    # silently onto a cluster that is not the one it was typed for.
     changed = one.copy()
     changed[0, 0] = ~changed[0, 0]
     assert board.fingerprint(changed) != board.fingerprint(one)
 
+    # **The property that matters is survival, not hashing.** A fingerprint
+    # over an exemplar is only worth having if it comes back the same after
+    # the re-run that shifted the indices — so this reproduces that run: a
+    # one-sighting cluster is dropped by a guard, and every OTHER cluster must
+    # keep the label already typed against it.
+    items = [((driver, k), a_name(driver, noise=0.03))
+             for driver in (41, 42, 43) for k in range(8)]
+    stray = [(("stray", 0), a_name(44))]
+    before = {board.fingerprint(g["bits"]) for g in board.cluster(items + stray)}
+    after = {board.fingerprint(g["bits"]) for g in board.cluster(list(items))}
+    assert after and after <= before, (
+        "dropping one cluster changed the fingerprints of the others, so the "
+        "labels would be lost exactly where index keying already lost them")
 
-def test_the_roster_carries_the_fingerprint_it_is_matched_on(board):
-    """A roster written without one cannot survive a re-run, so the field has
-    to be emitted, not merely read."""
+
+def test_a_label_survives_one_sighting_leaving_its_cluster(board):
+    """**The case the fingerprint failed**, and the reason matching is now by
+    distance rather than by an exact key.
+
+    The exemplar is a re-thresholded running mean, so dropping one member of a
+    SURVIVING cluster changes it. Measured over single-member drops: the hash
+    changed on 100% of trials at five members or fewer and none at eight or
+    more — exactly backwards, because the big clusters never vanish and the
+    one- and two-sighting clusters are what the guards remove readings from.
+    """
+    numpy = pytest.importorskip("numpy")
+    base = a_name(51)
+    # Four readings of ONE name, each with its own small rendering noise —
+    # `a_name(seed, noise=)` reseeds identically, so it cannot make members
+    # that differ from each other.
+    members = []
+    for k in range(4):
+        rng = numpy.random.default_rng(600 + k)
+        members.append((("d", k), base ^ (rng.random(base.shape) < 0.02)))
+    full = board.cluster([(k, b) for k, b in members])
+    assert len(full) == 1, "the fixture must make one cluster, not several"
+    roster = [(full[0]["bits"], "K.Graebs")]
+
+    # A guard removes one reading, and the exemplar moves.
+    fewer = board.cluster([(k, b) for k, b in members[1:]])
+    assert len(fewer) == 1
+    moved = board.fingerprint(fewer[0]["bits"]) != board.fingerprint(
+        full[0]["bits"])
+    name, apart = board.label_for(fewer[0]["bits"], roster)
+    assert name == "K.Graebs", (
+        f"the label did not follow the bitmap (exemplar moved: {moved}, "
+        f"distance {apart})")
+
+
+def test_a_bitmap_nothing_in_the_roster_resembles_gets_no_label(board):
+    """Returning the nearest name regardless would put a driver on a cluster
+    that is not his — silently, which is the whole defect."""
+    numpy = pytest.importorskip("numpy")
+    roster = [(a_name(61), "Rocky")]
+    name, apart = board.label_for(a_name(62), roster)
+    assert name is None
+    assert apart is not None and apart >= board.SAME_NAME_MAX_DIFF
+
+
+def test_carrying_a_label_by_position_is_announced_and_gated(board):
+    """A silent index fallback is the bug this replaced.
+
+    The only output last time was the same confident `20 -> Greenmachine 070`
+    line that was wrong, and `--apply` wrote it. So the carry has to say so,
+    and `--apply` has to stop on it unless the operator has looked.
+    """
+    numpy = pytest.importorskip("numpy")
+    stored = [(a_name(81), "Rocky")]
+    said = board.carried_by_position("Greenmachine 070", stored, 0.41,
+                                     "20", 1, "name-143-20-raw.png")
+    assert said and "Greenmachine 070" in said and "POSITION" in said
+    assert "name-143-20-raw.png" in said, "it must name the crop to open"
+    # Nothing to warn about: no label, or a roster being written the first
+    # time and so having no bitmaps to have matched against.
+    assert board.carried_by_position(None, stored, 0.4, "1", 1, "x.png") is None
+    assert board.carried_by_position("Rocky", [], None, "1", 1, "x.png") is None
+
     import inspect
     source = inspect.getsource(board.main)
-    assert '"fingerprint": mark' in source
-    assert "by_print" in source, "labels must be looked up by fingerprint"
+    assert "carried and args.apply" in source, (
+        "--apply must refuse a position-carried label unless confirmed")
+    assert "--trust-positions" in source
+
+
+def test_the_roster_carries_the_bitmap_it_is_matched_on(board):
+    """A roster written without the exemplar cannot survive a re-run at all,
+    so the field has to be emitted, not merely read."""
+    numpy = pytest.importorskip("numpy")
+    bits = a_name(71)
+    assert (board.unpack_bits(board.pack_bits(bits)) == bits).all(), (
+        "the stored exemplar must come back as the bitmap it went in as")
+    # ...and it has to be written under the key the next run reads.
+    import inspect
+    source = inspect.getsource(board.main)
+    assert '"exemplar": pack_bits(group["bits"])' in source
+    assert 'entry.get("exemplar")' in inspect.getsource(board.main)
 
 
 def test_more_than_one_sighting_is_shown(board):

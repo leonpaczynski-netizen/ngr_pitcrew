@@ -44,6 +44,13 @@ class Rival:
     laps_ahead: int
     laps_behind: int
     laps_together: int
+    # **Which instrument said so**, because a board line and a radar line are
+    # not the same claim (CLAUDE.md rule 13). The board reads the running
+    # order whatever the gap; the radar sees about a second in each direction
+    # and only while the driver has that page up. Three laps off the board and
+    # three off the radar describe different races, and rendered identically
+    # nobody can tell which they are looking at.
+    source: str = "board"
 
     @property
     def mostly(self) -> str:
@@ -80,33 +87,41 @@ def tendencies(store, session_id: int) -> list[Rival]:
     gave 1,096 readings of who was either side of him. A tendency is about
     time spent together, and the board is the instrument that measures it.
     """
-    rows = [{"name": row["driver"], "side": row["side"],
-             "lap_num": row["lap_num"]}
-            for row in store.list_board_sightings(session_id)]
-    if not rows:
-        rows = [{"name": row["rival"], "side": row["side"],
-                 "lap_num": row["lap_num"]}
-                for row in store.list_traffic(session_id)]
+    # **Switched on NAMES, not rows.** A board pass whose clusters were all
+    # marked unreadable files rows with `driver` NULL - that is the point of
+    # the column - and counting those as "the board answered" reported
+    # *nobody was beside him* over a radar pass that had named seven laps.
+    # "The board could not be read" and "nobody was there" are different
+    # answers (CLAUDE.md rule 3), and this line was collapsing them.
+    board = [{"name": row["driver"], "side": row["side"],
+              "lap_num": row["lap_num"], "source": "board"}
+             for row in store.list_board_sightings(session_id)
+             if row["driver"]]
+    rows = board or [{"name": row["rival"], "side": row["side"],
+                      "lap_num": row["lap_num"], "source": "radar"}
+                     for row in store.list_traffic(session_id)]
+    source = rows[0]["source"] if rows else "board"
     seen: dict[str, dict[str, set]] = {}
     for row in rows:
         name = row["name"]
         if not name:
             continue
-        side = row["side"] or "unknown"
+        side = row["side"] if row["side"] in ("ahead", "behind") else "unknown"
         lap = row["lap_num"]
         if lap is None:
             continue
         entry = seen.setdefault(name, {"ahead": set(), "behind": set(),
                                        "unknown": set()})
-        entry.setdefault(side, set()).add(lap)
+        entry[side].add(lap)
 
     found = []
     for name, sides in seen.items():
-        ahead, behind = sides.get("ahead", set()), sides.get("behind", set())
-        together = ahead | behind | sides.get("unknown", set())
+        ahead, behind = sides["ahead"], sides["behind"]
+        together = ahead | behind | sides["unknown"]
         if len(together) < MIN_LAPS_TOGETHER:
             continue
-        found.append(Rival(name, len(ahead), len(behind), len(together)))
+        found.append(Rival(name, len(ahead), len(behind), len(together),
+                           source=source))
     return sorted(found, key=lambda one: -one.laps_together)
 
 
