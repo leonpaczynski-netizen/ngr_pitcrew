@@ -121,22 +121,28 @@ Two write a file beside their input: `analyse_m0` a `<capture>.m0.json`,
 the point of the dry run: it is the roster you then label by hand.
 
 > ⛔ **The three corner tools do not give you corner names, and one of them
-> can make the refusal card false.** Every `corner_models` row on file is
-> `source='auto-segment'`, which is why `refusals.md` says there is no track
-> map and *"turn three" is not a name this app may honestly use*. **No count
-> is written here on purpose:** that file's own header says a number copied
-> into a refusal becomes a competing answer nobody re-queries. Query it —
-> `SELECT circuit_key, source FROM corner_models` on a read-only handle — and
-> note that several circuits he races have **no row at all**, which is a
-> stronger refusal than any of them, not a weaker one.
+> changes whether you may use them.** Ask the database which, before you say
+> anything about a corner: `SELECT circuit_key, source FROM corner_models` on
+> a read-only handle. **No count is written here on purpose** — `refusals.md`'s
+> own header says a number copied into a refusal becomes a competing answer
+> that nobody re-queries. Note also that several circuits he races have **no
+> row at all**, which is a stronger refusal than any source value, not a
+> weaker one.
 >
-> `tools/build_track_map.py --apply` is the thing that would change it. It is
-> a writer, so it is his call and never a step in a diagnosis — **and it
-> cannot honestly be run yet at all**: it updates `corners_json` and never
-> `source`, so a world-anchored model would still export as `auto-segment`,
-> which is the declaration `CLAUDE.md` §3.2 requires it to make. Until that is
-> fixed, corner identity stays auto-segmented, unstable at many corners and
-> unavailable at Monza.
+> While a circuit's model reads `auto-segment`, corner identity is derived
+> from speed minima and steering activity: unstable at many corners,
+> unavailable at Monza, and *"turn three" is not a name this app may honestly
+> use* there.
+>
+> `tools/build_track_map.py --apply` is what changes that, and **it writes the
+> `source` column as well as the corners now** (12 Sep) — it did not, so a
+> world-anchored model still exported as `auto-segment`, the one declaration
+> `CLAUDE.md` §3.2 requires it to make. **It writes `track-map` only when
+> EVERY corner in the model is anchored**, because the export declares one
+> source for the whole model and a half-anchored one is not a track map. It is
+> a writer: his call, never a step in a diagnosis. **Running it changes what
+> may be said about that circuit's corners** — so say that before proposing
+> it, not afterwards.
 
 - `tools/data_health.py` — what may honestly be claimed about one car at one circuit, before claiming it.
 - `tools/axis_board.py` — what has been measured on this car, and which axes nobody has tried.

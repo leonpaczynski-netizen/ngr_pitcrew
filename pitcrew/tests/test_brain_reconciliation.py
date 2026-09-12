@@ -1661,9 +1661,16 @@ def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
     assert updates, "build_track_map no longer updates corner_models"
     columns = {part.split("=")[0].strip().strip("\"'`")
                for update in updates for part in update.group(1).split(",")}
-    assert "source" not in columns, (
-        "build_track_map writes corner_models.source now - the corner "
-        "refusal's gate has opened, and the block must be rewritten")
+    # **The gate opened on 12 Sep and this assertion turned over with it.**
+    # It used to say `source` must NOT be among the columns - true while the
+    # tool wrote `corners_json` alone, and written to fail on the day that
+    # changed, because that is the day the refusal stopped being true. It did,
+    # the block was rewritten in the same commit, and the check now holds the
+    # tool to the declaration instead.
+    assert "source" in columns, (
+        "build_track_map no longer writes corner_models.source - a "
+        "world-anchored model would export as `auto-segment`, which is the "
+        "one declaration CLAUDE.md 3.2 requires it to make")
 
     # **A backstop, and only that.** A deny-list cannot referee contradiction
     # in general - but absolution is the one class of edit that has now been

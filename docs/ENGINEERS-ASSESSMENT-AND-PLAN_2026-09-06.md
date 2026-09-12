@@ -2543,6 +2543,20 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**The corner-source defect fixed, 12 Sep - and the gate retired itself as
+designed.** `build_track_map.py` updated `corners_json` and never `source`, so
+a world-anchored model still exported as `auto-segment`, which is the one
+declaration `CLAUDE.md` §3.2 requires it to make and the whole basis on which
+`refusals.md` says corner names may not be used. **It writes `track-map` only
+when EVERY corner in the model is anchored** - the export declares one source
+for the model, and a half-anchored one is not a track map.
+- **The assertion written three passes earlier failed on the day the defect
+  was fixed**, with the message it was given: *the corner refusal's gate has
+  opened, and the block must be rewritten*. It was, in the same commit, and
+  the assertion turned over to hold the tool to the declaration instead. **A
+  check that knew when it was finished** - which is what pinning the property
+  rather than the prose buys.
+
 **Row 2.10 DONE: critic AGREED on pass 7** - every mutant from seven passes
 dead, including every one it wrote. Its own summary of why: every tool and
 every MCP call has its own line in both directions; which side of the writers'

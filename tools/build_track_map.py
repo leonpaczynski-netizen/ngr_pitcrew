@@ -173,12 +173,26 @@ def main() -> int:
                 payload["corners"] = corners
             else:
                 payload = corners
+            # **The source is written too, and only when it is true.**
+            # This updated `corners_json` and never `source`, so a
+            # world-anchored model still exported as `auto-segment` - the one
+            # declaration `CLAUDE.md` §3.2 requires it to make, and the whole
+            # basis on which `refusals.md` says corner names may not be used.
+            # **Partially anchored is not a track map**: a model with any
+            # corner still derived from speed minima carries the weaker
+            # source, because the export declares one source for the model.
+            loose = [corner["id"] for corner in corners
+                     if corner["id"] not in anchors]
+            source = "auto-segment" if loose else "track-map"
             with store._write() as conn:
                 conn.execute(
-                    "UPDATE corner_models SET corners_json = ?, "
+                    "UPDATE corner_models SET corners_json = ?, source = ?, "
                     "updated_at = datetime('now') WHERE circuit_key = ?",
-                    (json.dumps(payload), circuit))
-            print(f"world anchors written for {len(anchors)} corners")
+                    (json.dumps(payload), source, circuit))
+            print(f"world anchors written for {len(anchors)} corners; "
+                  + (f"source is now `track-map`" if not loose else
+                     f"source stays `auto-segment` - {len(loose)} corner(s) "
+                     f"still derived: {', '.join(map(str, loose[:6]))}"))
         else:
             print("Nothing written. Re-run with --apply.")
         return 0
