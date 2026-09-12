@@ -177,7 +177,7 @@ def strategy_evidence(event_id: int) -> str:
 
     store = _store()
     try:
-        _inputs, evidence = build_inputs(store, event_id)
+        _inputs, evidence = build_inputs(store, event_id, remember=False)
         return _dump([{"label": e.label, "value": e.value, "source": e.source,
                        "note": e.note} for e in evidence])
     except ValueError as exc:

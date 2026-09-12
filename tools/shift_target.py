@@ -274,7 +274,7 @@ def main() -> None:
     args = ap.parse_args()
 
     store = Store(args.db)
-    inputs, _ = evidence.build_inputs(store, args.event)
+    inputs, _ = evidence.build_inputs(store, args.event, remember=False)
 
     burn, lap_ms, measured_drop = args.burn, args.lap_ms, args.measured_drop
     if args.from_sessions:

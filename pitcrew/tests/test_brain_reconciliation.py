@@ -1096,9 +1096,6 @@ def _mechanic() -> tuple[str, str]:
 _WRITE_VERB = re.compile(
     r"^(?:save|record|link|note|update|create|delete|set|write|approve)_"
     r"|^_write$")
-# Module-level callables that write, which no single file can see into.
-# `mechanic.md` names this one itself, and a tool calling it was invisible.
-_MODULE_WRITERS = ("carry_into_knowledge",)
 _DML = re.compile(r"INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM",
                   re.IGNORECASE)
 
@@ -1110,6 +1107,24 @@ def _render(node) -> str:
     if isinstance(node, ast.Attribute):
         return f"{base}.{node.attr}" if (base := _render(node.value)) else ""
     return ""
+
+
+def _without_docstrings(text: str, tree) -> str:
+    """The source with its docstrings removed.
+
+    Every check below reads prose otherwise, so a docstring quoting a SQL
+    statement or naming another method reclassifies its own function as a
+    writer - and then everything that calls it. Defined here because two of
+    them run at import.
+    """
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                              ast.AsyncFunctionDef))
+                and node.body and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)
+                and isinstance(node.body[0].value.value, str)):
+            text = text.replace(node.body[0].value.value, "")
+    return text
 
 
 def _store_handles(tree) -> set[str]:
@@ -1193,8 +1208,18 @@ def _store_write_methods() -> set[str]:
                  None)
     if store is None:                      # pragma: no cover - the class moved
         return set()
-    bodies = {node.name: ast.unparse(node) for node in store.body
-              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    # **Docstrings out first** (row 2.10 pass 4 review). Both tests below read
+    # the unparsed body, so ONE SENTENCE in a reader's docstring naming
+    # `self.save_race_knowledge(` put that reader into this set - and the
+    # any-receiver rule then flagged the fourteen tools that call it, with a
+    # failure message pointing at `mechanic.md`, which had not changed. A
+    # guard that fails loudly at the wrong file is how this programme spent
+    # months calling a product defect an environment fault.
+    bodies = {}
+    for node in store.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            source = ast.unparse(node)
+            bodies[node.name] = _without_docstrings(source, ast.parse(source))
     writers: set[str] = set()
     moved = True
     while moved:
@@ -1226,8 +1251,78 @@ def _writes_in(node, handles: set[str], writers: set[str]) -> str:
             return f"{_render(call.func.value)}.{call.func.attr}()"
         spelled = _render(call.func)
         if spelled and spelled.split(".")[-1] in writers:
+            # **A call that switches the write off is not a write.**
+            # `build_inputs` saves the measured track clock by default, and
+            # the two doors documented as read-only pass `remember=False` -
+            # which this cannot see from the name alone. Only an explicit
+            # literal counts; a variable could be anything.
+            if any(keyword.arg == "remember"
+                   and isinstance(keyword.value, ast.Constant)
+                   and keyword.value.value is False
+                   for keyword in call.keywords):
+                continue
             return f"{spelled}()"
     return ""
+
+
+def _module_writers() -> dict[str, set[str]]:
+    """Module-level callables in `pitcrew/` that write, and where they live.
+
+    **Derived, not listed** (row 2.10 pass 4 review). Naming
+    `carry_into_knowledge` closed one instance and left `resolve_corner_model`,
+    `handover.accept` and `rival_book.record` open - each of which a tool could
+    reasonably call, and `resolve_corner_model` is the canonical way to get a
+    corner model at all.
+
+    **Keyed by module, because the names are ordinary.** `record` and `accept`
+    are words a tool may well use for something of its own, so a caller only
+    counts when it has imported the name from the module that defines it.
+    """
+    found: dict[str, set[str]] = {}
+    for path in sorted((ROOT / "pitcrew").rglob("*.py")):
+        if "tests" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:                    # pragma: no cover
+            continue
+        handles = _store_handles(tree)
+        dotted = ".".join(path.relative_to(ROOT).with_suffix("").parts)
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            source = ast.unparse(node)
+            plain = _without_docstrings(source, ast.parse(source))
+            if _DML.search(plain) or _writes_in(node, handles, set()):
+                found.setdefault(node.name, set()).add(dotted)
+    return found
+
+
+_MODULE_WRITERS = _module_writers()
+
+
+def _imported_writers(tree) -> set[str]:
+    """Which of those a module has actually imported, under whatever name."""
+    names: set[str] = set()
+
+    def from_module(dotted: str, asname: str | None = None) -> None:
+        for writer, homes in _MODULE_WRITERS.items():
+            if dotted in homes:
+                names.add(writer)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                "pitcrew"):
+            for alias in node.names:
+                homes = _MODULE_WRITERS.get(alias.name, set())
+                if node.module in homes:
+                    names.add(alias.asname or alias.name)
+                from_module(f"{node.module}.{alias.name}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("pitcrew"):
+                    from_module(alias.name)
+    return names
 
 
 def _writing_functions(tree, handles: set[str]) -> set[str]:
@@ -1239,7 +1334,7 @@ def _writing_functions(tree, handles: set[str]) -> set[str]:
     read as a reader, and a helper sitting BETWEEN two tools made the check
     fail while naming the innocent tool before it.
     """
-    writers = set(_MODULE_WRITERS)
+    writers = _imported_writers(tree)
     functions = [node for node in ast.walk(tree)
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
     moved = True
@@ -1252,23 +1347,6 @@ def _writing_functions(tree, handles: set[str]) -> set[str]:
                 writers.add(function.name)
                 moved = True
     return writers
-
-
-def _without_docstrings(text: str, tree) -> str:
-    """The source with its docstrings removed.
-
-    The raw-DML check reads prose otherwise, so a reader whose docstring
-    quotes a SQL statement is reclassified a writer - the safe direction, for
-    the wrong reason.
-    """
-    for node in ast.walk(tree):
-        if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
-                              ast.AsyncFunctionDef))
-                and node.body and isinstance(node.body[0], ast.Expr)
-                and isinstance(node.body[0].value, ast.Constant)
-                and isinstance(node.body[0].value.value, str)):
-            text = text.replace(node.body[0].value.value, "")
-    return text
 
 
 def _writes_the_database(path) -> str:
@@ -1370,26 +1448,67 @@ def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
     # placed beside the sentence and a rewrite around it both got through -
     # the refusal was re-hosted in prose that inverted every clause while
     # keeping every anchor phrase, in order.
-    for tool in _INSTRUMENT_LINE.findall(writers):
-        if f"`tools/{tool}.py --apply`" not in writers:
+    # **Driven from the TOOLS, not from the line** (pass 4 review): the loop
+    # read ` --apply` out of the very document it polices, so editing the line
+    # skipped the check entirely and the tool could then drop the flag. And
+    # two substring tests are a word sequence again - `if False and not
+    # args.apply:` satisfied both while writing unconditionally.
+    unguarded = {}
+    for tool in sorted((ROOT / "tools").glob("*.py")):
+        source = tool.read_text(encoding="utf-8", errors="replace")
+        if '"--apply"' not in source and "'--apply'" not in source:
             continue
-        source = (ROOT / "tools" / f"{tool}.py").read_text(
-            encoding="utf-8", errors="replace")
-        assert '"--apply"' in source or "'--apply'" in source, (
-            f"{tool} is listed as taking `--apply` and never declares it")
-        assert "args.apply" in source, (
-            f"{tool} declares `--apply` and never branches on it")
+        tree = ast.parse(source)
+        handles = _store_handles(tree)
+        known = _writing_functions(tree, handles)
+        parents = {child: node for node in ast.walk(tree)
+                   for child in ast.iter_child_nodes(node)}
+
+        def guarded(node) -> bool:
+            """Is this write inside a scope that branches on the flag?
+
+            **The scope, not the file** - and a test carrying a boolean
+            literal is not a branch. `if False and not args.apply:` reads as
+            a guard to any check that only looks for the words.
+            """
+            scope = node
+            while (scope in parents
+                   and not isinstance(scope, (ast.FunctionDef,
+                                              ast.AsyncFunctionDef))):
+                scope = parents[scope]
+            for branch in ast.walk(scope):
+                if not isinstance(branch, ast.If):
+                    continue
+                test = ast.unparse(branch.test)
+                if "apply" in test and not re.search(r"\b(?:True|False)\b",
+                                                     test):
+                    return True
+            return False
+
+        for call in ast.walk(tree):
+            if not isinstance(call, ast.Call):
+                continue
+            why = _writes_in(call, handles, known)
+            if why and not guarded(call):
+                unguarded.setdefault(tool.stem, why)
+    assert not unguarded, (
+        f"tools that take `--apply` and write outside a branch on it: "
+        f"{unguarded}")
 
     # **The corner refusal's own claim, asserted against the code - and it
     # retires itself.** This fails the day `build_track_map` writes `source`,
     # which is exactly the day the refusal stops being true and the block has
     # to be rewritten. No pattern over the prose can do that.
     mapper = (ROOT / "tools/build_track_map.py").read_text(encoding="utf-8")
-    update = re.search(r"UPDATE\s+corner_models\s+SET\s+(.*?)\s+WHERE",
-                       mapper, re.IGNORECASE | re.DOTALL)
-    assert update, "build_track_map no longer updates corner_models"
+    # **Every such statement, not the first** (pass 4 review): the fix the
+    # driver has authorised may land as a second UPDATE rather than as a
+    # column added to this one, and a `search` would not see it - so the
+    # refusal would not be forced into rewriting, which is the whole point.
+    updates = list(re.finditer(r"UPDATE\s+corner_models\s+SET\s+(.*?)\s+WHERE",
+                               mapper, re.IGNORECASE | re.DOTALL))
+    assert updates, "build_track_map no longer updates corner_models"
     columns = {part.split("=")[0].strip().strip("\"'`")
-               for part in update.group(1).split(",")}
+               for update in updates for part in update.group(1).split(",")}
     assert "source" not in columns, (
         "build_track_map writes corner_models.source now - the corner "
         "refusal's gate has opened, and the block must be rewritten")

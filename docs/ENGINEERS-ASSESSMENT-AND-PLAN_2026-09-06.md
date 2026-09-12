@@ -2543,6 +2543,41 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Row 2.10 pass 4 (`0ecddce`): NOT AGREED - two majors, four minors, fixed.**
+Every mutant from three reviews was dead and keying on the method was
+confirmed sound (134 `Store` methods swept; no read-ish name among the 66 that
+write, and no library collision). What did not hold were the two pins added
+that pass.
+- **Major: a docstring in an unrelated file broke the check and blamed the
+  wrong files.** `_store_write_methods` read the unparsed body including
+  prose, so one sentence in `Store.get_lap_frames`' docstring naming
+  `self.save_race_knowledge(` put that reader into the write set - and the
+  any-receiver rule then flagged the fourteen tools that call it, with a
+  message pointing at `mechanic.md`, which had not changed. **A rot-guard
+  failing loudly at the wrong file is how this programme spent months calling
+  a product defect an environment fault.** Docstrings are stripped there now.
+- **Major: the `--apply` pin was two substring tests, and was gated on the
+  prose it replaced.** `if False and not args.apply:` satisfied both while
+  writing unconditionally; and the loop read ` --apply` out of the document it
+  polices, so editing the line skipped the check and the tool could then drop
+  the flag. It is driven from the tools now, and asserts the GUARD: every
+  write site must sit in a scope that branches on the flag, and **a test
+  carrying a boolean literal is not a branch.**
+- **Minor: `_MODULE_WRITERS` named one of at least five.** Derived now, and
+  resolved through each file's imports so a tool's own local `record()` is not
+  mistaken for `rival_book.record`. **It found a real defect on its first
+  run:** `evidence.build_inputs` saves the measured track clock, so the MCP
+  `strategy_evidence` call and `tools/shift_target.py` - both documented as
+  read-only - wrote to the database every time they were asked a question.
+  Fixed at the root with `remember=False` on those two doors rather than by
+  relabelling them, because reading the evidence should not mutate the store.
+- **Minor: the self-retiring gate used `search`**, so a SECOND
+  `UPDATE corner_models SET source` would have been invisible - which is
+  exactly how the authorised fix might land. `finditer`, columns unioned.
+- **Stated limit, not closed:** a refusal rewritten to its opposite while
+  avoiding the deny-list still passes. The real pin on that block is the
+  `source` property, which holds until the gate is fixed.
+
 **Row 2.10 pass 3 (`245f6c7`): NOT AGREED - three majors, fixed. Every mutant
 from the two earlier reviews was dead; all three attacks I had asked for
 landed.** The review's own diagnosis is the thing worth keeping: **`_WRITERS_

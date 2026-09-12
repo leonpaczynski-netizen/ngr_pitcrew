@@ -515,7 +515,8 @@ def _achieved_lap_ms(counted) -> int | None:
     return times[len(times) // 2]
 
 
-def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
+def build_inputs(store, event_id: int, *,
+                 remember: bool = True) -> tuple[RaceInputs, list[Evidence]]:
     """Assemble the model's inputs from the event and its practice laps."""
     event = store.get_event(event_id)
     if event is None:
@@ -632,7 +633,13 @@ def build_inputs(store, event_id: int) -> tuple[RaceInputs, list[Evidence]]:
     preset = event["time_of_day"] or ""
     reading = read_clock(laps)
     circuit = circuit_key(event["track"], event["layout"])
-    if reading.measured:
+    # **`remember=False` makes this a reader** (row 2.10 pass 5). Reading the
+    # evidence saved a row, so two doors documented as read-only - the MCP
+    # `strategy_evidence` and `tools/shift_target.py` - wrote to the database
+    # every time they were asked a question. The app's own paths still
+    # remember the clock: it is measured off the game clock rather than looked
+    # up, and it has to be kept somewhere to be reused.
+    if reading.measured and remember:
         store.save_track_clock(circuit, preset, reading)
     known = store.get_track_clock(circuit, preset)
     minutes = (float(event["race_laps"] or 0)
