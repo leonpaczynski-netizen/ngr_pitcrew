@@ -672,8 +672,11 @@ def test_spending_one_inferred_round_does_not_spend_the_other(
 def _notes(event_screen):
     """What the controller asks the footer to say, and how.
 
-    The warning is written straight through `set_ink` and cannot be read back
-    off the widget, so the flag is pinned where it is decided.
+    Pinned where the flag is DECIDED, which is where every defect of this
+    class has happened. **The painting is pinned separately**, by
+    `test_the_footer_paints_a_warning_as_a_warning`. This docstring used to
+    say the warning could not be read back off the widget at all - which was
+    untrue, and was the belief that left that seam open for six passes.
     """
     said = []
     wrote = event_screen.note
@@ -728,7 +731,9 @@ def test_the_hub_news_reaches_the_switch_footer_as_a_warning(
     # **Selected by what it says, not by being last** (pass 6 review): a note
     # appended after this one would make `said[-1]` follow it silently
     # instead of failing.
-    text, warn = next(note for note in said if "Working on" in note[0])
+    text, warn = next((note for note in said if "Working on" in note[0]),
+                      (None, None))
+    assert text is not None, f"nothing on the footer said 'Working on': {said}"
     assert "BoP is now on" in text and warn, (text, warn)
 
 
@@ -746,7 +751,9 @@ def test_the_adopted_link_footer_keeps_its_warning(
 
     controller.switch_event("r1")            # the calendar's own route in
 
-    text, warn = next(note for note in said if "not a second copy" in note[0])
+    text, warn = next((note for note in said if "not a second copy" in note[0]),
+                      (None, None))
+    assert text is not None, f"no footer note said 'not a second copy': {said}"
     assert "BoP is now on" in text, "the news the append was writing over"
     assert warn, "a warning, appended to, is still a warning"
 

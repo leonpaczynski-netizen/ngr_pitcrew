@@ -2543,6 +2543,64 @@ major, four minors, all fixed.**
 - **Proof at the parent:** e9 flags 4 lines, the widened e8 line 151, and e6
   the Deep Forest sentence.
 
+**Row 2.10: NOT AGREED on `5b351c1`, fixed - three majors.** e12 made the row
+**checkable, not met**, and the two things that actually endanger the driver
+sat in its blind spot.
+- **Major: the MCP surface was missing entirely.** `pitcrew/mcp/server.py` has
+  eighteen tools and `SKILL.md`:621 sends the skill to four by name; the word
+  MCP did not appear in `mechanic.md`. So the writers' standing rule - *only
+  with the driver's yes, never as a step of a diagnosis* - reached fourteen
+  scripts and **none of the MCP calls that write**. Checked by body rather
+  than by name, there are **seven**, not the six the critic listed:
+  `propose_strategy` saves the strategy it proposes despite its name, and
+  `write_measurement`/`write_verdict` write through `record_measurement` /
+  `record_verdict` plus a journal entry. And `write_shift_points` appeared
+  once, framed as a validator - it is the authoritative write of the one setup
+  artefact that reaches him at 60 Hz.
+- **Major: e12 pinned the roster, not the line.** Seven of the critic's
+  mutants lived: any backticked identifier satisfied it (a `tools/fit.py` or
+  `tools/judge.py` would pass on the strength of callables named elsewhere),
+  the reverse direction covered 32 of 51, an instrument could be reclassified
+  as *not* an instrument invisibly, and the writers' rule could be deleted or
+  inverted to "harmless, run them freely" with everything green. It now reads
+  the two lists as separate sections and requires a LINE; both directions for
+  both lists; every MCP tool named; a tool that writes the store listed under
+  the writers; and **a tool the skill sends itself to may not be excluded**.
+- **Major: the list offered three earth-anchored-corner tools while
+  `refusals.md` says there is no track map.** All nine `corner_models` rows
+  are `source='auto-segment'` (read-only check), so the refusal is true today
+  and `build_track_map.py --apply` is the thing that would make it false -
+  silently, mid-diagnosis, after which "T4 entry" reads as a name the app may
+  use. Now carried as a refusal in `mechanic.md` itself.
+- **Minors, each a claim that was not true:** `read_replay_board` writes its
+  roster JSON and PNGs on the *dry* run, so "writes nothing without `--apply`"
+  was false (the DATABASE is what it leaves alone); "write" meant two things
+  three lines apart; `brake_bias`'s one line invited rule 5 on a value GT7
+  does not send; the exclusion reason did not cover two of its own entries;
+  and `draw_bathurst_map` opens `Store()` at module scope, so *importing* it
+  writes the live database. Counts corrected to 51 tools, 32 instruments, 19
+  excluded. Eight mutants, all killed.
+- **Out of scope, wants its own row:** `tools/build_track_map.py` UPDATEs
+  `corner_models.corners_json` and never touches `source`, so a world-anchored
+  model would still export as `auto-segment` - the declaration CLAUDE.md §3.2
+  requires.
+
+**Critic on 2.8 part 2, pass 11 (`e6fe7ca`): AGREED - row 2.8 is done.** It
+ran the perturbation proof itself and confirmed both majors closed: under the
+house style pass 10 loses `07`:609 and pass 11 loses nothing; with the front
+axis bolded pass 10 flags one line more, the FWD line it should exclude. It
+called perturbing the input *"better than the standard I set"*. Seven minors
+carried to a follow-up, and the first is the one that matters: **`named.add(
+sentence)` can become `named.add(line)` and no test fails**, which would make
+the back-reference rule line-scoped - the fail-open class this row has fought
+since pass 7. Also: `_SENTENCE_END` knows `)` and `"` but not `]`, which is
+how every stamp in this corpus closes (measured at 0.12% of sentence ends, so
+a minor and not a repeat of the major); e11's call site can revert to `_CURE`
+untested; e11's fixed-width lookbehinds miss `front  accel` where e10's
+`[\s-]*` does not; and **narrowing e11's vocabulary cost his own word** -
+"the car will not turn in" is no longer seen, when the looseness was distance,
+not vocabulary.
+
 **Critic on 2.8 part 2, pass 10 (`202b26a`): NOT AGREED - two majors, five
 minors, fixed.** It granted the substance of all three pass-9 majors: the
 sentence is the right unit and not a third wrong one, the proof script is

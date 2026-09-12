@@ -946,6 +946,38 @@ def test_e11_sees_the_standing_rule_and_not_the_traction_one():
         "Keep accel sensitivity low here; Turn 4 is the reference corner")
 
 
+_MECHANIC = ".claude/skills/ludo/references/mechanic.md"
+# A tool's own LINE - the path, a dash, and something after it. **Not merely
+# its name somewhere in the file** (the critic on row 2.10): the old check was
+# satisfied by any backticked identifier, so a `tools/fit.py` or a
+# `tools/judge.py` would have passed undocumented on the strength of `fit` and
+# `judge` being callables named in a different list.
+_INSTRUMENT_LINE = re.compile(r"^\s*- `tools/(\w+)\.py[^`]*`\s*[—-]\s*\S",
+                              re.MULTILINE)
+_BACKTICKED = re.compile(r"`([A-Za-z_]\w*)`")
+_STORE_WRITE = re.compile(
+    r"store\.(?:save_|record_|link_|update_|create_|set_|delete_|note_)\w*")
+# The two sentences the section turns on. Deleting the first, or inverting it
+# to "harmless, run them freely", left every assertion green.
+_WRITERS_RULE = re.compile(
+    r"\*\*Writers\b[^*]*?each changes the database[^*]*?"
+    r"never as a step of a diagnosis\.\*\*", re.DOTALL)
+_APPLY_RULE = "leaves the DATABASE alone without `--apply`"
+
+
+def _mechanic() -> tuple[str, str]:
+    """The instrument list and the exclusion block, as separate text.
+
+    **Read apart, because reading the whole file cannot tell an instrument
+    from a tool that is explicitly not one** (row 2.10 review): a mutant
+    moving `debrief` from one list to the other left every assertion green.
+    """
+    text = (ROOT / _MECHANIC).read_text(encoding="utf-8")
+    head = text.index("## Every instrument, one line each")
+    split = text.index("**Not instruments for this skill**", head)
+    return text[head:split], text[split:text.index("\n---", split)]
+
+
 def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
     """Plan row 2.10: name every tool the skill may use, one line each.
 
@@ -961,19 +993,51 @@ def test_e12_every_tool_is_named_or_excluded_by_the_mechanic():
     the skill to run something that is not there, which is the stale-citation
     defect row 2.8 had to clear by hand.
     """
-    mechanic = (ROOT / ".claude/skills/ludo/references/mechanic.md").read_text(
-        encoding="utf-8")
+    instruments, excluded_block = _mechanic()
+    rule = _WRITERS_RULE.search(instruments)
+    assert rule, "the writers' standing rule is gone, or no longer says it"
+    writers = instruments[rule.end():]
+    assert _APPLY_RULE in instruments, "the --apply sentence is gone"
+
     tools = {path.stem for path in (ROOT / "tools").glob("*.py")}
-    unnamed = sorted(stem for stem in tools
-                     if f"tools/{stem}.py" not in mechanic
-                     and f"`{stem}`" not in mechanic)
-    assert not unnamed, (
-        f"tools named nowhere in mechanic.md - neither an instrument nor "
-        f"excluded: {unnamed}")
-    cited = set(re.findall(r"tools/(\w+)\.py", mechanic))
-    assert not sorted(cited - tools), (
-        f"mechanic.md sends the skill to tools that do not exist: "
-        f"{sorted(cited - tools)}")
+    lined = {hit.group(1) for line in instruments.splitlines()
+             if (hit := _INSTRUMENT_LINE.match(line.strip()))}
+    excluded = set(_BACKTICKED.findall(excluded_block))
+
+    assert not lined & excluded, f"both an instrument and not: {lined & excluded}"
+    assert not tools - (lined | excluded), (
+        f"tools with no line and no exclusion: {sorted(tools - (lined | excluded))}")
+    assert not lined - tools, (
+        f"instrument lines for tools that do not exist: {sorted(lined - tools)}")
+    assert not excluded - tools, (
+        f"excluded names that are not tools: {sorted(excluded - tools)}")
+
+    # **A tool that writes belongs under the writers' rule**, not in a bare
+    # exclusion list where the rule cannot reach it.
+    writing = {path.stem for path in (ROOT / "tools").glob("*.py")
+               if _STORE_WRITE.search(path.read_text(encoding="utf-8",
+                                                     errors="replace"))}
+    assert not writing - set(_INSTRUMENT_LINE.findall(writers)), (
+        f"tools that write the store, not listed with the writers: "
+        f"{sorted(writing - set(_INSTRUMENT_LINE.findall(writers)))}")
+
+    # **The MCP surface, which this list omitted entirely** (row 2.10 review):
+    # eighteen tools, seven of them writers, and the standing rule reached
+    # none of them while `SKILL.md` sends the skill to four by name.
+    server = (ROOT / "pitcrew/mcp/server.py").read_text(encoding="utf-8")
+    for call in re.findall(r"@mcp\.tool\(\)\s*\ndef (\w+)", server):
+        assert f"`{call}`" in instruments, f"MCP tool not named: {call}"
+
+    # **A tool the skill sends itself to is an instrument**, whatever else it
+    # is - so one cannot be quietly reclassified out of the safety rules.
+    for page in sorted((ROOT / ".claude/skills/ludo").rglob("*.md")):
+        text = page.read_text(encoding="utf-8")
+        if page.name == "mechanic.md":
+            text = text.replace(excluded_block, "")
+        for cited in set(re.findall(r"tools/(\w+)\.py", text)):
+            assert cited not in excluded, (
+                f"{page.name} sends the skill to `{cited}`, which "
+                f"mechanic.md lists as not an instrument")
 
 
 def test_e7_the_register_restates_no_setup_value():

@@ -97,8 +97,8 @@ rake.
 - `RangeRecord.fraction_of_range(key, value)` — advisory only. Nothing refuses
   on it, so a value outside range still needs your eyes.
 
-Everything else on a sheet — twenty-one of twenty-three values — has **no ground
-truth in the feed.** For those, the record is what he tells you, and the only
+Everything else on a sheet — twenty-two of twenty-three values, the gear ratios
+being the one — has **no ground truth in the feed.** For those, the record is what he tells you, and the only
 defence is provenance and confirmation.
 
 ---
@@ -112,9 +112,23 @@ in a write transaction, every time** - so even a reader touches the database it
 is pointed at. For work that must not, open sqlite with `mode=ro`, or a copy
 that includes the `-wal` file.
 
-**Readers — they answer a question and write no database row.** Two write a
-file beside their input: `analyse_m0` a `<capture>.m0.json`, `draw_track_map` a
-PNG.
+**Readers — they answer a question and add no row of their own.** Not the same
+"write" as the line above: opening the database writes to it whatever you do,
+so a reader here means one that adds nothing, never one that touches nothing.
+Two write a file beside their input: `analyse_m0` a `<capture>.m0.json`,
+`draw_track_map` a PNG — and `read_replay_board` writes its
+`roster-session-<n>.json` and one PNG per cluster **on the dry run**, which is
+the point of the dry run: it is the roster you then label by hand.
+
+> ⛔ **The three corner tools do not give you corner names, and one of them
+> can make the refusal card false.** Every `corner_models` row on file is
+> `source='auto-segment'` — nine of nine — which is why `references/
+> refusals.md` says there is no track map and *"turn three" is not a name this
+> app may honestly use*. `build_track_map.py --apply` is the thing that would
+> change that. It is a writer, so it is his call and never a step in a
+> diagnosis; and until he has asked for it **and** the export declares the new
+> source, corner identity stays auto-segmented, unstable at many corners and
+> unavailable at Monza.
 
 - `tools/data_health.py` — what may honestly be claimed about one car at one circuit, before claiming it.
 - `tools/axis_board.py` — what has been measured on this car, and which axes nobody has tried.
@@ -122,7 +136,7 @@ PNG.
 - `tools/where_the_time_went.py` — where 1.71's lap time went, by distance bin.
 - `tools/debrief.py` — the whole debrief, in the protocol's order (row 2.5): his report, the open ledger rows, the session, where a change landed, how it was driven, the driver as a variable, George's calls, the race against its plan, the radio. `--db` points it at a copy.
 - `tools/driving_style.py` — coast share and upshift rpm, per lap and per stint.
-- `tools/brake_bias.py` — what brake balance does, measured off the wheels.
+- `tools/brake_bias.py` — what brake balance **does**, measured off the wheels. GT7 sends no brake-bias channel, so the bias itself is DECLARED, never measured; this reads its effect. Four lines above is the list of what telemetry can verify, and the bias is not on it.
 - `tools/braking_change.py` — whether 1.71 changed braking, and whether later braking pays.
 - `tools/shift_points.py` — where to shift, per car and gear, off his own laps (the table is still issued, never typed).
 - `tools/shift_target.py` — how far to short-shift for a given race, and where it turns against him.
@@ -141,8 +155,27 @@ PNG.
 - `pitcrew.race.call_outcome` (`judge`, `summarise`) — what happened after the engineer said something, where the app can tell.
 - `pitcrew.race.pit_wall` (`PitWall`) — who was in the lane, on what, with how much.
 
+**Over MCP** (`pitcrew/mcp/server.py`, eighteen tools). **This section left the
+whole seam out**, so the standing rule below reached fourteen scripts and none
+of the seven MCP calls that write — while `SKILL.md` sends you to four of them
+by name. Read-only, eleven: `list_events`, `slider_ranges`, `event_export`,
+`laps`, `strategy_evidence`, `car_context`, `shift_points`, `measurements`,
+`axis_status`, `prompt_log`, `engineer_writes`.
+
 **Writers — each changes the database. Run one only with the driver's yes, and
 never as a step of a diagnosis.**
+
+- `propose_strategy` (MCP) — **writes.** It saves the strategy it proposes,
+  through `store.save_strategy`. The name reads like a proposal; it is not one.
+- `write_shift_points` (MCP) — the shift table, per car and circuit. **This is
+  the authoritative write of the one setup artefact that reaches him through
+  the app**, as a beep at 60 Hz. It also refuses a fuel-saving rpm at or above
+  its performance rpm, but that refusal is a property of the write, not a check
+  to run during a diagnosis.
+- `write_strategy`, `write_race_knowledge`, `write_qualifying_plan` (MCP) — the
+  plan, the circuit's knowledge row, the qualifying plan.
+- `write_measurement`, `write_verdict` (MCP) — `store.record_measurement` and
+  `record_verdict`, each also journalled through `note_engineer_write`.
 
 - `tools/backfill_measurements.py --apply` — numbers written into prose, as measurement and verdict rows.
 - `tools/build_track_map.py --apply` — anchors each corner to a place on the earth.
@@ -156,19 +189,26 @@ never as a step of a diagnosis.**
 - `tools/read_replay_traffic.py --apply` — who was around him, off the replay's radar.
 - `tools/read_replay_board.py --apply` — names those cars off the replay's leaderboard.
 
-  Each of those eleven reports and writes nothing without `--apply`. **Three
-  do not work that way:**
+  Each of those eleven leaves the DATABASE alone without `--apply` — not the
+  disk: `read_replay_board` writes its roster JSON and its cluster PNGs on the
+  dry run, by design. **Three do not work that way at all:**
 - `tools/derive_sectors.py` — **writes by default**; `--dry-run` reports only.
 - `tools/series.py` — `--set` writes at once; `--like`/`--car` ask first unless `--yes`.
 - `tools/name_drivers.py` — writes as soon as it is given a name (`old new`, `--me`, `--teammate`).
 - `pitcrew.analysis.wear_rates.carry_into_knowledge` — writes the fitted rates into `race_knowledge` through `store.save_race_knowledge`, whenever it is called.
 
 **Not instruments for this skill** (the app's own health, voice, rig and
-build): `audition_voices`, `render_voice_pack`, `render_voice_ab`,
+build — and two one-off scripts, which is what `draw_bathurst_map` and
+`extract_reference` are): `audition_voices`, `render_voice_pack`, `render_voice_ab`,
 `render_kokoro_audition`, `stt_bench`, `haptics_bench`, `rig_levels`,
 `wind_bench`, `wind_replay`, `wind_sweep`, `install_shortcut`,
 `probe_extended_packet`, `gap_bank`, `board_bench`, `build_race_fixture`,
 `extract_reference`, `draw_bathurst_map`, `schema_audit`, `wiring_audit`.
+
+**`draw_bathurst_map` is to be left alone, not merely skipped.** It opens
+`Store()` and `data/pitcrew.db` at module scope, with one session number
+written into it — so *importing* it is a write to the live database, before
+any function of yours runs.
 
 ---
 
@@ -179,8 +219,11 @@ validator went with the setup record (`CLAUDE.md` §1a), so the checks it made a
 against `range_records`: every value inside its slider's range for this car
 (`RangeRecord.fraction_of_range`); a sign only on toe front, toe rear and brake
 balance; gears strictly descending, every ratio positive, nine at most. The
-shift table is still checked by the app when you issue it (`write_shift_points`
-refuses a fuel-saving rpm at or above its performance rpm).
+shift table is still checked by the app at the moment you ISSUE it —
+`write_shift_points` refuses a fuel-saving rpm at or above its performance rpm.
+**That refusal lives inside the write, and is not a check you can run first:**
+the call that validates the table is the call that stores it, and it is listed
+with the writers above, under their rule.
 
 ---
 
