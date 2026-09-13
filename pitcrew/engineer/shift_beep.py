@@ -50,6 +50,7 @@ does not exclude them measures the app's own instruction.
 from __future__ import annotations
 
 import threading
+import time
 
 from pitcrew.diagnostics import log
 from pitcrew.engineer import audio_devices
@@ -77,14 +78,15 @@ BEEP = "the shift beep"
 # already applies to an overlapping beep, for the same reason.
 PRIORITY_WAIT_S = 0.4
 # For a sound that may not cut a line (`cuts_lines=False`, the radio static):
-# how long it waits for the writer to collect it into the line, and then how
-# long for the card if it was not collected. The first covers the gap before
-# a line's first chunk - an MME open was measured at 1.5 s - so a burst
-# offered as a line starts is still carried by it. The second is a long line
-# ending; past it the static is skipped and the radio opens anyway, because
-# confirmation is not the question.
-MUST_SOUND_MIX_WAIT_S = 2.0
-MUST_SOUND_CARD_WAIT_S = 8.0
+# the most it may wait, in total, for a busy card - first for the line to
+# collect it, then for the card itself. **Short on purpose.** The opening
+# burst plays before the microphone opens and the closing one before the
+# answer, so every millisecond here is the start of his question lost or his
+# answer late. A line still synthesising live (every pack miss) does not
+# collect for seconds; past this bound the static is skipped rather than
+# waited for. Skipping costs nothing he needs: the line holding the card is
+# itself proof the audio path works, and confirmation is not the question.
+MUST_SOUND_BUDGET_S = 0.5
 # No threshold may be dragged below this by a short-shift request. Short-
 # shifting out of the powerband is not fuel saving, it is driving badly, and
 # an engineer that asks for it has stopped being useful.
@@ -445,19 +447,24 @@ class _TonePlayer:
 
         Over the top of the line if the writer collects it, which is the
         common case and costs one chunk. Otherwise - the line ended before it
-        drained the mailbox, or it is still synthesising after
-        `MUST_SOUND_MIX_WAIT_S` - the offer is withdrawn and the sound waits
-        for the card like anything else. Never `priority_on`: that is the
-        request to cut.
+        drained the mailbox - it plays on the card once free. **All inside
+        `MUST_SOUND_BUDGET_S`**: a line still synthesising does not collect
+        for seconds, and the radio must not wait for it, so past the bound the
+        sound is skipped. Never `priority_on`: that is the request to cut.
         """
+        started = time.monotonic()
         if self._recipe is not None and audio_devices.mix_and_wait(
-                device, self._recipe, stale_after_s=MUST_SOUND_MIX_WAIT_S,
-                wait_s=MUST_SOUND_MIX_WAIT_S):
+                device, self._recipe, stale_after_s=MUST_SOUND_BUDGET_S,
+                wait_s=MUST_SOUND_BUDGET_S):
             return
-        if not lock.acquire(timeout=MUST_SOUND_CARD_WAIT_S):
-            raise TimeoutError(
-                f"the card was still busy {MUST_SOUND_CARD_WAIT_S:.0f}s "
-                f"later - played nothing rather than cut the line holding it")
+        left = MUST_SOUND_BUDGET_S - (time.monotonic() - started)
+        if not lock.acquire(timeout=max(0.0, left)):
+            log("beep").info(
+                "static skipped: the card was busy with a line for %.1fs and "
+                "did not take it. The line holding the card is proof the "
+                "audio path works, and the radio does not wait for it.",
+                MUST_SOUND_BUDGET_S)
+            return
         try:
             self._render_locked()
         finally:

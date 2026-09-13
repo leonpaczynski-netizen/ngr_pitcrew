@@ -194,6 +194,84 @@ def test_a_burst_the_line_ended_before_collecting_still_plays(one_card):
     assert len(one_card.streams) == 1, "the burst was lost with the line"
 
 
+class _NeverCollects:
+    """A line holding the card that does not drain the mailbox - George still
+    synthesising a pack miss live, which was every line at Suzuka."""
+
+    def __init__(self, seconds: float = 3.0) -> None:
+        self._release = threading.Event()
+        self._holding = threading.Event()
+        self._seconds = seconds
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        with audio_devices.lock_for(DEVICE), audio_devices.mixing_on(DEVICE):
+            self._holding.set()
+            self._release.wait(self._seconds)
+
+    def __enter__(self):
+        self._thread.start()
+        assert self._holding.wait(2.0)
+        return self
+
+    def __exit__(self, *_exc):
+        self._release.set()
+        self._thread.join(2.0)
+        return False
+
+
+class _TimedRecogniser:
+    name = "moonshine"
+    last_reason = None
+
+    def __init__(self) -> None:
+        self.opened_at = None
+
+    def begin(self) -> None:
+        self.opened_at = time.monotonic()
+
+    def end(self) -> str:
+        return "laps left"
+
+
+def _radio():
+    from pitcrew.engineer.ptt import PushToTalk
+
+    recogniser = _TimedRecogniser()
+    answered: list[float] = []
+    talk = PushToTalk(snapshot=lambda: {"lapsRemaining": 12},
+                      speak=lambda _text: answered.append(time.monotonic()),
+                      recogniser=recogniser, bursts=radio.bursts())
+    return talk, recogniser, answered
+
+
+def test_a_busy_card_does_not_hold_the_microphone_shut(one_card, caplog):
+    """Review of 8b0deb2: waiting for a line that never collects the static
+    opened the microphone up to ten seconds after the press, and the start
+    of his question went nowhere. The static is skipped instead."""
+    talk, recogniser, _ = _radio()
+    with _NeverCollects(), caplog.at_level("INFO", logger="pitcrew.beep"):
+        pressed = time.monotonic()
+        talk._open_radio()
+        talk._cancel_deadline()
+    assert recogniser.opened_at is not None
+    assert recogniser.opened_at - pressed < 0.6, (
+        f"the mic opened {recogniser.opened_at - pressed:.2f}s after the press")
+    assert one_card.streams == [], "the static cut in or waited for the card"
+    assert "static skipped" in caplog.text
+
+
+def test_a_busy_card_does_not_hold_the_answer(one_card):
+    talk, _, answered = _radio()
+    talk._recording = True
+    with _NeverCollects():
+        closed = time.monotonic()
+        talk._close_radio()
+    assert answered, "no answer was given"
+    assert answered[0] - closed < 0.6, (
+        f"the answer came {answered[0] - closed:.2f}s after the close")
+
+
 def test_an_offer_withdrawn_on_timeout_is_not_played_later():
     """A burst that gave up waiting and played itself must not also turn up
     in the next chunk of the line - that is the static twice."""
