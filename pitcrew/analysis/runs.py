@@ -373,6 +373,42 @@ def carry_compound(rows, lap_id) -> list:
     return changed if edited in changed else [edited, *changed]
 
 
+def declared_compound(event: dict | None) -> str | None:
+    """The one compound the event allows, or None.
+
+    **A declaration, never a guess.** GT7 broadcasts no tyre code, so the
+    only thing that can say what is on the car without anyone tagging it is
+    a regulation that leaves nothing else to fit. An event offering one
+    compound is that; an event offering three - Suzuka, Bathurst - is not,
+    and picking one of them would be the corruption `_tag_race_compound`
+    refuses: a wear rate attributed to the wrong tyre.
+    """
+    available = [code for code in ((event or {}).get("available_compounds")
+                                   or []) if code]
+    return available[0] if len(set(available)) == 1 else None
+
+
+def compound_for_new_lap(previous, lap, declared: str | None = None
+                         ) -> str | None:
+    """What a lap that has just landed ran on, where something already says.
+
+    **The carry reaches the laps that land AFTER the tag, too** (13 Sep 2026).
+    `carry_compound` fills the rest of a stint when the tag is made, which
+    only covers laps already on the rack: tag lap 1 at the start of the stint,
+    as he asked to be able to, and laps 2 onward still landed NULL, because
+    the add path copied the recorder's `compound`, which nothing fills. The
+    same run boundary stops it - a refuel, a stop, the garage - so it never
+    reaches a set nobody tagged.
+
+    Failing that, the event's own declaration where it leaves only one tyre.
+    Otherwise None: unknown is the honest value (§4 rule 3).
+    """
+    if previous is not None and previous.compound \
+            and not starts_run(previous, lap):
+        return previous.compound
+    return declared
+
+
 def run_of(runs: list[Run], lap_num: int) -> int | None:
     """The id of the run a lap belongs to."""
     for run in runs:

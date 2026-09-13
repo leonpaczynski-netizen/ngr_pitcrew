@@ -3503,7 +3503,7 @@ class PitCrewController(QObject):
         # `carry_compound` across a rack holding both.
         if self.session_kind != "practice":
             return
-        self.practice.add_lap(LapRow(
+        row = LapRow(
             lap_id=lap_id,
             lap_num=len(self.practice.rows()) + 1,
             lap_time_ms=lap.lap_time_ms,
@@ -3539,7 +3539,49 @@ class PitCrewController(QObject):
             sector2_ms=(frames.sector2_ms if frames is not None else None),
             sector3_ms=(frames.sector3_ms if frames is not None else None),
             sector_source=(frames.sector_model if frames is not None else None),
-        ))
+        )
+        self._tag_practice_compound(lap_id, row)
+        self.practice.add_lap(row)
+
+    def _event_record(self) -> dict | None:
+        """The active event's row, read without `active_event`'s side effects
+        (it re-points the shift table and the assists), for a per-lap read."""
+        event_id = self.store.active_event_id()
+        return self.store.get_event(event_id) if event_id else None
+
+    def _tag_practice_compound(self, lap_id: int, row) -> None:
+        """A practice lap that lands inside a tagged stint carries its tag.
+
+        Suzuka practice, 13 Sep 2026: five laps, `compound` NULL on every one,
+        and the evening's plan said RS "has no measured rate of its own". The
+        rack's carry runs when a tag is MADE, so it only ever reached laps
+        already on the rack - tag the first lap of a stint and the rest landed
+        NULL. `compound_for_new_lap` closes that on the same run boundary, and
+        falls back to the event's declaration only where it leaves one tyre.
+        Never a guess: with neither, the lap stays unknown.
+        """
+        if row.compound:
+            return
+        from pitcrew.analysis.runs import compound_for_new_lap, declared_compound
+
+        rows = self.practice.rows()
+        previous = rows[-1] if rows else None
+        try:
+            declared = declared_compound(self._event_record())
+        except Exception:                                    # noqa: BLE001
+            log("session").warning("the event's compounds could not be read",
+                                   exc_info=True)
+            declared = None
+        carried = compound_for_new_lap(previous, row)
+        compound = carried or declared
+        if not compound:
+            return
+        row.compound = compound
+        self.store.set_lap_compound(lap_id, compound)
+        log("session").info(
+            "lap %s tagged %s - %s", row.lap_num_in_session, compound,
+            "carried from the stint's tag" if carried
+            else "the only compound the event allows")
 
     def plan_qualifying(self) -> bool:
         """How much fuel to put in, and how many runs fit.
@@ -3935,6 +3977,20 @@ class PitCrewController(QObject):
         if race is None or not race.running:
             return
         compound = race.state.tyre_compound
+        if not compound:
+            # **No plan, or none naming the tyre: the event may still say.**
+            # Suzuka, 13 Sep 2026 - raced with no plan armed, and all 14 laps
+            # NULL. An event that allows ONE compound has declared what is on
+            # the car, before and after any stop; one offering three has not,
+            # and the lap stays unknown rather than take a pick.
+            from pitcrew.analysis.runs import declared_compound
+
+            try:
+                compound = declared_compound(self._event_record())
+            except Exception:                                # noqa: BLE001
+                log("race").warning("the event's compounds could not be read",
+                                    exc_info=True)
+                compound = None
         if compound:
             self.store.set_lap_compound(lap_id, compound)
 

@@ -87,6 +87,47 @@ def test_clearing_a_tag_clears_only_that_lap():
     assert [row.lap_id for row in changed] == [2]
 
 
+def test_a_lap_landing_after_the_tag_carries_it():
+    """13 Sep 2026: the fill ran when the tag was made, so it reached only the
+    laps already on the rack. Tag the first lap of a stint as he asked to, and
+    every lap after it landed NULL."""
+    from pitcrew.analysis.runs import compound_for_new_lap
+
+    first, second = a_stint(1, 2)
+    first.compound = "RS"
+    assert compound_for_new_lap(first, second) == "RS"
+
+
+def test_a_lap_landing_after_a_stop_does_not_carry():
+    from pitcrew.analysis.runs import compound_for_new_lap
+
+    stint, after = a_stint(1, 2), a_stint(3, 1)[0]
+    stint[1].compound = "RS"
+    stint[1].is_pit_lap = True
+    assert compound_for_new_lap(stint[1], after) is None
+    refuelled = a_stint(3, 1, tank=100.0)[0]
+    stint[1].is_pit_lap = False
+    assert compound_for_new_lap(stint[1], refuelled) is None
+    other_session = a_stint(3, 1, session_id=2)[0]
+    assert compound_for_new_lap(stint[1], other_session) is None
+
+
+def test_an_event_allowing_one_tyre_declares_it_and_three_do_not():
+    from pitcrew.analysis.runs import compound_for_new_lap, declared_compound
+
+    assert declared_compound({"available_compounds": ["RS"]}) == "RS"
+    assert declared_compound({"available_compounds": ["RS", "RM", "RH"]}) is None
+    assert declared_compound({"available_compounds": []}) is None
+    assert declared_compound(None) is None
+    lap = a_stint(1, 1)[0]
+    assert compound_for_new_lap(None, lap, declared="RS") == "RS"
+    assert compound_for_new_lap(None, lap) is None
+    # A tag on the stint wins over nothing, and never over a different tag.
+    previous = a_stint(1, 2)
+    previous[0].compound = "RM"
+    assert compound_for_new_lap(previous[0], previous[1], declared="RS") == "RM"
+
+
 def test_going_back_to_the_garage_ends_the_stint():
     rows = a_stint(1, 3) + a_stint(4, 3, session_id=2)
     rows[0].compound = "RH"

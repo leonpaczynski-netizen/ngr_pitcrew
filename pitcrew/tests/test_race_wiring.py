@@ -649,6 +649,62 @@ def test_a_lap_outside_a_race_is_not_tagged_from_a_plan(raced, store):
     assert all(r["compound"] is None for r in rows)
 
 
+def _no_plan(store_, event_id):
+    for strategy in store_.list_strategies(event_id):
+        store_._write().__enter__().execute(
+            "UPDATE strategies SET status='candidate' WHERE id=?",
+            (strategy["id"],))
+
+
+def test_a_race_with_no_plan_takes_the_one_tyre_the_event_allows(raced, store):
+    """Suzuka, 13 Sep 2026: all 14 race laps landed `compound` NULL - no
+    plan was armed, and the plan was the only source a race lap had. Where
+    the event leaves one tyre to fit, that is a declaration and not a guess."""
+    controller, _, store_, event_id = raced
+    store_.update_event(event_id, available_compounds=["RS"])
+    _no_plan(store_, event_id)
+    assert controller.start_race() is True
+    green(controller)
+    for lap_num in range(1, 4):
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+    rows = store_.list_laps(controller.session_id)
+    assert rows and all(r["compound"] == "RS" for r in rows), rows
+
+
+def test_a_race_with_no_plan_and_a_choice_of_tyres_stays_unknown(raced, store):
+    """Three compounds offered and nobody said which: NULL, not a pick."""
+    controller, _, store_, event_id = raced
+    _no_plan(store_, event_id)
+    assert controller.start_race() is True
+    green(controller)
+    for lap_num in range(1, 4):
+        a_lap(controller, lap_num, 92.0 - lap_num * 3.4)
+    rows = store_.list_laps(controller.session_id)
+    assert rows and all(r["compound"] is None for r in rows)
+
+
+def test_a_practice_lap_landing_after_the_tag_carries_it(raced, store):
+    """Tag the first lap of a stint and the laps that land afterwards carry
+    it - `carry_compound` ran only when the tag was made, so it never reached
+    them, and a stint tagged at its start was NULL from lap 2 on."""
+    controller, _, store_, _ = raced
+    session_id = controller.open_practice_session()
+    controller.bridge.on_packet(raw(speed_ms=50.0, fuel_level=90.0))
+    controller.bridge.on_packet(
+        raw(speed_ms=50.0, fuel_level=86.6, last_lap_ms=94_000))
+    [first] = [r for r in controller.practice.rows()
+               if r.session_id == session_id]
+    first.compound = "RS"
+    controller._on_lap_changed(first.lap_id)
+    controller.bridge.on_packet(
+        raw(speed_ms=50.0, fuel_level=83.2, last_lap_ms=94_500))
+    rows = store_.list_laps(session_id)
+    assert len(rows) == 2
+    assert [r["compound"] for r in rows] == ["RS", "RS"]
+    assert [r.compound for r in controller.practice.rows()
+            if r.session_id == session_id] == ["RS", "RS"]
+
+
 # ------------------------------------------------ the in-box refuel readout
 
 def test_the_engineer_calls_the_target_and_the_release_in_the_box(raced, voice):
