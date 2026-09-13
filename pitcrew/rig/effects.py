@@ -533,7 +533,7 @@ class EffectDeriver:
         self.model = model or vehicle.VehicleModel()
         # Read once, from the same selector as the mix profile and the duck, so
         # the three cannot disagree about which tune is running.
-        self._lift_bumps = synth.rig_revision() in ("C", "D")
+        self._lift_bumps = synth.rig_revision() in ("C", "D", "E", "F")
         self._bump = BumpPulse()
         self._out = np.zeros(len(self.NAMES) + len(self.MODIFIERS),
                              dtype=np.float32)

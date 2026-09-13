@@ -175,3 +175,24 @@ def test_rev_d_is_rev_c_with_his_engine_road_and_duck(monkeypatch):
     assert synth.default_profile() is synth.PORSCHE_RSR_17_REV_D
     from pitcrew.rig import effects
     assert effects.EffectDeriver()._lift_bumps is True
+
+
+def test_rev_f_engine_climbs_from_66_to_86_hz(monkeypatch):
+    """Rev E's pull: "I don't think engine rumble should be that deep?" The voice
+    swept 28 -> 31.8 Hz across the whole rev range. Rev F puts it at 66 Hz
+    rising to 86 Hz at the limiter (RPM_CURVE's 0.63), chosen on the bench over
+    the deep one and a 36-50 Hz one that knocked. Nothing else changes."""
+    e = {s.name: s for s in synth.PORSCHE_RSR_17_REV_E}
+    f = {s.name: s for s in synth.PORSCHE_RSR_17_REV_F}
+    engine = f["engine"]
+    at_limiter = engine.freq_lo + (engine.freq_hi - engine.freq_lo) * 0.63
+    assert engine.freq_lo == 66.0 and abs(at_limiter - 86.0) < 0.1
+    assert engine.freq_lo > 60.0                  # clear of the 60 Hz resonance
+    assert engine.gain < e["engine"].gain         # more sensitive region, less gain
+    for name in f:
+        if name != "engine":
+            assert f[name] == e[name], name
+
+    monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
+    monkeypatch.setenv("PITCREW_RIG_REV", "F")
+    assert synth.profile_name(synth.default_profile()) == "REV F"
