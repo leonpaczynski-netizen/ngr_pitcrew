@@ -76,9 +76,20 @@ def bursts(*, rate: int = 44100, ms: int = BURST_MS):
     try:
         from pitcrew.engineer.shift_beep import _TonePlayer as Tone
 
-        return (Tone(rate=rate, samples=_noise(ms, rate, rising=True,
-                                               seed=17)),
-                Tone(rate=rate, samples=_noise(ms, rate, rising=False,
-                                               seed=23)))
+        def burst(rising: bool, seed: int):
+            # **Over the top of George, never instead of him.** The recipe
+            # lets the line already on the card mix the burst in at its own
+            # rate, and `cuts_lines=False` keeps it off the shift beep's
+            # pre-emption path. Suzuka, 13 Sep 2026: without both, the
+            # opening burst cut a line and the closing burst cut the re-speak,
+            # and the driver never heard it. Seeded, so the same burst comes
+            # back at any rate.
+            return Tone(rate=rate,
+                        samples=_noise(ms, rate, rising=rising, seed=seed),
+                        recipe=lambda at: _noise(ms, at, rising=rising,
+                                                 seed=seed),
+                        cuts_lines=False)
+
+        return burst(True, 17), burst(False, 23)
     except Exception:                            # noqa: BLE001
         return None, None

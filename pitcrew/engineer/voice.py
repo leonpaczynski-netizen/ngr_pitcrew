@@ -206,7 +206,21 @@ def _yield_to_priority(line) -> bool:
             audio_devices.output_device()):
         return False
     line.interrupted = True
+    line.cut_by = STOOD_ASIDE
     return True
+
+
+# What a line cut by each of the two things that can cut it says in the log.
+# Two causes, two sentences: the Suzuka log of 13 Sep 2026 blamed a device
+# rebuild for a cut that was a priority claim, and nothing distinguished them.
+REBUILT = "the audio devices were rebuilt mid-line"
+STOOD_ASIDE = ("the line stood aside for a more urgent sound on the card "
+               "(the shift beep's pre-emption)")
+
+
+def cut_reason(line) -> str:
+    """Why `line` was cut, for `LineCut` and the log line it produces."""
+    return getattr(line, "cut_by", None) or REBUILT
 
 PACK_ROOT = Path(__file__).resolve().parent / "voice_pack"
 PACK_MANIFEST = "manifest.json"
@@ -386,28 +400,33 @@ class Voice:
                 continue
             try:
                 self._engine.speak(text)
-            except LineCut:
-                # A rebuild of the audio device list closed the stream in the
-                # middle of the line. Not a failure of the engine, so it does
-                # not touch `_failures` - the card is fine and the next line
-                # will play - but the driver heard half a sentence, and half a
-                # sentence from a race engineer is worse than none.
+            except LineCut as cut:
+                # Something closed the stream in the middle of the line - a
+                # rebuild of the device list, or the line standing aside for
+                # a sound that may pre-empt it. Not a failure of the engine,
+                # so it does not touch `_failures` - the card is fine and the
+                # next line will play - but the driver heard half a sentence,
+                # and half a sentence from a race engineer is worse than none.
                 #
                 # Re-queued with its ORIGINAL timestamp, not a fresh one. The
                 # staleness rule above is already the right test for whether a
                 # call is still worth making, and restarting the clock here
                 # would let a box call arrive ten seconds after it was true.
+                #
+                # **The reason is the one the cutter recorded.** This used to
+                # say "the audio devices were rebuilt" for every cut, and at
+                # Suzuka on 13 Sep 2026 the cut was the radio static.
+                why = str(cut) or REBUILT
                 age = _now() - queued_at
                 if age <= STALE_AFTER_S:
                     log("voice").warning(
-                        "the audio devices were rebuilt mid-line and cut %r "
-                        "off after %.1fs - saying it again.", text, age)
+                        "%s - cut %r off after %.1fs - saying it again.",
+                        why, text, age)
                     self._queue.put((queued_at, text))
                 else:
                     log("voice").warning(
-                        "the audio devices were rebuilt mid-line and cut %r "
-                        "off. It is %.1fs old now, so it is dropped rather "
-                        "than said late.", text, age)
+                        "%s - cut %r off. It is %.1fs old now, so it is "
+                        "dropped rather than said late.", why, text, age)
             except Exception as exc:            # noqa: BLE001 - see below
                 # Deliberately broad: a synthesis failure mid-race must not
                 # take the app with it, and the driver still has the screen
@@ -554,7 +573,7 @@ class PiperEngine:
                 if line is not None:
                     audio_devices.end_playback(line)
         if line is not None and line.interrupted:
-            raise LineCut("a device rebuild closed the stream mid-line")
+            raise LineCut(cut_reason(line))
 
 
 class VoicePackEngine:
@@ -688,7 +707,7 @@ class VoicePackEngine:
                 if line is not None:
                     audio_devices.end_playback(line)
         if line is not None and line.interrupted:
-            raise LineCut("a device rebuild closed the stream mid-line")
+            raise LineCut(cut_reason(line))
 
     def _read(self, filename: str):
         import numpy as np

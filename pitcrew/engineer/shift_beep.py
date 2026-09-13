@@ -76,6 +76,15 @@ BEEP = "the shift beep"
 # on time is dropped, not queued** - the same rule `_TonePlayer.__call__`
 # already applies to an overlapping beep, for the same reason.
 PRIORITY_WAIT_S = 0.4
+# For a sound that may not cut a line (`cuts_lines=False`, the radio static):
+# how long it waits for the writer to collect it into the line, and then how
+# long for the card if it was not collected. The first covers the gap before
+# a line's first chunk - an MME open was measured at 1.5 s - so a burst
+# offered as a line starts is still carried by it. The second is a long line
+# ending; past it the static is skipped and the radio opens anyway, because
+# confirmation is not the question.
+MUST_SOUND_MIX_WAIT_S = 2.0
+MUST_SOUND_CARD_WAIT_S = 8.0
 # No threshold may be dragged below this by a short-shift request. Short-
 # shifting out of the powerband is not fuel saving, it is driving badly, and
 # an engineer that asks for it has stopped being useful.
@@ -318,7 +327,8 @@ class _TonePlayer:
     """
 
     def __init__(self, *, freq: float = 1800.0, ms: int = 60,
-                 rate: int = 44100, samples=None) -> None:
+                 rate: int = 44100, samples=None, recipe=None,
+                 cuts_lines: bool = True) -> None:
         self._rate = rate
         # `samples` lets a caller supply its own waveform and inherit the rest:
         # the shared audio lock, the drop-rather-than-queue rule, and the
@@ -327,12 +337,21 @@ class _TonePlayer:
         self._samples = (_square_wave(freq, ms, rate) if samples is None
                          else samples)
         # How to build this sound again at somebody else's sample rate, for
-        # `audio_devices.offer_mix`. Only the synthesised beep can do it: a
-        # caller-supplied waveform exists at one rate and resampling it is how
-        # you get the click `_square_wave` ramps its edges to avoid. Those
-        # callers keep the pre-emption path, which is what they had.
-        self._recipe = (None if samples is not None
+        # `audio_devices.offer_mix`. A caller-supplied waveform exists at one
+        # rate and resampling it is how you get the click `_square_wave` ramps
+        # its edges to avoid - so a caller with its own samples mixes only if
+        # it also hands over how to make them again.
+        self._recipe = (recipe if samples is not None
                         else lambda at: _square_wave(freq, ms, at))
+        # **Whether this sound may cut a spoken line to get the card.** True
+        # for the shift beep, whose deadline is an rpm. False for the radio
+        # static, and that is not a detail: on 13 Sep 2026 (Suzuka, session
+        # 166) the opening burst took `priority_on`, cut George two seconds
+        # into a line, the closing burst cut the re-speak, and the line was
+        # dropped as too old - with the log calling both cuts a device
+        # rebuild. Nothing the radio plays is more urgent than what the
+        # engineer is saying. See `_render`.
+        self._cuts_lines = cuts_lines
         # Held for the duration of a beep. Non-blocking acquisition is what
         # makes an overlapping beep a drop rather than a queue.
         self._busy = threading.Lock()
@@ -394,6 +413,10 @@ class _TonePlayer:
                 lock.release()
             return
 
+        if not self._cuts_lines:
+            self._render_without_cutting(device, lock)
+            return
+
         # **Busy card: play over the top rather than instead of.** Measured in
         # the Fuji race, pre-emption cut nine calls mid-sentence and restarted
         # the race-start call four times. Handing the waveform to the thread
@@ -416,6 +439,29 @@ class _TonePlayer:
                 self._render_locked()
             finally:
                 lock.release()
+
+    def _render_without_cutting(self, device, lock) -> None:
+        """A busy card, for a sound that must neither cut the line nor be lost.
+
+        Over the top of the line if the writer collects it, which is the
+        common case and costs one chunk. Otherwise - the line ended before it
+        drained the mailbox, or it is still synthesising after
+        `MUST_SOUND_MIX_WAIT_S` - the offer is withdrawn and the sound waits
+        for the card like anything else. Never `priority_on`: that is the
+        request to cut.
+        """
+        if self._recipe is not None and audio_devices.mix_and_wait(
+                device, self._recipe, stale_after_s=MUST_SOUND_MIX_WAIT_S,
+                wait_s=MUST_SOUND_MIX_WAIT_S):
+            return
+        if not lock.acquire(timeout=MUST_SOUND_CARD_WAIT_S):
+            raise TimeoutError(
+                f"the card was still busy {MUST_SOUND_CARD_WAIT_S:.0f}s "
+                f"later - played nothing rather than cut the line holding it")
+        try:
+            self._render_locked()
+        finally:
+            lock.release()
 
     def _render_locked(self) -> None:
         """Play it, with the card already held."""

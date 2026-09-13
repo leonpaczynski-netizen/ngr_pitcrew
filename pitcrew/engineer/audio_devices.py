@@ -250,7 +250,43 @@ def mixing_on(device: object | None):
                 # for the next line is the same staleness rule stated as
                 # ownership: a beep that outlived its writer is a beep for an
                 # rpm two corners ago.
-                _MIX.pop(key, None)
+                for entry in _MIX.pop(key, None) or ():
+                    entry[2].settle(_MixTicket.DROPPED)
+
+
+class _MixTicket:
+    """What became of one offered sound: collected by the writer, or not.
+
+    Only `mix_and_wait` reads it. The shift beep never needed to know - a beep
+    that is not collected is a beep not worth playing late - but the radio
+    static does: a burst that silently vanishes is a driver who does not know
+    his microphone is open. Every transition happens under `_MIX_GUARD`, so a
+    burst cannot both give up waiting and be collected.
+    """
+
+    PENDING, TAKEN, DROPPED = "pending", "taken", "dropped"
+    __slots__ = ("state", "done")
+
+    def __init__(self) -> None:
+        self.state = self.PENDING
+        self.done = threading.Event()
+
+    def settle(self, state: str) -> None:
+        """Called with `_MIX_GUARD` held. The first settlement wins."""
+        if self.state == self.PENDING:
+            self.state = state
+            self.done.set()
+
+
+def _offer(device, render, stale_after_s: float) -> _MixTicket | None:
+    key = endpoint_key(device) if isinstance(device, str) else repr(device)
+    with _MIX_GUARD:
+        if not _MIXERS.get(key):
+            return None
+        ticket = _MixTicket()
+        _MIX.setdefault(key, []).append(
+            (_mix_now(), render, ticket, stale_after_s))
+        return ticket
 
 
 def offer_mix(device: object | None, render) -> bool:
@@ -260,28 +296,57 @@ def offer_mix(device: object | None, render) -> bool:
     samples at `rate`. It runs on the writer's thread, between chunks, so it
     has to be cheap - generating a waveform, not reading a file.
     """
+    return _offer(device, render, MIX_STALE_AFTER_S) is not None
+
+
+def mix_and_wait(device: object | None, render, *, stale_after_s: float,
+                 wait_s: float) -> bool:
+    """Offer a sound and wait to hear whether the writer actually played it.
+
+    True once the writer has collected it into the chunk it is about to
+    write. False when nobody is writing, when the writer finished without
+    collecting it, or when `wait_s` ran out - and in that last case the offer
+    is withdrawn first, so the caller may play the sound itself without it
+    also arriving in the line a moment later.
+
+    For sounds that must not be lost and must not cut a line: the radio
+    static. See `shift_beep._TonePlayer._render`.
+    """
+    ticket = _offer(device, render, stale_after_s)
+    if ticket is None:
+        return False
+    ticket.done.wait(wait_s)
     key = endpoint_key(device) if isinstance(device, str) else repr(device)
     with _MIX_GUARD:
-        if not _MIXERS.get(key):
-            return False
-        _MIX.setdefault(key, []).append((_mix_now(), render))
-        return True
+        if ticket.state == _MixTicket.PENDING:
+            ticket.settle(_MixTicket.DROPPED)
+            waiting = _MIX.get(key)
+            if waiting:
+                _MIX[key] = [e for e in waiting if e[2] is not ticket]
+        return ticket.state == _MixTicket.TAKEN
 
 
 def take_mix(device: object | None) -> list:
     """Everything waiting to be mixed into `device`, oldest first.
 
-    Drains. Anything older than `MIX_STALE_AFTER_S` is dropped here rather
-    than played late.
+    Drains. Anything older than its deadline - `MIX_STALE_AFTER_S` for the
+    beep - is dropped here rather than played late. Settled under the guard,
+    so `mix_and_wait` sees the same answer the writer acted on.
     """
     key = endpoint_key(device) if isinstance(device, str) else repr(device)
+    now = _mix_now()
+    taken = []
     with _MIX_GUARD:
         waiting = _MIX.pop(key, None)
-    if not waiting:
-        return []
-    now = _mix_now()
-    return [render for at, render in waiting
-            if now - at <= MIX_STALE_AFTER_S]
+        for at, render, ticket, stale_after_s in waiting or ():
+            if ticket.state != _MixTicket.PENDING:
+                continue
+            if now - at <= stale_after_s:
+                ticket.settle(_MixTicket.TAKEN)
+                taken.append(render)
+            else:
+                ticket.settle(_MixTicket.DROPPED)
+    return taken
 
 
 def _mix_now() -> float:
@@ -378,11 +443,16 @@ DEFER_CAP_S = 6.0
 class Playback:
     """One short-lived stream that is open and being written to right now."""
 
-    __slots__ = ("what", "thread", "interrupted")
+    __slots__ = ("what", "thread", "interrupted", "cut_by")
 
     def __init__(self, what: str) -> None:
         self.what = what
         self.thread = threading.get_ident()
+        # What ended it early, in words for the log, or None for a rebuild -
+        # the case this gate was built for. Set by whoever cuts it, because
+        # the log used to call every cut a device rebuild, and on 13 Sep 2026
+        # that sent the diagnosis of a radio-static cut to the wrong module.
+        self.cut_by: str | None = None
         # Set when the stream was ended before its sound finished - either a
         # rebuild ran out of patience and tore it down, or the caller stood
         # aside for something more urgent on the same card (`priority_on`).
