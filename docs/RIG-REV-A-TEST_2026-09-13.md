@@ -108,3 +108,57 @@ what your gut says while you drive.
 
 Unset `PITCREW_RIG_REV_A`. Nothing else changes; the default profile and the
 default duck are untouched.
+
+---
+
+## Result — 13 Sep 2026, practice session 163, ~4 minutes. REJECTED.
+
+Confirmed running (`haptics profile: REV A (duck 0.80 / critical 0.88)`),
+amp 35, seated. Driver's report, verbatim:
+
+> too much constant vibration, no brake haptics I could feel, rear traction not
+> strong or maybe buried under constant vibration on turning, feel nothing in
+> straight line, no bumps in road, also no ripple strip feeling
+
+The log's 24 ten-second mix snapshots corroborate every point (snapshots are
+instants, so they are weak evidence for brief transients — the report is the
+evidence, the log is the explanation):
+
+- **The constant vibration is `chassis_load`**: present in nearly every
+  cornering snapshot at 0.14–0.27, at **59–65 Hz — the most SENSITIVE band on
+  the rig** (floor −35 dBFS vs −25 at 40 Hz).
+- **It buries `rear_traction`**, exactly as the driver suspected. The one
+  snapshot with traction loss: `chassis_load 0.198@64Hz` against
+  `rear_traction 0.140@94Hz`, duck only −16%, because the critical duck is gated
+  and barely engages at USEFUL_SLIP. Lower, louder, continuous, on the more
+  sensitive band: the masking literature's prediction, measured in his seat.
+- **Ripple strips**: `impact` (52–60) shares `chassis_load`'s band and kerbs
+  happen while cornering. Rev A moved 12 dB of relative level the wrong way
+  (−9 impact, +3 chassis_load).
+- **`road` reached 0.45 and read as nothing** — not a level problem. A smooth
+  hum at 36–41 Hz, the least sensitive region, with no transient content, cannot
+  carry "bumps" at any trim.
+- **Brake**: FREE or STABLE in every snapshot, never AT_LIMIT. `brake_limit` is
+  silent at/below the slip optimum by the driver's own 16 Aug choice. Possibly
+  working as designed; the design is now in question.
+- **Limiter**: 49 engagements in four minutes — the louder beds hit the ceiling.
+
+### Why Rev A was wrong
+
+Its acceptance test checked each effect IN ISOLATION against the perception
+floor and the knock ceiling. Every effect passed and the mix failed, because
+the dominant failure is cue-on-cue masking — the exact finding of the masking
+research — and it was not in the test. The "lowest band anchors everything"
+warning was applied to `engine` and not to `chassis_load`, which is continuous
+in every corner and sits directly under the critical cue on the most sensitive
+band.
+
+**Lesson: a per-effect floor/ceiling check is necessary and not sufficient.
+Any future profile must be judged on what each CRITICAL cue has to beat at the
+moment it fires, not on its own level.**
+
+### Next — one variable, after the race
+
+`chassis_load` well down or OFF, nothing else changed. If traction and ripple
+strips come back, the masker is identified. It is also the most expendable cue
+on the rig: lateral load already arrives through the wheel.
