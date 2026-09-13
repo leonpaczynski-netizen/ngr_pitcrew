@@ -2136,6 +2136,9 @@ class RaceCoordinator:
             # median, so early in a race it is unresolvable - and the PTT
             # answers "how long left" from it.
             "lapsEstimateFirm": self.state.laps_estimate_firm,
+            # Whether the heartbeat says that count as a pair. The PTT answer
+            # to "laps left" must hedge it the same way (rule 13).
+            "lapsCountHedged": self.state.laps_count_hedged,
             "fuelL": self.state.fuel_l,
             # **Absolute: tank divided by burn.** Not a margin, and the PTT
             # answer used to say "8.2 laps of fuel" off it while the

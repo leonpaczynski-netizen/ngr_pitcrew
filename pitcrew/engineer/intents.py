@@ -703,7 +703,7 @@ def answer(intent: str, snapshot: dict, *,
                       intent)
 
     if intent == LAPS_LEFT:
-        return _how_much_longer(snapshot, intent)
+        return _how_much_longer(snapshot, intent, heard)
 
     if intent == FUEL:
         # **The same words the engineer volunteers, off the same expression**
@@ -829,19 +829,45 @@ def _clock(seconds: float) -> str:
     return "1 minute" if minutes == 1 else f"{minutes} minutes"
 
 
-def _how_much_longer(snapshot: dict, intent: str) -> Answer:
-    """"How long left" - answered from the clock where there IS one.
+# What a timed race says in place of a lap count it cannot give. Its own
+# sentence, number-free, and in the pack's fixed lines - it leads the answer,
+# so a miss here would be a pause before the clock too.
+NO_LAP_COUNT = "No lap count yet."
 
-    **This used to answer a timed race in laps, and the laps are the derived
-    figure.** `remainingS` is the app's own timer, started at the green and
-    reconciled against GT7's exact lap figures; the lap count divides it by a
-    noisy median and is wrong whenever the median is. Quoting the inference
-    and withholding the measurement, to a driver who asked "how long", is
-    rule 5 in the one place he cannot check it.
+# Words that make "how long left" a question about the clock rather than the
+# lap count. Everything else the laps-left intent matches - "laps left", "how
+# many to go", "what's left to run" - is answered laps first.
+_TIME_WORDS = ("how long", "time", "minute", "clock", "how much longer")
+
+
+def _asks_for_time(heard: str | None) -> bool:
+    words = (heard or "").lower()
+    if "lap" in words:
+        return False
+    return any(word in words for word in _TIME_WORDS)
+
+
+def _how_much_longer(snapshot: dict, intent: str,
+                     heard: str | None = None) -> Answer:
+    """"Laps left" answered in laps; "how long" answered on the clock.
+
+    **In the unit he asked for, first** (rule 13). At Suzuka on 13 Sep 2026
+    he asked "Laps left." in a timed race and was told "16 minutes left." -
+    the count was not firm yet, so the only figure he wanted was withheld and
+    a different one quoted in its place. Under a helmet an answer in the
+    wrong unit is a different answer, and he cannot ask which one he got.
+
+    **A soft count is hedged, not withheld.** It divides a measured clock by a
+    noisy median, so early on it can be one lap long - which is exactly what
+    the heartbeat's downward pair says, so the same pair is said here from
+    the same renderer (`calls.laps_to_go`). The clock follows as the
+    measurement behind it, and leads only when the question was about time.
 
     A lap race has no clock and its lap count is a regulation rather than an
     estimate, so there the laps ARE the measurement and are quoted alone.
     """
+    from pitcrew.race.calls import laps_to_go
+
     remaining = snapshot.get("lapsRemaining")
     seconds = snapshot.get("remainingS")
     timed = bool(snapshot.get("raceMinutes"))
@@ -852,22 +878,27 @@ def _how_much_longer(snapshot: dict, intent: str) -> Answer:
                           answered=False)
         return Answer(f"{_laps(remaining)} to go.", intent)
 
+    # Under one lap the count has run out before the flag - `orientation`
+    # does not say "0 laps to go" and neither does this.
+    counted = remaining is not None and remaining >= 1
+    hedged = (not snapshot.get("lapsEstimateFirm")
+              or bool(snapshot.get("lapsCountHedged")))
+    laps = laps_to_go(remaining, uncertain=hedged) if counted else None
+
     if seconds is None:
         # `calls.NO_CLOCK`'s case, and said rather than skipped: with GT7's
         # race HUD off, a race with no clause about its own length is
         # indistinguishable from one with no end.
-        if remaining is None:
+        if laps is None:
             return Answer("I don't have the clock.", intent, answered=False)
-        return Answer(f"No clock. About {_laps(remaining)} to go.", intent,
-                      answered=False)
+        return Answer(f"No clock. {laps}", intent, answered=False)
 
-    said = f"{_clock(seconds)} left."
-    # The lap count joins the clock only once it has firmed up. Early in a
-    # timed race the estimate flips on a median error far smaller than the
-    # spread, so it would change every crossing while the clock did not.
-    if remaining is not None and snapshot.get("lapsEstimateFirm"):
-        said = f"{said} {_laps(remaining)} to go."
-    return Answer(said, intent)
+    clock = f"{_clock(seconds)} left."
+    if _asks_for_time(heard):
+        return Answer(f"{clock} {laps}" if laps else clock, intent)
+    if laps is None:
+        return Answer(f"{NO_LAP_COUNT} {clock}", intent, answered=False)
+    return Answer(f"{laps} {clock}", intent)
 
 
 def _on_plan(snapshot: dict) -> str:

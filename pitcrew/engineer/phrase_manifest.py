@@ -46,6 +46,7 @@ from pitcrew.engineer.intents import (
     FUEL,
     KEEP,
     LAPS_LEFT,
+    NO_LAP_COUNT,
     PLAN,
     POSITION,
     REPEAT,
@@ -155,6 +156,7 @@ def fixed_lines() -> tuple[str, ...]:
         _text(KEEP, {}, pending_replan="x"),
         _text(POSITION, {}),                                 # no position
         _text(LAPS_LEFT, {}),                                # no race length
+        NO_LAP_COUNT,                          # timed race, no count yet
         _text(FUEL, {}),                                     # no fuel rate
         _text(BOX_WHEN, {}),                                 # no plan at all
         _text(BOX_WHEN, {"hasPlan": True}),                  # no stop planned
