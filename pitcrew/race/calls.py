@@ -618,6 +618,17 @@ class Call:
     # report form keeps its words when stripped, which is the old behaviour
     # and means the rail changed nothing audible.
     report_form: str | None = None
+    # **What a report claimed, as a figure, so it can be held to the laps
+    # afterwards without parsing the sentence back apart** (13 Sep 2026,
+    # Suzuka race run 20). Never spoken and never exported: they exist for
+    # `race/call_outcome`. `position_called` is the place a POSITION call
+    # named - None on "You're back on it.", which rides on the same kind and
+    # names no place. `fuel_frame` is the distance a FUEL_SHORT call was
+    # short OF, from the same `fuel_frame` expression the sentence came from,
+    # because short "to the stop" and short "to the flag" are answered by
+    # different laps.
+    position_called: int | None = None
+    fuel_frame: str | None = None
 
     def spoken(self) -> str:
         """Instruction, then reason. Then the one word that marks a register.
@@ -2733,7 +2744,8 @@ def _fuel(state: RaceState) -> Call | None:
             return Call(FUEL_SHORT, state.lap,
                         "Fuel needs a stop.",
                         f"{abs(gap):.1f} laps short of the flag - short-shifting "
-                        f"cannot cover it.", confidence, severity=-gap)
+                        f"cannot cover it.", confidence, severity=-gap,
+                        fuel_frame=fuel_frame(state)[1])
         drop, still = short_shift_for(state)
         save = fuel_save_l(state)
         if save is not None:
@@ -2762,6 +2774,9 @@ def _fuel(state: RaceState) -> Call | None:
             call = "Short-shift and lift into the slow corners."
         return Call(FUEL_SHORT, state.lap, call, reason, confidence,
                     severity=-gap,
+                    # The distance it is short OF, from the expression the
+                    # gap itself came from (rule 12) - the verdict needs it.
+                    fuel_frame=fuel_frame(state)[1],
                     # Only where a drop was named. "Short-shift and lift into
                     # the slow corners" is the lever without a number, and
                     # moving the beep by a figure nobody measured would be
@@ -3484,7 +3499,7 @@ def position_change(state: RaceState) -> "Call | None":
     # on the front. Written this way it reuses the line the PTT answer to
     # "where am i" already renders, and the direction is six fixed clips.
     return Call(POSITION, state.lap, position_line(now, state.field_size),
-                _places_moved(places))
+                _places_moved(places), position_called=now)
 
 
 def position_line(position: int, field_size: int | None) -> str:

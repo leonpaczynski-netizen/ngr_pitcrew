@@ -348,6 +348,58 @@ def test_the_flag_settles_what_the_laps_never_answered():
     assert [v for _, v, _ in controller.store.written] == [CANNOT_TELL]
 
 
+def test_the_suzuka_calls_are_held_to_the_laps_that_can_answer_them():
+    """Race run 20, 13 Sep 2026: every verdict read "cannot-tell ... GT7
+    broadcasts no fuel map and no brake balance", including a place, "two to
+    go" and "3.0 laps short". Replayed through the controller against the
+    rows that race stored: no stop, the flag on lap 14 with 2.7 L aboard."""
+    from pitcrew.race.call_outcome import BORNE_OUT, NOT_BORNE_OUT
+    from pitcrew.race.calls import (GREEN, LAPS_TO_GO, POSITION, TO_THE_FLAG)
+
+    places = {9: 4, 10: 5}
+    laps = [dict(_row(n), position=places.get(n, 5), fuel_start=10.0,
+                 fuel_end=2.73 if n == 14 else 8.0, laps_dropped=None)
+            for n in range(1, 15)]
+    filed = {
+        468: (Call(GREEN, 0, "Green, green, green.", ""), None),
+        471: (Call(FUEL_SHORT, 1, "Short-shift and lift into the slow "
+                   "corners.", "You're 3.0 laps short on fuel.",
+                   fuel_frame=TO_THE_FLAG), None),
+        484: (Call(POSITION, 8, "P4 of 8.", "", position_called=4), None),
+        487: (Call(POSITION, 9, "P2 of 8.", "", position_called=2), None),
+        495: (Call(LAPS_TO_GO, 13, "Two to go.", "On the clock.",
+                   tag="to-go-2"), None),
+    }
+    controller = _stub(laps, filed)
+    controller.race = SimpleNamespace(state=SimpleNamespace(finished=False))
+    controller._judge_filed_calls()
+    # Settled at the crossing: the green and both places. The flag's two
+    # claims wait for the flag.
+    assert {rid for rid, *_ in controller.store.written} == {468, 484, 487}
+    controller.race.state.finished = True
+    controller._judge_filed_calls(final=True)
+    verdicts = {rid: (v, d) for rid, v, d in controller.store.written}
+    assert verdicts[468][0] == CANNOT_TELL
+    assert "fuel map" not in verdicts[468][1]
+    assert verdicts[484][0] == BORNE_OUT
+    assert verdicts[487][0] == NOT_BORNE_OUT
+    assert verdicts[471][0] == NOT_BORNE_OUT and "2.7 L" in verdicts[471][1]
+    assert verdicts[495][0] == NOT_BORNE_OUT
+    assert "one lap sooner" in verdicts[495][1]
+
+
+def test_a_race_stopped_without_the_flag_holds_nothing_to_the_last_lap():
+    from pitcrew.race.calls import LAPS_TO_GO
+
+    two = Call(LAPS_TO_GO, 13, "Two to go.", "", tag="to-go-2")
+    controller = _stub([dict(_row(n), laps_dropped=None)
+                        for n in range(1, 15)], {1: (two, None)})
+    controller.race = SimpleNamespace(state=SimpleNamespace(finished=False))
+    controller._judge_filed_calls(final=True)
+    [(_, verdict, detail)] = controller.store.written
+    assert verdict == CANNOT_TELL and "flag was never seen" in detail
+
+
 def test_the_judging_runs_past_the_fragment_check():
     """The ordering itself, which the population filter above does not pin:
     a phantom must not be judged on its own crossing either."""

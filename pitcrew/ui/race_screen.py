@@ -114,21 +114,23 @@ class CallRow(QWidget):
     def set_outcome(self, verdict: str, detail: str) -> None:
         """Say what followed, in the ink the verdict earns.
 
-        **`cannot-tell` is shown, not hidden.** Most calls are unanswerable -
-        GT7 broadcasts no fuel map, brake balance or driving style - and a log
-        that quietly showed an outcome only where it had one would read as
-        though the app had watched every call and this driver ignored most of
-        them.
+        **`cannot-tell` is shown, not hidden.** Most calls are unanswerable,
+        each for a reason of its own that the detail names - and a log that
+        quietly showed an outcome only where it had one would read as though
+        the app had watched every call and this driver ignored most of them.
         """
-        from pitcrew.race.call_outcome import ACTED, CANNOT_TELL, NOT_ACTED
+        from pitcrew.race.call_outcome import (ACTED, BORNE_OUT, CANNOT_TELL,
+                                               NOT_ACTED, NOT_BORNE_OUT)
 
         # `STENCIL_DIM`, not `STRUCK`: this line is prose, and
         # `test_struck_is_only_used_where_low_contrast_is_the_point` holds
         # that no screen paints prose with the ink that means "removed from
         # the count". It caught this on the way in.
-        ink = {ACTED: theme.WEAR_FLAT,
-               NOT_ACTED: theme.WARNING}.get(verdict, theme.STENCIL_DIM)
+        ink = {ACTED: theme.WEAR_FLAT, BORNE_OUT: theme.WEAR_FLAT,
+               NOT_ACTED: theme.WARNING,
+               NOT_BORNE_OUT: theme.WARNING}.get(verdict, theme.STENCIL_DIM)
         word = {ACTED: "ACTED", NOT_ACTED: "NOT ACTED",
+                BORNE_OUT: "BORNE OUT", NOT_BORNE_OUT: "NOT BORNE OUT",
                 CANNOT_TELL: "CANNOT TELL"}.get(verdict, verdict.upper())
         self.outcome.setText(f"{word} — {detail}")
         self.outcome.set_ink(ink)

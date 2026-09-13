@@ -4008,8 +4008,16 @@ class PitCrewController(QObject):
             laps = [SimpleNamespace(**row)
                     for row in self.store.list_laps(self.session_id)
                     if row.get("exclusion_reason") != "fragment"]
+            # **Whether the race ended at the flag**, which is what makes the
+            # last lap on file the finishing lap. A lap count and a fuel
+            # shortfall are claims about the flag (13 Sep 2026); ended with
+            # the Stop button, or closed on shutdown with the flag missed,
+            # they are refused rather than held to whichever lap came last.
+            race = self.__dict__.get("race")
+            flagged = bool(final and race is not None
+                           and getattr(race.state, "finished", False))
             settled = judge(((rid, call) for rid, (call, _) in filed.items()),
-                            laps, final=final)
+                            laps, final=final, flagged=flagged)
         except Exception:                                    # noqa: BLE001
             log("race").exception("the filed calls could not be judged")
             return
