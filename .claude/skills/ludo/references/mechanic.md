@@ -220,8 +220,9 @@ never as a step of a diagnosis.**
 - `tools/read_hud_wear.py --apply` — the wear gauge read off an OBS capture, against the laps.
 - `tools/read_replay_traffic.py --apply` — who was around him, off the replay's radar.
 - `tools/read_replay_board.py --apply` — names those cars off the replay's leaderboard.
+- `tools/bridge_driver_names.py --apply` — renames the live pit wall's `Car #N` drivers to the names typed for the replay board, where both readers agree on the same row.
 
-  Each of those eleven leaves the DATABASE alone without `--apply` — not the
+  Each of those twelve leaves the DATABASE alone without `--apply` — not the
   disk: `read_replay_board` writes its roster JSON and its cluster PNGs on the
   dry run, by design. **Three do not work that way at all:**
 - `tools/derive_sectors.py` — **writes by default**; `--dry-run` reports only.
