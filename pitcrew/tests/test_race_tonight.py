@@ -664,13 +664,17 @@ def test_a_changed_stop_count_is_material():
 
 
 def test_a_stop_that_slides_a_lap_or_two_is_not_worth_a_word():
+    # The absolute lap moves with the relative one here: lap 12, then 15,
+    # then 17. (It used to stay on 12 while "moving", which is the Suzuka
+    # defect - see `test_suzuka_race_166`.)
     register = PlanRegister()
-    register.consider(an_offer(laps_to_next_stop=8), lap=4)
+    register.consider(an_offer(laps_to_next_stop=8, next_stop_lap=12), lap=4)
     assert register.consider(
-        an_offer(laps_to_next_stop=10), lap=5).spoken is False
-    outcome = register.consider(an_offer(laps_to_next_stop=11), lap=6)
+        an_offer(laps_to_next_stop=10, next_stop_lap=15), lap=5).spoken is False
+    outcome = register.consider(
+        an_offer(laps_to_next_stop=11, next_stop_lap=17), lap=6)
     assert outcome.spoken is True
-    assert "the stop has moved" in outcome.why
+    assert outcome.why == "the stop has moved 5 laps later"
 
 
 def test_a_stop_that_stays_put_is_never_announced_by_the_calendar():

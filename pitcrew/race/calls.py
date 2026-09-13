@@ -80,6 +80,12 @@ LOW = "low"
 BOX_NOW = "box-now"
 BOX_SOON = "box-soon"
 FUEL_SHORT = "fuel-short"
+# The tag on a FUEL_SHORT that asks for a fuel save to the flag rather than a
+# stop - "Save 1.5 litres a lap to make the flag."
+FUEL_SAVE = "fuel-save"
+# **The save is no longer needed**, said once after one was asked for. Suzuka,
+# 13 Sep 2026: nothing ever told him the shortfall had closed.
+FUEL_REACHES = "fuel-reaches"
 FUEL_LONG = "fuel-long"
 TYRE = "tyre"
 # **The gauge, not the model.** `TYRE` above is the retired
@@ -205,7 +211,10 @@ URGENCY = (CHEQUER, STOPS_OFF, STOP_BACK, BOX_NOW,
            # already due wins, and a fuel shortfall is an argument FOR it
            # rather than against - the fill it asks for is to the flag.
            UNDERCUT,
-           FUEL_SHORT, LAPS_TO_GO, BOX_SOON,
+           FUEL_SHORT, LAPS_TO_GO,
+           # Below the run-in: "Last lap." is true once, this can wait a lap.
+           FUEL_REACHES,
+           BOX_SOON,
            # **`STAY_OUT_FUEL` sits immediately below `BOX_SOON`, because it
            # is the argument against it.** The two answer the same question
            # and must be adjacent, or the driver hears them in an order that
@@ -328,6 +337,7 @@ REGISTER = {
     STOPS_OFF: DECISION,
     STOP_BACK: DECISION,
     FUEL_SHORT: DECISION,
+    FUEL_REACHES: DECISION,
     FUEL_LONG: DECISION,
     STAY_OUT: DECISION,
     SAVING_RESPONSE: DECISION,
@@ -404,6 +414,12 @@ TO_THE_FLAG = "to the flag"
 
 FUEL_STANDING_TOLERANCE_LAPS = 0.5
 FUEL_SHORT_LAPS = 0.5
+# **The half lap is burn noise over a stint, not over the last two laps.**
+# DERIVED: twice the measured 2.0% CV of a green lap's burn
+# (`RaceCoordinator.observed_fuel_per_lap`), per lap still to cover. It equals
+# the half lap at 12.5 laps and tightens below that. Suzuka, 13 Sep 2026: 3 L
+# short with two laps left was inside the flat half lap and read "Fuel good".
+FUEL_NOISE_PER_LAP = 0.04
 # Fuel surplus above which he is carrying a lap he does not need.
 FUEL_LONG_LAPS = 1.5
 
@@ -875,6 +891,9 @@ class RaceState:
     # powerband is not fuel saving.
     short_shift_max_drop_rpm: float = 800.0
     laps_since_stop: int = 0
+    # Whether the last fuel-short call said was a save target, not yet
+    # answered by FUEL_REACHES. Set and cleared only by `record`.
+    fuel_save_said: bool = False
     # A stop was made and nothing said whether the tyres came off. The wear
     # model keeps counting through it - GT7 lets you take fuel without taking
     # tyres - and the call that rests on it says so out loud.
@@ -1500,6 +1519,20 @@ class RaceState:
             self.stops_off_said = True
         if call.kind == STOP_BACK:
             self.stop_back_due = False
+        if call.kind == FUEL_SHORT:
+            self.fuel_save_said = call.tag == FUEL_SAVE
+        if call.kind == STAY_OUT and call.severity is not None:
+            # **The fold short of the flag IS the save ask.** Booked as one,
+            # so the fuel call follows it only if the gap worsens by its own
+            # margin, and "Fuel reaches the flag now." can close it.
+            self.fuel_save_said = True
+            if FUEL_SHORT not in self.said:
+                self.said.append(FUEL_SHORT)
+            self.said_at[FUEL_SHORT] = call.severity
+        if call.kind == FUEL_REACHES:
+            # Answered. A shortfall that opens again is news again.
+            self.fuel_save_said = False
+            self.forget_said(FUEL_SHORT)
         if call.kind == CHASE:
             self.chase_said_lap = call.lap
         if call.kind == TOW_TRADE and call.tag != "tow-spent":
@@ -1620,6 +1653,12 @@ def _worth_saying_again(state: RaceState, call: Call) -> bool:
         # of you" silencing "you are taking 1.4 a lap out of Rocky", which are
         # opposite news about two different cars.
         return call.tag not in state.said_tags
+    if (call.kind == FUEL_SHORT and call.tag == FUEL_SAVE
+            and not state.fuel_save_said):
+        # A stop call becoming a save target is a different instruction, and
+        # it arrives with the shortfall SMALLER - the severity rule below
+        # would never let it through.
+        return True
     if call.kind not in state.said:
         return True
     if call.kind == STATUS:
@@ -1673,10 +1712,14 @@ def _chase(state: RaceState) -> Call | None:
     if (state.chase_said_lap is not None
             and state.lap - state.chase_said_lap < CHASE_EVERY_LAPS):
         return None
-    need = latest / laps_left
+    # **The heartbeat's count, hedged the same way** (rule 13): "8 laps to go"
+    # here beside "7 or 8" in the heartbeat was Suzuka, lap 7. The pace needed
+    # is priced on the fewer laps, the one that asks more of him.
+    hedged = state.laps_count_hedged and laps_left > 1
+    need = latest / (laps_left - 1 if hedged else laps_left)
     them = state.gap_ahead_name or "the car ahead"
-    laps_word = "lap" if laps_left == 1 else "laps"
-    call = f"{them} {latest:.1f} ahead, {laps_left} {laps_word} to go."
+    call = (f"{them} {latest:.1f} ahead, "
+            f"{laps_to_go(laps_left, uncertain=hedged)}")
     # **"a lap" carries seconds in five places and litres in two** (row
     # 1.10). Behind the same car the driver can hear "You need 0.7 a lap."
     # and "The tow saves you 0.7 litres a lap." minutes apart. The unit is
@@ -1893,6 +1936,14 @@ def _laps_to_go(state: RaceState) -> Call | None:
     if to_go is None or not 1 <= to_go <= 2:
         return None
     call = "Last lap." if to_go == 1 else "Two to go."
+    if to_go == 2 and state.laps_count_hedged:
+        # **The pair, downward, as the heartbeat says it.** Suzuka, 13 Sep
+        # 2026: "Two to go." on the last lap, 1.8 s inside a ceiling the
+        # count was already hedged on. "Last lap." needs no hedge - one lap
+        # to go is the floor.
+        return Call(LAPS_TO_GO, state.lap, "One or two to go.",
+                    "Too close to call on the clock.", MEDIUM,
+                    tag=f"to-go-{to_go}")
     if state.laps_missed():
         # **A missed crossing, not a drift.** The clock folds the missing lap
         # into its offset and stays on the app timer, so "on lap times" would
@@ -2168,9 +2219,16 @@ def _box_now(state: RaceState) -> Call | None:
             # night it was written for. The FUEL_SHORT register instead:
             # the measured gap, its frame, and his lever - hedged, because
             # "on current burn" is a projection, not a reading.
-            reason += (f" You're {abs(gap):.1f} laps short of the flag on "
-                       "current burn - short-shift and lift if you stay "
-                       "out.")
+            save = fuel_save_l(state)
+            if save is not None:
+                # **Staying out is his to weigh, so he gets its price** - the
+                # same figure the fuel call says once the stop is behind him.
+                reason += (f" Save {_litres_a_lap(save)} litres a lap to make "
+                           "the flag if you stay out.")
+            else:
+                reason += (f" You're {abs(gap):.1f} laps short of the flag on "
+                           "current burn - short-shift and lift if you stay "
+                           "out.")
             confidence = MEDIUM
         elif fuel:
             reason += f" {fuel}"
@@ -2580,7 +2638,7 @@ def stay_out_call(state: RaceState) -> Call | None:
             # nine lines down has always said "0.4 laps short to the flag".
             f"Short-shift {int(round(drop / 50.0) * 50)} rpm, "
             f"you're {abs(gap):.1f} laps short to the flag.",
-            short_shift_drop_rpm=drop)
+            severity=-gap, short_shift_drop_rpm=drop)
     if gap < STAY_OUT_GAP_UNMEASURED:
         return None
     # No measured slope for this car: the lever is named without a number
@@ -2590,7 +2648,62 @@ def stay_out_call(state: RaceState) -> Call | None:
         "Staying out? You should make it.",
         f"Short-shift and lift - you're {abs(gap):.1f} laps short to the "
         "flag.",
-        MEDIUM)
+        MEDIUM, severity=-gap)
+
+
+def saving_covers(short_laps: float, laps_left: float | None) -> bool:
+    """Whether a fuel save can close `short_laps` over `laps_left`.
+
+    **One expression for "a save, not a stop"**, read by the fuel call and by
+    the re-planner (rule 12). Suzuka, 13 Sep 2026: the fuel call said
+    "Short-shift and lift" while the re-planner said "Recommend 1 stop" about
+    the same 3.0 laps, and he finished on 2.73 L with no stop.
+
+    DERIVED: what a short-shift saves over the laps still to run
+    (`SHORT_SHIFT_RECOVERY`, measured at about a fifth), plus the half lap
+    lift-and-coast closed on its own on the night `_box_now` records.
+    """
+    if short_laps <= 0:
+        return True
+    if laps_left is None or laps_left <= 0:
+        return False
+    return short_laps <= SHORT_SHIFT_RECOVERY * laps_left + FUEL_SHORT_LAPS
+
+
+def _short_tolerance_laps(state: RaceState) -> float:
+    """How far short is still inside the burn's noise, over this frame.
+
+    **To the flag only.** To the stop the fill covers a tenth of a lap, and a
+    tightened tolerance there would put a fuel call over "Box next lap."
+    """
+    target, reference = fuel_frame(state)
+    if reference != TO_THE_FLAG or not target or target <= 0:
+        return FUEL_SHORT_LAPS
+    return min(FUEL_SHORT_LAPS, FUEL_NOISE_PER_LAP * target)
+
+
+def fuel_save_l(state: RaceState) -> float | None:
+    """Litres a lap to save to reach the flag on the tank aboard, or None.
+
+    None where the tank reaches, where the frame is a stop rather than the
+    flag, or where a save cannot cover the gap - that is a stop. The same
+    gap `_fuel_gap` speaks, so the figure and the "laps short" beside it are
+    one arithmetic. No margin: it is the saving that makes the flag at the
+    burn measured, and it is said as exactly that.
+    """
+    target, reference = fuel_frame(state)
+    gap = _fuel_gap(state)
+    if (reference != TO_THE_FLAG or gap is None or gap >= 0
+            or not target or target <= 0):
+        return None
+    if not saving_covers(-gap, target):
+        return None
+    return state.fuel_per_lap_l - state.fuel_l / target
+
+
+def _litres_a_lap(litres: float) -> str:
+    """Up to the tenth: rounding a saving down under-asks for it."""
+    return f"{math.ceil(litres * 10.0 - 1e-9) / 10.0:.1f}"
 
 
 def _fuel(state: RaceState) -> Call | None:
@@ -2601,24 +2714,37 @@ def _fuel(state: RaceState) -> Call | None:
         return None
 
     confidence = MEDIUM if state.lap < 3 else HIGH
-    if gap < -FUEL_SHORT_LAPS:
+    if (state.fuel_save_said and gap >= 0
+            and fuel_reference(state) == TO_THE_FLAG):
+        # Once, and only after a save was asked for: he is lifting for fuel
+        # he no longer needs.
+        return Call(FUEL_REACHES, state.lap, "Fuel reaches the flag now.",
+                    "On current burn.", MEDIUM)
+    if gap < -_short_tolerance_laps(state):
         # **A shortfall no lever can cover is a stop, and is said as one.**
         # The Deep Forest race sim heard "Short-shift and lift into the slow
         # corners" three times while 6-8 laps short of the flag with no stop
         # planned: a saving of a fifth of the burn cannot close a gap of
-        # that size, so the honest instruction is the stop. Priced against
-        # what the laps still to run could save at the most a short-shift is
-        # worth, plus the half-lap the call's own threshold allows.
+        # that size, so the honest instruction is the stop.
         remaining = state.laps_remaining()
         if (remaining is not None and state.stint_ends_on_lap is None
                 and not state.stop_pending
-                and abs(gap) > SHORT_SHIFT_RECOVERY * remaining
-                + FUEL_SHORT_LAPS):
+                and not saving_covers(abs(gap), remaining)):
             return Call(FUEL_SHORT, state.lap,
                         "Fuel needs a stop.",
                         f"{abs(gap):.1f} laps short of the flag - short-shifting "
                         f"cannot cover it.", confidence, severity=-gap)
         drop, still = short_shift_for(state)
+        save = fuel_save_l(state)
+        if save is not None:
+            # **To the flag, and a save covers it: one number, in litres.**
+            # The beep still moves where a slope is measured.
+            return Call(FUEL_SHORT, state.lap,
+                        f"Save {_litres_a_lap(save)} litres a lap to make the "
+                        f"flag.",
+                        f"You're {abs(gap):.1f} laps short on current burn.",
+                        confidence, severity=-gap, tag=FUEL_SAVE,
+                        short_shift_drop_rpm=drop or None)
         reason = f"You're {abs(gap):.1f} laps short on fuel."
         if still > 0.05:
             # Said second because the instruction still stands - saving what
@@ -3983,7 +4109,8 @@ def _fuel_standing(state: RaceState) -> str:
     if gap is None:
         return "No burn figure yet."
     reference = fuel_reference(state)
-    if gap < -FUEL_STANDING_TOLERANCE_LAPS:
+    # The fuel call's own tolerance, so the two cannot disagree about short.
+    if gap < -min(FUEL_STANDING_TOLERANCE_LAPS, _short_tolerance_laps(state)):
         return f"{abs(gap):.1f} short {reference} on current burn."
     if gap > FUEL_LONG_LAPS:
         return f"{gap:.1f} spare {reference}."
@@ -4006,6 +4133,8 @@ def clear_stint(state: RaceState, *, tyres_changed: bool | None = None) -> None:
     state.said = [kind for kind in state.said if kind in (GREEN,)]
     state.said_at = {kind: value for kind, value in state.said_at.items()
                      if kind in (GREEN,)}
+    # A save asked for last stint is not a save asked for on this tank.
+    state.fuel_save_said = False
     # The temp occasions speak freshly each stint either way; the history
     # only survives when the rubber does - a new set's baseline is its own,
     # and it starts cold, which is exactly what the cold check should see.

@@ -129,12 +129,16 @@ def test_a_shortfall_with_a_stop_planned_still_asks_for_the_saving():
 
 
 def test_a_small_shortfall_with_no_plan_is_still_a_saving_call():
-    """Half a lap short over 12 to run is inside what a short-shift recovers."""
+    """Half a lap short over 12 to run is inside what a short-shift recovers.
+
+    To the flag it is said as the save in litres (Suzuka, 13 Sep 2026):
+    0.6 laps x 7.8 L over 12 laps is 0.39, asked as 0.4."""
     state = _fuelled(fuel_l=7.8 * 11.4, fuel_per_lap_l=7.8,
                      stint_ends_on_lap=None, laps_total=20, lap=8)
     call = _fuel(state)
     assert call is not None and call.kind == FUEL_SHORT
-    assert "Short-shift" in call.call
+    assert call.call == "Save 0.4 litres a lap to make the flag."
+    assert "stop" not in call.spoken().lower()
 
 
 # ------------------------------------------------------------------ rejoin

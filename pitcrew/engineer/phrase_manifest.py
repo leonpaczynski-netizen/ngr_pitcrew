@@ -786,6 +786,15 @@ def spoken_openers() -> tuple[str, ...]:
         # race/calls.py - the run-in, sayable only with an accurate clock
         "Last lap.",
         "Two to go.",
+        # ... and the run-in's hedged pair (Suzuka, 13 Sep 2026).
+        "One or two to go.",
+        "Too close to call on the clock.",
+        # race/calls.py - the answer to a save that is no longer needed.
+        "Fuel reaches the flag now.",
+        "On current burn.",
+        # "Save 1.5 litres a lap to make the flag.", split on its number.
+        "Save",
+        "litres a lap to make the flag.",
         # race/colour.py - the quiet-lap tier
         "That's the best lap of the race.",
         "That's the tidiest run of the race.",

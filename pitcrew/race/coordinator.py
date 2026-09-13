@@ -21,6 +21,9 @@ from pitcrew.race.calls import (
     stop_still_needed,
     BOX_IGNORED_LAPS,
     BOX_NOW,
+    FUEL_REACHES,
+    FUEL_SAVE,
+    FUEL_SHORT,
     HIGH,
     LOW,
     SAVING_RESPONSE,
@@ -254,6 +257,10 @@ class RaceCoordinator:
         # Lap times fit to judge pace against the plan - see
         # `representative_pace_ms` for what is kept out and why.
         self._pace_ms: list[int] = []
+        # (lap, ms) of every lap that was driving, and the crossing a fuel
+        # save was first asked for on - see `projected_lap_ms`.
+        self._racing_laps: list[tuple[int, int]] = []
+        self._save_asked_lap: int | None = None
         # An incident seen during the lap in progress: None for no,
         # False for detected, True for driver-reported. Consumed at
         # the crossing - see `note_incident`.
@@ -349,6 +356,8 @@ class RaceCoordinator:
         # under while they were being driven.
         self._pre_green_laps = []
         self._lap_of_read_key = {}
+        self._racing_laps = []
+        self._save_asked_lap = None
         if planned is not None and actual is not None:
             ok, why = planned.matches(actual)
             if not ok:
@@ -675,6 +684,8 @@ class RaceCoordinator:
             self.state.crossed_in_box = False
             # A new stint: the driving history and any pending note restart.
             self._driving = []
+            # A save asked for on the old tank is not asked for on this one.
+            self._save_asked_lap = None
             self.state.saving_change_note = None
             self.state.saving_change_lap = None
             entry = getattr(self, "_our_entry_fuel_l", None)
@@ -841,6 +852,10 @@ class RaceCoordinator:
         self.clock.note_lap(lap.lap_time_ms, is_pit_lap=bool(lap.is_pit_lap),
                             lap_num=lap.lap_num)
         self.expect.note_lap(lap)
+        if (lap.lap_time_ms > 0 and not lap.is_pit_lap
+                and not lap.is_out_lap):
+            # Driving, not the box: what `projected_lap_ms` may average.
+            self._racing_laps.append((int(lap.lap_num), int(lap.lap_time_ms)))
         self._corroborate_pit_lap(lap)
         self._weigh_the_tow()
 
@@ -970,6 +985,9 @@ class RaceCoordinator:
         folded = self._reconsider_ignored_box()
         if folded is not None:
             self.state.record(folded)
+            if folded.severity is not None:
+                # A fold short of the flag asks him to save.
+                self.note_save_asked(self.state.lap)
             return folded
         return self._emit()
 
@@ -1611,6 +1629,39 @@ class RaceCoordinator:
             log("race").warning("could not stamp the clock onto lap %s",
                                 getattr(lap, "lap_num", "?"), exc_info=True)
 
+    # Laps driven under a save that the projection averages: one lap is a
+    # lap, and a save that is working shows on the next as well.
+    SAVE_PACE_LAPS = 2
+
+    def note_save_asked(self, lap: int) -> None:
+        """A fuel save was asked for at this crossing. The first ask stands."""
+        if self._save_asked_lap is None:
+            self._save_asked_lap = int(lap)
+
+    def projected_lap_ms(self) -> int | None:
+        """The lap a timed race's remaining distance is divided by.
+
+        **The achieved median, unless he has been asked to save and is.**
+        Suzuka, 13 Sep 2026: 128.4 s left, a 126.7 s median, and a lap of
+        132.9 driven lifting - "Two to go." on the last lap. Under a save the
+        laps still to come are the saving laps, so the recent ones since the
+        ask count when they are slower. Without an ask a slow lap is an off
+        (lap 10 there) and the median stands, as it always has.
+
+        One figure for every reader: the distance, the hedge's margin, the
+        stop's price, and the re-planner's unit (rule 13).
+        """
+        achieved = (self.expect.achieved_lap_time_ms()
+                    or self.planned_lap_time_ms)
+        asked = self._save_asked_lap
+        if not achieved or asked is None:
+            return achieved
+        saving = [ms for num, ms in self._racing_laps
+                  if num > asked][-self.SAVE_PACE_LAPS:]
+        if not saving:
+            return achieved
+        return max(achieved, int(sum(saving) / len(saving)))
+
     def _update_clock_distance(self) -> Call | None:
         """A timed race's distance, from the app clock and the median lap.
 
@@ -1639,7 +1690,7 @@ class RaceCoordinator:
         # race is left, and minutes are a measurement where the lap count is
         # an inference over a median.
         self.state.race_remaining_s = self.clock.remaining_s
-        lap_ms = self.expect.achieved_lap_time_ms() or self.planned_lap_time_ms
+        lap_ms = self.projected_lap_ms()
         left = self.clock.laps_left(lap_ms)
         self.state.clock_corroborated = self.clock.corroborated
         # Carried onto the state so the lap-count calls can say which fault
@@ -1911,6 +1962,10 @@ class RaceCoordinator:
         heartbeat = call if call is not None and call.kind == STATUS else None
         if call is not None and heartbeat is None:
             self.state.record(call)
+            if call.kind == FUEL_SHORT and call.tag == FUEL_SAVE:
+                self.note_save_asked(self.state.lap)
+            elif call.kind == FUEL_REACHES:
+                self._save_asked_lap = None
             if call.short_shift_drop_rpm:
                 # The loop opens here. It has never closed.
                 self._saving_asked_lap = self.state.lap

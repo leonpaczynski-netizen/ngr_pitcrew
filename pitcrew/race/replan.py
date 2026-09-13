@@ -69,8 +69,10 @@ stop a stop looking cheaper than it is.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
+from pitcrew.race.calls import saving_covers
 from pitcrew.strategy.model import (
     RaceInputs,
     StrategyImpossible,
@@ -290,6 +292,9 @@ class Replan:
     # probe, the same instruction three times running. Relative, it sits
     # still.
     laps_to_next_stop: int | None = None
+    # Laps short of the flag that a fuel save covers, on a zero-stop race, or
+    # None. Not a stop: the fuel call says the save (`calls.fuel_save_l`).
+    fuel_short_laps: float | None = None
 
     @property
     def offered(self) -> bool:
@@ -409,10 +414,12 @@ def materially_different(new: Replan, told: Replan | None, *,
     if told is None:
         return new.worth_speaking, "first assessment of the race"
     if not new.offered:
-        if told.verdict == URGENT:
+        if told.verdict == URGENT and new.fuel_short_laps is None:
             return True, "the fuel picture has cleared"
         return False, ""
     urgent_now = new.verdict == URGENT and told.verdict != URGENT
+    if urgent_now and told.fuel_short_laps is not None:
+        return True, "a fuel save no longer covers the shortfall"
     if new.stops != told.stops:
         if (abandoned_stops is not None and new.stops == abandoned_stops
                 and not urgent_now):
@@ -420,14 +427,22 @@ def materially_different(new: Replan, told: Replan | None, *,
         return True, "the stop count has changed"
     if urgent_now:
         return True, "the fuel no longer reaches the flag"
-    # **Laps from now, never the absolute lap.** See `laps_to_next_stop`.
-    if (new.laps_to_next_stop is not None
-            and told.laps_to_next_stop is not None
-            and abs(new.laps_to_next_stop - told.laps_to_next_stop)
-            > stop_lap_move):
-        moved = abs(new.laps_to_next_stop - told.laps_to_next_stop)
-        return True, f"the stop has moved {moved} laps"
-    return False, ""
+    # **Laps from now, never the absolute lap alone** - see
+    # `laps_to_next_stop`. **And never laps from now alone either.** A stop
+    # that stays on lap 11 comes three laps nearer in three laps: Suzuka,
+    # 13 Sep 2026, "the stop has moved 3 laps" four times while it sat on 11,
+    # 11, 13, 13. A stop has moved when BOTH say so; the lap he boxes on is
+    # the figure spoken.
+    if (new.laps_to_next_stop is None or told.laps_to_next_stop is None):
+        return False, ""
+    relative = new.laps_to_next_stop - told.laps_to_next_stop
+    absolute = (new.next_stop_lap - told.next_stop_lap
+                if new.next_stop_lap is not None
+                and told.next_stop_lap is not None else relative)
+    if min(abs(relative), abs(absolute)) <= stop_lap_move:
+        return False, ""
+    way = "later" if absolute > 0 else "earlier"
+    return True, f"the stop has moved {abs(absolute)} laps {way}"
 
 
 def burn_band(drift: float | None, current: str = BAND_ON) -> str:
@@ -549,6 +564,14 @@ class PlanRegister:
             abandoned_stops=self.abandoned_stops)
         if blocked:
             say, why = False, ""
+        if (self.told is not None and self.told.verdict == URGENT
+                and verdict.fuel_short_laps is not None):
+            # **The stop is withdrawn in favour of a save, silently here.**
+            # "Fuel reaches the flag now" would be false, and the fuel call
+            # says the save with its figure. Committed, so the day the tank
+            # does reach is not announced twice.
+            self.told = verdict
+            self.told_lap = lap
 
         def allowed(candidate: Replan) -> bool:
             return may_speak is None or may_speak(candidate)
@@ -750,12 +773,23 @@ def assess(*, laps_done: int, laps_total: int | None,
     # off five green laps it is close to a reading.
     laps_left = laps_total - laps_done
     burn_now = observed_fuel_per_lap_l or planned_fuel_per_lap
+    covered_short = None
     if fuel_l is not None and burn_now and current_stops == 0:
         laps_of_fuel = fuel_l / burn_now
-        if laps_of_fuel < laps_left - 0.5:
-            short = laps_left - laps_of_fuel
-            measured = observed_fuel_per_lap_l is not None
-            basis = "current burn" if measured else "the planned burn"
+        short = laps_left - laps_of_fuel
+        measured = observed_fuel_per_lap_l is not None
+        basis = "current burn" if measured else "the planned burn"
+        if short > 0 and saving_covers(short, laps_left):
+            # **A save, not a stop** - `calls.saving_covers`, the one
+            # expression the fuel call reads too. Suzuka, 13 Sep 2026:
+            # "Recommend 1 stop" at 1.4 laps short on a count a lap long, and
+            # he made the flag on 2.73 L without one.
+            covered_short = short
+            if inputs is None:
+                return Replan(NONE, f"{short:.1f} laps short of the flag on "
+                              f"{basis} - a fuel save covers it", stops=0,
+                              fuel_short_laps=short)
+        elif laps_of_fuel < laps_left - 0.5:
             return Replan(
                 URGENT,
                 f"{short:.1f} laps short of the flag on {basis}",
@@ -802,7 +836,9 @@ def assess(*, laps_done: int, laps_total: int | None,
         plan for plan in plans
         if _worth_stopping(plan, laps_left)
         and (plan.stops > current_stops
-             or _first_stint_fits(plan, fuel_l, burn))]
+             or _first_stint_fits(plan, fuel_l, burn)
+             # The run he is on, short by what a save covers.
+             or (plan.stops == 0 and covered_short is not None))]
     if not runnable:
         # Every shape the model can build needs more fuel in the car than
         # there is. That is the urgent branch above arriving by another road.
@@ -822,7 +858,7 @@ def assess(*, laps_done: int, laps_total: int | None,
         # picture is genuinely tight and the urgent branch above and the fuel
         # call both own that conversation - this one stays out of it.
         return Replan(NONE, "the fuel is tight for the plan as split",
-                      stops=current_stops)
+                      stops=current_stops, fuel_short_laps=covered_short)
     gain = (current.total_time_s - best.total_time_s) if current else 0.0
     to_next_stop = best.stints[0].laps if best.stops and best.stints else None
     next_stop = laps_done + to_next_stop if to_next_stop is not None else None
@@ -835,7 +871,8 @@ def assess(*, laps_done: int, laps_total: int | None,
         return Replan(NONE, detail, stops=current_stops,
                       laps_to_next_stop=holding,
                       next_stop_lap=(laps_done + holding
-                                     if holding is not None else None))
+                                     if holding is not None else None),
+                      fuel_short_laps=covered_short)
 
     if current is None:
         # Nothing runnable at the stop count he is on, so there is no gain to
@@ -856,6 +893,14 @@ def assess(*, laps_done: int, laps_total: int | None,
         # should make it - short-shift and lift, you're 0.4 short."
         detail += (f"; you'd be {short:.1f} laps short at this burn - "
                    f"short-shift and lift")
+        # **And the size of the lever goes first**, because `spoken_reason`
+        # keeps only the first clause and this one was being cut off.
+        stint = best.stints[0].laps if best.stints else 0
+        if stint and burn:
+            where = "the flag" if not best.stops else "the stop"
+            litres = math.ceil(short * burn / stint * 10.0 - 1e-9) / 10.0
+            detail = (f"save {litres:.1f} litres a lap to make {where}; "
+                      f"{detail}")
         confidence = "low"
 
     return Replan(
