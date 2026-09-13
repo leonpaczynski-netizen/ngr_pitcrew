@@ -40,6 +40,13 @@ not the Yas one.
 
 - **Fuel is not a lever.** The lobby fixes 50 L; `race.quali_fuel` does not apply
   (`[MEASURED at Deep Forest quali, 6 Sep]` — same rule, same series).
+> ⟂ **Correction, 13 Sep 2026 (Ludo, race day).** "Out-lap plus four flyers" was
+> never checked against fuel. At this car's Deep Forest burn scaled to 5,807 m,
+> out-lap + 3 flyers is ~43 L and a 4th flyer needs ~54 L of the fixed 50.
+> **On map 1 the fourth flyer does not fit.** Out-lap on map 6 makes it fit
+> `[DERIVED + DOCTRINE]`; practice run 1 rehearses it on 50 L. See
+> `2026-09-13-shelby-suzuka-RUNPLAN.md`. Kept below as written.
+
 - **The flying lap is the fourth.** At Deep Forest his best came on flying lap 4
   in both sessions, worth 1.2–1.6 s over lap 1 — ten times the fuel-weight
   effect `[MEASURED, n=2 sessions]`. Ten minutes at Suzuka (~2:00 laps in a
