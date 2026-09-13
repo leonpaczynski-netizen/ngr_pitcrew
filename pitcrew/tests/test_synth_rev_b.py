@@ -212,7 +212,8 @@ def test_rev_g_kerbs_are_graded_by_the_worst_wheel():
 
     assert db(0.049) < db(0.133) < db(0.425)
     assert db(0.425) - db(0.049) > 4.5                     # was ~1 dB
-    assert effects.kerb_grade(10.0) == 1.0                 # the biggest as hard as ever
+    assert effects.kerb_grade(10.0) == effects.KERB_GRADE_TOP
+    assert abs(20 * math.log10(impact.shape(effects.KERB_GRADE_TOP)) + 3.0) < 0.1   # he set -3 dB
     assert effects.kerb_grade(0.0) == effects.KERB_GRADE_FLOOR
 
 

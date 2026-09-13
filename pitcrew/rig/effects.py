@@ -303,12 +303,18 @@ KERB_THUMP_DECAY_S = 0.12
 # the first 50 ms: p10 0.049, p50 0.133, p90 0.425, p99 0.727 - an 8.8x spread
 # where the old reading had 5.4x. Mapped on a LOG scale between the onset and
 # full points below (intensity steps are felt as ratios), from a floor of 0.45,
-# the p10/p50/p90 kerb shapes to about -6.4 / -3.0 / -0.5 dB of full: graded,
-# even steps, and the biggest as hard as it ever was, so no new knock reach.
+# the kerbs grade in even steps from smallest to biggest; the top is set below.
+# The biggest is quieter than the old thump's full scale, so no new knock reach.
 # The thump still fires on the edge frame and grows to its size over the rise.
 KERB_GRADE_ONSET_MS = 0.04
 KERB_GRADE_FULL_MS = 0.60
-KERB_GRADE_FLOOR = 0.45
+# Bench, 14 Sep, seated, four measured kerb sizes over a cruising engine: the
+# graded kerbs were "better" than the old ones but "still too powerful, can
+# reduce". A/B'd at the full top, -2 dB and -4 dB with the spread kept; he set
+# it between, at -3: the biggest kerb shapes to -3.0 dB of the impact voice's
+# full scale and the smallest to about -8.8, the ~5.8 dB spread intact.
+KERB_GRADE_FLOOR = 0.362
+KERB_GRADE_TOP = 0.685
 KERB_GRADE_RISE_S = 0.05
 
 
@@ -316,7 +322,7 @@ def kerb_grade(peak_speed: float) -> float:
     """A kerb hit's worst-wheel peak compression speed as a thump level."""
     lo, hi = np.log(KERB_GRADE_ONSET_MS), np.log(KERB_GRADE_FULL_MS)
     x = (np.log(max(peak_speed, 1e-6)) - lo) / (hi - lo)
-    return KERB_GRADE_FLOOR + (1.0 - KERB_GRADE_FLOOR) * float(np.clip(x, 0.0, 1.0))
+    return KERB_GRADE_FLOOR + (KERB_GRADE_TOP - KERB_GRADE_FLOOR) * float(np.clip(x, 0.0, 1.0))
 
 # **The kerb the surface channel cannot see.**
 #
