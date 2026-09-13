@@ -632,11 +632,40 @@ class PitWall:
         return [s for s in (self._close(d, stale=True)
                             for d in list(self._visits)) if s is not None]
 
+    @staticmethod
+    def _is_a_stop(visit) -> bool:
+        """The evidence any stop has to meet before it is called one.
+
+        `MIN_READS` fuel readings, watched for `MIN_WATCHED_S`: the same two
+        bars `_close` holds a rival's stop to below, stated once so the own
+        car's branch cannot run ahead of them again.
+        """
+        if visit is None or len(visit.readings) < MIN_READS:
+            return False
+        return max(0.0, visit.last_s - visit.started_s) >= MIN_WATCHED_S
+
     def _close(self, driver: int, *, stale: bool = False) -> Seen | None:
         # **Per VISIT.** Keyed per driver for the session, a two-stop rival's
         # second entry - the one that decides the end of the race - was silent.
         self._announced.discard(driver)
         visit = self._visits.pop(driver, None)
+        if driver == self._own and not self._is_a_stop(visit):
+            # **A glimpse is not a stop, ours any more than a rival's** (13 Sep
+            # 2026, Suzuka lap 7). The own-car branch used to run before the
+            # evidence a rival's stop must meet, so a visit with no fuel read
+            # at all - one frame where our white plate passed the white-disc
+            # and bright-ink tests - was logged "own stop on lap 7" on a lap
+            # he drove at 126.66 s burning 7.1 L. The same line is on file
+            # for laps he did not stop on, 7 and 11 Sep. Below the bar it is
+            # dropped the way a rival's fragment is, and said as that.
+            self._absent.pop(driver, None)
+            _log.info("pit-wall: pit columns glimpsed on our own row on lap "
+                      "%s (%d fuel reads over %.0f s) - not a stop",
+                      visit.lap if visit is not None else None,
+                      len(visit.readings) if visit is not None else 0,
+                      max(0.0, visit.last_s - visit.started_s)
+                      if visit is not None else 0.0)
+            return None
         if driver == self._own:
             # **Our own stop is not a rival's.** `read_rows` returns the
             # driver's own row like any other, so without this the wall handed

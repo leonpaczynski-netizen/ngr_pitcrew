@@ -61,7 +61,7 @@ def _digits(number, scale=2):
     return canvas
 
 
-def a_frame(*, in_lane=(), fuel=None, names=True):
+def a_frame(*, in_lane=(), fuel=None, names=True, smudged=()):
     """A board with flags, one white own-row, and pit columns where asked.
 
     `in_lane` is the row indices currently showing the pit columns, and `fuel`
@@ -103,6 +103,11 @@ def a_frame(*, in_lane=(), fuel=None, names=True):
             frame[y - DISC_SIZE // 2:y + DISC_SIZE // 2,
                   DISC_X:DISC_X + DISC_SIZE][round_] = DISC
             number = _digits(fuel.get(index, 40))
+            if index in smudged:
+                # **Something bright where the figure goes, and no figure.**
+                # What a glimpse looks like: a disc-shaped blob and a patch of
+                # ink the fuel box accepts, which `read_fuel` cannot read.
+                number = np.ones_like(number)
             left = DISC_X + DISC_SIZE + int(DISC_SIZE * 0.7)
             top = y - number.shape[0] // 2
             frame[top:top + number.shape[0],
@@ -465,6 +470,74 @@ def test_a_rival_in_the_same_race_is_still_filed():
     for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
         closed += wall.see(a_frame(), now=clock.tick())
     assert len(closed) == 1 and closed[0].stop.fuel_out_l == 83.0
+
+
+class _Lines:
+    """The wall's log, kept. `log()` names it under `pitcrew.`, which does not
+    propagate to pytest's capture, so the test holds the lines itself."""
+
+    def __init__(self):
+        self.lines = []
+
+    def _keep(self, msg, *args, **_):
+        self.lines.append(msg % args if args else msg)
+
+    info = debug = warning = exception = _keep
+
+
+def _kept_log(monkeypatch) -> _Lines:
+    import pitcrew.race.pit_wall as pit_wall
+
+    kept = _Lines()
+    monkeypatch.setattr(pit_wall, "_log", kept)
+    return kept
+
+
+def _own_stop_lines(kept):
+    return [line for line in kept.lines if "own stop" in line]
+
+
+def test_a_glimpse_on_our_own_row_is_not_an_own_stop(monkeypatch):
+    """Suzuka, 13 Sep 2026, lap 7: *"pit-wall: own stop on lap 7 not filed as
+    a rival's"* - and he did not stop. 126.66 s, 53.5 L to 46.4 L, no pit
+    lap. By then the whole race had drawn pit columns on six frames with
+    **no fuel figure read on any of them**; the same line is on file for
+    laps where he did not stop on 7 and 11 Sep.
+
+    `_close` checked for our own car BEFORE the evidence every rival's stop
+    has to meet, so a visit with no reading at all was announced as a stop.
+    Our own row is the white plate, which is exactly what the white-disc and
+    bright-ink tests find easiest to see."""
+    caplog = _kept_log(monkeypatch)
+    clock = Clock()
+    wall = a_wall()
+    warm(wall, clock)
+    wall.see(a_frame(in_lane=(OWN,), smudged=(OWN,)), lap=7, now=clock.tick())
+    closed = []
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        closed += wall.see(a_frame(), lap=7, now=clock.tick())
+    assert closed == [] and wall.stops() == []
+    assert _own_stop_lines(caplog) == []
+    # And the same where nothing closes it but the flag or the stale clock.
+    wall.see(a_frame(in_lane=(OWN,), smudged=(OWN,)), lap=9, now=clock.tick())
+    assert wall.close_all() == []
+    assert _own_stop_lines(caplog) == []
+
+
+def test_a_real_own_stop_is_still_recognised_as_ours(monkeypatch):
+    """The gate is the rival's bar, not a silencer: a stop watched with its
+    fuel readings is still ours, and still not filed as anyone else's."""
+    caplog = _kept_log(monkeypatch)
+    clock = Clock()
+    wall = a_wall()
+    warm(wall, clock)
+    for litres in (19, 40, 83):
+        wall.see(a_frame(in_lane=(OWN,), fuel={OWN: litres}), lap=11,
+                 now=clock.tick())
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        assert wall.see(a_frame(), now=clock.tick()) == []
+    assert len(_own_stop_lines(caplog)) == 1
+    assert "lap 11" in _own_stop_lines(caplog)[0]
 
 
 def test_our_own_stop_open_at_the_flag_is_not_filed_either():
