@@ -689,6 +689,16 @@ PORSCHE_RSR_17_REV_B = tuple(
 # night, worst tarmac hit 0.62 m/s and the hits did NOT recur at the same lap
 # position (0% above 0.3 m/s), so there are no discrete bumps in this channel
 # to render there, only the bed.
+# **The traction shaping was tested and kept.** The driver asked, from the
+# bench, that the cue "rise with the actual amount of wheelspin ... not just oh
+# traction broke full vibration". Traced: the deriver's input IS graded
+# (vehicle.ramp of slip excess, SLIP_ONSET 0.012 to SLIP_FULL 0.150), and the
+# shaping (threshold 15, min_force 20, gamma 1.3) leaves useful slip silent and
+# packs excessive-to-full into 6.7 dB. A dB-even proposal (threshold 8,
+# min_force 10, gamma 0.75: -18.5/-11.3/-6.3/-2.8/0 dB across the five slip
+# levels) was played as a staircase A/B against it, 14 Sep, seated: "first one
+# is better" - the CURRENT shaping. So the curve is not what reads as binary
+# on track; onset and release timing are the next suspects, to be judged in laps.
 _REV_C_TRIM = dict(
     _REV_B_TRIM,
     rear_traction=round(_REV_B_TRIM["rear_traction"] * 10 ** (6.0 / 20), 3),
