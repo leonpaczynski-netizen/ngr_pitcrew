@@ -143,11 +143,30 @@ class HapticsEngine:
     PortAudio's thread, so a slow sound card cannot reach the packet handler.
     """
 
-    def __init__(self, *, specs=synth.PROFILE,
+    def __init__(self, *, specs=None,
                  device: str = transducer.DEVICE_NAME,
                  master: float = 1.0) -> None:
+        # **The profile is chosen HERE, at construction, never at import.**
+        #
+        # This read `specs=synth.PROFILE`, a default bound when the module
+        # loaded - so `synth.default_profile()` was never consulted by the
+        # engine the app actually runs, and `PITCREW_RIG_REV_A` changed nothing
+        # about the trims in a live session. It DID change `DUCK_DEPTH`, which
+        # reads the same flag at import. Caught 13 Sep 2026 minutes before the
+        # first Rev A laps: they would have driven the old trims under the new
+        # duck - a mix that exists nowhere - and been reported as Rev A.
+        if specs is None:
+            specs = synth.default_profile()
         self._device = device
         self._specs = tuple(specs)
+        # Said at startup, because "which tune am I on" is otherwise not
+        # answerable from the seat, and a test drive of the wrong one looks
+        # exactly like a test drive of the right one.
+        log("haptics").info(
+            "haptics profile: %s (duck %.2f / critical %.2f)",
+            "REV A" if self._specs == tuple(synth.PORSCHE_RSR_17_REV_A)
+            else "default",
+            synth.DUCK_DEPTH, synth.DUCK_CRITICAL)
         self._mix = synth.HapticMix(specs, rate=transducer.SAMPLE_RATE,
                                     block=MAX_BLOCK, master=master)
         self._stereo = np.zeros((MAX_BLOCK, transducer.CHANNELS),

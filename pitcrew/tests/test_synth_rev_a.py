@@ -144,3 +144,20 @@ def test_rev_a_changes_only_trims():
         assert old.priority == new.priority
         assert (old.threshold, old.min_force, old.gamma) == (
             new.threshold, new.min_force, new.gamma)
+
+
+def test_the_live_engine_follows_the_flag(monkeypatch):
+    """The engine the app actually runs must pick up Rev A.
+
+    `HapticsEngine` used to bind `specs=synth.PROFILE` at import, so the flag
+    reached `DUCK_DEPTH` (read at import) but never the trims. The first Rev A
+    laps would have driven the old trims under the new duck and been reported
+    as Rev A. Constructing an engine opens no device, so this needs no rig.
+    """
+    from pitcrew.rig import haptics
+
+    monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
+    assert haptics.HapticsEngine()._specs == tuple(synth.PORSCHE_RSR_17)
+
+    monkeypatch.setenv("PITCREW_RIG_REV_A", "1")
+    assert haptics.HapticsEngine()._specs == tuple(synth.PORSCHE_RSR_17_REV_A)
