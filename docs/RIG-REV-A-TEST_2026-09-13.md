@@ -183,3 +183,20 @@ ButtKicker endpoint before.
 
 **Post-race queue, in order:** (1) `chassis_load` down/off, one variable;
 (2) bump detectability in stored laps; (3) the bump effect.
+
+### Pre-race, 13 Sep 2026 ~19:46 — old profile, amp 29 (session 164)
+
+Relaunched from the shortcut; log confirms `haptics profile: default
+(duck 0.70 / critical 0.82)`. Driver, after an out-lap:
+
+- **"kerb way too hard"** on the OLD `impact` trim (3.80) at amp 29 — even
+  though that combination was verified clean of knock on 12 Sep. So the right
+  `impact` level sits BETWEEN old (too hard) and Rev A's −9 dB (a kerb on the
+  bench, lost on track under `chassis_load`). With `chassis_load` down, it can
+  likely sit nearer the Rev A figure.
+- **"gear changes weren't there in the previous test either"** — `driveline`
+  (50 Hz) was not felt under Rev A. It shares the region `chassis_load` masks.
+  Add to the one-variable test: does gear change return with `chassis_load` down?
+
+Haptics turned OFF for the race by the driver. Note that is the state the app
+has actually been in since at least 11 Sep (`setting:haptics_enabled` was 0).
