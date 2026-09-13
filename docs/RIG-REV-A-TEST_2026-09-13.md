@@ -162,3 +162,24 @@ moment it fires, not on its own level.**
 `chassis_load` well down or OFF, nothing else changed. If traction and ripple
 strips come back, the masker is identified. It is also the most expendable cue
 on the rig: lateral load already arrives through the wheel.
+
+### Driver's answers after the laps (13 Sep 2026)
+
+- **Brake: "nothing unless over limit."** The 16 Aug design stands — silent at
+  and below the slip optimum. "No brake haptics I could feel" in Rev A is
+  consistent with never exceeding it; not a defect. Do not add a presence cue.
+- **Road: "bumps in road"** — read as DISCRETE bumps felt one at a time, not
+  general roughness (the reading was stated back to him for correction). No
+  trim of the `road` bed can deliver that: the bed is a continuous hum. It needs
+  a new TRANSIENT effect — a single thud per suspension hit on tarmac — built
+  from the same off-the-spring detection the sausage-kerb strike uses, and
+  separated from `impact` by RHYTHM (single thud vs the kerb's double tap), not
+  by frequency, since both are low chassis events.
+
+**Before building it:** replay stored laps to confirm tarmac bumps are
+resolvable in 60 Hz suspension telemetry at all. Not during a race — heavy
+Python on the rig PC starves the audio callback and has degraded the
+ButtKicker endpoint before.
+
+**Post-race queue, in order:** (1) `chassis_load` down/off, one variable;
+(2) bump detectability in stored laps; (3) the bump effect.
