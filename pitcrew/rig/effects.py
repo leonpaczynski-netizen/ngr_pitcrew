@@ -288,6 +288,36 @@ class BumpPulse:
 KERB_THUMP_FULL_MS = 0.30     # suspension velocity at which it maxes out
 KERB_THUMP_DECAY_S = 0.12
 
+# **Graded kerbs (Rev G): sized off the worst wheel, over the hit, on a log.**
+#
+# Reported on Rev F, 14 Sep 2026: "kerb strikes need improving, link to
+# suspension maybe, as a small kerb and big kerb hit the same". Measured over
+# 340 kerb edges in the 21 laps of 13 Sep, the thump above graded on the
+# AVERAGE of four wheels on the EDGE frame - p10 0.024, p50 0.048, p90 0.130
+# m/s against a full scale of 0.30 - so after its 0.70 floor and the impact
+# voice's shaping, the smallest and biggest tenth landed ~1 dB apart, under the
+# tactile intensity JND. Two wheels on a kerb read as half a kerb, and the edge
+# frame arrives before the hit has developed.
+#
+# The same edges sized on the WORST wheel's compression velocity, peak over
+# the first 50 ms: p10 0.049, p50 0.133, p90 0.425, p99 0.727 - an 8.8x spread
+# where the old reading had 5.4x. Mapped on a LOG scale between the onset and
+# full points below (intensity steps are felt as ratios), from a floor of 0.45,
+# the p10/p50/p90 kerb shapes to about -6.4 / -3.0 / -0.5 dB of full: graded,
+# even steps, and the biggest as hard as it ever was, so no new knock reach.
+# The thump still fires on the edge frame and grows to its size over the rise.
+KERB_GRADE_ONSET_MS = 0.04
+KERB_GRADE_FULL_MS = 0.60
+KERB_GRADE_FLOOR = 0.45
+KERB_GRADE_RISE_S = 0.05
+
+
+def kerb_grade(peak_speed: float) -> float:
+    """A kerb hit's worst-wheel peak compression speed as a thump level."""
+    lo, hi = np.log(KERB_GRADE_ONSET_MS), np.log(KERB_GRADE_FULL_MS)
+    x = (np.log(max(peak_speed, 1e-6)) - lo) / (hi - lo)
+    return KERB_GRADE_FLOOR + (1.0 - KERB_GRADE_FLOOR) * float(np.clip(x, 0.0, 1.0))
+
 # **The kerb the surface channel cannot see.**
 #
 # A sausage kerb clipped at speed is under the wheel for less than one 60 Hz
@@ -533,7 +563,9 @@ class EffectDeriver:
         self.model = model or vehicle.VehicleModel()
         # Read once, from the same selector as the mix profile and the duck, so
         # the three cannot disagree about which tune is running.
-        self._lift_bumps = synth.rig_revision() in ("C", "D", "E", "F")
+        self._lift_bumps = synth.revision_at_least("C")
+        self._grade_kerbs = synth.revision_at_least("G")
+        self._kerb_age: float | None = None
         self._bump = BumpPulse()
         self._out = np.zeros(len(self.NAMES) + len(self.MODIFIERS),
                              dtype=np.float32)
@@ -599,6 +631,7 @@ class EffectDeriver:
         self._gear_pulse = 0.0
         self._impact_pulse = 0.0
         self._kerb_pulse = 0.0
+        self._kerb_age = None
         self._bump = BumpPulse()
         self._strike_t = None
         self._strike_size = 0.0
@@ -899,6 +932,17 @@ class EffectDeriver:
         The tarmac-only guard lives in `vehicle._surfaces`.
         """
         self._kerb_pulse *= float(np.exp(-dt / KERB_THUMP_DECAY_S))
+        if self._grade_kerbs:
+            if s.kerb_strike and self._kerb_age is None:
+                self._kerb_age = 0.0
+            if self._kerb_age is not None:
+                if self._kerb_age <= KERB_GRADE_RISE_S:
+                    self._kerb_pulse = max(self._kerb_pulse,
+                                           kerb_grade(max(0.0, self._spike_speed)))
+                    self._kerb_age += dt
+                else:
+                    self._kerb_age = None
+            return self._kerb_pulse
         if s.kerb_strike:
             hit = KERB_THUMP_FLOOR + (1.0 - KERB_THUMP_FLOOR) * _ramp(
                 self._texture_speed, 0.0, KERB_THUMP_FULL_MS)

@@ -235,8 +235,20 @@ class EffectSpec:
 # 0.70 is about 10 dB at full - and a kerb thump does not shape to full, so the
 # bed measured over his laps drops by nearer 7, which is what turns a gear
 # shift from 8.5 dB under the road into 4 above it.
+# The trial tunes in the order they were built. Each carries everything the
+# one before it settled unless it says otherwise, so a feature switches on
+# "from" a revision rather than being listed against every letter by hand.
+REVISIONS = "ABCDEFG"
+
+
+def revision_at_least(first: str) -> bool:
+    """True when the selected trial tune is `first` or a later one."""
+    current = rig_revision()
+    return bool(current) and REVISIONS.index(current) >= REVISIONS.index(first)
+
+
 def rig_revision() -> str:
-    """Which trial tune is selected: "A"-"F", or "" for the default.
+    """Which trial tune is selected: a letter of REVISIONS, or "" for the default.
 
     `PITCREW_RIG_REV` names it; `PITCREW_RIG_REV_A=1` is kept because the Rev A
     test protocol and a test still use it. Read here, above the duck constants,
@@ -245,7 +257,10 @@ def rig_revision() -> str:
     real thing (see `HapticsEngine.__init__`).
     """
     named = os.environ.get("PITCREW_RIG_REV", "").strip().upper()
-    if named in ("A", "B", "C", "D", "E", "F"):
+    # One letter, and a letter of REVISIONS. `"" in "ABCDEFG"` is True, so a
+    # bare membership test returned early on an unset variable and silently
+    # stopped honouring PITCREW_RIG_REV_A - caught by its own test.
+    if len(named) == 1 and named in REVISIONS:
         return named
     if os.environ.get("PITCREW_RIG_REV_A"):
         return "A"
@@ -255,13 +270,13 @@ def rig_revision() -> str:
 # Rev D goes deeper again, chosen on the bench over a louder gear change: with
 # the engine raised, "less feel of the gear thud", and a 0.92 duck gave the thud
 # back without making it blunter (a louder thud had been "too big and blunt").
-DUCK_DEPTH = (0.92 if rig_revision() in ("D", "E", "F")
-              else 0.80 if rig_revision() in ("A", "B", "C") else 0.70)
+DUCK_DEPTH = (0.92 if revision_at_least("D")
+              else 0.80 if revision_at_least("A") else 0.70)
 # A limit cue gets more, because it lasts longer and matters more: 0.82 is
 # about 15 dB. The point is not to make the cue loud - it is to make it the
 # only thing happening, which is a different and much cheaper way to be
 # noticed.
-DUCK_CRITICAL = 0.88 if rig_revision() in ("A", "B", "C", "D", "E", "F") else 0.82
+DUCK_CRITICAL = 0.88 if revision_at_least("A") else 0.82
 DUCK_ATTACK_S = 0.02
 DUCK_RELEASE_S = 0.18
 
@@ -793,9 +808,31 @@ PORSCHE_RSR_17_REV_F = tuple(
     for spec in PORSCHE_RSR_17_REV_E)
 
 
+# **Rev G - the engine climbs audibly, and kerbs are graded (effects.py).**
+#
+# Rev F in the seat, 14 Sep 2026 (session 170): "engine could climb more but
+# other than that way better; kerb strikes need improving, link to suspension
+# maybe, as a small kerb and big kerb hit the same".
+#
+# Engine: 66->86 Hz was spread over RPM_CURVE intensity 0..0.63, but a real pull
+# lives between ~45% and 95% of the revs, where the curve gives 0.166..0.599 -
+# so on track it swept ~71->85 Hz, a 20% change, right at the tactile pitch JND
+# (15-30%). Re-spread so that same pull sweeps 66->100 Hz (+52%). Below 60 Hz
+# it only ever sounds at idle-level intensity, where knock is not in reach.
+_REV_G_PULL = ((0.166, 66.0), (0.599, 100.0))     # (intensity, Hz) at 45% / 95% revs
+_G_SLOPE = (_REV_G_PULL[1][1] - _REV_G_PULL[0][1]) / (_REV_G_PULL[1][0] - _REV_G_PULL[0][0])
+_REV_G_ENGINE = dict(freq_lo=round(_REV_G_PULL[0][1] - _REV_G_PULL[0][0] * _G_SLOPE, 1),
+                     freq_hi=round(_REV_G_PULL[0][1] + (1.0 - _REV_G_PULL[0][0]) * _G_SLOPE, 1))
+PORSCHE_RSR_17_REV_G = tuple(
+    dataclasses.replace(spec, **_REV_G_ENGINE) if spec.name == "engine" else spec
+    for spec in PORSCHE_RSR_17_REV_F)
+
+
 def default_profile():
     """The profile a `HapticMix` uses when none is named."""
     revision = rig_revision()
+    if revision == "G":
+        return PORSCHE_RSR_17_REV_G
     if revision == "F":
         return PORSCHE_RSR_17_REV_F
     if revision == "E":
@@ -814,6 +851,8 @@ def default_profile():
 def profile_name(specs) -> str:
     """"REV A", "REV B" or "default" - for the log line that says which tune ran."""
     specs = tuple(specs)
+    if specs == tuple(PORSCHE_RSR_17_REV_G):
+        return "REV G"
     if specs == tuple(PORSCHE_RSR_17_REV_F):
         return "REV F"
     if specs == tuple(PORSCHE_RSR_17_REV_E):

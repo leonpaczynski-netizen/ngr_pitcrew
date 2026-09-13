@@ -196,3 +196,60 @@ def test_rev_f_engine_climbs_from_66_to_86_hz(monkeypatch):
     monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
     monkeypatch.setenv("PITCREW_RIG_REV", "F")
     assert synth.profile_name(synth.default_profile()) == "REV F"
+
+
+def test_rev_g_kerbs_are_graded_by_the_worst_wheel():
+    """Rev F: "a small kerb and big kerb hit the same". The old grading put the
+    p10 and p90 kerb ~1 dB apart; Rev G sizes the worst wheel's peak on a log
+    scale. Measured kerb speeds of 13 Sep: p10 0.049, p50 0.133, p90 0.425."""
+    import math
+    from pitcrew.rig import effects
+
+    impact = {s.name: s for s in synth.PORSCHE_RSR_17_REV_G}["impact"]
+
+    def db(v):
+        return 20 * math.log10(impact.shape(effects.kerb_grade(v)))
+
+    assert db(0.049) < db(0.133) < db(0.425)
+    assert db(0.425) - db(0.049) > 4.5                     # was ~1 dB
+    assert effects.kerb_grade(10.0) == 1.0                 # the biggest as hard as ever
+    assert effects.kerb_grade(0.0) == effects.KERB_GRADE_FLOOR
+
+
+def test_rev_g_kerb_thump_fires_on_the_edge_and_grows(monkeypatch):
+    from pitcrew.rig import effects, vehicle
+
+    monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
+    monkeypatch.setenv("PITCREW_RIG_REV", "G")
+    d = effects.EffectDeriver()
+    assert d._grade_kerbs is True
+    state, dt = vehicle.VehicleState(), 1.0 / 60.0
+    state.kerb_strike = True
+    d._spike_speed = 0.05
+    first = d._kerb_thump(state, dt)
+    assert first >= effects.KERB_GRADE_FLOOR                # no latency on the edge
+    state.kerb_strike = False
+    d._spike_speed = 0.45                                   # the hit develops
+    grown = d._kerb_thump(state, dt)
+    assert grown > first
+    for _ in range(30):
+        d._kerb_thump(state, dt)
+    assert d._kerb_thump(state, dt) < 0.1                   # and it is gone
+
+    monkeypatch.setenv("PITCREW_RIG_REV", "F")
+    assert effects.EffectDeriver()._grade_kerbs is False
+
+
+def test_rev_g_engine_pull_climbs_66_to_100_hz(monkeypatch):
+    g = {s.name: s for s in synth.PORSCHE_RSR_17_REV_G}["engine"]
+    pitch = lambda i: g.freq_lo + (g.freq_hi - g.freq_lo) * i
+    assert abs(pitch(0.166) - 66.0) < 0.5 and abs(pitch(0.599) - 100.0) < 0.5
+    f = {s.name: s for s in synth.PORSCHE_RSR_17_REV_F}
+    for name, spec in {s.name: s for s in synth.PORSCHE_RSR_17_REV_G}.items():
+        if name != "engine":
+            assert spec == f[name], name
+    monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
+    monkeypatch.setenv("PITCREW_RIG_REV", "G")
+    assert synth.revision_at_least("D") and synth.revision_at_least("G")
+    monkeypatch.setenv("PITCREW_RIG_REV", "")
+    assert synth.rig_revision() == "" and not synth.revision_at_least("A")
