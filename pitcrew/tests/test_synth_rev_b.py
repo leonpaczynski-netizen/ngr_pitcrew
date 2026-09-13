@@ -102,3 +102,32 @@ def test_rev_c_turns_up_what_he_asked_for(monkeypatch):
     monkeypatch.setenv("PITCREW_RIG_REV", "C")
     assert synth.default_profile() is synth.PORSCHE_RSR_17_REV_C
     assert synth.profile_name(synth.default_profile()) == "REV C"
+
+
+def test_bumps_clear_the_impact_gate_and_stay_under_a_kerb():
+    """Rev C lifts the compression event over the impact voice's 25% gate.
+
+    Median real bump over the laps of 13 Sep was 0.16 - silent in every tune
+    ever run. Lifted, the smallest live compression shapes above zero and the
+    biggest stays below the lightest kerb thump, so a bump never reads as a kerb.
+    """
+    from pitcrew.rig import effects
+
+    impact = {s.name: s for s in synth.PORSCHE_RSR_17_REV_C}["impact"]
+    assert effects.bump_level(0.0) == 0.0
+    assert impact.shape(0.16) == 0.0                      # the defect
+    assert impact.shape(effects.bump_level(0.01)) > 0.0   # the fix
+    assert (impact.shape(effects.bump_level(1.0))
+            < impact.shape(effects.KERB_THUMP_FLOOR))
+
+
+def test_bump_lift_follows_the_tune(monkeypatch):
+    from pitcrew.rig import effects
+
+    monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
+    monkeypatch.setenv("PITCREW_RIG_REV", "C")
+    assert effects.EffectDeriver()._lift_bumps is True
+    monkeypatch.setenv("PITCREW_RIG_REV", "B")
+    assert effects.EffectDeriver()._lift_bumps is False
+    monkeypatch.delenv("PITCREW_RIG_REV")
+    assert effects.EffectDeriver()._lift_bumps is False

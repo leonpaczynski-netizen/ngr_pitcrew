@@ -220,6 +220,37 @@ SURFACE_BOOST_FULL_KPH = 45.0
 # ground; the suspension velocity at the moment of the strike can, and it is
 # already measured: median 0.082 m/s on a kerb, p90 0.318.
 KERB_THUMP_FLOOR = 0.70       # a brushed kerb, still unmistakably a kerb
+
+# **Suspension bumps, lifted over the impact voice's own gate.**
+#
+# Reported from the seat on Rev B, 14 Sep 2026: "road bumps previously picked
+# up from suspension travel seem missing". They were never all there. The
+# compression event (`vehicle.VehicleState.compression`, an excursion beyond
+# COMPRESSION_Z of that corner's own spread) rides the impact channel - and the
+# impact voice gates everything under 25%, a threshold set for the noisy
+# velocity-step detector. Compression is already a statistically gated event,
+# so the gate only threw real bumps away.
+#
+# Measured over the 21 laps of 13 Sep before anything was built: 3.8 compression
+# events a minute, **41% of them recurring at the same 20 m of the lap on at
+# least half the laps** (five spots) - track features, not noise; the tarmac
+# velocity channel, checked the same way, recurred 0%. Median event peak 0.16:
+# under the gate, silent in every tune ever run. The p90 event (0.43) came
+# through, and Rev A's -9 dB on impact took it 6 dB down with the kerb.
+#
+# So while one is live it is mapped into BUMP_FLOOR..BUMP_TOP: the floor just
+# clears the gate so the smallest real bump is felt, and the top sits under
+# KERB_THUMP_FLOOR so a bump never reads as a kerb. Single swell, no rhythm -
+# the kerb strike keeps the double tap. Rev C only, until it has run laps.
+BUMP_FLOOR = 0.35
+BUMP_TOP = 0.60
+
+
+def bump_level(compression: float) -> float:
+    """A compression excursion as an impact-channel level, or 0 when none."""
+    if compression <= 0.0:
+        return 0.0
+    return BUMP_FLOOR + (BUMP_TOP - BUMP_FLOOR) * min(1.0, compression)
 KERB_THUMP_FULL_MS = 0.30     # suspension velocity at which it maxes out
 KERB_THUMP_DECAY_S = 0.12
 
@@ -466,6 +497,9 @@ class EffectDeriver:
 
     def __init__(self, model: vehicle.VehicleModel | None = None) -> None:
         self.model = model or vehicle.VehicleModel()
+        # Read once, from the same selector as the mix profile and the duck, so
+        # the three cannot disagree about which tune is running.
+        self._lift_bumps = synth.rig_revision() == "C"
         self._out = np.zeros(len(self.NAMES) + len(self.MODIFIERS),
                              dtype=np.float32)
         self._prev_suspension: tuple[float, ...] | None = None
@@ -589,8 +623,10 @@ class EffectDeriver:
         out[3] = max(self._driveline(packet, state, dt),
                      self._limiter(state, dt))
         strike, strike_owns = self._suspension_strike(state, dt)
+        compression = (bump_level(state.compression) if self._lift_bumps
+                       else state.compression)
         others = max(self._impact(packet, dt), self._kerb_thump(state, dt),
-                     state.landed, state.compression)
+                     state.landed, compression)
         out[4] = strike if strike_owns else max(others, strike)
         out[5] = self._chassis_load(state)
         out[6] = state.traction_level

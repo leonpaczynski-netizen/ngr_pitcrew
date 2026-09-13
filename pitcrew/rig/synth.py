@@ -697,8 +697,11 @@ PORSCHE_RSR_17_REV_B = tuple(
 # packs excessive-to-full into 6.7 dB. A dB-even proposal (threshold 8,
 # min_force 10, gamma 0.75: -18.5/-11.3/-6.3/-2.8/0 dB across the five slip
 # levels) was played as a staircase A/B against it, 14 Sep, seated: "first one
-# is better" - the CURRENT shaping. So the curve is not what reads as binary
-# on track; onset and release timing are the next suspects, to be judged in laps.
+# is better" - the CURRENT shaping, "better and more realistic, steps were
+# good". And the complaint itself came from the BENCH: the first check played
+# the cue at one constant full level, which is the "full vibration" he meant.
+# There was no in-car defect to chase. Lesson: judge a graded cue on the bench
+# as a graded input, never as a single held level.
 _REV_C_TRIM = dict(
     _REV_B_TRIM,
     rear_traction=round(_REV_B_TRIM["rear_traction"] * 10 ** (6.0 / 20), 3),
