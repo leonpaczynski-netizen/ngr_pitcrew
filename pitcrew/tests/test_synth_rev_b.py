@@ -153,3 +153,25 @@ def test_a_bump_is_one_thud_not_a_rumble():
     peak_small = max(small.update(0.10, dt) for _ in range(4))
     peak_big = max(big.update(1.00, dt) for _ in range(4))
     assert peak_big > peak_small                             # still graded
+
+
+def test_rev_d_is_rev_c_with_his_engine_road_and_duck(monkeypatch):
+    """Rev C in the seat (session 168): traction, gear changes and kerbs "great";
+    engine rumble "needs to be stronger", road "still seems to lack a bit".
+    Rev D changes only those, each chosen on the bench and knock-checked at full."""
+    c = {s.name: s for s in synth.PORSCHE_RSR_17_REV_C}
+    d = {s.name: s for s in synth.PORSCHE_RSR_17_REV_D}
+    for name in ("brake_limit", "driveline", "impact", "chassis_load",
+                 "rear_traction"):
+        assert (d[name].felt_trim, d[name].gain) == (c[name].felt_trim, c[name].gain), name
+    engine_c = c["engine"].gain * c["engine"].felt_trim
+    engine_d = d["engine"].gain * d["engine"].felt_trim
+    assert 20 * __import__("math").log10(engine_d / engine_c) > 3.9     # +4 dB
+    assert d["engine"].felt_trim <= 4.0          # the trim guard was not moved
+    assert d["road"].felt_trim > c["road"].felt_trim
+
+    monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
+    monkeypatch.setenv("PITCREW_RIG_REV", "D")
+    assert synth.default_profile() is synth.PORSCHE_RSR_17_REV_D
+    from pitcrew.rig import effects
+    assert effects.EffectDeriver()._lift_bumps is True

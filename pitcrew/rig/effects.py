@@ -241,7 +241,7 @@ KERB_THUMP_FLOOR = 0.70       # a brushed kerb, still unmistakably a kerb
 # So while one is live it is mapped into BUMP_FLOOR..BUMP_TOP: the floor just
 # clears the gate so the smallest real bump is felt, and the top sits under
 # KERB_THUMP_FLOOR so a bump never reads as a kerb. Single swell, no rhythm -
-# the kerb strike keeps the double tap. Rev C only, until it has run laps.
+# the kerb strike keeps the double tap. Rev C and D.
 BUMP_FLOOR = 0.35
 BUMP_TOP = 0.60
 
@@ -533,7 +533,7 @@ class EffectDeriver:
         self.model = model or vehicle.VehicleModel()
         # Read once, from the same selector as the mix profile and the duck, so
         # the three cannot disagree about which tune is running.
-        self._lift_bumps = synth.rig_revision() == "C"
+        self._lift_bumps = synth.rig_revision() in ("C", "D")
         self._bump = BumpPulse()
         self._out = np.zeros(len(self.NAMES) + len(self.MODIFIERS),
                              dtype=np.float32)

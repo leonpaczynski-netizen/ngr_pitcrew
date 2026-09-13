@@ -236,7 +236,7 @@ class EffectSpec:
 # bed measured over his laps drops by nearer 7, which is what turns a gear
 # shift from 8.5 dB under the road into 4 above it.
 def rig_revision() -> str:
-    """Which trial tune is selected: "A", "B", "C", or "" for the default.
+    """Which trial tune is selected: "A"-"D", or "" for the default.
 
     `PITCREW_RIG_REV` names it; `PITCREW_RIG_REV_A=1` is kept because the Rev A
     test protocol and a test still use it. Read here, above the duck constants,
@@ -245,19 +245,23 @@ def rig_revision() -> str:
     real thing (see `HapticsEngine.__init__`).
     """
     named = os.environ.get("PITCREW_RIG_REV", "").strip().upper()
-    if named in ("A", "B", "C"):
+    if named in ("A", "B", "C", "D"):
         return named
     if os.environ.get("PITCREW_RIG_REV_A"):
         return "A"
     return ""
 
 
-DUCK_DEPTH = 0.80 if rig_revision() in ("A", "B", "C") else 0.70
+# Rev D goes deeper again, chosen on the bench over a louder gear change: with
+# the engine raised, "less feel of the gear thud", and a 0.92 duck gave the thud
+# back without making it blunter (a louder thud had been "too big and blunt").
+DUCK_DEPTH = (0.92 if rig_revision() == "D"
+              else 0.80 if rig_revision() in ("A", "B", "C") else 0.70)
 # A limit cue gets more, because it lasts longer and matters more: 0.82 is
 # about 15 dB. The point is not to make the cue loud - it is to make it the
 # only thing happening, which is a different and much cheaper way to be
 # noticed.
-DUCK_CRITICAL = 0.88 if rig_revision() in ("A", "B", "C") else 0.82
+DUCK_CRITICAL = 0.88 if rig_revision() in ("A", "B", "C", "D") else 0.82
 DUCK_ATTACK_S = 0.02
 DUCK_RELEASE_S = 0.18
 
@@ -726,9 +730,38 @@ PORSCHE_RSR_17_REV_C = tuple(
     for spec in PROFILE)
 
 
+# **Rev D - Rev C with the driver's engine, road and duck.**
+#
+# Rev C in the seat, 14 Sep 2026 (session 168, a different car - 2177 - from
+# the laps the replays were run on): "traction is great, gear changes great,
+# engine rumble needs to be stronger, road texture still seems to lack a bit,
+# kerbs are great".
+#
+#   * engine +4 dB over Rev C. Chosen from three two-gear pulls (C, +2, +4):
+#     "3", no knock on any. The trim was already at its 0-4 guard, so the lift
+#     is on the GAIN, 9.52 -> 14.946 - his SimHub number, changed because he
+#     asked for more. The trim guard is left alone on purpose.
+#   * DUCK_DEPTH 0.92: the louder engine gave "less feel of the gear thud", and
+#     a harder engine dip under the shift was preferred to a louder thud (B
+#     over A). It applies to every transient, so kerbs and bumps duck the beds
+#     a little more too.
+#   * road +3 dB over Rev C, from a cruise A/B: "feels ok can definitely feel
+#     road and bumps but it's hard to know without driving it".
+_REV_D_TRIM = dict(_REV_C_TRIM,
+                   engine=4.000,
+                   road=round(_REV_C_TRIM["road"] * 10 ** (3.0 / 20), 3))
+_REV_D_GAIN = {"engine": 14.946}
+PORSCHE_RSR_17_REV_D = tuple(
+    dataclasses.replace(spec, felt_trim=_REV_D_TRIM[spec.name],
+                        gain=_REV_D_GAIN.get(spec.name, spec.gain))
+    for spec in PROFILE)
+
+
 def default_profile():
     """The profile a `HapticMix` uses when none is named."""
     revision = rig_revision()
+    if revision == "D":
+        return PORSCHE_RSR_17_REV_D
     if revision == "C":
         return PORSCHE_RSR_17_REV_C
     if revision == "B":
@@ -741,6 +774,8 @@ def default_profile():
 def profile_name(specs) -> str:
     """"REV A", "REV B" or "default" - for the log line that says which tune ran."""
     specs = tuple(specs)
+    if specs == tuple(PORSCHE_RSR_17_REV_D):
+        return "REV D"
     if specs == tuple(PORSCHE_RSR_17_REV_C):
         return "REV C"
     if specs == tuple(PORSCHE_RSR_17_REV_B):
