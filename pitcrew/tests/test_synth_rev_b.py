@@ -81,3 +81,24 @@ def test_the_live_engine_runs_rev_b_and_says_so(monkeypatch):
     engine = haptics.HapticsEngine()
     assert engine._specs == tuple(synth.PORSCHE_RSR_17_REV_B)
     assert synth.profile_name(engine._specs) == "REV B"
+
+
+def test_rev_c_turns_up_what_he_asked_for(monkeypatch):
+    """Rev B in the seat: "everything could go up a bit but especially rear
+    traction loss and kerb strikes"; gear change "could be stronger"; engine
+    rumble missed. Rev C lifts exactly those, keeps chassis_load off, and the
+    engine lift is held to +2 dB because the masking replay showed Rev A's
+    engine level burying the gear change and brake cue a third of the time."""
+    c = {s.name: s for s in synth.PORSCHE_RSR_17_REV_C}
+    b = REV_B
+    for name in ("rear_traction", "impact", "driveline", "brake_limit",
+                 "engine", "road"):
+        assert c[name].felt_trim > b[name].felt_trim, name
+    assert c["rear_traction"].felt_trim / b["rear_traction"].felt_trim >= 1.99
+    assert c["chassis_load"].felt_trim <= 0.01
+    assert c["engine"].felt_trim < REV_A["engine"].felt_trim
+
+    monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
+    monkeypatch.setenv("PITCREW_RIG_REV", "C")
+    assert synth.default_profile() is synth.PORSCHE_RSR_17_REV_C
+    assert synth.profile_name(synth.default_profile()) == "REV C"

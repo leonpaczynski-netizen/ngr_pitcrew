@@ -236,7 +236,7 @@ class EffectSpec:
 # bed measured over his laps drops by nearer 7, which is what turns a gear
 # shift from 8.5 dB under the road into 4 above it.
 def rig_revision() -> str:
-    """Which trial tune is selected: "A", "B", or "" for the default.
+    """Which trial tune is selected: "A", "B", "C", or "" for the default.
 
     `PITCREW_RIG_REV` names it; `PITCREW_RIG_REV_A=1` is kept because the Rev A
     test protocol and a test still use it. Read here, above the duck constants,
@@ -245,19 +245,19 @@ def rig_revision() -> str:
     real thing (see `HapticsEngine.__init__`).
     """
     named = os.environ.get("PITCREW_RIG_REV", "").strip().upper()
-    if named in ("A", "B"):
+    if named in ("A", "B", "C"):
         return named
     if os.environ.get("PITCREW_RIG_REV_A"):
         return "A"
     return ""
 
 
-DUCK_DEPTH = 0.80 if rig_revision() in ("A", "B") else 0.70
+DUCK_DEPTH = 0.80 if rig_revision() in ("A", "B", "C") else 0.70
 # A limit cue gets more, because it lasts longer and matters more: 0.82 is
 # about 15 dB. The point is not to make the cue loud - it is to make it the
 # only thing happening, which is a different and much cheaper way to be
 # noticed.
-DUCK_CRITICAL = 0.88 if rig_revision() in ("A", "B") else 0.82
+DUCK_CRITICAL = 0.88 if rig_revision() in ("A", "B", "C") else 0.82
 DUCK_ATTACK_S = 0.02
 DUCK_RELEASE_S = 0.18
 
@@ -651,9 +651,63 @@ PORSCHE_RSR_17_REV_B = tuple(
     for spec in PROFILE)
 
 
+# **Rev C - Rev B, turned up where the driver asked.**
+#
+# Rev B in the seat, 14 Sep 2026 (session 167): "Overall much better just think
+# everything could go up a bit but especially rear traction loss and kerb
+# strikes". Traction "can feel slightly"; kerb strikes "could be stronger",
+# ripple strips OK; gear change "there but could be stronger"; engine rumble
+# missing; no knock.
+#
+# Each lift is sized against the peak the real mix renders for that effect at
+# full intensity, measured per effect, against the knock onset at its top pitch:
+#
+#                    B peak   onset   margin    C lift
+#     rear_traction  -10.5    -5.4    +5.1      +6 dB   his first ask
+#     impact         -15.3   -18.0    -2.8      +3 dB   his second ask
+#     driveline      -11.1    -6.0    +5.1      +7 dB
+#     brake_limit    -10.7    -6.0    +4.7      +5 dB
+#     engine         -14.7    -6.6    +8.1      +2 dB
+#     road           -13.5   -11.4    +2.1      +3 dB
+#
+# `impact` reads as already over, and it was clean on the bench and on track.
+# The knock curve was taken with a MICROPHONE detector that called 60 Hz knock
+# about 6 dB below where the driver's ear did, so for a brief transient it is
+# conservative; the 40 Hz entry, meanwhile, came from a bench tool driving both
+# channels at full (6 dB hotter than the app's per-channel 0.5), so it is
+# conservative the other way. Neither is trusted alone: Rev C goes to the
+# bench at full intensity before a lap.
+#
+# Engine was first put back to Rev A's 4.0 because its rumble was missed, and
+# the masking replay refused it: the always-on lowest band became the masker of
+# the gear change and the brake cue (each buried 33% of its live time, engine a
+# third of that), undoing the one thing he also asked for - a stronger gear
+# change. So engine takes +2 dB only, and the gear change and brake cue take
+# +7 and +5 instead of +4 and +3, inside their headroom by ear. Road gets a
+# modest +3: its "bumps" were checked in the stored laps first - 21 laps that
+# night, worst tarmac hit 0.62 m/s and the hits did NOT recur at the same lap
+# position (0% above 0.3 m/s), so there are no discrete bumps in this channel
+# to render there, only the bed.
+_REV_C_TRIM = dict(
+    _REV_B_TRIM,
+    rear_traction=round(_REV_B_TRIM["rear_traction"] * 10 ** (6.0 / 20), 3),
+    impact=round(_REV_B_TRIM["impact"] * 10 ** (3.0 / 20), 3),
+    driveline=round(_REV_B_TRIM["driveline"] * 10 ** (7.0 / 20), 3),
+    brake_limit=round(_REV_B_TRIM["brake_limit"] * 10 ** (5.0 / 20), 3),
+    engine=round(_REV_B_TRIM["engine"] * 10 ** (2.0 / 20), 3),
+    road=round(_REV_B_TRIM["road"] * 10 ** (3.0 / 20), 3),
+)
+PORSCHE_RSR_17_REV_C = tuple(
+    dataclasses.replace(spec, felt_trim=_REV_C_TRIM[spec.name])
+    if spec.name in _REV_C_TRIM else spec
+    for spec in PROFILE)
+
+
 def default_profile():
     """The profile a `HapticMix` uses when none is named."""
     revision = rig_revision()
+    if revision == "C":
+        return PORSCHE_RSR_17_REV_C
     if revision == "B":
         return PORSCHE_RSR_17_REV_B
     if revision == "A":
@@ -664,6 +718,8 @@ def default_profile():
 def profile_name(specs) -> str:
     """"REV A", "REV B" or "default" - for the log line that says which tune ran."""
     specs = tuple(specs)
+    if specs == tuple(PORSCHE_RSR_17_REV_C):
+        return "REV C"
     if specs == tuple(PORSCHE_RSR_17_REV_B):
         return "REV B"
     if specs == tuple(PORSCHE_RSR_17_REV_A):

@@ -70,7 +70,7 @@ def _profile_from_argv() -> str:
 
 
 _CHOSEN = _profile_from_argv().strip().upper()
-if _CHOSEN in ("A", "B"):
+if _CHOSEN in ("A", "B", "C"):
     os.environ["PITCREW_RIG_REV"] = _CHOSEN
 elif _CHOSEN == "DEFAULT":
     os.environ.pop("PITCREW_RIG_REV", None)
@@ -327,7 +327,7 @@ def main() -> None:
                              "were driven under; omit only for laps whose "
                              "assist you do not know")
     parser.add_argument("--profile", default="",
-                        choices=["", "default", "A", "B", "a", "b"],
+                        choices=["", "default", "A", "B", "C", "a", "b", "c"],
                         help="replay a trial tune instead of the selected one")
     args = parser.parse_args()
 
