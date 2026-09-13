@@ -235,12 +235,29 @@ class EffectSpec:
 # 0.70 is about 10 dB at full - and a kerb thump does not shape to full, so the
 # bed measured over his laps drops by nearer 7, which is what turns a gear
 # shift from 8.5 dB under the road into 4 above it.
-DUCK_DEPTH = 0.80 if os.environ.get("PITCREW_RIG_REV_A") else 0.70
+def rig_revision() -> str:
+    """Which trial tune is selected: "A", "B", or "" for the default.
+
+    `PITCREW_RIG_REV` names it; `PITCREW_RIG_REV_A=1` is kept because the Rev A
+    test protocol and a test still use it. Read here, above the duck constants,
+    because both the duck and the profile depend on it and they must never
+    disagree - they did once, and a half-applied Rev A nearly went out as the
+    real thing (see `HapticsEngine.__init__`).
+    """
+    named = os.environ.get("PITCREW_RIG_REV", "").strip().upper()
+    if named in ("A", "B"):
+        return named
+    if os.environ.get("PITCREW_RIG_REV_A"):
+        return "A"
+    return ""
+
+
+DUCK_DEPTH = 0.80 if rig_revision() in ("A", "B") else 0.70
 # A limit cue gets more, because it lasts longer and matters more: 0.82 is
 # about 15 dB. The point is not to make the cue loud - it is to make it the
 # only thing happening, which is a different and much cheaper way to be
 # noticed.
-DUCK_CRITICAL = 0.88 if os.environ.get("PITCREW_RIG_REV_A") else 0.82
+DUCK_CRITICAL = 0.88 if rig_revision() in ("A", "B") else 0.82
 DUCK_ATTACK_S = 0.02
 DUCK_RELEASE_S = 0.18
 
@@ -576,11 +593,84 @@ PORSCHE_RSR_17_REV_A = tuple(
     for spec in PROFILE)
 
 
+# **Rev B - Rev A with `chassis_load` OFF. One variable.**
+#
+# Rev A was rejected in the seat on 13 Sep 2026 (session 163): "too much
+# constant vibration ... rear traction not strong or maybe buried under constant
+# vibration on turning ... no ripple strip feeling", and the gear change was
+# not felt either. The mix log put the constant vibration on `chassis_load`:
+# live in every corner at 59-65 Hz, the most SENSITIVE band on the rig, and at
+# the one moment traction loss fired it was louder than the cue (0.198@64Hz
+# against rear_traction 0.140@94Hz) with the critical duck taking only 16%.
+#
+# The plan was to drive that one change. It was replayed instead, because the
+# masking check in `tools/rig_levels.py` - written the same night - reproduced
+# the driver's Rev A report from telemetry alone before grading anything new
+# (session 163: traction buried 67% of its live time, 79% under chassis_load;
+# gear change 58%; chassis_load over his floor 74% of the time). Over all 21
+# laps he drove that night in this car, race included, share of each cue's
+# live time something else is stronger:
+#
+#                     default   Rev A   A minus chassis_load
+#     rear_traction     42%      69%          24%
+#     driveline         37%      49%          38%
+#     impact            12%      53%          25%
+#     brake_limit       33%      41%          32%
+#
+# Two things out of that. His EVERYDAY profile already buries traction 42% of
+# the time, 91% of it under chassis_load - Rev A did not create the problem, it
+# deepened it. And removing chassis_load alone only moves the masker onto
+# `road`, which Rev A raised 7 dB and which he did not feel on the straights
+# anyway; it then takes 86% of the kerb strike's burial.
+#
+# So Rev B is built on that, not driven blind:
+#
+#   * `chassis_load` OFF. "Off" is a trim of 0.01 (-41.6 dB against Rev A):
+#     the spec guard requires a trim above zero, and removing the effect would
+#     misalign the intensity array the deriver fills by position.
+#   * `road`, `engine`, `driveline` back to DEFAULT. Rev A's lifts were not felt
+#     as beds and became the next masker; the gear change was lost under them.
+#   * `impact`, `rear_traction`, `brake_limit` stay at REV A - the levels bench-
+#     checked at amp 35 on 13 Sep: kerb "no knock, still a kerb strike",
+#     traction "no knock, feels good". The old kerb was "way too hard".
+#   * Duck stays at Rev A's 0.80 / 0.82->0.88: deeper ducking only ever helps a
+#     cue against a bed.
+_DEFAULT_TRIM = {spec.name: spec.felt_trim for spec in PROFILE}
+_REV_B_TRIM = {
+    "engine": _DEFAULT_TRIM["engine"],
+    "road": _DEFAULT_TRIM["road"],
+    "driveline": _DEFAULT_TRIM["driveline"],
+    "impact": _REV_A_TRIM["impact"],
+    "rear_traction": _REV_A_TRIM["rear_traction"],
+    "brake_limit": _REV_A_TRIM["brake_limit"],
+    "chassis_load": 0.010,
+}
+PORSCHE_RSR_17_REV_B = tuple(
+    dataclasses.replace(spec, felt_trim=_REV_B_TRIM[spec.name])
+    if spec.name in _REV_B_TRIM else spec
+    for spec in PROFILE)
+
+
 def default_profile():
     """The profile a `HapticMix` uses when none is named."""
-    if os.environ.get("PITCREW_RIG_REV_A"):
+    revision = rig_revision()
+    if revision == "B":
+        return PORSCHE_RSR_17_REV_B
+    if revision == "A":
         return PORSCHE_RSR_17_REV_A
     return PORSCHE_RSR_17
+
+
+def profile_name(specs) -> str:
+    """"REV A", "REV B" or "default" - for the log line that says which tune ran."""
+    specs = tuple(specs)
+    if specs == tuple(PORSCHE_RSR_17_REV_B):
+        return "REV B"
+    if specs == tuple(PORSCHE_RSR_17_REV_A):
+        return "REV A"
+    if specs == tuple(PORSCHE_RSR_17):
+        return "default"
+    return "custom"
 
 # Values that arrive alongside the effects and render nothing. See
 # `HapticMix.render` and `effects.EffectDeriver.MODIFIERS` - the two lists have

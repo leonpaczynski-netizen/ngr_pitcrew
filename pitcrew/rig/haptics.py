@@ -164,8 +164,7 @@ class HapticsEngine:
         # exactly like a test drive of the right one.
         log("haptics").info(
             "haptics profile: %s (duck %.2f / critical %.2f)",
-            "REV A" if self._specs == tuple(synth.PORSCHE_RSR_17_REV_A)
-            else "default",
+            synth.profile_name(self._specs),
             synth.DUCK_DEPTH, synth.DUCK_CRITICAL)
         self._mix = synth.HapticMix(specs, rate=transducer.SAMPLE_RATE,
                                     block=MAX_BLOCK, master=master)

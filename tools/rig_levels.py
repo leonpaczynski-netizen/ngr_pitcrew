@@ -45,25 +45,51 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import sqlite3
+import sys
 from collections import Counter
 
 import numpy as np
 
-from pitcrew.rig import transducer
-from pitcrew.rig.effects import EffectDeriver
-from pitcrew.rig.synth import (
+
+def _profile_from_argv() -> str:
+    """`--profile` has to be read BEFORE `synth` is imported.
+
+    The duck constants are fixed when the module loads, from the same selector
+    as the profile, and a replay that took one from the new tune and the other
+    from the old would grade a mix that exists nowhere - the defect that nearly
+    sent a half-applied Rev A out on 13 Sep 2026.
+    """
+    for i, arg in enumerate(sys.argv):
+        if arg == "--profile" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if arg.startswith("--profile="):
+            return arg.split("=", 1)[1]
+    return ""
+
+
+_CHOSEN = _profile_from_argv().strip().upper()
+if _CHOSEN in ("A", "B"):
+    os.environ["PITCREW_RIG_REV"] = _CHOSEN
+elif _CHOSEN == "DEFAULT":
+    os.environ.pop("PITCREW_RIG_REV", None)
+    os.environ.pop("PITCREW_RIG_REV_A", None)
+
+from pitcrew.rig import transducer  # noqa: E402
+from pitcrew.rig.effects import EffectDeriver  # noqa: E402
+from pitcrew.rig.synth import (  # noqa: E402
     DUCK_ATTACK_S,
     DUCK_CRITICAL,
     DUCK_DEPTH,
     DUCK_RELEASE_S,
-    PROFILE,
     UNLOAD_ATTACK_S,
     UNLOAD_DUCK,
     UNLOAD_RELEASE_S,
     HapticMix,
+    profile_name,
 )
-from pitcrew.store.db import DEFAULT_DB_PATH, Store
+from pitcrew.store.db import DEFAULT_DB_PATH, Store  # noqa: E402
 
 WHEELS = ("fl", "fr", "rl", "rr")
 DT = 1.0 / 60.0
@@ -135,6 +161,82 @@ def _load(path: str, count: int, sessions: list[int] | None = None,
         if count and len(laps) >= count:
             break
     return laps
+
+
+def _floor_dbfs(freq: float) -> float:
+    """The driver's measured detection floor at `freq`, held flat outside the
+    four frequencies a staircase was run at - a measurement, not a model."""
+    points = transducer.PERCEPTION_FLOOR_DBFS
+    if freq <= points[0][0]:
+        return points[0][1]
+    if freq >= points[-1][0]:
+        return points[-1][1]
+    for (lo_hz, lo), (hi_hz, hi) in zip(points, points[1:]):
+        if lo_hz <= freq <= hi_hz:
+            return lo + (hi - lo) * (freq - lo_hz) / (hi_hz - lo_hz)
+    return points[-1][1]
+
+
+def _masking_report(specs, amplitude: np.ndarray) -> None:
+    """What each cue has to beat at every instant it is live, not at its peak.
+
+    **Written after Rev A failed in the seat** (13 Sep 2026, session 163).
+    Every effect in Rev A cleared the driver's floor and stayed under the knock
+    curve when checked ALONE, and the mix still buried the traction cue, the
+    ripple strip and the gear change under `chassis_load` - because one piston
+    sums everything and the check never asked what else was playing. The live
+    log caught it at the cue's ONSET (USEFUL_SLIP, 0.14), not at its peak, and
+    the older "has to beat the bed" table above only looks at the top tenth of
+    an event's own maximum, which is where a cue is least likely to be lost.
+
+    Every voice is put on one scale - dB above the driver's floor at its own
+    centre frequency - so a quiet 60 Hz voice and a louder 95 Hz one compare
+    the way he feels them. A cue is "live" wherever it clears his floor on its
+    own; its margin is how far it stands above the strongest OTHER voice at
+    that instant. Below zero it is not the strongest thing on the piston, which
+    is what "buried" meant from the seat.
+
+    Stated approximations: centre frequency rather than the swept one, and a
+    floor measured with pure tones in silence. Masking between cues in the
+    literature is stronger than this assumes, not weaker - lower-frequency,
+    continuous voices dominate - so a margin near zero here is worse in the car.
+    """
+    floors = np.array([_floor_dbfs(spec.centre_hz) for spec in specs])
+    with np.errstate(divide="ignore"):
+        above = 20.0 * np.log10(np.maximum(amplitude, 1e-9)) - floors
+    felt = above > 0.0
+
+    print("\nOver the driver's floor, and what each cue must beat while it is "
+          "live:\n")
+    print(f"  {'effect':14s} {'felt %':>7}")
+    for index, spec in enumerate(specs):
+        print(f"  {spec.name:14s} {100.0 * float(felt[:, index].mean()):6.1f}%")
+
+    print(f"\n  {'cue':14s} {'live %':>7} {'median':>7} {'worst10':>8} "
+          f"{'buried':>7}  most often under")
+    for index, spec in enumerate(specs):
+        if spec.priority > 1:          # CRITICAL and TRANSIENT only
+            continue
+        live = felt[:, index]
+        if not live.any():
+            print(f"  {spec.name:14s} {'never':>7}")
+            continue
+        others = above[live].copy()
+        others[:, index] = -np.inf
+        strongest = others.max(axis=1)
+        margin = above[live, index] - strongest
+        buried = margin < 0.0
+        who = Counter(specs[int(k)].name for k in
+                      others[buried].argmax(axis=1)) if buried.any() else Counter()
+        masker = ", ".join(f"{n} {100.0 * c / buried.sum():.0f}%"
+                           for n, c in who.most_common(2)) or "-"
+        print(f"  {spec.name:14s} {100.0 * float(live.mean()):6.2f}% "
+              f"{float(np.median(margin)):+6.1f} "
+              f"{float(np.percentile(margin, 10)):+7.1f} "
+              f"{100.0 * float(buried.mean()):6.1f}%  {masker}")
+    print("\n  median / worst10 = dB the cue stands above the strongest other "
+          "voice;\n  buried = share of its live time something else is "
+          "stronger")
 
 
 def _number(row: dict, key: str, default: float = 0.0) -> float:
@@ -224,6 +326,9 @@ def main() -> None:
                         help="the assist declared on the event these laps "
                              "were driven under; omit only for laps whose "
                              "assist you do not know")
+    parser.add_argument("--profile", default="",
+                        choices=["", "default", "A", "B", "a", "b"],
+                        help="replay a trial tune instead of the selected one")
     args = parser.parse_args()
 
     sessions = [int(part) for part in args.sessions.split(",") if part.strip()]
@@ -239,6 +344,12 @@ def main() -> None:
     deriver = EffectDeriver()
     deriver.set_abs(args.abs or None)
     mix = HapticMix(block=512)
+    # **The profile the mix was built with, not `synth.PROFILE`.** This read
+    # the module default for shaping and priority while `_scale` came from the
+    # mix, so any trial tune was graded half as itself and half as the default.
+    specs = mix.specs
+    print(f"profile {profile_name(specs)} - duck {DUCK_DEPTH:.2f} / "
+          f"critical {DUCK_CRITICAL:.2f}")
     width = len(deriver.NAMES)
     raw: list[np.ndarray] = []
     states = []
@@ -254,9 +365,9 @@ def main() -> None:
 
     # The gain chain, per frame, exactly as `HapticMix.render` applies it.
     shaped = np.zeros((frames, width))
-    for index, spec in enumerate(PROFILE):
+    for index, spec in enumerate(specs):
         shaped[:, index] = [spec.shape(float(v)) for v in values[:, index]]
-    priority = np.array([spec.priority for spec in PROFILE])
+    priority = np.array([spec.priority for spec in specs])
     critical = priority == 0
     transient = priority == 1
     background = priority >= 2
@@ -284,7 +395,7 @@ def main() -> None:
     print(f"{'effect':15s} {'class':>9} {'Hz':>9} {'felt':>5} {'median':>8} "
           f"{'p99':>8} {'peak':>8} {'peak dB':>8} {'live':>6}")
     labels = ("CRITICAL", "TRANSIENT", "STATE", "BED")
-    for index, spec in enumerate(PROFILE):
+    for index, spec in enumerate(specs):
         amp = amplitude[:, index]
         top = spec.freq_hi or spec.freq_lo
         band = (f"{spec.freq_lo:.0f}-{top:.0f}" if spec.freq_hi
@@ -311,13 +422,13 @@ def main() -> None:
         when = column >= max(column.max() * 0.9, 1e-6)
         if not when.any():
             continue
-        spec = PROFILE[index]
+        spec = specs[index]
         mine = float(np.median(amplitude[when, index]))
         felt_mine = mine * transducer.felt_response(spec.centre_hz)
         decibels = 20 * math.log10(mine) if mine > 0 else float("-inf")
         print(f"\n  {event} fires at {mine:.4f} ({decibels:.1f} dBFS), "
               f"{spec.centre_hz:.0f} Hz, felt {felt_mine:.4f}")
-        for other_index, other in enumerate(PROFILE):
+        for other_index, other in enumerate(specs):
             if other_index == index:
                 continue
             bed = float(np.median(amplitude[when, other_index]))
@@ -331,6 +442,8 @@ def main() -> None:
                 continue
             print(f"    over {other.name:15s} {bed:8.4f}  x"
                   f"{felt_mine / felt_bed:7.2f} felt{mark}")
+
+    _masking_report(specs, amplitude)
 
     print("\nWhat the driver was told, as a fraction of the laps:")
     for label, seen in (("traction", Counter(s.traction for s in states)),
