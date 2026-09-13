@@ -3110,6 +3110,57 @@ clustering itself asks; an index carry warns and `--apply` refuses it without
   exactly as stored, and the packet's own `laps.position` says P5 for that lap
   - two independent instruments agreeing.
 
+**Row 3.5 is BLOCKED on two defects in stored data, both measured, 13 Sep.**
+The row says a rival's lap is ours plus the change in the gap, *"read at the
+same road position each lap off `gap_reads`"*. The derivation is sound and
+`race/rival_pace.py` already implements it. Neither input will carry it.
+
+**1. `gap_reads.track_m` is 0.0 on all 1,851 rows, across all three sessions
+that have any, with ZERO nulls.** The column is *"ego lap distance,
+integrated"* and it has never once been measured. `Store.record_gap_reads`
+argues the case itself - *"a sample with no track position is filed with
+`track_m` NULL, which is 'the ruler could not say' and never the start
+line (CLAUDE.md rule 3)"* - and the value arriving is not NULL, it is zero,
+so the guard never fires and every reading claims to have been taken **on the
+start line**. A consumer binning 40 readings spread round a lap would place
+all 40 at the line, and row 3.5's method reads the gap at one road position.
+- **Narrowed, not closed.** `LapRuler` is correct in isolation - fed 600
+  packets at 50 m/s it returns 500.0 m - and a packet missing `packet_id`
+  yields 0.83 m, not 0.0. The samples' own `at_s` are seconds apart, so they
+  were taken through the lap and not all at a crossing. So the ruler was live
+  and had integrated nothing at every sample. Which of the wiring, the thread
+  or the packet stream is at fault needs a race to watch and cannot be settled
+  by reading. **`race/sectors.py` - "where he has you" - is fed the same
+  zeros.**
+
+**2. `board_positions` is corrupt: a position is not unique.** 38 of 51
+lap-snapshots hold the same place twice or three times; for session 143 it is
+**20 of 20**. Lap 1 has `Car #12` and `Car #22` both at P3, and `Car #7` and
+`Car #9` both at P7.
+- **The cause is one driver wearing several handles.** `PitWall.positions()`
+  maps roster cluster ids through `name_of`, and an unnamed cluster is issued
+  a persistent `Car #N`. Derived from the stored data, `Magical daddy` lines
+  up against `Car #12`, `#17`, `#20` and `#22`; `PUNISHED` against three;
+  `TommyTbone` against three. One driver, one car - so the live roster is
+  splitting, and each split has been given its own handle in `drivers`.
+- **So the number-to-name join does not work**, and I tested it rather than
+  assuming: at every window from the whole lap down to 4 s either side of the
+  line, per-car agreement improves (1 unambiguous to 9) and **the collisions
+  do not clear**. My first guess - that the two are sampled on different
+  clocks, positions at crossings and sightings through the lap - is refuted by
+  that; the duplication is upstream of the join.
+
+**What this means for row 3.5.** The derivation can be keyed to a name without
+either table - `board_sightings` gives the name per (lap, side) and
+`gap_reads` gives the gap per (lap, side), and the identity check is simply
+that the same name held on both laps. That path is open. What is NOT
+recoverable is *"at the same road position"*: with `track_m` a constant zero,
+the gap that enters the difference was read at an unknown and varying point of
+the lap, and `rival_pace.py`'s own docstring says why that matters - *"a gap
+read 200 ms after the line is a gap over a different stretch of track, and the
+error goes straight into the lap time."* A derived lap time from this data
+would carry an error nobody can bound. **Not built on that basis.**
+
 **Row 2.9, final pass: an eval outlived the defect it described, and my own
 commit is what orphaned it.** Eval 17 told Ludo that `build_track_map` *"cannot
 honestly be run at all"* because it updates `corners_json` and never `source`.
