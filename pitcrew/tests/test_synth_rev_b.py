@@ -91,12 +91,12 @@ def test_rev_c_turns_up_what_he_asked_for(monkeypatch):
     engine level burying the gear change and brake cue a third of the time."""
     c = {s.name: s for s in synth.PORSCHE_RSR_17_REV_C}
     b = REV_B
-    for name in ("rear_traction", "impact", "driveline", "brake_limit",
+    for name in ("rear_traction", "impact", "brake_limit",
                  "engine", "road"):
         assert c[name].felt_trim > b[name].felt_trim, name
     assert c["rear_traction"].felt_trim / b["rear_traction"].felt_trim >= 1.99
     assert c["chassis_load"].felt_trim <= 0.01
-    assert c["engine"].felt_trim < REV_A["engine"].felt_trim
+    assert c["driveline"].felt_trim == b["driveline"].felt_trim   # +7 blunt, +3 worse
 
     monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
     monkeypatch.setenv("PITCREW_RIG_REV", "C")

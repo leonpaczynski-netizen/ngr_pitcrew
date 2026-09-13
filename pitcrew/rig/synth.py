@@ -665,9 +665,9 @@ PORSCHE_RSR_17_REV_B = tuple(
 #                    B peak   onset   margin    C lift
 #     rear_traction  -10.5    -5.4    +5.1      +6 dB   his first ask
 #     impact         -15.3   -18.0    -2.8      +3 dB   his second ask
-#     driveline      -11.1    -6.0    +5.1      +7 dB
-#     brake_limit    -10.7    -6.0    +4.7      +5 dB
-#     engine         -14.7    -6.6    +8.1      +2 dB
+#     driveline      -11.1    -6.0    +5.1       0 dB   (+7 blunt, +3 worse)
+#     brake_limit    -10.7    -6.0    +4.7      +3 dB   (+5 knocked)
+#     engine         -14.7    -6.6    +8.1      +4 dB   (chosen in the seat)
 #     road           -13.5   -11.4    +2.1      +3 dB
 #
 # `impact` reads as already over, and it was clean on the bench and on track.
@@ -683,7 +683,8 @@ PORSCHE_RSR_17_REV_B = tuple(
 # the gear change and the brake cue (each buried 33% of its live time, engine a
 # third of that), undoing the one thing he also asked for - a stronger gear
 # change. So engine takes +2 dB only, and the gear change and brake cue take
-# +7 and +5 instead of +4 and +3, inside their headroom by ear. Road gets a
+# +7 and +5 instead of +4 and +3, inside their headroom by ear - and the
+# brake cue then knocked very slightly at +5 on the bench, so it takes +3. Road gets a
 # modest +3: its "bumps" were checked in the stored laps first - 21 laps that
 # night, worst tarmac hit 0.62 m/s and the hits did NOT recur at the same lap
 # position (0% above 0.3 m/s), so there are no discrete bumps in this channel
@@ -692,9 +693,18 @@ _REV_C_TRIM = dict(
     _REV_B_TRIM,
     rear_traction=round(_REV_B_TRIM["rear_traction"] * 10 ** (6.0 / 20), 3),
     impact=round(_REV_B_TRIM["impact"] * 10 ** (3.0 / 20), 3),
-    driveline=round(_REV_B_TRIM["driveline"] * 10 ** (7.0 / 20), 3),
-    brake_limit=round(_REV_B_TRIM["brake_limit"] * 10 ** (5.0 / 20), 3),
-    engine=round(_REV_B_TRIM["engine"] * 10 ** (2.0 / 20), 3),
+    # Bench, 14 Sep, amp 35 seated, a two-gear pull through the real mix
+    # (revs on the app's own RPM_CURVE, the app's own shift pulse): +7 was
+    # "too big and blunt", +3 still lost to Rev B's level. It stays at B.
+    driveline=_REV_B_TRIM["driveline"],
+    # +5 dB knocked very slightly on the bench at full (14 Sep, amp 35,
+    # seated) - its top pitch is 50 Hz, nearer the resonance than traction's
+    # 94-104 - so it takes +3.
+    brake_limit=round(_REV_B_TRIM["brake_limit"] * 10 ** (3.0 / 20), 3),
+    # Same pulls: +2 "felt the same, possibly a bit more"; +4 chosen, and
+    # confirmed in combination with the gear change at B's level ("yes that's
+    # good"), because a louder engine can flatten the same shift thump.
+    engine=round(_REV_B_TRIM["engine"] * 10 ** (4.0 / 20), 3),
     road=round(_REV_B_TRIM["road"] * 10 ** (3.0 / 20), 3),
 )
 PORSCHE_RSR_17_REV_C = tuple(
