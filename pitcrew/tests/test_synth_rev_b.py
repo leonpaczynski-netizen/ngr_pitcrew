@@ -131,3 +131,25 @@ def test_bump_lift_follows_the_tune(monkeypatch):
     assert effects.EffectDeriver()._lift_bumps is False
     monkeypatch.delenv("PITCREW_RIG_REV")
     assert effects.EffectDeriver()._lift_bumps is False
+
+
+def test_a_bump_is_one_thud_not_a_rumble():
+    """Bench, 14 Sep: tracking compression for as long as the spring stayed down
+    felt "more like a rumble than a bump"; one decaying pulse per event, fired
+    on the rising edge, was "heaps better" and still graded by size."""
+    from pitcrew.rig import effects
+
+    dt = 1.0 / 60.0
+    pulse = effects.BumpPulse()
+    held = [pulse.update(0.43, dt) for _ in range(30)]      # spring held down 0.5 s
+    assert held[0] > 0.0
+    assert held[-1] < 0.25 * max(held)                       # gone while still compressed
+    assert pulse.update(0.0, dt) < 0.25 * max(held)          # clears
+    for _ in range(30):
+        pulse.update(0.0, dt)
+    assert pulse.update(0.43, dt) > 0.3                      # re-armed: next bump fires
+
+    small, big = effects.BumpPulse(), effects.BumpPulse()
+    peak_small = max(small.update(0.10, dt) for _ in range(4))
+    peak_big = max(big.update(1.00, dt) for _ in range(4))
+    assert peak_big > peak_small                             # still graded

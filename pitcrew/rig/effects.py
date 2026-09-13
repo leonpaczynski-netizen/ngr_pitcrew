@@ -251,6 +251,40 @@ def bump_level(compression: float) -> float:
     if compression <= 0.0:
         return 0.0
     return BUMP_FLOOR + (BUMP_TOP - BUMP_FLOOR) * min(1.0, compression)
+
+
+# **A bump is an edge, not a state.** The first cut followed the compression
+# level for as long as it lasted, and the driver felt all four sizes on the
+# bench, graded, and under a kerb - "feel more like a rumble than a bump".
+# Compression is a STATE: the spring stays down for a quarter second or more,
+# and a voice that tracks it for that long is a rumble by construction. So the
+# thud is fired on the rising edge, allowed to follow the rise for BUMP_RISE_S
+# to catch the hit's real size, and then decays on its own clock whatever the
+# spring does next - the same shape as the kerb thump, just lighter.
+BUMP_RISE_S = 0.05
+BUMP_DECAY_S = 0.09
+
+
+class BumpPulse:
+    """Turns a compression trace into a single decaying thud per event."""
+
+    def __init__(self) -> None:
+        self._level = 0.0
+        self._age: float | None = None      # seconds since the edge, or None
+        self._armed = True                  # re-arms once compression clears
+
+    def update(self, compression: float, dt: float) -> float:
+        self._level *= float(np.exp(-dt / BUMP_DECAY_S))
+        if compression <= 0.0:
+            self._armed, self._age = True, None
+            return self._level
+        if self._armed:
+            self._armed, self._age = False, 0.0
+        if self._age is not None:
+            if self._age <= BUMP_RISE_S:
+                self._level = max(self._level, bump_level(compression))
+            self._age += dt
+        return self._level
 KERB_THUMP_FULL_MS = 0.30     # suspension velocity at which it maxes out
 KERB_THUMP_DECAY_S = 0.12
 
@@ -500,6 +534,7 @@ class EffectDeriver:
         # Read once, from the same selector as the mix profile and the duck, so
         # the three cannot disagree about which tune is running.
         self._lift_bumps = synth.rig_revision() == "C"
+        self._bump = BumpPulse()
         self._out = np.zeros(len(self.NAMES) + len(self.MODIFIERS),
                              dtype=np.float32)
         self._prev_suspension: tuple[float, ...] | None = None
@@ -564,6 +599,7 @@ class EffectDeriver:
         self._gear_pulse = 0.0
         self._impact_pulse = 0.0
         self._kerb_pulse = 0.0
+        self._bump = BumpPulse()
         self._strike_t = None
         self._strike_size = 0.0
         self._limiter_pulse = 0.0
@@ -623,8 +659,8 @@ class EffectDeriver:
         out[3] = max(self._driveline(packet, state, dt),
                      self._limiter(state, dt))
         strike, strike_owns = self._suspension_strike(state, dt)
-        compression = (bump_level(state.compression) if self._lift_bumps
-                       else state.compression)
+        compression = (self._bump.update(state.compression, dt)
+                       if self._lift_bumps else state.compression)
         others = max(self._impact(packet, dt), self._kerb_thump(state, dt),
                      state.landed, compression)
         out[4] = strike if strike_owns else max(others, strike)
