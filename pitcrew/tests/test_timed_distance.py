@@ -78,6 +78,76 @@ def test_a_plan_that_fits_the_clock_certifies():
     assert not any("clock allows" in r for r in certificate.refusals)
 
 
+# ------------------------------------ the optimiser and the certifier agree
+#
+# Suzuka, 13 Sep 2026, event 13: "Build from practice" produced strategy 32 -
+# 9 + 6 = 15 laps - and the driver approved it. On the grid `certify` refused
+# it ("the clock allows about 14") three times, and he raced with no plan.
+# The optimiser costed the last stop with a fill a lap smaller than the one
+# it then wrote into the plan, and the certifier charged a declared pit loss
+# the dead time a second time. Two expressions for one distance.
+
+def suzuka_inputs(**overrides):
+    from pitcrew.strategy.model import RaceInputs
+
+    fields = dict(race_laps=14, race_minutes=30.0, lap_time_ms=125_032,
+                  fuel_per_lap_l=9.116, fuel_capacity_l=100.0,
+                  refuel_rate_lps=2.0, pit_loss_s=20.0, wear_per_lap=0.04861,
+                  available_compounds=("RS",), evidence_compound="RS")
+    fields.update(overrides)
+    return RaceInputs(**fields)
+
+
+def test_strategy_32s_inputs_build_a_plan_its_own_certifier_accepts():
+    from pitcrew.strategy.certify import certify
+    from pitcrew.strategy.model import recommend
+
+    inputs = suzuka_inputs()
+    plans = recommend(inputs)
+    assert plans
+    best = plans[0]
+    certificate = certify(best.as_dict(), inputs)
+    assert certificate.certified, certificate.describe()
+    assert (best.as_export(inputs)["raceLength"]["lapsAtThisPace"]
+            == best.laps_completed)
+
+
+def test_no_timed_plan_the_optimiser_emits_is_refused_on_the_clock():
+    """The invariant, swept across the boundary where a lap appears or goes:
+    whatever the pace, the certifier's count is the plan's own distance."""
+    from pitcrew.strategy.certify import certify
+    from pitcrew.strategy.model import recommend
+
+    for lap_ms in range(119_000, 131_001, 500):
+        for pit_loss in (15.0, 20.0, 30.0):
+            inputs = suzuka_inputs(lap_time_ms=lap_ms, pit_loss_s=pit_loss)
+            for plan in recommend(inputs):
+                if not plan.feasible:
+                    continue
+                certificate = certify(plan.as_dict(), inputs)
+                clock = [r for r in certificate.refusals + certificate.warnings
+                         if "clock allows" in r]
+                assert not clock, (lap_ms, pit_loss, plan.label(),
+                                   [s.laps for s in plan.stints], clock)
+
+
+def test_a_declared_pit_loss_is_not_charged_the_dead_time_twice():
+    """`stop_overhead_s`: a league-declared pit loss is the whole non-fuel
+    cost of a stop. 17 laps of 105 s and a 10 s stop cross at 1795 s, so an
+    18th lap is driven; charged a further 7.5 s it would not be."""
+    from pitcrew.strategy.certify import certify
+
+    inputs = suzuka_inputs(lap_time_ms=105_000, pit_loss_s=10.0,
+                           fuel_per_lap_l=None, wear_per_lap=None,
+                           fuel_weight_s_per_l_per_lap=0.0)
+    plan = {"stops": 1, "stints": [
+        {"laps": 9, "compound": "RS", "start_lap": 1},
+        {"laps": 9, "compound": "RS", "start_lap": 10}]}
+    certificate = certify(plan, inputs)
+    assert not any("clock allows" in r for r in certificate.refusals), \
+        certificate.describe()
+
+
 def test_without_a_reference_lap_the_check_is_named_as_unchecked():
     from pitcrew.strategy.certify import certify
     from pitcrew.strategy.model import RaceInputs

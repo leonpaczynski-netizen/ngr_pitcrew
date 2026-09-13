@@ -891,3 +891,94 @@ def test_pit_laps_on_a_plan_with_no_start_laps_is_not_a_crash():
     proposed = plan(stint(10), stint(10, "RM"))
     proposed["pit_laps"] = [10]
     assert certify(proposed, inputs()).certified
+
+
+# ------------------------------- the optimiser's approve certifies too
+#
+# Suzuka, 13 Sep 2026: `approve_strategy` stamped and approved strategy 32
+# without certifying it, `start_race` certified it and refused it three times
+# on the grid, and the refusal went only to a status label - the reason was
+# in nobody's log. He raced with no plan.
+
+def _refusals(caplog, logger: str) -> list[str]:
+    """What was logged, with the prefix off - so a test can ask for the
+    status label's own words."""
+    prefix = "start race refused: "
+    return [r.getMessage().removeprefix(prefix) for r in caplog.records
+            if r.name == logger and r.levelname == "WARNING"]
+
+
+def test_the_optimisers_approve_refuses_a_plan_the_grid_would(raced, caplog):
+    controller, _screen, store, event_id = raced
+    before = store.get_approved_strategy(event_id)["id"]
+    controller._plans[0].stints[0].fuel_l = 500.0
+
+    with caplog.at_level("WARNING", logger="pitcrew.strategy"):
+        assert controller.approve_strategy(0) is None
+    said = controller.strategy.subtitle.text()
+    assert said.startswith("Not approved. This plan cannot be driven:"), said
+    assert "500 L into a 100 L tank" in said
+    assert any("500 L into a 100 L tank" in m
+               for m in _refusals(caplog, "pitcrew.strategy"))
+    assert store.get_approved_strategy(event_id)["id"] == before
+
+
+def test_the_optimisers_approve_still_approves_a_driveable_plan(raced):
+    controller, _screen, store, event_id = raced
+    strategy_id = controller.approve_strategy(0)
+    assert strategy_id is not None
+    assert store.get_approved_strategy(event_id)["id"] == strategy_id
+    assert controller.start_race() is True
+
+
+def test_a_certificate_refused_on_the_grid_is_logged(raced, caplog):
+    controller, screen, store, event_id = raced
+    row = store.get_approved_strategy(event_id)
+    tampered = json.loads(json.dumps(row["plan"]))
+    tampered["stints"][0]["fuel_l"] = 500.0
+    store.update_strategy_plan(row["id"], tampered)
+
+    with caplog.at_level("WARNING", logger="pitcrew.race"):
+        assert controller.start_race() is False
+    said = screen.subtitle.text()
+    assert "500 L into a 100 L tank" in said
+    assert said in _refusals(caplog, "pitcrew.race")
+
+
+def test_a_plan_refused_on_the_grid_is_logged(raced, caplog):
+    controller, screen, store, event_id = raced
+    row = store.get_approved_strategy(event_id)
+    store.update_strategy_plan(row["id"], _unstamped(row["plan"]))
+
+    with caplog.at_level("WARNING", logger="pitcrew.race"):
+        assert controller.start_race() is False
+    said = screen.subtitle.text()
+    assert said.startswith("Plan refused:"), said
+    assert said in _refusals(caplog, "pitcrew.race")
+
+
+def test_an_arm_refused_on_the_grid_is_logged(raced, caplog, monkeypatch):
+    from pitcrew.race.coordinator import RaceCoordinator
+
+    controller, screen, _store, _event_id = raced
+
+    def refuse(self, planned, actual):
+        self.refusal = "this plan was built for another circuit"
+        return False
+
+    monkeypatch.setattr(RaceCoordinator, "arm", refuse)
+    with caplog.at_level("WARNING", logger="pitcrew.race"):
+        assert controller.start_race() is False
+    said = screen.subtitle.text()
+    assert said == "Plan refused: this plan was built for another circuit"
+    assert said in _refusals(caplog, "pitcrew.race")
+
+
+def test_a_preflight_refused_on_the_grid_is_logged(raced, caplog, monkeypatch):
+    controller, screen, _store, _event_id = raced
+    monkeypatch.setattr(controller, "gauge_preflight_ok", lambda _what: False)
+    with caplog.at_level("WARNING", logger="pitcrew.race"):
+        assert controller.start_race() is False
+    said = screen.subtitle.text()
+    assert "OBS projector" in said
+    assert said in _refusals(caplog, "pitcrew.race")

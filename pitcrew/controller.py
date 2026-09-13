@@ -4470,10 +4470,23 @@ class PitCrewController(QObject):
             self.strategy.set_status(f"Not approved. {exc}.", warn=True)
             log("strategy").warning("refused %r: %s", plan.label(), exc)
             return None
+        # **Certified here, by the gate `start_race` asks** - the same
+        # `certify_for_event` as `approve_stored_strategy`. This door did not
+        # certify, so strategy 32 (Suzuka, 13 Sep 2026) was approved in the
+        # week and refused on the grid three times, and he raced with no plan.
+        certificate = certify_for_event(self.store, event["id"], payload)
+        if not certificate.certified:
+            why = certificate.describe()
+            self.strategy.set_status(f"Not approved. {why}", warn=True)
+            log("strategy").warning("refused %r: %s", plan.label(), why)
+            return None
         strategy_id = self.store.save_strategy(
             event["id"], payload, label=plan.label(),
             evidence={"missing": self._inputs.missing()})
         self.store.approve_strategy(strategy_id)
+        # The accept is logged too (rule 10), as `approve_stored_strategy` does.
+        log("strategy").info("approved %r (id %d): %s", plan.label(),
+                             strategy_id, certificate.describe())
         self.strategy.note(
             f"{plan.label()} approved. It is the race plan until you approve "
             "another.")
@@ -4594,21 +4607,27 @@ class PitCrewController(QObject):
             self._close_driver_board()
         if self.race_screen is None:
             return False
+
+        # **Every refusal on the grid is logged, word for word.** Suzuka, 13
+        # Sep 2026: the approved plan was refused three times and the reason
+        # went only to the status label, so nothing on file said why he raced
+        # with no plan.
+        def refuse(why: str) -> bool:
+            self.race_screen.set_status(why, warn=True)
+            log("race").warning("start race refused: %s", why)
+            return False
+
         event = self.active_event()
         if event is None:
-            self.race_screen.set_status(
-                "Create an event before racing.", warn=True)
-            return False
+            return refuse("Create an event before racing.")
 
         # **Before anything is armed.** A race is the session where losing the
         # gauge costs most - it is the only stint run at race pace on a race
         # fuel load, and the wear rate measured in one is 32% above practice
         # at Deep Forest. See `gauge_preflight_ok`.
         if not self.gauge_preflight_ok("this race"):
-            self.race_screen.set_status(
-                "Not armed - set the OBS projector up and arm again.",
-                warn=True)
-            return False
+            return refuse(
+                "Not armed - set the OBS projector up and arm again.")
 
         # **Three choices, all his.** Whether this is the league race or a
         # rehearsal, whether the engineer speaks, and whether it runs to the
@@ -4641,8 +4660,7 @@ class PitCrewController(QObject):
             # Remembered word for word, so the refresh after he fixes it can
             # take THIS down and nothing else (critic 2, pass 4).
             self._grid_plan_refusal = f"Plan refused: {why}"
-            self.race_screen.set_status(self._grid_plan_refusal, warn=True)
-            return False
+            return refuse(self._grid_plan_refusal)
         try:
             inputs, _ = build_inputs(self.store, event["id"])
         except ValueError:
@@ -4660,9 +4678,7 @@ class PitCrewController(QObject):
         if plan is not None and inputs is not None:
             certificate = certify(plan, inputs)
             if not certificate.certified:
-                self.race_screen.set_status(
-                    f"Plan refused: {certificate.describe()}", warn=True)
-                return False
+                return refuse(f"Plan refused: {certificate.describe()}")
             for warning in certificate.warnings:
                 log("race").warning("approved plan: %s", warning)
             for gap in certificate.unchecked:
@@ -4755,10 +4771,9 @@ class PitCrewController(QObject):
         # timed plan refused on race day.
         planned = context_from_stored(stored, event) if stored else None
         if not self.race.arm(planned, actual):
-            self.race_screen.set_status(
-                f"Plan refused: {self.race.refusal}", warn=True)
+            refusal = self.race.refusal
             self.race = None
-            return False
+            return refuse(f"Plan refused: {refusal}")
 
         # **Declare the instrument, once, on the grid.** Silence is this
         # app's most-used output and it has never meant one thing - no plan,

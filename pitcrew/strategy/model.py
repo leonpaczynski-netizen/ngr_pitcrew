@@ -1108,8 +1108,10 @@ def build_plan(inputs: RaceInputs, stops: int,
 
     limits = [stint_limit(inputs, profile)[0] for profile in profiles]
     clock_total = None
+    clock_fills = None
     if inputs.is_timed:
-        stint_lengths, clock_total = clock_bound_stints(inputs, profiles, limits)
+        stint_lengths, clock_fills, clock_total = clock_bound_stints(
+            inputs, profiles, limits)
     else:
         # The optimum, not an even share. `allocate_laps` is the fallback for
         # the case the optimiser refuses - the caps cannot cover the distance -
@@ -1154,7 +1156,7 @@ def build_plan(inputs: RaceInputs, stops: int,
             # tankful rather than the 1010 L it actually needed, and paid no
             # stop for the difference. The requirement is reported honestly and
             # the plan is rejected.
-            margin_l, margin_why = inputs.margin_for(laps)
+            #
             # **Integrated over the stint, not multiplied.** Burn rises with
             # what is in the tank - measured +0.0061 L per litre aboard, which
             # is 0.61 L/lap between a full tank and an empty one - so a stint
@@ -1163,11 +1165,12 @@ def build_plan(inputs: RaceInputs, stops: int,
             # the distance and leaves the margin, which is self-referential
             # because the fuel is its own weight. Falls back to the old product
             # exactly when `fuel_reference_load_l` is None.
-            fuel_needed = fill_for_l(
-                inputs.fuel_per_lap_l, laps,
-                reference_load_l=inputs.fuel_reference_load_l,
-                buffer_l=(margin_l or 0.0),
-                capacity_l=inputs.fuel_capacity_l)
+            fuel_needed, margin_l, margin_why = planned_fill_l(laps, inputs)
+            # **A timed race carries the fills its clock was walked with.** A
+            # stint cut to the flag keeps the fill of the plan that was timed;
+            # resizing it here would shorten the stop and move the flag again.
+            if clock_fills is not None:
+                fuel_needed = clock_fills[index]
             if inputs.fuel_capacity_l and fuel_needed > inputs.fuel_capacity_l:
                 feasible = False
                 notes.append(
@@ -1196,9 +1199,23 @@ def build_plan(inputs: RaceInputs, stops: int,
                     f"{total / 60:.1f} min, after the {inputs.race_minutes:g}-"
                     f"minute flag. Nobody pits on the last lap of a timed "
                     f"race; this plan cannot be run as written.")
+            stopped_at = total
             total += inputs.stop_overhead_s()
             if fuel_needed:
                 total += refuel_time_s(fuel_needed, inputs)
+            # **And a stop the clock runs out during.** The next crossing is
+            # the flag, so this stop is on the last lap too, just entered a
+            # few seconds sooner - and the lap after it takes the race past
+            # `max_duration_s`.
+            if (limit_s is not None and stopped_at < limit_s
+                    and total >= limit_s):
+                feasible = False
+                notes.append(
+                    f"The stop after stint {index + 1} runs to "
+                    f"{total / 60:.1f} min, after the "
+                    f"{inputs.race_minutes:g}-minute flag. Nobody pits on the "
+                    f"last lap of a timed race; this plan cannot be run as "
+                    f"written.")
 
     # **The cap note sits here, and the position is the point.**
     # `strategy_screen` shows `notes[0]` and nothing else, so the first note is
@@ -1478,10 +1495,81 @@ def elapsed_for_s(inputs: RaceInputs, stint_lengths: list[int],
                for index, laps in enumerate(stint_lengths))
 
 
+def planned_fill_l(laps: int, inputs: RaceInputs
+                   ) -> tuple[float | None, float | None, str]:
+    """The fill a plan writes for a stint of `laps`: litres, margin, and why.
+
+    To the diamond plus the margin `fuel_margin_l` sizes, integrated over the
+    stint. One expression, because the clock is costed with the same litres
+    the plan hands the pump - see `clock_bound_stints`.
+    """
+    margin_l, why = inputs.margin_for(laps)
+    if not inputs.fuel_per_lap_l:
+        return None, margin_l, why
+    fill = fill_for_l(inputs.fuel_per_lap_l, laps,
+                      reference_load_l=inputs.fuel_reference_load_l,
+                      buffer_l=(margin_l or 0.0),
+                      capacity_l=inputs.fuel_capacity_l)
+    return fill, margin_l, why
+
+
+# A backstop on the lap walk below against a lap that costs no time.
+MAX_TIMED_RACE_LAPS = 10_000
+
+
+def timed_race_laps(inputs: RaceInputs, stint_lengths: list[int],
+                    profiles: list[CompoundProfile],
+                    fills: list[float | None]) -> tuple[int, float] | None:
+    """The lap a timed race's flag falls on if these stints are driven, and
+    the clock at that crossing. None where there is no clock or no lap.
+
+    **The one expression for a timed race's distance.** The optimiser lays
+    its plans out with it and `certify` checks plans against it (rule 12).
+    They used to be two: the optimiser costed its last stop with a fill a lap
+    smaller than the one it wrote into the plan, and the certifier charged a
+    declared pit loss the dead time again. Suzuka, 13 Sep 2026: strategy 32
+    said 15 laps, the certifier said 14, and the approved plan was refused on
+    the grid three times.
+
+    GT7's rule, walked a lap at a time: the flag falls at the first line
+    crossing at or after the clock, and a stop is stationary clock - the lane
+    loss (`stop_overhead_s`) and the stint's own fill at the pump's rate. The
+    last stint runs on to the flag whatever its planned length; a stop the
+    clock has already beaten is never made.
+    """
+    limit_s = inputs.race_limit_s
+    if not limit_s or not inputs.lap_time_ms or inputs.lap_time_ms <= 0:
+        return None
+    if not stint_lengths:
+        return None
+    clock, lap = 0.0, 0
+    last = len(stint_lengths) - 1
+    for index, planned in enumerate(stint_lengths):
+        fill = fills[index] if index < len(fills) else None
+        if index:
+            clock += inputs.stop_overhead_s()
+            if fill:
+                clock += refuel_time_s(fill, inputs)
+        driven, before = 0, 0.0
+        while index == last or driven < planned:
+            driven += 1
+            lap += 1
+            here = stint_time_s(driven, inputs, fuel_at_start_l=fill,
+                                profile=profiles[index])
+            clock += here - before
+            before = here
+            if clock >= limit_s:
+                return lap, clock
+            if lap >= MAX_TIMED_RACE_LAPS:
+                return None
+    return None
+
+
 def clock_bound_stints(inputs: RaceInputs, profiles: list[CompoundProfile],
-                       limits: list[int | None]) -> tuple[list[int], float]:
-    """The stints a timed race actually runs, and what the clock reads at the
-    flag.
+                       limits: list[int | None]
+                       ) -> tuple[list[int], list[float | None], float]:
+    """The stints a timed race actually runs, their fills, and what the clock
+    reads at the flag.
 
     **The distance is an output, not an input.** The race ends at the first
     line crossing after the clock expires, so every stop is time spent
@@ -1497,49 +1585,64 @@ def clock_bound_stints(inputs: RaceInputs, profiles: list[CompoundProfile],
     together - taking one more lap's fuel makes every stop longer, which can
     itself bring the flag forward a lap.
 
-    So it settles on the longest schedule that is **still short of the flag**,
-    and then adds the lap that carries the car past it. That final lap is
-    covered by the reserve lap already in every stint's fuel, which is what
-    the reserve is for, so it costs a lap of time and nothing at the pumps.
+    **Every count is judged by `timed_race_laps` with the fills the plan will
+    actually carry** (`planned_fill_l`). It settles on the smallest count
+    whose own plan reaches no further than it says. Where that plan's flag
+    falls a lap early - the bigger fill made the stop long enough to lose the
+    lap it was bought for - the last stint is cut to the flag and keeps its
+    fill: the one-shorter plan would reach the extra lap only by burning its
+    whole margin on it. Suzuka, strategy 32: 9 + 6 on 63.8 L drives 14.
     """
-    limit_s = inputs.race_limit_s
-    if not limit_s:
-        return allocate_laps(inputs.race_laps, limits), 0.0
-
-    def elapsed_at(count: int) -> float:
+    def attempt(count: int):
         split = optimal_split(inputs, profiles, limits, count)
-        return math.inf if split is None else elapsed_for_s(inputs, split,
-                                                            profiles)
+        if split is None:
+            return None
+        fills = [planned_fill_l(laps, inputs)[0] for laps in split]
+        flag = timed_race_laps(inputs, split, profiles, fills)
+        return None if flag is None else (split, fills, flag)
 
-    laps = max(1, inputs.race_laps)
+    count = max(1, inputs.race_laps)
+    tried = attempt(count)
     for _ in range(MAX_CLOCK_ITERATIONS):
-        if elapsed_at(laps) >= limit_s:
-            if laps <= 1:
+        if tried is not None or count <= 1:
+            break
+        count -= 1
+        tried = attempt(count)
+    if tried is None:
+        lengths = allocate_laps(max(1, inputs.race_laps), limits)
+        return (lengths, [planned_fill_l(laps, inputs)[0] for laps in lengths],
+                0.0)
+
+    for _ in range(MAX_CLOCK_ITERATIONS):
+        covered = tried[2][0]
+        if covered > count:
+            longer = attempt(count + 1)
+            if longer is None:
                 break
-            laps -= 1
+            count, tried = count + 1, longer
             continue
-        break
-    for _ in range(MAX_CLOCK_ITERATIONS):
-        if elapsed_at(laps + 1) < limit_s:
-            laps += 1
-            continue
+        if count > 1:
+            shorter = attempt(count - 1)
+            if shorter is not None and shorter[2][0] <= count - 1:
+                count, tried = count - 1, shorter
+                continue
         break
 
-    lengths = optimal_split(inputs, profiles, limits, laps)
-    if lengths is None:
-        return allocate_laps(laps, limits), 0.0
-    elapsed = elapsed_for_s(inputs, lengths, profiles)
-
-    # The clock has not expired, so one more lap has to be run whatever the
-    # plan says. It lands on the last stint, on the fuel that stint already
-    # took, and it is what takes the race past the flag.
-    fuel = stint_fuel_l(lengths[-1], inputs)
-    final_lap_s = (stint_time_s(lengths[-1] + 1, inputs, fuel_at_start_l=fuel,
-                                profile=profiles[-1])
-                   - stint_time_s(lengths[-1], inputs, fuel_at_start_l=fuel,
-                                  profile=profiles[-1]))
-    lengths[-1] += 1
-    return lengths, elapsed + final_lap_s
+    lengths, fills, (covered, flag_s) = tried
+    lengths = list(lengths)
+    if covered < count and lengths[-1] > count - covered:
+        # Cut to the flag. The laps removed come after it, so the crossings
+        # before it - and the flag itself - are unchanged.
+        lengths[-1] -= count - covered
+    elif covered > count:
+        # The caps stopped the search short of the flag; the last stint runs
+        # on regardless, and `build_plan` reports it past its cap.
+        lengths[-1] += covered - count
+        fills[-1] = planned_fill_l(lengths[-1], inputs)[0]
+        flag = timed_race_laps(inputs, lengths, profiles, fills)
+        if flag is not None:
+            flag_s = flag[1]
+    return lengths, fills, flag_s
 
 
 def legal(plan: Plan, inputs: RaceInputs) -> bool:

@@ -72,32 +72,32 @@ def _stints(plan: dict) -> list[dict]:
     return [s for s in raw if isinstance(s, dict)] if isinstance(raw, list) else []
 
 
-def _clock_allows(inputs: RaceInputs, stints: list[dict]) -> int | None:
+def _clock_allows(inputs: RaceInputs, stints: list[dict],
+                  laps: list[int]) -> int | None:
     """How many laps this plan's timed race can run, with its stops off the
-    clock. None where there is no reference lap to count with."""
-    from pitcrew.strategy.model import laps_from_minutes
+    clock. None where there is no reference lap to count with.
 
-    if not inputs.race_minutes or not inputs.lap_time_ms:
-        return None
-    stops = max(0, len(stints) - 1)
-    stop_s = 0.0
-    if stops:
-        fills = []
-        for index in range(1, len(stints)):
-            load = stints[index].get("fuel_l")
-            if load is not None and inputs.fuel_capacity_l:
-                # What goes through the hose is the next stint's load less
-                # whatever the previous stint left - unknown here, so the
-                # load itself is the ceiling, and a ceiling shortens the
-                # race, which is the safe direction.
-                fills.append(float(load))
-        litres = (sum(fills) / len(fills)) if fills else 0.0
-        stop_s = (float(inputs.pit_loss_s or 0.0)
-                  + float(inputs.pit_dead_time_s or 0.0)
-                  + (litres / inputs.refuel_rate_lps
-                     if inputs.refuel_rate_lps else 0.0))
-    return laps_from_minutes(inputs.race_minutes, inputs.lap_time_ms,
-                             stops=stops, stop_s=stop_s)
+    **`timed_race_laps`, the optimiser's own expression** (rule 12). This was
+    a second one - a flat lap, and a declared pit loss charged the dead time
+    again - and it refused strategy 32 on the grid a lap short of the count
+    the optimiser had built it to. Each stop is charged the next stint's own
+    load at the pump's rate: what goes through the hose is that load less
+    whatever the previous stint left, unknown here, so the load is the
+    ceiling, and a ceiling shortens the race, which is the safe direction.
+    A stint that omits its fuel is charged the fill the model would give it.
+    """
+    from pitcrew.strategy.model import planned_fill_l, timed_race_laps
+
+    profiles = [inputs.profile_for(stint.get("compound")) for stint in stints]
+    fills: list[float | None] = []
+    for stint, count in zip(stints, laps):
+        load = stint.get("fuel_l")
+        if isinstance(load, (int, float)) and not isinstance(load, bool):
+            fills.append(float(load))
+        else:
+            fills.append(planned_fill_l(count, inputs)[0])
+    flag = timed_race_laps(inputs, laps, profiles, fills)
+    return None if flag is None else flag[0]
 
 
 def certify(plan: dict, inputs: RaceInputs) -> Certificate:
@@ -289,7 +289,7 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
         # that was a lap long armed on that. The distance IS an output of the
         # plan - so it is computed from the plan: its stop count, its fills at
         # the pump's rate, the lane loss and the dead time.
-        allowed = _clock_allows(inputs, stints)
+        allowed = _clock_allows(inputs, stints, laps)
         if allowed is None:
             unchecked.append("the lap count against the clock, because no "
                              "reference lap time is known")
