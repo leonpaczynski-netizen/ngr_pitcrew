@@ -29,12 +29,39 @@ being 10.2 s from the start/finish line down the main straight.
 and would be wrong the first time he raced somewhere new. Throttle and lateral
 load are in the packet at 60 Hz and work on day one at any circuit.
 
-**It does not gate the crossing calls.** The once-per-lap call the coordinator
-emits at the line already lands on the biggest straight there is - at Monza the
-main straight *begins* at the start/finish line. This is for anything that
-wants to speak in the middle of a lap.
+**It did not gate the crossing calls, and that assumption was Monza's.** At
+Monza the main straight *begins* at the start/finish line; at Bathurst on 14
+Sep 2026 the line is a few seconds from Hell Corner, and the heartbeat plus the
+data line queued behind it reached the driver in the braking zone. So the voice
+now asks `fits` before it starts any volunteered line (`Voice.listen_on`) -
+the crossing's news included - and only instructions and events go unasked.
+
+### How long is this straight? - measured, and what is missing
+
+**Nothing in the app knows.** `corner_models` holds corners for eleven
+circuits and not Mount Panorama, and no table anywhere holds straights; the
+telemetry thread has no live lap distance to look one up by. So `Window`
+carries a `remaining_s` that is None today, and `fits` is written for both:
+
+* **With a model** (`remaining_s` known), a clip starts when it and
+  `FIT_MARGIN_S` fit in what is left.
+* **Without one**, it cannot know, so it waits for evidence: the straight has
+  to have been held `UNMODELLED_HOLD_S`, and a strict (colour) clip has to be
+  no longer than `UNMODELLED_CLIP_S`. Measured over the 143 straight windows
+  of the Bathurst race (session 176, 19 laps), a clip of up to 2.5 s started
+  at the 2 s edge finished inside the straight 33-38% of the time; started at
+  4 s held, 65-70%, with about two such chances a lap. Half of all windows
+  there had 1.5 s or less left at the edge.
+
+What would close the gap, per circuit: the straights as lap-distance windows
+with their duration at race pace - `windows()` below, run over stored laps
+with `lap_distance_m`, produces exactly that - and a live lap distance on the
+telemetry thread to look the current one up by. Then `Straight.window` takes
+the remaining time and the hold can drop back to the edge.
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 # Full throttle, near enough. Below this he is still working.
 THROTTLE_PCT = 90.0
@@ -46,6 +73,59 @@ MAX_LATERAL_G = 0.3
 # mid-corner is not a straight, short enough that the shorter straights still
 # qualify.
 MIN_HELD_S = 2.0
+
+# **Without a model of the circuit, how long the straight must already have
+# lasted before a volunteered clip starts on it.** See the module docstring
+# for the Bathurst measurement: 4 s held roughly doubles how often a short
+# clip finishes inside the straight, against the 2 s edge.
+UNMODELLED_HOLD_S = 4.0
+# And the longest strict (colour) clip that may start there. A data line from
+# the pack is 1.5-2.5 s; the fuel figure ("1.9 laps of fuel in hand to the
+# stop.", ~4.8 s) does not fit and is not read out mid-lap on a circuit with
+# no model - the heartbeat at the crossing carries the fuel anyway.
+UNMODELLED_CLIP_S = 2.5
+# With a model: the clip must end this far before the straight does.
+FIT_MARGIN_S = 0.5
+# A detector not fed for longer than this is not on a straight - the stream
+# stopped, or the game is paused - whatever it last said.
+FRESH_S = 0.5
+
+
+@dataclass(frozen=True)
+class Window:
+    """Where the car is, as far as speaking goes, at one moment."""
+    held_s: float = 0.0
+    # Seconds left on this straight, from a per-circuit model. None today:
+    # no circuit has one (see the module docstring).
+    remaining_s: float | None = None
+
+    @property
+    def open(self) -> bool:
+        return self.held_s >= MIN_HELD_S
+
+
+def fits(window: Window | None, clip_s: float | None, *,
+         strict: bool = False) -> bool:
+    """Whether a clip of `clip_s` may start now.
+
+    Never on a closed window. With a model, the clip has to fit in what is
+    left. Without one, the straight has to have proved itself for
+    `UNMODELLED_HOLD_S`, and a strict clip has to be short.
+
+    A clip of unknown length is refused when strict and otherwise judged by
+    the hold alone.
+    """
+    if window is None or not window.open:
+        return False
+    if window.remaining_s is not None:
+        if clip_s is None:
+            return not strict
+        return clip_s + FIT_MARGIN_S <= window.remaining_s
+    if window.held_s < UNMODELLED_HOLD_S:
+        return False
+    if not strict:
+        return True
+    return clip_s is not None and clip_s <= UNMODELLED_CLIP_S
 
 
 def lateral_g(speed_ms: float | None, yaw_rate: float | None) -> float | None:
@@ -74,7 +154,22 @@ class Straight:
         self._max_g = max_lateral_g
         self._min_held = min_held_s
         self._since: float | None = None
+        self._fed_at: float | None = None
         self.held_s: float = 0.0
+
+    def window(self, now: float, *,
+               remaining_s: float | None = None) -> Window:
+        """The straight as it stands at `now`, for `fits`.
+
+        Read from another thread (the voice's) while the telemetry thread
+        writes: two floats, each read once, and a torn pair costs at worst
+        one poll's wrong answer. A detector not fed for `FRESH_S` is closed -
+        a paused game must not hold a straight open.
+        """
+        since, fed = self._since, self._fed_at
+        if since is None or fed is None or now - fed > FRESH_S:
+            return Window()
+        return Window(held_s=max(0.0, now - since), remaining_s=remaining_s)
 
     def update(self, *, throttle_pct: float | None, speed_ms: float | None,
                yaw_rate: float | None, now: float) -> bool:
@@ -83,6 +178,7 @@ class Straight:
         **Stays true for the rest of the straight**, so a caller that has
         something to say does not have to catch one particular frame.
         """
+        self._fed_at = now
         g = lateral_g(speed_ms, yaw_rate)
         ok = (throttle_pct is not None and throttle_pct >= self._throttle
               and g is not None and g <= self._max_g)
@@ -98,6 +194,7 @@ class Straight:
     def reset(self) -> None:
         """Forget the current run - on a pit entry, a pause, or a new session."""
         self._since = None
+        self._fed_at = None
         self.held_s = 0.0
 
 

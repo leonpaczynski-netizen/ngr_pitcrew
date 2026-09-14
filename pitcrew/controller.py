@@ -5053,6 +5053,19 @@ class PitCrewController(QObject):
         self._engineer_speaks = speaks
         if speaks:
             self.voice.warm()
+            # **Volunteered radio waits for a straight long enough to say it
+            # on** - the driver's rule, 14 Sep 2026: talk whenever it
+            # matters, never in braking, instructions first. The voice asks
+            # this before starting any NEWS or COLOUR line; instructions and
+            # events are never held. See `race/straight.py` for what it can
+            # and cannot know about a circuit with no model.
+            listen_on = getattr(self.voice, "listen_on", None)
+            if listen_on is not None:
+                from pitcrew.race.straight import fits as straight_fits
+
+                detector = self.bridge.straight
+                listen_on(lambda clip_s, strict: straight_fits(
+                    detector.window(_monotonic()), clip_s, strict=strict))
             self.ptt.start()
         self._race_inputs = inputs
         self._race_burns = []
@@ -7016,7 +7029,7 @@ class PitCrewController(QObject):
         corner, worst = max(wear.items(), key=lambda kv: kv[1])
         return worst, corner
 
-    def _on_straight_reached(self) -> None:
+    def _on_straight_reached(self, *, recheck: bool = False) -> None:
         """Qt thread: the car is somewhere he can listen. Read him a number.
 
         **This is the only thing in the app that speaks mid-lap**, and it is
@@ -7034,6 +7047,16 @@ class PitCrewController(QObject):
         It is not extra radio. The data tier moved OFF the crossing to get
         here, so the budget is unchanged and the findings it used to displace
         now get through.
+
+        **Only onto a clear radio, and only if the straight has room for it**
+        (Bathurst, 14 Sep 2026). The edge fired a second into the heartbeat
+        and the line queued behind it: measured, 4.8-7.0 s from composed to
+        spoken, landing in the braking zone for Hell Corner. Now a busy voice
+        means this straight is passed over and the next straight of the same
+        lap tries again - `data_line` only uses the lap up when it says
+        something - and on a circuit with no straight model the line waits
+        for the straight to prove itself (`straight.UNMODELLED_HOLD_S`) with a
+        single re-check, then says only a number short enough to fit.
         """
         race = self.race
         if race is None or not race.running or self._colour is None:
@@ -7050,6 +7073,42 @@ class PitCrewController(QObject):
         if (state.last_said_lap == state.lap
                 and not state.only_the_heartbeat_this_lap()):
             return
+        fits_here = None
+        if self._engineer_speaks:
+            from pitcrew.race.straight import UNMODELLED_HOLD_S
+            from pitcrew.race.straight import fits as straight_fits
+
+            # **Never behind the engineer either.** Queued behind a line that
+            # is playing, a number composed for this straight is said on
+            # whatever comes after it.
+            if getattr(self.voice, "busy", False):
+                log("race").debug("straight: the voice is busy - the data "
+                                  "line waits for the next straight this lap")
+                return
+            detector = getattr(self.bridge, "straight", None)
+            window = (detector.window(_monotonic())
+                      if detector is not None else None)
+            if window is None or not window.open:
+                return
+            if (window.remaining_s is None
+                    and window.held_s < UNMODELLED_HOLD_S):
+                if not recheck:
+                    # One look again at the moment the straight would have
+                    # proved itself. If it ended first, the window is closed
+                    # then and the next straight's edge starts over.
+                    wait_ms = int((UNMODELLED_HOLD_S - window.held_s)
+                                  * 1000) + 20
+                    QTimer.singleShot(
+                        wait_ms,
+                        lambda: self._on_straight_reached(recheck=True))
+                return
+            timed = getattr(self.voice, "duration_s", None)
+
+            def fits_here(spoken: str) -> bool:
+                return straight_fits(window,
+                                     timed(spoken) if timed else None,
+                                     strict=True)
+
         fuel_laps, fuel_ref = self._laps_of_fuel_in_hand(state)
         # **The heartbeat already said the fuel this lap.** Its "N spare to
         # the flag" and this line's "N laps of fuel in hand to the flag" are
@@ -7072,12 +7131,13 @@ class PitCrewController(QObject):
             wear_corner=self._live_worst_wear()[1],
             # See `_voice_colour`: a retired stop is not counted down to.
             stint_ends_on_lap=(state.stint_ends_on_lap
-                               if stop_still_needed(state) else None))
+                               if stop_still_needed(state) else None),
+            fits=fits_here)
         if call is None:
             return
         spoken = call.spoken()
         if self._engineer_speaks:
-            self.voice.say(spoken)
+            self.voice.say(spoken, kind=call.kind)
         self.ptt.last_call = spoken
         if self.race_screen is not None:
             self.race_screen.set_status(spoken)

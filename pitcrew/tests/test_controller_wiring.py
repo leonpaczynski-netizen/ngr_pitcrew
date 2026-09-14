@@ -99,10 +99,24 @@ def test_the_straight_line_survives_a_heartbeat(raced):
     said: list = []
     controller._colour.data_line = lambda **kwargs: said.append(kwargs) or None
     controller.settings = replace(controller.settings, colour_calls="chatty")
+    # On a straight that has proved itself - the edge fires only on one, and
+    # the line now checks the straight before it composes anything.
+    on_a_straight(controller)
 
     controller._on_straight_reached()
 
     assert said, "the straight data line was retired by the heartbeat"
+
+
+def on_a_straight(controller, held_s: float = 6.0) -> None:
+    """Feed the live straight detector a flat, full-throttle run."""
+    import time
+
+    now = time.monotonic()
+    controller.bridge.straight.reset()
+    for at in (now - held_s, now):
+        controller.bridge.straight.update(throttle_pct=100.0, speed_ms=60.0,
+                                          yaw_rate=0.0, now=at)
 
 
 # ------------------------------------------------------------- the race path

@@ -216,7 +216,7 @@ class ColourCalls:
     def data_line(self, *, lap: int, fuel_laps_in_hand=None,
                   fuel_reference: str = TO_THE_FLAG, wear_worst=None,
                   wear_corner=None, lap_time_ms=None,
-                  stint_ends_on_lap=None) -> ColourCall | None:
+                  stint_ends_on_lap=None, fits=None) -> ColourCall | None:
         """The instrument read out, for somewhere the driver can listen.
 
         **The same `_data` tier, moved off the crossing.** It was one of the
@@ -234,6 +234,10 @@ class ColourCalls:
         At most once per lap, and the guard is the LAP rather than a timer
         because `Straight.update` stays true for the whole straight - a caller
         polling it every frame would otherwise be told yes six hundred times.
+
+        `fits(spoken)` is whether a line may start on the straight the car is
+        on; a line that does not fit is not said and does not use the lap up,
+        so the next straight of the same lap tries again.
         """
         if self.level != CHATTY:
             return None
@@ -241,7 +245,7 @@ class ColourCalls:
             return None
         call = self._data(fuel_laps_in_hand, fuel_reference,
                           wear_worst, wear_corner,
-                          lap_time_ms, stint_ends_on_lap, lap)
+                          lap_time_ms, stint_ends_on_lap, lap, fits=fits)
         if call is not None:
             self._data_lap = lap
         return call
@@ -256,7 +260,8 @@ class ColourCalls:
                 self._best_ms = lap_time_ms
 
     def _data(self, fuel_laps_in_hand, fuel_reference, wear_worst, wear_corner,
-              lap_time_ms, stint_ends_on_lap, lap) -> ColourCall | None:
+              lap_time_ms, stint_ends_on_lap, lap,
+              fits=None) -> ColourCall | None:
         """One measured number, rotating, so no lap in chatty mode is empty.
 
         *"Chatty mode still didn't talk to me enough and isn't keeping me
@@ -315,9 +320,19 @@ class ColourCalls:
         # wear reading comes and goes, the box countdown ends - so indexing by
         # lap lands on the same entry repeatedly. Measured on eight laps: five
         # of them said fuel.
-        call, reason = options[self._data_said % len(options)]
-        self._data_said += 1
-        return ColourCall(DATA, call, reason)
+        #
+        # **And skip, in rotation order, a number too long for the straight**
+        # (`fits`, Bathurst 14 Sep 2026). The fuel figure is twice the length
+        # of a wear figure, and a straight that has room for one and not the
+        # other should carry the one it has room for, not nothing.
+        start = self._data_said % len(options)
+        for step in range(len(options)):
+            call, reason = options[(start + step) % len(options)]
+            line = ColourCall(DATA, call, reason)
+            if fits is None or fits(line.spoken()):
+                self._data_said += 1
+                return line
+        return None
 
     def _best_lap(self, lap_time_ms: int | None) -> ColourCall | None:
         """**The one kind that may repeat within a stint.** A new personal best
