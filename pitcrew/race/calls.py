@@ -205,6 +205,25 @@ RIVAL_BOXED = "rival-boxed"
 RIVAL_COMMITTED = "rival-committed"
 RIVAL_SHORT = "rival-short"
 STAY_OUT_FUEL = "stay-out-fuel"
+# **What is going on in the race around him, volunteered** (the driver, 14 Sep
+# 2026, after Bathurst Rd7: *"want more comms from him about what is going on
+# in the race"*; `docs/ENGINEER-TARGET-STATE_2026-08-29.md` D7 as amended).
+# All four are said mid-lap, off `race/news.py`, and none at a crossing:
+#
+#   STOPS_PICTURE  the road against the stop cycle - "P6 on the road. 2 ahead
+#                  still to stop." / "Effectively P8 after the stops."
+#   PACE           a pace difference to the car ahead or behind, only off a
+#                  multi-lap trend that beats the gap's own noise.
+#   WATCHED        a championship rival from the brief's watch list, by place.
+#   GAPS           the gap ahead and behind, with names where the roster has
+#                  them.
+#
+# Rule 13 is held in the words: "ahead" and "behind" are always the on-road
+# neighbour, and "effectively" is always after the stops.
+STOPS_PICTURE = "stops-picture"
+PACE = "pace"
+WATCHED = "watched-rival"
+GAPS = "gaps"
 
 URGENCY = (CHEQUER, STOPS_OFF, STOP_BACK, BOX_NOW,
            # **`UNDERCUT` sits directly below `BOX_NOW`.** It is a box
@@ -280,6 +299,13 @@ URGENCY = (CHEQUER, STOPS_OFF, STOP_BACK, BOX_NOW,
            # about catching somebody is the driver's, and a closing rate that
            # outranked a fuel call would be a pace note said instead of a stop.
            CLOSING,
+           # **The volunteered race picture, in the driver's order of worth**
+           # (14 Sep 2026): what the stops mean for us, then pace against a
+           # neighbour, then a championship rival, then the gap refresher.
+           # Like `POSITION` they never contend here - they are said mid-lap
+           # - and `race/news.py` offers them in this same order, so the
+           # ranking is stated once.
+           STOPS_PICTURE, PACE, WATCHED, GAPS,
            GREEN, POSITION, STATUS)
 
 # --- the two registers -----------------------------------------------------
@@ -368,6 +394,14 @@ REGISTER = {
     RIVAL_COMMITTED: DECISION,
     RIVAL_SHORT: DECISION,
     STAY_OUT_FUEL: DECISION,
+    # **Facts, volunteered because he asked for them** (14 Sep 2026). Each
+    # is something no screen he races with carries: the order after the
+    # stops, a rate across five laps, a rival's place off a board he does
+    # not look at, a gap with a name on it said while he drives.
+    STOPS_PICTURE: FACT,
+    PACE: FACT,
+    WATCHED: FACT,
+    GAPS: FACT,
 }
 
 
@@ -661,6 +695,12 @@ class Call:
     # "acted" in every race on file (Bathurst, 14 Sep 2026). Never spoken.
     box_lap: int | None = None
     plan_box_lap: int | None = None
+    # **Why this was said now, and on what it rests** - the trigger and the
+    # model, in words for the audit (CLAUDE.md §5.5: the export carries the
+    # calls and the assumptions behind them). Never spoken. Filed with the
+    # call as `why_spoken`. Set by the volunteered race calls in
+    # `race/news.py`; None on the calls that predate it.
+    why_spoken: str | None = None
 
     def spoken(self) -> str:
         """Instruction, then reason. Then the one word that marks a register.

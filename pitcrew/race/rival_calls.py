@@ -1182,14 +1182,13 @@ def candidates(state) -> list:
                 # 1 was "Box next lap."; the number is the same and the
                 # meaning is now taken from the ladder's own expression.
                 due=state.laps_overdue() is not None))
-        out.append(closing_call(behind, lap=lap,
-                                who=state.gap_behind_name,
-                                laps_left=laps_left))
-    ahead = _snapshot(getattr(state, "gap_ahead", None))
-    if ahead is not None:
-        out.append(closing_call(ahead, lap=lap,
-                                who=state.gap_ahead_name,
-                                laps_left=laps_left))
+    # **`closing_call` is no longer offered at the crossing** (14 Sep 2026).
+    # Pace against the car ahead or behind is volunteered mid-lap now, as
+    # `calls.PACE` from `race/news.py`, on the same five-lap rule and figure
+    # and with a noise test on top - and one voice saying "taking 0.9 a lap
+    # out of him" at the line while another said nothing mid-lap about the
+    # same car would be two mechanisms for one question (rule 13). The
+    # function stays: its wording and its laps-to-catch are still pinned.
 
     out = [call for call in out if call is not None]
     # **The biggest opportunity first, because only one of them gets said.**

@@ -445,13 +445,18 @@ def test_the_call_says_when_the_burn_behind_it_is_ours():
 
 
 def test_a_gap_coming_down_is_said_with_the_name_the_board_gave_him():
+    """Mid-lap now, as `calls.PACE` (D7, 14 Sep 2026) - the crossing no longer
+    offers a second pace mechanism about the same car (rule 13). The name the
+    board gave him is still the name he hears."""
+    from pitcrew.race.news import pace_sentence
+
     state = a_state()
     state.gap_ahead = a_trend("ahead", [(4, 8.0), (5, 6.5), (6, 5.0),
                                         (7, 3.5), (8, 2.0)])
     state.gap_ahead_name = "Rocky"
     call = next_call(state)
-    assert call.kind == "closing"
-    assert "out of Rocky" in call.call
+    assert call is None or call.kind != "closing"
+    assert pace_sentence("ahead", "Rocky", 1.5) ==         "Catching Rocky, 1.5 seconds a lap."
 
 
 def test_a_stop_now_that_would_drop_us_behind_is_said():
@@ -646,8 +651,8 @@ def test_every_kind_that_needs_a_rival_can_be_emitted_at_once():
     state.gap_behind = a_trend("behind", [(8, 90.0)], subject=3)
     state.gap_behind_name = "Chook"
     kinds = {call.kind for call in candidates(state)}
-    assert kinds == {"rival-boxed", "rival-committed", RIVAL_SHORT,
-                     "closing", "rejoin"}
+    # `closing` left the crossing for the mid-lap pace call (D7, 14 Sep 2026).
+    assert kinds == {"rival-boxed", "rival-committed", RIVAL_SHORT, "rejoin"}
 
 
 def test_the_rejoin_says_box_now_only_where_the_box_call_does():

@@ -89,10 +89,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pitcrew.race.calls import (BOX_NOW, BOX_SOON, CHASE, FUEL_SHORT, GREEN,
-                                 INCIDENT, LAPS_TO_GO, POSITION, RIVAL_BOXED,
-                                 STATUS, STAY_OUT, TO_THE_FLAG, TO_THE_STOP,
-                                 TYRE_TEMP)
+from pitcrew.race.calls import (BOX_NOW, BOX_SOON, CHASE, FUEL_SHORT, GAPS,
+                                 GREEN, INCIDENT, LAPS_TO_GO, PACE, POSITION,
+                                 RIVAL_BOXED, STATUS, STAY_OUT, STOPS_PICTURE,
+                                 TO_THE_FLAG, TO_THE_STOP, TYRE_TEMP, WATCHED)
 
 ACTED = "acted"
 NOT_ACTED = "not-acted"
@@ -213,6 +213,8 @@ def outcome_for(call, laps, *, final: bool = False,
 
     if kind == POSITION:
         return _position(call, lap_num, laps)
+    if kind == STOPS_PICTURE:
+        return _stops_picture(call, lap_num, laps)
     if kind == LAPS_TO_GO:
         return _laps_to_go(call, lap_num, laps, final=final, flagged=flagged)
     if kind == FUEL_SHORT:
@@ -319,6 +321,17 @@ _UNANSWERABLE = {
             "file times the other car independently"),
     RIVAL_BOXED: ("a rival's stop is seen only by the pit wall's own read of "
                   "the board - no record of his laps to confirm it"),
+    # The race news (D7, 14 Sep 2026). Each is read off the board the call
+    # was made from, and nothing on file times the other car or places him
+    # independently - so holding one to the record would ask whether the
+    # reader agrees with itself.
+    GAPS: ("the gap is the timing board as the app read it, and nothing on "
+           "file times the other car independently"),
+    PACE: ("the rate is the change in the board's gap, lap to lap - the same "
+           "reading the call was made from; no record of his laps confirms "
+           "it"),
+    WATCHED: ("his place is the board's row as the app read it, and nothing "
+              "on file records where he ran"),
 }
 
 
@@ -361,6 +374,52 @@ def _position(call, lap_num: int, laps) -> Outcome:
                    f"called P{called}, lap {closing} closed at P{at_line} - "
                    f"lost before the line or never his; the laps cannot say "
                    f"which")
+
+
+def _stops_picture(call, lap_num: int, laps) -> Outcome:
+    """"P6 on the road." held to the line, the way a place is.
+
+    **Only the road half can be held to anything.** The call's first sentence
+    is the place he held - the packet's byte, which `laps.position` records at
+    the crossing - and it is judged exactly as a place call is. The second
+    half, "2 ahead still to stop" or "Effectively P8 after the stops", rests
+    on every rival stopping the regulation minimum, and the laps on file are
+    ours alone: a later place moves with passes as well as with stops, and no
+    record says which. The detail says so, every time, so a `borne-out` is
+    never read as the projection confirmed (rule 5).
+    """
+    projection = ("the after-the-stops half assumes each rival stops the "
+                  "regulation minimum and is not on file to confirm")
+    called = _road_place(call)
+    if called is None:
+        return Outcome(CANNOT_TELL,
+                       f"the call names no road place to hold to the line; "
+                       f"{projection}")
+    closing = lap_num + 1
+    row = _row_for(closing, laps)
+    if row is None:
+        return Outcome(CANNOT_TELL,
+                       f"lap {closing}, the lap P{called} was called in, is "
+                       f"not on file", settled=False)
+    at_line = getattr(row, "position", None)
+    if not at_line:
+        return Outcome(CANNOT_TELL,
+                       f"lap {closing} closed with no place read at the line; "
+                       f"{projection}")
+    if at_line == called:
+        return Outcome(BORNE_OUT,
+                       f"lap {closing} closed at P{at_line} on the road, as "
+                       f"called; {projection}")
+    return Outcome(NOT_BORNE_OUT,
+                   f"called P{called} on the road, lap {closing} closed at "
+                   f"P{at_line} - lost before the line or never his; "
+                   f"{projection}")
+
+
+def _road_place(call) -> int | None:
+    """The road place a stop picture named, off the field it was booked by -
+    never parsed back out of the sentence."""
+    return getattr(call, "position_called", None) or None
 
 
 def _finishing_lap(laps):

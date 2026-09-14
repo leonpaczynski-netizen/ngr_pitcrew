@@ -224,3 +224,31 @@ class LaneLog:
 
     def returned(self, keys) -> None:
         self._returned.update(keys)
+
+    # --- the stop cycle, for `race/news.py` -------------------------------
+
+    def stops(self) -> list[LaneStop]:
+        """Every visit on file this race, told or not, in the order seen."""
+        return list(self._stops)
+
+    def visits_by(self, driver: str | None) -> list[LaneStop]:
+        """His visits to the lane this race. Matched without case: the brief's
+        watch list and the roster spell a name the same way, but the watch
+        list is kept lower-cased."""
+        if not driver:
+            return []
+        wanted = str(driver).lower()
+        return [stop for stop in list(self._stops)
+                if stop.driver.lower() == wanted]
+
+    def dropped_behind(self) -> list[LaneStop]:
+        """Cars a place call said were ahead of us and boxed - explained - and
+        that have not since been counted back out of the lane ahead of us.
+
+        **What the lane alone can say about the order after the stops.** Each
+        of these was ahead going in and behind us on the road after it, with
+        its stop taken; while ours is still owed it is effectively still ahead.
+        """
+        return [stop for stop in list(self._stops)
+                if stop.key in self._explained
+                and stop.key not in self._returned]

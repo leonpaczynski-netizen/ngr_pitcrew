@@ -41,6 +41,7 @@ from pitcrew.race.calls import (
 from pitcrew.race.clock import RaceClock
 from pitcrew.race.composure import Composure
 from pitcrew.race.expectations import ExpectationTracker
+from pitcrew.race.news import RaceNews
 from pitcrew.store.tyres import gap_association_for
 from pitcrew.strategy.model import PIT_LOSS_MEASURED_EX_FUEL
 from pitcrew.telemetry.recorder import SAMPLE_HZ
@@ -351,6 +352,9 @@ class RaceCoordinator:
         # when the discrepancy CHANGES - see `note_packet`.
         self._gt7_pending = 0
         self._gt7_pending_value = 0
+        # **The race around him, volunteered** - gaps, the stop cycle, the
+        # championship and pace (D7, 14 Sep 2026). See `race/news.py`.
+        self.news = RaceNews()
         self._reset_mid_lap()
 
     # ------------------------------------------------------------------ arming
@@ -369,6 +373,7 @@ class RaceCoordinator:
         # **And the rival stops, and the mid-lap slot's clock** (rule 11): a
         # stop seen before a re-arm is not this race's news.
         self.state.lane.new_session()
+        self.news.new_session()
         self._reset_mid_lap()
         if planned is not None and actual is not None:
             ok, why = planned.matches(actual)
@@ -799,7 +804,8 @@ class RaceCoordinator:
         # reading per key, so the figure filed under 0 is the newest one -
         # which after a rolling start is a lap-one read and not a formation
         # gap, unless the board went unreadable for the whole of lap one.
-        self._lap_of_read_key[int(self.state.lap_now())] = int(lap.lap_num)
+        read_key = int(self.state.lap_now())
+        self._lap_of_read_key[read_key] = int(lap.lap_num)
         self.state.lap = lap.lap_num
         # **The offset between the two lap counters, learned once, here.**
         # At a crossing the relationship is exact; mid-lap GT7 is already
@@ -939,6 +945,21 @@ class RaceCoordinator:
         self._incident_pending = None
         if incident is not None:
             self._note_incident(lap, reported=incident)
+        # **The lap into the pace record of the cars either side**, with the
+        # reason where it is not a lap of anybody's pace (rule: exclude the
+        # excursions before correlating). Keyed on the wall's own read key.
+        dirty = ("our pit lap" if lap.is_pit_lap else
+                 "our out lap" if lap.is_out_lap else
+                 "our incident lap" if incident is not None else
+                 "lap one" if lap.lap_num <= 1 else None)
+        try:
+            self.news.note_lap(read_key, int(lap.lap_num),
+                               (lap.lap_time_ms / 1000.0
+                                if lap.lap_time_ms and lap.lap_time_ms > 0
+                                else None),
+                               dirty, lane=self.state.lane)
+        except Exception:
+            log("race").exception("news: the lap could not be filed")
 
         # **Lap one never enters the pace record.** It carries the grid and -
         # on race day - a standing start, and it once fed the pace-vs-plan
@@ -1177,6 +1198,39 @@ class RaceCoordinator:
             except Exception:
                 log("race").exception("the sector map could not take the lap")
 
+    def note_gap_read(self, side: str, gap_s: float | None, subject=None,
+                      name: str | None = None) -> None:
+        """One interval box, read now, with whose it is. Worker thread.
+
+        **As it is read, not at the crossing.** `note_gaps` hands over the
+        wall's trends once a lap, which is right for a closing rate and a lap
+        late for "PUNISHED ahead, 2.1" - the gap George volunteers mid-lap
+        has to be the gap now (D7, 14 Sep 2026). Stamped with the frame
+        count the mid-lap slot keeps time in, and the wall's own read key.
+        """
+        if not self.running:
+            return
+        try:
+            self.news.note_gap(side, gap_s, subject, name,
+                               packet=self._packets,
+                               lap_key=int(self.state.lap_now()))
+        except Exception:
+            log("race").exception("news: a gap reading could not be taken")
+
+    def note_board(self, rows, own_row: int | None) -> None:
+        """One frame of the board's rows, `(row, name)`. Worker thread.
+
+        Turned into places against our own place off the packet at this
+        moment - see `news.board_places` for the shape it has to fit.
+        """
+        if not self.running:
+            return
+        try:
+            self.news.note_board(rows, own_row, packet=self._packets,
+                                 our_position=self.state.position)
+        except Exception:
+            log("race").exception("news: a board read could not be taken")
+
     def note_rival_positions(self, positions: dict) -> None:
         """Where the other cars are, refreshed each lap from the board.
 
@@ -1261,11 +1315,26 @@ class RaceCoordinator:
         self._note_lap_counter(packet)
         return call
 
-    # **Seconds between two volunteered mid-lap calls.** Bathurst, 14 Sep
-    # 2026: "P9", "P8", "P7" in 41 s, and "You're back on it" with a place
-    # call 19 s behind it. A held place is not lost by the wait - it is
-    # re-read when the slot opens, so what is said is where he has SETTLED.
+    # **Seconds between two volunteered mid-lap calls OF ONE KIND.** Bathurst,
+    # 14 Sep 2026: "P9", "P8", "P7" in 41 s. A held place is not lost by the
+    # wait - it is re-read when the slot opens, so what is said is where he
+    # has SETTLED. Once a kind, not once for everything: the same night the
+    # driver asked for MORE radio about the race, with no cap on how much,
+    # and one 30 s slot shared by places, stops, gaps, pace and the
+    # championship would have been the cap he declined.
     MID_LAP_SPACING_S = 30.0
+    # **Seconds between any two volunteered lines.** Two lines back to back
+    # on one straight are a table, which §5.5 forbids: one thing, then a
+    # corner, then the next. The longest NEWS line is ~5 s from the pack, so
+    # this leaves at least seven seconds of silence after it - about one
+    # braking zone at racing speed. Not a limit on how many a lap: a 2:02
+    # Bathurst lap has room for eight at this spacing and the voice's gate,
+    # not this, decides which of them find a straight.
+    NEWS_SPACING_S = 12.0
+    # Frames between two looks at the four race-news calls when the slot is
+    # open. They read snapshots under a lock; ten times a second is plenty
+    # for facts that are held for seconds before they are said.
+    NEWS_EVERY_PACKETS = 6
     # **Seconds either side of a crossing the slot stays shut.** The crossing
     # speaks its own call - a box call among them - and the voice drops the
     # oldest of a queue three deep and anything eight seconds stale, so a
@@ -1288,6 +1357,9 @@ class RaceCoordinator:
         self._in_flight: dict[int, tuple] = {}
         # A place call's lane explanation, applied when it is heard.
         self._lane_use: dict[int, tuple] = {}
+        # The frame each mid-lap kind was last handed out on - see
+        # `MID_LAP_SPACING_S`.
+        self._last_kind_packet: dict[str, int] = {}
 
     def _note_crossing_for_mid_lap(self) -> None:
         """Qt thread, at the crossing: where the lap began, and how long it is
@@ -1315,12 +1387,20 @@ class RaceCoordinator:
                 return "coming up to the line"
         last = self._last_mid_lap_packet
         if last is not None and (self._packets - last
-                                 < int(self.MID_LAP_SPACING_S * SAMPLE_HZ)):
+                                 < int(self.NEWS_SPACING_S * SAMPLE_HZ)):
             return "spacing"
         return None
 
-    def _spoke_mid_lap(self) -> None:
+    def _rested(self, kind: str) -> bool:
+        """Whether a call of this kind may be handed out again yet."""
+        last = self._last_kind_packet.get(kind)
+        return last is None or (self._packets - last
+                                >= int(self.MID_LAP_SPACING_S * SAMPLE_HZ))
+
+    def _spoke_mid_lap(self, kind: str | None = None) -> None:
         self._last_mid_lap_packet = self._packets
+        if kind is not None:
+            self._last_kind_packet[kind] = self._packets
         self._holding_logged = None
 
     def _hold(self, what: str, why: str) -> None:
@@ -1333,8 +1413,8 @@ class RaceCoordinator:
     def _mid_lap(self, packet) -> "Call | None":
         """The one thing, if any, said between two crossings, off a frame.
 
-        Three things may be said here, in this order, and at most one per
-        `MID_LAP_SPACING_S`:
+        Three things may be said here first, in this order, each at most once
+        per `MID_LAP_SPACING_S` and any two `NEWS_SPACING_S` apart:
 
         1. **"You're back on it."** - the word owed on the way back from an
            off (see `_compose`). It is not spaced: it is the end of a silence.
@@ -1347,8 +1427,22 @@ class RaceCoordinator:
         None of it on or near a crossing (`CROSSING_QUIET_S`), which belongs
         to the crossing's own call. A held call is never booked as said, so
         it is still true, and still said, when the slot opens.
+
+        ### And the race around him (D7, 14 Sep 2026)
+
+        After those three, **the four volunteered race calls** in
+        `race/news.py`, in the driver's order of worth: what the stops mean
+        for us, pace against a neighbour, a championship rival, the gaps.
+        Any two volunteered lines are `NEWS_SPACING_S` apart and two of one
+        kind `MID_LAP_SPACING_S`; there is no count per lap.
+
+        **A place the pit lane made carries the stop picture, not "Not
+        passes".** "P6 of 13. Not passes - 2 cars ahead boxed." and "P6 on
+        the road. Effectively P8 after the stops." are the same event, and
+        one call says it: where the lane explains a gain and the picture has
+        an after-the-stops place to give, the picture IS the place call.
         """
-        from pitcrew.race.calls import FACT
+        from pitcrew.race.calls import FACT, POSITION, RIVAL_BOXED
 
         proposal = self._note_position(packet)
         in_pit = bool(self.state.in_pit)
@@ -1369,28 +1463,137 @@ class RaceCoordinator:
             if proposal is not None:
                 self._hold("position", shut)
             return None
-        rival = self._rival_stop_mid_lap()
+        rival = (self._rival_stop_mid_lap() if self._rested(RIVAL_BOXED)
+                 else None)
         if rival is not None:
-            self._spoke_mid_lap()
+            self._spoke_mid_lap(RIVAL_BOXED)
             log("race").info("mid-lap: %s", rival.spoken())
             self._hand_out(rival)
             return rival
-        if proposal is None:
+        if proposal is not None and self._rested(POSITION):
+            if not self.composure.may_volunteer(FACT):
+                self._hold("position", "off the road or still regathering")
+                return None
+            if self._place_waiting_on_the_voice(proposal):
+                # **The same place, already handed over and not yet heard.**
+                # The voice holds it for a straight; handing it over again
+                # would queue it twice. A DIFFERENT place goes through, and
+                # the voice replaces the queued line with it.
+                self._hold("position", "that place is waiting on the voice")
+                return None
+            call = self._through_the_lane(proposal)
+            call = self._place_with_the_picture(call)
+            self._spoke_mid_lap(POSITION)
+            log("race").info("mid-lap: %s", call.spoken())
+            self._hand_out(call)
+            return call
+        return self._race_news()
+
+    # ------------------------------------------------- the race around him
+
+    def _required_stops(self) -> tuple[int | None, str | None, int]:
+        """`(stops each rival is assumed to make, where that comes from, stops
+        our plan makes)`.
+
+        **The regulation minimum, and only that** (D7): nothing on the board
+        says how often a rival will stop, so each is taken to stop as often
+        as the rules make him, and every sentence built on it says so. Where
+        the event states no requirement, our own plan's count stands in and
+        the call is unconfirmed - it is an assumption about him drawn from us.
+        """
+        planned = max(0, len(self._stints) - 1)
+        if self._mandatory_stops > 0:
+            return self._mandatory_stops, "the regulations", planned
+        if planned > 0:
+            return planned, "our plan", planned
+        return None, None, planned
+
+    def _place_with_the_picture(self, call):
+        """The place call, or the stop picture that says what it means."""
+        use = self._lane_use.get(id(call))
+        if use is None or not use[1]:
+            return call                       # not a gain the lane made
+        required, source, planned = self._required_stops()
+        # The cars this place is about to explain are not explained yet -
+        # that is booked when it is heard - so they are counted here.
+        waiting = [key for key in use[2]
+                   if not self.state.lane.explained(key)]
+        picture = self.news.picture_call(
+            self.state, self._packets, required=required,
+            required_source=source, planned=planned,
+            extra_dropped=len(waiting), position_called=call.position_called,
+            hold=False)
+        if picture is None:
+            return call
+        if not picture.reason.startswith("Effectively"):
+            self.news.release(picture)
+            return call
+        self._lane_use.pop(id(call), None)
+        self._lane_use[id(picture)] = (picture, use[1], use[2])
+        log("race").info("the place is the stop picture: %s",
+                         picture.spoken())
+        return picture
+
+    def _news_in_flight(self) -> bool:
+        kinds = self._news_kinds()
+        return any(call.kind in kinds
+                   for call, _ in list(self._in_flight.values()))
+
+    @staticmethod
+    def _news_kinds() -> frozenset:
+        from pitcrew.race.calls import GAPS, PACE, STOPS_PICTURE, WATCHED
+
+        return frozenset({STOPS_PICTURE, PACE, WATCHED, GAPS})
+
+    def _race_news(self) -> "Call | None":
+        """The four volunteered race calls, best first, one at a time.
+
+        **Never a second while one is waiting on the voice.** A line held for
+        a straight is still the line he will hear; queueing the next behind
+        it is how a queue fills with facts that go stale together. Where
+        nothing answers for the voice (a replay), the spacing alone paces them.
+        """
+        from pitcrew.race.calls import (FACT, GAPS, PACE, STOPS_PICTURE,
+                                        WATCHED, _crossing_the_line)
+
+        if self._packets % self.NEWS_EVERY_PACKETS:
             return None
-        if not self.composure.may_volunteer(FACT):
-            self._hold("position", "off the road or still regathering")
+        state = self.state
+        if (state.in_pit or state.finished or state.lap < 1
+                or _crossing_the_line(state)
+                or not self.composure.composed
+                or not self.composure.may_volunteer(FACT)):
             return None
-        if self._place_waiting_on_the_voice(proposal):
-            # **The same place, already handed over and not yet heard.** The
-            # voice holds it for a straight; handing it over again would
-            # queue it twice. A DIFFERENT place goes through, and the voice
-            # replaces the queued line with it.
-            self._hold("position", "that place is waiting on the voice")
+        if self.acknowledged_delivery and self._news_in_flight():
+            self._hold("race news", "a line is waiting on the voice")
             return None
-        call = self._through_the_lane(proposal)
-        self._spoke_mid_lap()
-        self._hand_out(call)
-        return call
+        now = self._packets
+        required, source, planned = self._required_stops()
+        builders = (
+            (STOPS_PICTURE, lambda: self.news.picture_call(
+                state, now, required=required, required_source=source,
+                planned=planned)),
+            (PACE, lambda: self.news.pace_call(state, now, lane=state.lane)),
+            (WATCHED, lambda: self.news.watched_call(state, now)),
+            (GAPS, lambda: self.news.gaps_call(state, now)),
+        )
+        for kind, build in builders:
+            if not self._rested(kind):
+                continue
+            try:
+                call = build()
+            except Exception:
+                log("race").exception("news: the %s call could not be made",
+                                      kind)
+                continue
+            if call is None:
+                continue
+            self._spoke_mid_lap(kind)
+            log("race").info("mid-lap: %s [%s]", call.spoken(),
+                             call.why_spoken)
+            self._hand_out(call)
+            return call
+        return None
 
     # ------------------------------------------------- said means heard
     #
@@ -1429,8 +1632,10 @@ class RaceCoordinator:
             return False
         if call.kind == POSITION:
             return call.position_called is not None
+        # The race news books a band, a place or a figure as what he was
+        # told - so only when he was told it (`race/news.py`).
         return call.kind in (RIVAL_BOXED, RIVAL_COMMITTED, RIVAL_SHORT,
-                             CLOSING)
+                             CLOSING, *RaceCoordinator._news_kinds())
 
     def _hand_out(self, call) -> None:
         """`call` is being given to the voice: in flight, or booked now."""
@@ -1476,7 +1681,11 @@ class RaceCoordinator:
         lane = self.state.lane
         if call.kind == RIVAL_BOXED:
             lane.tell(lane.keys_in_tag(RIVAL_BOXED, call.tag))
-        elif call.kind == POSITION:
+        elif call.kind in self._news_kinds():
+            self.news.book(call)
+        if call.kind == POSITION or (call.kind in self._news_kinds()
+                                     and call.position_called is not None):
+            # A stop picture that stood in for a place books the place too.
             position_spoken(self.state, call)
             use = self._lane_use.pop(id(call), None)
             if use is not None and use[0] is call:
@@ -1489,6 +1698,8 @@ class RaceCoordinator:
         lane = self.state.lane
         if call.kind == RIVAL_BOXED:
             lane.release(lane.keys_in_tag(RIVAL_BOXED, call.tag))
+        if call.kind in self._news_kinds():
+            self.news.release(call)
         if call.tag:
             # A crossing's tagged rival fact is "said" by its tag
             # (`_worth_saying_again`); unheard, it is sayable again.
@@ -1498,7 +1709,8 @@ class RaceCoordinator:
     def _place_waiting_on_the_voice(self, proposal) -> bool:
         from pitcrew.race.calls import POSITION
 
-        return any(call.kind == POSITION
+        # Any kind carrying the place: a stop picture can stand in for one.
+        return any((call.kind == POSITION or call.position_called is not None)
                    and call.position_called == proposal.position_called
                    for call, _ in list(self._in_flight.values()))
 

@@ -314,6 +314,12 @@ NEWS_STALE_AFTER_S = 20.0
 # A position line is coalesced (the newest replaces any queued one), so the
 # one that is said is the current place however long it waited.
 POSITION_STALE_AFTER_S = 30.0
+# **A gap is not a fact that keeps.** "PUNISHED ahead, 2.1" is said to a tenth
+# because two readings seconds apart agree to about that (median 0.03-0.11 s,
+# `race/news.py`), and a gap closing at a second a lap moves a tenth in about
+# twelve seconds of a two-minute lap. Older than this it is dropped, the race
+# is told it was not heard, and the next line is built from the gap then.
+GAP_STALE_AFTER_S = 12.0
 # The straight's number. Late by more than this it lands somewhere he is
 # not listening, and the straight it was composed for has gone.
 DATA_STALE_AFTER_S = 1.5
@@ -344,7 +350,9 @@ def _kind_classes() -> dict[str, int]:
     # Said mid-lap, off a frame or the pit wall's worker - never at the
     # crossing. Everything else not listed is EVENT.
     news = (calls.POSITION, calls.RIVAL_BOXED, calls.RIVAL_COMMITTED,
-            calls.RIVAL_SHORT, calls.CLOSING)
+            calls.RIVAL_SHORT, calls.CLOSING,
+            # The race around him (D7, 14 Sep 2026) - `race/news.py`.
+            calls.STOPS_PICTURE, calls.PACE, calls.WATCHED, calls.GAPS)
     table = {kind: NEWS for kind in news}
     table.update({kind: INSTRUCTION for kind in instructions})
     table[colour.DATA] = COLOUR
@@ -365,13 +373,15 @@ def stale_after_s(kind: str | None) -> float:
     Read from the module constants at call time, so a test that shortens one
     shortens the rule rather than a copy of it.
     """
-    from pitcrew.race.calls import POSITION
+    from pitcrew.race.calls import GAPS, POSITION
 
     cls = class_of(kind)
     if cls == COLOUR:
         return DATA_STALE_AFTER_S
     if kind == POSITION:
         return POSITION_STALE_AFTER_S
+    if kind == GAPS:
+        return GAP_STALE_AFTER_S
     if cls == NEWS:
         return NEWS_STALE_AFTER_S
     return STALE_AFTER_S
@@ -385,12 +395,15 @@ def _coalesce_key(kind: str | None, text: str) -> str | None:
     on it."), and only the first is superseded by a newer one. So the place
     is recognised by its shape, which `phrase_manifest` already relies on.
     """
-    from pitcrew.race.calls import POSITION, STATUS
+    from pitcrew.race.calls import GAPS, POSITION, STATUS, STOPS_PICTURE
     from pitcrew.race.colour import DATA
 
     if kind == POSITION and re.match(r"P\d+\b", text):
         return "position"
-    if kind in (STATUS, DATA):
+    # **A newer gap line replaces a queued older one**, and a newer stop
+    # picture a queued older picture: both describe the order NOW, and two of
+    # them read out in turn is the older one said as though it still were.
+    if kind in (STATUS, DATA, GAPS, STOPS_PICTURE):
         return kind
     return None
 

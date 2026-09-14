@@ -18,6 +18,7 @@ and the two places that were cars in the lane are not called passes.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import pytest
@@ -164,12 +165,21 @@ def test_the_two_cars_in_the_lane_are_not_called_passes(monkeypatch):
 
 
 def test_nothing_mid_lap_is_said_closer_than_the_spacing(monkeypatch):
+    """Two volunteered lines `NEWS_SPACING_S` apart, two of one kind
+    `MID_LAP_SPACING_S` - "P9, P8, P7 in 41 s" was one kind flapping. One
+    shared 30 s slot was the per-lap cap the driver declined on 14 Sep 2026."""
     _, said = replay(monkeypatch)
-    mid = [when for when, how, text in said
+    mid = [(t(when), bool(re.search(r"ha(s|ve) boxed", text)),
+            bool(re.match(r"P\d", text)))
+           for when, how, text in said
            if how == "mid-lap" and not text.startswith("You're back on it")]
-    seconds = [t(when) for when in mid]
-    gaps = [b - a for a, b in zip(seconds, seconds[1:])]
-    assert all(gap >= RaceCoordinator.MID_LAP_SPACING_S for gap in gaps), said
+    gaps = [b[0] - a[0] for a, b in zip(mid, mid[1:])]
+    assert all(gap >= RaceCoordinator.NEWS_SPACING_S for gap in gaps), said
+    for family in (1, 2):
+        seconds = [m[0] for m in mid if m[family]]
+        same = [b - a for a, b in zip(seconds, seconds[1:])]
+        assert all(gap >= RaceCoordinator.MID_LAP_SPACING_S
+                   for gap in same), said
 
 
 def test_the_stop_is_one_line_after_he_rejoins(monkeypatch):
