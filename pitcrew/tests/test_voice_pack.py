@@ -350,8 +350,20 @@ def test_the_pack_stays_within_budget():
     PTT answers and the box call's own figure, played whole on purpose: a
     join in the middle of the number he dials in is the wrong place to save
     a file.
+
+    **Raised to 800 on 15 Sep 2026, for the race around him** (D7, the
+    driver's decision after Bathurst Rd7: gaps with names, what the stops
+    mean, championship rivals, pace). The ceiling stood at 750 with 747 used.
+    `race_news_lines` costs 20 clips - the unnamed gap and pace lines split on
+    their one number, the count behind a rate, and the stop picture's fixed
+    halves ("on the road.", "Effectively", "after the stops.", "If they stop
+    once.") with the place played from the existing "P6" - bringing the pack
+    to 767. The picture's two place sentences were given shapes rather than
+    enumerated, which is the 60 clips this raise does not spend; a named line
+    ("PUNISHED ahead, 2.1.") costs nothing because no clip can hold a name.
+    800 leaves 33, about one more family of this size.
     """
-    assert len(manifest.clips()) < 750
+    assert len(manifest.clips()) < 800
 
 
 def test_the_same_line_always_names_the_same_file():

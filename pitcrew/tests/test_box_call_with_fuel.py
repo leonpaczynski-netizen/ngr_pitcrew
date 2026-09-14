@@ -84,5 +84,5 @@ def test_a_box_call_is_never_a_declared_gap():
 
 
 def test_the_pack_stays_within_budget_with_the_fuel_sentence_in_it():
-    # 750 since 14 Sep 2026 - see `test_voice_pack.test_the_pack_stays_within_budget`.
-    assert len(manifest.clips()) < 750
+    # 800 since 15 Sep 2026 - see `test_voice_pack.test_the_pack_stays_within_budget`.
+    assert len(manifest.clips()) < 800

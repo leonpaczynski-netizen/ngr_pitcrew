@@ -104,6 +104,12 @@ TANK_FUEL_TAIL = "laps of fuel in the tank."
 # refuses a sentence with two, so a family with a known fixed shape is
 # decomposed by that shape rather than generically.
 _POSITION_LINE = re.compile(r"^P(\d+) of (\d+)\.$")
+# **The stop picture's two place sentences** (`race/news.py`, 14 Sep 2026):
+# "P6 on the road." and "Effectively P8 after the stops.". `_NUMBER` rightly
+# refuses the 6 in "P6", so without a shape each would be a whole clip per
+# place - sixty clips for two sentences whose place is already in the pack.
+_ROAD_LINE = re.compile(r"^P(\d+) on the road\.$")
+_EFFECTIVE_LINE = re.compile(r"^Effectively P(\d+) after the stops\.$")
 
 # The one number inside a race call, wherever it sits. Deliberately strict
 # about its edges, because each edge is a line that decomposed wrongly once:
@@ -1012,10 +1018,53 @@ def refuel_lines() -> tuple[str, ...]:
     return _pieces(*lines)
 
 
+@lru_cache(maxsize=1)
+def race_news_lines() -> tuple[str, ...]:
+    """The race around him (D7, 14 Sep 2026): the parts that hold no name.
+
+    Driven through `race/news.py`'s own wording functions, never retyped:
+    the gap line and the pace line about an UNNAMED car ("The car ahead,
+    2.1.", "Catching the car ahead, 0.9 seconds a lap."), the count it rests
+    on, and the stop picture ("P6 on the road. Effectively P8 after the
+    stops. If they stop once."). Kept as the words either side of each number
+    (`_pieces`), and the two place sentences as the fixed halves `_shaped`
+    plays them from - "P6" is already a clip.
+
+    **Not a named line.** "PUNISHED ahead, 2.1." and "Magical daddy P4, 3
+    ahead." carry a name no clip can hold, and a pack clip spliced to a
+    live-synthesised name is two voices in one sentence - they stay live, as
+    the rival's stop does.
+    """
+    from pitcrew.race.news import (gap_sentence, pace_reason, pace_sentence,
+                                   picture_words)
+
+    lines: list[str] = []
+    for side in ("ahead", "behind"):
+        for gap_s in (2.1, 12.0, 0.04):
+            lines.append(gap_sentence(side, None, gap_s))
+        for rate in (0.9, -0.9):
+            lines.append(pace_sentence(side, None, rate))
+    lines.append(pace_reason(5))
+    for line, required in ((("still", 2), 1), (("effective", 8), 1),
+                           (("effective", 8), 2), (("effective", 8), 3)):
+        call, reason = picture_words(6, line, required)
+        lines.append(f"{call} {reason}")
+    out: list[str] = []
+    for line in lines:
+        for sentence in re.split(r"(?<=\.)\s+", line.strip()):
+            shaped = _shaped(sentence)
+            if shaped:
+                out.extend(piece for piece in shaped
+                           if not re.fullmatch(r"P\d+", piece))
+            else:
+                out.extend(_pieces(sentence))
+    return tuple(dict.fromkeys(out))
+
+
 def volunteered_lines() -> tuple[str, ...]:
     """Every clip the families above need."""
     return tuple(dict.fromkeys((*colour_data_lines(), *off_road_lines(),
-                                *refuel_lines())))
+                                *refuel_lines(), *race_news_lines())))
 
 
 # The two references the fuel clause is measured against, mirrored from
@@ -1256,6 +1305,18 @@ def _shaped(sentence: str) -> tuple[str, ...] | None:
         if not 1 <= position <= MAX_POSITION or not 2 <= field <= MAX_FIELD:
             return ()
         return (f"P{position}", f"of {field}.")
+    match = _ROAD_LINE.match(sentence)
+    if match is not None:
+        position = int(match.group(1))
+        if not 1 <= position <= MAX_POSITION:
+            return ()
+        return (f"P{position}", "on the road.")
+    match = _EFFECTIVE_LINE.match(sentence)
+    if match is not None:
+        position = int(match.group(1))
+        if not 1 <= position <= MAX_POSITION:
+            return ()
+        return ("Effectively", f"P{position}", "after the stops.")
     return None
 
 
