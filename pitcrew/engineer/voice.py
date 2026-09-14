@@ -262,16 +262,25 @@ SPOKEN_LINE = "the engineer's line"
 #                a lower class, never waits for a straight: its lateness costs
 #                more than the distraction does, and the fill and the release
 #                are said with the car stationary.
-#   EVENT        true once at a moment - green, chequer, incident, the run-in
-#                count - and **every line said without a kind**, which is the
-#                safe default: exactly the old behaviour, eight seconds and
-#                no gate. A push-to-talk answer is here too: he just asked.
-#   NEWS         facts and advice volunteered because they matter - the
-#                heartbeat, a place gained, a rival's stop, wear, the colour
-#                findings. Waits for somewhere he can listen (see `listen_on`)
-#                and goes stale slowly, because the fact stays true while it
-#                waits; a position line is REPLACED by a newer one rather
-#                than both being read out.
+#   EVENT        tied to a moment, and above all to the CROSSING: the
+#                heartbeat, green, chequer, incident, the run-in, the
+#                crossing's colour findings and its advice (wear, temperature,
+#                fuel long). The coordinator arbitrates one of these per
+#                crossing, and saying it at the line is the design - "Lap 6"
+#                twenty seconds later is not the same call. **Every line said
+#                without a kind is here too**, which is the safe default:
+#                exactly the old behaviour, eight seconds and no gate. So is a
+#                push-to-talk answer: he just asked.
+#   NEWS         volunteered MID-LAP, at a moment that has nothing to do with
+#                where the car is: a place gained, a rival in his box or out
+#                of it, closing on a car. Waits for somewhere he can listen
+#                (see `listen_on`) and goes stale slowly, because the fact
+#                stays true while it waits; a position line is REPLACED by a
+#                newer one rather than both being read out. This is the
+#                class the driver asked for more of (14 Sep 2026: gaps and
+#                names, rival stops, championship rivals, pace - "talk
+#                whenever it matters", no cap), so it is the class that must
+#                never land in a braking zone.
 #   COLOUR       the straight's data line. A number read out on a straight
 #                and nowhere else: gated strictly on length, and stale after
 #                a second and a half, because a data line five seconds late is
@@ -282,7 +291,7 @@ SPOKEN_LINE = "the engineer's line"
 # (2.8 s) to start at all, so that is the most an instruction can wait behind
 # one, and the alternative is half a sentence the driver has to parse under
 # braking before the instruction starts - which is exactly what `LineCut`'s
-# re-queue exists to avoid for the beep. A position line (about 3.5 s from the
+# re-queue exists to avoid for the beep. A position line (3.5-4 s from the
 # pack) is the longest NEWS line likely to be playing mid-lap; the heartbeat
 # is longer but is emitted at the crossing by the same arbitration that picks
 # the box call, so the two never contend.
@@ -298,9 +307,9 @@ CLASS_NAMES = {INSTRUCTION: "instruction", EVENT: "event", NEWS: "news",
 STALE_AFTER_S = 8.0
 # **News waits for a straight, so it may wait longer.** At Bathurst a
 # straight held long enough to speak on comes two or three times a lap and
-# there is a minute of the Mountain with none; a heartbeat that goes stale in
-# eight seconds is a heartbeat that is never said there. What it says - the
-# lap, the laps to go, the fuel - stays true for the lap.
+# there is a minute of the Mountain with none; news that goes stale in eight
+# seconds is news never said there. A rival standing in his box is still
+# standing there twenty seconds on.
 NEWS_STALE_AFTER_S = 20.0
 # A position line is coalesced (the newest replaces any queued one), so the
 # one that is said is the current place however long it waited.
@@ -332,14 +341,12 @@ def _kind_classes() -> dict[str, int]:
                     calls.FUEL_SAVE, calls.FUEL_REACHES, calls.REJOIN,
                     calls.STAY_OUT_FUEL,
                     refuel.TARGET, refuel.RELEASE, refuel.SHORT)
-    events = (calls.GREEN, calls.CHEQUER, calls.INCIDENT, calls.LAPS_TO_GO)
-    table = {kind: NEWS for kind in calls.REGISTER}
-    table.update({kind: EVENT for kind in events})
+    # Said mid-lap, off a frame or the pit wall's worker - never at the
+    # crossing. Everything else not listed is EVENT.
+    news = (calls.POSITION, calls.RIVAL_BOXED, calls.RIVAL_COMMITTED,
+            calls.RIVAL_SHORT, calls.CLOSING)
+    table = {kind: NEWS for kind in news}
     table.update({kind: INSTRUCTION for kind in instructions})
-    for name in dir(colour):
-        value = getattr(colour, name)
-        if isinstance(value, str) and value.startswith("colour-"):
-            table[value] = NEWS
     table[colour.DATA] = COLOUR
     return table
 

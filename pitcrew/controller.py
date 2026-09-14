@@ -5056,8 +5056,9 @@ class PitCrewController(QObject):
             # **Volunteered radio waits for a straight long enough to say it
             # on** - the driver's rule, 14 Sep 2026: talk whenever it
             # matters, never in braking, instructions first. The voice asks
-            # this before starting any NEWS or COLOUR line; instructions and
-            # events are never held. See `race/straight.py` for what it can
+            # this before starting any line volunteered mid-lap (NEWS, and
+            # the COLOUR data line); instructions and the crossing's calls
+            # are never held. See `race/straight.py` for what it can
             # and cannot know about a circuit with no model.
             listen_on = getattr(self.voice, "listen_on", None)
             if listen_on is not None:

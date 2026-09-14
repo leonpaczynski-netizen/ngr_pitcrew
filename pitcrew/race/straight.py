@@ -33,8 +33,10 @@ load are in the packet at 60 Hz and work on day one at any circuit.
 Monza the main straight *begins* at the start/finish line; at Bathurst on 14
 Sep 2026 the line is a few seconds from Hell Corner, and the heartbeat plus the
 data line queued behind it reached the driver in the braking zone. So the voice
-now asks `fits` before it starts any volunteered line (`Voice.listen_on`) -
-the crossing's news included - and only instructions and events go unasked.
+now asks `fits` before it starts any line volunteered mid-lap - a place, a
+rival's stop, the data line (`Voice.listen_on`). Instructions go unasked, and
+so does what the crossing says: it is arbitrated one call per crossing and
+saying it at the line is the design.
 
 ### How long is this straight? - measured, and what is missing
 

@@ -24,7 +24,14 @@ from pitcrew.engineer.voice import (
     class_of,
     stale_after_s,
 )
-from pitcrew.race.calls import BOX_NOW, FUEL_SHORT, POSITION, STATUS, STOP_BACK
+from pitcrew.race.calls import (
+    BOX_NOW,
+    FUEL_SHORT,
+    POSITION,
+    RIVAL_BOXED,
+    STATUS,
+    STOP_BACK,
+)
 from pitcrew.race.colour import BEST_LAP, DATA
 from pitcrew.race.refuel import RELEASE
 
@@ -67,9 +74,12 @@ def test_every_kind_has_the_class_its_urgency_earns():
     assert class_of(FUEL_SHORT) == INSTRUCTION
     assert class_of(STOP_BACK) == INSTRUCTION
     assert class_of(RELEASE) == INSTRUCTION
-    assert class_of(STATUS) == NEWS
+    # Said at the crossing, which is when it is meant to be said.
+    assert class_of(STATUS) == EVENT
+    assert class_of(BEST_LAP) == EVENT
+    # Said mid-lap, wherever the car happens to be.
     assert class_of(POSITION) == NEWS
-    assert class_of(BEST_LAP) == NEWS
+    assert class_of(RIVAL_BOXED) == NEWS
     assert class_of(DATA) == COLOUR
     # No kind is the old behaviour, and so is a kind nobody classified.
     assert class_of(None) == EVENT
@@ -77,14 +87,17 @@ def test_every_kind_has_the_class_its_urgency_earns():
 
 
 def test_staleness_is_per_kind():
-    """A data line five seconds late is worse than none; a heartbeat stays
-    true for its lap; a box call is not said ten seconds after it was true."""
+    """A data line five seconds late is worse than none; a rival in his box
+    is still there while news waits for a straight; a box call is not said
+    ten seconds after it was true."""
     assert stale_after_s(DATA) == voice_module.DATA_STALE_AFTER_S == 1.5
     assert stale_after_s(BOX_NOW) == voice_module.STALE_AFTER_S
     assert stale_after_s(None) == voice_module.STALE_AFTER_S
-    assert stale_after_s(STATUS) == voice_module.NEWS_STALE_AFTER_S
+    assert stale_after_s(STATUS) == voice_module.STALE_AFTER_S
+    assert stale_after_s(RIVAL_BOXED) == voice_module.NEWS_STALE_AFTER_S
     assert stale_after_s(POSITION) == voice_module.POSITION_STALE_AFTER_S
-    assert stale_after_s(DATA) < stale_after_s(BOX_NOW) < stale_after_s(STATUS)
+    assert (stale_after_s(DATA) < stale_after_s(BOX_NOW)
+            < stale_after_s(RIVAL_BOXED))
 
 
 # ------------------------------------------------------------------ ordering
@@ -102,7 +115,7 @@ def test_an_instruction_plays_before_news_queued_ahead_of_it():
     assert _until(lambda: len(engine.lines) == 5), engine.lines
     speaker.stop()
     assert engine.lines == ["Radio check.", BOX, HEARTBEAT, PLACE, DATA_LINE], (
-        "instruction first, then news in the order it came, colour last")
+        "instruction, then the crossing's event, then news, colour last")
 
 
 def test_a_playing_line_is_never_cut_for_an_instruction():
