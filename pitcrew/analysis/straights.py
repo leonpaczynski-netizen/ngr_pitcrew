@@ -47,11 +47,40 @@ plus **no brake**, held at least 2 s. Two differences, both deliberate:
 * **Pooled on a circular axis.** Bathurst's pit straight runs across the line,
   so a window may end past `lap_length_m` and the live lookup wraps.
 
-A window is kept where **more than half** of the laps are on a straight
-(coverage on a 5 m grid) and at least `MIN_LAPS` laps contribute. Its start is
-the median of the contributing runs' starts; **its end is their lower
-quartile** - on three laps in four the straight lasts at least that far - which
-is the conservative side for a voice that must finish before it.
+A window is pooled where **more than half** of the laps are on a straight
+(coverage on a 5 m grid). Its start is the median of the contributing runs'
+starts; **its end is their lower quartile** - on three laps in four the
+straight lasts at least that far - which is the conservative side for a voice
+that must finish before it.
+
+### Gates - what is stored, and what is only reported
+
+A pooled window is stored only if it passes `gate`: at least `MIN_LAPS` laps
+contribute, and its end is a place - the interquartile range of where the
+straight ended is at most `MAX_END_SPREAD_M`. A model needs `MIN_LAPS` clean
+laps. The numbers, and what they were measured against, are beside the
+constants. A window that fails is left out and listed in `Derived.dropped`
+with its reason and lap count.
+
+**Leaving a window out is not neutral live.** Where a model exists and the
+ruler is trusted, `race/straight.StraightsModel.remaining_s` reads a place
+with no stored window as 0.0 - no room - not as unknown. A dropped straight is
+therefore one nothing is volunteered on, which is the conservative side, and
+the report says which.
+
+**Yas Marina, the case that set the spread gate** (15 Sep 2026, 25 laps,
+sessions 11-44, one car). The back straight (1619-2214 m, 12 s) ended
+anywhere from 1924 to 2416 m - IQR 189 m, 2.6 s at 260 km/h. Twelve laps ran
+to the braking at 2369-2416 m; thirteen ended earlier, each at the first frame
+where the derived lateral load crossed 0.3 g (peaks 0.31-0.40) along the
+flat-out curve. **Not two lines:** at 1700-2300 m the early-ending laps sit
+within about 1 m of the others' line (median offset -1.2 to +0.6 m, ranges
+overlapping), in the same sessions (41, 43, 44 carry both), so there is no
+variant to split off. **Not a corner cut** for the same reason. **Not kept:**
+its end is not a place on the road but where a 0.3 g reading first happened,
+and its spread is five times the live fit margin. Dropped, with the second
+straight (IQR 52 m: its ends fall in two clusters, 3221-3277 m and 3300-3369
+m, both at a lateral-load crossing); the third is stored.
 
 ### Braking zones
 
@@ -90,8 +119,45 @@ MIN_BRAKE_S = 0.2
 # Pooling.
 GRID_M = 5.0
 PRESENCE = 0.5          # strictly more than this fraction of laps
-MIN_LAPS = 5
 END_QUANTILE = 0.25
+
+# **The gates** (15 Sep 2026). A window that fails one is reported and left
+# out of the model, never stored; see the module docstring's "Gates".
+#
+# Clean laps a model is pooled from, and laps a stored window has to be on.
+# Measured by deriving gated models from n laps drawn at random from six
+# circuits' full pools (Monza 158, Daytona 138, Sardegna 109, Spa 60, Watkins
+# 61, Red Bull Ring 49 laps; 20 draws each) and comparing every window stored
+# against the model the full pool stores:
+#
+#   n    stored  claims past the full pool's end by > 0.5 s  phantom windows
+#   5      352     3                                            8.2%
+#   8      459     1                                            7.6%
+#   10     471     0                                            5.3%
+#   15     478     0                                            3.1%
+#   20-25  989     0                                            3.6%
+#
+# 0.5 s is the live gate's `FIT_MARGIN_S`: an end placed further out than
+# that is a clip the margin no longer protects. From 10 laps no draw stored
+# one; below it they appear. Phantoms (a window the full pool does not hold)
+# settle at the 3-4% of windows that sit near half presence. 10 is one
+# practice session, and every circuit on file clears it (Suzuka, the
+# fewest, has 16).
+MIN_LAPS = 10
+# How far a window's end may wander lap to lap - the interquartile range of
+# where its straight ended - and still be a place on the road. Measured on the
+# twelve circuits on file (15 Sep 2026), pooled two ways: every clean lap (57
+# windows) and the most recent 80, as `straight_refresh` pools them (56). The
+# windows whose runs end at one landmark - a braking point, or one corner's
+# lateral load - on at least three laps in four spread 4-34 m. The ten that
+# spread 48-412 m each end in TWO places on a quarter of the laps or more: a
+# lateral load crossing the 0.3 g rule along a flat-out curve or a kink on
+# some laps, the braking point or the corner itself on the rest (Yas Marina's
+# back straight, Road Atlanta's, Watkins Glen's last, the Bathurst pit
+# straight, Daytona's first on the recent laps). Their lower-quartile end is
+# not a landmark but wherever that mix put it. Nothing on file falls between
+# 34 and 48 m; 40 m is 0.72 s at 200 km/h.
+MAX_END_SPREAD_M = 40.0
 LAP_LENGTH_TOLERANCE = 0.02
 PACE_RATIO = 1.07
 PROFILE_POINTS = 11
@@ -109,6 +175,10 @@ class LapInput:
     frames: list
     sample_hz: float = SAMPLE_HZ
     car_name: str | None = None
+    # Whether the car jumped, when the loader already knows - it read the
+    # position channels and dropped them to keep 80 laps in memory. None:
+    # `select` looks for itself.
+    teleported: bool | None = None
 
 
 @dataclass
@@ -128,6 +198,8 @@ class Derived:
     laps_used: int
     refused: dict[str, int] = field(default_factory=dict)
     reason: str | None = None
+    # Windows present on most laps that failed `gate`: reported, never stored.
+    dropped: list[dict] = field(default_factory=list)
 
 
 # ----------------------------------------------------------- per-lap runs
@@ -233,8 +305,17 @@ def _length(frames: list[dict]) -> float | None:
     return max(values) if values else None
 
 
-def select(laps: list[LapInput]) -> tuple[list[_Lap], dict[str, int], float | None]:
-    """The laps fit to pool, on one axis, and a count of the rest by reason."""
+def select(laps: list[LapInput], *, max_laps: int | None = None,
+           reference_length_m: float | None = None,
+           ) -> tuple[list[_Lap], dict[str, int], float | None]:
+    """The laps fit to pool, on one axis, and a count of the rest by reason.
+
+    `laps` is in the order driven. `max_laps` keeps the most recent of the
+    laps that pass - after the medians are taken over all of them. With
+    `reference_length_m` the 2% length test is against that length instead
+    of the pooled median: after a lap-distance axis change the older laps can
+    outnumber the new ones, and their median would keep the old axis.
+    """
     refused: dict[str, int] = {}
 
     def refuse(reason: str) -> None:
@@ -252,7 +333,8 @@ def select(laps: list[LapInput]) -> tuple[list[_Lap], dict[str, int], float | No
         if any(f.get("lap_distance_m") is None for f in lap.frames):
             refuse("no distance channel")
             continue
-        if teleports(lap.frames).happened:
+        if (lap.teleported if lap.teleported is not None
+                else teleports(lap.frames).happened):
             refuse("teleport")
             continue
         if not lap.lap_time_ms or lap.lap_time_ms <= 0:
@@ -262,19 +344,29 @@ def select(laps: list[LapInput]) -> tuple[list[_Lap], dict[str, int], float | No
     if not candidates:
         return [], refused, None
 
-    median_length = statistics.median(length for _, length in candidates)
-    median_time = statistics.median(lap.lap_time_ms for lap, _ in candidates)
+    median_length = (reference_length_m if reference_length_m
+                     else statistics.median(length for _, length in candidates))
+    on_axis = [(lap, length) for lap, length in candidates
+               if abs(length - median_length)
+               <= LAP_LENGTH_TOLERANCE * median_length]
+    for _ in range(len(candidates) - len(on_axis)):
+        refuse("length off the median by more than 2%")
+    if not on_axis:
+        return [], refused, None
+    # Pace against the laps on the axis only: after a layout or axis change
+    # the old laps' times would call every new lap slow.
+    median_time = statistics.median(lap.lap_time_ms for lap, _ in on_axis)
     kept = []
-    for lap, length in candidates:
-        if abs(length - median_length) > LAP_LENGTH_TOLERANCE * median_length:
-            refuse("length off the median by more than 2%")
-            continue
+    for lap, length in on_axis:
         if lap.lap_time_ms > PACE_RATIO * median_time:
             refuse("slower than 107% of the median lap")
             continue
         kept.append((lap, length))
     if not kept:
         return [], refused, None
+    if max_laps is not None and len(kept) > max_laps:
+        refused[f"older than the most recent {max_laps}"] = len(kept) - max_laps
+        kept = kept[-max_laps:]
     axis = statistics.median(length for _, length in kept)
     out = []
     for lap, length in kept:
@@ -370,6 +462,7 @@ def _time_at(distance: list[float], time: list[float],
 
 
 def _pool_straights(laps: list[_Lap], axis: float) -> list[dict]:
+    """Every window present on most laps, gated or not - `gate` decides."""
     coverage, per_lap = _coverage(
         laps, axis, lambda lap: straight_runs(lap.source.frames, lap.hz))
     windows = []
@@ -384,7 +477,7 @@ def _pool_straights(laps: list[_Lap], axis: float) -> list[dict]:
                     best, pick = o, (a, b, s0, s1)
             if pick is not None:
                 members.append((lap, pick))
-        if len(members) < MIN_LAPS or len(members) <= PRESENCE * len(laps):
+        if not members or len(members) <= PRESENCE * len(laps):
             continue
         # Starts and ends on one unwrapped axis anchored at the segment.
         starts, ends, durations, end_kph = [], [], [], []
@@ -403,6 +496,13 @@ def _pool_straights(laps: list[_Lap], axis: float) -> list[dict]:
         start_m = statistics.median(starts)
         end_m = _quantile(ends, END_QUANTILE)
         if end_m - start_m <= 0:
+            windows.append({
+                "start_m": round(start_m % axis, 1),
+                "end_m": round(start_m % axis + (end_m - start_m), 1),
+                "laps": len(members), "laps_pooled": len(laps),
+                "end_spread_m": round(_quantile(ends, 0.75)
+                                      - _quantile(ends, 0.25), 1),
+                "empty": True})
             continue
         # How long is left from each point to `end_m`, lap by lap.
         profile = []
@@ -491,17 +591,58 @@ def _next_braking(window: dict, zones: list[dict], axis: float) -> float | None:
     return round(best, 1) if best is not None else None
 
 
+def gate(window: dict) -> str | None:
+    """Why a pooled window may not be stored, or None if it may.
+
+    See `MIN_LAPS` and `MAX_END_SPREAD_M` for the numbers and what they were
+    measured against.
+    """
+    if window.get("empty"):
+        return "its lower-quartile end comes before its start"
+    if window["laps"] < MIN_LAPS:
+        return f"on {window['laps']} laps, fewer than {MIN_LAPS}"
+    if window["end_spread_m"] > MAX_END_SPREAD_M:
+        return (f"its end wanders {window['end_spread_m']:.0f} m lap to lap "
+                f"(interquartile), more than {MAX_END_SPREAD_M:.0f} m")
+    return None
+
+
+def describe_dropped(window: dict) -> str:
+    return (f"{window['start_m']:.0f}-{window['end_m']:.0f} m on "
+            f"{window['laps']}/{window['laps_pooled']} laps: {window['reason']}")
+
+
 def derive(circuit_key: str, laps: list[LapInput], *,
-           derived_on: str | None = None) -> Derived:
-    """The straights model for one circuit, or None with the reason."""
-    kept, refused, axis = select(laps)
+           derived_on: str | None = None,
+           max_laps: int | None = None,
+           reference_length_m: float | None = None) -> Derived:
+    """The straights model for one circuit, or None with the reason.
+
+    `max_laps` keeps only the most recent laps that survived selection (the
+    input is in the order driven), so a pool capped for memory is capped at
+    the same count every time rather than at however many a capped load
+    happened to leave. `reference_length_m` pools only laps on that axis -
+    see `select`.
+    """
+    kept, refused, axis = select(laps, max_laps=max_laps,
+                                 reference_length_m=reference_length_m)
     if not kept or axis is None:
         return Derived(circuit_key, None, 0, refused,
                        "no lap survived selection")
     if len(kept) < MIN_LAPS:
         return Derived(circuit_key, None, len(kept), refused,
                        f"{len(kept)} clean laps, fewer than {MIN_LAPS}")
-    windows = _pool_straights(kept, axis)
+    pooled = _pool_straights(kept, axis)
+    dropped = []
+    windows = []
+    for window in pooled:
+        reason = gate(window)
+        if reason is None:
+            windows.append(window)
+        else:
+            dropped.append({key: window[key] for key in (
+                "start_m", "end_m", "laps", "laps_pooled", "end_spread_m")}
+                | {"reason": reason})
     zones = _pool_braking(kept, axis)
     for index, window in enumerate(windows, start=1):
         window["id"] = f"S{index}"
@@ -527,6 +668,7 @@ def derive(circuit_key: str, laps: list[LapInput], *,
             "bridge_s": BRIDGE_S, "presence": PRESENCE,
             "end_quantile": END_QUANTILE, "heavy_brake_pct": HEAVY_BRAKE_PCT,
             "min_brake_s": MIN_BRAKE_S,
+            "min_laps": MIN_LAPS, "max_end_spread_m": MAX_END_SPREAD_M,
         },
         "windows": [{"id": w["id"], **{k: v for k, v in w.items()
                                         if k != "id"}} for w in windows],
@@ -535,5 +677,7 @@ def derive(circuit_key: str, laps: list[LapInput], *,
     }
     if not windows:
         return Derived(circuit_key, None, len(kept), refused,
-                       "no straight present on most laps")
-    return Derived(circuit_key, model, len(kept), refused)
+                       "every window failed the gates" if dropped
+                       else "no straight present on most laps",
+                       dropped=dropped)
+    return Derived(circuit_key, model, len(kept), refused, dropped=dropped)

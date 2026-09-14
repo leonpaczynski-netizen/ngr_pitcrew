@@ -1192,8 +1192,12 @@ CREATE INDEX IF NOT EXISTS idx_verdict_axis
 -- next time a corner model is re-detected - and Mount Panorama, the circuit
 -- that needed this, has no corner model at all.
 --
--- Written only by `tools/derive_straights.py --apply`, which the driver runs:
--- a model changes when George may speak. `[DERIVED]`, never measured.
+-- Written by `tools/derive_straights.py --apply`, and by the app when a
+-- session closes (`analysis/straight_refresh`) - the driver, 15 Sep 2026:
+-- "Map all known and future circuits." Only windows that pass the gates in
+-- `analysis/straights.py`, never a worse model over a stored one. `model_json`
+-- carries `laps_available`, the clean laps on file when it was derived, which
+-- is what the refresh counts growth from. `[DERIVED]`, never measured.
 CREATE TABLE IF NOT EXISTS straight_models (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     circuit_key   TEXT    NOT NULL UNIQUE,   -- = corner_models.circuit_key

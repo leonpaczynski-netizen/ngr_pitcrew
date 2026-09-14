@@ -85,7 +85,7 @@ def synthetic_lap(session_id: int = 1, lap_num: int = 1, *,
 
 @pytest.fixture(scope="module")
 def synthetic():
-    laps = [synthetic_lap(1 + i % 2, i + 1) for i in range(6)]
+    laps = [synthetic_lap(1 + i % 2, i + 1) for i in range(12)]
     return derivation.derive("test-circuit", laps, derived_on="2026-09-14")
 
 
@@ -98,13 +98,13 @@ def test_the_thresholds_are_the_live_detectors():
 def test_a_synthetic_lap_gives_its_two_straights(synthetic):
     model = synthetic.model
     assert model is not None and model["tag"] == "[DERIVED]"
-    assert synthetic.laps_used == 6
+    assert synthetic.laps_used == 12
     back, pit = model["windows"]
     # The back straight, bridged across its upshift and ended before braking.
     assert back["start_m"] == pytest.approx(400.0, abs=5.0)
     assert back["end_m"] == pytest.approx(1400.0, abs=5.0)
     assert back["brake_m"] == pytest.approx(1400.0, abs=5.0)
-    assert back["laps"] == 6 and back["laps_pooled"] == 6
+    assert back["laps"] == 12 and back["laps_pooled"] == 12
     # 1000 m at 45 -> 70 m/s is (1000/25) * ln(70/45) = 17.7 s.
     assert back["median_s"] == pytest.approx(17.7, abs=0.2)
     profile = back["t_left_s"]
@@ -127,13 +127,13 @@ def test_braking_zones_are_marked(synthetic):
     entries = [z["start_m"] for z in synthetic.model["braking"]]
     assert entries == [pytest.approx(150.0, abs=5.0),
                        pytest.approx(1400.0, abs=5.0)]
-    assert all(z["laps"] == 6 for z in synthetic.model["braking"])
+    assert all(z["laps"] == 12 for z in synthetic.model["braking"])
 
 
 def test_every_window_carries_its_count_and_sources(synthetic):
     model = synthetic.model
     assert model["session_ids"] == [1, 2]
-    assert model["laps"] == 6
+    assert model["laps"] == 12
     for window in model["windows"]:
         assert window["laps"] > 0
 
@@ -432,7 +432,7 @@ def test_apply_writes_a_copy_and_a_dry_run_writes_nothing(tmp_path):
             car_name="Car", race_type="laps", race_laps=10)
         session = store.start_session(event, "practice")
         index = {name: i for i, name in enumerate(FRAME_FIELDS)}
-        for lap_num in range(1, 7):
+        for lap_num in range(1, 13):
             lap = synthetic_lap(session, lap_num)
             rows = []
             for f in lap.frames:

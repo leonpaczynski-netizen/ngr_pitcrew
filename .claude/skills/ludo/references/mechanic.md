@@ -223,7 +223,7 @@ never as a step of a diagnosis.**
 - `tools/read_replay_traffic.py --apply` — who was around him, off the replay's radar.
 - `tools/read_replay_board.py --apply` — names those cars off the replay's leaderboard.
 - `tools/bridge_driver_names.py --apply` — renames the live pit wall's `Car #N` drivers to the names typed for the replay board, where both readers agree on the same row.
-- `tools/derive_straights.py --apply --db PATH` — each circuit's straights as lap-distance windows, `[DERIVED]` from his clean laps, so George starts a volunteered line only where it fits before the braking. Changes when the engineer may speak; the dry run prints the model and a `--replay SESSION` of how often a clip would have finished on the straight.
+- `tools/derive_straights.py --all --apply --db PATH` — each circuit's straights as lap-distance windows, `[DERIVED]` from his clean laps, so George starts a volunteered line only where it fits before the braking. Only windows that pass the gates (10 laps, end spread 40 m) are stored and the rest are printed; a stored model is never replaced by a worse one without `--replace`. The app also re-derives a circuit on its own when a session closes. Changes when the engineer may speak; the dry run prints the model and a `--replay SESSION` of how often a clip would have finished on the straight.
 
   Each of those thirteen leaves the DATABASE alone without `--apply` — not the
   disk: `read_replay_board` writes its roster JSON and its cluster PNGs on the

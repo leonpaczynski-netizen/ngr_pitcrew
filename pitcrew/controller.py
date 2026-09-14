@@ -3009,6 +3009,7 @@ class PitCrewController(QObject):
             # After the session is closed, so a slow websocket cannot hold the
             # close open - the session row is what matters and it is written.
             self._stop_video(closing)
+            self._refresh_straights(closing)
 
         self.practice.set_recording(False)
         event = self.active_event()
@@ -3024,6 +3025,25 @@ class PitCrewController(QObject):
             self._start_debrief(event)
         elif event:
             self.practice.set_status(self._idle_status(event))
+
+    def _refresh_straights(self, session_id: int | None) -> None:
+        """Re-derive the closed session's circuit straights, if they need it.
+
+        *"Map all known and future circuits."* - the driver, 15 Sep 2026. When
+        and whether is `analysis/straight_refresh.plan`, and a worse model is
+        never stored (`compare`). Off the Qt thread - it can decode 160 laps -
+        and it holds nothing of this session: the thread is handed the id
+        and reads everything else from the store (rule 11). Never raises into
+        the close; a failure is a logged warning inside the thread, and one
+        raised starting it is logged here.
+        """
+        try:
+            from pitcrew.analysis.straight_refresh import refresh_in_background
+            refresh_in_background(self.store, session_id)
+        except Exception:                                    # noqa: BLE001
+            log("straights").warning(
+                "could not start the straights refresh for session %s",
+                session_id, exc_info=True)
 
     def _start_debrief(self, event) -> None:
         """Build the practice debrief off the Qt thread, then speak it.
@@ -5726,6 +5746,7 @@ class PitCrewController(QObject):
             # one costs nothing here.
             self._stop_video(self.session_id)
             self.store.end_session(self.session_id)
+            self._refresh_straights(self.session_id)
             self.session_kind = None
             self._tell_settings_about_the_session()
             # `stop_practice` clears this and `stop_race` did not, so the
