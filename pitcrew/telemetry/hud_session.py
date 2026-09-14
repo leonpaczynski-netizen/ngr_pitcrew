@@ -82,6 +82,17 @@ HYGRO_KEEP = 8
 # read of a different code among them, before the tyre counts as known.
 COMPOUND_WINDOW_S = 30.0
 COMPOUND_MIN_AGREE = 3
+# The car icon's bumper arcs (`telemetry/hud_damage.py`): contact is
+# `DAMAGE_MIN_LIT` lit reads of one arc inside `DAMAGE_WINDOW_S`; "no contact"
+# needs `DAMAGE_MIN_READS` readable grabs with not one red pixel on that arc
+# (621 clean frames carried none); anything between is None. Sized for the
+# driver's 2 s grab; `DAMAGE_KEEP` holds a full window down to a 0.5 s grab.
+# **Off at crossing-only sampling** (`hud_sample_interval_s = 0`, the default):
+# one read a lap never reaches `DAMAGE_MIN_READS`, so every answer is None.
+DAMAGE_WINDOW_S = 20.0
+DAMAGE_MIN_READS = 3
+DAMAGE_MIN_LIT = 2
+DAMAGE_KEEP = 40
 
 # How long a pre-flight grab may take before it is called a failure.
 #
@@ -187,6 +198,12 @@ class HudSession:
         # lock, which a lap handler must never wait on.
         self._hygro: deque = deque(maxlen=HYGRO_KEEP)
         self._compound: deque = deque(maxlen=HYGRO_KEEP)
+        # `(monotonic time, front px, rear px, front lit, rear lit)` - the
+        # read's own verdicts kept beside its counts, so "lit" is decided in
+        # one place (`read_damage`). None for an unreadable grab.
+        self._damage: deque = deque(maxlen=DAMAGE_KEEP)
+        # The last answer per arc that was logged, so a change is logged once.
+        self._contact_said: dict[str, bool | None] = {"front": None, "rear": None}
 
     @property
     def settings(self):
@@ -234,6 +251,59 @@ class HudSession:
         if len(codes) < COMPOUND_MIN_AGREE or len(set(codes)) != 1:
             return None
         return codes[0]
+
+    def contact_recent(self, now: float | None = None) -> dict[str, bool | None]:
+        """Is the HUD showing recent contact on the front / rear bumper arc?
+
+        **The icon, not the car's condition** (critic pass 1, rule 13): GT7
+        clears the red on its own 90-135 s after contact with no stop, so False
+        two minutes after a crash means "icon grey", never "undamaged".
+
+        * True: `DAMAGE_MIN_LIT` lit reads of the arc in `DAMAGE_WINDOW_S`.
+        * False: `DAMAGE_MIN_READS` readable grabs and **not one red pixel** on
+          that arc - a clean icon carried none on 621 frames, so any red is
+          evidence, not noise.
+        * None otherwise - too few readable grabs, or some red below the bar.
+
+        **Onset latency**: after the one front hit on file (lit from 1267 s)
+        the arc read 0 px on most samples at first. Replayed at a 2 s grab it
+        read **False until 1284 s - 17 s after the onset - then None, and first
+        True at 1290 s, 23 s after it** (critic pass 2). A consumer that needs
+        the moment of contact must not wait on this.
+        """
+        now = time.monotonic() if now is None else now
+        recent = [entry[1:] for entry in list(self._damage)
+                  if now - entry[0] <= DAMAGE_WINDOW_S and entry[1] is not None
+                  and entry[2] is not None]
+
+        def side(px: list[int], lit: list[bool]) -> bool | None:
+            if sum(1 for value in lit if value) >= DAMAGE_MIN_LIT:
+                return True
+            if len(px) < DAMAGE_MIN_READS or any(value > 0 for value in px):
+                return None
+            return False
+
+        return {"front": side([r[0] for r in recent], [r[2] for r in recent]),
+                "rear": side([r[1] for r in recent], [r[3] for r in recent])}
+
+    def _note_damage(self, read) -> None:
+        """Worker thread: one car-icon read from the grab just taken.
+
+        **A frame's arc is logged when it turns lit and when it turns dim**
+        (rule 10: log the accepts), so a debrief can audit what the history
+        held. "dim" is one frame below the bar - inside an episode that is the
+        pulse - never `contact_recent`'s False.
+        """
+        self._damage.append((time.monotonic(), read.front_px, read.rear_px,
+                             read.front, read.rear))
+        for name, lit in (("front", read.front), ("rear", read.rear)):
+            if lit is None or lit == self._contact_said.get(name):
+                continue
+            if lit or self._contact_said.get(name):
+                log("pitcrew").info("hud-damage: %s arc %s (%s px)", name,
+                                    "lit" if lit else "dim",
+                                    read.front_px if name == "front" else read.rear_px)
+            self._contact_said[name] = lit
 
     def _note_compound(self, read) -> None:
         """Worker thread: one compound label read from the grab just taken."""
@@ -500,7 +570,8 @@ class HudSession:
                                   interval_s=interval,
                                   on_frame=self._pass_frame,
                                   on_hygro=self._note_hygro,
-                                  on_compound=self._note_compound)
+                                  on_compound=self._note_compound,
+                                  on_damage=self._note_damage)
         sampler.start()
         log("pitcrew").info(
             "hud-wear: %s source, %s", self.settings.hud_source,
@@ -633,6 +704,8 @@ class HudSession:
         # Rule 11: the last session's wet and tyre are not this session's.
         self._hygro.clear()
         self._compound.clear()
+        self._damage.clear()
+        self._contact_said = {"front": None, "rear": None}
         # **The lap-id map outlives the session too, and it leaked a practice
         # wear figure into a race.** `_write_wear` looks a lap_id up here
         # to decide which lap a reading belongs to; the ids carried over, so

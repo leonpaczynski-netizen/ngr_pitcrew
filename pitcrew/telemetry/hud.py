@@ -1544,7 +1544,7 @@ class LiveWearSampler:
 
     def __init__(self, source, write, *, on_status=None,
                  interval_s: float = 0.0, on_frame=None,
-                 on_hygro=None, on_compound=None) -> None:
+                 on_hygro=None, on_compound=None, on_damage=None) -> None:
         self._source = source
         # **The hygrometer rides the same grab** (plan row 5.21), for the reason
         # `on_frame` does: a second grab would halve the gauge's rate. Handed a
@@ -1552,6 +1552,8 @@ class LiveWearSampler:
         self._on_hygro = on_hygro
         # And the compound label beside the same bars (`hud_compound`).
         self._on_compound = on_compound
+        # And the car icon between them (`hud_damage`, plan row 5.20).
+        self._on_damage = on_damage
         self._write = write
         self._status = on_status
         # **Anyone else who needs this frame gets THIS frame.** Measured on
@@ -1765,7 +1767,8 @@ class LiveWearSampler:
         # and the panel readers each decoded the same grab).
         whole = (whole_frame(frame)
                  if self._on_frame is not None or self._on_hygro is not None
-                 or self._on_compound is not None else None)
+                 or self._on_compound is not None
+                 or self._on_damage is not None else None)
         if self._on_frame is not None:
             if whole is None:
                 # **Said once, not swallowed.** A passenger that wants the
@@ -1784,7 +1787,8 @@ class LiveWearSampler:
                 except Exception:
                     _log.exception("hud-wear: frame passenger failed")
         reading = read_gauge(frame)
-        if self._on_hygro is not None or self._on_compound is not None:
+        if (self._on_hygro is not None or self._on_compound is not None
+                or self._on_damage is not None):
             self._pass_hygro(frame, reading, whole=whole)
         return reading, False
 
@@ -1796,6 +1800,7 @@ class LiveWearSampler:
         "cannot see", said as such, never a dry reading.
         """
         from pitcrew.telemetry.hud_compound import CompoundRead, read_compound
+        from pitcrew.telemetry.hud_damage import DamageRead, read_damage
         from pitcrew.telemetry.hygrometer import HygroReading, read_hygrometer
 
         if whole is None and reading.bars is not None:
@@ -1816,6 +1821,12 @@ class LiveWearSampler:
                                   else read_compound(whole, reading.bars))
             except Exception:
                 _log.exception("hud-wear: compound label passenger failed")
+        if self._on_damage is not None:
+            try:
+                self._on_damage(DamageRead(None, None, why=why) if why
+                                else read_damage(whole, reading.bars))
+            except Exception:
+                _log.exception("hud-wear: damage icon passenger failed")
 
     def _coherent(self, wear: dict) -> tuple[bool, bool, str]:
         """Can this reading follow the last one on a real set of tyres?
