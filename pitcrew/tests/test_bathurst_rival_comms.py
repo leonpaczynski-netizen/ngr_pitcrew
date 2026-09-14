@@ -58,6 +58,11 @@ VISITS = [
     ("Car #33", 12, "20:47:34", "20:50:52", None),
 ]
 CONFIRM_AFTER_S = 13
+# Entry fuel as filed in `rival_stops`; CruisingChaos was joined mid-fill.
+FUEL_IN = {"PUNISHED": 47, "CruisingChaos": 41, "K.Graebs": 21,
+           "Magical daddy": 32, "Car #31": 14, "Car #28": 17, "Car #76": 5,
+           "Car #11": 6, "TommyTbone": 7, "Car #33": 15}
+PARTIAL = {"CruisingChaos"}
 # Car #30 entered at 20:39:32 and was discarded - 4 reads over 13 s - so under
 # the filing bar it is never announced and is not in VISITS.
 
@@ -116,7 +121,8 @@ def replay(monkeypatch):
         if second in enter_at:
             driver, lap, ahead = enter_at[second]
             co.note_rival_entered(Entered(driver=driver, driver_id=0, lap=lap,
-                                          fuel_in_l=None, partial=False,
+                                          fuel_in_l=FUEL_IN[driver],
+                                          partial=driver in PARTIAL,
                                           ahead_at_entry=ahead))
         if second in leave_at:
             co.state.lane.left(leave_at[second], lap=co.state.lap)
