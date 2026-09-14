@@ -388,7 +388,7 @@ the hub says weather RANDOM with inters and wets allowed.
 seeing a rival stop. The GT7 board shows **only the top 8**
 (`reference-gt7-board-truncation`) and a car that pits drops below the cut —
 so the name and the gap both go dark at precisely the moment the derivation
-needs them. `rival_stops` is still empty, which is the keystone defect on the
+needs them. `rival_stops` was still empty when this was written (27 rows by 14 Sep), which was the keystone defect on the
 Deep Forest register. Until a stop can be timed from the board, 3.6 returns
 `None` rather than a number and 3.7 and 3.8 have nothing to stand on, so
 **3.2 — naming the drivers — is the row that unblocks the rest**, and 3.5 is
@@ -403,9 +403,196 @@ the only one of the four that can land before it.
 | 4.3 | **Track book generated from the DB** (pit loss, dead time, wear rate and knee per multiplier, burn, rival habits) — the knowledge record reads from it, never re-typed | S5, S7, L12 |
 | 4.4 | **Wear-vs-temperature knee** tested on our own archive (public Feb-2025 figure is pre-1.71 and suspect) | research §9 |
 
+### Phase 5 — What the telemetry literature adds (written 14 Sep 2026, revision 5 after critic passes 1–5 — AGREED)
+
+**Sources.** Campbell-Brennan, *Tech Explained: Data Acquisition*, Racecar
+Engineering, 18 Jun 2021 (roll angle ratio, understeer angle trended over a
+stint, damper histograms, full-throttle %, curvature) — the only one of the
+three with method in it. *How Telemetry Is Used in Race Strategy*, EngineStories
+(degradation modelling, stint length moved live, simulation ahead of the race,
+teammate comparison, weather). *How to Analyze Driver Performance Using
+Telemetry Data*, IODA Racing (speed/throttle/brake against distance, braking
+reference points). **All three are real-motorsport sources and none is GT7** —
+rule 7 applies to every threshold they imply, and rule 8 removes the
+low/high-speed damper split outright.
+
+**Already built or already a row, so not repeated here:** wear and fuel models,
+the stint optimiser, live re-planning, undercut/overcut, the tow trade, rival
+pace and the whole of Phase 3, call verdicts, lap consistency, the 100 m
+where-the-time-went bins, bottoming, coast share and shift rpm, noise floors and
+the verdict store.
+
+**⚠️ Three things revision 0 of this phase refused (in conversation, 14 Sep), and
+the driver disputed all three.**
+
+1. **"Brake 10 m later."** ⛔ **The contract refuses this by name, and this plan
+   does not overrule the contract.** `CLAUDE.md`'s header: *"Multi-lap trends,
+   whole-lap comparisons and pooled findings are fair; 'brake 10 m later at T4'
+   is not, at any corner on any circuit on file."* The refusal card says the
+   same four times (`references/refusals.md` :17–20 per-corner input coaching,
+   :21–23 no track map and no corner names, :112–113 the five-lap brake test
+   named as forbidden, :116 `what to try` may never propose it). Revision 1 of
+   this phase quoted only the first half of that header sentence — critic pass 1
+   caught it. **What the driver's dispute actually changes is whether that line
+   should move, and that is his decision on an amendment (row 5.B0), not a
+   reading of the current text.** The evidence for moving it, stated honestly:
+   - The refusal rests on a **lap-to-lap** floor: brake-point 2σ **14–37 m** —
+     those are *circuit medians across corners* (Watkins ~14, Monza ~33–37, v1.70,
+     pre-teleport-filter), not two kinds of corner. It forbids a *single-lap*
+     call outright.
+   - A pooled figure does shrink with laps, but **that σ is taken from
+     consecutive-lap differences, which remove drift by design**; a session mean
+     and a before/after across runs carry drift, fuel, tyre, day and learning, so
+     the real σ is larger and must be measured (5.3).
+   - Sized at 80 % power, not at a coin-flip 2σ: to *see* a 10 m shift in where he
+     brakes between a before and an after needs roughly **8–54 laps a side** at the
+     circuit-median floors — **more** once the between-run variance is added, and
+     more again at the low end because σ is itself estimated from few laps.
+   - **Seeing that he brakes 10 m later is not showing that 10 m later is
+     faster.** The payoff has to be judged on braking-zone time and exit speed;
+     corner time's 2σ is ~130–183 ms against a gain that is well under 100 ms.
+   - **His median practice session is 3 clean laps** (`DRIVER-COACH-FINDINGS`
+     2026-08-23, 12 of 44 reach 6).
+   - ⇒ **Where he brakes, drawn on the map with its spread and n, is achievable
+     from one decent practice at the tighter corners. "Brake 10 m later *because
+     it is faster*" is a multi-session experiment at a few corners, or it is
+     refused at that corner by its own arithmetic.** The 1 Sep re-measure
+     (`a3d171e`) is evidence about the *apex* axis, not the brake point, and is
+     not cited for it.
+2. **Weather was refused as "no channel".** There is no UDP channel. **The
+   hygrometer is on the captured HUD panel** (§7, and 0.3 said so); the reader
+   was *struck* in Phase 0 for want of a calibration frame, and nothing has
+   replaced it (`controller.py:4132`, `analysis/penalties.py:71`). And `rain` is
+   in `handover.CANNOT_SEE` (`strategy/handover.py:675`), so no rain rule can arm.
+   "Random weather" is also wind at a rain-impossible circuit
+   (`reference_random_weather_is_wind`).
+3. **Teammates were refused as "he has none".** He has them in some series. The
+   store models it — `series_teammates` (v13), `drivers.is_teammate`,
+   `hub/read.py:301 teammates()`, `hub/link.py:238`, and `tools/name_drivers.py`
+   already calls `set_teammate` — and `race/teammate.py` is written. **`series_teammates`
+   has 0 rows and `race/teammate.py` has no importer outside its test.**
+
+**Every row below that writes to the live database — measurement or verdict rows,
+a `--apply`, a teammate designation — needs his yes, as every writer does.**
+
+#### 5A — The contract, and the plan saying what would change it
+
+| # | Work | Answers | Done when |
+|---|---|---|---|
+| 5.B0 | **The amendment, offered, not made.** File the disagreement in `brain/RECONCILIATION.md` and put to him one wording for the `CLAUDE.md` header, charter §2, `references/refusals.md` (:17–31, :112–116) and `project_corner_noise_floor_2026_08_22`: *a per-lap per-corner instruction stays refused, and no per-corner input finding is ever a live call; a pooled per-corner finding may be shown with its n and its uncertainty; a per-corner experiment may be proposed only where its lap count was sized from that corner's measured floor before he drives, it runs A-B-A on one car-state revision, it is refused when the laps exceed what he will run, and his report is in the verdict; a corner may be named only on a model that is `track-map` in the form the export reads (5.2b).* **Nothing in 5B that names a corner or proposes a marker starts until he says yes**; 5.3's measurement does not need it | the driver's dispute vs the contract | his yes or no recorded; if yes, all four files carry one wording and the e-tests that pin the refusal card are updated in the same commit |
+| 5.0 | **The instrument gate.** (a) same-setup floor by the split-halves method of 4 Sep; (b) a known-answer check on a session where his account is already known right (`CLAUDE.md` §6 item 6); (c) a **causal** check — can the channel move at all under what it is judging (`feedback_abs_pins_the_slip_channel`); (d) a **between-run** variance, not only consecutive-lap. Failure is an `unresolvable` verdict in its own row | every instrument below | one helper 5.3 and 5.7–5.11 all call; run on the 4 Sep instruments it reproduces that table |
+| 5.1 | **Flip points in every race plan — a sensitivity, not a simulation, and said so.** For each uncertain input (burn, wear, pit loss, refuel rate) the value at which a decision changes (stops, tyres, compound), by re-running `recommend` across it (rule 12). **In a timed race burn and lap time move the lap count together, so they are flipped jointly.** The spread each input is judged against **includes the practice→race bias**, not only lap-to-lap scatter. **His fuel-saving levers (lift-and-coast, short-shift — row 1.1's detectors) are a flip input**, priced in litres and lap time, because a zero-stop is often made by a save rather than by the raw burn. The flip becomes a playbook threshold: `fuel_long → drop_stop`, or `fuel_short → short_shift`/`lift_and_coast` where the save closes it. Lands with row 2.6's playbook requirement, which Suzuka's plan never met. **Before Sardegna the save is priced from `tools/shortshift_trade.py` and labelled `[DERIVED]`**; row 1.1's detectors replace it when they are wired to the plan | Suzuka 13 Sep: strategy 32 used **9.116 L/lap from 4 practice laps at quali pace** (s165) and **carried no handover at all**; 28/29 grant `fuel_long → report_only`, 31's playbook is empty. Session 166: laps 1–12 averaged **7.38 L**, laps 13–14 burned **3.97 and 4.69 L** at ~133 s — **the zero-stop was made by a ~5 L save at the end**; 14 laps unsaved at 7.2 is 100.8 L, over the tank | strategy 32's inputs re-run report the flip region over burn × lap time × save, and whether session 166's actual burn profile, save included, lies inside it; a plan built that way names the save that makes the flag |
+
+#### 5B — Braking and throttle on the map (the driver's dispute)
+
+**What exists.** `tools/draw_track_map.py` draws a lap from `pos_x`/`pos_z`
+coloured by speed, orientation fitted against GT7's minimap with handedness from
+net yaw, names from the hub — **`ORIENTATION` is fitted for Daytona only.**
+`tools/build_track_map.py --apply` writes `apex_x`/`apex_z`/`world_sd_m` into
+the JSON and sets the **`source` column** (`9adece9`) — **but nothing reads that
+column**: every consumer goes through `Store.get_corner_model` → `from_dict`,
+which takes the source from the JSON and builds a five-field `Corner`, dropping
+the anchors (`store/db.py:1976–1983`, `corner_model.py:78–90`); the export's
+declared source comes from the same JSON (`export/build.py:575,593`). So an
+applied model would still export `auto-segment`, with the column disagreeing.
+`save_corner_model` overwrites in place, and `resolve_corner_model` re-detects
+and overwrites a stored model whenever a lap is more than 50 m off its length
+(`analysis/resolve.py:36–53`) — which would wipe a track map silently. **All 11 `corner_models` rows are
+`auto-segment`.** `tools/braking_change.py` separates what he did from what the
+tyre did. Nothing draws brake or throttle on the map or pools a brake point with
+its n.
+
+| # | Work | Answers | Done when |
+|---|---|---|---|
+| 5.2a | **Fitted maps for the calendar circuits** — Sardegna, Mount Panorama, Monza, Fuji: `ORIENTATION` per circuit with the handedness check; `build_track_map` read-only report of lap-distance vs world scatter | a map he can read the right way round | each circuit draws correctly; the scatter report is on file |
+| 5.2b | **Make `track-map` real in the form the app reads.** (1) **Schema:** `corner_models.circuit_key` is `UNIQUE` (`store/schema.py:610`), so versions need a table rebuild to `UNIQUE(circuit_key, version)` — a migration, run first on a copy of the DB **with its WAL**. (2) **One copy of source and version:** the JSON is authoritative and the `source`/`version` columns are derived from it on write, or dropped. (3) **Readers pick the latest version** — `Store.get_corner_model` (`db.py:1979–1983`), `sector_model_for` (`schema.py:2064`), `tools/find_penalties.py:48`, `tools/data_health.py:97,109` (which reads the columns directly), `Store.list_corner_models` (`db.py:2045–2047`) lists each circuit once, and the Ludo skill's raw `SELECT circuit_key, source` (`references/mechanic.md:131`) moves to the latest-version read. (4) **The model's shape round-trips:** the anchors as fields on the frozen `Corner`, **added last and defaulting to `None`** so every positional construction in the tests and `from_dict` still builds and a missing anchor stays unmeasured (rule 3), `from_dict` tolerating old models, `as_dict` writing them back (`corner_model.py:64–75`), per `analysis/grip.py:100–111`; `export/build.py` moves with it; slicing and matching read the anchors. (5) **Every writer goes through `save_corner_model`, which inserts** — including `tools/build_track_map.py:189`'s raw UPDATE. (6) **`resolve_corner_model` never overwrites a `track-map` model** on a length mismatch; it reports it. (7) **Sector lines are pinned to the corner-model version they were cut on**, so a new version never re-cuts S1–S3 on stored laps or moves a personal best — `derive_sectors(restamp=True)` (`schema.py:2076`) is the path that must refuse it. (8) **What is already derived from the old model stays as it was:** stored `laps.penalties_served` is not rewritten (re-derived only with his yes), and the penalty detector is re-verified against the known penalties on the new windows before any live use at that circuit; `grip_observations` keep their `corner_model_version` and are re-derived for the new version beside the old, never overwritten. (9) **The tests that pin today's behaviour are rewritten in the same commit, keeping their purpose:** `test_brain_reconciliation.py:1660–1691` (the raw UPDATE — now asserted through `save_corner_model`), `_CORNER_REFUSAL` (`:1204`), `test_session_analysis.py:228–235` (overwrite on mismatch) and its `list_corner_models` count (`:230`); and every skill line stating that all models are `auto-segment` — `refusals.md:21–23`, `voice.md:34,66`, `where-the-change-landed.md:100`, `evals.json:190` — changes per circuit as it passes. `--apply` only with his yes, never in the race week of the circuit it touches | `CLAUDE.md` §3.3 item 2; critic passes 1–3 | on a DB copy: `as_meta()` on the export path returns `track-map` for an applied circuit; a lap 60 m off the stored length leaves that model intact; the previous version still reads; a stored lap's sector stamp and every personal best are unchanged after `--apply`; the Daytona penalty laps still flag; `data_health` and `find_penalties` read the latest version |
+| 5.3 | **Pooled floors on v1.71, teleport-filtered, per corner per circuit, through 5.0** — brake-on, release, throttle pickup, full-throttle point, min speed, **braking-zone time, corner time and exit speed**, consecutive-lap **and** between-run. For each corner print the laps a side needed for a before/after at 80 % power for 5 / 10 / 20 m and for a 50 / 100 ms braking-zone gain; and **against his realistic lap count**, whether it can ever be run. **Every floor is stamped with a hash of the corner model's JSON** it was measured on (versions are not distinct until 5.2b), and is void when that hash changes | the 22 Aug floors are v1.70, pre-filter, three circuits, consecutive-lap only | a table per circuit; corners that cannot be resolved in a realistic run are named |
+| 5.4 | **The input map.** On the fitted map, per corner: median brake-on, release, throttle pickup and full-throttle points as marks, **the band is the uncertainty on the mark, printed with n — not a consistency score and never spoken** (row 2.11). **One mode: run A vs run B** (a change, or a marker test). The fastest-laps-vs-the-rest mode of revision 1 is **withdrawn** — it is the confound 5.5 names. Names from the hub, disagreements shown not resolved, and only where 5.B0 and 5.2b allow a name. A difference inside 5.3's floor is drawn grey and says "cannot resolve". **The drawing and its `pos_x`/`pos_z` stay in the app — nothing of it reaches the export or MCP** (rule 2, §8) | the driver: *"overlay throttle and braking onto the map for analysis"* | Daytona drawn A vs B with n and bands; one corner reads "cannot resolve" |
+| 5.5 | **"Brake later" as an experiment — only after 5.B0's yes and 5.3's floors.** **[MEASURED]** where he brakes (5.4); **[DERIVED]** headroom from deceleration against the car's own peak and trail duration — **never front slip with ABS on**; **the test** at a corner 5.3 says can resolve it: a marker, A-B-A (row 2.2), the laps sized before he drives and refused if they exceed what he will run, judged on **braking-zone time and exit speed against their measured floors**, **with his report in the verdict** (rule 1). Laps may accumulate across sessions only on one car-state revision. Delivered in the brief and on the map — **never a live per-lap call**; live practice coaching stays the request he deferred on 22 Aug | "brake 10 m later" said with evidence, or refused with its arithmetic | one corner either gets a sized test and a verdict row, or a written refusal naming the laps it would need |
+| 5.6 | **Throttle, same treatment, and probably less.** Per-lap `throttle_on_pct` 2σ 11–51 pp; 5.3 decides whether any corner pools to something sayable | IODA throttle application | 5.3's throttle columns name the corners, or none |
+
+#### 5C — Car instruments from the article (Ludo)
+
+| # | Work | Answers | Done when |
+|---|---|---|---|
+| 5.7 | **Full-throttle % and braking % as change instruments**, per lap and stint, through 5.0. Braking % must not inherit `analysis/driving.py:72`'s `brake_pct or 0.0` (rule 3) — a missing brake frame is excluded, not zero. Laps with lift-and-coast or short-shifting (row 1.1's detectors) are separated, because both lower full-throttle % directly | Campbell-Brennan: rear degradation as falling full-throttle %, a traction fix as rising; `arb_r` 4→6 at Daytona was invisible to the rotation indexes | floors recorded; a known `lsd_a`/`arb_r` A/B on file reads in its known direction or is recorded blind |
+| 5.8 | **Balance over the stint as a second wear witness.** `yaw_deficit_pct` **with its 1/v² speed structure removed first** (`analysis/corners.py:718–745` says it gates nothing until then), opposite-lock frames beside it, and fuel mass as the second confound. Validated on **at least four** gauge-read stints, on direction **and** magnitude, before George hears any of it | §5.1 "balance shifts before the stopwatch does"; charter §6 lap time cannot warn | agreement with the gauge on ≥4 stints beyond what chance gives, or `unresolvable` |
+| 5.9 | **Roll-ratio meter.** Front vs rear roll per g from the four `susp_mm_*`; `lat_g` is itself derived (path yaw × speed, `telemetry/recorder.py:86–88`) and labelled so (rule 5); binned by speed for aero squat; track width stated as an assumption; **no roll-rate channel is recorded** (`angvel_z` sat under `yaw_rate` only in v1 blobs, repaired on read, `recorder.py:37–43`), so the archive uses `susp_mm_*` alone; recording `angvel_z` as a second witness that needs no width is a separate recorder row (append-only format). Pitch per g under braking from the same frames. A change, never an imported target | reads an ARB/spring change at the corners it was made | floor recorded; both `arb_r` changes on file (Daytona, Sardegna s158) resolved or recorded blind |
+| 5.10 | **Debrief panel: car or driver.** Per stint, lap time beside 5.7–5.9 | charter §14 by hand today | `tools/debrief.py` prints it with n |
+| 5.11 | **Probes that may end in refusal.** Curvature per lap — does it separate *he changed his line* from *the car changed*. A compression/rebound velocity histogram — **one distribution, no speed knee and no zone binning (rule 8), Nyquist 30 Hz stated** — does it move when `dc_r` moved | Campbell-Brennan curvature and histograms | kept or refused in a verdict row |
+
+#### 5D — Weather (George and Ludo)
+
+| # | Work | Answers | Done when |
+|---|---|---|---|
+| 5.12 | **The calibration frame first.** **8 of 13 events** are `changeable`/`Random` but **only events 4, 6 and 9 have `rain_possible = 1`, and only 6 and 9 have video (20 recordings between them)** — search those for a wet hygrometer frame; if none, **ask him** for one capture in a wet lobby. The stale "seven of eleven" in `penalties.py`/`controller.py` docstrings is corrected in the same commit | 0.3 struck | a labelled dry and wet frame from the native crop, or his capture requested |
+| 5.13 | **Hygrometer reader** on the wear-panel capture: tri-state (dry / wet reading / cannot see); rule 10 — bounded moves in both directions and a reference retired after sustained refusals, accepts logged; rule 11 — reset at session start **with a production caller** | nothing can see rain | on the calibration recording it reads wet on the wet frames **and** no false wet on dry laps; the reset is called from the session start path |
+| 5.14 | **What reads it:** `rain` leaves `CANNOT_SEE`; the `rain` trigger fires off it; the penalty detector stands down on a *read* wet, not only a *declared* one; George's call is one line with its source (*"Track's getting wet — hygrometer, unconfirmed"*); Ludo's plan names the compound crossover the playbook acts on | a plan that assumed dry cannot see rain | harness replay fires `rain` once, a rain playbook entry arms, and the penalty detector stands down |
+| 5.15 | **Wind in the debrief.** Same-gear same-speed acceleration per straight (the 11 Sep method), **corrected for fuel mass**, so a fuel or top-speed change is not credited to the setup or a tow | Random weather is wind | reproduces the Sardegna 9 vs 10 Sep finding |
+
+#### 5E — Teammates (George and Ludo)
+
+| # | Work | Answers | Done when |
+|---|---|---|---|
+| 5.16 | **Designate per series from the hub** through the existing `set_teammate` — shown for his confirmation, never silently. Live use **depends on 3.2** (names on the board) | 0 rows | each series he races with a teammate has a row he confirmed; `series_teammates` leaves `tools/wiring_audit.py`'s `EXPECTED_EMPTY` |
+| 5.17 | **George says what `race/teammate.py` already allows** — position and places between, gap only when adjacent, a stop seen and latched, nothing outside the top eight — **no team orders** | written, never wired | harness replay of a race with a teammate speaks his place and his stop |
+| 5.18 | **The teammate comparison with the data we have.** No telemetry from his car. The hub's `RoundResult` gives quali and best race lap per round → pace gap per round and circuit, with n, in the brief. **Ask him** whether the teammate shares setups. A shared sheet is **reference material outside `brain/car-state/`**, never a second file under that key (§1a). **A shared replay is replay-derived data, out of scope under `CLAUDE.md` §8** — not planned unless he amends §8 | EngineStories teammate comparison | the question asked; hub gap per round in the pre-race brief |
+
+**Order against the calendar.** **Before Sardegna (16 Sep):** 5.1; 5.12's search
+of events 6 and 9's recordings; 5.B0 put to him. **After Sardegna, before Bathurst/Monza
+(20–21 Sep):** 5.2a, 5.0, 5.3, 5.16. **Before Fuji (26 Sep):** 5.13–5.14 only if a
+frame exists **and** they pass the harness before Monza (21 Sep) — nothing new
+merges into Fuji race week. **After Fuji:** 5.2b's code, verified on a DB copy
+with its WAL; then `--apply` circuit by circuit outside its race week; 5.4,
+5.5 (gated by 5.B0 and 5.3), 5.7–5.11, 5.15, 5.17–5.18.
+
+**Revision 2 answers critic pass 1 (NOT AGREED):** B1 the contract quoted in full
+and 5.B0 added; B2 5.2 split so `track-map` is true before it is declared; M1 the
+statistics restated at 80 % power with drift and the apex citation removed; M2 5.5
+judged on measured braking-zone and exit floors, A-B-A, his report in the verdict,
+refused when it cannot fit his running; M3 the fastest-n mode withdrawn; M4 5.1's
+evidence corrected from the stored strategies and flipped jointly for timed races;
+M5 speed structure removed first, four stints; M6 replay out under §8, shared
+sheet outside car-state; M7 event counts corrected, `CANNOT_SEE`, both-sided
+acceptance, a reset with a caller. Minors: 5.7 rule 3 and lift/short-shift, 5.9
+derived `lat_g` and `angvel_z`, 5.11 rule 8 wording, 5.15 mass, 5.2b after
+Sardegna, sensitivity named as such, live-DB writes stated once for the phase,
+5.16 `EXPECTED_EMPTY`.
+
+**Revision 3 answers critic pass 2 (NOT AGREED):** B1 5.2b rewritten to the stored
+form the app reads (JSON source and anchors, `Corner` fields, version insert, no
+overwrite by `resolve_corner_model`); M1 5.1 carries the Suzuka save and the save
+lever as a flip input; M2 `angvel_z` is not recorded; M3 5.B0's wording carries
+A-B-A, the run-length refusal, one car-state revision and never-live. Minors: only
+before/after lap counts quoted, with the small-n caveat; 20 recordings; card refs
+:17–31; "uncertainty" in both places; 5.2b applied only after Fuji; floors stamped
+with the model version; the map never reaches export or MCP.
+
+**Revision 4 answers critic pass 3 (NOT AGREED):** B1 5.2b now carries the schema
+rebuild off `UNIQUE(circuit_key)`, one authoritative copy of source and version,
+latest-version readers including `sector_model_for`, `as_dict` round-tripping the
+anchors, `build_track_map` writing through `save_corner_model`, and sector lines
+pinned to their model version, with a sector-stamp and personal-best check; M1
+5.2b's code and every migration move after Fuji, and 5.13–5.14 must pass before
+Monza or wait. Minors: 5.1's pre-Sardegna save priced from `shortshift_trade.py`
+as `[DERIVED]`; 5.3 floors stamped with a JSON hash until versions exist.
+
+**Revision 5 answers critic pass 4 (NOT AGREED, 5.2b only; ordering agreed):** the
+two tool readers and `list_corner_models` added to (3); (8) stored penalties and
+grip observations kept on the model they were derived from, the detector
+re-verified before live use; (9) the three tests pinning today's write, refusal and
+overwrite rewritten in the same commit; `derive_sectors(restamp=True)` named as
+the path (7) guards.
+
+**Critic pass 5: AGREED.** Its two minors are folded into 5.2b (anchor fields last
+with `None` defaults; the skill's raw read and its "all auto-segment" lines).
+
 ### 6.1 What is refused, and why
 
-- **Per-corner input coaching** stays refused (charter §2). 2.11 is trends only.
+- **Per-lap per-corner input coaching** stays refused (charter §2). 2.11 is trends only.
+  Whether a pooled, pre-sized per-corner experiment should be allowed is the driver's
+  decision on the amendment in row 5.B0 — until he says yes, `CLAUDE.md`'s header and
+  the refusal card stand as written.
 - **A setup record in the app** stays out (`CLAUDE.md` §1a). The ledger in 2.1 holds
   the experiment, not the value.
 - **Fuel-map calls** stay out (driver's standing refusal).
