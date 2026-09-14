@@ -9,6 +9,10 @@ learned the hard way and this one inherits:
 * **A newer call outranks an older one.** If two calls queue up, the driver
   wants the one that is still true. The queue is short and drops stale items
   rather than reading a backlog at him three corners too late.
+* **An instruction outranks everything else.** Lines carry a class - see
+  `INSTRUCTION` and the table above it - and the class decides what plays
+  first, what is dropped when the queue is full, how soon a line goes stale,
+  and whether it waits for a straight.
 * **Failure is silent, never fatal.** No voice is a degraded race; a crash is a
   lost one. Every engine failure falls through to the next, and if none work
   the call still reaches the screen and the call log.
@@ -21,9 +25,11 @@ learned the hard way and this one inherits:
 from __future__ import annotations
 
 import hashlib
-import queue
+import itertools
+import re
 import threading
 import wave
+from functools import lru_cache
 from pathlib import Path
 
 from pitcrew.diagnostics import log
@@ -224,6 +230,8 @@ def cut_reason(line) -> str:
 
 PACK_ROOT = Path(__file__).resolve().parent / "voice_pack"
 PACK_MANIFEST = "manifest.json"
+# What `tools/render_voice_pack.py` writes, for a manifest that does not say.
+PACK_SAMPLE_RATE = 22_050
 
 
 def clip_filename(text: str) -> str:
@@ -237,10 +245,259 @@ def clip_filename(text: str) -> str:
 # line a deferred device rebuild writes. See `audio_devices.begin_playback`.
 SPOKEN_LINE = "the engineer's line"
 
-# A call older than this has been overtaken by the race.
+# ------------------------------------------------------- what plays first
+#
+# **The queue was one FIFO, and at Bathurst on 14 Sep 2026 that was the whole
+# timing defect.** Synthesis was not the problem; the order was. The status
+# line at the crossing runs 5.4-5.7 s, the full box call about 10 s, and the
+# straight's data line arrived a second into the status line and waited
+# behind it - reaching the driver 4.8 to 7.0 s after it was composed, in the
+# braking zone for Hell Corner. A full queue dropped its OLDEST line whatever
+# it was, so a box call could be dropped to make room for a wear figure.
+#
+# So a line carries a class, and the class decides three things:
+#
+#   INSTRUCTION  box, stop off/back, fuel short/save/reaches, the undercut and
+#                rejoin, and the pit-box fill. Plays first. Never dropped for
+#                a lower class, never waits for a straight: its lateness costs
+#                more than the distraction does, and the fill and the release
+#                are said with the car stationary.
+#   EVENT        true once at a moment - green, chequer, incident, the run-in
+#                count - and **every line said without a kind**, which is the
+#                safe default: exactly the old behaviour, eight seconds and
+#                no gate. A push-to-talk answer is here too: he just asked.
+#   NEWS         facts and advice volunteered because they matter - the
+#                heartbeat, a place gained, a rival's stop, wear, the colour
+#                findings. Waits for somewhere he can listen (see `listen_on`)
+#                and goes stale slowly, because the fact stays true while it
+#                waits; a position line is REPLACED by a newer one rather
+#                than both being read out.
+#   COLOUR       the straight's data line. A number read out on a straight
+#                and nowhere else: gated strictly on length, and stale after
+#                a second and a half, because a data line five seconds late is
+#                worse than none.
+#
+# **No class may cut a line that is already playing.** An instruction behind
+# a colour line waits for it: a data line is held to `straight.UNMODELLED_CLIP_S`
+# (2.5 s) to start at all, so that is the most an instruction can wait behind
+# one, and the alternative is half a sentence the driver has to parse under
+# braking before the instruction starts - which is exactly what `LineCut`'s
+# re-queue exists to avoid for the beep. A position line (about 3.5 s from the
+# pack) is the longest NEWS line likely to be playing mid-lap; the heartbeat
+# is longer but is emitted at the crossing by the same arbitration that picks
+# the box call, so the two never contend.
+INSTRUCTION = 0
+EVENT = 1
+NEWS = 2
+COLOUR = 3
+CLASS_NAMES = {INSTRUCTION: "instruction", EVENT: "event", NEWS: "news",
+               COLOUR: "colour"}
+
+# A call older than this has been overtaken by the race. Instructions and
+# events, and every line said without a kind.
 STALE_AFTER_S = 8.0
-# Deliberately shallow: a backlog read at the driver is worse than silence.
-MAX_QUEUED = 3
+# **News waits for a straight, so it may wait longer.** At Bathurst a
+# straight held long enough to speak on comes two or three times a lap and
+# there is a minute of the Mountain with none; a heartbeat that goes stale in
+# eight seconds is a heartbeat that is never said there. What it says - the
+# lap, the laps to go, the fuel - stays true for the lap.
+NEWS_STALE_AFTER_S = 20.0
+# A position line is coalesced (the newest replaces any queued one), so the
+# one that is said is the current place however long it waited.
+POSITION_STALE_AFTER_S = 30.0
+# The straight's number. Late by more than this it lands somewhere he is
+# not listening, and the straight it was composed for has gone.
+DATA_STALE_AFTER_S = 1.5
+# How deep the queue may get. **Staleness bounds lateness per class now, so
+# depth does not have to**: it was 3 when depth was the only guard, and with
+# more volunteered radio queued for straights three would drop news that was
+# still true. The drop takes the lowest class first, oldest first.
+MAX_QUEUED = 5
+# How often a line waiting for a straight asks again.
+GATE_POLL_S = 0.05
+# Seconds of speech per character, for a line the pack cannot time. Measured
+# on the rendered en_GB-alan-medium pack, 14 Sep 2026: median 0.123 s over
+# every clip of 15 characters or more.
+LIVE_SECONDS_PER_CHAR = 0.123
+
+
+@lru_cache(maxsize=1)
+def _kind_classes() -> dict[str, int]:
+    """Call kind -> class. Imported lazily: the race layer is not needed to
+    build a Voice, and a test that holds one should not pay for it."""
+    from pitcrew.race import calls, colour, refuel
+
+    instructions = (calls.BOX_NOW, calls.BOX_SOON, calls.STOPS_OFF,
+                    calls.STOP_BACK, calls.UNDERCUT, calls.FUEL_SHORT,
+                    calls.FUEL_SAVE, calls.FUEL_REACHES, calls.REJOIN,
+                    calls.STAY_OUT_FUEL,
+                    refuel.TARGET, refuel.RELEASE, refuel.SHORT)
+    events = (calls.GREEN, calls.CHEQUER, calls.INCIDENT, calls.LAPS_TO_GO)
+    table = {kind: NEWS for kind in calls.REGISTER}
+    table.update({kind: EVENT for kind in events})
+    table.update({kind: INSTRUCTION for kind in instructions})
+    for name in dir(colour):
+        value = getattr(colour, name)
+        if isinstance(value, str) and value.startswith("colour-"):
+            table[value] = NEWS
+    table[colour.DATA] = COLOUR
+    return table
+
+
+def class_of(kind: str | None) -> int:
+    """The class a call kind plays in. An unknown or missing kind is EVENT -
+    the old behaviour, so a caller not yet passing a kind loses nothing."""
+    if kind is None:
+        return EVENT
+    return _kind_classes().get(kind, EVENT)
+
+
+def stale_after_s(kind: str | None) -> float:
+    """How long a line of this kind stays worth saying.
+
+    Read from the module constants at call time, so a test that shortens one
+    shortens the rule rather than a copy of it.
+    """
+    from pitcrew.race.calls import POSITION
+
+    cls = class_of(kind)
+    if cls == COLOUR:
+        return DATA_STALE_AFTER_S
+    if kind == POSITION:
+        return POSITION_STALE_AFTER_S
+    if cls == NEWS:
+        return NEWS_STALE_AFTER_S
+    return STALE_AFTER_S
+
+
+def _coalesce_key(kind: str | None, text: str) -> str | None:
+    """Lines that a newer line of the same key replaces, or None.
+
+    **The position kind carries two different facts**: the place ("P8 of
+    13. You've made a place.") and the word back from an off ("You're back
+    on it."), and only the first is superseded by a newer one. So the place
+    is recognised by its shape, which `phrase_manifest` already relies on.
+    """
+    from pitcrew.race.calls import POSITION, STATUS
+    from pitcrew.race.colour import DATA
+
+    if kind == POSITION and re.match(r"P\d+\b", text):
+        return "position"
+    if kind in (STATUS, DATA):
+        return kind
+    return None
+
+
+class _Line:
+    """One thing to say, and what the queue needs to know about it."""
+
+    __slots__ = ("text", "kind", "cls", "queued_at", "seq", "clip_s")
+
+    def __init__(self, text: str, kind: str | None, queued_at: float,
+                 seq: int) -> None:
+        self.text = text
+        self.kind = kind
+        self.cls = class_of(kind)
+        self.queued_at = queued_at
+        self.seq = seq
+        self.clip_s: float | None = None
+
+    def __repr__(self) -> str:                      # pragma: no cover
+        return f"<{CLASS_NAMES[self.cls]} {self.kind} {self.text!r}>"
+
+
+class _LineQueue:
+    """Lines waiting to be said, taken best class first.
+
+    Holds its lock only for list operations: deciding whether a line may
+    start asks the gate and times the clip, and neither may block `say` on
+    the Qt thread.
+
+    `put` and `qsize` keep the shape of the `queue.Queue` this replaced, so a
+    caller that enqueues `(queued_at, text)` directly still works.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._lines: list[_Line] = []
+        self._seq = itertools.count()
+        self.closed = False
+
+    def qsize(self) -> int:
+        with self._cond:
+            return len(self._lines)
+
+    def line(self, text: str, kind: str | None = None,
+             queued_at: float | None = None) -> _Line:
+        return _Line(text, kind, _now() if queued_at is None else queued_at,
+                     next(self._seq))
+
+    def put(self, item) -> None:
+        if item is None:
+            self.close()
+            return
+        if isinstance(item, _Line):
+            self.offer(item)
+            return
+        queued_at, text = item
+        self.offer(self.line(text, None, queued_at))
+
+    def offer(self, line: _Line) -> list[tuple[_Line, str]]:
+        """Queue `line`; return what was dropped to make room, and why."""
+        dropped: list[tuple[_Line, str]] = []
+        with self._cond:
+            key = _coalesce_key(line.kind, line.text)
+            if key is not None:
+                for old in [o for o in self._lines
+                            if _coalesce_key(o.kind, o.text) == key]:
+                    self._lines.remove(old)
+                    dropped.append((old, f"replaced by a newer {key} line"))
+            while len(self._lines) + 1 > MAX_QUEUED:
+                # The lowest class first, and inside it the oldest - the
+                # newer of two equal calls is the one still true.
+                victim = max([*self._lines, line],
+                             key=lambda o: (o.cls, -o.seq))
+                if victim is line:
+                    dropped.append((line, "the queue is full of lines that "
+                                          "outrank it"))
+                    return dropped
+                self._lines.remove(victim)
+                dropped.append((victim, f"dropped for a {CLASS_NAMES[line.cls]}"
+                                        f" line with the queue full"))
+            self._lines.append(line)
+            self._cond.notify_all()
+        return dropped
+
+    def requeue(self, line: _Line) -> None:
+        """Back in, as it was - its place in its class and its timestamp."""
+        with self._cond:
+            self._lines.append(line)
+            self._cond.notify_all()
+
+    def snapshot(self) -> list[_Line]:
+        with self._cond:
+            return sorted(self._lines, key=lambda o: (o.cls, o.seq))
+
+    def remove(self, line: _Line) -> bool:
+        with self._cond:
+            if line in self._lines:
+                self._lines.remove(line)
+                return True
+            return False
+
+    def wait(self, poll_s: float) -> None:
+        """Until something changes: `poll_s` while lines are waiting (a gate
+        may open without anyone calling), indefinitely while there are none.
+        Decided under the lock, so a line offered after the caller last
+        looked cannot be missed."""
+        with self._cond:
+            if not self.closed:
+                self._cond.wait(poll_s if self._lines else None)
+
+    def close(self) -> None:
+        with self._cond:
+            self.closed = True
+            self._cond.notify_all()
 
 # Passing engine=None means "this machine has no speech"; the default
 # means "find the best one available". Conflating the two made a test
@@ -285,7 +542,12 @@ class Voice:
         self._failures = 0
         self.last_error: str | None = None
         self.spoken: list[str] = []
-        self._queue: queue.Queue = queue.Queue()
+        self._queue = _LineQueue()
+        # The line on the card right now, for `busy`.
+        self._playing: _Line | None = None
+        # Whether a NEWS or COLOUR line may start now. See `listen_on`.
+        self._gate = None
+        self._gate_failed = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         if self.enabled:
@@ -312,12 +574,19 @@ class Voice:
         never speak through.
         """
         warm = getattr(self._engine, "warm", None)
-        if warm is None:
+        timed = getattr(self._engine, "duration_s", None)
+        if warm is None and timed is None:
             return
 
         def run() -> None:
             try:
-                warm()
+                if warm is not None:
+                    warm()
+                if timed is not None:
+                    # The pack's decomposition tables are built on first
+                    # use, and the first use is otherwise a line waiting on
+                    # the voice thread to be timed against a straight.
+                    timed(WARM_LINE)
             except Exception as exc:            # noqa: BLE001
                 log("voice").error("warm-up failed: %s: %s",
                                    type(exc).__name__, exc, exc_info=True)
@@ -349,19 +618,99 @@ class Voice:
         return (f"The engineer has said nothing for {self._failures} "
                 f"{calls}: {self.last_error}")
 
-    def say(self, text: str) -> None:
+    def say(self, text: str, kind: str | None = None) -> None:
+        """Queue `text`. `kind` is the call kind (`race.calls`, `race.colour`,
+        `race.refuel`) and decides its class - see the table above `_Line`.
+
+        No kind is EVENT: the queue's old behaviour, so a caller that has not
+        been given a kind is never made worse.
+        """
         if not text:
             return
         self.spoken.append(text)
         if not self.enabled:
             return
-        # Drop the oldest rather than grow a backlog.
-        while self._queue.qsize() >= MAX_QUEUED:
+        line = self._queue.line(text, kind)
+        for dropped, why in self._queue.offer(line):
+            log("voice").info("not saying %r (%s, %s): %s", dropped.text,
+                              dropped.kind or "no kind",
+                              CLASS_NAMES[dropped.cls], why)
+
+    @property
+    def busy(self) -> bool:
+        """Whether anything is playing or waiting to - so a caller with
+        something optional to say can wait for a clear radio instead of
+        queueing behind it."""
+        return self._playing is not None or self._queue.qsize() > 0
+
+    def listen_on(self, gate) -> None:
+        """Hold NEWS and COLOUR lines until `gate(clip_s, strict)` says yes.
+
+        `clip_s` is how long the line will take to say; `strict` is True for
+        COLOUR. The race passes `straight.fits` over the live straight
+        detector, so a volunteered line starts only where the driver can
+        listen for as long as it lasts - never in a braking zone - and waits
+        (until it goes stale) where he cannot. Instructions and events are
+        never held. None removes the gate.
+        """
+        self._gate = gate
+        self._gate_failed = False
+
+    def duration_s(self, text: str) -> float:
+        """How long `text` takes to say: timed off the pack where the pack
+        carries it, estimated from its length where it does not."""
+        timed = getattr(self._engine, "duration_s", None)
+        if timed is not None:
             try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                break
-        self._queue.put((_now(), text))
+                seconds = timed(text)
+            except Exception:                   # noqa: BLE001 - estimate
+                seconds = None
+            if seconds is not None:
+                return seconds
+        return len(text) * LIVE_SECONDS_PER_CHAR
+
+    def _may_start(self, line: _Line) -> bool:
+        if line.cls < NEWS or self._gate is None:
+            return True
+        if line.clip_s is None:
+            line.clip_s = self.duration_s(line.text)
+        try:
+            return bool(self._gate(line.clip_s, line.cls == COLOUR))
+        except Exception as exc:                # noqa: BLE001 - fail open
+            # A gate that raises must not silence the engineer: the line is
+            # said as it would have been before there was a gate.
+            if not self._gate_failed:
+                self._gate_failed = True
+                log("voice").error("the listening gate raised, so volunteered "
+                                   "lines are no longer held for a straight: "
+                                   "%s: %s", type(exc).__name__, exc,
+                                   exc_info=True)
+            return True
+
+    def _next_line(self) -> _Line | None:
+        """The best line that may start now, dropping stale ones on the way.
+
+        Blocks until there is one. A line held for a straight does not hold
+        up a line behind it that is not held: an instruction arriving while
+        the heartbeat waits for the Mountain Straight is said at once.
+        """
+        while not self._queue.closed:
+            now = _now()
+            for line in self._queue.snapshot():
+                age = now - line.queued_at
+                if age > stale_after_s(line.kind):
+                    if self._queue.remove(line):
+                        # The race has moved on; saying it now would mislead.
+                        log("voice").info(
+                            "not saying %r (%s, %s): %.1fs old, stale after "
+                            "%.1fs", line.text, line.kind or "no kind",
+                            CLASS_NAMES[line.cls], age,
+                            stale_after_s(line.kind))
+                    continue
+                if self._may_start(line) and self._queue.remove(line):
+                    return line
+            self._queue.wait(GATE_POLL_S)
+        return None
 
     def say_now(self, text: str) -> tuple[bool, str]:
         """Speak on the calling thread and report what actually happened.
@@ -391,57 +740,62 @@ class Voice:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            item = self._queue.get()
-            if item is None:
+            line = self._next_line()
+            if line is None:
                 return
-            queued_at, text = item
-            if _now() - queued_at > STALE_AFTER_S:
-                # The race has moved on; saying it now would mislead.
-                continue
+            self._playing = line
             try:
-                self._engine.speak(text)
-            except LineCut as cut:
-                # Something closed the stream in the middle of the line - a
-                # rebuild of the device list, or the line standing aside for
-                # a sound that may pre-empt it. Not a failure of the engine,
-                # so it does not touch `_failures` - the card is fine and the
-                # next line will play - but the driver heard half a sentence,
-                # and half a sentence from a race engineer is worse than none.
-                #
-                # Re-queued with its ORIGINAL timestamp, not a fresh one. The
-                # staleness rule above is already the right test for whether a
-                # call is still worth making, and restarting the clock here
-                # would let a box call arrive ten seconds after it was true.
-                #
-                # **The reason is the one the cutter recorded.** This used to
-                # say "the audio devices were rebuilt" for every cut, and at
-                # Suzuka on 13 Sep 2026 the cut was the radio static.
-                why = str(cut) or REBUILT
-                age = _now() - queued_at
-                if age <= STALE_AFTER_S:
-                    log("voice").warning(
-                        "%s - cut %r off after %.1fs - saying it again.",
-                        why, text, age)
-                    self._queue.put((queued_at, text))
-                else:
-                    log("voice").warning(
-                        "%s - cut %r off. It is %.1fs old now, so it is "
-                        "dropped rather than said late.", why, text, age)
-            except Exception as exc:            # noqa: BLE001 - see below
-                # Deliberately broad: a synthesis failure mid-race must not
-                # take the app with it, and the driver still has the screen
-                # and the call log. Reported, never swallowed silently.
-                self._failures += 1
-                self.last_error = f"{type(exc).__name__}: {exc}"
-                log("voice").error("%s (nothing said for %d call(s))",
-                                   self.last_error, self._failures,
-                                   exc_info=True)
+                self._say_one(line)
+            finally:
+                self._playing = None
+
+    def _say_one(self, line: _Line) -> None:
+        """Play one line; a cut line goes back in, a failure is counted."""
+        queued_at, text = line.queued_at, line.text
+        try:
+            self._engine.speak(text)
+        except LineCut as cut:
+            # Something closed the stream in the middle of the line - a
+            # rebuild of the device list, or the line standing aside for
+            # a sound that may pre-empt it. Not a failure of the engine,
+            # so it does not touch `_failures` - the card is fine and the
+            # next line will play - but the driver heard half a sentence,
+            # and half a sentence from a race engineer is worse than none.
+            #
+            # Re-queued with its ORIGINAL timestamp, not a fresh one. The
+            # staleness rule above is already the right test for whether a
+            # call is still worth making, and restarting the clock here
+            # would let a box call arrive ten seconds after it was true.
+            #
+            # **The reason is the one the cutter recorded.** This used to
+            # say "the audio devices were rebuilt" for every cut, and at
+            # Suzuka on 13 Sep 2026 the cut was the radio static.
+            why = str(cut) or REBUILT
+            age = _now() - queued_at
+            if age <= stale_after_s(line.kind):
+                log("voice").warning(
+                    "%s - cut %r off after %.1fs - saying it again.",
+                    why, text, age)
+                self._queue.requeue(line)
             else:
-                if self._failures:
-                    log("voice").info("voice recovered after %d silent call(s)",
-                                      self._failures)
-                self._failures = 0
-                self.last_error = None
+                log("voice").warning(
+                    "%s - cut %r off. It is %.1fs old now, so it is "
+                    "dropped rather than said late.", why, text, age)
+        except Exception as exc:            # noqa: BLE001 - see below
+            # Deliberately broad: a synthesis failure mid-race must not
+            # take the app with it, and the driver still has the screen
+            # and the call log. Reported, never swallowed silently.
+            self._failures += 1
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            log("voice").error("%s (nothing said for %d call(s))",
+                               self.last_error, self._failures,
+                               exc_info=True)
+        else:
+            if self._failures:
+                log("voice").info("voice recovered after %d silent call(s)",
+                                  self._failures)
+            self._failures = 0
+            self.last_error = None
 
 
 def _now() -> float:
@@ -621,12 +975,30 @@ class VoicePackEngine:
 
     name = "voice-pack"
 
-    def __init__(self, pack_dir: Path, clips: dict, fallback=None) -> None:
+    def __init__(self, pack_dir: Path, clips: dict, fallback=None, *,
+                 sample_rate: int = PACK_SAMPLE_RATE) -> None:
         self._dir = pack_dir
         self._clips = clips
         self._fallback = fallback
+        self._rate = sample_rate
         self.hits = 0
         self.misses = 0
+
+    def duration_s(self, text: str) -> float | None:
+        """How long the pack takes to say `text`, off the rendered sample
+        counts, or None where it does not carry every clip of it."""
+        from pitcrew.engineer.phrase_manifest import segments_for
+
+        segments = segments_for(text)
+        if not segments:
+            return None
+        total = 0
+        for name in segments:
+            samples = (self._clips.get(name) or {}).get("samples")
+            if samples is None:
+                return None
+            total += samples
+        return total / float(self._rate)
 
     @property
     def has_live_engine(self) -> bool:
@@ -754,7 +1126,9 @@ def load_voice_pack(fallback=None, voice_id: str | None = None):
         try:
             import json
             with index.open(encoding="utf-8") as handle:
-                clips = json.load(handle).get("clips") or {}
+                loaded = json.load(handle)
+            clips = loaded.get("clips") or {}
+            rate = int(loaded.get("sampleRate") or PACK_SAMPLE_RATE)
         except (OSError, ValueError) as exc:
             log("voice").warning("voice pack %s is unreadable: %s",
                                  folder.name, exc)
@@ -762,7 +1136,7 @@ def load_voice_pack(fallback=None, voice_id: str | None = None):
         if clips:
             log("voice").info("voice pack %s loaded, %d clips",
                               folder.name, len(clips))
-            return VoicePackEngine(folder, clips, fallback)
+            return VoicePackEngine(folder, clips, fallback, sample_rate=rate)
     return None
 
 
