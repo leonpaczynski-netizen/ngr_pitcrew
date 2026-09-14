@@ -395,6 +395,20 @@ def _coalesce_key(kind: str | None, text: str) -> str | None:
     return None
 
 
+# **"Car #76" is a handle, and Piper reads "#" as "hash".** The store mints
+# `Car #N` for a car nobody has named yet (`Store.provisional_driver_name`),
+# and it reaches the ear through every call that names a driver - a rival's
+# stop, the chase, the rejoin, the tow. Said "Car hash 76" at Bathurst. Turned
+# into words here, at the one boundary every spoken line crosses, so no call
+# has to remember; the screen and the record keep the handle as it is filed.
+_HANDLE_IN_TEXT = re.compile(r"\bCar #(\d+)\b")
+
+
+def spoken_form(text: str) -> str:
+    """`text` as the engine should say it: "Car #76" as "Car 76"."""
+    return _HANDLE_IN_TEXT.sub(r"Car \1", text) if text else text
+
+
 class _Line:
     """One thing to say, and what the queue needs to know about it."""
 
@@ -694,12 +708,12 @@ class Voice:
         timed = getattr(self._engine, "duration_s", None)
         if timed is not None:
             try:
-                seconds = timed(text)
+                seconds = timed(spoken_form(text))
             except Exception:                   # noqa: BLE001 - estimate
                 seconds = None
             if seconds is not None:
                 return seconds
-        return len(text) * LIVE_SECONDS_PER_CHAR
+        return len(spoken_form(text)) * LIVE_SECONDS_PER_CHAR
 
     def _may_start(self, line: _Line) -> bool:
         if line.cls < NEWS or self._gate is None:
@@ -760,7 +774,7 @@ class Voice:
         if self._engine is None:
             return False, "no speech engine loaded on this machine"
         try:
-            self._engine.speak(text)
+            self._engine.speak(spoken_form(text))
         except Exception as exc:                      # noqa: BLE001 - reported
             log("voice").error("say_now failed: %s", exc)
             return False, str(exc)
@@ -790,7 +804,7 @@ class Voice:
         """Play one line; a cut line goes back in, a failure is counted."""
         queued_at, text = line.queued_at, line.text
         try:
-            self._engine.speak(text)
+            self._engine.speak(spoken_form(text))
         except LineCut as cut:
             # Something closed the stream in the middle of the line - a
             # rebuild of the device list, or the line standing aside for

@@ -126,6 +126,24 @@ def test_a_voice_that_is_off_answers_false_and_a_raising_callback_is_survived():
         speaker.stop()
 
 
+def test_car_hash_n_is_said_as_car_n_everywhere_the_voice_speaks():
+    assert voice_module.spoken_form("Car #76 has boxed on 5 litres.") == \
+        "Car 76 has boxed on 5 litres."
+    assert voice_module.spoken_form("A stop now puts you behind Car #4.") == \
+        "A stop now puts you behind Car 4."
+    assert voice_module.spoken_form("Box this lap.") == "Box this lap."
+    engine = NullEngine()
+    voice = Voice(engine, enabled=True)
+    try:
+        voice.say("Car #31 and Car #28 have boxed.")
+        deadline = time.monotonic() + 2.0
+        while not engine.lines and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert engine.lines == ["Car 31 and Car 28 have boxed."]
+    finally:
+        voice.stop()
+
+
 # ------------------------------------------------------------ the race
 
 @dataclass
@@ -276,7 +294,9 @@ def test_through_a_real_voice_a_stale_stop_comes_back_and_is_said_once(
         hand(again[0])
         assert _until(lambda: answers == [False, True])
         assert offered(co, seconds=2 * RaceCoordinator.MID_LAP_SPACING_S) == []
-        assert engine.lines == [first[0].spoken()]
+        # Said once - and said as words, not "Car hash 76" (D7, 14 Sep 2026).
+        assert engine.lines == [voice_module.spoken_form(first[0].spoken())]
+        assert engine.lines == ["Car 76 has boxed on 5 litres."]
     finally:
         speaker.stop()
 
