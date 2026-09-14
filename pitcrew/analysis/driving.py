@@ -21,8 +21,16 @@ Two numbers per lap, taken at the crossing from the rows in hand, the way
   the shift frame rejects every real upshift (`tools/shortshift_trade.py`,
   trap 1; memory, 6 Sep 2026).
 
-Both are None where the lap cannot carry them - too few frames, no upshift
-under power - never zero.
+* **full-throttle share** and **braking share** - the fraction of frames at
+  or above `FULL_THROTTLE_PCT` throttle, and at or above `BRAKING_PCT` brake.
+  Plan row 5.7: Campbell-Brennan (Racecar Engineering, 2021) uses the first as a
+  rear-degradation and traction instrument; neither is quoted as one until it
+  has passed `analysis/instrument_gate`.
+
+All are None where the lap cannot carry them - too few frames, no upshift
+under power - never zero. **A frame with no pedal reading is left out of that
+share's count, not read as a released pedal** (rule 3): `brake_pct or 0.0`
+used to count a missing brake frame as coasting.
 """
 from __future__ import annotations
 
@@ -37,6 +45,9 @@ COAST_MIN_KPH = 60.0
 # the shift to count as one taken under power.
 LOOKBACK = 15
 FULL_THROTTLE_PCT = 90.0
+# Real pressure, not a foot resting on the pedal - the same threshold
+# `tools/braking_change.py` finds braking events with.
+BRAKING_PCT = 20.0
 # A lap needs this many frames before a share is a share (~10 s at 60 Hz).
 MIN_FRAMES = 600
 
@@ -48,6 +59,8 @@ class DrivingRead:
     upshift_rpm: float | None        # median upshift rpm under power
     upshifts: int                    # how many upshifts under power were seen
     frames: int
+    # Appended with a default: `DrivingRead` is built positionally.
+    braking_pct: float | None = None  # % of frames at >= 20% brake
 
 
 def read_rows(rows: list[list], field_names) -> DrivingRead:
@@ -65,17 +78,28 @@ def read_frames(frames: list[dict]) -> DrivingRead:
     count = len(frames)
     if count < MIN_FRAMES:
         return DrivingRead(None, None, None, 0, count)
-    coasting = 0
-    flat = 0
+    coasting = flat = braking = 0
+    coast_seen = throttle_seen = brake_seen = 0
     for f in frames:
-        throttle = f.get("throttle_pct") or 0.0
-        brake = f.get("brake_pct") or 0.0
-        speed = f.get("speed_kph") or 0.0
-        if (throttle < PEDAL_OFF_PCT and brake < PEDAL_OFF_PCT
-                and speed >= COAST_MIN_KPH):
-            coasting += 1
-        if throttle >= FULL_THROTTLE_PCT:
-            flat += 1
+        throttle = f.get("throttle_pct")
+        brake = f.get("brake_pct")
+        speed = f.get("speed_kph")
+        if throttle is not None:
+            throttle_seen += 1
+            if throttle >= FULL_THROTTLE_PCT:
+                flat += 1
+        if brake is not None:
+            brake_seen += 1
+            if brake >= BRAKING_PCT:
+                braking += 1
+        if throttle is not None and brake is not None and speed is not None:
+            coast_seen += 1
+            if (throttle < PEDAL_OFF_PCT and brake < PEDAL_OFF_PCT
+                    and speed >= COAST_MIN_KPH):
+                coasting += 1
+
+    def share(hits: int, seen: int) -> float | None:
+        return round(100.0 * hits / seen, 2) if seen >= MIN_FRAMES else None
     shifts: list[float] = []
     for i in range(LOOKBACK, count):
         gear, before = int(frames[i].get("gear") or 0), int(frames[i - 1].get("gear") or 0)
@@ -89,11 +113,12 @@ def read_frames(frames: list[dict]) -> DrivingRead:
         if rpm:
             shifts.append(float(rpm))
     return DrivingRead(
-        coast_pct=round(100.0 * coasting / count, 2),
-        full_throttle_pct=round(100.0 * flat / count, 2),
+        coast_pct=share(coasting, coast_seen),
+        full_throttle_pct=share(flat, throttle_seen),
         upshift_rpm=(round(median(shifts)) if shifts else None),
         upshifts=len(shifts),
-        frames=count)
+        frames=count,
+        braking_pct=share(braking, brake_seen))
 
 
 # --- the step, lap over lap -----------------------------------------------------

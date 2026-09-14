@@ -228,6 +228,7 @@ never as a step of a diagnosis.**
 - `tools/derive_sectors.py` — **writes by default**; `--dry-run` reports only.
 - `tools/series.py` — `--set` writes at once; `--like`/`--car` ask first unless `--yes`.
 - `tools/name_drivers.py` — writes as soon as it is given a name (`old new`, `--me`, `--teammate`).
+- `tools/instrument_floors.py --write` — records measurement rows (same-setup noise floors for full-throttle, braking and coast share, per session, through `pitcrew.analysis.instrument_gate`, rows 5.0/5.7); read-only without `--write`. Analysis rows carry the driver's standing yes (14 Sep 2026). A floor is the first of the gate's four checks, not a pass, and it refuses a between-run floor until row 5.4a says which sessions share a setup.
 - `pitcrew.analysis.wear_rates.carry_into_knowledge` — writes the fitted rates into `race_knowledge` through `store.save_race_knowledge`, whenever it is called.
 
 **Not instruments for this skill** (the app's own health, voice, rig and
