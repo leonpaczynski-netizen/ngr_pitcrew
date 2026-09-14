@@ -19,9 +19,16 @@ date,session_ids,key,direction,delta_pct_range,instrument,measured_floor,control
 2026-09-08,none yet,ECU;restrictor,to the highest legal reading,range unknown,GT7 settings-screen power readout,not established,screen readings at two ECU points (6.0 bhp per ECU point),one of two untried ECU/restrictor combinations reads closer to the power limit from below,neither beats the current reading,open,"§'Power landed ... 4 bhp given away' (derived rows; 'Check ... on the screen')",issued sheet 8 Sep
 2026-09-08,s151 onward,gear1;gear2,re-cut over the mountain,range unknown,tools/shift_points.py on mountain frames,not established,s151 as the run-as-is baseline,1st/2nd over the mountain are [UNMEASURED]; re-cut after the first run,none stated,open,"§'The gearbox — held' ('Run the box as it stands, then re-cut')",issued sheet 8 Sep
 2026-09-08,s151,n/a (traction at The Cutting),n/a,n/a,on-power rear-spin share (646 frames laps 5-10); whole-lap wheelspin,not established; Daytona whole-lap 7.0/5.8/5.5 % as reference,Daytona whole-lap wheelspin,a traction limit not a diff question; 'a question not a change',n/a,open,"§s151 'What he did NOT report — The Cutting'",s151
-2026-09-08,none yet,n/a (pit loss),n/a,n/a,measured pit loss,not established,n/a,reference estimate 28-30 s at medium-high confidence,n/a,open,"§'What is silent' ('Measure it')",-
+2026-09-08,s160;s176,n/a (pit loss),n/a,n/a,measured pit loss,not established,n/a,reference estimate 28-30 s at medium-high confidence,n/a,refuted (lower),"§'What is silent' ('Measure it'); closed 15 Sep debrief: tools/debrief.py 14 - 23.1 s ex-fuel at the s160 stop, 20.7 s at the s176 stop; refuel 1.00 L/s measured both stops",-
 2026-09-08,none yet,n/a (wear rate / stint length / tyre model),n/a,n/a,HUD wear gauge,not established,n/a,none yet ('needs laps'),n/a,open,"§'What is silent'",-
 ```
+
+**Debrief of the race, 15 Sep 2026 (s176).** No row above was tested in the race except pit loss,
+which closed. The five other open rows stay open: the race changed nothing on the sheet as far as the
+feed can see (gearbox and ride height unchanged, `FEED`), and nothing else is on file for 10–14 Sep.
+**Rank zero is open again:** the TCS-intervening flag sat at about 7 % of race frames from lap 1
+(measurement id 127) against ~0 in s151/s173 — asked of the driver, not yet answered. Findings in the
+car-state file, §"Round 7 race — debrief".
 
 **Notes, Bathurst (Huracán v1.71 ranges, step ÷ span)**
 

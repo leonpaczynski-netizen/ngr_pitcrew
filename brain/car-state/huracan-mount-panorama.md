@@ -268,3 +268,56 @@ forward ballast (more front load on a car whose chronic weakness is a front-limi
 Ten laps at a brand-new circuit, still improving, the driver likes the car, the symptom he
 raised is resolving on its own, and the one measurable defect is normal for the car. **Moving
 anything now throws away the baseline and chases an adaptation curve.**
+
+---
+
+# Round 7 race — debrief, 15 Sep 2026 (s176, 20 laps, RS, GT7 1.71)
+
+**No setup value is written here: nothing moved.** Sources: `tools/debrief.py 14`; three read-only
+crew passes (replay video `2026-09-15 07-21-54.mp4`, frames, fuel) checked by Ludo the same day.
+
+## `[DRIVER REPORT]`
+> *"car was still too lively and not planted enough for the race to be consistent I used way too
+> much fuel compared to other drivers. Too many crashes."*
+
+## Rank zero — OPEN AGAIN
+- `FEED`: gearbox unchanged in s151…s176; ride height at matched speed and fuel within ±1.1 mm of s151.
+  Springs, dampers, ARB, diff, camber, toe, aero: **no ground truth — not asked yet.**
+- ⚠️ **TCS flag (bit 11) about 7 % of race frames, 4.7–9.8 % on EVERY lap from lap 1** (measurement
+  id 127). s151 0.04 · s173 0.00 · s174 1.06 · s175 1.59 · s160 1.54 (zero on laps 1–5) · the
+  TCS-on calibration lap s172 19.2. Event row says `tcs=0`, which has been wrong before (Spa).
+  **Asked of the driver: was a TCS level on in the race?**
+
+## The offs — every one began with a wheel off the road or the car arriving too fast
+Replay (chase cam only) and frames agree: **no contact with another car seen; no off started with the
+rear sliding on clean tarmac.** Where the rear let go, it was after a kerb/grass strike.
+
+| lap | where | what |
+|---|---|---|
+| 1 | Esses/Dipper | kerb in the Esses at 172 km/h, arrived ~20 km/h fast, pushed straight on into the wall under braking. P1→P3 |
+| 1 | The Chase | 3 m off line (traffic), right wheels on grass at full brake, spun. P5→P11 |
+| 8 | Griffins Bend | left rear dropped onto grass under braking, rear came round |
+| 9 | The Dipper | inside wheels on grass, rear let go, barrier. P7→P11 |
+| 10, 17 | The Chase exit | full throttle in 4th, ran wide onto the left grass needing ~2× the steering of clean laps for the same turn (front-limited on power) |
+| 14, 19 | McPhillamy Park exit | run wide onto grass/sand; lap 19 rejoined off line and crashed in the Esses |
+| 16 | Hell Corner exit | kerb with the car unloaded, grass, spun on the grass under power — the worst, ~20 s |
+| 11 | Mountain Straight | car ~90 km/h slow after the lap-10 hit — cause not visible; pitted next lap |
+
+**"Lively" outside the offs:** catches 1.2 per 10 km in the race vs 0.7 in practice — not separable
+from chance on 91 km; the rehearsal race s160 was livelier (1.65). No fuel-load or tyre-age effect
+resolved. No sign of bottoming over the crests. **His report and the telemetry disagree; the
+disagreement stands** — the channels cannot feel "planted" or TCS cutting in.
+**Second half of the race:** later braking in all 8 zones and lower or equal minimum speed in 7,
+against 14 Sep practice at matched fuel (trend, 5–8 laps a cell).
+
+## Fuel
+- Burn 8.23 L/lap over 19 laps; clean stint 1 8.14 (n=7), stint 2 8.39 (n=3); the race matched his
+  practice and s160. Incidents cost +1.2–1.8 L (≈1.2–1.8 s of fill). Refuel 1.00 L/s measured.
+- **Against rivals: not established.** The full-fill cars (#31, #11, #76, K.Graebs) sit within
+  ±0.5 L/lap of him depending on a one-lap ambiguity in the reader. The clear low burners
+  (PUNISHED, Magical daddy, TommyTbone) are registered in a Ferrari 296, a GT-R and a 992.
+- Finished lapped with 7.7 L aboard = 7.7 s standing — not knowable at the stop.
+- He already shifts 250–440 rpm under the 8,600 performance beep; the fuel table was never used.
+- Short-shift trade borrowed from Daytona does not pay unless it deletes a stop `[DERIVED elsewhere, transfer ASSUMED]`.
+
+## Decision — NO CHANGE at Bathurst (the round is over); Rd8 is a separate turn
