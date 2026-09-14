@@ -46,7 +46,10 @@ import threading
 
 import numpy as np
 
+from pitcrew.diagnostics import log
 from pitcrew.telemetry.board import flag_ladder
+
+_log = log(__name__)
 
 # A flag is saturated colour; the HUD's greys and a name's white are not.
 FLAG_SPREAD = 45
@@ -105,6 +108,24 @@ NAME_SHAPE = (64, 16)
 # 0.58 is the midpoint of the measured gap. The direction to err is wide: a
 # split invents a driver and is invisible, a merge shows on the sheet the moment
 # anybody looks at it.
+#
+# **Re-measured on a full race, 15 Sep 2026, and kept.** Bathurst Rd 7
+# (session 176), 13 cars, every row the live reader found at the live 2 s grab,
+# each labelled with its driver from the NATIVE crop rather than from this
+# roster (`tools/extract_board_identity_fixture.py`):
+#
+#                      pairs     min    0.1%    1%     5%    50%    95%    99%
+#     different, 1 frame 22,687  0.641  0.687  0.753  0.789  0.883  0.936  0.957
+#     same driver         7,800  0.020  0.030  0.050  0.079  0.233  0.674  0.814
+#
+# No pair of different drivers falls under anything up to 0.64; at 0.58 one
+# same-driver pair in ten falls outside (the reader's band clips a glyph and
+# the height-scaled bitmap moves), which splits a driver into a second cluster
+# rather than merging two. The two tails overlap above 0.64, so no threshold
+# is clean on both sides, and the Spa reasoning above about which way to err
+# is reversed now that a merge is the expensive direction (see
+# `test_board_identity_s176.py`). Handle "78" absorbing nine drivers that
+# night was NOT this threshold: see `PitWall._neighbour`.
 SAME_NAME_MAX_DIFF = 0.58
 
 # How far a row's y may sit from a pit disc's y and still be the same row.
@@ -303,6 +324,16 @@ class Roster:
         self._lock = threading.RLock()
         self._groups: list[dict] = []
         self._alias: dict[int, int] = {}
+        # **Clusters that have been on the board in the same frame, and so are
+        # two cars.** One car cannot hold two rows at once, which is the one
+        # fact about identity a frame proves outright. `_merge_converged`
+        # consults it, so two drivers who have been seen side by side are
+        # never folded into one however alike their bitmaps grow.
+        self._together: dict[int, set[int]] = {}
+        # Rule 10: the accepts are counted as well as the refusals. `matched`
+        # rows joined a cluster, `founded` started one, `contested` wanted a
+        # cluster another row of the same frame was closer to.
+        self.counts = {"matched": 0, "founded": 0, "contested": 0}
         for label, bits in (seed or {}).items():
             array = np.asarray(bits, dtype=bool)
             self._groups.append({"bits": array, "sum": array.astype(float),
@@ -343,6 +374,10 @@ class Roster:
             if (mine["label"] and theirs["label"]
                     and mine["label"] != theirs["label"]):
                 continue
+            if other in self._together.get(index, ()):
+                # Seen on two rows of one frame: two cars, whatever the
+                # bitmaps say now.
+                continue
             if theirs["bits"].shape != mine["bits"].shape:
                 continue
             if _distance(theirs["bits"], mine["bits"]) >= SAME_NAME_MAX_DIFF:
@@ -357,6 +392,14 @@ class Roster:
             winner["bits"] = (winner["sum"] / winner["seen"]) > 0.5
             winner["label"] = winner["label"] or loser["label"]
             self._alias[drop] = keep
+            apart = self._together.pop(drop, set()) | self._together.get(keep, set())
+            apart.discard(keep)
+            apart.discard(drop)
+            self._together[keep] = apart
+            for other_id in apart:
+                partners = self._together.setdefault(other_id, set())
+                partners.discard(drop)
+                partners.add(keep)
             return keep
         return index
 
@@ -364,31 +407,91 @@ class Roster:
         """Fold one sighting in and return the driver id it belongs to.
 
         `None` for an unreadable bitmap: an unread name is not a new driver.
+        One row on its own; a whole board is `see_frame`, which is what the
+        pit wall calls.
         """
-        if bits is None:
-            return None
-        bits = np.asarray(bits, dtype=bool)
+        return self.see_frame([bits])[0]
+
+    def see_frame(self, bitmaps) -> list[int | None]:
+        """Every row of ONE frame, resolved together: a driver id per row.
+
+        **Two rows of one frame are two cars**, so no id is handed to two of
+        them. Rows are settled closest-first: a row whose nearest cluster was
+        already taken by a closer row of the same frame falls to its next
+        nearest untaken cluster under the threshold, and otherwise founds its
+        own. The exemplar only moves for the row that won, never for the
+        contested one - a reading the frame itself proves is somebody else
+        must not pull a driver's bitmap toward that somebody.
+
+        Measured on the Bathurst race of 14 Sep 2026 (session 176, 1,336
+        frames at the live 2 s grab): two rows of one racing frame never
+        measured closer than 0.574, so on a clean board this refuses nothing.
+        It fires on the frames where the reader is NOT looking at a race
+        board - the pre-race grid showed twelve identical "DR" plates - and
+        that is exactly where one id would otherwise have been handed to
+        twelve rows.
+        """
+        rows = [None if b is None else np.asarray(b, dtype=bool)
+                for b in bitmaps]
+        out: list[int | None] = [None] * len(rows)
         with self._lock:
-            # **Nearest cluster, not the first one under the threshold.** An earlier
-            # version took whichever group was created first, so a bitmap 0.17 from
-            # one name and 0.05 from another joined the wrong one purely by order of
-            # appearance.
-            best, closest = None, None
-            for index, group in enumerate(self._groups):
-                if index in self._alias or group["bits"].shape != bits.shape:
+            # **Nearest cluster, not the first one under the threshold.** An
+            # earlier version took whichever group was created first, so a
+            # bitmap 0.17 from one name and 0.05 from another joined the wrong
+            # one purely by order of appearance.
+            ranked: list[list[tuple[float, int]]] = []
+            for bits in rows:
+                if bits is None:
+                    ranked.append([])
                     continue
-                apart = _distance(group["bits"], bits)
-                if closest is None or apart < closest:
-                    best, closest = index, apart
-            if best is not None and closest < SAME_NAME_MAX_DIFF:
-                group = self._groups[best]
-                group["seen"] += 1
-                group["sum"] = group["sum"] + bits
-                group["bits"] = (group["sum"] / group["seen"]) > 0.5
-                return self._merge_converged(best)
-            self._groups.append({"bits": bits, "sum": bits.astype(float),
-                                 "seen": 1, "label": None})
-            return len(self._groups) - 1
+                near = []
+                for index, group in enumerate(self._groups):
+                    if (index in self._alias
+                            or group["bits"].shape != bits.shape):
+                        continue
+                    apart = _distance(group["bits"], bits)
+                    if apart < SAME_NAME_MAX_DIFF:
+                        near.append((apart, index))
+                ranked.append(sorted(near))
+            taken: set[int] = set()
+            order = sorted((r for r in range(len(rows)) if rows[r] is not None),
+                           key=lambda r: ranked[r][0][0] if ranked[r] else 2.0)
+            contested = []
+            for r in order:
+                choice = next((i for _, i in ranked[r] if i not in taken), None)
+                if ranked[r] and ranked[r][0][1] in taken:
+                    contested.append((r, ranked[r][0][1], choice))
+                if choice is None:
+                    self._groups.append({"bits": rows[r],
+                                         "sum": rows[r].astype(float),
+                                         "seen": 1, "label": None})
+                    choice = len(self._groups) - 1
+                    self.counts["founded"] += 1
+                else:
+                    group = self._groups[choice]
+                    group["seen"] += 1
+                    group["sum"] = group["sum"] + rows[r]
+                    group["bits"] = (group["sum"] / group["seen"]) > 0.5
+                    self.counts["matched"] += 1
+                taken.add(choice)
+                out[r] = choice
+            if contested:
+                self.counts["contested"] += len(contested)
+                # Rule 10: a refusal is said, with what it refused.
+                _log.info("roster: %d row%s of one frame wanted a driver a "
+                          "closer row already held - %s", len(contested),
+                          "" if len(contested) == 1 else "s",
+                          ", ".join(f"row {r + 1} wanted {want}, got "
+                                    f"{'a new id' if got is None else got}"
+                                    for r, want, got in contested))
+            ids = [i for i in out if i is not None]
+            for i in ids:
+                self._together.setdefault(i, set()).update(
+                    j for j in ids if j != i)
+            for r, index in enumerate(out):
+                if index is not None:
+                    out[r] = self._merge_converged(index)
+            return out
 
     def label(self, driver_id: int, text: str) -> None:
         """Name a cluster. Silently ignores an id that is not one.

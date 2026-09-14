@@ -477,14 +477,21 @@ class PitWall:
         counted, and the first one reading 0 is the one to fix.
         """
         s = self._stage
+        # **The roster's accepts beside its refusals** (rule 10): rows that
+        # joined a driver, rows that founded one, and rows refused the driver
+        # a closer row of the same frame held. Cumulative for the roster.
+        counts = getattr(self._roster, "counts", None) or {}
         return ("pit-wall: %d frames -> ladder %d -> own row %d -> rows %d "
                 "-> any named %d -> our row %d -> gaps %d -> pit columns %d "
-                "-> fuel read %d | %d driver%s placed, %d stop%s filed" % (
+                "-> fuel read %d | %d driver%s placed, %d stop%s filed | "
+                "roster rows matched %d, founded %d, contested %d" % (
                     self._frames, s["ladder"], s["own_row"], s["rows"],
                     s["named"], s["own_driver"], s["gaps"], s["pit_cols"],
                     s["fuel_read"],
                     len(self._position), "" if len(self._position) == 1 else "s",
-                    len(self._stops), "" if len(self._stops) == 1 else "s"))
+                    len(self._stops), "" if len(self._stops) == 1 else "s",
+                    counts.get("matched", 0), counts.get("founded", 0),
+                    counts.get("contested", 0)))
 
     def see(self, frame, *, lap: int | None = None, now: float | None = None):
         """Take one frame. Never raises; returns the stops it just closed."""
@@ -517,8 +524,12 @@ class PitWall:
         ids: dict[int, int] = {}
         identified: set[int] = set()
         frame_rows: list[tuple[int, int | None]] = []
-        for place, row in enumerate(rows, start=1):
-            driver = self._roster.see(row.name)
+        # **The whole board at once**, so no two rows of one frame can come
+        # back as one driver - see `Roster.see_frame`.
+        resolved = self._roster.see_frame([row.name for row in rows])
+        own_row_place = next((place for place, row in enumerate(rows, start=1)
+                              if row.is_own), None)
+        for place, (row, driver) in enumerate(zip(rows, resolved), start=1):
             frame_rows.append((place, driver))
             if driver is None:
                 continue
@@ -608,7 +619,7 @@ class PitWall:
         at_m = self.where()
         for trend, gap, step in ((self.ahead, ahead_gap, -1),
                                  (self.behind, behind_gap, +1)):
-            who = self._neighbour(ids, own_place, step)
+            who = self._neighbour(frame_rows, own_row_place, step)
             trend.note(lap, gap, subject=who)
             if gap is not None:
                 self.samples.append(GapSample(
@@ -652,16 +663,38 @@ class PitWall:
         near = [y for y in ids if abs(y - own_y) <= ROW_MATCH_TOL]
         return ids[near[0]] if near else None
 
-    def _neighbour(self, ids: dict, own_place: int | None, step: int):
-        """The driver one place ahead of or behind us, or `None`.
+    @staticmethod
+    def _neighbour(frame_rows, own_row: int | None, step: int):
+        """The driver read on the row next to ours THIS frame, or `None`.
 
         `None` rather than a guess: a gap whose owner is unknown must not be
-        folded into a trend that thinks it knows.
+        folded into a trend that thinks it knows - and that includes a row
+        whose name did not read this frame.
+
+        **It used to be looked up in `_position`, and that turned a board row
+        into a car** (Bathurst, 14 Sep 2026, session 176). `_position` is
+        sticky: it holds the row every cluster was LAST seen on, including
+        cars long gone from the board and one-frame misreads. The lookup
+        returned the first cluster in insertion order whose last row was ours
+        minus one, whoever was drawn there now. GT7's board is a window
+        around the player, so our own row sits at 6 while the race position
+        moves, and the row above ours is a slot the whole field passes
+        through. One cluster - "78" - held that slot from lap 0 to lap 14
+        while we went P11 to P7: 329 gap readings, and the video at those
+        moments shows at least nine drivers in that row (Corn_flake,
+        Greenmachine 070, X-Man Oce, BustedGun, A.Maidment, Chook, PUNISHED,
+        K.Graebs, ZenPhilosopher). Replayed at the live grab rate, the sticky
+        lookup named a car that was not on the adjacent row on 738 of 1,233
+        frames, and its most-named car was a cluster seen exactly once.
+
+        The gap readout is drawn beside the row next to ours, so the car it
+        belongs to is the name read on that row in the same frame. That is
+        content, read off the frame the gap came from.
         """
-        if own_place is None:
+        if own_row is None:
             return None
-        wanted = own_place + step
-        for driver, place in self._position.items():
+        wanted = own_row + step
+        for place, driver in frame_rows:
             if place == wanted:
                 return driver
         return None
