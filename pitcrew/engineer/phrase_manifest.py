@@ -249,6 +249,33 @@ def place_change_lines() -> tuple[str, ...]:
 
 
 @lru_cache(maxsize=1)
+def lane_place_lines() -> tuple[str, ...]:
+    """Why the position moved when the pit lane moved it, and a stop's result.
+
+    "P11 of 13. After your stop." and "P6 of 13. Not passes - 2 cars ahead
+    boxed." (the rival fix, 14 Sep 2026) were declared nowhere, so every place
+    call the lane explained was a live synthesis mid-lap. Whole lines, from
+    `places_through_the_lane` over every step it will word: thirteen clips,
+    and the ones with two numbers ("You've made 3 places, and 2 of them
+    boxed.") cannot be split, so they are enumerated - three steps is the most
+    the call ever counts.
+
+    Played whole rather than as "Not passes -" + a number + a tail: the same
+    count of clips, and no join in a sentence said at racing speed.
+    """
+    from pitcrew.race.calls import (AFTER_YOUR_STOP, POSITION_MAX_STEP,
+                                    places_through_the_lane)
+
+    lines = [AFTER_YOUR_STOP]
+    for places in range(-POSITION_MAX_STEP, POSITION_MAX_STEP + 1):
+        for lane in range(1, POSITION_MAX_STEP + 1):
+            said = places_through_the_lane(places, lane)
+            if said:
+                lines.append(said)
+    return tuple(dict.fromkeys(lines))
+
+
+@lru_cache(maxsize=1)
 def laps_remaining_lines() -> tuple[str, ...]:
     return tuple(_text(LAPS_LEFT, {"lapsRemaining": n})
                  for n in range(0, MAX_LAPS + 1))
@@ -1157,6 +1184,7 @@ def clips() -> tuple[str, ...]:
         *position_lines(),
         *position_fragments(),
         *place_change_lines(),
+        *lane_place_lines(),
         *laps_remaining_lines(),
         *box_when_lines(),
         *box_fuel_lines(),
@@ -1251,6 +1279,8 @@ def _reusable_lines() -> frozenset[str]:
                       # place-change line, both whole and both already here -
                       # so the call itself costs the pack nothing.
                       *place_change_lines(),
+                      # And its lane-made reasons, whole (`lane_place_lines`).
+                      *lane_place_lines(),
                       *orientation_lines(),
                       *spoken_openers(),
                       # "You're back on it." and "Go." open a line whose
@@ -1364,7 +1394,10 @@ def _decompose(text: str) -> tuple[str, ...]:
 # after the first is what makes it combinatorial, so the single-clause form -
 # which `plan_single_part_lines` renders whole - deliberately does not count.
 _PLAN_SUMMARY = re.compile(
-    r"^(?:Running to the flag|Box this lap|Box in \d+ laps?)"
+    # "Box next lap" since the box ladder's rung 2 (e9c7657): without it a
+    # summary on that lap logged as "not in the manifest", a bug, instead of
+    # the known combinatorial gap it is.
+    r"^(?:Running to the flag|Box this lap|Box next lap|Box in \d+ laps?)"
     r"(, onto .+?|, no tyres|, tyres on)?(, \d+ laps? to go)?\.$")
 
 
@@ -1410,6 +1443,7 @@ def plan_summary_examples() -> tuple[str, ...]:
         {},
         {"lapsToStop": 0},
         {"lapsToStop": 1},
+        {"lapsToStop": 2, "nextCompound": "Racing Medium"},
         {"lapsToStop": 4},
         {"lapsToStop": 4, "nextCompound": "Racing Medium"},
         {"lapsToStop": 4, "lapsRemaining": 1},

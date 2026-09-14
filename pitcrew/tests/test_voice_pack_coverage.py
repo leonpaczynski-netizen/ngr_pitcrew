@@ -87,6 +87,27 @@ def test_every_line_bathurst_heard_plays_from_declared_clips(line):
     assert not missing, (line, missing)
 
 
+def test_the_place_calls_the_lane_explains_play_from_declared_clips():
+    """The rival fix's sentences (14 Sep 2026): the stop's result, and the
+    places cars in the lane made or took back - every wording
+    `places_through_the_lane` has, behind a position, from the source."""
+    from pitcrew.race.calls import (AFTER_YOUR_STOP, POSITION_MAX_STEP,
+                                    places_through_the_lane)
+
+    clips = set(manifest.clips())
+    reasons = {AFTER_YOUR_STOP}
+    for places in range(-POSITION_MAX_STEP, POSITION_MAX_STEP + 1):
+        for lane in range(1, POSITION_MAX_STEP + 1):
+            reasons.add(places_through_the_lane(places, lane))
+    reasons.discard(None)
+    assert "Not passes - 2 cars ahead boxed." in reasons
+    for reason in sorted(reasons):
+        line = f"P6 of 13. {reason}"
+        segments = manifest.segments_for(line)
+        assert segments[-1] == reason, (line, segments)   # whole, no join
+        assert all(name in clips for name in segments), (line, segments)
+
+
 def test_the_new_families_come_from_their_sources():
     """Driven through the functions that say them, so a reworded line is a
     re-rendered clip, not a copy that drifts."""
