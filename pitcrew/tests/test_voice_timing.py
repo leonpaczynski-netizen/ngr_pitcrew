@@ -27,6 +27,7 @@ from pitcrew.engineer.voice import (
 from pitcrew.race.calls import (
     BOX_NOW,
     FUEL_SHORT,
+    GAPS,
     POSITION,
     RIVAL_BOXED,
     STATUS,
@@ -87,17 +88,25 @@ def test_every_kind_has_the_class_its_urgency_earns():
 
 
 def test_staleness_is_per_kind():
-    """A data line five seconds late is worse than none; a rival in his box
-    is still there while news waits for a straight; a box call is not said
-    ten seconds after it was true."""
+    """The data line gives way; a box call is not said ten seconds after it
+    was true; a rival in his box is still there fifteen seconds on.
+
+    **And nothing volunteered keeps for 20 s** (15 Sep 2026). No line waits
+    for a straight now, so age is time queued behind other speech - and a gap
+    figure or a place twenty seconds late is wrong however it got there. The
+    longest single line on the radio is the full box call, ~12 s, so a gap or
+    a place survives one of those and no more."""
     assert stale_after_s(DATA) == voice_module.DATA_STALE_AFTER_S == 1.5
-    assert stale_after_s(BOX_NOW) == voice_module.STALE_AFTER_S
+    assert stale_after_s(BOX_NOW) == voice_module.STALE_AFTER_S == 8.0
     assert stale_after_s(None) == voice_module.STALE_AFTER_S
     assert stale_after_s(STATUS) == voice_module.STALE_AFTER_S
     assert stale_after_s(RIVAL_BOXED) == voice_module.NEWS_STALE_AFTER_S
     assert stale_after_s(POSITION) == voice_module.POSITION_STALE_AFTER_S
+    assert stale_after_s(GAPS) == voice_module.GAP_STALE_AFTER_S
     assert (stale_after_s(DATA) < stale_after_s(BOX_NOW)
             < stale_after_s(RIVAL_BOXED))
+    for kind in (POSITION, GAPS, RIVAL_BOXED):
+        assert 12.0 <= stale_after_s(kind) < 20.0, kind
 
 
 # ------------------------------------------------------------------ ordering
@@ -214,65 +223,91 @@ def test_a_stale_data_line_is_dropped_but_an_instruction_of_the_same_age_is_said
     assert engine.lines == ["Radio check.", BOX]
 
 
-# ----------------------------------------------------------------- the gate
+# ------------------------------------------------- no gate (15 Sep 2026)
+#
+# The driver: "George can speak at anytime." Replayed over Bathurst, the
+# straight gate left 28 of 52 mid-lap lines stale waiting for a straight.
 
-def test_news_waits_for_the_gate_and_an_instruction_does_not():
+GAP_LINE = "PUNISHED ahead, 2.1."
+
+
+def test_the_voice_has_no_straight_gate_to_install():
+    assert not hasattr(Voice, "listen_on")
+    assert not hasattr(voice_module, "GATE_POLL_S")
+
+
+def test_news_with_no_straight_plays_as_soon_as_the_radio_is_free():
+    """Nothing anywhere says the car is on a straight, and nothing is asked:
+    a place, a gap and the data line each start the moment the radio is."""
     engine = voice_module.NullEngine()
     speaker = Voice(engine)
-    open_ = threading.Event()
-    asked: list = []
-
-    def gate(clip_s, strict):
-        asked.append((clip_s, strict))
-        return open_.is_set()
-
-    speaker.listen_on(gate)
     speaker.say(PLACE, kind=POSITION)
-    speaker.say(BOX, kind=BOX_NOW)
-    assert _until(lambda: engine.lines == [BOX])
-    time.sleep(0.2)
-    assert engine.lines == [BOX], "the place was said with the gate shut"
-    assert speaker.busy, "a line waiting for a straight is still queued"
-    open_.set()
-    assert _until(lambda: engine.lines == [BOX, PLACE])
-    speaker.stop()
-    clip_s, strict = asked[0]
-    assert clip_s > 0 and strict is False
-
-
-def test_the_data_line_asks_the_gate_strictly():
-    engine = voice_module.NullEngine()
-    speaker = Voice(engine)
-    asked: list = []
-    speaker.listen_on(lambda clip_s, strict: asked.append(strict) or True)
+    assert _until(lambda: engine.lines == [PLACE], timeout=1.0)
+    speaker.say(GAP_LINE, kind=GAPS)
+    assert _until(lambda: engine.lines == [PLACE, GAP_LINE], timeout=1.0)
     speaker.say(DATA_LINE, kind=DATA)
-    assert _until(lambda: engine.lines == [DATA_LINE])
+    assert _until(lambda: engine.lines == [PLACE, GAP_LINE, DATA_LINE],
+                  timeout=1.0)
+    assert _until(lambda: not speaker.busy)
     speaker.stop()
-    assert asked == [True]
 
 
-def test_a_gate_that_raises_does_not_silence_the_engineer():
-    engine = voice_module.NullEngine()
+def test_news_behind_a_playing_line_starts_when_it_ends():
+    engine = Held()
     speaker = Voice(engine)
-
-    def broken(_clip_s, _strict):
-        raise RuntimeError("detector gone")
-
-    speaker.listen_on(broken)
-    speaker.say(PLACE, kind=POSITION)
-    assert _until(lambda: engine.lines == [PLACE])
+    heard: list = []
+    speaker.say(HEARTBEAT, kind=STATUS)
+    assert engine.started.wait(2.0)
+    speaker.say(GAP_LINE, kind=GAPS, on_done=heard.append)
+    time.sleep(0.1)
+    assert engine.lines == [HEARTBEAT], "news cut into a playing line"
+    engine.release.set()
+    assert _until(lambda: heard == [True])
+    assert engine.lines == [HEARTBEAT, GAP_LINE]
     speaker.stop()
 
 
-def test_a_line_waiting_for_a_straight_goes_stale(monkeypatch):
-    monkeypatch.setattr(voice_module, "POSITION_STALE_AFTER_S", 0.2)
-    engine = voice_module.NullEngine()
+def test_a_queued_gap_older_than_its_limit_is_dropped_and_returned(
+        monkeypatch):
+    """A gap figure queued behind speech for longer than a gap keeps is
+    dropped, and its owner is told it was not heard so the race builds the
+    next line from the gap as it is then."""
+    monkeypatch.setattr(voice_module, "GAP_STALE_AFTER_S", 0.2)
+    engine = Held()
     speaker = Voice(engine)
-    speaker.listen_on(lambda _clip_s, _strict: False)
-    speaker.say(PLACE, kind=POSITION)
-    assert _until(lambda: not speaker.busy, timeout=2.0)
+    speaker.say(BOX, kind=BOX_NOW)
+    assert engine.started.wait(2.0)
+    heard: list = []
+    speaker.say(GAP_LINE, kind=GAPS, on_done=heard.append)
+    time.sleep(0.4)                          # behind the box call, too long
+    engine.release.set()
+    assert _until(lambda: heard == [False])
+    assert _until(lambda: not speaker.busy)
     speaker.stop()
-    assert engine.lines == []
+    assert engine.lines == [BOX]
+
+
+def test_a_line_offered_to_a_free_radio_is_never_stale():
+    """Nothing that was never tried is dropped: taken at the moment it was
+    queued, a line of any kind is said, whatever its limit."""
+    q = _LineQueue()
+    q.offer(q.line(DATA_LINE, DATA, queued_at=100.0))
+    line, stale = q.take(100.0)
+    assert line is not None and line.text == DATA_LINE and stale == []
+
+
+def test_take_is_best_class_first_and_drops_the_stale_on_the_way():
+    q = _LineQueue()
+    q.offer(q.line(GAP_LINE, GAPS, queued_at=0.0))
+    q.offer(q.line(PLACE, POSITION, queued_at=5.0))
+    q.offer(q.line(BOX, BOX_NOW, queued_at=10.0))
+    line, stale = q.take(13.0)
+    assert line.text == BOX and stale == []
+    line, stale = q.take(13.0)
+    # The gap was queued first but 13 s is past its 12; the place is 8 s old.
+    assert [(old.text, round(age)) for old, age in stale] == [(GAP_LINE, 13)]
+    assert line.text == PLACE
+    assert q.take(13.0) == (None, [])
 
 
 def test_a_pack_line_is_timed_off_its_clips(tmp_path):

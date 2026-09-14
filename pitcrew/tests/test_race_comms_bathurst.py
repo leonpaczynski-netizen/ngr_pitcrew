@@ -436,3 +436,101 @@ def test_a_pace_claim_carries_its_test():
     for h in heard:
         if h.kind == PACE:
             assert "Over 5 laps." in h.text
+
+
+# ------------------------------------------------ through the voice's queue
+#
+# **15 Sep 2026, the driver: "George can speak at anytime."** With NEWS held
+# for a straight (model-backed, else 4 s held), 24 of the 52 lines volunteered
+# mid-lap on this race played and 28 went stale waiting: Mountain to Conrod
+# is about a minute. With no gate a line waits only behind other speech, and
+# this replays exactly that - every line, crossing and mid-lap, offered to the
+# voice's own queue (`voice._LineQueue`: its classes, its replacement of a
+# queued same-kind line, its per-kind staleness) at the moment it was
+# composed, and played one at a time for as long as the pack takes to say it.
+
+@dataclass
+class Through:
+    heard: Heard
+    outcome: str              # "played", "stale", or why it was dropped
+    seconds: float            # how long it takes to say
+    wait_s: float | None      # queued to started, where it played
+
+
+def through_the_voice(heard) -> list[Through]:
+    """What the voice does with `heard`, on the race clock."""
+    queue = voice_module._LineQueue()
+    of: dict[int, Heard] = {}
+    out: dict[int, Through] = {}
+    free_at = 0.0
+
+    def settle(line, outcome, wait_s=None):
+        h = of[id(line)]
+        out[id(h)] = Through(h, outcome, speech_s(h.text)[0], wait_s)
+
+    def play_until(moment: float) -> None:
+        nonlocal free_at
+        while queue.qsize() and free_at <= moment:
+            line, stale = queue.take(free_at)
+            for old, _age in stale:
+                settle(old, "stale")
+            if line is None:
+                return
+            settle(line, "played", free_at - line.queued_at)
+            free_at += speech_s(line.text)[0]
+
+    for h in sorted(heard, key=lambda h: h.race_s):
+        play_until(h.race_s)
+        line = queue.line(h.text, h.kind, queued_at=h.race_s)
+        of[id(line)] = h
+        for dropped, why in queue.offer(line):
+            settle(dropped, why)
+        free_at = max(free_at, h.race_s)
+    play_until(float("inf"))
+    return [out[id(h)] for h in heard]
+
+
+@lru_cache(maxsize=1)
+def voiced() -> list[Through]:
+    return through_the_voice(replayed()[1])
+
+
+def test_print_what_the_voice_plays():
+    lines = voiced()
+    mid = [t for t in lines if t.heard.how == "mid-lap"]
+    played = [t for t in mid if t.outcome == "played"]
+    stale = [t for t in mid if t.outcome == "stale"]
+    other = [t for t in mid if t.outcome not in ("played", "stale")]
+    waits = [t for t in lines if t.wait_s is not None]
+    longest = max(waits, key=lambda t: t.wait_s)
+    print(f"mid-lap lines: {len(mid)}  played {len(played)}  "
+          f"stale {len(stale)}  otherwise dropped {len(other)}")
+    for t in stale + other:
+        print(f"  {t.heard.clock} {t.outcome}: {t.heard.text}")
+    print(f"longest queue wait: {longest.wait_s:.1f} s - "
+          f"{longest.heard.clock} {longest.heard.text!r}")
+    print("lap  lap_s  spoken_s  mid_s  line_s  spoken%  max_wait_s")
+    laps = {lap["lap_num"]: lap for lap in record()["laps"]}
+    for num in sorted(laps):
+        mine = [t for t in lines if t.heard.lap == num
+                and t.outcome == "played"]
+        spoken = sum(t.seconds for t in mine)
+        mid_s = sum(t.seconds for t in mine if t.heard.how == "mid-lap")
+        lap_s = laps[num]["lap_time_ms"] / 1000.0
+        wait = max((t.wait_s for t in mine), default=0.0)
+        print(f"{num:>3}  {lap_s:5.1f}  {spoken:8.1f}  {mid_s:5.1f}  "
+              f"{spoken - mid_s:6.1f}  {100 * spoken / lap_s:6.1f}%  "
+              f"{wait:10.1f}")
+    assert mid
+
+
+def test_with_no_straight_gate_nothing_volunteered_goes_stale():
+    """Before the driver's decision: 24 of 52 played, 28 stale. Now every
+    line volunteered mid-lap is said, and none waits long enough behind other
+    speech to be dropped."""
+    mid = [t for t in voiced() if t.heard.how == "mid-lap"]
+    assert len(mid) == 52
+    assert [t.heard.text for t in mid if t.outcome != "played"] == []
+    for t in voiced():
+        if t.wait_s is not None:
+            assert t.wait_s <= voice_module.stale_after_s(t.heard.kind)

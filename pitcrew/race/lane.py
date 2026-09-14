@@ -20,9 +20,9 @@ without a chance to say it. Nothing else removes one.
 ### Said means heard (14 Sep 2026, the integration pass)
 
 **Handed to the voice is not said.** Since lines carry a class, a rival's
-stop is NEWS: it waits for a straight, and the voice may drop it as stale or
-for an instruction before it plays. Retired when it was handed over, it was
-lost exactly as the queue lost it. So a stop handed over is IN FLIGHT -
+stop is NEWS: it can wait behind other speech, and the voice may drop it as
+stale or for an instruction before it plays. Retired when it was handed over,
+it was lost exactly as the queue lost it. So a stop handed over is IN FLIGHT -
 `offer` - and not offered again while it is; `tell` retires it when the voice
 says it played, and `release` puts it back when the voice says it did not,
 where `stale` still applies to it as to any untold stop.

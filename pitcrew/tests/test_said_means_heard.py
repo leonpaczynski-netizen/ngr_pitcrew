@@ -1,7 +1,7 @@
 """A volunteered fact is retired when the driver HEARD it, not when it was queued.
 
 The voice fix (14 Sep 2026) gave every line a class, and NEWS - a rival's
-stop, a place - now waits for a straight and can go stale, be replaced by a
+stop, a place - can wait behind other speech and go stale, be replaced by a
 newer place, or be dropped for an instruction. The rival fix retired a stop
 and booked a place when it was handed to the voice. Put together, a dropped
 line lost the fact exactly as the Bathurst queue did: eight of ten stops never
@@ -70,19 +70,23 @@ def test_a_line_that_plays_answers_true_once():
         speaker.stop()
 
 
-def test_news_that_goes_stale_waiting_for_a_straight_answers_false(
+def test_news_that_goes_stale_behind_other_speech_answers_false(
         monkeypatch):
     monkeypatch.setattr(voice_module, "NEWS_STALE_AFTER_S", 0.1)
-    engine = NullEngine()
+    engine = Held()
     speaker = Voice(engine, enabled=True)
-    speaker.listen_on(lambda clip_s, strict: False)       # no straight
     answers: list[bool] = []
     try:
+        speaker.say("Box this lap.", kind=BOX_NOW)        # holds the card
+        assert engine.started.wait(2.0)
         speaker.say("Car #76 has boxed.", kind=RIVAL_BOXED,
                     on_done=answers.append)
+        time.sleep(0.3)
+        engine.release.set()
         assert _until(lambda: answers == [False])
-        assert engine.lines == []
+        assert engine.lines == ["Box this lap."]
     finally:
+        engine.release.set()
         speaker.stop()
 
 
@@ -267,13 +271,14 @@ def test_a_crossing_rival_call_unheard_is_sayable_again():
 
 def test_through_a_real_voice_a_stale_stop_comes_back_and_is_said_once(
         monkeypatch):
-    """The whole loop on the voice thread: gate shut, the line goes stale,
-    the race offers it again, the gate opens, it plays - once."""
+    """The whole loop on the voice thread: queued behind a long line, the
+    stop goes stale, the race offers it again onto a free radio, it plays -
+    once."""
     monkeypatch.setattr(voice_module, "NEWS_STALE_AFTER_S", 0.1)
-    engine = NullEngine()
+    engine = Held()
     speaker = Voice(engine, enabled=True)
-    straight = {"open": False}
-    speaker.listen_on(lambda clip_s, strict: straight["open"])
+    speaker.say("Box this lap.", kind=BOX_NOW)            # holds the card
+    assert engine.started.wait(2.0)
     co = a_race()
     a_stop(co)
     answers: list[bool] = []
@@ -287,17 +292,20 @@ def test_through_a_real_voice_a_stale_stop_comes_back_and_is_said_once(
     try:
         first = offered(co)
         hand(first[0])
+        time.sleep(0.3)
+        engine.release.set()                              # the box call ends
         assert _until(lambda: answers == [False])
-        straight["open"] = True
         again = offered(co, seconds=RaceCoordinator.MID_LAP_SPACING_S + 1)
         assert len(again) == 1
         hand(again[0])
         assert _until(lambda: answers == [False, True])
         assert offered(co, seconds=2 * RaceCoordinator.MID_LAP_SPACING_S) == []
         # Said once - and said as words, not "Car hash 76" (D7, 14 Sep 2026).
-        assert engine.lines == [voice_module.spoken_form(first[0].spoken())]
-        assert engine.lines == ["Car 76 boxed."]
+        assert engine.lines == [
+            "Box this lap.", voice_module.spoken_form(first[0].spoken())]
+        assert engine.lines[1] == "Car 76 boxed."
     finally:
+        engine.release.set()
         speaker.stop()
 
 
@@ -314,9 +322,6 @@ class Recorder:
 
     def say(self, text, kind=None, on_done=None):
         self.said.append((text, kind, on_done))
-
-    def listen_on(self, gate):
-        pass
 
     def stop(self):
         pass

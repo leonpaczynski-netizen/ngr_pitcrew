@@ -11,8 +11,9 @@ learned the hard way and this one inherits:
   rather than reading a backlog at him three corners too late.
 * **An instruction outranks everything else.** Lines carry a class - see
   `INSTRUCTION` and the table above it - and the class decides what plays
-  first, what is dropped when the queue is full, how soon a line goes stale,
-  and whether it waits for a straight.
+  first, what is dropped when the queue is full, and how long a line may wait
+  behind other speech before it is stale. **No line waits for the track** -
+  the driver, 15 Sep 2026: *"George can speak at anytime."*
 * **Failure is silent, never fatal.** No voice is a degraded race; a crash is a
   lost one. Every engine failure falls through to the next, and if none work
   the call still reaches the screen and the call log.
@@ -255,13 +256,23 @@ SPOKEN_LINE = "the engineer's line"
 # braking zone for Hell Corner. A full queue dropped its OLDEST line whatever
 # it was, so a box call could be dropped to make room for a wear figure.
 #
-# So a line carries a class, and the class decides three things:
+# So a line carries a class, and the class decides three things: what plays
+# first, what a full queue drops, and how long it may wait behind other
+# speech.
+#
+# **What it does not decide is where the car is** (the driver, 15 Sep 2026:
+# *"George can speak at anytime."*). NEWS and the data line were held for a
+# straight from 14 Sep - model-backed where a circuit had one, otherwise 4 s
+# of held straight - and replayed over Bathurst 28 of the 52 lines volunteered
+# mid-lap went stale waiting: Mountain to Conrod is about a minute, and news
+# is stale in 12-20 s. So a line starts as soon as the radio is free, and
+# nothing is withheld for want of a straight. `race/straight.py` keeps its
+# models for later; speech does not consult them.
 #
 #   INSTRUCTION  box, stop off/back, fuel short/save/reaches, the undercut and
 #                rejoin, and the pit-box fill. Plays first. Never dropped for
-#                a lower class, never waits for a straight: its lateness costs
-#                more than the distraction does, and the fill and the release
-#                are said with the car stationary.
+#                a lower class: its lateness costs more than anything else
+#                on the radio.
 #   EVENT        tied to a moment, and above all to the CROSSING: the
 #                heartbeat, green, chequer, incident, the run-in, the
 #                crossing's colour findings and its advice (wear, temperature,
@@ -269,32 +280,27 @@ SPOKEN_LINE = "the engineer's line"
 #                crossing, and saying it at the line is the design - "Lap 6"
 #                twenty seconds later is not the same call. **Every line said
 #                without a kind is here too**, which is the safe default:
-#                exactly the old behaviour, eight seconds and no gate. So is a
+#                exactly the old behaviour, eight seconds. So is a
 #                push-to-talk answer: he just asked.
-#   NEWS         volunteered MID-LAP, at a moment that has nothing to do with
-#                where the car is: a place gained, a rival in his box or out
-#                of it, closing on a car. Waits for somewhere he can listen
-#                (see `listen_on`) and goes stale slowly, because the fact
-#                stays true while it waits; a position line is REPLACED by a
-#                newer one rather than both being read out. This is the
-#                class the driver asked for more of (14 Sep 2026: gaps and
-#                names, rival stops, championship rivals, pace - "talk
-#                whenever it matters", no cap), so it is the class that must
-#                never land in a braking zone.
-#   COLOUR       the straight's data line. A number read out on a straight
-#                and nowhere else: gated strictly on length, and stale after
-#                a second and a half, because a data line five seconds late is
-#                worse than none.
+#   NEWS         volunteered MID-LAP: a place gained, a rival in his box or
+#                out of it, closing on a car, the gaps, the stop picture,
+#                pace, championship rivals. The class the driver asked for
+#                more of (14 Sep 2026: "talk whenever it matters", no cap).
+#                A newer position, gap or stop picture REPLACES a queued one
+#                rather than both being read out.
+#   COLOUR       the data line: one measured number a lap, offered by the
+#                race only onto a clear radio
+#                (`Controller._on_straight_reached`), so it is the line most
+#                willing to give way.
 #
 # **No class may cut a line that is already playing.** An instruction behind
-# a colour line waits for it: a data line is held to `straight.UNMODELLED_CLIP_S`
-# (2.8 s) to start at all, so that is the most an instruction can wait behind
-# one, and the alternative is half a sentence the driver has to parse under
-# braking before the instruction starts - which is exactly what `LineCut`'s
-# re-queue exists to avoid for the beep. A position line (3.5-4 s from the
-# pack) is the longest NEWS line likely to be playing mid-lap; the heartbeat
-# is longer but is emitted at the crossing by the same arbitration that picks
-# the box call, so the two never contend.
+# a line waits for it to finish, and the alternative is half a sentence the
+# driver has to parse before the instruction starts - which is exactly what
+# `LineCut`'s re-queue exists to avoid for the beep. The longest line likely
+# to be playing mid-lap is the stop picture (8.2 s from the pack at
+# Bathurst); the data line is 1.9-5.2 s; the heartbeat and the full box call
+# are longer but are emitted at the crossing by one arbitration, so the two
+# never contend.
 INSTRUCTION = 0
 EVENT = 1
 NEWS = 2
@@ -302,34 +308,64 @@ COLOUR = 3
 CLASS_NAMES = {INSTRUCTION: "instruction", EVENT: "event", NEWS: "news",
                COLOUR: "colour"}
 
-# A call older than this has been overtaken by the race. Instructions and
-# events, and every line said without a kind.
+# **How long a line may wait, and what that wait now is.** Nothing waits for
+# the track (15 Sep 2026), so a line's age when the voice reaches it is time
+# spent queued behind other speech and nothing else: a line offered onto a
+# free radio starts at once and cannot go stale. Every limit below is how late
+# a fact may still be said and be TRUE, measured from when it was composed -
+# not how long a straight takes to arrive. A line dropped on it is returned
+# to its owner (`on_done(False)`), which composes it again from what is true
+# then.
+#
+# The waits the queue can actually produce: the longest single line on the
+# radio is the full box call at the crossing (10.1-12.3 s from the pack at
+# Bathurst), the heartbeat 5.4-7.8 s, and the longest mid-lap line the stop
+# picture at 8.2 s. Replayed over Bathurst with no gate
+# (`test_race_comms_bathurst.through_the_voice`), all 52 lines volunteered
+# mid-lap played, and the longest any line waited was 2.4 s - "You're back on
+# it." behind the tail of the 12.3 s box call. The coordinator keeps news ten
+# seconds off the crossing and twelve apart, so the limits below are a guard
+# on a burst, not a wait expected on an ordinary lap.
+#
+# Instructions and events, and every line said without a kind: a box call
+# eight seconds late has been overtaken by the race.
 STALE_AFTER_S = 8.0
-# **News waits for a straight, so it may wait longer.** At Bathurst a
-# straight held long enough to speak on comes two or three times a lap and
-# there is a minute of the Mountain with none; news that goes stale in eight
-# seconds is news never said there. A rival standing in his box is still
-# standing there twenty seconds on.
-NEWS_STALE_AFTER_S = 20.0
-# A position line is coalesced (the newest replaces any queued one), so the
-# one that is said is the current place however long it waited.
-POSITION_STALE_AFTER_S = 30.0
+# **The rest of the news: a rival's stop, the stop picture, pace, a
+# championship rival.** A rival standing in his box is still there fifteen
+# seconds on - the Bathurst stops were priced at about a minute standing -
+# and a stop picture changes
+# only when a car goes in or comes out, which the lane re-offers as a newer
+# picture that replaces this one in the queue. Fifteen seconds carries it
+# behind the longest line on the radio (the box call, ~12 s) and no further:
+# older than that it has sat behind two lines, the radio has been busy for
+# the whole of it, and "PUNISHED boxed." may now be about a car that is out.
+NEWS_STALE_AFTER_S = 15.0
+# **A position is wrong 20 s late, even coalesced.** A newer place replaces a
+# queued one, but "P8 of 13. You've made a place." is about a pass he has
+# just made, and twenty seconds on he may have made or lost another that has
+# not yet held long enough to be proposed. Twelve seconds is one box call's
+# wait; older than that the race is told it was not heard and re-reads the
+# place when the slot next opens.
+POSITION_STALE_AFTER_S = 12.0
 # **A gap is not a fact that keeps.** "PUNISHED ahead, 2.1" is said to a tenth
 # because two readings seconds apart agree to about that (median 0.03-0.11 s,
 # `race/news.py`), and a gap closing at a second a lap moves a tenth in about
 # twelve seconds of a two-minute lap. Older than this it is dropped, the race
 # is told it was not heard, and the next line is built from the gap then.
 GAP_STALE_AFTER_S = 12.0
-# The straight's number. Late by more than this it lands somewhere he is
-# not listening, and the straight it was composed for has gone.
+# **The data line gives way.** It is offered only onto a clear radio, so it
+# waits only if something else was queued in the same instant - and anything
+# else outranks it and plays first, for two to twelve seconds. A number is
+# there every lap; one read out straight after an instruction dilutes the
+# instruction, and the next NEWS line would queue behind it. So it has the
+# shortest leash: a second and a half, which a clear-radio start never uses.
 DATA_STALE_AFTER_S = 1.5
-# How deep the queue may get. **Staleness bounds lateness per class now, so
-# depth does not have to**: it was 3 when depth was the only guard, and with
-# more volunteered radio queued for straights three would drop news that was
-# still true. The drop takes the lowest class first, oldest first.
+# How deep the queue may get. **Staleness bounds lateness per class, so depth
+# does not have to**: it was 3 when depth was the only guard. With no gate the
+# queue rarely holds more than the crossing's call and one line behind it;
+# five is room for a burst without dropping news that is still true. The drop
+# takes the lowest class first, oldest first.
 MAX_QUEUED = 5
-# How often a line waiting for a straight asks again.
-GATE_POLL_S = 0.05
 # Seconds of speech per character, for a line the pack cannot time. Measured
 # on the rendered en_GB-alan-medium pack, 14 Sep 2026: median 0.123 s over
 # every clip of 15 characters or more.
@@ -425,8 +461,7 @@ def spoken_form(text: str) -> str:
 class _Line:
     """One thing to say, and what the queue needs to know about it."""
 
-    __slots__ = ("text", "kind", "cls", "queued_at", "seq", "clip_s",
-                 "on_done")
+    __slots__ = ("text", "kind", "cls", "queued_at", "seq", "on_done")
 
     def __init__(self, text: str, kind: str | None, queued_at: float,
                  seq: int, on_done=None) -> None:
@@ -435,7 +470,6 @@ class _Line:
         self.cls = class_of(kind)
         self.queued_at = queued_at
         self.seq = seq
-        self.clip_s: float | None = None
         # `on_done(played)`, once, when the line is finished with - see
         # `Voice.say`.
         self.on_done = on_done
@@ -469,6 +503,29 @@ class _LineQueue:
              queued_at: float | None = None, on_done=None) -> _Line:
         return _Line(text, kind, _now() if queued_at is None else queued_at,
                      next(self._seq), on_done)
+
+    def take(self, now: float) -> tuple[_Line | None,
+                                        list[tuple[_Line, float]]]:
+        """The best line to say at `now`, and the stale ones found on the way.
+
+        Best is the lowest class, and inside it the oldest. A line older than
+        its kind's limit is removed and returned with its age instead of being
+        said; the caller tells its owner. Nothing here asks where the car is:
+        a line is eligible the moment it is queued (15 Sep 2026).
+
+        Pure over the queue and `now`, so a replay can drive it on a race
+        clock (`test_race_comms_bathurst.through_the_voice`).
+        """
+        stale: list[tuple[_Line, float]] = []
+        with self._cond:
+            for line in sorted(self._lines, key=lambda o: (o.cls, o.seq)):
+                self._lines.remove(line)
+                age = now - line.queued_at
+                if age > stale_after_s(line.kind):
+                    stale.append((line, age))
+                    continue
+                return line, stale
+        return None, stale
 
     def put(self, item) -> None:
         if item is None:
@@ -523,14 +580,14 @@ class _LineQueue:
                 return True
             return False
 
-    def wait(self, poll_s: float) -> None:
-        """Until something changes: `poll_s` while lines are waiting (a gate
-        may open without anyone calling), indefinitely while there are none.
-        Decided under the lock, so a line offered after the caller last
-        looked cannot be missed."""
+    def wait(self) -> None:
+        """Until a line is offered or the queue closes. Nothing else can make
+        a line sayable - no line waits for the track - so there is nothing to
+        poll for. Decided under the lock, so a line offered after the caller
+        last looked cannot be missed."""
         with self._cond:
-            if not self.closed:
-                self._cond.wait(poll_s if self._lines else None)
+            if not self.closed and not self._lines:
+                self._cond.wait()
 
     def close(self) -> None:
         with self._cond:
@@ -583,9 +640,6 @@ class Voice:
         self._queue = _LineQueue()
         # The line on the card right now, for `busy`.
         self._playing: _Line | None = None
-        # Whether a NEWS or COLOUR line may start now. See `listen_on`.
-        self._gate = None
-        self._gate_failed = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         if self.enabled:
@@ -622,8 +676,8 @@ class Voice:
                     warm()
                 if timed is not None:
                     # The pack's decomposition tables are built on first
-                    # use, and the first use is otherwise a line waiting on
-                    # the voice thread to be timed against a straight.
+                    # use, and the first use is otherwise the first line of
+                    # the race, paused while they build.
                     timed(WARM_LINE)
             except Exception as exc:            # noqa: BLE001
                 log("voice").error("warm-up failed: %s: %s",
@@ -665,12 +719,12 @@ class Voice:
         been given a kind is never made worse.
 
         **`on_done(played)` is how a caller learns whether it was HEARD.**
-        Queued is not said: since lines carry a class a NEWS line can wait for
-        a straight and go stale, be replaced by a newer place, or be dropped
-        for an instruction with the queue full. A caller that retires a fact
-        when it hands it over - a rival's stop, a place - loses it every time
-        that happens, which is the Bathurst defect (eight of ten stops never
-        said) moved one layer down. So the callback is called exactly once:
+        Queued is not said: since lines carry a class a NEWS line can wait
+        behind other speech and go stale, be replaced by a newer place, or be
+        dropped for an instruction with the queue full. A caller that retires
+        a fact when it hands it over - a rival's stop, a place - loses it
+        every time that happens, which is the Bathurst defect (eight of ten
+        stops never said) moved one layer down. So the callback is called exactly once:
         `True` when the engine returned from speaking the line, `False` when
         it was dropped, went stale, failed, or the voice is off.
 
@@ -702,19 +756,6 @@ class Voice:
         queueing behind it."""
         return self._playing is not None or self._queue.qsize() > 0
 
-    def listen_on(self, gate) -> None:
-        """Hold NEWS and COLOUR lines until `gate(clip_s, strict)` says yes.
-
-        `clip_s` is how long the line will take to say; `strict` is True for
-        COLOUR. The race passes `straight.fits` over the live straight
-        detector, so a volunteered line starts only where the driver can
-        listen for as long as it lasts - never in a braking zone - and waits
-        (until it goes stale) where he cannot. Instructions and events are
-        never held. None removes the gate.
-        """
-        self._gate = gate
-        self._gate_failed = False
-
     def duration_s(self, text: str) -> float:
         """How long `text` takes to say: timed off the pack where the pack
         carries it, estimated from its length where it does not."""
@@ -728,48 +769,28 @@ class Voice:
                 return seconds
         return len(spoken_form(text)) * LIVE_SECONDS_PER_CHAR
 
-    def _may_start(self, line: _Line) -> bool:
-        if line.cls < NEWS or self._gate is None:
-            return True
-        if line.clip_s is None:
-            line.clip_s = self.duration_s(line.text)
-        try:
-            return bool(self._gate(line.clip_s, line.cls == COLOUR))
-        except Exception as exc:                # noqa: BLE001 - fail open
-            # A gate that raises must not silence the engineer: the line is
-            # said as it would have been before there was a gate.
-            if not self._gate_failed:
-                self._gate_failed = True
-                log("voice").error("the listening gate raised, so volunteered "
-                                   "lines are no longer held for a straight: "
-                                   "%s: %s", type(exc).__name__, exc,
-                                   exc_info=True)
-            return True
-
     def _next_line(self) -> _Line | None:
-        """The best line that may start now, dropping stale ones on the way.
+        """The best line to say now, dropping stale ones on the way.
 
-        Blocks until there is one. A line held for a straight does not hold
-        up a line behind it that is not held: an instruction arriving while
-        the heartbeat waits for the Mountain Straight is said at once.
+        Blocks until there is one. **Nothing is held for the track** (the
+        driver, 15 Sep 2026: *"George can speak at anytime."*): the moment
+        the card is free, the best queued line starts, so a line's age here
+        is only the time it spent behind other speech.
         """
         while not self._queue.closed:
-            now = _now()
-            for line in self._queue.snapshot():
-                age = now - line.queued_at
-                if age > stale_after_s(line.kind):
-                    if self._queue.remove(line):
-                        # The race has moved on; saying it now would mislead.
-                        log("voice").info(
-                            "not saying %r (%s, %s): %.1fs old, stale after "
-                            "%.1fs", line.text, line.kind or "no kind",
-                            CLASS_NAMES[line.cls], age,
-                            stale_after_s(line.kind))
-                        _finish(line, False, "stale")
-                    continue
-                if self._may_start(line) and self._queue.remove(line):
-                    return line
-            self._queue.wait(GATE_POLL_S)
+            line, stale = self._queue.take(_now())
+            for old, age in stale:
+                # The race has moved on while it waited; saying it now would
+                # mislead. Its owner is told, and builds it again from now.
+                log("voice").info(
+                    "not saying %r (%s, %s): %.1fs queued behind other "
+                    "speech, stale after %.1fs", old.text,
+                    old.kind or "no kind", CLASS_NAMES[old.cls], age,
+                    stale_after_s(old.kind))
+                _finish(old, False, "stale")
+            if line is not None:
+                return line
+            self._queue.wait()
         return None
 
     def say_now(self, text: str) -> tuple[bool, str]:

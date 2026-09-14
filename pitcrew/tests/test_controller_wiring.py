@@ -99,8 +99,8 @@ def test_the_straight_line_survives_a_heartbeat(raced):
     said: list = []
     controller._colour.data_line = lambda **kwargs: said.append(kwargs) or None
     controller.settings = replace(controller.settings, colour_calls="chatty")
-    # On a straight that has proved itself - the edge fires only on one, and
-    # the line now checks the straight before it composes anything.
+    # On a straight or not: since 15 Sep 2026 the line asks only whether the
+    # radio is clear. Fed one anyway, so a straight cannot be what refuses it.
     on_a_straight(controller)
 
     controller._on_straight_reached()

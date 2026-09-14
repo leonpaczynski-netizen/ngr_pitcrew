@@ -3,9 +3,10 @@
 The driver, 14 Sep 2026, after Bathurst Rd7: *"want more comms from him about
 what is going on in the race."* His decision, recorded in
 `docs/ENGINEER-TARGET-STATE_2026-08-29.md` D7: George volunteers four things,
-with **no per-lap talk cap** ("talk whenever it matters"). The limit is WHERE
-he speaks - instructions first, a line only on a straight long enough to carry
-it, never in braking - and that is the voice's gate, not this module's.
+with **no per-lap talk cap** ("talk whenever it matters"). And no limit on
+where: *"George can speak at anytime."* (15 Sep 2026). Instructions go first
+and a line waits only behind other speech - the voice's classes decide that,
+not this module.
 
 What this module decides is WHETHER a fact is worth a word, and what the word
 may claim. In the order the coordinator offers them (`calls.URGENCY`):
@@ -35,7 +36,7 @@ ahead" or "the car behind": it is not a person, and read aloud it came out as
 `gap_reads` (sessions 143, 160, 166, 176; 3,575 readings): two readings of one
 car under 4 s apart differ by a median 0.03-0.11 s. So a gap is said to a
 tenth under `TENTHS_BELOW_S` and in whole seconds above it - a five-second gap
-waiting for a straight moves by more than a tenth before it is heard. The
+queued behind a box call moves by more than a tenth before it is heard. The
 NAME is the weaker half: the board's clusters split one driver into several
 handles and, at session 176, merged several drivers into one, so a gap line
 is MEDIUM and the name is only ever the roster's.

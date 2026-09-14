@@ -1,10 +1,23 @@
-"""Whether the car is somewhere the driver can listen.
+"""Whether the car is on a straight, and how much of it is left.
 
-*"Agree data should come on straights not corners."* - the driver, 22 Aug.
+### No speech waits for this any more (15 Sep 2026)
 
-It is the most consistent piece of real radio discipline there is: engineers
-wait for the straight, because a call in a braking zone is a distraction rather
-than information.
+*"George can speak at anytime."* - the driver, 15 Sep 2026, superseding his
+*"Agree data should come on straights not corners."* of 22 Aug.
+
+From 14 Sep the voice held every line volunteered mid-lap (NEWS, and the data
+line) until `fits` said the straight had room for it. Replayed over Bathurst,
+28 of the 52 lines volunteered mid-lap went stale waiting: Mountain to Conrod
+is about a minute with no straight, and news is stale in 12-20 s. So **the
+voice no longer consults this module**: a line starts as soon as the radio is
+free (`engineer/voice.py`), and the data line is spoken on the first clear
+radio of the lap (`Controller._on_straight_reached`, which the straight edge
+still calls as one more moment to ask).
+
+**What stays, and why.** The detector, the per-circuit models, `remaining_s`
+and `fits` are kept, with their tests, for future use: another pass is
+deriving models for every circuit. Everything below describes what they
+measure and what `fits` would decide - not what the voice does.
 
 ### Why throttle alone does not work, measured
 
@@ -29,14 +42,10 @@ being 10.2 s from the start/finish line down the main straight.
 and would be wrong the first time he raced somewhere new. Throttle and lateral
 load are in the packet at 60 Hz and work on day one at any circuit.
 
-**It did not gate the crossing calls, and that assumption was Monza's.** At
-Monza the main straight *begins* at the start/finish line; at Bathurst on 14
-Sep 2026 the line is a few seconds from Hell Corner, and the heartbeat plus the
-data line queued behind it reached the driver in the braking zone. So the voice
-now asks `fits` before it starts any line volunteered mid-lap - a place, a
-rival's stop, the data line (`Voice.listen_on`). Instructions go unasked, and
-so does what the crossing says: it is arbitrated one call per crossing and
-saying it at the line is the design.
+**The crossing is not a straight everywhere, and that assumption was
+Monza's.** At Monza the main straight *begins* at the start/finish line; at
+Bathurst the line is a few seconds from Hell Corner. That finding is why the
+voice was gated on 14 Sep, and the gate is what the driver removed on 15 Sep.
 
 ### How long is this straight? - measured, and what closes the gap
 
@@ -57,8 +66,9 @@ lap-distance windows, derived from his own clean laps by
 `tools/derive_straights.py` (`analysis/straights.py` says how) and stored per
 circuit in `straight_models`. `Straight.use_model` hands the detector the
 model and the live lap ruler; `Straight.window` then fills `remaining_s`
-itself, so both callers of `fits` - the voice's gate and the straight's data
-line - read it with no change of their own.
+itself, so a caller of `fits` reads it with no change of its own. (Its two
+speech callers - the voice's gate and the data line - were removed on 15 Sep
+2026; `tools/derive_straights.py --replay` still calls it.)
 
 `remaining_s` is the LOWER of two estimates, because each errs long in its
 own way: the model's median time from here to the end of the window (his
@@ -79,7 +89,7 @@ from dataclasses import dataclass, field
 
 # Full throttle, near enough. Below this he is still working.
 THROTTLE_PCT = 90.0
-# **The gate that does the real work.** Lateral load this low is a car going
+# **The test that does the real work.** Lateral load this low is a car going
 # straight; at Monza the flat-out kinks and the Parabolica exit all clear
 # 1.5 g and are excluded by it.
 MAX_LATERAL_G = 0.3
@@ -89,7 +99,7 @@ MAX_LATERAL_G = 0.3
 MIN_HELD_S = 2.0
 
 # **Without a model of the circuit, how long the straight must already have
-# lasted before a volunteered clip starts on it.** See the module docstring
+# lasted before `fits` lets a clip start on it.** See the module docstring
 # for the Bathurst measurement: 4 s held roughly doubles how often a short
 # clip finishes inside the straight, against the 2 s edge.
 UNMODELLED_HOLD_S = 4.0
@@ -98,9 +108,9 @@ UNMODELLED_HOLD_S = 4.0
 # wear ("RR 19 percent.") 2.1-3.1 s with a median of 2.66; "Worst tyre N
 # percent." 2.5-3.4 s, the gap to his best up to 4.0 s, and the fuel figure
 # 4.5-5.2 s. 2.8 s is where the Bathurst fit rate falls off (63% -> 48% at
-# 3.0 s), and it keeps the countdown and most corner figures. The fuel figure
-# is not read out mid-lap on a circuit with no model - the heartbeat at the
-# crossing carries the fuel anyway.
+# 3.0 s), and it keeps the countdown and most corner figures. **No longer a
+# cap on the data line** (15 Sep 2026): nothing spoken asks `fits`, so the
+# fuel figure is read out mid-lap on any circuit.
 UNMODELLED_CLIP_S = 2.8
 # With a model: the clip must end this far before the straight does.
 #
@@ -142,8 +152,9 @@ class Window:
 
 def fits(window: Window | None, clip_s: float | None, *,
          strict: bool = False) -> bool:
-    """Whether a clip of `clip_s` may start now.
+    """Whether a clip of `clip_s` would fit on the straight now.
 
+    **Not asked by any speech since 15 Sep 2026** - see the module docstring.
     Never on a closed window. With a model, the clip has to fit in what is
     left. Without one, the straight has to have proved itself for
     `UNMODELLED_HOLD_S`, and a strict clip has to be short.

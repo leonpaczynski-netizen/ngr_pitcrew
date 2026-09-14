@@ -1350,8 +1350,8 @@ class RaceCoordinator:
     # corner, then the next. The longest NEWS line is ~5 s from the pack, so
     # this leaves at least seven seconds of silence after it - about one
     # braking zone at racing speed. Not a limit on how many a lap: a 2:02
-    # Bathurst lap has room for eight at this spacing and the voice's gate,
-    # not this, decides which of them find a straight.
+    # Bathurst lap has room for eight at this spacing, and none of them waits
+    # for a straight (15 Sep 2026: "George can speak at anytime.").
     NEWS_SPACING_S = 12.0
     # Frames between two looks at the four race-news calls when the slot is
     # open. They read snapshots under a lock; ten times a second is plenty
@@ -1502,7 +1502,7 @@ class RaceCoordinator:
                 return None
             if self._place_waiting_on_the_voice(proposal):
                 # **The same place, already handed over and not yet heard.**
-                # The voice holds it for a straight; handing it over again
+                # It may be queued behind other speech; handing it over again
                 # would queue it twice. A DIFFERENT place goes through, and
                 # the voice replaces the queued line with it.
                 self._hold("position", "that place is waiting on the voice")
@@ -1574,9 +1574,9 @@ class RaceCoordinator:
     def _race_news(self) -> "Call | None":
         """The four volunteered race calls, best first, one at a time.
 
-        **Never a second while one is waiting on the voice.** A line held for
-        a straight is still the line he will hear; queueing the next behind
-        it is how a queue fills with facts that go stale together. Where
+        **Never a second while one is waiting on the voice.** A line queued
+        behind other speech is still the line he will hear; queueing the next
+        behind it is how a queue fills with facts that go stale together. Where
         nothing answers for the voice (a replay), the spacing alone paces them.
         """
         from pitcrew.race.calls import (FACT, GAPS, PACE, STOPS_PICTURE,
@@ -1624,10 +1624,10 @@ class RaceCoordinator:
     # ------------------------------------------------- said means heard
     #
     # **A volunteered fact is retired when the voice says it was HEARD, not
-    # when it is handed over** (14 Sep 2026, after the voice fix). NEWS waits
-    # for a straight and can go stale, be replaced by a newer place, or be
-    # dropped for an instruction; a rival stop retired at hand-over was lost
-    # every time that happened, which is the Bathurst defect - eight of ten
+    # when it is handed over** (14 Sep 2026, after the voice fix). NEWS can
+    # wait behind other speech and go stale, be replaced by a newer place, or
+    # be dropped for an instruction; a rival stop retired at hand-over was
+    # lost every time that happened, which is the Bathurst defect - eight of ten
     # stops never said - one layer further down.
     #
     # So a rival stop, a place, and the tagged rival facts (committed, short,
@@ -1643,8 +1643,8 @@ class RaceCoordinator:
     #
     # **And a hand-over nobody answers is released** after `ACK_TIMEOUT_S`
     # (rule 10: a reference that nothing can retire is a latch). The voice's
-    # slowest line goes stale at 30 s, so an answer later than that is one
-    # that is never coming.
+    # slowest volunteered line goes stale at 15 s (`voice.NEWS_STALE_AFTER_S`),
+    # so an answer later than this is one that is never coming.
 
     acknowledged_delivery = False
     ACK_TIMEOUT_S = 45.0
