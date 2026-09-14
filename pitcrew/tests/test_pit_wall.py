@@ -639,3 +639,38 @@ def test_health_counts_frames_at_every_stage():
     for stage in ("ladder", "own row", "any named", "our row", "gaps",
                   "pit columns", "fuel read"):
         assert stage in line
+
+
+# --- the race news hooks (D7, 14 Sep 2026) ---------------------------------
+
+def test_each_frame_hands_the_race_its_rows_and_our_own_row():
+    """Per FRAME, not the sticky `_position`: a car that has left the board
+    must not be handed on at the row it last held."""
+    boards = []
+    wall = a_wall(on_board=lambda rows, own: boards.append((rows, own)))
+    warm(wall, Clock())
+    assert boards, "no board was handed on"
+    # One hand-over per frame our own row was identified on, every row of
+    # that frame numbered down the board, and our own row among them. (The
+    # synthetic names do not survive clustering as six drivers, so WHICH row
+    # is ours is not what this pins - that is `test_the_entry_says_...`.)
+    assert len(boards) == FEW + 1
+    rows, own = boards[-1]
+    assert [row for row, _ in rows] == list(range(1, ROWS + 1))
+    assert own in {row for row, _ in rows}
+
+
+def test_each_gap_reading_is_handed_on_with_whose_it_is(monkeypatch):
+    from pitcrew.race import pit_wall as pit_wall_module
+
+    monkeypatch.setattr(pit_wall_module, "read_gaps",
+                        lambda frame, board: (2.1, 0.6))
+    gaps = []
+    wall = a_wall(on_gap=lambda side, gap, who, name: gaps.append(
+        (side, gap, who)))
+    warm(wall, Clock())
+    assert {side for side, _, _ in gaps} == {"ahead", "behind"}
+    assert {gap for side, gap, _ in gaps if side == "ahead"} == {2.1}
+    # A reading whose neighbour the board could not place says so with None,
+    # never a guessed car - and the race keys it on nothing.
+    assert len(gaps) == 2 * (FEW + 1)

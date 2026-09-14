@@ -5263,7 +5263,9 @@ class PitCrewController(QObject):
                                      on_stop=self._on_rival_stop,
                                      on_enter=self._on_rival_enter,
                                      name_for=self.store.provisional_driver_name,
-                                     where_on_lap=self._where_on_lap)
+                                     where_on_lap=self._where_on_lap,
+                                     on_gap=self._on_wall_gap,
+                                     on_board=self._on_wall_board)
             self.hud.watch_board(self._pit_wall, lap_of=self._our_lap)
             log("pitcrew").info(
                 "pit-wall: watching, seeded with %d known driver%s",
@@ -5520,6 +5522,26 @@ class PitCrewController(QObject):
             self.bridge.rival_stopped.emit(seen)
         except Exception:
             pass
+
+    def _on_wall_gap(self, side, gap_s, driver_id, name) -> None:
+        """Worker thread: one interval box read, straight to the race.
+
+        **Not through a Qt signal**, unlike a stop: the race's news keeps its
+        own lock (`race/news.py`), and a reading queued behind the Qt thread
+        is a gap from however long the Qt thread was busy - the one figure
+        George says to a tenth.
+        """
+        race = self.race
+        if race is None:
+            return
+        race.note_gap_read(side, gap_s, driver_id, name)
+
+    def _on_wall_board(self, rows, own_row) -> None:
+        """Worker thread: this frame's board rows, straight to the race."""
+        race = self.race
+        if race is None:
+            return
+        race.note_board(rows, own_row)
 
     def _on_rival_enter(self, entered) -> None:  # noqa: D401
         """Worker thread. A rival is standing in his box; say so while he is.
@@ -7231,17 +7253,28 @@ class PitCrewController(QObject):
             # recorded before v17, filed and never settled, and never filed at
             # all - and nothing distinguished them for a reader. Its verdict
             # is `cannot-tell` and settled, which is a fact worth writing.
+            payload = {"call": call.as_export(), "confidence": call.confidence,
+                       "kind": call.kind}
+            # **Why it was said, and on what** (§5.5: the record carries the
+            # assumptions behind each call). The race news states its trigger
+            # and its model - the regulation minimum behind "effectively",
+            # the interval behind a pace figure - so the debrief can hold the
+            # call to what it actually claimed.
+            why = getattr(call, "why_spoken", None)
+            if why:
+                payload["why_spoken"] = why
+                payload["informational"] = True
             revision_id = self.store.append_revision(
-                self.race_run_id, call.lap, call.call,
-                {"call": call.as_export(), "confidence": call.confidence,
-                 "kind": call.kind},
+                self.race_run_id, call.lap, call.call, payload,
                 accepted=False)
             self._filed_calls.setdefault(revision_id, (call, row))
         # **After the place, and only when the championship actually moved.**
         # Said second because the place is the thing he can see out of the
         # window and the championship is the thing he cannot. Not after a
-        # rival's stop: nothing about our place changed.
-        if call.kind != POSITION:
+        # rival's stop: nothing about our place changed. A stop picture that
+        # stood in for a place carries the place, so it counts.
+        if call.kind != POSITION and getattr(call, "position_called",
+                                             None) is None:
             return
         moved = self._league_moved()
         if moved and moved == getattr(self, "_league_last_said", None):

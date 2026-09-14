@@ -213,7 +213,8 @@ class PitWall:
 
     def __init__(self, roster: Roster | None = None, *, on_stop=None,
                  on_enter=None, min_sightings: int = MIN_SIGHTINGS,
-                 name_for=None, where_on_lap=None) -> None:
+                 name_for=None, where_on_lap=None, on_gap=None,
+                 on_board=None) -> None:
         self._roster = roster if roster is not None else Roster()
         self._on_stop = on_stop
         # **Entering is a different event from having stopped, and it is the
@@ -242,6 +243,17 @@ class PitWall:
         # and the position cannot be recovered - the frame is gone and so is
         # the packet. See `race/lap_ruler.py`.
         self._where_on_lap = where_on_lap
+        # **Each reading as it is taken, and each frame's rows** (D7, 14 Sep
+        # 2026). The trends and `positions()` reach the race once a lap, at
+        # the crossing; George now volunteers the gap and a rival's place
+        # mid-lap, and a lap-old gap said as "2.1" is a figure from a minute
+        # ago. `on_gap(side, gap_s, driver_id, name)` per reading;
+        # `on_board(rows, own_row)` per frame with our own row identified,
+        # `rows` as `(row, name or None)` for THIS frame only - never the
+        # sticky `_position`, which keeps a car's last row after it has gone.
+        # Worker thread, guarded: a hook that raises costs its own reading.
+        self._on_gap = on_gap
+        self._on_board = on_board
         self._visits: dict[int, Visit] = {}
         self._absent: dict[int, int] = {}
         # Drivers seen on the board WITHOUT pit columns. A visit that begins
@@ -504,8 +516,10 @@ class PitWall:
         self._clean += 1
         ids: dict[int, int] = {}
         identified: set[int] = set()
+        frame_rows: list[tuple[int, int | None]] = []
         for place, row in enumerate(rows, start=1):
             driver = self._roster.see(row.name)
+            frame_rows.append((place, driver))
             if driver is None:
                 continue
             ids[row.y] = driver
@@ -583,6 +597,14 @@ class PitWall:
         if ahead_gap is not None or behind_gap is not None:
             self._stage["gaps"] += 1
         own_place = self._position.get(own)
+        if self._on_board is not None and own is not None:
+            try:
+                self._on_board(
+                    [(place, self._roster.name_of(driver)
+                      if driver is not None else None)
+                     for place, driver in frame_rows], own_place)
+            except Exception:                        # pragma: no cover
+                _log.exception("pit-wall: the board hook raised")
         at_m = self.where()
         for trend, gap, step in ((self.ahead, ahead_gap, -1),
                                  (self.behind, behind_gap, +1)):
@@ -593,6 +615,13 @@ class PitWall:
                     at_s=now, gap_s=gap, track_s=at_m, lap=lap,
                     position=own_place, subject=who,
                     ok=True, side=trend.side))
+                if self._on_gap is not None:
+                    try:
+                        self._on_gap(trend.side, gap, who,
+                                     self._roster.name_of(who)
+                                     if who is not None else None)
+                    except Exception:                # pragma: no cover
+                        _log.exception("pit-wall: the gap hook raised")
 
         for driver in identified - in_lane:
             self._seen_clean.add(driver)
