@@ -279,7 +279,7 @@ SPOKEN_LINE = "the engineer's line"
 #
 # **No class may cut a line that is already playing.** An instruction behind
 # a colour line waits for it: a data line is held to `straight.UNMODELLED_CLIP_S`
-# (2.5 s) to start at all, so that is the most an instruction can wait behind
+# (2.8 s) to start at all, so that is the most an instruction can wait behind
 # one, and the alternative is half a sentence the driver has to parse under
 # braking before the instruction starts - which is exactly what `LineCut`'s
 # re-queue exists to avoid for the beep. A position line (about 3.5 s from the

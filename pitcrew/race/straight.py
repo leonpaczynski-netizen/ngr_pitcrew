@@ -48,10 +48,10 @@ carries a `remaining_s` that is None today, and `fits` is written for both:
 * **Without one**, it cannot know, so it waits for evidence: the straight has
   to have been held `UNMODELLED_HOLD_S`, and a strict (colour) clip has to be
   no longer than `UNMODELLED_CLIP_S`. Measured over the 143 straight windows
-  of the Bathurst race (session 176, 19 laps), a clip of up to 2.5 s started
-  at the 2 s edge finished inside the straight 33-38% of the time; started at
-  4 s held, 65-70%, with about two such chances a lap. Half of all windows
-  there had 1.5 s or less left at the edge.
+  of the Bathurst race (session 176, 19 laps), a 2.8 s clip started at the
+  2 s edge finished inside the straight 28% of the time; started at 4 s
+  held, 63%, with about two such chances a lap. At 3.0 s that falls to 48%.
+  Half of all windows there had 1.5 s or less left at the edge.
 
 What would close the gap, per circuit: the straights as lap-distance windows
 with their duration at race pace - `windows()` below, run over stored laps
@@ -79,11 +79,15 @@ MIN_HELD_S = 2.0
 # for the Bathurst measurement: 4 s held roughly doubles how often a short
 # clip finishes inside the straight, against the 2 s edge.
 UNMODELLED_HOLD_S = 4.0
-# And the longest strict (colour) clip that may start there. A data line from
-# the pack is 1.5-2.5 s; the fuel figure ("1.9 laps of fuel in hand to the
-# stop.", ~4.8 s) does not fit and is not read out mid-lap on a circuit with
-# no model - the heartbeat at the crossing carries the fuel anyway.
-UNMODELLED_CLIP_S = 2.5
+# And the longest strict (colour) clip that may start there. Timed off the
+# rendered pack, 14 Sep 2026: "N laps to the stop." is 1.9-2.6 s, a corner's
+# wear ("RR 19 percent.") 2.1-3.1 s with a median of 2.66; "Worst tyre N
+# percent." 2.5-3.4 s, the gap to his best up to 4.0 s, and the fuel figure
+# 4.5-5.2 s. 2.8 s is where the Bathurst fit rate falls off (63% -> 48% at
+# 3.0 s), and it keeps the countdown and most corner figures. The fuel figure
+# is not read out mid-lap on a circuit with no model - the heartbeat at the
+# crossing carries the fuel anyway.
+UNMODELLED_CLIP_S = 2.8
 # With a model: the clip must end this far before the straight does.
 FIT_MARGIN_S = 0.5
 # A detector not fed for longer than this is not on a straight - the stream
