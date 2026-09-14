@@ -294,6 +294,12 @@ class Reading:
     # run is being judged. The canvas size does not answer this - a dim frame
     # on the calibrated canvas is located too.
     located: bool = False
+    # **Where the four bars were, in the frame's own pixels**, when a gauge
+    # was read. Appended with a default: the hygrometer sits beside the bars
+    # and is anchored off them (`telemetry/hygrometer.py`), so a reading that
+    # found them passes the geometry on rather than making the reader search
+    # the frame a second time. None where no bars were read.
+    bars: dict | None = None
 
     @property
     def ok(self) -> bool:
@@ -649,7 +655,7 @@ def _read_bars(frame, layout: dict, *,
 
     if all(v is None for v in out.values()):
         return Reading(out, "no bar showed enough classified rows to read",
-                       rows=shortest, located=quantisation_note)
+                       rows=shortest, located=quantisation_note, bars=layout)
     if quantisation_note and shortest:
         # **Said, because it changes what the number is worth.** One pixel of
         # an 18 px bar is 5.6% of tyre life - about a lap at Monza - against
@@ -664,8 +670,9 @@ def _read_bars(frame, layout: dict, *,
                             f"{shortest} px, so one pixel is "
                             f"{100 / shortest:.1f}% of tyre life - fit a slope "
                             f"across the stint rather than trusting one "
-                            f"reading", rows=shortest, located=True)
-    return Reading(out, rows=shortest, located=quantisation_note)
+                            f"reading", rows=shortest, located=True,
+                       bars=layout)
+    return Reading(out, rows=shortest, located=quantisation_note, bars=layout)
 
 
 # --- finding the gauge when it will not hold still -------------------------
@@ -1536,8 +1543,15 @@ class LiveWearSampler:
     """
 
     def __init__(self, source, write, *, on_status=None,
-                 interval_s: float = 0.0, on_frame=None) -> None:
+                 interval_s: float = 0.0, on_frame=None,
+                 on_hygro=None, on_compound=None) -> None:
         self._source = source
+        # **The hygrometer rides the same grab** (plan row 5.21), for the reason
+        # `on_frame` does: a second grab would halve the gauge's rate. Handed a
+        # `HygroReading` every grab - "cannot see" included - and swallowed.
+        self._on_hygro = on_hygro
+        # And the compound label beside the same bars (`hud_compound`).
+        self._on_compound = on_compound
         self._write = write
         self._status = on_status
         # **Anyone else who needs this frame gets THIS frame.** Measured on
@@ -1747,8 +1761,12 @@ class LiveWearSampler:
         frame, why = self._source.grab()
         if frame is None:
             return Reading(None, why), True
+        # Decoded once for everyone riding along (critic pass 1: the pit wall
+        # and the panel readers each decoded the same grab).
+        whole = (whole_frame(frame)
+                 if self._on_frame is not None or self._on_hygro is not None
+                 or self._on_compound is not None else None)
         if self._on_frame is not None:
-            whole = whole_frame(frame)
             if whole is None:
                 # **Said once, not swallowed.** A passenger that wants the
                 # board and is being handed a gauge crop will find no board on
@@ -1765,7 +1783,39 @@ class LiveWearSampler:
                     self._on_frame(whole)
                 except Exception:
                     _log.exception("hud-wear: frame passenger failed")
-        return read_gauge(frame), False
+        reading = read_gauge(frame)
+        if self._on_hygro is not None or self._on_compound is not None:
+            self._pass_hygro(frame, reading, whole=whole)
+        return reading, False
+
+    def _pass_hygro(self, frame, reading: Reading, *, whole=None) -> None:
+        """Read the hygrometer beside the bars this grab found, and hand it on.
+
+        **Only on a whole frame.** At the calibrated canvas the source grabs the
+        gauge rectangle alone, and the hygrometer is outside it - that is
+        "cannot see", said as such, never a dry reading.
+        """
+        from pitcrew.telemetry.hud_compound import CompoundRead, read_compound
+        from pitcrew.telemetry.hygrometer import HygroReading, read_hygrometer
+
+        if whole is None and reading.bars is not None:
+            whole = whole_frame(frame)
+        if reading.bars is None:
+            whole = None
+        why = (reading.reason or "gauge not found" if reading.bars is None
+               else "grab is a gauge crop" if whole is None else "")
+        if self._on_hygro is not None:
+            try:
+                self._on_hygro(HygroReading(None, None, why) if why
+                               else read_hygrometer(whole, reading.bars))
+            except Exception:
+                _log.exception("hud-wear: hygrometer passenger failed")
+        if self._on_compound is not None:
+            try:
+                self._on_compound(CompoundRead(None, why=why) if why
+                                  else read_compound(whole, reading.bars))
+            except Exception:
+                _log.exception("hud-wear: compound label passenger failed")
 
     def _coherent(self, wear: dict) -> tuple[bool, bool, str]:
         """Can this reading follow the last one on a real set of tyres?

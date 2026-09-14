@@ -64,11 +64,24 @@ the gauge does.
 from __future__ import annotations
 
 import datetime
+import time
+from collections import deque
 from dataclasses import dataclass
 
 from pitcrew.diagnostics import log
 from pitcrew.settings import HUD_SOURCE_SCREEN
 from pitcrew.store.db import WEAR_HUD_VIDEO
+
+# The WET light's window: reads inside this many seconds, at least this many
+# readable, the last `HYGRO_KEEP` kept. With the driver's 2 s grab interval that
+# is the last ten seconds and three readings to say anything at all.
+HYGRO_WINDOW_S = 10.0
+HYGRO_MIN_READS = 3
+HYGRO_KEEP = 8
+# The compound label: this many agreeing reads inside the window, and not one
+# read of a different code among them, before the tyre counts as known.
+COMPOUND_WINDOW_S = 30.0
+COMPOUND_MIN_AGREE = 3
 
 # How long a pre-flight grab may take before it is called a failure.
 #
@@ -168,12 +181,67 @@ class HudSession:
         # a lock a lap handler could wait on.
         self._wall = None
         self._wall_lap = None
+        # The last few hygrometer reads, `(monotonic time, level or None)`,
+        # appended on the worker thread and read on the Qt one. A bounded
+        # deque: append and a snapshot copy are safe across the two without a
+        # lock, which a lap handler must never wait on.
+        self._hygro: deque = deque(maxlen=HYGRO_KEEP)
+        self._compound: deque = deque(maxlen=HYGRO_KEEP)
 
     @property
     def settings(self):
         return self._settings()
 
     # ------------------------------------------------------- what it hands out
+
+    def wet_now(self, now: float | None = None) -> str | None:
+        """The WET light: "wet", "mixed", "dry", or None when it cannot say.
+
+        **The hygrometer is water under the car right now, not how wet the
+        track is** (`telemetry/hygrometer.py`): a tunnel on a wet track reads
+        empty for a second. So the light is the last few reads inside
+        `HYGRO_WINDOW_S`, and needs `HYGRO_MIN_READS` of them - with the 2 s
+        grab that is the last 10 s. Fewer, or all unreadable, is None: the
+        board says "cannot see", never DRY.
+        """
+        from pitcrew.telemetry.hygrometer import WET_LEVEL
+
+        now = time.monotonic() if now is None else now
+        recent = [level for at, level in list(self._hygro)
+                  if now - at <= HYGRO_WINDOW_S and level is not None]
+        if len(recent) < HYGRO_MIN_READS:
+            return None
+        share = sum(1 for level in recent if level >= WET_LEVEL) / len(recent)
+        if share >= 2 / 3:
+            return "wet"
+        if share <= 1 / 3:
+            return "dry"
+        return "mixed"
+
+    def compound_now(self, now: float | None = None) -> str | None:
+        """The compound the HUD label shows, once it is settled, or None.
+
+        **Settled means agreed and undisputed**: `COMPOUND_MIN_AGREE` reads of
+        one code in the last `COMPOUND_WINDOW_S`, and no read of another code
+        among them. Unreadable grabs (menus, a crew in front of the car, a
+        label this reader has no template for) neither count for nor against.
+        A tyre attributed wrongly corrupts the wear model; a missing one is a
+        gap, so this refuses on any doubt.
+        """
+        now = time.monotonic() if now is None else now
+        codes = [code for at, code in list(self._compound)
+                 if now - at <= COMPOUND_WINDOW_S and code is not None]
+        if len(codes) < COMPOUND_MIN_AGREE or len(set(codes)) != 1:
+            return None
+        return codes[0]
+
+    def _note_compound(self, read) -> None:
+        """Worker thread: one compound label read from the grab just taken."""
+        self._compound.append((time.monotonic(), read.code))
+
+    def _note_hygro(self, reading) -> None:
+        """Worker thread: one hygrometer read from the grab just taken."""
+        self._hygro.append((time.monotonic(), reading.level))
 
     def latest_wear(self) -> tuple[dict | None, int | None]:
         """What the gauge last transcribed, and the lap it describes.
@@ -430,7 +498,9 @@ class HudSession:
         sampler = LiveWearSampler(source, self._write_wear,
                                   on_status=self._status,
                                   interval_s=interval,
-                                  on_frame=self._pass_frame)
+                                  on_frame=self._pass_frame,
+                                  on_hygro=self._note_hygro,
+                                  on_compound=self._note_compound)
         sampler.start()
         log("pitcrew").info(
             "hud-wear: %s source, %s", self.settings.hud_source,
@@ -560,6 +630,9 @@ class HudSession:
         sampler = self._sampler
         if sampler is not None:
             sampler.new_session()
+        # Rule 11: the last session's wet and tyre are not this session's.
+        self._hygro.clear()
+        self._compound.clear()
         # **The lap-id map outlives the session too, and it leaked a practice
         # wear figure into a race.** `_write_wear` looks a lap_id up here
         # to decide which lap a reading belongs to; the ids carried over, so
