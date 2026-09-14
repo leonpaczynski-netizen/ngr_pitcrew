@@ -531,6 +531,7 @@ its n.
 | 5.13 | **Hygrometer reader** on the wear-panel capture: tri-state (dry / wet reading / cannot see); rule 10 — bounded moves in both directions and a reference retired after sustained refusals, accepts logged; rule 11 — reset at session start **with a production caller** | nothing can see rain | on the calibration recording it reads wet on the wet frames **and** no false wet on dry laps; the reset is called from the session start path |
 | 5.14 | **What reads it:** `rain` leaves `CANNOT_SEE`; the `rain` trigger fires off it; the penalty detector stands down on a *read* wet, not only a *declared* one; George's call is one line with its source (*"Track's getting wet — hygrometer, unconfirmed"*); Ludo's plan names the compound crossover the playbook acts on | a plan that assumed dry cannot see rain | harness replay fires `rain` once, a rain playbook entry arms, and the penalty detector stands down |
 | 5.15 | **Wind in the debrief.** Same-gear same-speed acceleration per straight (the 11 Sep method), **corrected for fuel mass**, so a fuel or top-speed change is not credited to the setup or a tow | Random weather is wind | reproduces the Sardegna 9 vs 10 Sep finding |
+| 5.20 | **Damage reader** (the driver, 14 Sep: *"have we built the damage reader?"* - no; 0.3 deferred it with the hygrometer for want of a calibration frame, and revision 0-9 of this phase left it out). The car icon between the tyre-bar columns turns red where parts are damaged, more red for more damage (`reference_gt7_wear_panel_geometry`). **Calibration on file:** session 135's replay (`2026-09-06 14-32-00.mp4`, 1080p) shows the icon's front red after his lap-2 crash - a replay frame, so geometry is checked against a flat live capture before use. Per-region red share (front / rear / left / right), anchored off `locate_gauge`'s bars like 5.13; tri-state with `cannot see`; rule 10 guards; read per lap. **What reads it:** the `incident` trigger gains a damage fact ("Front damage - unconfirmed"), the debrief separates a pace step after contact from tyre wear, and the wear model refuses a lap on a damaged car as a wear sample | Phase 0 row 0.3; the driver, 14 Sep | a reader that reads the s135 front damage and no damage on the dry Suzuka race frames, checked on every frame of one clip |
 
 #### 5E — Teammates (George and Ludo)
 
@@ -631,6 +632,67 @@ The amendment is applied to `CLAUDE.md`, charter §2, the refusal card, `gt7-bra
 `where-the-change-landed`, eval 1 and the noise-floor memory, filed as RECONCILIATION AV,
 and pinned by `test_best_corner_rule.py` (shown failing on the parent's text first).
 5.19 adds guided practice after 5.5 and 5.2b.
+
+**Execution record, 14 Sep 2026.**
+- **5.12 searched — no wet frame exists.** All 20 recordings of events 6 and 9 were sampled
+  every 20 s (852 frames, AV1 via imageio_ffmpeg): every frame where the hygrometer is visible
+  reads **dry**. **Every one of those recordings is a PSVR2 capture** — the HUD is drawn on the
+  dash and moves with his head by a couple of hundred pixels, so no fixed crop works and
+  `locate_gauge` finds nothing on them; calibrate on flat-screen capture (he left VR 12 Sep).
+  Dry state: a thin light-grey bracket ~32×80 px at 1080p with a small icon to its left, no
+  fill, no colour. Crops in the session scratchpad `hygro/`. **The driver's wet-lobby
+  screenshot is the only calibration source; 5.13 waits on it.**
+- **5.1 built, and it found two optimiser defects before it reported a single flip.** At
+  strategy 32's inputs the first choice went 1 stop / none / 1 / 4 / 1 / 3 / 1 / 2 as burn fell
+  from 9.2 to 6.6 L/lap: the tank limit was computed three ways (`tank_limited_laps` now, one
+  expression with `planned_fill_l`, used by `stint_limit`, `max_stint_laps` and `certify`), and
+  a timed split could put its stop after the flag (`_stop_past_flag`, re-solved). After both,
+  every burn 9.2→5.5 is one stop. At the race's own mean lap (129.25 s) and 7.38 L/lap the
+  model wants one stop, and `flip_on_saving` finds **~6.9 L saved over 14 laps (~0.49 L a lap)
+  makes it no stop** — the save he actually made.
+- **5.1 critic pass 1: NOT AGREED, no blocker, all answered.**
+  - **The stop was costed three ways.** `stint_cost_s` used a flat lap, `timed_race_laps`
+    the next stint's planned fill, and `build_plan` the fill of the stint that had just
+    ENDED. On events 10, 12 and 14 a faster 12 + 8 was reported 8.7 s slower than 11 + 9.
+    Now one rule: the fill for stint k is paid at the stop before stint k.
+  - **`tank_limited_laps` could walk forever at a tiny burn.** It is now bounded at 200
+    laps, a fill that shrinks is refused, and capacity 0 (electric) means no fuel ceiling.
+  - **Mutants.** 9 of 23 survived. New tests kill the certifier, `max_stint_laps`,
+    upward-walk, stop-charge, unbounded-walk and electric mutants.
+  - **Removed as untestable because they change nothing.**
+    - The re-solve loop: no plan changed in 144 timed races.
+    - The clock guard on the split: no plan changed in 840 timed races once the stop was
+      costed one way. Its "stop after the flag" symptom came from `build_plan` charging
+      the ended stint's fill.
+  - **flip.py:** equality ignores refusal wording, `describe` prints units, the saving
+    clamp became None, and there is no playbook hint where the timed flip moves with pace.
+  - **Speed:** the slowest test went from 7m44s to 0.3 s. Full suite exit 0.
+- **5.16 partly done.** The driver confirmed the hub's teammates. Written: GR3 Season 1 →
+  Boxhead, Supercars Series 1 → X-man Oce. **Porsche Cup has three (Smarty,
+  Peterbrocksmate, Magical daddy) and `series_teammates.series` is the PRIMARY KEY** - one
+  teammate per series, so the second write would silently replace the first. Not written.
+  5.16 gains a schema change to (series, driver) and `race/teammate.py` a list, before 5.17.
+  `series_teammates` left `wiring_audit.EXPECTED_EMPTY`.
+- **5.12 done, 5.13 reader built (not wired - 5.14).** The driver recorded a flat-screen
+  video with water on the track (`InstantReplays/2026-09-14 11-46-35.mp4`); the dry Suzuka
+  race of 13 Sep reads 0 on every lit frame. **The hygrometer is not a slow wetness gauge:**
+  it is a fill bar of water under the car - 0 dry, 57-81 of 86 px wet, empty in ~0.8 s
+  through a tunnel on the same wet track. So the answer is per lap (share of readable frames
+  wet), never one frame. `telemetry/hygrometer.py` anchors off `locate_gauge`'s bars, refuses
+  an unlit HUD, drops a frame that disagrees with both neighbours (a codec glitch blanked five
+  frames), and says `cannot see` below 5 reads. Checked against every one of the video's 9,688
+  frames: 9,478 readable agree with the calibration table within 2 px, and the 210 it cannot
+  see are exactly the dimmed ones. Fixture: `tests/fixtures/hygrometer_panels.npz`, six real
+  panels. Memory: `reference_gt7_hygrometer_behaviour`.
+- **5.0 built** (`analysis/instrument_gate.py`): same-setup split-halves floor, a
+  run-against-run floor (a first version split run means in halves and shrank with more
+  runs - caught on the Daytona dry run), known-answer and pinned-channel checks, and a gate
+  that passes only with all four. **The 4 Sep floors table cannot be re-derived** - its
+  scripts were never saved; on s118/119/114 the split counts match and the values do not -
+  so the helper is pinned on synthetic data. **5.7 built:** `braking_pct` beside
+  `full_throttle_pct`, and a missing pedal frame is no longer read as a released pedal
+  (rule 3). `tools/instrument_floors.py` prints same-setup floors per session and refuses a
+  between-run floor until 5.4a says which sessions share a setup.
 
 ### 6.1 What is refused, and why
 

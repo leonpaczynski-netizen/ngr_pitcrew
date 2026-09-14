@@ -38,8 +38,9 @@ ENTRY_POINTS = {"pitcrew.app", "pitcrew.controller", "pitcrew.mcp.server",
                 "pitcrew.settings"}
 # Tables that are legitimately empty on a machine that has never done the
 # thing: named so the report can say "expected" rather than "unwired".
-EXPECTED_EMPTY = {"series_teammates": "written by nothing yet (assessment S3)",
-                  "gap_reads": "filled by the pit wall from the next race "
+# `series_teammates` left this list on 14 Sep 2026: the driver confirmed the hub
+# teammates and they were written (plan row 5.16).
+EXPECTED_EMPTY = {"gap_reads": "filled by the pit wall from the next race "
                                "(added 7 Sep 2026)",
                   "board_positions": "filled by the pit wall from the next "
                                      "race (added 8 Sep 2026)"}
