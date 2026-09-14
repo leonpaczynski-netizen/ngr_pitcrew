@@ -70,6 +70,15 @@ def test_a_slot_change_resets_the_derived_lap_times_too():
     assert list(pace.lap_times_s) == [6]
 
 
+def test_his_lap_is_ours_less_what_we_took_out_of_the_gap():
+    """rival_pace had both signs inverted: a car we were catching was derived
+    as the faster one."""
+    pace = RivalPace()
+    assert pace.note_lap(5, 120.0, 4.0, 5.0, ahead=True) == 121.0
+    behind = RivalPace()
+    assert behind.note_lap(5, 120.0, 4.0, 5.0, ahead=False) == 119.0
+
+
 # --- 2. a single OCR misread must not corrupt the rate ---------------------
 
 def test_one_garbled_frame_is_rejected_and_the_rate_survives():

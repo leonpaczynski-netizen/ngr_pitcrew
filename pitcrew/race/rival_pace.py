@@ -5,8 +5,18 @@
 Sampled at the same point of the lap each time - start/finish - the identity is
 exact:
 
-    t_ahead(L)  = t_us(L) + [ g_ahead(L)  - g_ahead(L-1)  ]
-    t_behind(L) = t_us(L) - [ g_behind(L) - g_behind(L-1) ]
+    t_ahead(L)  = t_us(L) - [ g_ahead(L)  - g_ahead(L-1)  ]
+    t_behind(L) = t_us(L) + [ g_behind(L) - g_behind(L-1) ]
+
+**The signs were the other way round until 14 Sep 2026, and nothing read the
+module to notice.** The gap to the car ahead is how long before us he crosses
+a point, so it SHRINKS by exactly the time we take out of him: a lap 0.5 s
+quicker than his takes 0.5 off the gap, and his lap is ours PLUS 0.5 - which
+is ours MINUS the change. Behind, the gap is how long after us he crosses, so
+it grows by the time he loses. Written as it was, a car we were catching was
+derived as the faster one - the "correct number and the wrong idea" the
+attribution section below warns about, one layer down. `race/news.py` is the
+first caller and pins the direction.
 
 **Sampled at the same POINT, not at whatever reading was nearest the lap
 trigger.** A gap read 200 ms after the line is a gap over a different stretch
@@ -91,7 +101,9 @@ class RivalPace:
             self.excluded[int(lap)] = "a gap or our own lap time was not read"
             return None
         moved = gap_now_s - gap_last_s
-        theirs = ours_s + moved if ahead else ours_s - moved
+        # Ahead, a shrinking gap is time we took out of him; behind, a
+        # growing one is time he lost. See the module docstring.
+        theirs = ours_s - moved if ahead else ours_s + moved
         if theirs <= 0:
             self.excluded[int(lap)] = "the arithmetic gave a negative lap time"
             return None
