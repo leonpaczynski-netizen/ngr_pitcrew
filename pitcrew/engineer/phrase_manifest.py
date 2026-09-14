@@ -892,7 +892,7 @@ def spoken_openers() -> tuple[str, ...]:
 # sentences (which `_decompose` peels) plus the words either side of its one
 # number (which the number words already in the pack complete).
 #
-# **Not the rival's stop.** "TommyTbone has boxed on 7 litres." carries a name
+# **Not the rival's stop.** "TommyTbone boxed, 7 litres." carries a name
 # no clip can hold, and the engine plays a line from the pack only whole - a
 # pack clip spliced to a live-synthesised name would be two voices in one
 # sentence. It stays live, and says so in the miss log.

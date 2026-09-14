@@ -595,6 +595,11 @@ class RaceNews:
             self._neighbour_name[side] = name
             self._follow(side, read)
 
+    def one_car(self, key: str) -> bool:
+        """Whether a handle is still taken to be one car this race."""
+        with self._lock:
+            return key not in self._merged and key not in self._unreliable
+
     def _new_car(self, side: str, read: _Read, *, another: bool = True) -> None:
         """The car in the slot from `read` on. Locked.
 

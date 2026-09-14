@@ -374,6 +374,7 @@ class RaceCoordinator:
         # stop seen before a re-arm is not this race's news.
         self.state.lane.new_session()
         self.news.new_session()
+        self.state.rival_gaps = {}
         self._reset_mid_lap()
         if planned is not None and actual is not None:
             ok, why = planned.matches(actual)
@@ -1211,10 +1212,16 @@ class RaceCoordinator:
         if not self.running:
             return
         try:
+            key = int(self.state.lap_now())
             self.news.note_gap(side, gap_s, subject, name,
-                               packet=self._packets,
-                               lap_key=int(self.state.lap_now()),
+                               packet=self._packets, lap_key=key,
                                moment=self._slot_moment())
+            if name and gap_s is not None:
+                gaps = self.state.rival_gaps
+                if self.news.one_car(str(name)):
+                    gaps[str(name).lower()] = (float(gap_s), key)
+                else:
+                    gaps.pop(str(name).lower(), None)
         except Exception:
             log("race").exception("news: a gap reading could not be taken")
 

@@ -895,6 +895,11 @@ class RaceState:
     # so their stops lead the rival call. Set by the controller from the same
     # list the grid line spoke (rules 12 and 13). Empty with no league.
     watched_rivals: frozenset = frozenset()
+    # **The last gap the wall read to each car it could name**, lower-cased
+    # name -> `(gap_s, lap key)`, so a rival's stop can be told apart as one
+    # that swaps places with ours (`rival_calls._worth_pricing`). Written by
+    # the coordinator only for handles `race/news.py` holds to be one car.
+    rival_gaps: dict = field(default_factory=dict)
     # Our own stop happened since the last position call was spoken: the next
     # one is said as the result of the stop, not as places lost on the road.
     position_through_stop: bool = False

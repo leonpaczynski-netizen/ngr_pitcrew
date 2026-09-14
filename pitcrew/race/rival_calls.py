@@ -300,17 +300,23 @@ def boxed_call(state) -> Call | None:
     entered the lane inside two minutes, three more inside the next ninety
     seconds; `next_call` says one thing a crossing, and a kind was said once,
     so the second and third of each group were dropped by a stable sort. One
-    sentence carries them all: "PUNISHED, CruisingChaos and K.Graebs have
-    boxed."
+    sentence carries them all: "PUNISHED, CruisingChaos and K.Graebs boxed."
 
-    **One car keeps the priced call** `rival_boxed` makes - his litres and
-    the standing time that follows - where it can be priced and is worth
-    saying. Where it cannot (the arithmetic refuses, or the swing is inside
-    `WORTH_SAYING_S`) the FACT is still said: that he has boxed, and on how
-    much where the entry figure was watched. It used to be silence, and the
-    driver's complaint that night was silence: "want more comms from him
-    about what is going on in the race". Several cars carry names only; a
-    per-car price in one sentence is the table §5.5 forbids.
+    **Short, because it has to fit a straight** (15 Sep 2026). Replayed, the
+    priced line - "PUNISHED has boxed on 47 litres. That is about 53 seconds
+    standing, on our burn." - ran about ten seconds of live synthesis, and
+    laps 11 and 12 carried 35-38 s of mid-lap speech against Mount Panorama's
+    two long straights (13.1 and 14.7 s median). So the call is the fact:
+    "PUNISHED boxed." One clause more only where the stop is a decision for
+    US (`_worth_pricing`): a championship rival from the brief, or a car that
+    was within one pit loss of us on the road when he went in - "PUNISHED
+    boxed, 47 litres.", the entry figure where it was watched from the start.
+    The standing-time arithmetic `rival_boxed` does is kept on the call's
+    `why_spoken`, for the audit, and not said.
+
+    **One word for one fact at both slots** (rule 13): this builds the
+    crossing's line and the mid-lap slot's alike, so "boxed" is the only way
+    a rival's stop is said.
 
     **The watch list leads.** Championship rivals from the brief come first
     and are never the ones folded into "and N more".
@@ -346,24 +352,57 @@ def boxed_call(state) -> Call | None:
             ours=state.our_stop,
             capacity_l=state.fuel_capacity_l or TANK_L,
             entry_is_a_bound=stop.partial)
-        if priced is not None:
-            return replace(priced, tag=tag, severity=severity)
-        if stop.fuel_in_l is not None and not stop.partial:
-            said = f"{stop.driver} has boxed on {stop.fuel_in_l:.0f} litres."
+        worth = _worth_pricing(state, stop)
+        if worth is not None and stop.fuel_in_l is not None \
+                and not stop.partial:
+            said = f"{stop.driver} boxed, {stop.fuel_in_l:.0f} litres."
         else:
             # An entry figure nobody saw him arrive with is a bound, and a
             # bound is not said as a reading (rule 5).
-            said = f"{stop.driver} has boxed."
+            said = f"{stop.driver} boxed."
+        why = "; ".join(part for part in (
+            f"said with his litres: {worth}" if worth and said.endswith(
+                "litres.") else None,
+            (f"priced, not said: {priced.call} {priced.reason}"
+             if priced is not None else None)) if part)
         return Call(RIVAL_BOXED, state.lap, said, "", MEDIUM,
-                    severity=severity, tag=tag)
+                    severity=severity, tag=tag, why_spoken=why)
     shown = names[:BOXED_NAMES]
     more = len(names) - len(shown)
     if more:
-        said = f"{', '.join(shown)} and {more} more have boxed."
+        said = f"{', '.join(shown)} and {more} more boxed."
     else:
-        said = f"{', '.join(shown[:-1])} and {shown[-1]} have boxed."
+        said = f"{', '.join(shown[:-1])} and {shown[-1]} boxed."
     return Call(RIVAL_BOXED, state.lap, said, "", MEDIUM,
                 severity=severity, tag=tag)
+
+
+def _worth_pricing(state, stop) -> str | None:
+    """Why this rival's stop is a decision for us, or None where it is news.
+
+    **A championship rival from the brief**, or **a car within one pit loss
+    of us on the road when he went in**: the one whose stop can swap places
+    with ours. The gap is the wall's own reading of him by name
+    (`RaceState.rival_gaps`) on the lap he went in or the one before, against
+    the circuit's measured `pit_loss_s`; a car the wall never read by name is
+    not guessed at from places.
+    """
+    driver = str(stop.driver)
+    watched = getattr(state, "watched_rivals", None) or frozenset()
+    if driver.lower() in watched:
+        return "a championship rival from the brief"
+    loss = getattr(state, "pit_loss_s", None)
+    seen = (getattr(state, "rival_gaps", None) or {}).get(driver.lower())
+    if not loss or seen is None:
+        return None
+    gap_s, key = seen
+    began = stop.lap if stop.lap is not None else stop.noted_lap
+    if key is None or began is None or not (began - 1 <= key <= began + 1):
+        return None
+    if abs(gap_s) > loss:
+        return None
+    return (f"{abs(gap_s):.1f} s from us on the road on lap key {key}, "
+            f"inside one pit loss ({loss:.1f} s)")
 
 
 def _whose(rival: Rival) -> str:

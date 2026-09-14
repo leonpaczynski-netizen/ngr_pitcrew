@@ -281,7 +281,7 @@ def test_print_the_volunteered_transcript(capsys):
 
 def test_every_confirmed_stop_still_reaches_him_once():
     _, heard, _ = replayed()
-    rival = [h.text for h in heard if re.search(r"ha(s|ve) boxed", h.text)]
+    rival = [h.text for h in heard if re.search(r"\bboxed\b", h.text)]
     for driver, *_ in VISITS:
         assert len([t for t in rival if driver in t]) == 1, (driver, rival)
 
@@ -409,6 +409,26 @@ def test_no_gap_he_hears_jumps_with_nothing_on_the_circuit_to_explain_it():
     _, heard, _ = replayed()
     assert spoken_gaps(heard)
     assert implausible_jumps(heard) == []
+
+
+STRAIGHTS = Path(__file__).parent / "fixtures" / "straights_mount_panorama.json"
+
+
+def test_no_volunteered_line_is_longer_than_the_longest_straight():
+    """Replayed before: "Magical daddy has boxed on 32 litres. That is about
+    67 seconds standing, on our burn." - 10.5 s of live synthesis, and laps 11
+    and 12 carried 37.8 and 35.0 s of mid-lap speech. No mid-lap line may now
+    outrun the lower quartile of Mount Panorama's longest straight, and a
+    rival's stop is the fact, said in under four seconds."""
+    windows = json.loads(STRAIGHTS.read_text(encoding="utf-8"))["windows"]
+    longest_p25 = max(w["p25_s"] for w in windows)
+    _, heard, _ = replayed()
+    mid = [(h.text, speech_s(h.text)[0]) for h in heard if h.how == "mid-lap"]
+    assert mid and all(seconds <= longest_p25 for _, seconds in mid), mid
+    rival = [(h.text, speech_s(h.text)[0]) for h in heard
+             if re.search(r"\bboxed\b", h.text)]
+    assert rival and all(seconds <= 4.0 for _, seconds in rival), rival
+    assert not any("standing" in text for text, _ in rival)
 
 
 def test_a_pace_claim_carries_its_test():

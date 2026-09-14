@@ -296,7 +296,7 @@ def test_through_a_real_voice_a_stale_stop_comes_back_and_is_said_once(
         assert offered(co, seconds=2 * RaceCoordinator.MID_LAP_SPACING_S) == []
         # Said once - and said as words, not "Car hash 76" (D7, 14 Sep 2026).
         assert engine.lines == [voice_module.spoken_form(first[0].spoken())]
-        assert engine.lines == ["Car 76 has boxed on 5 litres."]
+        assert engine.lines == ["Car 76 boxed."]
     finally:
         speaker.stop()
 

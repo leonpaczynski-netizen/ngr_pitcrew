@@ -84,7 +84,7 @@ def test_several_stops_are_one_sentence_and_the_rest_are_counted():
     for name in names:
         state.lane.enter(entered(name), lap=11)
     call = boxed_call(state)
-    assert call.call == "PUNISHED, CruisingChaos, K.Graebs and 2 more have boxed."
+    assert call.call == "PUNISHED, CruisingChaos, K.Graebs and 2 more boxed."
     assert len(state.lane.keys_in_tag(RIVAL_BOXED, call.tag)) == len(names)
     assert BOXED_NAMES == 3
 

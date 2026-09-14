@@ -384,14 +384,52 @@ def test_a_rival_entering_the_lane_is_said_while_he_is_still_in_it():
                              fuel_in_l=12, partial=False), lap=8)
     call = next_call(state)
     assert call.kind == "rival-boxed"
-    assert "Boxhead has boxed on 12 litres." == call.call
-    assert "seconds longer than you did" in call.reason
+    # Said short (15 Sep 2026): the price is kept for the audit, not said.
+    assert "Boxhead boxed." == call.spoken()
+    assert "seconds longer than you did" in call.why_spoken
     # **Retired when SAID, and only then.** Drained on being offered, eight
     # of ten stops at Bathurst went into a crossing a box call won and never
     # came out.
     assert next_call(state) is not None and state.lane.untold(8)
     state.record(call)
     assert state.lane.untold(8) == []
+
+
+def test_a_stop_that_can_swap_places_with_ours_carries_his_litres():
+    """One clause more, and only where it is a decision for us: a car the
+    wall read within one pit loss of us on the lap he went in."""
+    state = a_state()
+    state.rival_gaps = {"boxhead": (9.4, 8)}
+    state.lane.enter(Entered(driver="Boxhead", driver_id=1, lap=8,
+                             fuel_in_l=12, partial=False), lap=8)
+    call = next(c for c in candidates(state) if c.kind == "rival-boxed")
+    assert call.spoken() == "Boxhead boxed, 12 litres."
+    assert "inside one pit loss (17.6 s)" in call.why_spoken
+
+
+def test_a_car_beyond_a_pit_loss_or_read_laps_ago_is_the_fact_alone():
+    for gaps in ({"boxhead": (31.0, 8)}, {"boxhead": (4.0, 5)}, {}):
+        state = a_state()
+        state.rival_gaps = gaps
+        state.lane.enter(Entered(driver="Boxhead", driver_id=1, lap=8,
+                                 fuel_in_l=12, partial=False), lap=8)
+        call = next(c for c in candidates(state) if c.kind == "rival-boxed")
+        assert call.spoken() == "Boxhead boxed.", gaps
+
+
+def test_a_watched_rivals_stop_carries_his_litres_unless_they_are_a_bound():
+    state = a_state()
+    state.watched_rivals = frozenset({"rocky"})
+    state.lane.enter(Entered(driver="Rocky", driver_id=2, lap=8,
+                             fuel_in_l=6, partial=False), lap=8)
+    call = next(c for c in candidates(state) if c.kind == "rival-boxed")
+    assert call.spoken() == "Rocky boxed, 6 litres."
+    bound = a_state()
+    bound.watched_rivals = frozenset({"rocky"})
+    bound.lane.enter(Entered(driver="Rocky", driver_id=2, lap=8,
+                             fuel_in_l=6, partial=True), lap=8)
+    call = next(c for c in candidates(bound) if c.kind == "rival-boxed")
+    assert call.spoken() == "Rocky boxed."
 
 
 def test_two_cars_entering_in_one_frame_are_one_call_naming_both():
@@ -404,7 +442,7 @@ def test_two_cars_entering_in_one_frame_are_one_call_naming_both():
                             partial=False)):
         state.lane.enter(entered, lap=8)
     boxed = [c for c in candidates(state) if c.kind == "rival-boxed"]
-    assert [c.call for c in boxed] == ["Boxhead and Rocky have boxed."]
+    assert [c.call for c in boxed] == ["Boxhead and Rocky boxed."]
 
 
 def test_an_entry_figure_that_is_only_an_upper_bound_prices_nothing():
@@ -415,7 +453,7 @@ def test_an_entry_figure_that_is_only_an_upper_bound_prices_nothing():
     state.lane.enter(Entered(driver="Boxhead", driver_id=1, lap=8,
                              fuel_in_l=12, partial=True), lap=8)
     boxed = [c for c in candidates(state) if c.kind == "rival-boxed"]
-    assert [(c.call, c.reason) for c in boxed] == [("Boxhead has boxed.", "")]
+    assert [(c.call, c.reason) for c in boxed] == [("Boxhead boxed.", "")]
 
 
 def test_a_rivals_fill_cannot_exceed_the_tank():
@@ -428,9 +466,9 @@ def test_a_rivals_fill_cannot_exceed_the_tank():
     boxed = [c for c in candidates(state) if c.kind == "rival-boxed"]
     # 18 laps to go at 8 L/lap is 144 L; the tank is 100, so his fill is the
     # same 95 L ours was and there is no swing worth saying - so the fact is
-    # said without a price.
-    assert [(c.call, c.reason) for c in boxed] == [
-        ("Boxhead has boxed on 5 litres.", "")]
+    # said, and no price is kept even for the audit.
+    assert [(c.call, c.reason, c.why_spoken) for c in boxed] == [
+        ("Boxhead boxed.", "", "")]
 
 
 def test_the_call_says_when_the_burn_behind_it_is_ours():
@@ -441,7 +479,7 @@ def test_the_call_says_when_the_burn_behind_it_is_ours():
     state.lane.enter(Entered(driver="Rocky", driver_id=2, lap=8,
                              fuel_in_l=6, partial=False), lap=8)
     call = next(c for c in candidates(state) if c.kind == "rival-boxed")
-    assert "on our burn" in call.reason
+    assert "on our burn" in call.why_spoken
 
 
 def test_a_gap_coming_down_is_said_with_the_name_the_board_gave_him():
