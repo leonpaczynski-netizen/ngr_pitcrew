@@ -8,7 +8,8 @@ car that was *getting faster* came to be exported as losing 72 ms a lap.
 
 **A tank and a set of tyres are different objects and this module keeps them
 apart.** A refuel is visible in the feed: the tank goes up between one lap and
-the next. A tyre change is not visible at all — GT7 broadcasts no wear channel
+the next, or - where the fill landed inside one lap's frames - a lap ends
+fuller than it started. A tyre change is not visible at all — GT7 broadcasts no wear channel
 and no stop event, so whether the tyres came off at that stop is something only
 the driver knows. So:
 
@@ -283,11 +284,66 @@ def fresh_by_temperature(lap: LapInput) -> bool | None:
 
 
 def refuelled_between(previous, lap) -> bool:
-    """The tank went up between the end of one lap and the start of the next."""
+    """The tank went up between the end of one lap and the start of the next.
+
+    A missing reading at either end is "cannot tell", which is not a refuel.
+    """
+    if lap.fuel_start is None or previous.fuel_end is None:
+        return False
     return lap.fuel_start > previous.fuel_end + REFUEL_STEP_L
 
 
-def starts_run(previous, lap) -> bool:
+def refuelled_within(lap) -> bool:
+    """The tank ended this lap fuller than it started it: a fill inside the lap.
+
+    **The stop does not have to fall on a lap boundary.** The lap counter
+    ticks at the line and the box is wherever the circuit put it, so the fill
+    can land inside one lap's frames - 27 laps on file (14 Sep 2026) end
+    fuller than they started, 12 of them carrying neither stop flag and 9 of
+    those a race's opening lap - event 11, session 158, lap
+    11 opened on 31.4 L and closed on 93.1 L with `is_pit_lap = 0`, and the
+    between-laps test above saw a continuous tank either side of it.
+
+    The same `REFUEL_STEP_L` margin, and it is looser here than it looks: the
+    lap burned fuel on the way round, so a net rise past it means the fill was
+    at least a lap's burn plus half a litre. The blind spot is the other way -
+    a splash smaller than the lap's own burn nets out as an ordinary lap, and
+    only the frames (`reaggregate`, the live stop detector) can see it.
+
+    A missing reading at either end is "cannot tell", which is not a refuel.
+    """
+    if lap.fuel_start is None or lap.fuel_end is None:
+        return False
+    return lap.fuel_end > lap.fuel_start + REFUEL_STEP_L
+
+
+def _stop_inside(previous, before) -> bool:
+    """A fill inside `previous` that nothing has already put a boundary at.
+
+    Two kinds of fill inside a lap already sit at a run start, and splitting
+    after them as well would cut a one-lap run off the front of a stint:
+
+    * **the lap that opened its run** - the grid fill on a session's first
+      lap (the races on file open on 20-50 L and fill during lap 1), or the
+      second half of a stop whose pit lap was flagged on the lap before (a box
+      past the line: the fill lands in the out-lap);
+    * **a lap stored as an out-lap**, which says the same thing without the
+      lap before it to hand.
+
+    `before` is the lap before `previous`, or None where `previous` is the
+    first lap there is - in which case there is no earlier tank to separate
+    it from, and the fill is the one the session opened on.
+    """
+    if not refuelled_within(previous):
+        return False
+    if getattr(previous, "is_out_lap", False):
+        return False
+    if before is None:
+        return False
+    return not starts_run(before, previous)
+
+
+def starts_run(previous, lap, before=None) -> bool:
     """Does this lap begin a new tank?
 
     Duck-typed on purpose. The lap rack asks this of its own row objects and
@@ -299,12 +355,41 @@ def starts_run(previous, lap) -> bool:
     wherever the recording session changed — stopping and restarting the app
     means he went back to the garage, and the laps either side are not one
     continuous stint.
+
+    **A fill inside a lap opens the run on the lap AFTER it**, exactly as a
+    flagged pit lap does. The two are the same event - a stop found in one
+    lap's frames is what `is_pit_lap` records (`reaggregate`: "a stop lives
+    inside one lap's frames, and the lap after it is the out-lap") - so the
+    boundary must not move depending on whether a detector happened to flag
+    it: one stop, one split (CLAUDE.md rule 13). It also keeps the tyre
+    evidence where `split_runs` reads it, on the lap before the run, and the
+    lap carrying the stop stays the last lap of the tank it started on, as an
+    in-lap does. Neither choice makes that lap's own fuel honest - it starts
+    on one tank and ends on the next whichever run holds it.
+
+    `before` is the lap before `previous`, and the intra-lap test needs it to
+    tell a mid-stint stop from the fill a run already opened on (see
+    `_stop_inside`). Without it - a caller holding only two laps - a fill
+    inside `previous` is not treated as a boundary: cannot tell is not a stop.
     """
     session_changed = (lap.session_id is not None
                        and previous.session_id is not None
                        and lap.session_id != previous.session_id)
     return (refuelled_between(previous, lap) or session_changed
-            or previous.is_pit_lap)
+            or previous.is_pit_lap or _stop_inside(previous, before))
+
+
+def run_start_flags(laps) -> list[bool]:
+    """`starts_run` over a whole sequence, with each lap's `before` supplied.
+
+    The first lap always starts a run. Duck-typed like `starts_run`, so the
+    rack and the export walk their laps through one loop rather than two.
+    """
+    flags = [True] if laps else []
+    for index in range(1, len(laps)):
+        before = laps[index - 2] if index >= 2 else None
+        flags.append(starts_run(laps[index - 1], laps[index], before))
+    return flags
 
 
 def split_runs(laps: list[LapInput]) -> list[Run]:
@@ -317,10 +402,20 @@ def split_runs(laps: list[LapInput]) -> list[Run]:
     # What the stop that opened each run did to the tyres. The first run of a
     # session has no stop before it, so it stays unknown rather than False.
     swapped: list[bool | None] = [None]
-    for previous, lap in zip(laps, laps[1:]):
-        if starts_run(previous, lap):
+    for index, starts in enumerate(run_start_flags(laps)):
+        if index == 0:
+            continue
+        previous, lap = laps[index - 1], laps[index]
+        if starts:
             grouped.append([lap])
-            refuelled.append(refuelled_between(previous, lap))
+            # The tank went up at the stop that opened this run, whether the
+            # fill crossed the line or sat inside the lap before it - and a
+            # flagged pit lap carrying the fill is that same stop.
+            refuelled.append(refuelled_between(previous, lap)
+                             or (previous.is_pit_lap
+                                 and refuelled_within(previous))
+                             or _stop_inside(previous, laps[index - 2]
+                                             if index >= 2 else None))
             swapped.append(previous.tyres_changed)
         else:
             grouped[-1].append(lap)
@@ -388,8 +483,8 @@ def declared_compound(event: dict | None) -> str | None:
     return available[0] if len(set(available)) == 1 else None
 
 
-def compound_for_new_lap(previous, lap, declared: str | None = None
-                         ) -> str | None:
+def compound_for_new_lap(previous, lap, declared: str | None = None,
+                         before=None) -> str | None:
     """What a lap that has just landed ran on, where something already says.
 
     **The carry reaches the laps that land AFTER the tag, too** (13 Sep 2026).
@@ -402,9 +497,12 @@ def compound_for_new_lap(previous, lap, declared: str | None = None
 
     Failing that, the event's own declaration where it leaves only one tyre.
     Otherwise None: unknown is the honest value (§4 rule 3).
+
+    `before` is the lap before `previous`, so a fill inside `previous` ends
+    the carry the way it ends the run (`starts_run`).
     """
     if previous is not None and previous.compound \
-            and not starts_run(previous, lap):
+            and not starts_run(previous, lap, before):
         return previous.compound
     return declared
 

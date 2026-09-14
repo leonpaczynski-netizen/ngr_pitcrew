@@ -3618,7 +3618,8 @@ class PitCrewController(QObject):
             log("session").warning("the event's compounds could not be read",
                                    exc_info=True)
             declared = None
-        carried = compound_for_new_lap(previous, row)
+        carried = compound_for_new_lap(
+            previous, row, before=rows[-2] if len(rows) >= 2 else None)
         # **The compound he declared at Start, until the car first stops.** A
         # pit lap is where a set can change, so after it the declaration is no
         # longer evidence about the tyre on the car and only the rack's own

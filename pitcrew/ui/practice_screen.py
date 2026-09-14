@@ -35,8 +35,8 @@ from pitcrew.analysis.runs import (
     REASON_FUEL_IMPLAUSIBLE,
     auto_out_laps,
     fuel_implausible_laps,
+    run_start_flags,
     split_runs,
-    starts_run,
 )
 from pitcrew.store.tyres import ALL_COMPOUNDS
 from pitcrew.ui import theme
@@ -261,10 +261,10 @@ def run_start_ids(rows: list[LapRow]) -> set[int]:
     """
     if not rows:
         return set()
-    starts = {rows[0].lap_id}
-    for previous, row in zip(rows, rows[1:]):
-        if starts_run(previous, row):
-            starts.add(row.lap_id)
+    # The whole sequence, not pairs: a fill inside a lap needs the lap before
+    # it to tell a mid-stint stop from the fill its run opened on.
+    starts = {row.lap_id for row, starts in zip(rows, run_start_flags(rows))
+              if starts}
     # A declaration already made keeps its control even if the boundary moved -
     # hiding it would hide something he said that is still stored.
     starts.update(row.lap_id for row in rows if row.tyres_fresh is not None)
