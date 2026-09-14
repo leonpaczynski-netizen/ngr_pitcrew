@@ -180,9 +180,12 @@ def test_a_rival_who_came_in_with_more_than_he_needs_is_refused_not_zeroed():
 
 
 def test_on_and_after_the_planned_lap_it_goes_quiet():
-    assert stay_out(lap=11, laps_left=9, burn_per_lap_l=SPA_BURN,
-                    refuel_rate_lps=RATE, capacity_l=100.0, laps_total=20,
-                    planned_stop_lap=11) is None
+    """`planned_stop_lap` is the plan's in-lap: it is in progress with one
+    lap fewer completed, where the box call says "Box this lap."."""
+    for lap in (10, 11):
+        assert stay_out(lap=lap, laps_left=20 - lap, burn_per_lap_l=SPA_BURN,
+                        refuel_rate_lps=RATE, capacity_l=100.0,
+                        laps_total=20, planned_stop_lap=11) is None
 
 
 def test_where_a_lap_of_fuel_is_not_worth_saying_nothing_is_said():

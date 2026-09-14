@@ -144,7 +144,7 @@ def test_a_small_shortfall_with_no_plan_is_still_a_saving_call():
 # ------------------------------------------------------------------ rejoin
 
 def _rejoin(due):
-    return rejoin_call(lap=8, gap_behind_s=10.0, litres_to_take=35.0,
+    return rejoin_call(lap=8, gap_behind_s=30.0, litres_to_take=35.0,
                        refuel_rate_lps=2.0, pit_loss_s=20.0,
                        pit_loss_source="measured", who="Boxhead", due=due)
 

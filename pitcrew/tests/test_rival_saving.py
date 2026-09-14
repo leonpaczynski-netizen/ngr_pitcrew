@@ -455,25 +455,28 @@ def test_a_gap_coming_down_is_said_with_the_name_the_board_gave_him():
 
 
 def test_a_stop_now_that_would_drop_us_behind_is_said():
+    from pitcrew.race.calls import fuel_to_flag_l
+
     state = a_state()
     state.stint_ends_on_lap = 10                 # the stop is in prospect
-    state.gap_behind = a_trend("behind", [(8, 9.0)], subject=3)
+    state.gap_behind = a_trend("behind", [(8, 100.0)], subject=3)
     state.gap_behind_name = "Chook"
     state.next_stint_load_l = 68.0
-    state.fuel_l = 8.0                           # so the FILL is 60 L
-    # Through `candidates`: eight litres aboard is genuinely a fuel emergency
-    # and `FUEL_SHORT` rightly wins the crossing. The point is that the rejoin
-    # is OFFERED, and with the fill priced rather than the stint's load.
+    state.fuel_l = 20.0
+    # Through `candidates`: the rejoin is OFFERED, with the fill a stop NOW
+    # needs - to the flag, no further stop planned - less what the car
+    # arrives with after this lap's burn.
     call = next(c for c in candidates(state) if c.kind == "rejoin")
-    # Lap 8 with the stop planned for lap 10: not due, so the arithmetic is
+    # Lap 8 with the in-lap planned for lap 10: not due, so the arithmetic is
     # said as the conditional it is - "Box now" is reserved for a stop that
     # is (7 Sep 2026, noise cut 0.7).
     assert call.call == "A stop now puts you behind Chook."
-    # 60 L at 1 L/s + a 17.6 s lane + the 7.5 s dead time, because the source
-    # says this loss was measured here. `strategy/model.stop_overhead_s`
+    # The fill at 1 L/s + a 17.6 s lane + the 7.5 s dead time, because the
+    # source says this loss was measured here. `strategy/model.stop_overhead_s`
     # carries the evidence: Watkins 15.7 measured + 7.5 = 23.2 against a
     # frame-measured 23.07 total.
-    assert "85 second stop" in call.reason
+    fill = fuel_to_flag_l(state) - (20.0 - BURN)
+    assert f"{round(fill + 17.6 + 7.5)} second stop" in call.reason
 
 
 def test_a_rejoin_is_not_argued_before_the_stop_is_in_prospect():
@@ -490,21 +493,100 @@ def test_a_rejoin_is_not_argued_before_the_stop_is_in_prospect():
     assert [c for c in candidates(state) if c.kind == "rejoin"] == []
 
 
-def test_the_rejoin_prices_the_fill_and_not_the_stints_whole_load():
-    """`next_stint_load_l` is what the car STARTS the next stint on; the
-    litres through the hose are that minus what is aboard when we arrive.
-    Priced as a fill it overstated the stop by the fuel already in the car,
-    and `REJOIN_MARGIN_S` is three seconds."""
+def test_the_rejoin_prices_the_stop_it_asks_about():
+    """**"If you box now" is priced as a stop now.** It was the plan's
+    next-stint load less the tank now - a fill for neither stop: the car
+    arrives at the planned one with less than it carries, and a stop now has
+    more laps to run. The fill is to the flag with no further stop planned,
+    and to the plan's NEXT in-lap where there is one."""
+    from pitcrew.race.calls import fuel_to_flag_l
     from pitcrew.race.rival_calls import _fill_at_the_stop
 
-    state = a_state()
-    state.next_stint_load_l = 88.0
-    state.fuel_l = 8.0
-    assert _fill_at_the_stop(state) == 80.0
+    state = a_state()                            # lap 8 of 20, 8 L a lap
+    state.stint_ends_on_lap = 10
+    state.next_stint_load_l = 88.0               # not read any more
+    state.fuel_l = 30.0
+    state.further_stop_planned = False
+    assert _fill_at_the_stop(state) == fuel_to_flag_l(state) - (30.0 - BURN)
     state.fuel_l = None                          # nothing aboard is not zero
     assert _fill_at_the_stop(state) is None
-    state.fuel_l = 95.0                          # arrives with more than needed
-    assert _fill_at_the_stop(state) is None      # not a zero-litre stop
+
+    # A further stop after the next stint: the plan's next in-lap is lap
+    # 10 + 5 = 15, and a stop now leaves with 9 laps done - 6 laps to run.
+    state.fuel_l = 30.0
+    state.further_stop_planned = True
+    state.next_stint_laps = 5
+    six_laps = _fill_at_the_stop(state)
+    state.further_stop_planned = False
+    assert six_laps < _fill_at_the_stop(state)
+
+    # The tank already covers the run: nothing goes through the hose and the
+    # stop costs the lane alone - a real zero, not a negative clamped.
+    state.further_stop_planned = True
+    state.fuel_l = 95.0
+    assert _fill_at_the_stop(state) == 0.0
+
+    # A stop now the tank cannot hold is a second stop, not a fill.
+    state.further_stop_planned = False
+    state.lap = 2
+    state.fuel_l = 90.0
+    assert _fill_at_the_stop(state) is None
+
+
+def test_bathurst_lap_8_prices_a_stop_now_and_says_nothing_about_a_car_inside_the_lane():
+    """Bathurst, 14 Sep 2026, lap 8: "A stop now puts you behind the car
+    behind. He is 1 seconds back against a 70 second stop." 34.8 L aboard,
+    plan in-lap 11 and a 9-lap last stint, 23.13 s ex-fuel pit loss, 1 L/s.
+
+    Two things were wrong with it. The 70 s was 74.1 L of next-stint load
+    less the tank now plus a dead time already inside the loss; a stop that
+    lap needs about 71 L to the flag. And a car one second back comes out in
+    front of ANY stop, so the sentence had no decision in it."""
+    from pitcrew.race.calls import fuel_to_flag_l
+    from pitcrew.race.gaps import stop_costs_s
+    from pitcrew.race.rival_calls import _fill_at_the_stop, rejoin_call
+    from pitcrew.strategy.model import PIT_LOSS_MEASURED_EX_FUEL
+
+    state = RaceState(lap=8, laps_total=20, fuel_per_lap_l=8.13)
+    state.fuel_l = 34.8
+    state.refuel_rate_lps = 1.0
+    state.pit_loss_s = 23.13
+    state.pit_loss_source = PIT_LOSS_MEASURED_EX_FUEL
+    state.fuel_capacity_l = TANK_L
+    state.stint_ends_on_lap = 11
+    state.next_stint_laps = 9
+    state.further_stop_planned = False
+    state.next_stint_load_l = 74.14
+    state.gap_behind = a_trend("behind", [(8, 1.0)], subject=3)
+
+    fill = _fill_at_the_stop(state)
+    assert fill == fuel_to_flag_l(state) - (34.8 - 8.13)
+    assert 65.0 < fill < 75.0                    # not 74.14 - 34.8 = 39.3
+    cost = stop_costs_s(fill, 1.0, 23.13, PIT_LOSS_MEASURED_EX_FUEL)
+    assert cost == fill + 23.13
+
+    assert [c for c in candidates(state) if c.kind == "rejoin"] == []
+
+    def said(gap):
+        call = rejoin_call(lap=8, gap_behind_s=gap, litres_to_take=fill,
+                           refuel_rate_lps=1.0, pit_loss_s=23.13,
+                           pit_loss_source=PIT_LOSS_MEASURED_EX_FUEL,
+                           due=state.laps_overdue() is not None)
+        return call.spoken() if call else None
+
+    assert said(1.0) is None and said(23.0) is None
+    assert said(60.0) == ("A stop now puts you behind the car behind. He is "
+                          f"60 seconds back against a {round(cost)} second "
+                          "stop.")
+
+
+def test_a_rejoin_says_one_second_and_rounds_once():
+    from pitcrew.race.rival_calls import _seconds
+
+    assert _seconds(0.6) == "1 second"
+    assert _seconds(1.4) == "1 second"
+    assert _seconds(1.5) == "2 seconds"
+    assert _seconds(23.4, adjective=True) == "23 second"
 
 
 def test_the_tank_argument_needs_no_rival_at_all():
@@ -559,8 +641,28 @@ def test_every_kind_that_needs_a_rival_can_be_emitted_at_once():
     state.gap_ahead = a_trend("ahead", [(4, 8.0), (5, 6.5), (6, 5.0),
                                         (7, 3.5), (8, 2.0)])
     state.gap_ahead_name = "Rocky"
-    state.gap_behind = a_trend("behind", [(8, 9.0)], subject=3)
+    # Further back than the lane alone (17.6 + 7.5 s): a car inside it comes
+    # out in front of any stop, and the rejoin has nothing to say about him.
+    state.gap_behind = a_trend("behind", [(8, 90.0)], subject=3)
     state.gap_behind_name = "Chook"
     kinds = {call.kind for call in candidates(state)}
     assert kinds == {"rival-boxed", "rival-committed", RIVAL_SHORT,
                      "closing", "rejoin"}
+
+
+def test_the_rejoin_says_box_now_only_where_the_box_call_does():
+    """`due` was `laps_to_stop() <= 1`, written when 1 was "Box next lap." It
+    is the box ladder's own expression now: "if you box now" from the in-lap
+    on, the conditional before it."""
+    state = a_state()                            # lap 8
+    state.gap_behind = a_trend("behind", [(8, 60.0)], subject=3)
+    state.gap_behind_name = "Chook"
+    state.fuel_l = 40.0
+
+    state.stint_ends_on_lap = 10                 # "Box next lap."
+    call = next(c for c in candidates(state) if c.kind == "rejoin")
+    assert call.call == "A stop now puts you behind Chook."
+
+    state.stint_ends_on_lap = 9                  # the in-lap
+    call = next(c for c in candidates(state) if c.kind == "rejoin")
+    assert call.call == "Chook comes out in front if you box now."

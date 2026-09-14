@@ -696,3 +696,20 @@ def test_a_tyre_that_will_not_reach_the_flag_refuses():
     race.state.briefed_wear_per_lap = 0.09      # 12 laps x 9% = 108%
     calls = _drive(race, upto=8)
     assert _kinds(calls, UNDERCUT) == []
+
+
+def test_the_undercut_stands_aside_on_the_in_lap():
+    """**The box call has the in-lap, and it is `laps_overdue()`'s.** The
+    undercut refused only at `lap >= stint_ends_on_lap` - the old ladder's
+    zero - so on the in-lap itself, where "Box this lap." is now said, it
+    could still speak over the box call (14 Sep 2026)."""
+    from pitcrew.race.rival_calls import undercut_call
+
+    race = _race()
+    _drive(race, upto=7)
+    state = race.state
+    state.said.remove(UNDERCUT)
+    state.stint_ends_on_lap = state.lap + 2      # "Box next lap."
+    assert undercut_call(state) is not None
+    state.stint_ends_on_lap = state.lap + 1      # the in-lap: "Box this lap."
+    assert undercut_call(state) is None

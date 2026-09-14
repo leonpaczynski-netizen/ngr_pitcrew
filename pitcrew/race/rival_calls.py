@@ -82,6 +82,8 @@ from pitcrew.race.gaps import (
     rejoin_against,
     stop_costs_s,
 )
+from pitcrew.strategy.fuel_model import fill_for_l
+from pitcrew.strategy.model import fuel_margin_l
 from pitcrew.race.rivals import (
     DEAD_TIME_S,
     Stop,
@@ -404,7 +406,12 @@ def stay_out(*, lap: int, laps_left: int | None,
                     "Don't box yet.",
                     f"Too much fuel aboard to fill. Lap {floor} at the "
                     f"earliest.", HIGH)
-    if planned_stop_lap is not None and lap >= planned_stop_lap:
+    # `planned_stop_lap` is the plan's IN-LAP and `lap` counts laps completed,
+    # so the in-lap is in progress at `planned_stop_lap - 1` - where the box
+    # call says "Box this lap." (14 Sep 2026). This compared `lap >=
+    # planned_stop_lap`, the old ladder's zero, and on the in-lap argued
+    # "Every lap you stay out is a shorter stop" against "Box this lap."
+    if planned_stop_lap is not None and lap >= planned_stop_lap - 1:
         return None
     # **Above the clamp there is no seconds argument, so there is no call.**
     # The fill is the same length whatever lap it happens on, and saying "every
@@ -619,10 +626,22 @@ def rejoin_call(*, lap: int, gap_behind_s: float | None,
     """
     cost = stop_costs_s(litres_to_take, refuel_rate_lps, pit_loss_s,
                         pit_loss_source)
+    # **Nothing to decide inside the lane alone.** A car closer than the
+    # cheapest stop there is - no fuel at all - comes out in front whatever
+    # the fill, on any lap, and the stop is still owed. Bathurst, 14 Sep
+    # 2026, lap 8: "He is 1 seconds back against a 70 second stop." A true
+    # sentence with no choice in it, spoken as a warning.
+    lane_only = stop_costs_s(0.0, refuel_rate_lps, pit_loss_s,
+                             pit_loss_source)
+    if (gap_behind_s is not None and lane_only is not None
+            and gap_behind_s < lane_only):
+        return None
     rejoin = rejoin_against(gap_behind_s, cost)
     if rejoin is None:
         return None
     them = who or "the car behind"
+    reason = (f"He is {_seconds(rejoin.their_gap_s)} back against a "
+              f"{_seconds(rejoin.ours_lost_s, adjective=True)} stop.")
     # **"Box now" only when a stop is actually due.** Three laps before the
     # planned stop at Deep Forest the call opened "Box now and the car behind
     # comes out in front" - an instruction-shaped sentence about a stop
@@ -638,16 +657,24 @@ def rejoin_call(*, lap: int, gap_behind_s: float | None,
         return Call(REJOIN, lap,
                     f"{them} comes out in front if you box now." if due
                     else f"A stop now puts you behind {them}.",
-                    f"He is {rejoin.their_gap_s:.0f} seconds back against a "
-                    f"{rejoin.ours_lost_s:.0f} second stop.",
-                    HIGH if due else MEDIUM)
+                    reason, HIGH if due else MEDIUM)
     if rejoin.too_close:
         return Call(REJOIN, lap,
                     f"{them} is too close to call if you box now." if due
                     else f"A stop now is too close to call against {them}.",
-                    f"He is {rejoin.their_gap_s:.0f} seconds back against a "
-                    f"{rejoin.ours_lost_s:.0f} second stop.", MEDIUM)
+                    reason, MEDIUM)
     return None
+
+
+def _seconds(value: float, *, adjective: bool = False) -> str:
+    """`value` seconds, rounded once and counted in the number it says.
+
+    "He is 1 seconds back" was the rounding and the plural taken from two
+    different numbers. As an adjective ("a 23 second stop") English takes
+    the singular whatever the count.
+    """
+    n = int(round(value))
+    return f"{n} second" if adjective or n == 1 else f"{n} seconds"
 
 
 def closing_call(trend: GapTrend, *, lap: int, who: str | None = None,
@@ -991,8 +1018,12 @@ def undercut_call(state) -> Call | None:
     if split is None or not split[0]:
         return None                     # no measured sector where we gain
     gains = split[0]
-    if state.stint_ends_on_lap is None or state.lap >= state.stint_ends_on_lap:
-        return None                     # no stop ahead, or it is due: BOX_NOW
+    if state.stint_ends_on_lap is None or state.laps_overdue() is not None:
+        # No stop ahead, or it is due: BOX_NOW has the lap. `laps_overdue` is
+        # not None from the in-lap on - the box ladder's own "Box this lap."
+        # (14 Sep 2026). This was `lap >= stint_ends_on_lap`, the old ladder,
+        # which let the undercut speak on the in-lap over the box call.
+        return None
     if state.further_stop_planned is not False:
         return None                     # only the last stop fills to the flag
     if not stop_still_needed(state):
@@ -1064,7 +1095,8 @@ def undercut_call(state) -> Call | None:
             tow = f" No fuel saving in the tow, and {behind}."
     reason = (f"Undercut on {them}: you're held up, and faster through "
               f"{_sector_names(g.index for g in gains)}. The fill costs the "
-              f"same now as on lap {state.stint_ends_on_lap}.{tow}{tyres}")
+              f"same now as on lap {state.box_lap_on_screen()}."
+              f"{tow}{tyres}")
     # The same tyre word every box instruction carries (rule 13): "No
     # tyres." / "RS on." - the driver decides in the box on it.
     return Call(UNDERCUT, state.lap,
@@ -1137,7 +1169,6 @@ def candidates(state) -> list:
         # silent on the lap it exists for. Its own module calls it "the call,
         # and it dominates everything else here".
         if _a_stop_is_in_question(state):
-            to_stop = state.laps_to_stop()
             out.append(rejoin_call(
                 lap=lap, gap_behind_s=behind.latest(),
                 litres_to_take=_fill_at_the_stop(state),
@@ -1145,7 +1176,12 @@ def candidates(state) -> list:
                 pit_loss_s=state.pit_loss_s,
                 pit_loss_source=state.pit_loss_source,
                 who=state.gap_behind_name,
-                due=(to_stop is not None and to_stop <= 1)))
+                # **"If you box now" only where the box call says "Box this
+                # lap."** - from the in-lap on, `laps_overdue()` not None. It
+                # was `laps_to_stop() <= 1` written for the old ladder, where
+                # 1 was "Box next lap."; the number is the same and the
+                # meaning is now taken from the ladder's own expression.
+                due=state.laps_overdue() is not None))
         out.append(closing_call(behind, lap=lap,
                                 who=state.gap_behind_name,
                                 laps_left=laps_left))
@@ -1185,26 +1221,66 @@ def _snapshot(trend):
 
 
 def _fill_at_the_stop(state) -> float | None:
-    """The litres that actually go through the hose, or `None`.
+    """The litres a stop taken NOW would put through the hose, or `None`.
 
-    **`next_stint_load_l` is what the car STARTS the next stint on**, not what
-    it takes on: the fill is that minus whatever is aboard when we arrive.
-    Priced as a fill it overstated the stop - measured, 88 L quoted a 108 s
-    stop against a true 100 s - and `REJOIN_MARGIN_S` is three seconds, so an
-    eight-second error flips the verdict for any car in that window. That is
-    the very error `stop_costs_s`'s docstring was written about.
+    **The question the rejoin call answers is "if I box now"**, so the fill
+    is the one a stop now needs - not the plan's. It covers the laps from
+    this stop to the plan's NEXT in-lap where a further stop is planned
+    (`stint_ends_on_lap + next_stint_laps`: an early stop does not move the
+    stop after it), or to the flag where none is. The car arrives with the
+    tank less this lap's burn, because the lap in progress is the in-lap and
+    it is driven before the hose goes in (`calls._laps_after_this_stop`).
 
-    `None` rather than a guess where either half is missing, and `None` rather
-    than a clamp where the arithmetic comes out negative: a car that arrives
-    with more than the next stint needs is not one that takes zero litres, it
-    is one this arithmetic does not describe (rule 9).
+    **It was `next_stint_load_l - fuel_l`**: the plan's load for the stint
+    after the PLANNED stop, less the tank NOW. Bathurst, 14 Sep 2026, lap 8:
+    74.1 L less 34.8 L priced a 39 L fill, where a stop that lap needed about
+    65 L to reach the flag - the call named a stop 26 s cheaper than the one
+    it was about. It measured neither the planned stop (the car arrives with
+    less than it carries now) nor this one (a stop now runs three laps more).
+
+    The fill is solved the way `calls.fuel_to_flag_l` solves it - the run's
+    margin on this race's scatter, the fuel carrying its own weight - so the
+    rejoin and the box call price one stop the same way (rule 13).
+
+    `None` where it cannot be sized, where the car would not reach the box,
+    or where a stop now cannot hold what it needs - that is a second stop
+    this arithmetic does not describe. **Zero where the tank already covers
+    the run**: the pump cannot take fuel out, so nothing goes through the
+    hose and the stop costs the lane alone. That is a bound on a real
+    quantity, not a negative clamped away (rule 9).
     """
-    load = getattr(state, "next_stint_load_l", None)
+    burn = getattr(state, "fuel_per_lap_l", None)
     aboard = getattr(state, "fuel_l", None)
-    if load is None or aboard is None:
+    if not burn or burn <= 0 or aboard is None:
         return None
-    fill = load - aboard
-    return fill if fill >= 0 else None
+    to_flag = _laps_after_this_stop(state)
+    if to_flag is None:
+        return None
+    laps = to_flag
+    if (getattr(state, "further_stop_planned", None) is not False
+            and state.stint_ends_on_lap is not None
+            and getattr(state, "next_stint_laps", None)):
+        next_in_lap = state.stint_ends_on_lap + state.next_stint_laps
+        # The lap in progress ends in the lane, so a stop now leaves with
+        # `lap + 1` laps completed.
+        laps = min(to_flag, next_in_lap - (state.lap + 1))
+    if laps <= 0:
+        return None
+    arriving = aboard if state.crossed_in_box else aboard - burn
+    if arriving < 0:
+        return None
+    margin_l, _ = fuel_margin_l(laps, burn, sd_l=state.fuel_sd_l,
+                                timed=state.race_minutes is not None,
+                                lap_count_firm=state.laps_estimate_firm)
+    capacity = state.fuel_capacity_l or TANK_L
+    needed = fill_for_l(burn, laps,
+                        reference_load_l=state.fuel_reference_load_l,
+                        buffer_l=(margin_l or 0.0), capacity_l=capacity)
+    if needed > capacity:
+        return None
+    if needed <= arriving:
+        return 0.0                      # the tank covers it: lane alone
+    return needed - arriving
 
 
 def _a_stop_is_in_question(state) -> bool:
