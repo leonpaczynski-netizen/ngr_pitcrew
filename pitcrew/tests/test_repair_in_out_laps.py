@@ -26,6 +26,9 @@ REPAIR_LAPS = {19: [13, 14, 15], 49: [11, 12, 13, 14], 53: [13, 14, 15],
                108: [4, 5, 6], 149: [6, 7, 8], 158: [10, 11, 12]}
 
 
+from pitcrew.tests.test_in_out_lap_rule import AS_FOUND  # noqa: E402
+
+
 def copy_of_real_laps(target: Path) -> None:
     """A scratch database holding only these laps, blobs byte for byte."""
     from pitcrew.store.db import Store
@@ -48,12 +51,17 @@ def copy_of_real_laps(target: Path) -> None:
                     "JOIN lap_frames f ON f.lap_id = l.id "
                     "WHERE l.session_id = ? AND l.lap_num = ?",
                     (session_id, num)).fetchone()
+                # The flags as the repair found them, not as they are now:
+                # after the live repair the copy started clean and the
+                # violation count read 0 before anything ran.
+                pit, out, excluded, reason = AS_FOUND.get(
+                    (session_id, num), (row[2], row[3], row[7], row[8]))
                 dest.execute(
                     "INSERT INTO laps (id, session_id, lap_num, lap_time_ms, "
                     "is_pit_lap, is_out_lap, excluded, exclusion_reason, "
                     "recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2026-09-15')",
-                    (row[0], session_id, num, row[1], row[2], row[3], row[7],
-                     row[8]))
+                    (row[0], session_id, num, row[1], pit, out, excluded,
+                     reason))
                 dest.execute(
                     "INSERT INTO lap_frames (lap_id, sample_hz, frame_count, "
                     "blob) VALUES (?, ?, ?, ?)", (row[0], row[4], row[5], row[6]))

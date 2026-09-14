@@ -383,6 +383,22 @@ def test_the_live_state_does_not_call_a_reset_a_pit_entry():
 
 # ------------------------------------------------------- real frames, read-only
 
+# **The archive as the repair found it** (is_pit_lap, is_out_lap, excluded,
+# exclusion_reason), read off the backup taken before the live repair on 15 Sep
+# 2026. The frames never change, but these flags did: read live after the
+# repair, every plan below came back empty and four tests failed on a database
+# that was now RIGHT (CLAUDE.md §7 - a test that depends on shared state).
+# Pinning the as-found flags makes each test replay the repair from the same
+# start whether or not it has already run.
+AS_FOUND = {
+    (19, 14): (0, 0, 0, None), (49, 12): (0, 0, 0, None),
+    (49, 13): (1, 1, 0, None), (60, 1): (1, 1, 0, None),
+    (74, 2): (1, 1, 0, None), (88, 6): (1, 1, 0, None),
+    (93, 1): (1, 1, 0, None), (108, 5): (0, 0, 0, None),
+    (149, 7): (1, 1, 0, None), (158, 11): (0, 0, 0, None),
+}
+
+
 def live_rows(session_id: int, lap_nums) -> tuple[list[dict], dict]:
     conn = sqlite3.connect(f"file:{LIVE_DB.as_posix()}?mode=ro", uri=True)
     try:
@@ -400,6 +416,10 @@ def live_rows(session_id: int, lap_nums) -> tuple[list[dict], dict]:
                          "is_pit_lap": row[4], "is_out_lap": row[5],
                          "sample_hz": row[6] or HZ, "excluded": row[8],
                          "exclusion_reason": row[9]})
+            if (session_id, num) in AS_FOUND:
+                pit, out, excluded, reason = AS_FOUND[(session_id, num)]
+                rows[-1].update(is_pit_lap=pit, is_out_lap=out,
+                                excluded=excluded, exclusion_reason=reason)
             frames[row[0]] = decode_frames(row[7]) if row[7] else None
         return rows, frames
     finally:
