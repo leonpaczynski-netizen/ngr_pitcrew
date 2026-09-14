@@ -380,37 +380,42 @@ def test_a_rival_entering_the_lane_is_said_while_he_is_still_in_it():
     his fill is about to cost him."""
     state = a_state()
     state.our_stop = Stop(lap=6, fuel_in_l=20.0, fuel_out_l=70.0)
-    state.rivals_entering.append(Entered(driver="Boxhead", driver_id=1, lap=8,
-                                         fuel_in_l=12, partial=False))
+    state.lane.enter(Entered(driver="Boxhead", driver_id=1, lap=8,
+                             fuel_in_l=12, partial=False), lap=8)
     call = next_call(state)
     assert call.kind == "rival-boxed"
     assert "Boxhead has boxed on 12 litres." == call.call
     assert "seconds longer than you did" in call.reason
-    # **Drained.** Left in place, the same lap-8 entry was re-spoken after our
-    # own stop reset `said`, five laps later, with a swing computed against a
-    # tank that had changed underneath it.
-    assert state.rivals_entering == []
+    # **Retired when SAID, and only then.** Drained on being offered, eight
+    # of ten stops at Bathurst went into a crossing a box call won and never
+    # came out.
+    assert next_call(state) is not None and state.lane.untold(8)
+    state.record(call)
+    assert state.lane.untold(8) == []
 
 
-def test_two_cars_entering_in_one_frame_are_both_offered():
-    """A single slot lost one of them before either was spoken."""
+def test_two_cars_entering_in_one_frame_are_one_call_naming_both():
+    """A single slot lost one of them before either was spoken; one call per
+    car lost the second to a stable sort. One sentence carries both."""
     state = a_state()
-    state.rivals_entering += [
-        Entered(driver="Boxhead", driver_id=1, lap=8, fuel_in_l=12,
-                partial=False),
-        Entered(driver="Rocky", driver_id=2, lap=8, fuel_in_l=6,
-                partial=False)]
+    for entered in (Entered(driver="Boxhead", driver_id=1, lap=8,
+                            fuel_in_l=12, partial=False),
+                    Entered(driver="Rocky", driver_id=2, lap=8, fuel_in_l=6,
+                            partial=False)):
+        state.lane.enter(entered, lap=8)
     boxed = [c for c in candidates(state) if c.kind == "rival-boxed"]
-    assert {c.call.split()[0] for c in boxed} == {"Boxhead", "Rocky"}
+    assert [c.call for c in boxed] == ["Boxhead and Rocky have boxed."]
 
 
 def test_an_entry_figure_that_is_only_an_upper_bound_prices_nothing():
     """`partial` means nobody saw him arrive, so the lowest reading is a bound
-    on what he came in with. The mirror of the exit bound."""
+    on what he came in with. The mirror of the exit bound. **The stop is
+    still said** - he has boxed, and that is a fact - but not the bound."""
     state = a_state()
-    state.rivals_entering.append(Entered(driver="Boxhead", driver_id=1, lap=8,
-                                         fuel_in_l=12, partial=True))
-    assert [c for c in candidates(state) if c.kind == "rival-boxed"] == []
+    state.lane.enter(Entered(driver="Boxhead", driver_id=1, lap=8,
+                             fuel_in_l=12, partial=True), lap=8)
+    boxed = [c for c in candidates(state) if c.kind == "rival-boxed"]
+    assert [(c.call, c.reason) for c in boxed] == [("Boxhead has boxed.", "")]
 
 
 def test_a_rivals_fill_cannot_exceed_the_tank():
@@ -418,12 +423,14 @@ def test_a_rivals_fill_cannot_exceed_the_tank():
     fill at more than the car holds - the whole first half of a long race."""
     state = a_state(lap=2)
     state.our_stop = Stop(lap=2, fuel_in_l=5.0, fuel_out_l=100.0)
-    state.rivals_entering.append(Entered(driver="Boxhead", driver_id=1, lap=2,
-                                         fuel_in_l=5, partial=False))
+    state.lane.enter(Entered(driver="Boxhead", driver_id=1, lap=2,
+                             fuel_in_l=5, partial=False), lap=2)
     boxed = [c for c in candidates(state) if c.kind == "rival-boxed"]
     # 18 laps to go at 8 L/lap is 144 L; the tank is 100, so his fill is the
-    # same 95 L ours was and there is no swing worth saying.
-    assert boxed == []
+    # same 95 L ours was and there is no swing worth saying - so the fact is
+    # said without a price.
+    assert [(c.call, c.reason) for c in boxed] == [
+        ("Boxhead has boxed on 5 litres.", "")]
 
 
 def test_the_call_says_when_the_burn_behind_it_is_ours():
@@ -431,8 +438,8 @@ def test_the_call_says_when_the_burn_behind_it_is_ours():
     completed a stop this race, so on his first stop ours is always what is
     used - and this call leans on it harder than the one that says so."""
     state = a_state()
-    state.rivals_entering.append(Entered(driver="Rocky", driver_id=2, lap=8,
-                                         fuel_in_l=6, partial=False))
+    state.lane.enter(Entered(driver="Rocky", driver_id=2, lap=8,
+                             fuel_in_l=6, partial=False), lap=8)
     call = next(c for c in candidates(state) if c.kind == "rival-boxed")
     assert "on our burn" in call.reason
 
@@ -542,8 +549,8 @@ def test_every_kind_that_needs_a_rival_can_be_emitted_at_once():
     """
     state = a_state()
     state.our_stop = Stop(lap=6, fuel_in_l=20.0, fuel_out_l=70.0)
-    state.rivals_entering.append(Entered(driver="Boxhead", driver_id=1, lap=8,
-                                         fuel_in_l=12, partial=False))
+    state.lane.enter(Entered(driver="Boxhead", driver_id=1, lap=8,
+                             fuel_in_l=12, partial=False), lap=8)
     state.stint_ends_on_lap = 10
     state.next_stint_load_l = 68.0
     state.fuel_l = 8.0

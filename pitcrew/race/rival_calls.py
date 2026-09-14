@@ -280,6 +280,90 @@ def rival_boxed(rival: Rival, *, lap: int, laps_left: int | None,
                 f"{_whose(rival)}.", HIGH, tag=f"{RIVAL_BOXED}:{who}")
 
 
+# **How many names one boxed call carries** before the rest are counted. Three
+# names and "and 2 more" is about three seconds of speech; a fourth name is a
+# list, and §5.5 says not a table.
+BOXED_NAMES = 3
+
+# Severity of a boxed call that names a championship rival from the brief's
+# watch list, against none for one that does not - so it leads anything else
+# about other cars that shares its rank.
+WATCHED_SEVERITY = 10.0
+
+
+def boxed_call(state) -> Call | None:
+    """Every rival stop not yet said, as ONE call. `None` when there are none.
+
+    **Why one call and not one per car** (Bathurst, 14 Sep 2026). Three cars
+    entered the lane inside two minutes, three more inside the next ninety
+    seconds; `next_call` says one thing a crossing, and a kind was said once,
+    so the second and third of each group were dropped by a stable sort. One
+    sentence carries them all: "PUNISHED, CruisingChaos and K.Graebs have
+    boxed."
+
+    **One car keeps the priced call** `rival_boxed` makes - his litres and
+    the standing time that follows - where it can be priced and is worth
+    saying. Where it cannot (the arithmetic refuses, or the swing is inside
+    `WORTH_SAYING_S`) the FACT is still said: that he has boxed, and on how
+    much where the entry figure was watched. It used to be silence, and the
+    driver's complaint that night was silence: "want more comms from him
+    about what is going on in the race". Several cars carry names only; a
+    per-car price in one sentence is the table §5.5 forbids.
+
+    **The watch list leads.** Championship rivals from the brief come first
+    and are never the ones folded into "and N more".
+
+    The tag carries every stop it names, and `RaceState.record` - or the
+    coordinator's mid-lap slot - retires exactly those.
+    """
+    lane = getattr(state, "lane", None)
+    if lane is None:
+        return None
+    stops = lane.untold(state.lap)
+    if not stops:
+        return None
+    watched = getattr(state, "watched_rivals", None) or frozenset()
+    is_watched = [s.driver.lower() in watched for s in stops]
+    ordered = ([s for s, w in zip(stops, is_watched) if w]
+               + [s for s, w in zip(stops, is_watched) if not w])
+    severity = WATCHED_SEVERITY if any(is_watched) else None
+    tag = lane.tag_for(RIVAL_BOXED, ordered)
+    names: list[str] = []
+    for stop in ordered:
+        if stop.driver not in names:
+            names.append(stop.driver)
+    if len(names) == 1:
+        stop = ordered[-1]
+        priced = rival_boxed(
+            Rival(name=stop.driver, pitted=True,
+                  stop=Stop(lap=stop.lap, fuel_in_l=stop.fuel_in_l),
+                  burn_per_lap_l=_burn_of(state, stop.driver)),
+            lap=state.lap, laps_left=state.laps_remaining(),
+            burn_per_lap_l=state.fuel_per_lap_l,
+            refuel_rate_lps=state.refuel_rate_lps,
+            ours=state.our_stop,
+            capacity_l=state.fuel_capacity_l or TANK_L,
+            entry_is_a_bound=stop.partial)
+        if priced is not None:
+            return replace(priced, tag=tag, severity=severity)
+        if stop.fuel_in_l is not None and not stop.partial:
+            said = f"{stop.driver} has boxed on {stop.fuel_in_l:.0f} litres."
+        else:
+            # An entry figure nobody saw him arrive with is a bound, and a
+            # bound is not said as a reading (rule 5).
+            said = f"{stop.driver} has boxed."
+        return Call(RIVAL_BOXED, state.lap, said, "", MEDIUM,
+                    severity=severity, tag=tag)
+    shown = names[:BOXED_NAMES]
+    more = len(names) - len(shown)
+    if more:
+        said = f"{', '.join(shown)} and {more} more have boxed."
+    else:
+        said = f"{', '.join(shown[:-1])} and {shown[-1]} have boxed."
+    return Call(RIVAL_BOXED, state.lap, said, "", MEDIUM,
+                severity=severity, tag=tag)
+
+
 def _whose(rival: Rival) -> str:
     """Says the burn is ours when it is.
 
@@ -1019,24 +1103,11 @@ def candidates(state) -> list:
             lap=lap, laps_total=state.laps_total))
 
     # **He is in the box NOW**, which is the whole value of the call and the
-    # reason it is fed by its own event rather than by the finished stop. The
-    # queue is DRAINED here: an entry is news for one crossing, and left in
-    # place it was re-spoken after our own stop reset `said`, five laps later,
-    # with a swing computed against a tank that had changed underneath it.
-    entering = list(getattr(state, "rivals_entering", None) or ())
-    if entering:
-        state.rivals_entering = []
-    for entered in entering:
-        out.append(rival_boxed(
-            Rival(name=entered.driver, pitted=True,
-                  stop=Stop(lap=entered.lap, fuel_in_l=entered.fuel_in_l),
-                  burn_per_lap_l=_burn_of(state, entered.driver)),
-            lap=lap, laps_left=laps_left,
-            burn_per_lap_l=state.fuel_per_lap_l,
-            refuel_rate_lps=state.refuel_rate_lps,
-            ours=state.our_stop,
-            capacity_l=state.fuel_capacity_l or TANK_L,
-            entry_is_a_bound=bool(getattr(entered, "partial", False))))
+    # reason it is fed by its own event rather than by the finished stop.
+    # **Offered, not drained.** Every untold stop is one call; it is retired
+    # when that call is SAID (`RaceState.record`) or when it goes stale -
+    # never by being offered on a crossing something more urgent won.
+    out.append(boxed_call(state))
 
     # **Only while a stop is actually the question.** `URGENCY` puts this
     # immediately below `BOX_SOON` because "the two answer the same question" -

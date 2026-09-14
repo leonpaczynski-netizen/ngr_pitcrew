@@ -804,12 +804,21 @@ class RaceState:
     # it always did. Critic pass 5: the rail had changed the sentence and
     # not the behaviour.
     drop_stop_granted: bool | None = None
-    # **Rivals seen entering the lane, as a queue.** A single slot lost one of
-    # two cars entering in the same frame, and was never cleared - so the same
-    # lap-8 entry was re-spoken five laps later, after our own stop had reset
-    # `said`, with a swing computed against a different tank. Drained by
-    # `_rivals` on the crossing that offers it (rule 11).
-    rivals_entering: list = field(default_factory=list)
+    # **Rivals seen standing in the lane, as a RECORD - a `lane.LaneLog`.**
+    # It was a queue drained at every crossing whether or not a rival call
+    # won it, and at Bathurst (14 Sep 2026) box calls won the two crossings
+    # that mattered, so eight of ten stops were never said. A stop is now
+    # retired only when it is said (`record`, or the mid-lap slot) or when it
+    # has gone stale - see `race/lane.py`. Built per state, so a new race
+    # starts empty (rule 11), and emptied again by the coordinator on arming.
+    lane: object = field(default_factory=lambda: _new_lane())
+    # **The championship rivals the brief told him to watch**, lower-cased,
+    # so their stops lead the rival call. Set by the controller from the same
+    # list the grid line spoke (rules 12 and 13). Empty with no league.
+    watched_rivals: frozenset = frozenset()
+    # Our own stop happened since the last position call was spoken: the next
+    # one is said as the result of the stop, not as places lost on the road.
+    position_through_stop: bool = False
     # Litres a second at the pump, from the event. `None` is not a rate.
     refuel_rate_lps: float | None = None
     # Seconds lost driving through the lane, a TRACK constant (CLAUDE.md 5.4).
@@ -1505,6 +1514,10 @@ class RaceState:
             self.said_at[call.kind] = call.severity
         if call.tag:
             self.said_tags.add(call.tag)
+        if call.kind == RIVAL_BOXED:
+            # **Said, so retired** - and only the stops this call named. The
+            # lane record is never drained by being OFFERED (race/lane.py).
+            self.lane.tell(self.lane.keys_in_tag(RIVAL_BOXED, call.tag))
         if call.kind == TYRE_TEMP and call.tag:
             self.temp_said.add(call.tag)
             if call.tag == "conserve":
@@ -3462,8 +3475,24 @@ def position_change(state: RaceState) -> "Call | None":
     Silent in the pit lane and on either side of it. Positions during a stop
     are arithmetic about cars that are still circulating, every one of them
     reverses on exit, and none of it is a place he won or lost on the road.
+    The first call after the stop is said as the stop's result, once.
+
+    ### A PROPOSAL, committed only by `position_spoken` (14 Sep 2026)
+
+    **It used to record the new position as said before anyone decided to
+    say it.** The coordinator then held the call - he was off the road - and
+    the place was already booked: Bathurst, 20:35:35, a drop to P8 held and
+    never spoken, then "P7 of 13. You've made a place" when the last place
+    he had HEARD was P7. So this returns the call on every frame it is true
+    and changes nothing but the hold counter; whoever actually speaks it
+    calls `position_spoken`, and a held call is still news on the next frame
+    - measured against what he was last told.
     """
-    if state.finished or state.in_pit or state.lap < 1:
+    if state.finished or state.lap < 1:
+        return None
+    if state.in_pit:
+        if state.position_said is not None:
+            state.position_through_stop = True
         return None
     now = state.position
     if not now:
@@ -3477,18 +3506,19 @@ def position_change(state: RaceState) -> "Call | None":
     if now == was:
         state.position_pending = 0
         state.position_pending_value = None
+        # Out of the lane in the place he went in: the stop cost nothing to
+        # say, and a later pass on the road is not "after your stop".
+        state.position_through_stop = False
         return None
     if now != state.position_pending_value:
         state.position_pending_value = now
         state.position_pending = 1
         return None
-    state.position_pending += 1
+    if state.position_pending < POSITION_HOLD_FRAMES:
+        state.position_pending += 1
     if state.position_pending < POSITION_HOLD_FRAMES:
         return None
 
-    state.position_said = now
-    state.position_pending = 0
-    state.position_pending_value = None
     places = was - now                      # positive is a gain
     # **The position IS the call and the direction is the reason**, which is
     # §5.5's shape - the figure first, the why second and short - and it is
@@ -3498,8 +3528,72 @@ def position_change(state: RaceState) -> "Call | None":
     # second and third enumeration of the same 300 lines with a word bolted
     # on the front. Written this way it reuses the line the PTT answer to
     # "where am i" already renders, and the direction is six fixed clips.
+    reason = (AFTER_YOUR_STOP if state.position_through_stop
+              else _places_moved(places))
     return Call(POSITION, state.lap, position_line(now, state.field_size),
-                _places_moved(places), position_called=now)
+                reason, position_called=now)
+
+
+# **One line for the stop's whole effect on the order**, said once he is out.
+# Counting places lost in the lane is counting cars that drove past a car
+# standing still - true, and nothing he did or can do anything about.
+AFTER_YOUR_STOP = "After your stop."
+
+
+def position_spoken(state: RaceState, call: "Call") -> None:
+    """Book a position call as SAID. The only thing that moves the baseline.
+
+    Called by whoever actually put the call in his ear. Anything that holds
+    a proposal instead - composure, spacing, the crossing - leaves the
+    baseline where his ears last left it.
+    """
+    if call is None or call.position_called is None:
+        return
+    state.position_said = call.position_called
+    state.position_pending = 0
+    state.position_pending_value = None
+    state.position_through_stop = False
+
+
+def places_through_the_lane(places: int, lane: int) -> str | None:
+    """Why the position byte moved, when cars in the pit lane moved it.
+
+    `places` is positive for a gain. `lane` is how many cars account for it:
+    on a gain, cars that were AHEAD of us when they went in and are standing
+    in their boxes now; on a loss, those same cars back out of the lane.
+    `None` where the lane explains nothing, and the ordinary reason stands.
+
+    **Bathurst, 20:44:32: "P6 of 13. You've made 2 places."** The two were
+    Car #31 and Car #28, stopped; the lap closed at P8. A place he did not
+    take on the road is not a place he made, and he drives differently to
+    one. The position itself is still said - it is what the game says - and
+    the reason says what it is made of. Beyond `POSITION_MAX_STEP` the count
+    is not offered at all, as before.
+    """
+    if not places or lane <= 0 or abs(places) > POSITION_MAX_STEP:
+        return None
+    k = min(lane, abs(places))
+    cars = "a car" if k == 1 else f"{k} cars"
+    if places > 0:
+        # "Boxed", the rival call's own word for the same event (rule 13) -
+        # and not "in the lane": by the time a place is said he may be out.
+        if k == places:
+            return ("Not a pass - the car ahead boxed." if k == 1
+                    else f"Not passes - {cars} ahead boxed.")
+        return f"You've made {places} places, and {k} of them boxed."
+    lost = -places
+    if k == lost:
+        return ("Not a pass - a car came out of the lane ahead." if k == 1
+                else f"Not passes - {cars} came out of the lane ahead.")
+    return (f"You've lost {lost} places, and {k} of them "
+            f"{'is a car' if k == 1 else 'are cars'} out of the lane.")
+
+
+def _new_lane():
+    """The race's record of rival stops. Imported late: `lane` is plain."""
+    from pitcrew.race.lane import LaneLog
+
+    return LaneLog()
 
 
 def position_line(position: int, field_size: int | None) -> str:

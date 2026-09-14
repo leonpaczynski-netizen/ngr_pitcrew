@@ -24,6 +24,7 @@ from pitcrew.race.calls import (
     URGENCY,
     RaceState,
     position_change,
+    position_spoken,
     register_of,
 )
 
@@ -65,9 +66,115 @@ def test_a_place_that_holds_is_said_once():
     call = settle(state, 7)
     assert call is not None
     assert call.kind is POSITION or call.kind == POSITION
+    position_spoken(state, call)
     # ...and not again on the next frame, or the one after that.
     assert position_change(state) is None
     assert position_change(state) is None
+
+
+def test_a_place_nobody_said_is_not_booked_as_said():
+    """**Bathurst, 20:35:35.** A drop to P8 was held - he was off the road -
+    and booked as said anyway, so the recovery to P7 was announced as "You've
+    made a place" to a driver who had last heard P7. The call is a proposal
+    until someone speaks it."""
+    state = a_state(position_said=7)
+    held = settle(state, 8)
+    assert held is not None and state.position_said == 7
+    # Still true on the next frame, because nothing was said.
+    assert position_change(state) == held
+    # He gets the place back before the slot opens: nothing to say at all.
+    state.position = 7
+    assert position_change(state) is None
+    assert state.position_said == 7
+
+
+def test_a_held_place_is_said_against_what_he_last_heard():
+    state = a_state(position_said=9)
+    settle(state, 8)                       # held, never said
+    call = settle(state, 7)
+    assert call.call == "P7 of 12."
+    assert call.reason == "You've made 2 places."
+
+
+def test_the_stop_is_one_line_and_not_places_lost_on_the_road():
+    """Places lost standing in the box are cars driving past a stationary
+    car. One line once he is out, and it names the stop."""
+    from pitcrew.race.calls import AFTER_YOUR_STOP
+
+    state = a_state(position_said=6)
+    state.in_pit = True
+    state.position = 9
+    for _ in range(POSITION_HOLD_FRAMES + 2):
+        assert position_change(state) is None
+    state.in_pit = False
+    call = settle(state, 9)
+    assert call.call == "P9 of 12." and call.reason == AFTER_YOUR_STOP
+    position_spoken(state, call)
+    # The next change is a place on the road again.
+    assert settle(state, 8).reason == "You've made a place."
+
+
+def test_a_stop_that_costs_no_place_leaves_nothing_owed():
+    state = a_state(position_said=6)
+    state.in_pit = True
+    position_change(state)
+    state.in_pit = False
+    state.position = 6
+    assert position_change(state) is None
+    assert settle(state, 5).reason == "You've made a place."
+
+
+def test_places_are_spaced_and_the_one_said_is_where_he_settled():
+    """**Bathurst: "P9", "P8", "P7" inside 41 seconds.** Calls through the
+    coordinator's mid-lap slot are held for the spacing - and a held place is
+    re-read when the slot opens, so the final settled one is never lost."""
+    from dataclasses import dataclass
+
+    from pitcrew.race.coordinator import RaceCoordinator, RacePhase
+
+    @dataclass
+    class Packet:
+        current_position: int
+        cars_in_race: int = 13
+        surface_types: tuple = ("T", "T", "T", "T")
+
+    co = RaceCoordinator()
+    co.phase = RacePhase.RUNNING
+    co.state.lap, co.state.laps_total = 5, 20
+    co.state.position = co.state.position_said = 9
+    said = []
+
+    def run(position, seconds):
+        for _ in range(int(seconds * 60)):
+            call = co.note_packet(Packet(position))
+            if call is not None:
+                said.append((co._packets / 60.0, call.spoken()))
+
+    run(8, 10)          # holds 8 s, said at once
+    run(7, 10)          # holds, then waits on the spacing...
+    run(6, 40)          # ...and the place it settles on is the one said
+    assert [text for _, text in said] == [
+        "P8 of 13. You've made a place.",
+        "P6 of 13. You've made 2 places."]
+    assert said[1][0] - said[0][0] >= RaceCoordinator.MID_LAP_SPACING_S
+
+
+@pytest.mark.parametrize("places, lane, said", [
+    (2, 2, "Not passes - 2 cars ahead boxed."),
+    (1, 1, "Not a pass - the car ahead boxed."),
+    (1, 3, "Not a pass - the car ahead boxed."),
+    (3, 1, "You've made 3 places, and 1 of them boxed."),
+    (-1, 1, "Not a pass - a car came out of the lane ahead."),
+    (-2, 1, "You've lost 2 places, and 1 of them is a car out of the lane."),
+    (2, 0, None),
+    (POSITION_MAX_STEP + 1, 2, None),
+])
+def test_places_the_lane_made_are_said_as_the_lane(places, lane, said):
+    """**Bathurst, 20:44:32: "P6 of 13. You've made 2 places."** Car #31 and
+    Car #28 were standing in their boxes and the lap closed at P8."""
+    from pitcrew.race.calls import places_through_the_lane
+
+    assert places_through_the_lane(places, lane) == said
 
 
 def test_a_swap_that_reverses_inside_the_hold_says_nothing():

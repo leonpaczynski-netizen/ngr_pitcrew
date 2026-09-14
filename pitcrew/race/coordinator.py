@@ -344,6 +344,7 @@ class RaceCoordinator:
         # when the discrepancy CHANGES - see `note_packet`.
         self._gt7_pending = 0
         self._gt7_pending_value = 0
+        self._reset_mid_lap()
 
     # ------------------------------------------------------------------ arming
 
@@ -358,6 +359,10 @@ class RaceCoordinator:
         self._lap_of_read_key = {}
         self._racing_laps = []
         self._save_asked_lap = None
+        # **And the rival stops, and the mid-lap slot's clock** (rule 11): a
+        # stop seen before a re-arm is not this race's news.
+        self.state.lane.new_session()
+        self._reset_mid_lap()
         if planned is not None and actual is not None:
             ok, why = planned.matches(actual)
             if not ok:
@@ -858,6 +863,7 @@ class RaceCoordinator:
             self._racing_laps.append((int(lap.lap_num), int(lap.lap_time_ms)))
         self._corroborate_pit_lap(lap)
         self._weigh_the_tow()
+        self._note_crossing_for_mid_lap()
 
         # Fuel calls must use what this race is actually burning, not what
         # practice suggested. Told he could push while burning 35% more than
@@ -1022,6 +1028,12 @@ class RaceCoordinator:
         from pitcrew.race.rival_calls import Rival
 
         name = seen.driver
+        # **He is out of the lane.** From here his stop is news for one more
+        # crossing and then history (`race/lane.py`), and a place gained on
+        # him while he stood there can come back without being a pass.
+        if self.state.lane.left(name, lap=self.state.lap) is not None:
+            log("race").info("rival out of the lane: %s, after our lap %s",
+                             name, self.state.lap)
         self.state.rivals[name] = Rival(
             name=name, stop=seen.stop, pitted=True,
             burn_per_lap_l=burn_per_lap_l, burn_stops=burn_stops,
@@ -1047,11 +1059,18 @@ class RaceCoordinator:
         if not getattr(entered, "driver", None):
             log("race").info("rival entry not taken: no driver name")
             return
-        # Appended, not assigned: two cars can be in the lane in one frame,
-        # and a single slot lost one of them before either was spoken.
-        self.state.rivals_entering.append(entered)
-        log("race").info("rival entered the lane: %s on %s L, lap %s",
-                         entered.driver, entered.fuel_in_l, entered.lap)
+        # **Recorded, not queued.** Two cars can be in the lane in one frame,
+        # and a queue drained at every crossing lost every stop a box call
+        # outranked - eight of ten at Bathurst. See `race/lane.py`.
+        if self.state.lane.enter(entered, lap=self.state.lap) is None:
+            log("race").info("rival entry already on file: %s, lap %s",
+                             entered.driver, entered.lap)
+            return
+        log("race").info("rival entered the lane: %s on %s L, lap %s, %s us",
+                         entered.driver, entered.fuel_in_l, entered.lap,
+                         {True: "was ahead of", False: "was behind",
+                          None: "unplaced against"}[
+                              getattr(entered, "ahead_at_entry", None)])
 
     def _weigh_the_tow(self) -> None:
         """Remake the tow trade from this race's laps and the wall's gaps.
@@ -1206,15 +1225,209 @@ class RaceCoordinator:
         has to be said while it is still what just happened.
 
         The caller speaks whatever comes back. `None` is the ordinary answer.
+
+        **It is also the mid-lap slot for a rival's stop** (14 Sep 2026), and
+        whatever it returns has been decided on: see `_mid_lap`.
         """
         call = None
         if packet is not None and self.phase is RacePhase.RUNNING \
                 and not getattr(packet, "paused", False) \
                 and not getattr(packet, "loading", False):
+            self._packets += 1
             self._note_composure(packet)
-            call = self._compose(self._note_position(packet))
+            call = self._mid_lap(packet)
         self._note_lap_counter(packet)
         return call
+
+    # **Seconds between two volunteered mid-lap calls.** Bathurst, 14 Sep
+    # 2026: "P9", "P8", "P7" in 41 s, and "You're back on it" with a place
+    # call 19 s behind it. A held place is not lost by the wait - it is
+    # re-read when the slot opens, so what is said is where he has SETTLED.
+    MID_LAP_SPACING_S = 30.0
+    # **Seconds either side of a crossing the slot stays shut.** The crossing
+    # speaks its own call - a box call among them - and the voice drops the
+    # oldest of a queue three deep and anything eight seconds stale, so a
+    # rival's name landing on the line can cost the instruction or itself.
+    CROSSING_QUIET_S = 10.0
+
+    def _reset_mid_lap(self) -> None:
+        self._packets = 0
+        self._last_mid_lap_packet: int | None = None
+        self._crossed_at_packet: int | None = None
+        self._lap_packets: int | None = None
+        self._holding_logged: str | None = None
+        self._was_in_pit = False
+        self._left_pit_packet: int | None = None
+        # Keys of cars that stood in the lane, ahead of us when they went in,
+        # at any frame since the last place he was told - see `_through_the_lane`.
+        self._lane_while_moving: dict[str, object] = {}
+
+    def _note_crossing_for_mid_lap(self) -> None:
+        """Qt thread, at the crossing: where the lap began, and how long it is
+        likely to be, in packets. Two assignments the telemetry thread reads."""
+        lap_ms = self.projected_lap_ms()
+        self._lap_packets = (int(lap_ms * SAMPLE_HZ / 1000.0)
+                             if lap_ms else None)
+        self._crossed_at_packet = self._packets
+
+    def _slot_is_open(self) -> str | None:
+        """Why the mid-lap slot is shut, or `None` when it is open."""
+        quiet = int(self.CROSSING_QUIET_S * SAMPLE_HZ)
+        if self.state.in_pit:
+            # Our own stop: the fill and the release are called in the box.
+            return "in our own pit box"
+        if (self._left_pit_packet is not None
+                and self._packets - self._left_pit_packet < quiet):
+            return "just out of the box"
+        crossed = self._crossed_at_packet
+        if crossed is not None:
+            into = self._packets - crossed
+            if into < quiet:
+                return "just after the line"
+            if self._lap_packets and into > self._lap_packets - quiet:
+                return "coming up to the line"
+        last = self._last_mid_lap_packet
+        if last is not None and (self._packets - last
+                                 < int(self.MID_LAP_SPACING_S * SAMPLE_HZ)):
+            return "spacing"
+        return None
+
+    def _spoke_mid_lap(self) -> None:
+        self._last_mid_lap_packet = self._packets
+        self._holding_logged = None
+
+    def _hold(self, what: str, why: str) -> None:
+        """Log a held call once per reason, not sixty times a second."""
+        key = f"{what}:{why}"
+        if self._holding_logged != key:
+            self._holding_logged = key
+            log("race").info("held a %s call: %s", what, why)
+
+    def _mid_lap(self, packet) -> "Call | None":
+        """The one thing, if any, said between two crossings, off a frame.
+
+        Three things may be said here, in this order, and at most one per
+        `MID_LAP_SPACING_S`:
+
+        1. **"You're back on it."** - the word owed on the way back from an
+           off (see `_compose`). It is not spaced: it is the end of a silence.
+        2. **A rival's stop** not yet said. Perishable - he is in the box now
+           and out in a minute - so it goes before a place, which keeps.
+        3. **A place gained or lost**, once it has held, measured against the
+           last place he was TOLD, and said through the lane where the lane
+           made it.
+
+        None of it on or near a crossing (`CROSSING_QUIET_S`), which belongs
+        to the crossing's own call. A held call is never booked as said, so
+        it is still true, and still said, when the slot opens.
+        """
+        from pitcrew.race.calls import FACT, RIVAL_BOXED
+
+        proposal = self._note_position(packet)
+        in_pit = bool(self.state.in_pit)
+        if self._was_in_pit and not in_pit:
+            self._left_pit_packet = self._packets
+        self._was_in_pit = in_pit
+        self._watch_the_lane_while_moving()
+        shut = self._slot_is_open()
+        if shut is not None and shut != "spacing":
+            if proposal is not None:
+                self._hold("position", shut)
+            return None
+        owed = self._compose(None)
+        if owed is not None:
+            self._spoke_mid_lap()
+            return owed
+        if shut is not None:
+            if proposal is not None:
+                self._hold("position", shut)
+            return None
+        rival = self._rival_stop_mid_lap()
+        if rival is not None:
+            self.state.lane.tell(
+                self.state.lane.keys_in_tag(RIVAL_BOXED, rival.tag))
+            self._spoke_mid_lap()
+            log("race").info("mid-lap: %s", rival.spoken())
+            return rival
+        if proposal is None:
+            return None
+        if not self.composure.may_volunteer(FACT):
+            self._hold("position", "off the road or still regathering")
+            return None
+        call = self._through_the_lane(proposal)
+        from pitcrew.race.calls import position_spoken
+
+        position_spoken(self.state, call)
+        self._spoke_mid_lap()
+        return call
+
+    def _rival_stop_mid_lap(self) -> "Call | None":
+        """The untold rival stops, if this is a moment to say them.
+
+        Not from our own pit box - the fill is being called there - nor on
+        the lap that is the flag, and not while he is regathering: it is not
+        an instruction and it keeps until he is settled (race/lane.py says
+        how long).
+        """
+        from pitcrew.race.calls import _crossing_the_line
+        from pitcrew.race.rival_calls import boxed_call
+
+        state = self.state
+        if state.in_pit or state.finished or state.lap < 1:
+            return None
+        if _crossing_the_line(state) or not self.composure.composed:
+            return None
+        return boxed_call(state)
+
+    def _watch_the_lane_while_moving(self) -> None:
+        """Remember every car standing in the lane while the byte is away from
+        the last place he was told.
+
+        **Asked at the moment of speaking, the lane had already emptied.** A
+        place gained on a car in its box is SAID up to half a minute later -
+        the spacing, the crossing - and by then he may be back out: replayed
+        at Bathurst, Car #31 left at 20:44:38, nine seconds before the call
+        his stop had made. So the cars are collected while the place is
+        moving and read when it is said.
+        """
+        state = self.state
+        if state.position_said is None or state.position == state.position_said:
+            if self._lane_while_moving:
+                self._lane_while_moving = {}
+            return
+        for stop in state.lane.passed_in_the_lane():
+            if stop.key not in self._lane_while_moving:
+                self._lane_while_moving[stop.key] = stop
+
+    def _through_the_lane(self, call) -> "Call":
+        """The position call, with its reason taken from the pit lane where
+        cars in the lane - not passes - moved the byte."""
+        from pitcrew.race.calls import places_through_the_lane
+
+        was, now = self.state.position_said, call.position_called
+        if was is None or now is None or self.state.position_through_stop:
+            return call
+        lane = self.state.lane
+        places = was - now
+        if places > 0:
+            cars = [stop for stop in self._lane_while_moving.values()
+                    if not lane.explained(stop.key)]
+        elif places < 0:
+            cars = lane.back_out(self.state.lap)
+        else:
+            cars = []
+        reason = places_through_the_lane(places, len(cars))
+        if reason is None:
+            return call
+        used = [stop.key for stop in cars[:abs(places)]]
+        if places > 0:
+            lane.explain(used)
+        else:
+            lane.returned(used)
+        log("race").info("position through the lane: %s (%s)",
+                         reason, ", ".join(stop.driver
+                                           for stop in cars[:abs(places)]))
+        return replace(call, reason=reason)
 
     def _note_composure(self, packet) -> None:
         """Watch the surface, so the engineer knows when to stop volunteering.
@@ -1252,6 +1465,9 @@ class RaceCoordinator:
             return None
         if self.composure.may_volunteer(register_of(call.kind)):
             return call
+        # **Held, not booked.** Nothing here marks the call said: a position
+        # held while he is off the road is measured against what he last
+        # heard when it is finally said (`calls.position_spoken`).
         log("race").info("held a %s call: off the road or still regathering",
                          call.kind)
         return None

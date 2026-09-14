@@ -5330,6 +5330,12 @@ class PitCrewController(QObject):
             # then the clause is simply not said.
             if math.live_rivals and math.rivals_from:
                 said += " Watch " + ", ".join(math.live_rivals[:3])
+                # **The same three names, handed to the race** so a watched
+                # rival's stop leads the rival call (rules 12 and 13: the
+                # list he heard is the list that ranks).
+                if self.race is not None:
+                    self.race.state.watched_rivals = frozenset(
+                        name.lower() for name in math.live_rivals[:3])
                 said += (" - entered, not yet seen."
                          if math.rivals_from == "the entry list" else ".")
             if league.stale:
@@ -7101,9 +7107,20 @@ class PitCrewController(QObject):
 
         Recorded like any other call. A place lost two laps before a stop is
         evidence about the plan, and the ledger is where the debrief reads it.
+
+        **Everything that reaches here has already been decided on** (14 Sep
+        2026). The coordinator's mid-lap slot spaces these calls
+        (`MID_LAP_SPACING_S`), keeps them off the crossing, and books a
+        position as said only when it hands one over - so this slot speaks
+        what it is given and filters nothing. A filter here would be a call
+        booked as said and then not said, which is the Bathurst defect in a
+        second place. The slot also carries a rival's stop, "Car #76 has
+        boxed", when one is waiting and the crossing did not take it.
         """
         if self.race is None or call is None:
             return
+        from pitcrew.race.calls import POSITION
+
         if self._engineer_speaks:
             self.voice.say(call.spoken())
             self.ptt.last_call = call.spoken()
@@ -7125,7 +7142,10 @@ class PitCrewController(QObject):
             self._filed_calls.setdefault(revision_id, (call, row))
         # **After the place, and only when the championship actually moved.**
         # Said second because the place is the thing he can see out of the
-        # window and the championship is the thing he cannot.
+        # window and the championship is the thing he cannot. Not after a
+        # rival's stop: nothing about our place changed.
+        if call.kind != POSITION:
+            return
         moved = self._league_moved()
         if moved and moved == getattr(self, "_league_last_said", None):
             # The same championship line twice is the position flapping,
