@@ -837,9 +837,10 @@ class RaceNews:
         # only held the slot across a place change is not in doubt about its
         # figure: that is the box, and every figure here is continuous with
         # the car in the slot or explained by what changed it. It loses its
-        # name and its pace (`_merged`), not its number - at session 176 that
-        # would have put the word on 14 of 16 gap lines, every one of them
-        # right, and a word on every line is a word he stops hearing.
+        # name and its pace (`_merged`), not its number. Replayed at session
+        # 176 with the word on those too, it was on 14 of 16 gap lines, each
+        # continuous with its car or said across a pass - and a word on every
+        # line is a word he stops hearing.
         # The unsure side goes last so the word follows the figure it
         # qualifies.
         said.sort(key=lambda e: e[7] is not None)
