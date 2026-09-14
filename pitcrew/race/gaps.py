@@ -72,7 +72,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from statistics import median
 
-from pitcrew.strategy.model import PIT_DEAD_TIME_S, PIT_LOSS_MEASURED
+from pitcrew.strategy.model import (PIT_DEAD_TIME_S, PIT_LOSS_MEASURED,
+                                    PIT_LOSS_MEASURED_EX_FUEL)
 from pitcrew.telemetry.board import gap_lines
 from pitcrew.telemetry.hud_time import read_gap
 
@@ -276,6 +277,13 @@ def stop_costs_s(litres: float | None, refuel_rate_lps: float | None,
     figure reached the driver from two expressions that disagreed, which is
     CLAUDE.md rule 12.
 
+    **And only to a loss that EXCLUDES it.** `PIT_LOSS_MEASURED_EX_FUEL` is
+    the whole stop less the refuelling - `race/pit_loss.py`'s figure, the one
+    the event page stores as measured - and the dead time is already in it.
+    Adding it there priced Bathurst's 23.13 s as 30.6 s and told him "A stop
+    now puts you behind the car behind" about a stop it overstated by 7.5 s
+    (14 Sep 2026).
+
     `None` if either half is unknown: a stop cost built from one of them is not
     a stop cost.
     """
@@ -286,7 +294,9 @@ def stop_costs_s(litres: float | None, refuel_rate_lps: float | None,
         return None
     lane = pit_loss_s
     if pit_loss_source == PIT_LOSS_MEASURED:
+        # A lane-only figure: the standing time before the hose is not in it.
         lane += PIT_DEAD_TIME_S
+    # `PIT_LOSS_MEASURED_EX_FUEL` and a declared loss already carry it.
     return litres / refuel_rate_lps + lane
 
 

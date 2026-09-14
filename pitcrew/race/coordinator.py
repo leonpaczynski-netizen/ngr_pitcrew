@@ -42,7 +42,7 @@ from pitcrew.race.clock import RaceClock
 from pitcrew.race.composure import Composure
 from pitcrew.race.expectations import ExpectationTracker
 from pitcrew.store.tyres import gap_association_for
-from pitcrew.strategy.model import PIT_LOSS_MEASURED
+from pitcrew.strategy.model import PIT_LOSS_MEASURED_EX_FUEL
 from pitcrew.telemetry.recorder import SAMPLE_HZ
 from pitcrew.telemetry.session_state import EventKind, Phase
 
@@ -303,8 +303,15 @@ class RaceCoordinator:
         #
         # The events column keeps its own storage vocabulary ("declared" /
         # "measured"); it is translated here, once, at the boundary.
-        self.state.pit_loss_source = (PIT_LOSS_MEASURED if pit_loss_measured
-                                      else None)
+        #
+        # **And translated to what the measurement IS** (14 Sep 2026). The
+        # only writer of "measured" is `race/pit_loss.py` via
+        # `Store.record_measured_pit_loss`, and its figure is the whole stop
+        # less the refuelling - dead time included. Translated to the
+        # lane-only `PIT_LOSS_MEASURED`, `stop_costs_s` added the 7.5 s dead
+        # time a second time: Bathurst's 23.13 s was priced as 30.6 s.
+        self.state.pit_loss_source = (PIT_LOSS_MEASURED_EX_FUEL
+                                      if pit_loss_measured else None)
         self.state.refuel_rate_lps = refuel_rate_lps
         self._mandatory_stops = int(mandatory_stops or 0)
         self._note_mandatory_stops()

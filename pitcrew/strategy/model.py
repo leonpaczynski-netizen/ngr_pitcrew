@@ -237,6 +237,16 @@ SOURCE_ASSUMED = "assumed"      # the reference compound's rate, reused
 # stronger one.
 PIT_LOSS_MEASURED = "measured-this-track"
 PIT_LOSS_DECLARED = "declared-on-the-event-page"
+# **Measured, and the dead time is already inside it.** `race/pit_loss.py` is
+# the only thing that writes `events.pit_loss_source = 'measured'`, and what it
+# writes is `(in-lap + out-lap) - 2 x clean - litres / rate`: the whole stop
+# less the refuelling, which is the lane AND the standing time before the hose.
+# `PIT_LOSS_MEASURED` above is a lane-only figure the dead time is added to;
+# this is not one, and adding `PIT_DEAD_TIME_S` to it charges the same seconds
+# twice. Bathurst, 14 Sep 2026: 23.13 s derived that way, priced as a 30.6 s
+# lane by the rejoin call, against a stop that showed about 21.6 s of non-fuel
+# time on the night.
+PIT_LOSS_MEASURED_EX_FUEL = "measured-whole-stop-less-fuel"
 
 # How many compound assignments the search will enumerate before it gives up
 # on being exhaustive. Five stints across four compounds is 1024 candidates,
