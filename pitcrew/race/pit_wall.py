@@ -170,6 +170,12 @@ class Entered:
     lap: int | None
     fuel_in_l: int | None
     partial: bool
+    # **Whether he was ahead of us when he went in**, off the last board
+    # read that showed him OUT of the lane, against our own place on that
+    # same read. `None` where either place was unread. A car ahead that pits
+    # drops behind us on the position byte without being passed - Bathurst
+    # lap 11, "You've made 2 places" about two cars standing in their boxes.
+    ahead_at_entry: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -242,6 +248,9 @@ class PitWall:
         # for a driver who is not in here started after the fill did, so far as
         # anything can tell - which is what `partial` means.
         self._seen_clean: set[int] = set()
+        # `driver -> (his place, our place)` on the last board read that
+        # showed him out of the lane. What `Entered.ahead_at_entry` is from.
+        self._clean_place: dict[int, tuple[int, int | None]] = {}
         self._position: dict[int, int] = {}
         self._pitted: set[int] = set()
         self._stops: list[Seen] = []
@@ -310,11 +319,21 @@ class PitWall:
     def _announce_entry(self, driver: int, visit, lap, own: int | None) -> None:
         """Say he is in, once per VISIT, as soon as the reading is credible.
 
-        Three gates, and each of them was a defect:
+        Four gates, and each of them was a defect:
 
-        * **On the SECOND reading**, not the first. `MIN_READS` is 2 for filing
-          and the same argument applies here: one frame can catch a marshal
-          walking across the row, and "he has boxed" cannot be un-heard.
+        * **Only once the visit has met the bar a STOP is filed on** -
+          `MIN_READS` fuel readings over `MIN_WATCHED_S` - not on the second
+          reading. Bathurst, 14 Sep 2026: Car #30 was announced on its second
+          reading at 20:39:32 and discarded by `_close` three minutes later as
+          "4 reads over 13 s is too brief to be a stop". A stop that is not
+          filed must not have been said. The price is latency: the fifteen
+          seconds of the bar, against filed visits that night of 16 to 84 s
+          watched and a GT7 stop of 50-100 s standing - so he is still in
+          the box when it is said. It is the same function `_close` uses for
+          our own car, so the two bars cannot drift.
+        * **Not before the second reading either**, which the bar above
+          includes: one frame can catch a marshal walking across the row, and
+          "he has boxed" cannot be un-heard.
         * **Not our own car.** `read_rows` is the one path that returns the
           driver's own row, so without this the app announces our own stop and
           then compares it against itself.
@@ -323,7 +342,7 @@ class PitWall:
           then declining to file it is the weaker bar on the louder channel.
         """
         if (self._on_enter is None or driver in self._announced
-                or len(visit.readings) < MIN_READS
+                or not self._is_a_stop(visit)
                 or (own is not None and driver == own)
                 or self._roster.sightings(driver) < self._min_sightings):
             return
@@ -335,12 +354,23 @@ class PitWall:
             # it - a refusal that becomes its own baseline (rule 10).
             return
         self._announced.add(driver)
+        clean = self._clean_place.get(driver)
+        ahead = (clean[0] < clean[1]
+                 if clean is not None and clean[1] is not None else None)
+        # Rule 10: the accept is logged, with the evidence that passed.
+        _log.info("pit-wall: %s confirmed in the lane - %d reads over %.0f s, "
+                  "in on %s L%s, %s us when he went in", name,
+                  len(visit.readings), visit.last_s - visit.started_s,
+                  visit.entry_l, " (joined mid-fill)" if visit.partial else "",
+                  {True: "ahead of", False: "behind", None: "unplaced against"}
+                  [ahead])
         try:
             self._on_enter(Entered(driver=name, driver_id=driver,
                                    lap=visit.lap if visit.lap is not None
                                    else lap,
                                    fuel_in_l=visit.entry_l,
-                                   partial=visit.partial))
+                                   partial=visit.partial,
+                                   ahead_at_entry=ahead))
         except Exception:                                    # pragma: no cover
             _log.exception("pit-wall: the entry hook raised")
 
@@ -364,6 +394,7 @@ class PitWall:
         self._visits.clear()
         self._absent.clear()
         self._seen_clean.clear()
+        self._clean_place.clear()
         self._position.clear()
         self._pitted.clear()
         # **Or every driver's entry is announced once per APP RUN.** Rule 11:
@@ -565,6 +596,9 @@ class PitWall:
 
         for driver in identified - in_lane:
             self._seen_clean.add(driver)
+            place = self._position.get(driver)
+            if place is not None and driver != own:
+                self._clean_place[driver] = (place, own_place)
 
         closed = []
         for driver in list(self._visits):

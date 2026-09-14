@@ -436,6 +436,56 @@ def test_a_second_stop_by_the_same_car_is_announced_too():
     assert [e.fuel_in_l for e in seen] == [12, 20]
 
 
+def test_a_visit_too_brief_to_be_filed_is_never_announced():
+    """**Bathurst, Car #30.** Announced on its second reading, discarded three
+    minutes later as "4 reads over 13 s is too brief to be a stop". The entry
+    now waits for the same bar the stop is filed on, so what is not filed was
+    never said."""
+    seen, clock = [], Clock(step=3.0)
+    wall = a_watching_wall(seen)
+    warm(wall, clock)
+    for litres in (40, 41, 42, 43):                  # 4 reads over 9 s
+        wall.see(a_frame(in_lane=(4,), fuel={4: litres}), lap=8,
+                 now=clock.tick())
+    closed = []
+    for _ in range(CLOSE_AFTER_CLEAN_FRAMES):
+        closed += wall.see(a_frame(), lap=8, now=clock.tick())
+    assert closed == [] and seen == []
+
+
+def test_the_entry_is_announced_once_the_visit_meets_the_filing_bar():
+    seen, clock = [], Clock(step=5.0)
+    wall = a_watching_wall(seen)
+    warm(wall, clock)
+    for n, litres in enumerate((12, 13, 14, 15)):
+        wall.see(a_frame(in_lane=(4,), fuel={4: litres}), lap=8,
+                 now=clock.tick())
+        # 0, 5 and 10 s watched are under MIN_WATCHED_S; 15 s is not.
+        assert len(seen) == (1 if n >= 3 else 0), n
+    assert seen[0].fuel_in_l == 12
+
+
+def test_the_entry_says_whether_he_was_ahead_of_us_when_he_went_in():
+    """A car ahead that pits drops behind us on the position byte without
+    being passed.
+
+    Driven through `_announce_entry` with the board places set by hand: the
+    six-row fixture's clusters do not hold still enough across frames to
+    stand for a place, which is a fact about the fixture and not the board.
+    """
+    seen = []
+    wall = a_watching_wall(seen)
+    wall._roster.sightings = lambda driver: 99
+    # driver -> (his place, our place) the last time he was seen out.
+    wall._clean_place = {11: (2, 5), 12: (7, 5), 13: (3, None)}
+    for driver, litres in ((11, 20), (12, 30), (13, 40)):
+        visit = Visit(driver=driver, lap=8, started_s=0.0,
+                      readings=[litres, litres], last_s=MIN_WATCHED_S)
+        wall._announce_entry(driver, visit, 8, own=1)
+    ahead = {e.fuel_in_l: e.ahead_at_entry for e in seen}
+    assert ahead == {20: True, 30: False, 40: None}
+
+
 def test_our_own_stop_is_never_filed_as_a_rivals():
     """**The book is permanent and keyed by name.** `read_rows` returns the
     driver's own row like any other, so the wall handed his own stop to
