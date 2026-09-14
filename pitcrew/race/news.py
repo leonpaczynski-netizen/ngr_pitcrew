@@ -40,6 +40,15 @@ NAME is the weaker half: the board's clusters split one driver into several
 handles and, at session 176, merged several drivers into one, so a gap line
 is MEDIUM and the name is only ever the roster's.
 
+**And a figure is only said continuous with the car it is about** (15 Sep
+2026). The subject of a gap is the car in the slot, not the handle: a reading
+that jumps further than one car's gap can move (`jump_allowed_s`) is held
+until three agree, and a figure he would hear as a jump from the last one on
+that side is not said unless a place change, a rival's stop or our own off
+or stop lies between. A handle seen holding the slot across a place change
+names a slot - no name, no pace off it; one whose readings jump twice with
+nothing to explain it is said "Unconfirmed.". See `JUMP_RATE_S_PER_S`.
+
 **The stop cycle** knows who stopped (the pit wall's lane log) and nobody's
 plan but ours. **A rival's remaining stops are assumed to be the regulation
 minimum** - `events.mandatory_stops`, or our own plan's stop count where the
@@ -142,6 +151,64 @@ T_975 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447,
 # The fewest clean lap-to-lap changes a pace verdict may rest on.
 PACE_MIN_CHANGES = 3
 
+# ------------------------------------------------ one car, or several
+#
+# **A gap figure is only said continuous with the car it is about.** Replayed
+# at Bathurst (session 176) George said "The car ahead, 0.5." and thirty
+# seconds later "The car ahead, 9 seconds." The board's unnamed cluster "78"
+# held the ahead box for fifteen laps and six places: it is a slot, not a car.
+# Both figures were GT7's own interval box, read right - a pass sat between
+# them - but a single "car ahead" across them is several cars, and heard back
+# to back they are a jump no car makes.
+#
+# **How far one car's gap can move** (gap_reads, sessions 143/160/166/176:
+# consecutive readings of one handle and side, under 8 s apart, on laps with
+# no pit, lane visit or off of ours - 1,066 pairs, median 2.2 s apart): the
+# rate of change has a median of 0.02 s/s and a 99th percentile of 0.25 s/s.
+# Two readings of one car under 3 s apart differ by a 99th percentile of
+# 0.57 s. So a reading is the same car where it moved no more than
+# `JUMP_NOISE_S + JUMP_RATE_S_PER_S` x seconds since the last one. That
+# envelope passes 1,061 of the 1,066 pairs; the five it refuses are all
+# 1.8-7.7 s jumps inside 2-7 s, among them the lap-6 pass above.
+#
+# **A corner's burst is not a sustained rate.** A quarter second a second for
+# thirty seconds is 7.5 s, which let "0.5" then "9 seconds" through as one
+# car. Over longer spans, inside chains of readings each continuous with the
+# last (same sessions and filter, 17,414 pairs up to 120 s apart), the 99.9th
+# percentile change is 0.9 s at 3 s, 2.9 s at 30-45 s, 3.8 s at 45-60 s and
+# 5.8 s at 90-120 s. `JUMP_BURST_S + DRIFT_S_PER_S` x seconds caps the rate
+# from about 5 s on and passes all but 7 of those pairs.
+JUMP_NOISE_S = 0.5
+JUMP_RATE_S_PER_S = 0.25
+JUMP_BURST_S = 1.0
+DRIFT_S_PER_S = 0.05
+# **Readings that must agree before a jump is a new car.** Replaying that
+# envelope over the same four sessions' handles: a run of readings that broke
+# from the car and agreed among themselves, then was abandoned inside 30 s,
+# was one or two readings long on laps clean of our stops and offs (3 runs)
+# and never three. Runs of 3, 4 and 6 were abandoned only on our own stop and
+# off laps (session 176 laps 9, 11 and 13), where our off or stop is in the
+# reading's moment and nothing is volunteered while he regathers. Three
+# readings is 4-12 s at the wall's 2-4 s cadence, and it is
+# `NEIGHBOUR_HOLD_READS` - "a new car" is held to one rule whether the name
+# changed or the figure did.
+SUBJECT_HOLD_READS = 3
+# **Rule 10: a reference that disagrees with everything is the thing that is
+# wrong.** This many readings running that fit neither the car nor each other
+# retire the car: nothing is said about that side until three readings agree.
+RETIRE_AFTER_REFUSALS = 6
+# **Jumps nothing on the circuit explains before a handle is not believed.**
+# A jump across a place change, a stop or an off is a different car in the
+# slot; one without any of them is the reader, and twice in a race is a habit.
+UNRELIABLE_AFTER_JUMPS = 2
+# **Seconds the interval box can trail the event that changed its car.**
+# Session 176, lap 8: the place was lost at 20:35:25 and the box still showed
+# the old car ahead (5.93 s) at 20:35:25, the new one (0.68 s) from 20:35:30;
+# and the replay's place changes are the ledger's calls less their 8 s hold,
+# good to a few seconds. An event up to this long before the car's last
+# reading still explains a jump after it.
+EXPLAIN_LAG_S = 10.0
+
 # A provisional handle the store mints for a car nobody has named.
 _HANDLE = re.compile(r"^Car #\d+$")
 
@@ -150,6 +217,20 @@ SIDES = ("ahead", "behind")
 
 def packets(seconds: float) -> int:
     return int(seconds * SAMPLE_HZ)
+
+
+def continuous(before_gap: float, before_packet: int, gap: float,
+               packet: int) -> bool:
+    """Whether a gap could be the same car's as one read `packet - before`
+    frames earlier - see `JUMP_RATE_S_PER_S` and `DRIFT_S_PER_S`."""
+    seconds = max(0, int(packet) - int(before_packet)) / SAMPLE_HZ
+    return abs(float(gap) - float(before_gap)) <= jump_allowed_s(seconds)
+
+
+def jump_allowed_s(seconds: float) -> float:
+    """How far one car's gap can move in `seconds`."""
+    return JUMP_NOISE_S + min(JUMP_RATE_S_PER_S * seconds,
+                              JUMP_BURST_S + DRIFT_S_PER_S * seconds)
 
 
 def a_person(name: str | None) -> str | None:
@@ -377,6 +458,30 @@ class _Read:
     key: str
     name: str | None
     lap_key: int | None
+    # **What could have put another car in the slot, or moved one's gap**:
+    # `(our place changes, rival lane entries and exits, our offs, our stint
+    # index, in our box)` - `RaceCoordinator._slot_moment`. The first two are
+    # other cars, the rest are ours. Two readings with the same moment have
+    # nothing between them but the circuit. `None` where the caller cannot
+    # say.
+    moment: tuple | None = None
+    # The moment `EXPLAIN_LAG_S` before this reading: an event that recent
+    # may not have reached the interval box yet.
+    moment_before: tuple | None = None
+
+
+def _explained(before: tuple | None, after: tuple | None) -> bool:
+    """Whether a place change, a stop or an off lies between two moments."""
+    if before is None or after is None:
+        return False
+    return tuple(before) != tuple(after)
+
+
+def _ours_between(before: tuple | None, after: tuple | None) -> bool:
+    """Whether an off or a stop of OURS lies between two moments."""
+    if before is None or after is None:
+        return False
+    return tuple(before)[2:] != tuple(after)[2:]
 
 
 class RaceNews:
@@ -397,8 +502,26 @@ class RaceNews:
             self._band: dict[str, int | None] = {s: None for s in SIDES}
             self._band_pending: dict[str, tuple | None] = {
                 s: None for s in SIDES}
+            # `(identity, band, the reading said)` - see `gaps_call`.
             self._said_gap: dict[str, tuple | None] = {s: None for s in SIDES}
             self._gap_lap: int | None = None
+            # One car in the slot: the last reading that was continuous with
+            # it, the readings since that broke from it and agree among
+            # themselves, how many running fit nothing, and a count that
+            # makes a new car in the slot a new identity under one handle.
+            self._ref: dict[str, _Read | None] = {s: None for s in SIDES}
+            self._run: dict[str, list] = {s: [] for s in SIDES}
+            self._refused: dict[str, int] = {s: 0 for s in SIDES}
+            self._segment: dict[tuple, int] = {}
+            self._key_ref: dict[tuple, _Read] = {}
+            # Handles that are not one car this race, and why; unexplained
+            # jumps per handle; the lap keys a handle changed car on.
+            self._merged: dict[str, str] = {}
+            self._unreliable: dict[str, str] = {}
+            self._jumps: dict[str, int] = {}
+            self._broke_on: dict[str, set] = {}
+            # (frame, moment) of recent readings, both sides - `moment_before`.
+            self._moments: deque = deque(maxlen=64)
             self._pace = {side: RivalPace() for side in SIDES}
             self._ours_s: dict[int, float] = {}
             self._dirty: set[int] = set()
@@ -416,38 +539,164 @@ class RaceNews:
 
     def note_gap(self, side: str, gap_s: float | None, subject=None,
                  name: str | None = None, *, packet: int,
-                 lap_key: int | None) -> None:
+                 lap_key: int | None, moment: tuple | None = None) -> None:
         """One interval box read. Worker thread.
 
         `subject` is the roster's cluster id, `name` its name where it has
         one. The car is keyed on the name where there is one, so a trend and
-        a lane visit can be matched.
+        a lane visit can be matched. `moment` is `_Read.moment`.
+
+        **The car in the slot is the last reading continuous with it**
+        (`continuous`). A reading that breaks from it is held with any that
+        follow and agree among themselves; `SUBJECT_HOLD_READS` of them are a
+        new car under the same handle, and nothing is said of that side
+        meanwhile (`gaps_call` speaks only the car's own latest reading).
         """
         if side not in SIDES or gap_s is None:
             return
         key = str(name or subject) if (name or subject is not None) else None
         if key is None:
             return
-        read = _Read(packet=int(packet), gap_s=float(gap_s), key=key,
-                     name=name, lap_key=lap_key)
+        moment = tuple(moment) if moment is not None else None
         with self._lock:
+            history = self._moments
+            history.append((int(packet), moment))
+            cutoff = int(packet) - packets(EXPLAIN_LAG_S)
+            older = [then for at, then in history if at <= cutoff]
+            before = older[-1] if older else history[0][1]
+            read = _Read(packet=int(packet), gap_s=float(gap_s), key=key,
+                         name=name, lap_key=lap_key, moment=moment,
+                         moment_before=before)
             reads = self._reads[side]
             reads.append(read)
             if lap_key is not None:
                 self._trends[side].note(lap_key, gap_s, subject=key)
-            recent = list(reads)[-NEIGHBOUR_HOLD_READS:]
-            if (len(recent) == NEIGHBOUR_HOLD_READS
-                    and all(r.key == key for r in recent)
-                    and self._neighbour[side] != key):
-                log("race").info("news: the car %s is now %s (%d readings)",
-                                 side, name or key, NEIGHBOUR_HOLD_READS)
-                self._neighbour[side] = key
-                self._neighbour_name[side] = name
-                self._band[side] = _band_index(gap_s)
-                self._band_pending[side] = None
-            elif self._neighbour[side] == key:
-                self._neighbour_name[side] = name
-                self._move_band(side, gap_s)
+            if self._neighbour[side] != key:
+                recent = list(reads)[-NEIGHBOUR_HOLD_READS:]
+                if (len(recent) == NEIGHBOUR_HOLD_READS
+                        and all(r.key == key for r in recent)
+                        and _agree(recent)):
+                    log("race").info(
+                        "news: the car %s is now %s at %.2f s (%d readings "
+                        "that agree)", side, name or key, gap_s,
+                        NEIGHBOUR_HOLD_READS)
+                    self._neighbour[side] = key
+                    self._neighbour_name[side] = name
+                    # **A handle back in the box after another's readings is
+                    # the car it was** where its gap is still his - a name
+                    # flicker is not a new car to announce.
+                    prior = self._key_ref.get((side, key))
+                    same = prior is not None and (
+                        continuous(prior.gap_s, prior.packet, gap_s,
+                                   read.packet)
+                        or _ours_between(prior.moment_before, read.moment))
+                    self._new_car(side, read, another=not same)
+                return
+            self._neighbour_name[side] = name
+            self._follow(side, read)
+
+    def _new_car(self, side: str, read: _Read, *, another: bool = True) -> None:
+        """The car in the slot from `read` on. Locked.
+
+        `another` False is the same car re-referenced - after our own off or
+        stop moved its gap, or its handle back in the box: not news of a new
+        car, only a new baseline."""
+        if another:
+            slot = (side, read.key)
+            self._segment[slot] = self._segment.get(slot, 0) + 1
+        self._key_ref[(side, read.key)] = read
+        self._ref[side] = read
+        self._run[side] = []
+        self._refused[side] = 0
+        self._band[side] = _band_index(read.gap_s)
+        self._band_pending[side] = None
+
+    def _follow(self, side: str, read: _Read) -> None:
+        """The neighbour's handle read again: the same car, or not. Locked."""
+        ref, run = self._ref[side], self._run[side]
+        if run and continuous(run[-1].gap_s, run[-1].packet, read.gap_s,
+                              read.packet):
+            # The more recent chain first: a figure that fits both is the
+            # figure the readings since the jump have been walking towards.
+            run.append(read)
+            if len(run) >= SUBJECT_HOLD_READS:
+                self._another_car(side, ref, run)
+            return
+        if ref is None or continuous(ref.gap_s, ref.packet, read.gap_s,
+                                     read.packet):
+            if run:
+                log("race").info(
+                    "news: %d reading(s) of the car %s at %.2f s refused - "
+                    "back to %.2f s, the car it was", len(run), side,
+                    run[0].gap_s, read.gap_s)
+            self._run[side] = []
+            self._refused[side] = 0
+            self._ref[side] = read
+            self._key_ref[(side, read.key)] = read
+            self._move_band(side, read.gap_s)
+            return
+        if not run:
+            log("race").info(
+                "news: the car %s went %.2f -> %.2f s in %.1f s, beyond %.1f s "
+                "+ %.2f s/s - held until %d readings agree", side, ref.gap_s,
+                read.gap_s, (read.packet - ref.packet) / SAMPLE_HZ,
+                JUMP_NOISE_S, JUMP_RATE_S_PER_S, SUBJECT_HOLD_READS)
+        self._run[side] = [read]
+        self._refused[side] += 1
+        if self._refused[side] >= RETIRE_AFTER_REFUSALS:
+            # Rule 10. Nothing agrees with the car and nothing agrees with
+            # anything else: the car is the reference that is wrong.
+            log("race").warning(
+                "news: %d readings of the car %s running fit neither %.2f s "
+                "nor each other - that car is retired until %d agree",
+                self._refused[side], side, ref.gap_s, NEIGHBOUR_HOLD_READS)
+            self._neighbour[side] = None
+            self._ref[side] = None
+            self._run[side] = []
+            self._refused[side] = 0
+
+    def _another_car(self, side: str, ref: _Read, run: list) -> None:
+        """Readings that broke from the car and agree: another car under the
+        same handle. Locked."""
+        key = ref.key
+        before, after = ref.moment_before, run[-1].moment
+        across = _explained(before, after)
+        ours = _ours_between(before, after)
+        for r in run:
+            if r.lap_key is not None:
+                self._broke_on.setdefault(key, set()).add(int(r.lap_key))
+        if ours:
+            # **Our own off or stop**: the same car's gap moves by what it
+            # cost, and a place lost in it may or may not be a new car in the
+            # slot. Explained; evidence of nothing about the handle.
+            why = (f"our off or stop moved the {side} gap "
+                   f"({ref.gap_s:.1f} -> {run[0].gap_s:.1f} s)")
+        elif across:
+            # **The same handle held the slot across a place change or a
+            # rival's stop**: it names the slot, not a car. The figure is
+            # still the box's, right about whoever is there now.
+            why = (f"held the {side} slot across a place change or a stop "
+                   f"({ref.gap_s:.1f} -> {run[0].gap_s:.1f} s)")
+            if key not in self._merged:
+                self._merged[key] = why
+                log("race").warning(
+                    "news: %s names a slot, not a car, this race - no name "
+                    "and no pace off it: %s", key, why)
+        else:
+            self._jumps[key] = self._jumps.get(key, 0) + 1
+            why = (f"{self._jumps[key]} jump(s) nothing on the circuit "
+                   f"explains, latest {ref.gap_s:.1f} -> {run[0].gap_s:.1f} s")
+            if (key not in self._unreliable
+                    and self._jumps[key] >= UNRELIABLE_AFTER_JUMPS):
+                self._unreliable[key] = why
+                log("race").warning(
+                    "news: %s's readings jump with nothing to explain it - "
+                    "its gaps are said unconfirmed this race: %s", key, why)
+        log("race").info("news: the car %s %s under %s at %.2f s "
+                         "(%d readings agree; %s)", side,
+                         "is the same car" if ours else "is another car",
+                         key, run[-1].gap_s, len(run), why)
+        self._new_car(side, run[-1], another=not ours)
 
     def _move_band(self, side: str, gap_s: float) -> None:
         """Across a band only past the dead band, on two readings running."""
@@ -520,18 +769,36 @@ class RaceNews:
             for side in SIDES:
                 reads = self._reads[side]
                 neighbour = self._neighbour[side]
-                if not reads or neighbour is None:
+                latest = self._ref[side]
+                if not reads or neighbour is None or latest is None:
                     continue
-                latest = reads[-1]
-                if (latest.key != neighbour
+                if (reads[-1] is not latest
                         or now - latest.packet > packets(GAP_FRESH_S)
                         or latest.gap_s <= 0):
+                    # The newest reading is not the car's own: a jump held
+                    # until readings agree, or another handle in the box.
                     continue
+                identity = (neighbour,
+                            self._segment.get((side, neighbour), 0))
+                unsure = self._unreliable.get(neighbour)
+                name = (None if unsure or neighbour in self._merged
+                        else self._neighbour_name[side])
                 said = self._said_gap[side]
                 band = self._band[side]
-                changed = said is None or said[0] != neighbour
+                if said is not None and not _explained(
+                        said[2].moment_before, latest.moment) and not continuous(
+                        said[2].gap_s, said[2].packet, latest.gap_s,
+                        latest.packet):
+                    # **Never a jump he hears.** The last figure he was told
+                    # on this side, and this one, are not one car's gap and
+                    # nothing on the circuit put another car there. Silent
+                    # until the figure is one the time since could explain
+                    # - the envelope keeps widening (`DRIFT_S_PER_S`), so
+                    # this retires itself (rule 10).
+                    continue
+                changed = said is None or said[0] != identity
                 if (changed and latest.gap_s >= REFRESH_WITHIN_S
-                        and a_person(self._neighbour_name[side]) is None):
+                        and a_person(name) is None):
                     # **A new unnamed car far away teaches him nothing.**
                     # Replayed at Bathurst the board's clusters handed the
                     # car behind to three unnamed cars in a minute during the
@@ -539,11 +806,10 @@ class RaceNews:
                     # seconds.", "14 seconds." - none of them racing him.
                     # A named one is still news: who is up the road is.
                     changed = False
-                banded = (said is not None and said[0] == neighbour
+                banded = (said is not None and said[0] == identity
                           and said[1] != band)
-                entries.append((side, latest, neighbour,
-                                self._neighbour_name[side], band,
-                                changed, banded))
+                entries.append((side, latest, identity, name, band,
+                                changed, banded, unsure))
             refresher_due = self._gap_lap is None or lap_key > self._gap_lap
         if not entries:
             return None
@@ -559,12 +825,30 @@ class RaceNews:
             why = "refresher, a car inside %.0f s" % REFRESH_WITHIN_S
         else:
             return None
+        # **A handle whose readings jump with nothing to explain it is said
+        # unconfirmed, not silenced** (`UNRELIABLE_AFTER_JUMPS`). The reader
+        # is what is in doubt there, and "unconfirmed" is the word §5.5 gives
+        # him to act on - he has the box on his own screen. A handle that
+        # only held the slot across a place change is not in doubt about its
+        # figure: that is the box, and every figure here is continuous with
+        # the car in the slot or explained by what changed it. It loses its
+        # name and its pace (`_merged`), not its number - at session 176 that
+        # would have put the word on 14 of 16 gap lines, every one of them
+        # right, and a word on every line is a word he stops hearing.
+        # The unsure side goes last so the word follows the figure it
+        # qualifies.
+        said.sort(key=lambda e: e[7] is not None)
+        unsure = [e for e in said if e[7] is not None]
         words = " ".join(gap_sentence(e[0], e[3], e[1].gap_s) for e in said)
-        call = Call(GAPS, state.lap, words, "", MEDIUM,
+        call = Call(GAPS, state.lap, words, "", LOW if unsure else MEDIUM,
                     why_spoken=f"{why}; GT7's interval boxes as read "
                                f"(0.1 s under {TENTHS_BELOW_S:.0f} s); "
-                               "names from the roster")
-        booked = {e[0]: (e[2], e[4]) for e in said}
+                               "names from the roster; each figure "
+                               "continuous with the car it is about"
+                               + "".join(f"; the car {e[0]}'s handle "
+                                         f"{e[2][0]} is unconfirmed: {e[7]}"
+                                         for e in unsure))
+        booked = {e[0]: (e[2], e[4], e[1]) for e in said}
 
         def book() -> None:
             with self._lock:
@@ -585,13 +869,21 @@ class RaceNews:
             dirty = set(self._dirty)
             names = dict(self._neighbour_name)
             said = dict(self._said_pace)
+            unreliable = {**self._merged, **self._unreliable}
+            broke_on = {k: set(v) for k, v in self._broke_on.items()}
         for side in SIDES:
             trend = trends[side]
             if trend.subject is None:
                 continue
             subject = str(trend.subject)
+            if subject in unreliable:
+                # **A rate is a claim about one car**, and this handle has
+                # been more than one this race.
+                continue
             his = _lane_keys(lane, subject, now_key) if lane is not None \
                 else set()
+            # A lap the handle changed car on is not a lap of either car.
+            his |= broke_on.get(subject, set())
             verdict, why_not = pace_verdict(
                 trend, side, paces[side], ours, now_key=now_key,
                 dirty_keys=frozenset(dirty | his))
@@ -811,6 +1103,12 @@ class RaceNews:
 
 
 # ------------------------------------------------------------------- helpers
+
+def _agree(reads) -> bool:
+    """Each reading continuous with the one before it."""
+    return all(continuous(a.gap_s, a.packet, b.gap_s, b.packet)
+               for a, b in zip(reads, reads[1:]))
+
 
 def _band_index(gap_s: float, current: int | None = None) -> int:
     """Which band a gap is in, with the dead band either side of each edge

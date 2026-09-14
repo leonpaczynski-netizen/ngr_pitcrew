@@ -1213,9 +1213,24 @@ class RaceCoordinator:
         try:
             self.news.note_gap(side, gap_s, subject, name,
                                packet=self._packets,
-                               lap_key=int(self.state.lap_now()))
+                               lap_key=int(self.state.lap_now()),
+                               moment=self._slot_moment())
         except Exception:
             log("race").exception("news: a gap reading could not be taken")
+
+    def _slot_moment(self) -> tuple:
+        """What could have put another car in the ahead or behind box, as
+        counters that only rise - `news._Read.moment`.
+
+        Our place changes, every rival lane entry and exit, our offs, our
+        stops. A gap that jumps with none of them between its readings was
+        not a new car arriving; one that jumps across any of them may be.
+        """
+        lane = self.state.lane
+        lane_events = sum(1 + (stop.left_lap is not None)
+                          for stop in lane.stops()) if lane is not None else 0
+        return (self._place_changes, lane_events, self._off_episodes,
+                int(self.state.stint_index), bool(self.state.in_pit))
 
     def note_board(self, rows, own_row: int | None) -> None:
         """One frame of the board's rows, `(row, name)`. Worker thread.
@@ -1360,6 +1375,10 @@ class RaceCoordinator:
         # The frame each mid-lap kind was last handed out on - see
         # `MID_LAP_SPACING_S`.
         self._last_kind_packet: dict[str, int] = {}
+        # Counters for `_slot_moment`: place changes off the packet, and offs
+        # begun. Rule 11: a new race counts from nothing.
+        self._place_changes = 0
+        self._off_episodes = 0
 
     def _note_crossing_for_mid_lap(self) -> None:
         """Qt thread, at the crossing: where the lap began, and how long it is
@@ -1807,8 +1826,11 @@ class RaceCoordinator:
         angry."* See `race/composure.py`. The register that goes quiet is FACT
         only, and a decision is never withheld.
         """
+        was_off = self.composure.off
         self.composure.update(getattr(packet, "surface_types", None),
                               1.0 / SAMPLE_HZ)
+        if self.composure.off and not was_off:
+            self._off_episodes += 1
 
     def _compose(self, call):
         """Hold a volunteered fact while he is off the road or regathering.
@@ -1860,6 +1882,8 @@ class RaceCoordinator:
 
         position = getattr(packet, "current_position", None)
         if position:
+            if self.state.position and position != self.state.position:
+                self._place_changes += 1
             self.state.position = position
         field = getattr(packet, "cars_in_race", None)
         if field:

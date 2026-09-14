@@ -265,6 +265,162 @@ def test_nothing_is_volunteered_off_the_road():
     assert run(co, 3, packet=off) == []
 
 
+# ------------------------------------------------ one car, or several
+
+def spaced(co, side, gaps, name, *, every_s=2.2, packet=None):
+    """Readings `every_s` apart, the race running between them; the calls
+    made meanwhile."""
+    out = []
+    for gap in gaps:
+        co.note_gap_read(side, gap, subject=name,
+                         name=None if str(name).isdigit() else name)
+        out += run(co, every_s, packet=packet)
+    return out
+
+
+def gap_lines(calls):
+    return [c.spoken() for c in calls if c.kind == GAPS]
+
+
+def test_the_envelope_is_a_corner_burst_then_a_drift():
+    allowed = news_module.jump_allowed_s
+    assert allowed(0.0) == pytest.approx(0.5)
+    assert allowed(2.0) == pytest.approx(1.0)          # 0.25 s a second
+    assert allowed(30.0) == pytest.approx(3.0)         # not 8.0
+    assert allowed(120.0) == pytest.approx(7.5)
+
+
+def test_a_jump_with_nothing_on_the_circuit_between_is_never_heard():
+    """Bathurst, replayed: "The car ahead, 0.5." then "The car ahead, 9
+    seconds." Here with no pass, no stop and no off between them."""
+    co = a_race()
+    first = gap_lines(spaced(co, "ahead", [0.52, 0.50, 0.49], "78")
+                      + run(co, 1))
+    assert first == ["The car ahead, 0.5."]
+    heard = gap_lines(
+        spaced(co, "ahead", [9.0, 9.02, 8.98, 9.01, 9.0, 8.97, 9.03], "78")
+        + run(co, RaceCoordinator.MID_LAP_SPACING_S))
+    co.state.lap = 6                                     # the refresher is due
+    heard += gap_lines(spaced(co, "ahead", [9.0, 9.02], "78")
+                       + run(co, RaceCoordinator.MID_LAP_SPACING_S))
+    assert not any("9" in line for line in heard), heard
+
+
+def test_one_misread_is_refused_and_the_car_stands():
+    co = a_race()
+    assert gap_lines(spaced(co, "ahead", [2.1, 2.1, 2.1], "PUNISHED")
+                     + run(co, 1)) == ["PUNISHED ahead, 2.1."]
+    spaced(co, "ahead", [9.9], "PUNISHED", every_s=0.1)
+    assert co.news._run["ahead"] and co.news._ref["ahead"].gap_s == 2.1
+    # Nothing is said while a jump is being held.
+    assert co.news.gaps_call(co.state, co._packets) is None
+    spaced(co, "ahead", [2.0], "PUNISHED")
+    assert co.news._run["ahead"] == [] and co.news._ref["ahead"].gap_s == 2.0
+
+
+def test_the_refresher_does_not_alternate_between_two_cars():
+    """One handle, two cars' figures in turn - the board's merged cluster.
+    Whatever is said on that side is the car the handle was first."""
+    co = a_race()
+    said = gap_lines(spaced(co, "ahead", [1.2, 1.2, 1.2], "78") + run(co, 1))
+    for lap in range(6, 10):
+        co.state.lap = lap
+        said += gap_lines(spaced(co, "ahead", [7.8, 1.2] * 8, "78")
+                          + run(co, 5))
+    figures = {line for line in said}
+    assert figures == {"The car ahead, 1.2."}, said
+
+
+def test_a_jump_across_a_place_change_is_a_new_car_once_three_agree():
+    co = a_race(position=8)
+    assert gap_lines(spaced(co, "ahead", [0.3, 0.3, 0.3], "78",
+                            packet=_Packet(8))
+                     + run(co, 1, packet=_Packet(8))) == ["The car ahead, 0.3."]
+    # The box read every 2.2 s, as the wall reads it.
+    spaced(co, "ahead", [0.3] * 14, "78", packet=_Packet(8))
+    # We pass him: P7, and the box shows the next car up the road.
+    run(co, 2, packet=_Packet(7))
+    assert gap_lines(spaced(co, "ahead", [1.9, 1.92], "78",
+                            packet=_Packet(7))) == []          # two, held
+    said = gap_lines(spaced(co, "ahead", [1.94], "78", packet=_Packet(7))
+                     + run(co, 1, packet=_Packet(7)))
+    assert said == ["The car ahead, 1.9."]
+    # The handle held the slot across the pass: a slot, not a car.
+    assert "78" in co.news._merged and "78" not in co.news._unreliable
+
+
+def test_a_named_handle_that_names_a_slot_loses_its_name_and_its_pace():
+    co = a_race(position=8)
+    assert gap_lines(spaced(co, "ahead", [0.3, 0.3, 0.3], "PUNISHED",
+                            packet=_Packet(8))
+                     + run(co, 1, packet=_Packet(8))) == [
+        "PUNISHED ahead, 0.3."]
+    spaced(co, "ahead", [0.3] * 14, "PUNISHED", packet=_Packet(8))
+    run(co, 2, packet=_Packet(7))
+    said = gap_lines(spaced(co, "ahead", [2.4, 2.4, 2.4], "PUNISHED",
+                            packet=_Packet(7))
+                     + run(co, RaceCoordinator.MID_LAP_SPACING_S,
+                           packet=_Packet(7)))
+    assert said == ["The car ahead, 2.4."]
+    trend = co.news._trends["ahead"]
+    for key in range(1, 8):
+        trend.note(key, 10.0 - key, subject="PUNISHED")
+    assert co.news.pace_call(co.state, co._packets) is None
+
+
+def test_readings_that_jump_twice_with_nothing_to_explain_it_are_unconfirmed():
+    co = a_race()
+    spaced(co, "ahead", [3.0, 3.0, 3.0], "80")
+    run(co, 1)
+    spaced(co, "ahead", [6.0, 6.0, 6.0], "80")         # jump one
+    spaced(co, "ahead", [3.2, 3.2, 3.2], "80")         # jump two
+    assert "80" in co.news._unreliable
+    run(co, 60)
+    co.state.lap = 7
+    said = [c for c in spaced(co, "ahead", [3.2, 3.2], "80") + run(co, 1)
+            if c.kind == GAPS]
+    assert [c.spoken() for c in said] == ["The car ahead, 3.2. Unconfirmed."]
+    assert said[0].confidence == LOW
+
+
+def test_readings_that_fit_nothing_retire_the_car():
+    """Rule 10: a reference that disagrees with everything is what is
+    wrong."""
+    co = a_race()
+    spaced(co, "ahead", [2.0, 2.0, 2.0], "PUNISHED")
+    spaced(co, "ahead", [9.0, 15.0, 4.0, 12.0, 20.0, 7.0], "PUNISHED",
+           every_s=0.5)
+    assert co.news._neighbour["ahead"] is None
+    spaced(co, "ahead", [7.1, 7.1, 7.1], "PUNISHED")
+    assert co.news._neighbour["ahead"] == "PUNISHED"
+    assert co.news._ref["ahead"].gap_s == 7.1
+
+
+def test_our_own_off_moves_the_gap_and_is_not_a_new_car():
+    co = a_race()
+    assert gap_lines(spaced(co, "ahead", [2.0, 2.0, 2.0], "PUNISHED")
+                     + run(co, 1)) == ["PUNISHED ahead, 2.0."]
+    identity = co.news._segment[("ahead", "PUNISHED")]
+    run(co, 6, packet=_Packet(surface_types=("G",) * 4))
+    spaced(co, "ahead", [9.0, 9.0, 9.0], "PUNISHED")
+    assert co.news._segment[("ahead", "PUNISHED")] == identity
+    assert "PUNISHED" not in co.news._merged
+    assert "PUNISHED" not in co.news._unreliable
+
+
+def test_the_one_car_state_is_reset_with_the_race():
+    co = a_race()
+    spaced(co, "ahead", [2.0, 2.0, 2.0], "78")
+    run(co, 2, packet=_Packet(6))
+    spaced(co, "ahead", [6.0, 6.0, 6.0], "78", packet=_Packet(6))
+    assert co.news._merged
+    co.news.new_session()
+    news = co.news
+    assert (news._merged, news._unreliable, news._jumps, news._segment,
+            news._key_ref, len(news._moments)) == ({}, {}, {}, {}, {}, 0)
+    assert news._ref == {"ahead": None, "behind": None}
+
+
 # ------------------------------------------------------------ pace
 
 def _pace_trend(side, gaps, subject="PUNISHED"):
@@ -333,12 +489,17 @@ def test_the_pace_call_through_the_race_names_him_and_says_the_count():
     co = a_race()
     for key in range(1, 9):
         co.state.lap = key
+        # A lap apart: a second a lap is a car closing, not a jump.
+        co._packets += int(120 * SAMPLE_HZ)
         for _ in range(3):
             co.note_gap_read("ahead", 10.0 - 1.0 * key, subject="PUNISHED",
                              name="PUNISHED")
         co.news.note_lap(key, key + 1, 120.0)
     co.state.lap = 9
-    co.news._said_gap["ahead"] = ("PUNISHED", co.news._band["ahead"])
+    news = co.news
+    news._said_gap["ahead"] = (
+        ("PUNISHED", news._segment[("ahead", "PUNISHED")]),
+        news._band["ahead"], news._ref["ahead"])
     co.news._gap_lap = co.state.lap_now()
     said = run(co, 1)
     assert [c.spoken() for c in said] == [

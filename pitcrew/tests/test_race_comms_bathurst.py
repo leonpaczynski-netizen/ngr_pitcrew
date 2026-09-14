@@ -34,6 +34,7 @@ from pathlib import Path
 
 from pitcrew.engineer import phrase_manifest as manifest
 from pitcrew.engineer import voice as voice_module
+from pitcrew.race import news as news_module
 from pitcrew.race.calls import GAPS, PACE, POSITION, STOPS_PICTURE, WATCHED
 from pitcrew.race.coordinator import RaceCoordinator
 from pitcrew.race.pit_wall import Entered
@@ -340,6 +341,74 @@ def test_every_unnamed_volunteered_line_plays_from_declared_clips():
     for text in unnamed:
         segments = manifest.segments_for(text)
         assert segments and all(s in clips for s in segments), (text, segments)
+
+
+# ------------------------------------------------ one car, or several
+
+_FIGURE = re.compile(r"(ahead|behind), (under a tenth|\d+\.\d|\d+ seconds)\.")
+
+
+def spoken_gaps(heard) -> list[tuple[float, str, float, float]]:
+    """`(race_s, side, figure, rounding)` for every gap figure he heard."""
+    out = []
+    for h in heard:
+        if h.kind != GAPS:
+            continue
+        for side, figure in _FIGURE.findall(h.text):
+            if figure == "under a tenth":
+                value, rounding = 0.05, 0.05
+            elif figure.endswith("seconds"):
+                value, rounding = float(figure.split()[0]), 0.5
+            else:
+                value, rounding = float(figure), 0.05
+            out.append((h.race_s, side, value, rounding))
+    return out
+
+
+def slot_events() -> list[float]:
+    """Every moment on the race clock that could put another car in the
+    ahead or behind box, or move a gap by what it cost us: the place byte's
+    changes, each rival entering and leaving the lane, our offs, our stop -
+    taken from this module's reconstruction, not from the coordinator."""
+    times = [race_s(when) for when, _ in POSITIONS[1:]]
+    times += [race_s(second) + CONFIRM_AFTER_S for _, _, second, _, _ in VISITS]
+    times += [race_s(filed) for _, _, _, filed, _ in VISITS]
+    times += [race_s(when) for when, _ in OFFS]
+    times += [race_s(when) for when in IN_PIT]
+    return sorted(times)
+
+
+def implausible_jumps(heard, *, explained: bool = True) -> list[tuple]:
+    """Consecutive figures heard on one side that no car's gap moves between
+    in the time between them (`news.continuous`, plus what saying a figure
+    rounds off), with - where `explained` - nothing in `slot_events` inside
+    `news.EXPLAIN_LAG_S` before the first figure up to the second."""
+    events = slot_events()
+    jumps, last = [], {}
+    for at, side, value, rounding in spoken_gaps(heard):
+        before, last[side] = last.get(side), (at, value, rounding)
+        if before is None:
+            continue
+        then, was, was_rounding = before
+        allowed = (news_module.jump_allowed_s(at - then)
+                   + was_rounding + rounding)
+        if abs(value - was) <= allowed:
+            continue
+        if explained and any(then - news_module.EXPLAIN_LAG_S < t <= at
+                             for t in events):
+            continue
+        jumps.append((side, round(then), was, round(at), value))
+    return jumps
+
+
+def test_no_gap_he_hears_jumps_with_nothing_on_the_circuit_to_explain_it():
+    """Replayed before the guard: "The car ahead, 0.5." then, thirty seconds
+    later, "The car ahead, 9 seconds." - the board's cluster "78" holding the
+    ahead box across a pass. Each figure he hears is now continuous with the
+    last on its side, or has a place change, a stop or an off between."""
+    _, heard, _ = replayed()
+    assert spoken_gaps(heard)
+    assert implausible_jumps(heard) == []
 
 
 def test_a_pace_claim_carries_its_test():
