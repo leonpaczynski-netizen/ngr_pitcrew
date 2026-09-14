@@ -280,7 +280,16 @@ crew passes (replay video `2026-09-15 07-21-54.mp4`, frames, fuel) checked by Lu
 > *"car was still too lively and not planted enough for the race to be consistent I used way too
 > much fuel compared to other drivers. Too many crashes."*
 
-## Rank zero — OPEN AGAIN
+## Rank zero — CLOSED by the driver, 15 Sep
+- `[DRIVER REPORT]` *"setup hasn't changed"* — the 8 Sep `SCREEN` sheet above was in the car for the race.
+  (A driver report, not a screenshot; consistent with the `FEED` checks below.)
+- `[DRIVER REPORT]` *"I started on TCS 1 then 2 then 3 that should be in the live race screen captures
+  in the HUD"* — the flag reading below was TCS, driven deliberately. Not a setup error.
+- `[DRIVER REPORT]` *"when the car hits a kerb it loses the "planted feel" to the road and it's hard for
+  me to keep control, compared to the porsche RSR which is a much more balanced car"* — agrees with the
+  frames: every off began with a kerb or grass strike. **This is the Rd8 brief.**
+
+### What the feed showed before he answered
 - `FEED`: gearbox unchanged in s151…s176; ride height at matched speed and fuel within ±1.1 mm of s151.
   Springs, dampers, ARB, diff, camber, toe, aero: **no ground truth — not asked yet.**
 - ⚠️ **TCS flag (bit 11) about 7 % of race frames, 4.7–9.8 % on EVERY lap from lap 1** (measurement
@@ -320,4 +329,4 @@ against 14 Sep practice at matched fuel (trend, 5–8 laps a cell).
 - He already shifts 250–440 rpm under the 8,600 performance beep; the fuel table was never used.
 - Short-shift trade borrowed from Daytona does not pay unless it deletes a stop `[DERIVED elsewhere, transfer ASSUMED]`.
 
-## Decision — NO CHANGE at Bathurst (the round is over); Rd8 is a separate turn
+## Decision — NO CHANGE at Bathurst (the round is over). Rd8 is GR3 Rd8 Monza (driver, 15 Sep); the kerb behaviour is its brief.
