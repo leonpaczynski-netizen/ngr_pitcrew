@@ -159,29 +159,86 @@ def test_a_refusal_carries_whether_obs_is_recording():
         assert check.recording is state
 
 
-def test_the_app_not_driving_the_recording_is_not_proof_obs_is_idle():
+class _FakeObs:
+    """Stands in for `ObsSource` so no test here touches a live OBS.
+
+    **These tests used to ask the real websocket on 127.0.0.1:4455** and assume
+    nothing answered. On 14 Sep 2026, with OBS open and idle, it answered False
+    - a correct live reading that failed the suite. A test whose verdict
+    depends on what else is running on the machine is testing the machine
+    (CLAUDE.md §7).
+    """
+
+    answer: tuple = (None, "ConnectionRefusedError")
+    release = None
+    built: list = []
+
+    def __init__(self, host, port, password):
+        _FakeObs.built.append((host, port, password))
+
+    def recording(self):
+        if _FakeObs.release is not None:
+            _FakeObs.release.wait(timeout=10.0)
+        return _FakeObs.answer
+
+
+@pytest.fixture
+def fake_obs(monkeypatch):
+    from pitcrew.telemetry import hud
+
+    _FakeObs.answer = (None, "ConnectionRefusedError")
+    _FakeObs.release = None
+    _FakeObs.built = []
+    monkeypatch.setattr(hud, "ObsSource", _FakeObs)
+    yield _FakeObs
+    if _FakeObs.release is not None:
+        _FakeObs.release.set()
+
+
+@pytest.mark.parametrize("obs_says, expected", [
+    ((None, "ConnectionRefusedError"), None),   # unreachable: cannot tell
+    ((True, None), True),                       # he started it himself
+    ((False, None), False),                     # OBS itself says idle
+])
+def test_the_app_not_driving_the_recording_is_not_proof_obs_is_idle(
+        fake_obs, obs_says, expected):
     """`obs_record_sessions` means "the APP drives the recording", not "OBS is
     recording" - he may have started it himself. Reading it as the second told
     him "OBS is not recording either, so there would be nothing to transcribe",
     which is the sentence most likely to make him abort a race he did not need
-    to abort. CLAUDE.md rule 3: unknown is not False. A critic found it."""
-    session = HudSession(
-        settings=_Settings(obs_record_sessions=False), store=None)
-    # Unreachable OBS in the test environment, so the honest answer is None -
-    # and crucially NOT False, which is what the flag alone used to yield.
-    assert session._obs_recording() is not False
+    to abort. CLAUDE.md rule 3: unknown is not False. A critic found it.
+
+    **The answer is OBS's, never the flag's.** With the flag off: an
+    unreachable OBS is None, not False; a recording he started is True; and
+    False is said only when OBS itself reports it."""
+    fake_obs.answer = obs_says
+    settings = _Settings(obs_record_sessions=False, obs_host="10.0.0.9",
+                         obs_port=4460, obs_password="pw")
+    session = HudSession(settings=settings, store=None)
+    assert session._obs_recording() is expected
+    assert fake_obs.built == [("10.0.0.9", 4460, "pw")], \
+        "the flag was read instead of OBS being asked"
 
 
-def test_asking_obs_whether_it_records_cannot_hang_the_button():
+def test_asking_obs_whether_it_records_cannot_hang_the_button(
+        fake_obs, monkeypatch):
     """It goes down `ObsSource._request`, whose receive timeout re-arms on
     every message - the same unbounded path the grab is wrapped for. Bounding
     one of the two doors is not bounding the room."""
+    import threading
     import time
 
+    from pitcrew.telemetry import hud_session
+
+    fake_obs.answer = (True, None)
+    fake_obs.release = threading.Event()        # an OBS that never answers
+    monkeypatch.setattr(hud_session, "PREFLIGHT_TIMEOUT_S", 0.2)
     session = HudSession(settings=_Settings(), store=None)
     began = time.monotonic()
-    session._obs_recording()
-    assert time.monotonic() - began < 8.0, "the recording query blocked"
+    state = session._obs_recording()
+    assert time.monotonic() - began < 2.0, "the recording query blocked"
+    # CLAUDE.md rule 3: a query that did not answer is unknown, not idle.
+    assert state is None
 
 
 def test_the_check_costs_exactly_one_grab():
