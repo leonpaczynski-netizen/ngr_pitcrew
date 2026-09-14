@@ -1061,10 +1061,24 @@ def race_news_lines() -> tuple[str, ...]:
     return tuple(dict.fromkeys(out))
 
 
+def hud_alert_lines() -> tuple[str, ...]:
+    """Contact and water, appearing and going (`race/hud_alerts.py`).
+
+    **Whole clips, and every one is said mid-corner.** An onset lands the
+    moment the icon lights or the bar fills, which is exactly when a pause for
+    live synthesis would be heard. Eight fixed sentences, no numbers, imported
+    from the module that says them.
+    """
+    from pitcrew.race.hud_alerts import fixed_lines as alert_lines
+
+    return tuple(alert_lines())
+
+
 def volunteered_lines() -> tuple[str, ...]:
     """Every clip the families above need."""
     return tuple(dict.fromkeys((*colour_data_lines(), *off_road_lines(),
-                                *refuel_lines(), *race_news_lines())))
+                                *refuel_lines(), *race_news_lines(),
+                                *hud_alert_lines())))
 
 
 # The two references the fuel clause is measured against, mirrored from

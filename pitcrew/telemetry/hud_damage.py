@@ -43,6 +43,19 @@ ffmpeg decode of an mp4; the live HUD source is an uncompressed grab. Chroma
 subsampling blurs a 2-3 px red stroke, so arc counts, the clean zero and kerb
 bleed may differ live. **Nothing consumes this until a live grab with contact
 has been checked** (plan row 5.20).
+
+**Wired 15 Sep 2026, because the driver asked for it** (*"George needs to
+verbally alert me to damage appearing and leaving car"*) - George says it
+through `race/hud_alerts.py`, and the first live race is the check. What the
+live log already holds: Bathurst, session 176, 14 Sep, ran this reader live
+(its lit/dim transitions are in `logs/pitcrew.log`) through seven episodes.
+Every one fell on a lap the laps table credits with off-track time, and lit
+arcs read 10-53 px live against 22-52 on the survey. The recording of the same
+race, read by this module, found the same episodes: three began within 4 s of
+the live reader's first lit grab, and three began 20-64 s EARLIER on the
+recording, in stretches where half its frames were refused for red outside the
+arcs - the chroma blur warned of above, and on the side of the live reader
+saying less, later.
 """
 from __future__ import annotations
 

@@ -224,6 +224,21 @@ STOPS_PICTURE = "stops-picture"
 PACE = "pace"
 WATCHED = "watched-rival"
 GAPS = "gaps"
+# **What the HUD panel shows that no packet carries** (the driver, 15 Sep
+# 2026: *"alert me to damage appearing and leaving car and water on track
+# too"*). Said off `race/hud_alerts.py`, mid-lap, as the reads arrive - never
+# at a crossing. The onsets are EVENTS: true once, and gone in two minutes.
+# The clears are facts. See that module for every threshold.
+#
+#   CONTACT        "Contact, front." / "Contact again, rear." - the car icon's
+#                  bumper arc lit. Recent contact, never the car's condition.
+#   CONTACT_CLEAR  "Contact warning's cleared." - the icon cleared itself.
+#   WATER          "Water on track." - the hygrometer, under our car.
+#   WATER_DRY      "Track looks dry again."
+CONTACT = "contact"
+CONTACT_CLEAR = "contact-clear"
+WATER = "water"
+WATER_DRY = "water-dry"
 
 URGENCY = (CHEQUER, STOPS_OFF, STOP_BACK, BOX_NOW,
            # **`UNDERCUT` sits directly below `BOX_NOW`.** It is a box
@@ -265,7 +280,11 @@ URGENCY = (CHEQUER, STOPS_OFF, STOP_BACK, BOX_NOW,
            # `next_call` raises on any kind absent from this tuple, and a kind
            # that only ever arrives by another road is exactly the one that
            # goes unranked until a race finds it.
-           FUEL_LONG, INCIDENT, WEAR, TYRE_TEMP,
+           # **`CONTACT` and `WATER` sit with `INCIDENT`**: true once, about
+           # our own car and the surface under it, and below every call about
+           # fuel and the stop. They never contend at a crossing - they are
+           # said mid-lap off the HUD reads - but every kind is ranked.
+           FUEL_LONG, INCIDENT, CONTACT, WATER, WEAR, TYRE_TEMP,
            # A fact about his own driving, below every call about the car.
            SAVING_CHANGE,
            # And the chase, below it: news about the car ahead, not about ours.
@@ -306,6 +325,8 @@ URGENCY = (CHEQUER, STOPS_OFF, STOP_BACK, BOX_NOW,
            # - and `race/news.py` offers them in this same order, so the
            # ranking is stated once.
            STOPS_PICTURE, PACE, WATCHED, GAPS,
+           # The HUD clears: news that something went away, below the race.
+           CONTACT_CLEAR, WATER_DRY,
            GREEN, POSITION, STATUS)
 
 # --- the two registers -----------------------------------------------------
@@ -402,6 +423,14 @@ REGISTER = {
     PACE: FACT,
     WATCHED: FACT,
     GAPS: FACT,
+    # **The HUD alerts** (15 Sep 2026). An onset is an EVENT - true once and
+    # not askable two minutes later, when the icon has cleared itself or the
+    # car is out of the water. A clear is a FACT he cannot see: he races with
+    # the race HUD off.
+    CONTACT: EVENT,
+    WATER: EVENT,
+    CONTACT_CLEAR: FACT,
+    WATER_DRY: FACT,
 }
 
 

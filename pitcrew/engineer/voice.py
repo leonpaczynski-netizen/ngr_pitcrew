@@ -388,8 +388,15 @@ def _kind_classes() -> dict[str, int]:
     news = (calls.POSITION, calls.RIVAL_BOXED, calls.RIVAL_COMMITTED,
             calls.RIVAL_SHORT, calls.CLOSING,
             # The race around him (D7, 14 Sep 2026) - `race/news.py`.
-            calls.STOPS_PICTURE, calls.PACE, calls.WATCHED, calls.GAPS)
+            calls.STOPS_PICTURE, calls.PACE, calls.WATCHED, calls.GAPS,
+            # A HUD warning going away (`race/hud_alerts.py`): news.
+            calls.CONTACT_CLEAR, calls.WATER_DRY)
+    # **Contact and water appearing are EVENTS**, said as they happen: ahead
+    # of the news, behind any instruction. Named rather than left to the
+    # default so the class is a decision someone wrote down.
+    events = (calls.CONTACT, calls.WATER)
     table = {kind: NEWS for kind in news}
+    table.update({kind: EVENT for kind in events})
     table.update({kind: INSTRUCTION for kind in instructions})
     table[colour.DATA] = COLOUR
     return table

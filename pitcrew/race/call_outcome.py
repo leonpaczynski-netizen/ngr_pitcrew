@@ -89,10 +89,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pitcrew.race.calls import (BOX_NOW, BOX_SOON, CHASE, FUEL_SHORT, GAPS,
-                                 GREEN, INCIDENT, LAPS_TO_GO, PACE, POSITION,
+from pitcrew.race.calls import (BOX_NOW, BOX_SOON, CHASE, CONTACT,
+                                 CONTACT_CLEAR, FUEL_SHORT, GAPS, GREEN,
+                                 INCIDENT, LAPS_TO_GO, PACE, POSITION,
                                  RIVAL_BOXED, STATUS, STAY_OUT, STOPS_PICTURE,
-                                 TO_THE_FLAG, TO_THE_STOP, TYRE_TEMP, WATCHED)
+                                 TO_THE_FLAG, TO_THE_STOP, TYRE_TEMP, WATCHED,
+                                 WATER, WATER_DRY)
 
 ACTED = "acted"
 NOT_ACTED = "not-acted"
@@ -332,6 +334,18 @@ _UNANSWERABLE = {
            "it"),
     WATCHED: ("his place is the board's row as the app read it, and nothing "
               "on file records where he ran"),
+    # The HUD alerts (15 Sep 2026, `race/hud_alerts.py`). Each rests on the
+    # one instrument that sees it, and nothing else on file can say whether
+    # it was right: GT7 sends no contact, damage or weather in any packet.
+    CONTACT: ("the HUD car icon is the only record of contact - GT7 sends no "
+              "contact or damage channel, so nothing on file can confirm it"),
+    CONTACT_CLEAR: ("the icon going grey is the only record, and it says the "
+                    "warning cleared itself, not that the car is undamaged"),
+    WATER: ("the hygrometer under the car is the only instrument for water - "
+            "GT7 sends no weather, and no lap keeps a water record to hold it "
+            "to"),
+    WATER_DRY: ("the hygrometer under the car is the only instrument for "
+                "water, and no lap keeps a water record to hold it to"),
 }
 
 

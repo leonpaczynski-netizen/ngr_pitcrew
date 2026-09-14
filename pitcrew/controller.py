@@ -76,6 +76,7 @@ from pitcrew.race.calls import (STATUS, STATUS_EVERY_LAPS, STAY_OUT,
 from pitcrew.race.coordinator import (PlanContext, RaceCoordinator,
                                       context_from_stored)
 from pitcrew.race.expectations import PRACTICE
+from pitcrew.race.hud_alerts import HudAlerts
 from pitcrew.race.hud_calibration import note_frame_red
 from pitcrew.race.incident_watch import IncidentWatch
 from pitcrew.race.straight import Straight
@@ -947,6 +948,9 @@ class PitCrewController(QObject):
     # it over, the call, whether it was heard). Emitted on the voice thread,
     # delivered on this one - see `_on_voice_heard`.
     voice_heard = pyqtSignal(object, object, bool)
+    # The same answer about a HUD alert: (the alerts that handed it over, the
+    # call, whether it was heard). See `_on_hud_alert_heard`.
+    hud_alert_heard = pyqtSignal(object, object, bool)
 
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
@@ -1066,6 +1070,11 @@ class PitCrewController(QObject):
         # attributes here, written on a worker thread and read from three
         # different places. See `telemetry/hud_session.py`.
         self.hud = HudSession(settings=lambda: self.settings, store=self.store)
+        # **Contact and water, said as they come and go** (the driver, 15 Sep
+        # 2026). Fed from the reads `hud` keeps, once a second off the health
+        # tick that runs while any session is open - see `_poll_hud_alerts`.
+        self._hud_alerts = HudAlerts()
+        self._hud_alerts.acknowledged_delivery = True
         # **And the bench**: the Settings screen's hardware checks and the
         # ten-tick health line. `listener` and `settings` go in as readers
         # because the controller rebinds both - a bench holding the object it
@@ -1116,6 +1125,7 @@ class PitCrewController(QObject):
         self.bridge.straight_reached.connect(self._on_straight_reached)
         self.bridge.position_changed.connect(self._on_position_changed)
         self.voice_heard.connect(self._on_voice_heard)
+        self.hud_alert_heard.connect(self._on_hud_alert_heard)
         # **The connection this signal never had.** `_on_rival_stop` emitted
         # into it from the worker thread and nothing was listening, so every
         # rival call in `race/rival_calls.py` was unreachable - written,
@@ -1189,6 +1199,9 @@ class PitCrewController(QObject):
         self._health = QTimer(self)
         self._health.setInterval(1000)
         self._health.timeout.connect(self._report_health)
+        # Started and stopped with every session, practice and race alike -
+        # which is exactly the life the HUD alerts need.
+        self._health.timeout.connect(self._poll_hud_alerts)
 
         # **A plan approved from outside reaches a running app.** The Race
         # screen is refreshed when it is shown (`RaceScreen.shown`) and, in
@@ -2897,6 +2910,11 @@ class PitCrewController(QObject):
 
     def _new_hud_session(self) -> None:
         self.hud.new_session()
+        # Rule 11, and this is its caller: practice start and race arm both
+        # come through here, so no episode outlives the session it lit in.
+        alerts = self.__dict__.get("_hud_alerts")
+        if alerts is not None:
+            alerts.new_session()
 
     def _stop_hud_sampler(self) -> None:
         self.hud.stop()
@@ -7374,6 +7392,88 @@ class PitCrewController(QObject):
         if race is None or race is not self.race:
             return
         race.delivered(call, played)
+
+    # --------------------------------------------------- contact and water
+
+    def _poll_hud_alerts(self, now: float | None = None) -> None:
+        """Qt thread, once a second while a session is open: the HUD alerts.
+
+        **Everything is decided in `race/hud_alerts.py`**; this hands it the
+        reads `hud` keeps and says what comes back. Practice and race alike -
+        George speaks in practice too (the debrief, the qualifying coach) -
+        and never with the car in the pit, off the circuit, or past the flag.
+        """
+        alerts = self.__dict__.get("_hud_alerts")
+        hud = self.__dict__.get("hud")
+        if alerts is None or hud is None or self.session_id is None:
+            return
+        from pitcrew.telemetry.session_state import Phase
+
+        try:
+            state = self.bridge.state
+            race = self.__dict__.get("race")
+            on_track = bool(state.on_track) and state.phase is not Phase.IN_PIT
+            if race is not None and (race.state.in_pit or race.state.finished):
+                on_track = False
+            alerts.feed_history(hud.damage_history(), hud.hygro_history(),
+                                on_track=on_track)
+            lap = race.state.lap if race is not None else state.lap_count
+            calls = alerts.poll(_monotonic() if now is None else now,
+                                lap=lap, on_track=on_track)
+            for call in calls:
+                self._say_hud_alert(call)
+        except Exception:                                   # noqa: BLE001
+            # A timer slot: nothing may escape into Qt, and the lap is
+            # recorded whatever the alerts do.
+            log("race").exception("hud alerts: this poll failed")
+
+    def _say_hud_alert(self, call) -> None:
+        """Say one alert in its own class, and book it only when heard."""
+        alerts = self._hud_alerts
+        spoken = call.spoken()
+        log("race").info("hud alert: %s [%s]", spoken, call.why_spoken)
+        if self._engineer_speaks and getattr(self.voice, "enabled", False):
+            emit = self.hud_alert_heard.emit
+            self.voice.say(spoken, kind=call.kind,
+                           on_done=lambda played: emit(alerts, call, played))
+        else:
+            # No voice to wait on: the screen is the delivery.
+            if self._engineer_speaks:
+                self.voice.say(spoken, kind=call.kind)
+            self._on_hud_alert_heard(alerts, call, True)
+        if self.race is not None and self.race_screen is not None:
+            self.race_screen.set_status(spoken)
+        elif self.race is None and self.practice is not None:
+            self.practice.set_status(spoken)
+
+    def _on_hud_alert_heard(self, alerts, call, played: bool) -> None:
+        """Qt thread: the voice finished with an alert. Rule 11: only the
+        alerts that handed it over hear the answer - a session reset since
+        has forgotten the call, and `delivered` ignores it."""
+        if alerts is not self.__dict__.get("_hud_alerts"):
+            return
+        if not alerts.awaits_delivery(call):
+            return
+        alerts.delivered(call, played)
+        if not played or self.race_run_id is None or self.race is None \
+                or self.race.state.finished:
+            return
+        # **Filed as heard, like every other call** (§5.5): what was said, why,
+        # and a verdict - cannot-tell, with the reason that binds for it.
+        payload = {"call": call.as_export(), "confidence": call.confidence,
+                   "kind": call.kind, "why_spoken": call.why_spoken,
+                   "informational": True}
+        try:
+            row = None
+            if self.race_screen is not None:
+                row = self.race_screen.show_call(call)
+            revision_id = self.store.append_revision(
+                self.race_run_id, call.lap, call.call, payload,
+                accepted=False)
+            self._filed_calls.setdefault(revision_id, (call, row))
+        except Exception:                                   # noqa: BLE001
+            log("race").exception("hud alert: %r could not be filed",
+                                  call.call)
 
     def _on_incident_seen(self) -> None:
         """Qt thread: the car stopped mid-lap. Decide what it is worth.

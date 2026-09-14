@@ -413,11 +413,14 @@ def test_the_judging_runs_past_the_fragment_check():
 def test_every_call_path_files_for_a_verdict():
     """Critic pass 8: the position-call path discarded both the row and the
     revision id, so its rows kept `verdict = NULL` for the life of the race
-    and NULL meant three unrelated things."""
+    and NULL meant three unrelated things.
+
+    15 Sep 2026: the HUD alerts (`_on_hud_alert_heard`) are the third path,
+    and file the same way - so one more of each."""
     source = _controller_source()
     assert source.count("self._filed_calls[revision_id] = (call, row)") == 1
-    assert source.count("self._filed_calls.setdefault(revision_id,") == 1
-    assert source.count("row = self.race_screen.show_call(call)") == 2
+    assert source.count("self._filed_calls.setdefault(revision_id,") == 2
+    assert source.count("row = self.race_screen.show_call(call)") == 3
 
 
 def test_a_crossing_with_no_lap_number_files_no_board_row():

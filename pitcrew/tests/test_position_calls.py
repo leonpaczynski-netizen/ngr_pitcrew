@@ -333,15 +333,24 @@ def test_only_three_facts_are_volunteered_and_each_had_to_be_argued():
     championship rival's place off a board he does not read, and a gap with
     a name on it said while he drives - none is on the screen he races with,
     and he asked for all four with no cap on how often.
+
+    **`CONTACT_CLEAR` and `WATER_DRY` are the thirteenth and fourteenth, and
+    the DRIVER decided them too** (15 Sep 2026: "George needs to verbally
+    alert me to damage appearing and leaving car and water on track too").
+    Both close an EVENT he was told of - the contact icon has cleared itself,
+    the water has gone from under the car for most of a lap - on a panel he
+    does not look at mid-corner. See `race/hud_alerts.py`.
     """
-    from pitcrew.race.calls import (CHASE, CLOSING, GAPS, PACE, PENALTY,
-                                    SAVING_CHANGE, SECTOR_SPLIT, STOPS_PICTURE,
-                                    TOW_TRADE, WATCHED)
+    from pitcrew.race.calls import (CHASE, CLOSING, CONTACT_CLEAR, GAPS, PACE,
+                                    PENALTY, SAVING_CHANGE, SECTOR_SPLIT,
+                                    STOPS_PICTURE, TOW_TRADE, WATCHED,
+                                    WATER_DRY)
 
     facts = {kind for kind, reg in REGISTER.items() if reg == FACT}
     assert facts == {POSITION, STATUS, CLOSING, SAVING_CHANGE, CHASE,
                      SECTOR_SPLIT, TOW_TRADE, PENALTY,
-                     STOPS_PICTURE, PACE, WATCHED, GAPS}
+                     STOPS_PICTURE, PACE, WATCHED, GAPS,
+                     CONTACT_CLEAR, WATER_DRY}
 
 
 def test_the_box_call_is_an_instruction():

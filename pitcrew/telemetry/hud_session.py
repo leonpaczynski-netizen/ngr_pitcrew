@@ -286,6 +286,17 @@ class HudSession:
         return {"front": side([r[0] for r in recent], [r[2] for r in recent]),
                 "rear": side([r[1] for r in recent], [r[3] for r in recent])}
 
+    def damage_history(self) -> list[tuple]:
+        """The car-icon reads kept, oldest first: `(monotonic time, front px,
+        rear px, front lit, rear lit)`, px None for an unreadable grab. A
+        snapshot copy - safe to walk on the Qt thread (`race/hud_alerts.py`)."""
+        return list(self._damage)
+
+    def hygro_history(self) -> list[tuple]:
+        """The hygrometer reads kept, oldest first: `(monotonic time, level or
+        None)`. A snapshot copy, like `damage_history`."""
+        return list(self._hygro)
+
     def _note_damage(self, read) -> None:
         """Worker thread: one car-icon read from the grab just taken.
 

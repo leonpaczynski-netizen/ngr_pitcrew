@@ -243,7 +243,7 @@ build — and two one-off scripts, which is what `draw_bathurst_map` and
 `rig_endpoint_rate`, `rig_knock_sequence`, `rig_knock_curve`, `rig_perception`,
 `wind_bench`, `wind_replay`, `wind_sweep`, `install_shortcut`,
 `probe_extended_packet`, `gap_bank`, `board_bench`, `build_race_fixture`,
-`extract_race_comms_fixture`, `extract_board_identity_fixture`,
+`build_hud_alert_fixture`, `extract_race_comms_fixture`, `extract_board_identity_fixture`,
 `extract_reference`, `draw_bathurst_map`,
 `schema_audit`, `wiring_audit`.
 
