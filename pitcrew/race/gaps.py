@@ -105,6 +105,29 @@ MIN_LAPS_FOR_TREND = 5
 # will miss real trends; that is the correct direction, because the failure it
 # replaces was telling the driver he was catching somebody three times in four
 # when nothing was happening.
+#
+# **Checked against the reader's own noise, 14 Sep 2026, and it stands.**
+# Measured off `gap_reads` for sessions 143, 160, 166 and 176 (3,575 readings):
+#
+# * the READING is not what is noisy. Two readings of one car under 4 s apart
+#   differ by a median 0.03-0.11 s (90th percentile 0.13-0.37 s), which is
+#   the digit reader plus a few seconds of real racing;
+# * the per-LAP value is. `seen` keeps the last reading of a lap, taken at a
+#   different point on the road every lap, and adjacent laps of one car
+#   differ with a standard deviation of 0.74-2.47 s (pooled 1.92 s, n=51) -
+#   the random walk above, plus where on the lap the board happened to be
+#   legible;
+# * the rate this file quotes, over five consecutive laps of one car, came
+#   out with a spread of 0.48-0.62 s a lap at session 143 - the band the
+#   simulation above predicted. At session 176 it spread 1.7 s a lap, and
+#   that session's "one car ahead" held through a climb from P11 to P7,
+#   which is a board cluster standing for several drivers, not noise in a
+#   gap.
+#
+# So 0.8 remains about one and a half standard deviations of what a real
+# window produces with nothing happening, and the five laps stay. Letting a
+# misread erase the history (fixed in `GapTrend.note`) was what kept the call
+# unreachable; the threshold was not.
 TREND_WORTH_SAYING_S = 0.8
 
 
@@ -315,17 +338,86 @@ class GapTrend:
     side: str = "ahead"
     seen: dict[int, float] = field(default_factory=dict)
     subject: object = None
+    # **Every reading, by lap and by whose it was** - `lap -> subject ->
+    # [count, last gap, order]`. `seen` and `subject` are DERIVED from this
+    # on every note, so a misread never destroys anything: it is outvoted.
+    _reads: dict = field(default_factory=dict, repr=False)
+    _order: int = field(default=0, repr=False)
 
     def note(self, lap: int | None, gap_s: float | None,
              subject: object = None) -> None:
-        """Record one reading. A change of subject starts a new history."""
+        """Record one reading. The car a LAP was about is decided by vote.
+
+        ### 14 Sep 2026 - one misread used to erase five laps
+
+        **A change of subject threw the whole history away, and one frame
+        was enough to change it.** Bathurst, session 176: the car ahead was
+        the same cluster on every lap 1-14, 16 to 31 readings a lap - and on
+        laps 2, 4, 5, 6, 7 and 10 a single reading carried another name (a
+        board row misread, `Car #4` or `Car #31` once each). Each of those
+        wiped the history, so `MIN_LAPS_FOR_TREND` consecutive laps never
+        accumulated and `closing_call` could not be reached all race.
+
+        So the car a lap is about is the MAJORITY of that lap's readings,
+        and the history is never deleted - it is re-derived. `seen` holds
+        the laps of the current subject's run: for each lap, the last
+        reading of that car, where the lap has one. A genuine overtake still
+        starts a new history, because from the lap it happens on the new car
+        carries the readings; a flicker is a minority and changes nothing.
+
+        **The newest lap decides who the subject is, and the incumbent wins
+        a tie.** At a crossing the newest lap may hold a single reading, and
+        one reading of a new car IS what an overtake looks like at first -
+        so a lone reading of a new name still moves the subject, exactly as
+        before, until the lap's next readings outvote it. The difference is
+        that when they do, the old car's laps come back instead of being gone.
+
+        A reading with no subject (`None`) is a wildcard: it votes for nobody
+        and stands in for whichever car the lap is about.
+        """
         if lap is None or gap_s is None:
             return
-        if subject is not None and subject != self.subject:
-            if self.subject is not None:
-                self.seen = {}
-            self.subject = subject
-        self.seen[int(lap)] = float(gap_s)
+        lap = int(lap)
+        self._order += 1
+        slot = self._reads.setdefault(lap, {}).setdefault(subject, [0, 0.0, 0])
+        slot[0] += 1
+        slot[1] = float(gap_s)
+        slot[2] = self._order
+        self._rederive()
+
+    def _majority(self, lap: int, incumbent: object) -> object:
+        """The car most read on `lap`; the incumbent on a tie; None if unvoted."""
+        votes = {who: slot[0] for who, slot in self._reads.get(lap, {}).items()
+                 if who is not None}
+        if not votes:
+            return incumbent
+        best = max(votes.values())
+        if incumbent in votes and votes[incumbent] == best:
+            return incumbent
+        # Deterministic among equals: the one read most recently.
+        tied = [who for who, n in votes.items() if n == best]
+        return max(tied, key=lambda who: self._reads[lap][who][2])
+
+    def _rederive(self) -> None:
+        """Rebuild `subject` and `seen` from the readings. Rebinds, never
+        mutates, so a snapshot taken on another thread is never half-built."""
+        if not self._reads:
+            self.seen, self.subject = {}, None
+            return
+        newest = max(self._reads)
+        subject = self._majority(newest, self.subject)
+        seen: dict[int, float] = {}
+        for lap, by_who in self._reads.items():
+            if subject is not None and self._majority(lap, subject) != subject:
+                # A lap that was about another car is not this car's lap,
+                # even where a stray reading of this one landed in it.
+                continue
+            mine = [slot for who, slot in by_who.items()
+                    if who == subject or who is None]
+            if mine:
+                seen[lap] = max(mine, key=lambda slot: slot[2])[1]
+        self.subject = subject
+        self.seen = seen
 
     def latest(self) -> float | None:
         """The most recent gap, or `None` where nothing has been read.
@@ -342,6 +434,8 @@ class GapTrend:
         """CLAUDE.md rule 11. A gap history is about one race."""
         self.seen = {}
         self.subject = None
+        self._reads = {}
+        self._order = 0
 
     def _window(self, over_laps: int) -> list[int]:
         """The last `over_laps` CONSECUTIVE laps, newest last.

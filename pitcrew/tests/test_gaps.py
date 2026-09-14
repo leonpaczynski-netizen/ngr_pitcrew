@@ -161,6 +161,86 @@ def test_a_change_of_car_ahead_throws_the_history_away():
     assert count == 1 and rate is None
 
 
+# Bathurst, session 176, the car ahead: readings per lap of the car that was
+# there, and the laps on which ONE reading carried another name.
+_BATHURST_AHEAD = {1: 27, 2: 19, 3: 24, 4: 21, 5: 22, 6: 23, 7: 18, 8: 16,
+                   9: 20, 10: 19}
+_BATHURST_FLICKERS = {2: ["Car #4", "82"], 4: ["Car #4"],
+                      5: ["Car #31", "Car #4"], 6: ["Car #31"],
+                      7: ["Car #31"], 10: ["Car #4"]}
+
+
+def test_a_misread_name_no_longer_erases_the_history():
+    """**The closing call was unreachable all race at Bathurst.** One stray
+    reading on laps 2, 4, 5, 6, 7 and 10 each wiped the history, so five
+    consecutive laps never existed. The lap's car is now its majority, and a
+    stray reading is outvoted rather than obeyed."""
+    trend = GapTrend()
+    gap = 30.0
+    for lap in sorted(_BATHURST_AHEAD):
+        gap -= 1.2                                   # closing 1.2 s a lap
+        n = _BATHURST_AHEAD[lap]
+        flickers = list(_BATHURST_FLICKERS.get(lap, []))
+        for i in range(n):
+            trend.note(lap, gap + 0.01 * (i % 3), subject="78")
+            if flickers and i == n // 2:
+                trend.note(lap, 55.0, subject=flickers.pop())
+        for stray in flickers:
+            trend.note(lap, 55.0, subject=stray)
+    assert trend.subject == "78"
+    rate, count = trend.closing_s_per_lap()
+    assert count == MIN_LAPS_FOR_TREND
+    assert rate == pytest.approx(1.2, abs=0.05)
+    assert closing_call(trend, lap=10, who="Rocky") is not None
+
+
+def test_a_lone_new_name_at_the_crossing_moves_the_subject_until_outvoted():
+    """One reading of a new car is what an overtake looks like at first, so it
+    is obeyed - but when the lap's next readings are the old car again, the
+    old car's laps come back instead of being gone."""
+    trend = GapTrend()
+    for lap, gap in enumerate([10.0, 8.9, 7.8, 6.7, 5.6], start=6):
+        for _ in range(5):
+            trend.note(lap, gap, subject="rocky")
+    trend.note(11, 60.0, subject="punished")
+    assert trend.subject == "punished"
+    trend.note(11, 4.5, subject="rocky")          # a tie: the incumbent holds
+    assert trend.subject == "punished"
+    trend.note(11, 4.5, subject="rocky")
+    assert trend.subject == "rocky"
+    rate, count = trend.closing_s_per_lap()
+    assert count == MIN_LAPS_FOR_TREND and rate == pytest.approx(1.1)
+
+
+def test_a_genuine_overtake_still_starts_a_new_history():
+    trend = GapTrend()
+    for lap, gap in enumerate([10.0, 8.9, 7.8, 6.7, 5.6], start=6):
+        for _ in range(5):
+            trend.note(lap, gap, subject="rocky")
+    for lap in (11, 12):
+        for _ in range(5):
+            trend.note(lap, 12.0, subject="punished")
+    assert trend.subject == "punished"
+    assert sorted(trend.seen) == [11, 12]
+
+
+def test_a_lap_about_another_car_is_not_this_cars_lap():
+    """A stray reading of the old car inside a lap that was about the new
+    one does not stitch the two histories together."""
+    trend = GapTrend()
+    for lap in (1, 2, 3):
+        for _ in range(4):
+            trend.note(lap, 5.0, subject="rocky")
+    for _ in range(4):
+        trend.note(4, 9.0, subject="punished")
+    trend.note(4, 5.0, subject="rocky")
+    for _ in range(4):
+        trend.note(5, 9.5, subject="punished")
+    assert trend.subject == "punished"
+    assert sorted(trend.seen) == [4, 5]
+    assert trend.seen[4] == 9.0
+
+
 def test_only_consecutive_laps_are_fitted():
     """Five readings spanning laps 3, 4, 15, 16, 17 came back as a trend "over
     the last 5 laps", with a 10-lap hole regressed straight through."""
