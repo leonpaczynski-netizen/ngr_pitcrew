@@ -471,6 +471,11 @@ DEFAULT_TUNING: dict[str, float] = {
 }
 
 
+# What `PiperEngine.warm` synthesises and throws away. Short, and a real
+# sentence, so the warm-up runs the same code path a call does.
+WARM_LINE = "Radio check."
+
+
 class PiperEngine:
     """Local neural speech. Offline, and far better than SAPI on a race radio.
 
@@ -515,8 +520,19 @@ class PiperEngine:
                 self.tuning[key] = float(value)
 
     def warm(self) -> None:
-        """Load the model now, so the first real call does not wait for it."""
+        """Load the model AND run it once, so the first real call waits for
+        neither.
+
+        **Loading was only half the cost.** The first synthesis after a load
+        pays for the ONNX session's own first run - measured at Bathurst on
+        14 Sep 2026, the first pack miss of the race took 550 ms against
+        137 ms warm, and it landed on a call at racing speed. One throwaway
+        line, synthesised into nothing: no stream is opened, no card is
+        claimed, and the driver hears nothing.
+        """
         self._load()
+        for _samples, _rate in self.synthesise(WARM_LINE):
+            pass
 
     def _load(self):
         if self._voice is None:
