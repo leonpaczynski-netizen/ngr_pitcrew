@@ -720,6 +720,56 @@ and pinned by `test_best_corner_rule.py` (shown failing on the parent's text fir
   `full_throttle_pct`, and a missing pedal frame is no longer read as a released pedal
   (rule 3). `tools/instrument_floors.py` prints same-setup floors per session and refuses a
   between-run floor until 5.4a says which sessions share a setup.
+- **5.22 built, critic AGREED at pass 4** (`analysis/compound_pace.py`,
+  `tools/compound_pace.py`, a "By tyre" plate on the Practice screen, a debrief section).
+  Per game version and sector lines: the best lap on each compound (counted laps with all
+  three sectors, which is `personal_bests`' guard against a pit-exit fragment), the best of
+  each sector from any lap, and their sum labelled derived. **Gaps come off one expression of
+  "comparable"** - `strategy.evidence.comparable_groups`, which `comparable_pace` now calls
+  too (checked equal on 20,000 random event shapes) - on the lap and each sector.
+  - **The unit had to widen, and says so.** He sweeps compounds by restarting a session per
+    tyre, so strategy's same-session rule refused every comparison on file. The panel
+    compares a *sitting* (practice sessions chained within 2 h of the last one's end), every
+    gap line says "Separate sessions, so the race plan does not use it", and strategy's own
+    refusal says the panel may show a weaker figure. Strategy's rule is unchanged.
+  - **Sardegna RSR, the first read:** 9 Sep RM -1.00 s and RS -1.93 s a lap on RH; 10 Sep RM
+    -2.51 s on RH (both runs fuel-saving). **The two sittings disagree by 1.52 s, wider
+    than either's spread** - the RM-RH gap moves with something other than the tyre, and
+    no tyre has enough laps in two sessions of either sitting to give a session-to-session
+    floor. That is the finding, not a number to plan on.
+  - **What the four passes caught:** the panel contradicted strategy without saying so; a
+    "no tyre ran twice" sentence that was false on 10 Sep (RM ran twice, its second run lost
+    its young laps to incidents) and survived once in the per-sector detail; a drawing error
+    that could abort the app from the lap handler; a most-run reference that reverses every
+    row when counts cross (now the hardest compound present); compounds with a best and no
+    gap and no word (Spa's RS, 2 h 07 after the RH/RM runs); sittings chained start to start.
+    Open minors: `ended_at` is stop time, so a session left open stretches its sitting; a
+    refuel inside one lap does not start a new run (session 158 lap 11) - filed as its own
+    task, it narrows strategy's candidates too.
+- **5.20 reader built, NOT wired - critic AGREED at pass 2** (`telemetry/hud_damage.py`,
+  `HudSession.contact_recent`, a passenger on the same grab as the hygrometer and label).
+  A search of every flat recording found two real episodes in the Suzuka race (session
+  166: rear arc lap 2, 288-381 s; front arc lap 10, ~1267-1401 s) and none in 635 lit frames
+  elsewhere. **The row's premise was wrong twice:** only the bumper arc of the end that was
+  hit turns red (no left/right, no "more parts for more damage"), and **it clears on its own
+  90-135 s later with no stop** - it is recent contact, not the car's condition, so the
+  API says `contact_recent`, never damage. It pulses ~2 Hz; a clean icon carries 0 red
+  pixels on 621 frames, so any red rules out "no contact" (None, unconfirmed). Onset latency
+  at a 2 s grab: False for 17 s and True 23 s after the front hit. Run over all 1030 survey
+  crops: lit only inside the two episodes; every refusal is a misdetected bar.
+  **Still to do before anything consumes it:** a live grab with contact (the survey is all
+  mp4 decodes, and chroma subsampling blurs a 2-3 px stroke), the s135 front-damage replay,
+  and the driver's answer on what it feeds - George's incident call, refusing a contact lap
+  as a wear sample (a laps column, his yes), or a call on contact without an off. It is off
+  at crossing-only sampling (the default).
+- **5.1's tool built, critic AGREED at pass 2** (`tools/flip_points.py`): the event's plan
+  inputs built as the plan builds them (`remember=False`, a reader) and re-run through
+  `strategy.flip`, with supplied burn / lap / wear figures said as supplied. **Sardegna Rd 9
+  on practice figures** (50 min, 102.26 s, 6.75 L/lap - fuel-saving runs included): two stops
+  on RH; one stop at 6.27 L/lap; the last stint's tyre flips RH→RM on a 1-2 % wear change.
+  Six and a half minutes for all four inputs (`--inputs` for fewer). The critic caught a
+  per-lap save figure printed beside the playbook line that refuses it in a timed race, and
+  a playbook refusal that named the wrong reason; both now follow `playbook_hint`'s branches.
 
 ### 6.1 What is refused, and why
 

@@ -293,7 +293,7 @@ def test_main_scores_a_filtered_run_against_every_run(monkeypatch):
     monkeypatch.setattr(debrief, "Store", Store)
     monkeypatch.setattr(debrief, "against_the_plan", against_the_plan)
     for name in ("driver_first", "open_predictions", "render", "change_landed",
-                 "how_driven", "driver_variable", "calls_against_outcome",
+                 "how_driven", "by_compound", "driver_variable", "calls_against_outcome",
                  "radio", "close", "_head"):
         monkeypatch.setattr(debrief, name, lambda *a, **k: None)
     monkeypatch.setattr(debrief, "from_store", lambda *a, **k: None)
@@ -511,7 +511,7 @@ def test_main_asks_who_he_raced_about_the_sessions_it_found(monkeypatch):
     monkeypatch.setattr(debrief, "who_he_raced",
                         lambda store, given: asked.setdefault("given", given))
     for name in ("driver_first", "open_predictions", "render", "change_landed",
-                 "how_driven", "driver_variable", "calls_against_outcome",
+                 "how_driven", "by_compound", "driver_variable", "calls_against_outcome",
                  "against_the_plan", "radio", "close", "_head"):
         monkeypatch.setattr(debrief, name, lambda *a, **k: None)
     monkeypatch.setattr(debrief, "from_store", lambda *a, **k: None)

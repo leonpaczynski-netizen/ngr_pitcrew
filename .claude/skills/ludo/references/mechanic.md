@@ -154,11 +154,13 @@ the point of the dry run: it is the roster you then label by hand.
 - `tools/axis_board.py` — what has been measured on this car, and which axes nobody has tried.
 - `tools/where_the_change_landed.py` — where on the lap a change landed (above).
 - `tools/where_the_time_went.py` — where 1.71's lap time went, by distance bin.
-- `tools/debrief.py` — the whole debrief, in the protocol's order (row 2.5): his report, the open ledger rows, the session, where a change landed, how it was driven, the driver as a variable, George's calls, the race against its plan, the radio. `--db` points it at a copy.
+- `tools/debrief.py` — the whole debrief, in the protocol's order (row 2.5): his report, the open ledger rows, the session, where a change landed, how it was driven, the bests and gaps by compound, the driver as a variable, George's calls, the race against its plan, the radio. `--db` points it at a copy.
+- `tools/compound_pace.py` — the best lap and best sectors on each compound, and the lap and sector gaps between compounds off like-for-like laps (row 5.22). **A gap here spans back-to-back practice sessions in one sitting, wider than `strategy_evidence`'s one session** — so the two can differ, the race plan does not use it, and the session-to-session floor it prints (where one tyre has enough laps in two sessions) says how much of a gap the sitting itself explains. A best is never a gap.
 - `tools/driving_style.py` — coast share and upshift rpm, per lap and per stint.
 - `tools/brake_bias.py` — what brake balance **does**, measured off the wheels. GT7 sends no brake-bias channel, so the bias itself is DECLARED, never measured; this reads its effect. Four lines above is the list of what telemetry can verify, and the bias is not on it.
 - `tools/braking_change.py` — whether 1.71 changed braking, and whether later braking pays.
 - `tools/shift_points.py` — where to shift, per car and gear, **derived from his own laps** (the table is still issued, never typed). **Not the MCP `shift_points`**, which is the table already ISSUED and in the car: two different things under one word, and quoting the derived one as the issued one is the §1a failure this programme is built around.
+- `tools/flip_points.py` — what would change the race plan: the burn, wear, pit loss and refuel rate at which the optimiser's choice flips, and the fuel save that removes a stop (row 5.1). **A sensitivity, not a forecast**; `--save-cost` must come from a lever he drove, and a full run takes minutes (`--inputs` for fewer).
 - `tools/shift_target.py` — how far to short-shift for a given race, and where it turns against him.
 - `tools/shortshift_trade.py` — what short-shifting costs and saves, off laps he drove.
 - `tools/find_penalties.py` — which laps served a track-limit penalty, off the frames.

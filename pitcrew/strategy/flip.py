@@ -247,7 +247,7 @@ def with_saving(inputs: RaceInputs, save_l: float, laps: int,
         # A saving as big as the burn is not a lever - rule 9: no clamp.
         return None
     changed = replace(inputs, fuel_per_lap_l=inputs.fuel_per_lap_l - per_lap)
-    if cost_s_per_l:
+    if cost_s_per_l is not None:
         changed = replace(changed, lap_time_ms=int(round(
             inputs.lap_time_ms + per_lap * cost_s_per_l * 1000.0)))
     return changed
@@ -267,7 +267,7 @@ class SavingFlip:
         if self.litres is None:
             return (f"saving up to {self.searched_to_l:.0f} L over the race "
                     f"does not remove a stop")
-        cost = ("cost not priced" if not self.cost_s_per_l
+        cost = ("cost not priced" if self.cost_s_per_l is None
                 else f"at {self.cost_s_per_l:.2f} s a litre")
         return (f"saving {self.litres:.1f} L over {self.over_laps} laps "
                 f"(about {self.per_lap_l:.2f} L a lap) makes it "

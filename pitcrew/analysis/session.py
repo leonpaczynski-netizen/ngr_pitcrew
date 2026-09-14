@@ -106,6 +106,22 @@ class LapInput:
     off_track_s: float | None = None
     spin_s: float | None = None
     frames: list[dict] | None = None
+    # **The three sector times and the lines they were cut at** (plan row
+    # 5.22). Null where the span gate refused the lap or the circuit had no
+    # lines when it was driven - never 0. Two laps' sectors compare only when
+    # `sector_model` is the same stamp: a sector cut at 1,780 m is not one cut
+    # at 2,097.
+    sector1_ms: int | None = None
+    sector2_ms: int | None = None
+    sector3_ms: int | None = None
+    sector_model: str | None = None
+
+    @property
+    def sectors_ms(self) -> tuple[int | None, int | None, int | None]:
+        """The three sectors, a non-positive time read as not measured."""
+        return tuple(value if value is not None and value > 0 else None
+                     for value in (self.sector1_ms, self.sector2_ms,
+                                   self.sector3_ms))
 
     @property
     def counted(self) -> bool:

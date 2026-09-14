@@ -1654,6 +1654,7 @@ class PitCrewController(QObject):
         event, proposal, applied = self._apply_hub_regulations(event)
         self.event_screen.load(event)
         self.practice.set_laps(self._rows_for_event(event["id"]))
+        self._refresh_compound_pace(event["id"])
         self.practice.set_status(self._idle_status(event))
         self._refresh_race_options(event)
         self.refresh_nav_state()
@@ -1690,6 +1691,7 @@ class PitCrewController(QObject):
             self._refresh_event_picker(None)
             self.event_screen.clear()
             self.practice.set_laps([])
+            self._refresh_compound_pace(None)
             self.practice.set_status(
                 "No event yet. Fill one in on the Event screen and save it.",
                 warn=True)
@@ -2051,6 +2053,7 @@ class PitCrewController(QObject):
         self.load_active_event()
         self.event_screen.load_proposal(proposal)
         self.practice.set_laps([])
+        self._refresh_compound_pace(None)
         self.practice.set_status(
             f"{proposal.name} is not saved yet. Finish it on the Event screen.",
             warn=True)
@@ -3582,6 +3585,7 @@ class PitCrewController(QObject):
         )
         self._tag_practice_compound(lap_id, row)
         self.practice.add_lap(row)
+        self._refresh_compound_pace(self.store.active_event_id())
         self._board_note_lap(lap, rows, row.compound, lap_id=lap_id,
                              excluded=bool(pending) or bool(row.is_out_lap))
 
@@ -3821,6 +3825,7 @@ class PitCrewController(QObject):
             # The rack redraws because the answer moves which laps are
             # out-laps, and that is visible on it.
             self.practice.set_laps(self._rows_for_event(event["id"]))
+            self._refresh_compound_pace(event["id"])
 
     def _on_practice_intent(self, intent: str) -> None:
         """He changed what this session is for.
@@ -4102,6 +4107,40 @@ class PitCrewController(QObject):
                                 row.wear_rl, row.wear_rr)
         self.store.exclude_lap(
             lap_id, "struck by hand" if row.excluded else None)
+        # After the writes: a tag or a strike moves which laps a best is of.
+        self._refresh_compound_pace(self.store.active_event_id())
+
+    def _refresh_compound_pace(self, event_id) -> None:
+        """Plan row 5.22 on the Practice screen: bests per tyre and the gaps.
+
+        Read from the archive, not the rack, so the screen and
+        `tools/compound_pace.py` are one expression over the same laps.
+        **Never the lap path's problem**: a read that fails leaves the plate
+        empty and says so in the log.
+        """
+        practice = getattr(self, "practice", None)
+        if practice is None or not hasattr(practice, "show_compound_pace"):
+            return
+        pace = None
+        if event_id is not None:
+            try:
+                from pitcrew.analysis.compound_pace import compound_pace, sittings
+                from pitcrew.export.build import event_lap_inputs, mark_incidents
+
+                laps, _ = mark_incidents(
+                    event_lap_inputs(self.store, event_id, hydrate=set()))
+                pace = compound_pace(
+                    laps, sitting_of=sittings(self.store.list_sessions(event_id)))
+            except Exception:                                # noqa: BLE001
+                log("pitcrew").exception("compound pace: could not read event %s",
+                                         event_id)
+                pace = None
+        # The drawing too (critic pass 1): an exception out of a Qt slot aborts
+        # the process, and this is called from the lap handler.
+        try:
+            practice.show_compound_pace(pace)
+        except Exception:                                    # noqa: BLE001
+            log("pitcrew").exception("compound pace: could not draw the plate")
 
     def _judge_filed_calls(self, *, final: bool = False) -> None:
         """Write a verdict onto every filed call the laps can now answer.

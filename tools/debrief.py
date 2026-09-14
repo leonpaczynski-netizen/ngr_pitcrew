@@ -13,7 +13,7 @@ because numbers shown first lead him and his account is primary evidence
 telemetry is read, four at most (the spine's steps 3 and 4). The row's
 per-corner grid is open for the driver - see `references/modes.md`. Then the open predictions the ledger holds for this car at
 this circuit; the practice session; where a named change landed; how it was
-driven; the driver as a variable (row 2.11 - here and nowhere else); George's
+driven; the bests and gaps by compound (row 5.22); the driver as a variable (row 2.11 - here and nowhere else); George's
 calls against what followed them; the race against its plan; the radio. Every
 section says what it could not see rather than going quiet.
 
@@ -304,6 +304,25 @@ def how_driven(store, sessions) -> None:
               f"coast {median(r.coast_pct for r in reads):4.1f}%   "
               f"flat {median(r.full_throttle_pct for r in reads):4.1f}%   "
               f"upshift {upshift}   (n={len(reads)})")
+
+
+# ------------------------------------------------------------ by compound
+
+def by_compound(store, event_id: int) -> None:
+    """Plan row 5.22: the best lap and sectors on each tyre, and the gaps
+    between tyres off like-for-like laps only - `tools/compound_pace.py`."""
+    tool = _tool("compound_pace")
+    # The whole event, whatever `--sessions` says: a best on a tyre is a best
+    # over every lap on file (critic pass 1).
+    _head("BY COMPOUND — bests per tyre, and gaps on like-for-like laps "
+          "(whole event, not --sessions)")
+    laps, evenings, refused = tool.load(store, [event_id])
+    if refused:
+        print(f"  {refused}")
+        return
+    from pitcrew.analysis.compound_pace import compound_pace
+
+    tool.render(compound_pace(laps, sitting_of=evenings))
 
 
 # ---------------------------------------------------- the driver as a variable
@@ -818,6 +837,7 @@ def main() -> int:
         if args.sessions:
             sessions = [s for s in sessions if s["id"] in set(args.sessions)]
         how_driven(store, sessions)
+        by_compound(store, args.event_id)
         driver_variable(store, args.event_id, sessions,
                         start_type=event.get("start_type"))
         who_he_raced(store, sessions)

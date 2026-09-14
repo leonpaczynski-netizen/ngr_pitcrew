@@ -337,14 +337,95 @@ PACE_FUEL_BAND_L = 15.0         # spread of starting fuel across compared laps
 PACE_MIN_LAPS = 3               # per compound, before a comparison is offered
 
 
-def _pace_candidates(laps: list[LapInput]) -> dict[str, list[LapInput]]:
-    """Counted laps young enough on their set to describe the compound."""
+def lap_time_of(lap: LapInput) -> int | None:
+    """The whole lap - the timing every compound comparison used before 5.22."""
+    return lap.lap_time_ms
+
+
+def _pace_candidates(laps: list[LapInput],
+                     timing=lap_time_of) -> dict[str, list[LapInput]]:
+    """Counted laps young enough on their set to describe the compound.
+
+    `timing` is what is being compared - the lap, or one sector (plan row
+    5.22). **The tyre age is counted over every lap of the run before it is
+    applied**, so a lap whose sector was refused still ages the set.
+    """
     out: dict[str, list[LapInput]] = {}
     for run in split_runs(laps):
         for age, lap in enumerate(run.laps):
-            if lap.counted and lap.compound and age < PACE_MAX_TYRE_AGE:
+            if (lap.counted and lap.compound and age < PACE_MAX_TYRE_AGE
+                    and timing(lap) is not None):
                 out.setdefault(lap.compound, []).append(lap)
     return out
+
+
+def session_of(lap: LapInput):
+    """The unit a strategy compound comparison must sit inside."""
+    return lap.session_id
+
+
+def comparable_groups(laps: list[LapInput], reference: str | None,
+                      timing=lap_time_of,
+                      group_of=session_of) -> dict[object, dict[str, list[LapInput]]]:
+    """Every group that holds a like-for-like compound comparison.
+
+    **The one expression of "comparable"** (CLAUDE.md rule 12): the strategy
+    delta, the practice report's lap and sector gaps and their spreads are all
+    read off these pools. `group_of` is the unit the laps must share -
+    the session for strategy; one evening of back-to-back runs for the
+    practice report (plan row 5.22), which says so wherever it prints a gap.
+    The lap and sector pools are drawn separately, through their own `timing`;
+    they hold the same laps because capture stores a lap's sectors all three or
+    none (`lap_sectors`), not because this function forces it.
+
+    Each value holds, per compound, the laps inside the reference's fuel band;
+    a group is kept only when the reference and one other compound both have
+    `PACE_MIN_LAPS` there.
+    """
+    candidates = _pace_candidates(laps, timing)
+    if not reference or reference not in candidates:
+        return {}
+
+    by_group: dict[object, dict[str, list[LapInput]]] = {}
+    for code, pool in candidates.items():
+        for lap in pool:
+            by_group.setdefault(group_of(lap), {}).setdefault(
+                code, []).append(lap)
+
+    out: dict[object, dict[str, list[LapInput]]] = {}
+    for key, pools in by_group.items():
+        reference_laps = pools.get(reference, [])
+        if len(reference_laps) < PACE_MIN_LAPS or len(pools) < 2:
+            continue
+        fuels = [lap.fuel_start for lap in reference_laps]
+        low = min(fuels) - PACE_FUEL_BAND_L
+        high = max(fuels) + PACE_FUEL_BAND_L
+
+        found: dict[str, list[LapInput]] = {}
+        for code, pool in pools.items():
+            matched = [lap for lap in pool if low <= lap.fuel_start <= high]
+            if len(matched) >= PACE_MIN_LAPS:
+                found[code] = matched
+        if len(found) > 1:
+            out[key] = found
+    return out
+
+
+def comparable_pools(laps: list[LapInput], reference: str | None,
+                     timing=lap_time_of) -> dict[str, list[LapInput]]:
+    """The one session's pools `comparable_pace` compares.
+
+    The session that compared the most compounds wins; on a tie, the first
+    such session in the order `comparable_groups` meets them, which is the
+    order the candidate laps are met compound by compound - not necessarily
+    the earliest session. A comparison of three in one run says more than two
+    in another.
+    """
+    best: dict[str, list[LapInput]] = {}
+    for pools in comparable_groups(laps, reference, timing).values():
+        if len(pools) > len(best):
+            best = pools
+    return best
 
 
 def comparable_pace(laps: list[LapInput],
@@ -372,46 +453,32 @@ def comparable_pace(laps: list[LapInput],
     measured - and at Monza it is the only honest output, because no two
     compounds ever shared a session.
     """
-    candidates = _pace_candidates(laps)
-    if not reference or reference not in candidates:
+    pools = comparable_pools(laps, reference)
+    if not pools:
         return {}
+    # The yardstick is the reference's laps INSIDE its own fuel band, which is
+    # every one of them - the band is drawn around them.
+    reference_ms = median([lap.lap_time_ms for lap in pools[reference]])
+    return {
+        code: {
+            "deltaS": (0.0 if code == reference else
+                       (median([lap.lap_time_ms for lap in matched])
+                        - reference_ms) / 1000.0),
+            "basis": (
+                f"{len(matched)} laps against {reference} in one session, "
+                f"all within {PACE_MAX_TYRE_AGE} laps of a set going on "
+                f"and inside a {PACE_FUEL_BAND_L:.0f} L fuel band"),
+        }
+        for code, matched in pools.items()
+    }
 
-    # Sessions where the reference has enough young laps to be a yardstick.
-    by_session: dict[int | None, dict[str, list[LapInput]]] = {}
-    for code, pool in candidates.items():
-        for lap in pool:
-            by_session.setdefault(lap.session_id, {}).setdefault(
-                code, []).append(lap)
 
-    best: dict[str, dict] = {}
-    for session, pools in by_session.items():
-        reference_laps = pools.get(reference, [])
-        if len(reference_laps) < PACE_MIN_LAPS or len(pools) < 2:
-            continue
-        fuels = [lap.fuel_start for lap in reference_laps]
-        low = min(fuels) - PACE_FUEL_BAND_L
-        high = max(fuels) + PACE_FUEL_BAND_L
-        reference_ms = median([lap.lap_time_ms for lap in reference_laps])
-
-        found: dict[str, dict] = {}
-        for code, pool in pools.items():
-            matched = [lap for lap in pool if low <= lap.fuel_start <= high]
-            if len(matched) < PACE_MIN_LAPS:
-                continue
-            delta = (median([lap.lap_time_ms for lap in matched])
-                     - reference_ms) / 1000.0
-            found[code] = {
-                "deltaS": 0.0 if code == reference else delta,
-                "basis": (
-                    f"{len(matched)} laps against {reference} in one session, "
-                    f"all within {PACE_MAX_TYRE_AGE} laps of a set going on "
-                    f"and inside a {PACE_FUEL_BAND_L:.0f} L fuel band"),
-            }
-        # The session that compared the most compounds wins; a comparison of
-        # three in one run says more than two in another.
-        if len(found) > len(best):
-            best = found
-    return best if len(best) > 1 else {}
+# Said beside every refusal, in one wording: the practice report compares a
+# wider unit, and its figure - where it has one - is not this one.
+PRACTICE_PANEL_NOTE = (
+    "(The Practice screen's By tyre panel may show a gap across back-to-back "
+    "sessions; that weaker figure carries whatever changed between the "
+    "sessions and is not used here.)")
 
 
 def comparable_pace_gap(laps: list[LapInput], reference: str | None,
@@ -425,7 +492,7 @@ def comparable_pace_gap(laps: list[LapInput], reference: str | None,
     if not reference or code == reference:
         return (f"{code} is the reference compound, but no other compound "
                 f"shares a session with it on comparable laps, so there is "
-                f"nothing to be a reference for. {fix}")
+                f"nothing to be a reference for. {fix} {PRACTICE_PANEL_NOTE}")
 
     together = ({lap.session_id for lap in candidates.get(code, [])}
                 & {lap.session_id for lap in candidates.get(reference, [])})
@@ -442,7 +509,7 @@ def comparable_pace_gap(laps: list[LapInput], reference: str | None,
         f"{'' if matched == 1 else 's'} inside {PACE_MAX_TYRE_AGE} laps of a "
         f"fresh set, and {shared}. Any figure would compare the sessions "
         f"rather than the compounds - whole-session medians made a Racing "
-        f"Medium read quicker than a Racing Soft. {fix}")
+        f"Medium read quicker than a Racing Soft. {fix} {PRACTICE_PANEL_NOTE}")
 
 
 def _daylight_value(daylight: dict) -> str:

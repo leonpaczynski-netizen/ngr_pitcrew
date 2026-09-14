@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
+    QGridLayout,
     QHBoxLayout,
     QFrame,
     QScrollArea,
@@ -896,6 +897,112 @@ class OpportunityRow(QWidget):
                       Qt.AlignmentFlag.AlignVCenter)
 
 
+class CompoundPaceView(QWidget):
+    """Bests on each tyre, and the gaps between tyres - plan row 5.22.
+
+    **Two registers, because they are two claims.** A best is measured - the
+    fastest lap he drove on that set - and wears the measured ink. The
+    theoretical lap and every gap are worked out, and wear `DERIVED`: the
+    theoretical is three sectors nobody strung together, and a gap is a
+    median against a median on like-for-like laps. **A gap is never a best
+    subtracted from a best**; where the laps are not alike it is refused in
+    words (`analysis/compound_pace`).
+    """
+
+    # "BEST S1" not "S1": they are the best sector from any lap, not the best
+    # lap's splits (critic pass 1, rule 13).
+    HEADS = ("TYRE", "BEST LAP", "LAPS", "BEST S1", "BEST S2", "BEST S3",
+             "SECTORS ADDED")
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.body = QVBoxLayout(self)
+        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body.setSpacing(2)
+        self.empty = EmptyState(
+            "No tyre has a full lap yet.",
+            needs=("a clean lap with all three sectors, tagged with its tyre",))
+        self.body.addWidget(self.empty)
+        self.pace = None
+
+    def _clear(self) -> None:
+        while self.body.count():
+            item = self.body.takeAt(0)
+            widget = item.widget()
+            if widget is not None and widget is not self.empty:
+                widget.deleteLater()
+            elif item.layout() is not None:
+                _drop_layout(item.layout())
+
+    def show_pace(self, pace) -> None:
+        """Render one `CompoundPace`, or the empty state for None."""
+        self._clear()
+        self.pace = pace
+        if pace is None or not pace.bests:
+            self.body.addWidget(self.empty)
+            self.empty.setVisible(True)
+            return
+        self.empty.setVisible(False)
+        self.body.addWidget(self.empty)
+        # Imported here, not at the top: the strategy layer behind it is not
+        # first-paint work (`test_first_paint_work`).
+        from pitcrew.analysis.compound_pace import sitting_line
+
+
+        groups: list[tuple] = []
+        for best in pace.bests:
+            key = (best.game_version, best.sector_model)
+            if key not in groups:
+                groups.append(key)
+        for version, model in groups:
+            if len(groups) > 1:
+                self.body.addWidget(StencilLabel(
+                    f"GT7 {version or '?'} - {model}", size=11, tracking=12.0,
+                    colour=theme.STENCIL_DIM))
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(theme.GAP_WIDE)
+            grid.setVerticalSpacing(2)
+            for column, head in enumerate(self.HEADS):
+                grid.addWidget(StencilLabel(head, size=11, tracking=12.0,
+                                            colour=theme.STENCIL_DIM), 0, column)
+            these = sorted((b for b in pace.bests
+                            if (b.game_version, b.sector_model) == (version, model)),
+                           key=lambda b: b.lap_ms)
+            for line, best in enumerate(these, start=1):
+                grid.addWidget(Measured(best.compound, bold=True), line, 0)
+                grid.addWidget(Measured(format_lap_time(best.lap_ms)), line, 1)
+                grid.addWidget(Measured(str(best.laps), colour=theme.STENCIL_DIM),
+                               line, 2)
+                for index, sector in enumerate(best.sectors_ms):
+                    grid.addWidget(Measured(f"{sector / 1000:.3f}"), line, 3 + index)
+                grid.addWidget(Derived(format_lap_time(best.theoretical_ms)),
+                               line, 6)
+            grid.setColumnStretch(len(self.HEADS), 1)
+            self.body.addLayout(grid)
+
+            gaps = [g for g in pace.gaps
+                    if (g.game_version, g.sector_model) == (version, model)]
+            for sitting in dict.fromkeys(g.sitting for g in gaps):
+                on = [g for g in gaps if g.sitting == sitting]
+                for code in sorted({g.compound for g in on}):
+                    self.body.addWidget(BodyLabel(
+                        sitting_line(on, code, sitting), size=13,
+                        colour=theme.DERIVED))
+        for line in pace.across_sittings():
+            self.body.addWidget(BodyLabel(line, size=13, colour=theme.DERIVED))
+        for line in pace.refusals:
+            self.body.addWidget(BodyLabel(line, size=13, colour=theme.STENCIL_DIM))
+
+
+def _drop_layout(layout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        if item.widget() is not None:
+            item.widget().deleteLater()
+        elif item.layout() is not None:
+            _drop_layout(item.layout())
+
+
 class PracticeScreen(QWidget):
     """The rack, its spec line, and the export that ends the session."""
 
@@ -1049,6 +1156,7 @@ class PracticeScreen(QWidget):
         # The rack still takes the spare room - it is the subject of the
         # screen and the debrief is what he reads once he has marked it up.
         stack.addWidget(self._rack_plate(), 1)
+        stack.addWidget(self._compound_plate())
         stack.addWidget(self._debrief_plate())
 
         scroller = QScrollArea()
@@ -1062,6 +1170,17 @@ class PracticeScreen(QWidget):
         # scrolled away from - the same rule the Settings footer follows.
         page.addLayout(self._footer())
         self.refresh()
+
+    def _compound_plate(self) -> Plate:
+        """Bests per tyre and the gaps between tyres, over the whole event."""
+        plate = Plate("By tyre")
+        self.compound_view = CompoundPaceView()
+        plate.body.addWidget(self.compound_view)
+        return plate
+
+    def show_compound_pace(self, pace) -> None:
+        """Plan row 5.22 - the controller's read of the event, or None."""
+        self.compound_view.show_pace(pace)
 
     def _debrief_plate(self) -> Plate:
         """What the stint says, read afterwards with the headset off.

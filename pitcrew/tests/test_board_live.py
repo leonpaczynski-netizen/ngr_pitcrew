@@ -558,10 +558,13 @@ class _Fitted:
         self.store = SimpleNamespace(
             set_lap_compound=lambda lap_id, c: self.written.append((lap_id, c)),
             set_lap_tyres_fresh=lambda *a: None, set_lap_wear=lambda *a: None,
-            exclude_lap=lambda *a: None)
+            exclude_lap=lambda *a: None, active_event_id=lambda: 11)
 
     def _event_record(self):
         return None
+
+    def _refresh_compound_pace(self, event_id):
+        self.refreshed = event_id
 
 
 def _row(compound=None, pit=False, lap_id=0, session_id=42):

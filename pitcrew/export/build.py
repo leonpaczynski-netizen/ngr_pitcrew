@@ -165,6 +165,10 @@ def _rows_to_laps(store, rows, *, hydrate: set[int] | None = None) -> list[LapIn
             crawl_s=_column(row, "crawl_s"),
             off_track_s=_column(row, "off_track_s"),
             spin_s=_column(row, "spin_s"),
+            sector1_ms=_column(row, "sector1_ms"),
+            sector2_ms=_column(row, "sector2_ms"),
+            sector3_ms=_column(row, "sector3_ms"),
+            sector_model=_column(row, "sector_model"),
         ))
     return out
 
