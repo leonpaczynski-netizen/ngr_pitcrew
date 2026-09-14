@@ -295,17 +295,22 @@ def test_the_multiplier_the_rate_was_measured_at_travels_with_it():
 
 # ------------------------------------------------------- P7 exclusion reasons
 
-def test_every_run_opens_with_an_out_lap_and_it_names_itself():
+def test_every_out_lap_names_itself():
     """Four of the eight hand strikes in the Monza session were out-laps the
-    refuel boundary names for free — and the fifth was lap 1, which used to be
-    excluded from the rule and is the most out-lap-like lap of the session:
-    cold tyres, a rolling pit exit, and a capture that does not cover the same
-    span as the lap GT7 timed.
+    app names for free — and the fifth was lap 1, which used to be excluded
+    from the rule and is the most out-lap-like lap of the session: cold tyres,
+    a rolling pit exit, and a capture that does not cover the same span as the
+    lap GT7 timed.
+
+    The lap after an in-lap is the out-lap (the driver's rule, 15 Sep 2026),
+    so the in-lap names itself too.
     """
-    laps = classify_exclusions(
-        a_run(1, 4, compound="RH") + a_run(5, 4, compound="RH"), 100.0)
+    stint = a_run(1, 4, compound="RH")
+    stint[-1] = replace(stint[-1], is_pit_lap=True)
+    laps = classify_exclusions(stint + a_run(5, 4, compound="RH"), 100.0)
     detail = session_export(laps, 100.0)["lapsExcludedDetail"]
     assert detail == [{"lap": 1, "reason": "out-lap", "source": "auto"},
+                      {"lap": 4, "reason": "in-lap", "source": "auto"},
                       {"lap": 5, "reason": "out-lap", "source": "auto"}]
 
 

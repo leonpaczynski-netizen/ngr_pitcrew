@@ -214,6 +214,15 @@ lines and it keeps the register in sync automatically.
   `fuel-implausible` | `manual`; `.source` ∈ `auto` | `driver`. `note` appears only
   where the driver's own words say more than the vocabulary does — "spun at T4"
   survives, "struck by hand" does not, because it repeats `source`.
+- **`in-lap` and `out-lap` have one definition each.** An in-lap is the lap the
+  car was driven into the pit lane on and serviced, read off the frames: a stop
+  after racing in that lap, or - where the line lies inside the pit lane before
+  the box (Daytona, Spa) - the lap before one whose frames open on the stop. A
+  practice reset (the car moved to the box, tank and tyres replaced in one
+  frame) is not a stop and makes neither. An out-lap is a session's opening lap
+  out of the lobby box, or **the lap after an in-lap in the same session, always**
+  (the driver's rule, 15 Sep 2026). A run can open with no out-lap: a reset ends
+  the tank, and the lap after it is a flying lap.
 - **Fuel plausibility is part of validity.** A lap burning less than half the
   session's median burn is a lap boundary that landed inside a pit or garage
   transition: it is `valid: false`, absent from `lapsCounted`, and never eligible
@@ -284,7 +293,7 @@ tyre.
 |---|---|
 | `id` | 1-based, in the order the runs happened. `wear.byDriverGauge[].runId`, `wear.byRun[].runId` and `wear.byCompound[].runIds` all point here |
 | `firstLap` / `lastLap` | Inclusive, in the payload's own lap numbering. Runs never overlap and export refuses if they do |
-| `refuelledBefore` | **Measured.** The tank rose by more than 0.5 L at the stop that opened this run: between the end of the previous lap and the start of this one, or inside the previous lap (it ended fuller than it started). A fill inside a lap opens the run on the lap after it, where a flagged pit lap would, except on a lap that already opened its own run (a session's grid fill, or the out-lap of a stop that crossed the line). A run also starts wherever the driver came in, and wherever the recording session changed — a stop and restart means he went back to the garage |
+| `refuelledBefore` | **Measured.** The tank rose by more than 0.5 L at the stop that opened this run: between the end of the previous lap and the start of this one, or inside the previous lap (it ended fuller than it started), or - after an in-lap whose line lay before the box - inside this run's first lap, the out-lap that holds the fill. A fill inside a lap opens the run on the lap after it, where a flagged pit lap would, except on a lap that already opened its own run (a session's grid fill, or the out-lap of a stop that crossed the line). A run also starts wherever the driver came in, and wherever the recording session changed — a stop and restart means he went back to the garage |
 | `fuelStartL` / `fuelEndL` / `fuelDeltaL` | **Measured.** What the tank did across the run. `fuelDeltaL` is what `wear.byLapTime.fuelDeltaL` is netted against, if the reader chooses to net it |
 | `compound` | The compound tagged on this run's laps, or `null` where they disagree. **Never a vote** — a run tagged two ways is a data-entry question, and answering it silently is how three compounds became one |
 | `tyresFresh` | `true`, `false` or **`null`**. The resolved answer: the driver's declaration where he made one, otherwise what the temperatures show. **Never inferred from the refuel** — taking fuel without taking tyres is a normal stop, and inferring `true` from one would halve every wear rate spanning it. `null` means neither source can say. **`false` is a positive claim that the set carried over** and needs its source; export refuses a bare `false` |

@@ -51,6 +51,7 @@ def test_a_time_trial_still_gets_an_out_lap_after_a_stop():
     Come in mid-session and the lap after it is an out-lap either way."""
     laps = a_stint(1, 4, practice_mode=TIME_TRIAL) + a_stint(
         5, 4, practice_mode=TIME_TRIAL)
+    laps[3] = LapInput(**{**laps[3].__dict__, "is_pit_lap": True})
     assert auto_out_laps(laps) == {5}
 
 
@@ -99,9 +100,20 @@ def test_every_time_trial_of_the_day_keeps_its_opening_lap():
     assert auto_out_laps(first + second) == set()
 
 
-def test_a_refuel_inside_a_time_trial_still_opens_an_out_lap():
-    """The exception is about where the car starts the *session*. A run that
-    opens mid-session opens in the box like any other."""
+def test_a_stop_inside_a_time_trial_still_opens_an_out_lap():
+    """The exception is about where the car starts the *session*. The lap
+    after an in-lap mid-session is an out-lap like any other."""
     laps = (a_stint(1, 3, practice_mode=TIME_TRIAL)
             + a_stint(4, 3, practice_mode=TIME_TRIAL))
+    laps[2] = LapInput(**{**laps[2].__dict__, "is_pit_lap": True})
     assert auto_out_laps(laps) == {4}
+
+
+def test_a_refill_with_no_in_lap_opens_a_run_but_no_out_lap():
+    """THE RULE keys on the in-lap, not on the tank. A tank handed back with
+    no lap driven into the pit lane - a practice reset - splits the run and
+    strikes nothing."""
+    laps = (a_stint(1, 3, practice_mode=LOBBY)
+            + a_stint(4, 3, practice_mode=LOBBY))
+    assert [run.first_lap for run in split_runs(laps)] == [1, 4]
+    assert auto_out_laps(laps) == {1}

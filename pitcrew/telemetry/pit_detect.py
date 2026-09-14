@@ -32,7 +32,10 @@ this codebase replaced, and has no importer.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+
+from pitcrew.analysis.refuel import MAX_PLAUSIBLE_LPS
 
 # Stationary, in the units the packet reports. Not zero: the box release and
 # the roll-in both pass through single-digit speeds, and a hard zero would
@@ -106,6 +109,30 @@ MIN_STOP_S = 2.0
 # missing packets and not a jitter.
 MAX_SAMPLE_GAP_S = 0.20
 
+# **A car the game MOVED, not a car that drove.** At 60 Hz a car at 400 km/h
+# covers under 2 m between samples, and a hole as long as `MAX_SAMPLE_GAP_S`
+# at that speed is 22 m. Further than this in one sample step is GT7 placing
+# the car somewhere: into the pit lane, back onto the track at pit exit, or -
+# the case this exists for - back into the lobby's box on a practice reset.
+#
+# Measured over every refuel on file (15 Sep 2026): a practice reset moves the
+# car 114-1786 m in ONE frame, at the same frame the tank and all four tyre
+# temperatures are assigned, and the car lands stationary. A real pit entry
+# is a speed step with the car frozen in place (0.0 m moved); GT7 then places
+# it in the lane 8-10 s later, landing ROLLING at the limiter (50-60 km/h).
+RELOCATED_M = 25.0
+
+# The slowest a car the game has just placed in the pit lane is moving. The
+# pit limiters on file are 40, 50 and 60 km/h; a reset lands at 0.0.
+PLACED_ROLLING_KPH = 20.0
+
+# A fill faster than this is a tank being REPLACED, not filled - the figure
+# `analysis/refuel.py` rejects an implausible rate with and the live
+# `session_state._refuelling` bounds the same rise with. Real fills on file
+# peak at 0.06 L in one frame (3.6 L/s); every practice reset puts 1.6-68.9 L
+# in a single frame (96-4100 L/s).
+MAX_FILL_LPS = MAX_PLAUSIBLE_LPS
+
 FUEL = "fuel"           # fuel rose: certain
 TEMPS = "temps"         # tyre temperatures collapsed: strong
 SWAP = "swap"           # all four stepped to one value in a frame: certain
@@ -128,6 +155,33 @@ class Sample:
     temps: tuple[float, float, float, float] | None = None
     road_distance_m: float | None = None
     position: int | None = None
+    # Where the car is on the ground plane, metres. Optional: a synthetic
+    # trace without it simply cannot see a relocation, which reads as "the
+    # car drove", the behaviour before this existed.
+    x_m: float | None = None
+    z_m: float | None = None
+
+
+def relocated(before, after, *, metres: float = RELOCATED_M) -> bool:
+    """Did the game move the car between these two samples?
+
+    Duck-typed on `x_m`/`z_m` (a `Sample`) or `pos_x`/`pos_z` (a packet), so
+    the live path asks it of two packets and the offline path of two stored
+    frames. A missing coordinate is "cannot tell", which is not a relocation.
+    """
+    if before is None or after is None:
+        return False
+
+    def ground(sample, axis):
+        value = getattr(sample, f"{axis}_m", None)
+        return value if value is not None else getattr(sample, f"pos_{axis}",
+                                                        None)
+
+    coords = (ground(before, "x"), ground(before, "z"),
+              ground(after, "x"), ground(after, "z"))
+    if any(value is None for value in coords):
+        return False
+    return math.hypot(coords[2] - coords[0], coords[3] - coords[1]) > metres
 
 
 @dataclass(frozen=True)
@@ -147,6 +201,34 @@ class Stop:
     # analysis must refuse it rather than quote it.
     gapped: bool = False
     gap_s: float = 0.0
+    # The car arrived at this window by being MOVED there (`relocated`), in
+    # the sample that opened it. See `reset`.
+    arrived_relocated: bool = False
+    # The fastest the tank rose between two samples inside the window, L/s.
+    # None where it never rose.
+    peak_fill_lps: float | None = None
+
+    @property
+    def tank_replaced(self) -> bool:
+        """The fuel went in faster than any rig delivers: handed back, not filled."""
+        return self.peak_fill_lps is not None and self.peak_fill_lps > MAX_FILL_LPS
+
+    @property
+    def reset(self) -> bool:
+        """**A practice reset, not a stop.** The game put the car back in the
+        box - it arrived there by relocation, or its tank was replaced in one
+        sample. Nothing was driven into the pit lane, so there is no in-lap.
+
+        Measured, session 158 lap 11 (10 Sep 2026): 265.4 -> 0.0 km/h, moved
+        168 m to the lobby's own start spot, 31.08 -> 100.00 L and all four
+        tyres to 70.0 C, all in one frame, 3.2 s into the lap.
+        """
+        return self.arrived_relocated or self.tank_replaced
+
+    @property
+    def pit_stop(self) -> bool:
+        """Serviced in the box after being driven there: what makes an in-lap."""
+        return self.serviced and not self.reset
 
     @property
     def duration_s(self) -> float:
@@ -242,6 +324,37 @@ def entered_the_pits(previous_kph: float | None, speed_kph: float | None, *,
     return previous_kph > from_kph and speed_kph < to_kph
 
 
+def placed_in_pit_lane(samples, stops=None) -> float | None:
+    """When GT7 put the car into the pit lane, or None.
+
+    **The hand-over, not the stop.** A driven pit entry ends with the game
+    placing the car in the lane ROLLING at the limiter: a one-sample
+    relocation landing at `PLACED_ROLLING_KPH` or more. Every in-lap on file
+    carries one (15 Sep 2026: seventeen of seventeen, 50 or 60 km/h), and it
+    is the only trace of the entry on a lap whose stop the recording never
+    reached - the session that ended in the pits.
+
+    Two relocations look alike and are not this. A practice reset lands the
+    car STATIONARY. The release at pit exit lands it rolling too, but only
+    ever once the service is over - so the search stops at the end of the
+    first serviced stop. (The placement can sit INSIDE that window: at Monza
+    the car freezes at the entry, which opens the window, and is placed in
+    the lane 10 s later while the window is still open.)
+    """
+    samples = list(samples)
+    if stops is None:
+        stops = find_stops(samples)
+    serviced_until = min((stop.end_s for stop in stops if stop.serviced),
+                         default=None)
+    for before, after in zip(samples, samples[1:]):
+        if serviced_until is not None and after.t_s > serviced_until:
+            return None
+        if (relocated(before, after)
+                and after.speed_kph >= PLACED_ROLLING_KPH):
+            return after.t_s
+    return None
+
+
 @dataclass
 class _Window:
     start_s: float
@@ -255,6 +368,20 @@ class _Window:
     corners: list = field(default_factory=list)
     samples: int = 0
     gap_s: float = 0.0
+    arrived_relocated: bool = False
+    peak_fill_lps: float | None = None
+
+    def note_fill(self, previous: Sample | None, sample: Sample) -> None:
+        """The tank's rise between two samples, kept if it is the fastest."""
+        if previous is None:
+            return
+        step_s = sample.t_s - previous.t_s
+        rise = sample.fuel_l - previous.fuel_l
+        if step_s <= 0 or rise <= 0:
+            return
+        rate = rise / step_s
+        if self.peak_fill_lps is None or rate > self.peak_fill_lps:
+            self.peak_fill_lps = rate
 
 
 def find_stops(samples, *, stopped_kph: float = STOPPED_KPH,
@@ -279,8 +406,11 @@ def find_stops(samples, *, stopped_kph: float = STOPPED_KPH,
             moving_since = None
             if current is None:
                 current = _Window(start_s=sample.t_s, end_s=sample.t_s,
-                                  lap=sample.lap)
+                                  lap=sample.lap,
+                                  arrived_relocated=relocated(previous, sample))
+                current.note_fill(previous, sample)
             elif previous is not None:
+                current.note_fill(previous, sample)
                 step = sample.t_s - previous.t_s
                 if step > MAX_SAMPLE_GAP_S:
                     current.gap_s = max(current.gap_s, step)
@@ -335,6 +465,8 @@ def _classify(window: _Window, min_stop_s: float) -> Stop | None:
         temp_before_c=temp_before, temp_after_c=temp_after,
         signals=tuple(signals), samples=window.samples,
         gapped=window.gap_s > 0.0, gap_s=window.gap_s,
+        arrived_relocated=window.arrived_relocated,
+        peak_fill_lps=window.peak_fill_lps,
     )
 
 

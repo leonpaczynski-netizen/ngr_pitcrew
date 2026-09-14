@@ -63,7 +63,8 @@ class Run:
     # `None` where no stop was captured there, which is also the case for the
     # first run of a session. It lives on the Run rather than on its first lap
     # because the evidence is in the lap before it — the stop happens on the
-    # in-lap, and the set it fitted is the set this run goes out on.
+    # in-lap, and the set it fitted is the set this run goes out on - or, where
+    # the line came before the box, in the out-lap that opens the run.
     tyres_changed_before: bool | None = None
     # `lobby`, `time-trial`, or None where the driver has not said. Only the
     # first run of a session uses it.
@@ -346,6 +347,12 @@ def _stop_inside(previous, before) -> bool:
 def starts_run(previous, lap, before=None) -> bool:
     """Does this lap begin a new tank?
 
+    **A tank, not a pace sample.** Whether a lap is struck is
+    `out_lap_after_in_lap`, and the two are kept apart on purpose: a real stop
+    opens the run on its out-lap, which that rule also strikes; a practice
+    reset replaces the tank with no lap driven into the pit lane, so the run
+    splits here and nothing is struck.
+
     Duck-typed on purpose. The lap rack asks this of its own row objects and
     the export asks it of `LapInput`, and they must agree exactly: the rack is
     where the driver declares a set fresh, and a declaration made on a lap the
@@ -411,12 +418,25 @@ def split_runs(laps: list[LapInput]) -> list[Run]:
             # The tank went up at the stop that opened this run, whether the
             # fill crossed the line or sat inside the lap before it - and a
             # flagged pit lap carrying the fill is that same stop.
+            # **Or inside this lap, where the line came before the box**
+            # (Daytona, Spa): the in-lap carries no fill and its out-lap -
+            # the first lap of this run - carries all of it.
+            crossed_in_box = previous.is_pit_lap and refuelled_within(lap)
             refuelled.append(refuelled_between(previous, lap)
                              or (previous.is_pit_lap
                                  and refuelled_within(previous))
+                             or crossed_in_box
                              or _stop_inside(previous, laps[index - 2]
                                              if index >= 2 else None))
-            swapped.append(previous.tyres_changed)
+            # The tyre answer is filed on the lap whose frames held the stop:
+            # the in-lap where the box is before the line, the out-lap where
+            # the line came first - and there the in-lap's is None, which is
+            # "not asked on this row", never "no".
+            changed = previous.tyres_changed
+            if (changed is None and previous.is_pit_lap
+                    and not getattr(lap, "is_pit_lap", False)):
+                changed = getattr(lap, "tyres_changed", None)
+            swapped.append(changed)
         else:
             grouped[-1].append(lap)
 
@@ -694,16 +714,63 @@ def flag_opening_lap(lap, *, session_kind: str | None,
     return lap, verdict
 
 
+def _same_session(previous, lap) -> bool:
+    """Both laps belong to one recording session, as far as anything says.
+
+    A missing id on either side is not a session change: a lap list built by
+    hand, or the live state that only ever holds one session, carries none.
+    """
+    before = getattr(previous, "session_id", None)
+    after = getattr(lap, "session_id", None)
+    return before is None or after is None or before == after
+
+
+def out_lap_after_in_lap(previous, lap) -> bool:
+    """**THE RULE: in the same session, the lap after an in-lap is an out-lap.**
+
+    The driver, 15 Sep 2026: *"A lap in the same session after an in lap has
+    to be an out lap."* No exceptions within a session. A session change makes
+    none - the first lap of a session is judged by `opening_lap_verdict` -
+    and a race's grid lap is not an out-lap, because nothing comes before it.
+
+    **The one place this is decided.** The live state files it on the lap
+    (`session_state`), the rack and the export name it through
+    `auto_out_laps`, and the archive repair and `reaggregate` write it - all
+    by calling this, so "out-lap" means one thing (CLAUDE.md rule 13).
+
+    `previous.is_pit_lap` is the in-lap, and what makes one is defined from
+    the frames in `analysis/reaggregate`: the lap the car was driven into the
+    pit lane on and serviced. A practice reset is not one, so the lap after a
+    reset is not struck - the tank still splits there (`starts_run`), because
+    a tank and a pace sample are different things.
+
+    Duck-typed like `starts_run`: anything with `is_pit_lap` and, optionally,
+    `session_id`.
+    """
+    if previous is None or lap is None:
+        return False
+    return bool(getattr(previous, "is_pit_lap", False)) and _same_session(
+        previous, lap)
+
+
 def auto_out_laps(laps: list[LapInput]) -> set[int]:
-    """**The first lap of every run** — with one exception, and it matters.
+    """**The session's opening lap, and every lap after an in-lap.**
 
-    It used to be the first lap of a *refuelled* run only, and explicitly not
-    the session's own first lap. The refuel condition was a proxy for "a stop
-    happened", written when a stop could not be detected; it can be now, and a
-    stop for tyres alone opens a run just as much as one for fuel does. So
-    every run's first lap qualifies.
+    Two sources, and nothing else:
 
-    **Except the opening lap of a time trial.** The two modes put the car in
+    * **the lap after an in-lap**, by `out_lap_after_in_lap` - THE RULE;
+    * **a session's opening lap**, by `opening_lap_verdict` - out of the
+      lobby's box, unless the session is a time trial or a race.
+
+    **It used to be the first lap of every RUN**, and that is not the same
+    set. A run is a tank, and a tank also ends where no lap was driven into
+    the pit lane: a practice reset replaces it in one frame (session 158 lap
+    11, 10 Sep 2026: 31.1 -> 100.0 L at 265 km/h, 3.2 s into the lap), and
+    the lap after that is a flying lap, 101.4 s against 100.5-102.3 for the
+    rest of the tank. Striking it threw away a real lap and called the reset
+    a stop. The run still splits there; the pace sample is not struck.
+
+    **The opener exception is for a time trial.** The two modes put the car in
     different places when the session starts:
 
     * **In a lobby** it starts in the pit box. The first lap is driven out of
@@ -722,12 +789,12 @@ def auto_out_laps(laps: list[LapInput]) -> set[int]:
 
     **The exception belongs to the first lap of a session, not to `runs[0]`.**
     `practice_mode` is per session and an event export concatenates every
-    practice session it has, each opening a new run — so applying it to
-    `runs[0]` alone struck the opening lap of the second and third time trial
-    of the day, usually the fastest lap each of them had. It is not applied to
-    every run either: a mid-session refuel opens a genuine out-lap whatever
-    mode the session is in. Where the car started the session is the whole of
-    what the exception is about.
+    practice session it has - so applying it to `runs[0]` alone struck the
+    opening lap of the second and third time trial of the day, usually the
+    fastest lap each of them had. It is not applied after an in-lap either: a
+    mid-session stop opens a genuine out-lap whatever mode the session is in.
+    Where the car started the session is the whole of what the exception is
+    about.
 
     **The opener's verdict comes from `opening_lap_verdict`, the same rule
     the live path writes with**, so the rack, the export and the stored flag
@@ -740,19 +807,18 @@ def auto_out_laps(laps: list[LapInput]) -> set[int]:
     always holds a mode, so every session recorded since it existed is
     declared, and the nineteen undeclared sessions on file all predate it.
     """
-    runs = split_runs(laps)
-    out = {run.first_lap for run in runs}
-    session_openers = _session_opening_laps(laps)
-    for run in runs:
-        if run.first_lap not in session_openers:
+    out = {lap.lap_num for previous, lap in zip(laps, laps[1:])
+           if out_lap_after_in_lap(previous, lap)}
+    openers = _session_opening_laps(laps)
+    for lap in laps:
+        if lap.lap_num not in openers:
             continue
-        first = run.laps[0]
         verdict = opening_lap_verdict(
-            session_kind=getattr(first, "session_kind", None),
-            practice_mode=run.practice_mode,
-            standing_start_ms=getattr(first, "standing_start_ms", None))
-        if verdict.is_out_lap is False:
-            out.discard(run.first_lap)
+            session_kind=getattr(lap, "session_kind", None),
+            practice_mode=getattr(lap, "practice_mode", None),
+            standing_start_ms=getattr(lap, "standing_start_ms", None))
+        if verdict.is_out_lap is not False:
+            out.add(lap.lap_num)
     return out
 
 
@@ -783,10 +849,11 @@ def classify_exclusions(laps: list[LapInput],
                         fuel_capacity_l: float | None) -> list[LapInput]:
     """Give every excluded lap a reason from the vocabulary, and a source.
 
-    Also *applies* the two mechanical exclusions — the out-lap after a refuel
-    and the fuel-implausible lap — so that everything downstream, `lapsCounted`
-    and `bestLapMs` included, sees one consistent set of counted laps rather
-    than each aggregate deciding for itself.
+    Also *applies* the two mechanical exclusions — the out-lap (the session's
+    opener, or the lap after an in-lap) and the fuel-implausible lap — so that
+    everything downstream, `lapsCounted` and `bestLapMs` included, sees one
+    consistent set of counted laps rather than each aggregate deciding for
+    itself.
     """
     implausible = fuel_implausible_laps(laps, fuel_capacity_l)
     out_laps = auto_out_laps(laps)

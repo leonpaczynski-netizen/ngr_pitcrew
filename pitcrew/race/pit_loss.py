@@ -93,6 +93,16 @@ def measure(laps: list, *, refuel_rate_lps: float | None) -> list[PitLoss]:
         if not row.get("is_pit_lap"):
             continue
         num = int(row["lap_num"])
+        before = by_num.get(num - 1)
+        if row.get("is_out_lap") and not (before or {}).get("is_pit_lap"):
+            # **The pit row holds its own out-lap.** The exit came before the
+            # next crossing the app saw - every Monza stop on file, where GT7
+            # restarts the lap clock at the box and the row's frames run 286 s
+            # against a 168 s lap - so the in-lap and the out-lap share this
+            # row. The row after is struck by THE RULE (`runs.
+            # out_lap_after_in_lap`) but is a flying lap by the clock, and
+            # summing it in would take a whole lap off the stop.
+            continue
         following = by_num.get(num + 1)
         if following is None or not following.get("is_out_lap"):
             # The stop straddled the line and the app filed both halves on

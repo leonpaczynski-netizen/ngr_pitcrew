@@ -82,8 +82,17 @@ def test_the_tyre_answer_is_read_off_the_stop_lap():
     assert split_runs(laps)[1].tyres_changed_before is True
 
 
-def test_the_lap_after_the_fill_is_the_out_lap():
-    assert 12 in auto_out_laps(session_158())
+def test_the_lap_after_a_fill_with_no_in_lap_is_not_struck():
+    """Session 158's fill was a practice reset, not a stop (its frames:
+    relocated to the box and refilled in one frame, 3.2 s into lap 11). No
+    in-lap, so no out-lap: lap 12 is a flying lap. The driver, 15 Sep 2026."""
+    assert 12 not in auto_out_laps(session_158())
+
+
+def test_the_lap_after_a_flagged_in_lap_is_struck():
+    laps = session_158()
+    laps[10] = LapInput(**{**laps[10].__dict__, "is_pit_lap": True})
+    assert 12 in auto_out_laps(laps)
 
 
 def test_a_session_opening_on_a_fill_is_not_split():

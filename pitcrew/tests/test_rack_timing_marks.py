@@ -169,10 +169,10 @@ def test_green_is_the_stints_own_best_and_purple_is_the_sessions(app):
     assert laps[1] == theme.BEST_EVER       # quickest of the whole session
     assert laps[3] == theme.BEST_STINT      # best of stint two, and slower
     assert laps[4] == theme.SLOWER          # slower than its own stint's best
-    # Lap 3 is the refuel lap, which OPENS stint two - so it is an out-lap by
-    # the rack's own rule and holds no mark at all, which is not the same
-    # claim as being slower than something.
-    assert laps[2] is None
+    # Lap 3 OPENS stint two, but nothing was driven into the pit lane before
+    # it - no in-lap, so it is not an out-lap (the driver's rule, 15 Sep
+    # 2026) and it is judged like any lap of its stint.
+    assert laps[2] == theme.SLOWER
 
 
 def test_purple_is_the_session_best_and_comes_from_the_rack(app):

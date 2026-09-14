@@ -44,12 +44,18 @@ import enum
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 from pitcrew.analysis.refuel import MAX_PLAUSIBLE_LPS
+from pitcrew.analysis.runs import out_lap_after_in_lap
 from pitcrew.diagnostics import log
 from pitcrew.telemetry.packet import GT7Packet
-from pitcrew.telemetry.pit_detect import entered_the_pits
+from pitcrew.telemetry.pit_detect import entered_the_pits, relocated
 from pitcrew.telemetry.recorder import SAMPLE_HZ
+
+# One `SessionState` holds one recording session, so the lap being filed is
+# always in the same session as the one before it.
+_THIS_SESSION = SimpleNamespace(session_id=None)
 
 # Speed below which a fuel increase means the pit lane rather than a physics
 # quirk.  GT7 pit limiters sit at 60-80 km/h; 120 leaves generous margin.
@@ -673,8 +679,14 @@ class SessionState:
         adjacent = (p.packet_id is not None
                     and self._prev.packet_id is not None
                     and p.packet_id - self._prev.packet_id == 1)
-        taken = adjacent and entered_the_pits(self._prev.speed_kmh,
-                                              p.speed_kmh)
+        # **And not a car the game moved.** A practice reset is the same
+        # step - 265 km/h to 0 between two frames at session 158 lap 11 - but
+        # the car lands 168 m away in the box in that same frame, where a
+        # real entry freezes it in place. A reset is not a stop and makes no
+        # in-lap (`pit_detect.Stop.reset`).
+        taken = (adjacent
+                 and entered_the_pits(self._prev.speed_kmh, p.speed_kmh)
+                 and not relocated(self._prev, p))
 
         if self._phase is not Phase.IN_PIT:
             if not (refuelling or swapped or taken):
@@ -865,7 +877,18 @@ class SessionState:
                             else None),
             position=p.current_position,
             is_pit_lap=self._pit_lap,
-            is_out_lap=self._out_lap_pending,
+            # **THE RULE, on the live side too** - the lap after an in-lap is
+            # an out-lap, decided by the one function everything else calls.
+            # The pit EXIT alone put the flag on the in-lap itself wherever
+            # the exit came before the next crossing the app saw (the Monza
+            # stops on file, sessions 52, 53, 58 and 78), and the lap after it
+            # was counted: `is_pit_lap` followed by a lap that was not an
+            # out-lap. The in-lap keeps that flag too - `race.pit_loss` reads
+            # it as "this row holds both halves of the stop".
+            is_out_lap=(self._out_lap_pending
+                        or out_lap_after_in_lap(
+                            self._laps[-1] if self._laps else None,
+                            _THIS_SESSION)),
             gear_ratios=list(self._gear_ratios) if self._gear_ratios else None,
             # **`None` until the stop has actually closed.** The swap is read
             # at PIT_ENTRY, before it has happened, so a `False` filed on the

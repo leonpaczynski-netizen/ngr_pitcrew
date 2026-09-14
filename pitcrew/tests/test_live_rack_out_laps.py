@@ -93,9 +93,10 @@ def test_the_live_rack_and_the_rebuild_reach_the_same_answer(qt_app):
     assert live == rebuilt
 
 
-def test_a_refuel_mid_session_opens_a_run_and_strikes_its_first_lap(qt_app):
-    """The new lap is what opens the run, so the rule cannot be applied to
-    the row in isolation - it is recomputed across the whole rack."""
+def test_the_lap_after_an_in_lap_is_struck_as_it_lands(qt_app):
+    """THE RULE (the driver, 15 Sep 2026): the lap after an in-lap is an
+    out-lap. The new lap is what it applies to, so the rack has to judge it
+    against the row before it, not in isolation."""
     from pitcrew.ui.practice_screen import PracticeScreen
 
     laps = [
@@ -108,14 +109,39 @@ def test_a_refuel_mid_session_opens_a_run_and_strikes_its_first_lap(qt_app):
     ]
     screen = PracticeScreen()
     for index, lap in enumerate(laps, 1):
-        screen.add_lap(_row(index, lap))
+        row = _row(index, lap)
+        row.is_pit_lap = index == 3       # driven into the box on lap 3
+        screen.add_lap(row)
 
     rows = screen.rows()
     assert rows[0].is_out_lap
-    assert rows[3].is_out_lap, "the lap after the stop is an out-lap"
+    assert rows[3].is_out_lap, "the lap after the in-lap is an out-lap"
     assert not rows[4].is_out_lap
     counted = [row.lap_time_ms for row in rows if row.counted]
     assert min(counted) == 104500
+
+
+def test_a_refill_with_no_in_lap_strikes_nothing(qt_app):
+    """A practice reset replaces the tank with no lap driven into the pit
+    lane (session 158 lap 11). The run splits; the next lap is a flying lap
+    and stays counted."""
+    from pitcrew.ui.practice_screen import PracticeScreen, run_start_ids
+
+    laps = [
+        (95000, 100.0, 92.0),
+        (105000, 92.0, 84.0),
+        (103000, 84.0, 99.0),        # the reset, 3 s into the lap
+        (101400, 99.0, 91.0),
+        (101100, 91.0, 83.0),
+    ]
+    screen = PracticeScreen()
+    for index, lap in enumerate(laps, 1):
+        screen.add_lap(_row(index, lap))
+
+    rows = screen.rows()
+    assert [row.is_out_lap for row in rows] == [True, False, False, False, False]
+    assert rows[3].counted
+    assert run_start_ids(rows) == {1001, 1004}
 
 
 def test_a_time_trials_opening_lap_is_not_struck(qt_app):
