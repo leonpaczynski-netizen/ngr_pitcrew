@@ -127,9 +127,13 @@ def test_the_engine_bed_stays_the_quietest_thing_in_the_mix():
         "always-on band and must not anchor the mix")
 
 
-def test_rev_a_is_opt_in():
-    """It has not run laps yet. The default profile is unchanged."""
-    assert synth.default_profile() is synth.PORSCHE_RSR_17
+def test_rev_a_is_opt_in(monkeypatch):
+    """Rev A was rejected in the seat and is never the default: with nothing
+    selected the locked tune runs; Rev A only runs when asked for by name."""
+    monkeypatch.delenv("PITCREW_RIG_REV", raising=False)
+    monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
+    assert synth.default_profile() is not synth.PORSCHE_RSR_17_REV_A
+    assert synth.default_profile() is synth.PORSCHE_RSR_17_REV_G
 
 
 def test_rev_a_changes_only_trims():
@@ -157,7 +161,9 @@ def test_the_live_engine_follows_the_flag(monkeypatch):
     from pitcrew.rig import haptics
 
     monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
+    monkeypatch.setenv("PITCREW_RIG_REV", "ORIGINAL")
     assert haptics.HapticsEngine()._specs == tuple(synth.PORSCHE_RSR_17)
 
+    monkeypatch.delenv("PITCREW_RIG_REV", raising=False)
     monkeypatch.setenv("PITCREW_RIG_REV_A", "1")
     assert haptics.HapticsEngine()._specs == tuple(synth.PORSCHE_RSR_17_REV_A)

@@ -61,14 +61,17 @@ def test_rev_b_changes_only_trims():
 def test_revision_selector(monkeypatch):
     monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
     monkeypatch.delenv("PITCREW_RIG_REV", raising=False)
-    assert synth.rig_revision() == ""
+    assert synth.rig_revision() == synth.LOCKED_REVISION == "G"      # locked in
+    assert synth.default_profile() is synth.PORSCHE_RSR_17_REV_G
+    monkeypatch.setenv("PITCREW_RIG_REV", "original")
+    assert synth.rig_revision() == ""                                  # the baseline
     assert synth.default_profile() is synth.PORSCHE_RSR_17
 
     monkeypatch.setenv("PITCREW_RIG_REV", "b")
     assert synth.rig_revision() == "B"
     assert synth.default_profile() is synth.PORSCHE_RSR_17_REV_B
 
-    monkeypatch.setenv("PITCREW_RIG_REV", "")
+    monkeypatch.delenv("PITCREW_RIG_REV", raising=False)
     monkeypatch.setenv("PITCREW_RIG_REV_A", "1")
     assert synth.default_profile() is synth.PORSCHE_RSR_17_REV_A
 
@@ -129,8 +132,10 @@ def test_bump_lift_follows_the_tune(monkeypatch):
     assert effects.EffectDeriver()._lift_bumps is True
     monkeypatch.setenv("PITCREW_RIG_REV", "B")
     assert effects.EffectDeriver()._lift_bumps is False
-    monkeypatch.delenv("PITCREW_RIG_REV")
+    monkeypatch.setenv("PITCREW_RIG_REV", "ORIGINAL")
     assert effects.EffectDeriver()._lift_bumps is False
+    monkeypatch.delenv("PITCREW_RIG_REV")
+    assert effects.EffectDeriver()._lift_bumps is True          # the locked tune
 
 
 def test_a_bump_is_one_thud_not_a_rumble():
@@ -252,5 +257,35 @@ def test_rev_g_engine_pull_climbs_66_to_100_hz(monkeypatch):
     monkeypatch.delenv("PITCREW_RIG_REV_A", raising=False)
     monkeypatch.setenv("PITCREW_RIG_REV", "G")
     assert synth.revision_at_least("D") and synth.revision_at_least("G")
-    monkeypatch.setenv("PITCREW_RIG_REV", "")
+    monkeypatch.setenv("PITCREW_RIG_REV", "ORIGINAL")
     assert synth.rig_revision() == "" and not synth.revision_at_least("A")
+
+
+def _nothing_continuous_shares_the_traction_band(profile) -> bool:
+    specs = {s.name: s for s in profile}
+    traction = specs["rear_traction"]
+    for spec in profile:
+        if spec is traction or spec.priority <= synth.TRANSIENT:
+            continue
+        if spec.felt_trim <= 0.01:                    # switched off
+            continue
+        if (spec.freq_hi or spec.freq_lo) > traction.freq_lo:
+            return False
+    return True
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.xfail(
+    not _nothing_continuous_shares_the_traction_band(synth.PORSCHE_RSR_17_REV_G),
+    strict=True,
+    reason="OPEN CONFLICT, recorded not resolved: test_synth's rule that no "
+           "continuous voice shares the traction band is checked against the "
+           "ORIGINAL profile only. The locked tune's engine climbs 66->100 Hz on "
+           "a pull (freq_hi 131.5) into rear_traction's 86-104 - the failure that "
+           "rule was written against. Kept because the driver drove it and "
+           "called traction 'great'; the replay put traction 4% buried. Strict, "
+           "so it flags if the engine is ever moved back out.")
+def test_the_locked_tune_keeps_the_traction_band_clear():
+    assert _nothing_continuous_shares_the_traction_band(synth.default_profile())

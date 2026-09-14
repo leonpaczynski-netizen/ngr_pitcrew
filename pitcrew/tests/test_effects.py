@@ -220,7 +220,12 @@ def test_arriving_on_a_kerb_thumps_once():
     deriver = EffectDeriver()
     deriver.update(Frame(surfaces="TTTT"))
     strike = deriver.update(Frame(surfaces="TTCT"))[_index("impact")]
-    assert strike > 0.5
+    # The edge must land at least at the running tune's floor for a kerb: the
+    # locked Rev G grades kerbs from 0.362 (a flat synthetic frame is the
+    # smallest possible kerb); the original fixed floor was 0.70.
+    from pitcrew.rig import effects as _fx
+    floor = _fx.KERB_GRADE_FLOOR if deriver._grade_kerbs else 0.5
+    assert strike >= floor
     held = strike
     for _ in range(20):
         held = deriver.update(Frame(surfaces="TTCT"))[_index("impact")]

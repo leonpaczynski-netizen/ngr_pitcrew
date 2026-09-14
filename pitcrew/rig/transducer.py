@@ -306,6 +306,14 @@ AMP_VOLUME_MAX = 50
 # and not only by what the hardware can deliver there.
 AMP_VOLUME_RACE_2026_09_13 = 29
 
+# **The operating point: amp 35, with the Rev G tune.** Supersedes the 29 above,
+# which was a one-race stopgap for the old profile. Every level in Rev G was set
+# on the bench and knock-checked seated with the knob at 35, and driven there;
+# the driver locked it in on 14 Sep 2026. At 29 the beds fall under his floor.
+# Nothing in software can read the knob, so this is the number to check when the
+# rig "feels weak" before anything in the mix is touched.
+AMP_VOLUME_OPERATING = 35
+
 # What is left above the reference, and it is deliberate rather than spare.
 # Sustained content sits at or below -6 dBFS; a discrete event may use the
 # 6 dB above it. That reserve is what makes a kerb strike read as an EVENT

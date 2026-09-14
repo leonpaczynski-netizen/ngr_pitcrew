@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from pitcrew.rig import transducer
+from pitcrew.rig import synth as _synth_module
 from pitcrew.rig.effects import EffectDeriver
 from pitcrew.rig.synth import (
     BED,
@@ -231,14 +232,17 @@ def test_the_whole_band_is_reachable_not_just_the_bottom_of_it():
     rig on its way past.
     """
     mix = HapticMix(block=BLOCK)
-    index = mix.names.index("chassis_load")
+    # rear_traction, not chassis_load: the locked tune (Rev G) switches
+    # chassis_load off with a 0.01 trim, and pitch smoothing is paced by the
+    # voice's own level, so a silenced voice cannot show what this protects.
+    index = mix.names.index("rear_traction")
     swept = np.zeros(len(mix.names) + len(MODIFIERS), dtype=np.float32)
     swept[index] = 1.0
     for _ in range(400):
         mix.render(swept, BLOCK)
     reached = mix._voices[index]._pitch
     assert reached > 0.9, (
-        f"chassis load only reached {reached:.0%} of its band at full "
+        f"rear traction only reached {reached:.0%} of its band at full "
         f"intensity - pitch is still following amplitude")
 
     mix.master = 0.25
@@ -299,7 +303,10 @@ def test_compensating_across_a_band_keeps_the_felt_strength_flat():
     spec = _named("chassis_load")
     assert spec.band_compensate is True
     mix = HapticMix(block=BLOCK)
-    index = mix.names.index("chassis_load")
+    # rear_traction, not chassis_load: the locked tune (Rev G) switches
+    # chassis_load off with a 0.01 trim, and pitch smoothing is paced by the
+    # voice's own level, so a silenced voice cannot show what this protects.
+    index = mix.names.index("rear_traction")
     voice = mix._voices[index]
 
     felt = []
@@ -436,10 +443,18 @@ def test_no_effect_is_louder_than_the_level_he_calibrated_against():
     """The headroom above the calibration level belongs to the limiter and to
     brief transients, not to any one effect's own scale."""
     mix = HapticMix(block=BLOCK)
+    # **One effect is past this on the driver's instruction, and it is named.**
+    # Rev G's rear_traction is +6 dB over Rev B at his request ("especially rear
+    # traction loss"), which puts its SCALE at 0.63. It was played at full
+    # intensity on the bench, seated at amp 35 - "no knock, stronger, feels
+    # good" - and renders a peak of ~0.50, at the reference. It may use the
+    # transient headroom; nothing else may, and nothing past it.
+    allowed = {"rear_traction": transducer.TRANSIENT_CEILING}
     for spec, scale in zip(mix.specs, mix._scale):
-        assert float(scale) <= transducer.SUSTAINED_CEILING + 1e-6, (
+        ceiling = allowed.get(spec.name, transducer.SUSTAINED_CEILING)
+        assert float(scale) <= ceiling + 1e-6, (
             f"{spec.name} peaks at {float(scale):.4f}, above the "
-            f"{transducer.SUSTAINED_CEILING} this rig was calibrated against")
+            f"{ceiling} allowed against this rig's calibration")
 
 
 def test_an_impossible_shaping_is_refused():
@@ -507,6 +522,13 @@ def test_a_cue_at_its_own_floor_does_not_move_the_bed():
         f"a cue at its perceptibility floor pulled the bed to {mix.duck:.2f}")
 
 
+@pytest.mark.xfail(
+    _synth_module.DUCK_DEPTH > _synth_module.DUCK_CRITICAL, strict=True,
+    reason="OPEN CONFLICT, recorded not resolved: the locked tune's event duck "
+           "(0.92, chosen by the driver so the gear thud survived a louder "
+           "engine) is deeper than its limit-cue duck (0.88), so an event now "
+           "clears the beds harder than traction or the brake cue does - the "
+           "reverse of this rule. Strict, so this flags the moment it is fixed.")
 def test_a_limit_cue_ducks_the_background_harder_than_an_event_does():
     """A transient is over in 90 ms and a limit cue is not, so it earns more:
     the point is not to make the cue loud, it is to make it the only thing

@@ -240,21 +240,38 @@ class EffectSpec:
 # "from" a revision rather than being listed against every letter by hand.
 REVISIONS = "ABCDEFG"
 
+# **Rev G is the rig's tune. Locked in by the driver, 14 Sep 2026.**
+#
+# After laps on it (session 171, car 2177): "perfect lock it in". It is the end
+# of a run that started with the transducer remounted vertically on 12 Sep and
+# went A (rejected) -> B -> C -> D -> E (bench only) -> F -> G, every step
+# driven or bench-tested seated at amp 35 - see docs/RIG-TUNE-REV-G_2026-09-14.md.
+# So with nothing selected, G is what runs. The pre-tune profile is still one
+# word away, `PITCREW_RIG_REV=ORIGINAL`, because a baseline you cannot get back
+# to is a comparison you can never make again.
+#
+# **Amp 35 is part of the tune**, not a separate preference: every level in it
+# was set and knock-checked with the knob at 35. At 29 the beds go under the
+# floor - see transducer.AMP_VOLUME_OPERATING.
+LOCKED_REVISION = "G"
+ORIGINAL = "ORIGINAL"
+
 
 def revision_at_least(first: str) -> bool:
-    """True when the selected trial tune is `first` or a later one."""
+    """True when the running tune is `first` or a later one."""
     current = rig_revision()
     return bool(current) and REVISIONS.index(current) >= REVISIONS.index(first)
 
 
 def rig_revision() -> str:
-    """Which trial tune is selected: a letter of REVISIONS, or "" for the default.
+    """Which tune runs: a letter of REVISIONS, or "" for the pre-tune original.
 
-    `PITCREW_RIG_REV` names it; `PITCREW_RIG_REV_A=1` is kept because the Rev A
-    test protocol and a test still use it. Read here, above the duck constants,
-    because both the duck and the profile depend on it and they must never
-    disagree - they did once, and a half-applied Rev A nearly went out as the
-    real thing (see `HapticsEngine.__init__`).
+    `PITCREW_RIG_REV` names a letter, or ORIGINAL; unset means LOCKED_REVISION.
+    `PITCREW_RIG_REV_A=1` is kept because the Rev A test protocol and a test
+    still use it. Read here, above the duck constants, because both the duck
+    and the profile depend on it and they must never disagree - they did once,
+    and a half-applied Rev A nearly went out as the real thing (see
+    `HapticsEngine.__init__`).
     """
     named = os.environ.get("PITCREW_RIG_REV", "").strip().upper()
     # One letter, and a letter of REVISIONS. `"" in "ABCDEFG"` is True, so a
@@ -262,9 +279,11 @@ def rig_revision() -> str:
     # stopped honouring PITCREW_RIG_REV_A - caught by its own test.
     if len(named) == 1 and named in REVISIONS:
         return named
+    if named == ORIGINAL:
+        return ""
     if os.environ.get("PITCREW_RIG_REV_A"):
         return "A"
-    return ""
+    return LOCKED_REVISION
 
 
 # Rev D goes deeper again, chosen on the bench over a louder gear change: with
