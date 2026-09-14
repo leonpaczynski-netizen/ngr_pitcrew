@@ -40,6 +40,9 @@ def _race(plan=None):
     race.handle(SessionEvent(EventKind.RACE_STARTED, {"laps_in_race": LAPS}))
     burn = [4.5]
     race.expect.current_fuel_per_lap_l = lambda: burn[0]
+    # The coordinator installs the burn off `current_fuel_basis` - the figure,
+    # the laps behind it and whose laps they are (14 Sep 2026).
+    race.expect.current_fuel_basis = lambda: (burn[0], 10, "this stint")
     race.expect.green_laps = lambda: 10
     race.expect.current_fuel_reference_load_l = lambda: None
     race._test_burn = burn

@@ -90,6 +90,13 @@ BURN_OUTLIER_FRACTION = 0.04
 
 PRACTICE = "practice"
 RACE = "race"
+
+# What `current_fuel_basis` sized the laps ahead on. A burn is only as good as
+# the laps behind it, and after a stop those are not this stint's until there
+# are `STINT_BURN_LAPS` of them.
+FUEL_BASIS_STINT = "this stint"
+FUEL_BASIS_RACE = "the race"
+FUEL_BASIS_HIGHER = "the higher of the race and this stint so far"
 # The pair where practice set the figure and the race has laps but not yet
 # enough of them to take over. Named so the export can show which of the two
 # the plan was running on at any point.
@@ -490,20 +497,36 @@ class ExpectationTracker:
             return None
         return round(median(clean), 3)
 
-    def _clean_this_stint(self) -> list[tuple[int, float, bool, int]]:
-        """The clean rows of the stint being driven now."""
+    def _burn_this_stint(self) -> list[tuple[int, float, bool, int]]:
+        """The rows of the stint being driven now that are evidence about BURN.
+
+        **No lap-time filter - a lap-time filter is a pace filter.** This was
+        the pace population with `BURN_OUTLIER_FRACTION` applied, and a lap
+        slowed by an off, a spin or a fight is not a lap that burned less:
+        Bathurst, 14 Sep 2026, stint 2 ran 8.37, 8.52, 8.63 and 8.42 L with
+        two of the four more than 4% off the stint's best, so the stint "had"
+        two laps, never reached `STINT_BURN_LAPS`, and the race median of
+        8.248 - mostly stint 1 - stood in for a stint burning 8.5. "Fuel good
+        to the flag." was said three laps out, and lap 19 closed on 7.70 L
+        with a lap to run at 8.4.
+
+        What stays out is what is not a burn at all or is the app's own
+        instruction: pit and out laps (a fill is not a burn; `note_lap` never
+        admits them), lap one of a standing start, laps driven under the
+        short-shift instruction (evidence about the instruction), and a lap
+        that served a penalty - the crawl is in the burn as well as the time,
+        and `_clean` has always dropped it; this did not.
+        """
         if not self._green:
             return []
         current = self._stint
-        rows = [row for row, stint in zip(self._green, self._green_stint)
-                if stint == current]
-        if not rows:
-            return []
-        cutoff = min(row[0] for row in rows) * (1.0 + BURN_OUTLIER_FRACTION)
-        return [row for row in rows if row[0] <= cutoff and not row[2]]
+        return [row for row, stint in zip(self._green, self._green_stint)
+                if stint == current and not row[2] and row[1] > 0
+                and row[3] not in self._penalised]
 
     def stint_green_laps(self) -> int:
-        return len(self._clean_this_stint())
+        """Laps behind this stint's burn - see `_burn_this_stint`."""
+        return len(self._burn_this_stint())
 
     def stint_fuel_per_lap_l(self) -> float | None:
         """This stint's own green burn, or None until it has enough laps.
@@ -512,15 +535,14 @@ class ExpectationTracker:
         stint's figure is what the next laps will actually burn - the car is
         lighter, and the driver may have stopped saving.
         """
-        clean = [used for _, used, _, _ in self._clean_this_stint()
-                 if used > 0]
-        if len(clean) < STINT_BURN_LAPS:
+        burns = [used for _, used, _, _ in self._burn_this_stint()]
+        if len(burns) < STINT_BURN_LAPS:
             return None
-        return round(median(clean), 3)
+        return round(median(burns), 3)
 
     def stint_fuel_reference_load_l(self) -> float | None:
         """The mean fuel aboard across the laps `stint_fuel_per_lap_l` used."""
-        rows = self._clean_this_stint()
+        rows = self._burn_this_stint()
         if len(rows) < STINT_BURN_LAPS:
             return None
         loads = []
@@ -535,22 +557,52 @@ class ExpectationTracker:
         """Lap-to-lap scatter on this stint's green burn, or None before
         `STINT_BURN_LAPS`. Never across a stint boundary - the step between
         stints is a change, not scatter."""
-        clean = [used for _, used, _, _ in self._clean_this_stint()
-                 if used > 0]
-        if len(clean) < STINT_BURN_LAPS:
+        burns = [used for _, used, _, _ in self._burn_this_stint()]
+        if len(burns) < STINT_BURN_LAPS:
             return None
-        return stdev(clean)
+        return stdev(burns)
 
     def current_fuel_per_lap_l(self) -> float | None:
-        """The burn to size the next laps on: the stint's once it can speak,
-        the race's until then."""
+        """The burn to size the next laps on - `current_fuel_basis`'s figure."""
+        return self.current_fuel_basis()[0]
+
+    def current_fuel_basis(self) -> tuple[float | None, int, str]:
+        """`(burn, laps behind it, what it is)` for the laps AHEAD.
+
+        * **The stint's own** once it has `STINT_BURN_LAPS` laps
+          (`FUEL_BASIS_STINT`).
+        * **Before that, after a stop, the HIGHER of the race's and the
+          stint's so far** (`FUEL_BASIS_HIGHER`). The previous stint's burn
+          may not stand in silently for this one: at Bathurst it was 0.25 L a
+          lap light, and a light burn is the direction that says "fuel good"
+          about a tank that is short. The higher of the two can over-fill by
+          a litre or so; the lower runs him dry. The laps are the ones behind
+          whichever figure won, and the source is named so the call can carry
+          the hedge.
+        * **The race's** in the first stint, or where the stint has nothing
+          yet (`FUEL_BASIS_RACE`).
+        """
         stint = self.stint_fuel_per_lap_l()
-        return stint if stint is not None else self.race_fuel_per_lap_l()
+        stint_laps = self.stint_green_laps()
+        if stint is not None:
+            return stint, stint_laps, FUEL_BASIS_STINT
+        race = self.race_fuel_per_lap_l()
+        race_laps = len([row for row in self._clean() if row[1] > 0])
+        if self._stint > 0 and stint_laps:
+            so_far = round(median(used for _, used, _, _
+                                  in self._burn_this_stint()), 3)
+            if race is None or so_far > race:
+                return so_far, stint_laps, FUEL_BASIS_HIGHER
+            return race, race_laps, FUEL_BASIS_HIGHER
+        return race, race_laps, FUEL_BASIS_RACE
 
     def current_fuel_reference_load_l(self) -> float | None:
-        stint = self.stint_fuel_per_lap_l()
-        if stint is not None:
+        burn, _laps, basis = self.current_fuel_basis()
+        if basis == FUEL_BASIS_STINT:
             return self.stint_fuel_reference_load_l()
+        if basis == FUEL_BASIS_HIGHER and burn != self.race_fuel_per_lap_l():
+            # A burn from one or two laps has no load worth anchoring to.
+            return None
         return self.race_fuel_reference_load_l()
 
     def race_fuel_reference_load_l(self) -> float | None:

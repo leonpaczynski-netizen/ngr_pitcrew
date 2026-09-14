@@ -22,7 +22,13 @@ def _tracker(planned=7.83):
                               planned_lap_time_ms=88_000)
 
 
-def test_before_three_stint_laps_the_race_figure_stands():
+def test_before_three_stint_laps_the_higher_of_race_and_stint_stands():
+    """**Not the race figure alone** (Bathurst, 14 Sep 2026): the previous
+    stint's lighter burn may not stand in silently for this one. Until the
+    stint has three laps the higher of the two sizes the laps ahead, and the
+    basis says which it is."""
+    from pitcrew.race.expectations import FUEL_BASIS_HIGHER
+
     t = _tracker()
     for n in range(2, 8):
         t.note_lap(_lap(n, 7.32))
@@ -32,7 +38,8 @@ def test_before_three_stint_laps_the_race_figure_stands():
     t.note_lap(_lap(11, 7.80))
     assert t.stint_green_laps() == 2
     assert t.stint_fuel_per_lap_l() is None
-    assert t.current_fuel_per_lap_l() == t.race_fuel_per_lap_l()
+    assert t.race_fuel_per_lap_l() == 7.32
+    assert t.current_fuel_basis() == (7.795, 2, FUEL_BASIS_HIGHER)
 
 
 def test_from_three_stint_laps_the_stint_figure_takes_over():

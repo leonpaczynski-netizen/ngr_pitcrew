@@ -435,8 +435,9 @@ def test_the_engineer_folds_to_the_stay_out_with_the_short_shift_lever(raced):
     # No measured slope for the Shelby: the lever carries no rpm number and
     # the confidence drops instead of a figure being invented.
     assert fold.confidence == MEDIUM
-    # A lap earlier than it was (14 Sep 2026), so a lap's less burn behind it.
-    assert "0.3" in fold.reason
+    # A lap earlier than it was (14 Sep 2026), on this stint's burn with its
+    # slow laps counted - a lap slowed in traffic still burns.
+    assert "0.4" in fold.reason
     # The fold adopted the zero-stop shape: no stop left, target is the flag.
     assert race.stops_planned() == 0
     assert race.state.stint_ends_on_lap is None

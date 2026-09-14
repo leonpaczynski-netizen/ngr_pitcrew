@@ -884,9 +884,20 @@ class RaceCoordinator:
         # in at Deep Forest, from a first stint driven lift-and-coasting,
         # while the stint about to be run burned 8% more. The fill and every
         # "vs plan" sentence size the laps AHEAD, and those are this stint's.
-        green = self.expect.current_fuel_per_lap_l()
+        green, burn_laps, basis = self.expect.current_fuel_basis()
         if green is not None and self.expect.green_laps() >= self.BURN_LAPS_NEEDED:
+            if (green != self.state.fuel_per_lap_l
+                    or basis != self.state.fuel_burn_basis):
+                # **Logged on accept** (rule 10): the burn every fuel call
+                # rests on, how many laps stand behind it, and whose laps.
+                log("race").info("burn installed on lap %s: %.3f L/lap over "
+                                 "%d laps of %s", lap.lap_num, green,
+                                 burn_laps, basis)
             self.state.fuel_per_lap_l = green
+            # How many laps the band in `calls.fuel_verdict` is a projection
+            # off, and whether they are this stint's yet.
+            self.state.fuel_burn_laps = burn_laps
+            self.state.fuel_burn_basis = basis
             # **And the load it was measured at, or the burn is unanchored.**
             # A median taken over the heavy first half of a stint over-states
             # what the light second half will use; without this the fill at the

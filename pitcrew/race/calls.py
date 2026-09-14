@@ -25,6 +25,7 @@ from pitcrew.strategy.model import fuel_margin_l
 # What George says at the green when nobody wrote a briefing. Imported rather
 # than restated: `race/knowledge.py` owns the sentence, and two copies of one
 # line is how the app comes to say it two ways.
+from pitcrew.race.expectations import FUEL_BASIS_HIGHER
 from pitcrew.race.knowledge import NO_NOTES
 from pitcrew.strategy.fuel_model import fill_for_l, stint_burn_l
 
@@ -412,14 +413,37 @@ STATUS_EVERY_LAPS = 5
 TO_THE_STOP = "to the stop"
 TO_THE_FLAG = "to the flag"
 
-FUEL_STANDING_TOLERANCE_LAPS = 0.5
 FUEL_SHORT_LAPS = 0.5
-# **The half lap is burn noise over a stint, not over the last two laps.**
-# DERIVED: twice the measured 2.0% CV of a green lap's burn
-# (`RaceCoordinator.observed_fuel_per_lap`), per lap still to cover. It equals
-# the half lap at 12.5 laps and tightens below that. Suzuka, 13 Sep 2026: 3 L
-# short with two laps left was inside the flat half lap and read "Fuel good".
-FUEL_NOISE_PER_LAP = 0.04
+# **How short is short, to the flag: the noise of the projection, and nothing
+# that shrinks faster than it.** DERIVED. The gap is `fuel / burn - laps`, and
+# what it can be wrong by is the prediction interval of a sum: N laps still
+# to run, each with the burn's lap-to-lap sd, on a burn that is itself the
+# median of n laps - `sd * sqrt(N + N^2 / n)`, in litres, over the burn to put
+# it in laps. Two of those (`FUEL_SHORT_SIGMAS`) is short.
+#
+# It replaced `min(0.5, 0.04 x N)`, which was the systematic half only and
+# went to zero with the laps: Bathurst, 14 Sep 2026 (session 176), three laps
+# to go, 24.67 L at a stint burn of 8.47 - 0.09 laps short, 0.7 L - sat inside
+# its 0.12 and was said as "Fuel good to the flag." until the last lap. Here,
+# on that stint's measured sd of 0.12 L over four laps, the band is 0.06.
+#
+# **The floor is one lap's own scatter, and it is not a constant.** With one
+# lap to run the band is `2 * sd * sqrt(1 + 1/n)` - 0.3-0.4 L on every burn on
+# file (sd 0.12-0.17 L) - so a shortfall inside what one lap's burn wanders by
+# is never spoken, and one outside it always is. Where no sd is measured the
+# lap-to-lap CV of a green lap's burn stands in (`FUEL_NOISE_CV`, 2.0%,
+# `RaceCoordinator.observed_fuel_per_lap`), and n is `STINT_BURN_LAPS` - the
+# fewest laps a burn is ever installed on, so the widest honest band. Capped
+# at the half lap that has always been the ceiling. Suzuka, 13 Sep 2026: 3 L
+# short with two laps left read "Fuel good" under the flat half lap.
+FUEL_SHORT_SIGMAS = 2.0
+FUEL_NOISE_CV = 0.02
+FUEL_BURN_LAPS_FLOOR = 3
+# The three answers `fuel_verdict` gives. One decision, read by the heartbeat,
+# the fuel call, the save figure and the overdue box call (rule 13).
+FUEL_IS_SHORT = "short"
+FUEL_IS_GOOD = "good"
+FUEL_IS_SPARE = "spare"
 # Fuel surplus above which he is carrying a lap he does not need.
 FUEL_LONG_LAPS = 1.5
 
@@ -731,6 +755,13 @@ class RaceState:
     # an sd from, and then `strategy.model.fuel_margin_l` falls back to the
     # flat lap and says so.
     fuel_sd_l: float | None = None
+    # **How many laps the installed burn is the median of**, and which laps
+    # (`expectations.FUEL_BASIS_*`). The shortfall band is the noise of a
+    # projection off that median, and a burn from two laps is not one from
+    # twelve. None where nobody said - a state built by hand - and the band
+    # then assumes the fewest laps a burn is ever installed on.
+    fuel_burn_laps: int | None = None
+    fuel_burn_basis: str | None = None
     # What the tank actually holds. Without it the engineer will ask for a
     # fuel figure the car cannot take - and it did: "Fuel to 510 litres."
     fuel_capacity_l: float | None = None
@@ -2344,11 +2375,11 @@ def _box_now(state: RaceState) -> Call | None:
         # new fact: how overdue, and where the fuel stands against the flag.
         # (Past the box lap `_fuel_gap` is measured against the flag, which
         # is the frame he is actually racing in.)
-        gap = _fuel_gap(state)
+        verdict, gap, _reference = fuel_verdict(state)
         laps_word = "lap" if overdue == 1 else "laps"
         reason = f"{overdue} {laps_word} overdue."
         confidence = HIGH
-        if gap is not None and gap < 0:
+        if verdict == FUEL_IS_SHORT:
             # This used to say "You will not make the flag." off a constant
             # floor - an unhedged claim about the future, and the measured
             # driver closed 0.7 laps with lift-and-coast alone on the very
@@ -2362,9 +2393,9 @@ def _box_now(state: RaceState) -> Call | None:
                 reason += (f" Save {_litres_a_lap(save)} litres a lap to make "
                            "the flag if you stay out.")
             else:
-                reason += (f" You're {abs(gap):.1f} laps short of the flag on "
-                           "current burn - short-shift and lift if you stay "
-                           "out.")
+                reason += (f" You're {_short_by(gap)} laps short of the flag "
+                           "on current burn - short-shift and lift if you "
+                           "stay out.")
             confidence = MEDIUM
         elif fuel:
             reason += f" {fuel}"
@@ -2819,15 +2850,59 @@ def saving_covers(short_laps: float, laps_left: float | None) -> bool:
 
 
 def _short_tolerance_laps(state: RaceState) -> float:
-    """How far short is still inside the burn's noise, over this frame.
+    """How far short is still inside the burn's noise, over this frame, in laps.
 
     **To the flag only.** To the stop the fill covers a tenth of a lap, and a
     tightened tolerance there would put a fuel call over "Box next lap."
+    To the flag it is the projection's own noise - see `FUEL_SHORT_SIGMAS`.
     """
     target, reference = fuel_frame(state)
-    if reference != TO_THE_FLAG or not target or target <= 0:
+    burn = state.fuel_per_lap_l
+    if (reference != TO_THE_FLAG or not target or target <= 0
+            or not burn or burn <= 0):
         return FUEL_SHORT_LAPS
-    return min(FUEL_SHORT_LAPS, FUEL_NOISE_PER_LAP * target)
+    sd_l = (state.fuel_sd_l if state.fuel_sd_l and state.fuel_sd_l > 0
+            else FUEL_NOISE_CV * burn)
+    behind = max(FUEL_BURN_LAPS_FLOOR, state.fuel_burn_laps or 0)
+    spread_l = sd_l * math.sqrt(target + target * target / behind)
+    return min(FUEL_SHORT_LAPS, FUEL_SHORT_SIGMAS * spread_l / burn)
+
+
+def fuel_verdict(state: RaceState) -> tuple[str | None, float | None, str]:
+    """`(short / good / spare, the gap in laps, what it is a gap to)`.
+
+    **The one decision about whether the fuel reaches**, and everything that
+    says so reads it: the heartbeat's "Fuel good"/"N short", the fuel call,
+    the save figure and the overdue box call's fuel clause. At Bathurst on
+    14 Sep 2026 the heartbeat decided on one tolerance, the call on another,
+    and `fuel_reaches_flag` on a fill margin - and "Fuel good to the flag." was
+    said about a tank the other two called short (rule 13).
+
+    `fuel_reaches_flag` is not this and says so: it is the bar for DROPPING a
+    planned stop, and carries the margin a fill is sized with. A tank this
+    calls short does not reach it either.
+
+    `(None, None, reference)` where there is no burn or no distance.
+    """
+    gap = _fuel_gap(state)
+    reference = fuel_reference(state)
+    if gap is None:
+        return None, None, reference
+    if gap < -_short_tolerance_laps(state):
+        return FUEL_IS_SHORT, gap, reference
+    if (gap < 0 and reference == TO_THE_FLAG
+            and getattr(state, "fuel_save_said", False)):
+        # **Once a save has been asked for, short stays short until the tank
+        # reaches** - the same edge `FUEL_REACHES` retracts it on. Replayed
+        # over session 176 the median burn dipped on lap 18 and the gap came
+        # back inside the band, so the heartbeat would have said "Fuel good
+        # to the flag." one lap after "Save 0.3 litres a lap" with the tank
+        # still short on the point estimate: rule 13 across two laps, and
+        # the hysteresis rule 10 asks for.
+        return FUEL_IS_SHORT, gap, reference
+    if gap > FUEL_LONG_LAPS:
+        return FUEL_IS_SPARE, gap, reference
+    return FUEL_IS_GOOD, gap, reference
 
 
 def fuel_save_l(state: RaceState) -> float | None:
@@ -2839,14 +2914,25 @@ def fuel_save_l(state: RaceState) -> float | None:
     one arithmetic. No margin: it is the saving that makes the flag at the
     burn measured, and it is said as exactly that.
     """
-    target, reference = fuel_frame(state)
-    gap = _fuel_gap(state)
-    if (reference != TO_THE_FLAG or gap is None or gap >= 0
+    target, _frame = fuel_frame(state)
+    verdict, gap, reference = fuel_verdict(state)
+    # **Short by the one decision, or no figure** - a save named inside the
+    # noise is a save the status line beside it calls "good" (rule 13).
+    if (reference != TO_THE_FLAG or verdict != FUEL_IS_SHORT
             or not target or target <= 0):
         return None
     if not saving_covers(-gap, target):
         return None
     return state.fuel_per_lap_l - state.fuel_l / target
+
+
+def _short_by(gap: float) -> str:
+    """A shortfall in laps, to the tenth - and never "0.0". The band can call
+    a shortfall of 0.04 laps real at the flag, and "0.0 short" is a sentence
+    that argues with itself; the least that is said is "0.1". A floor on the
+    WORDS for a shortfall already decided, not on the measurement: the gap
+    itself travels unrounded as the call's severity."""
+    return f"{max(0.1, round(abs(gap), 1)):.1f}"
 
 
 def _litres_a_lap(litres: float) -> str:
@@ -2855,20 +2941,24 @@ def _litres_a_lap(litres: float) -> str:
 
 
 def _fuel(state: RaceState) -> Call | None:
-    gap = _fuel_gap(state)
+    verdict, gap, _reference = fuel_verdict(state)
     if gap is None or state.in_pit or state.finished:
         return None
     if _crossing_the_line(state):
         return None
 
-    confidence = MEDIUM if state.lap < 3 else HIGH
+    # **MEDIUM while the burn is not yet this stint's own** - the higher of
+    # the race's and a stint of one or two laps is a hedge, and the record
+    # says so (`expectations.current_fuel_basis`).
+    confidence = (MEDIUM if state.lap < 3
+                  or state.fuel_burn_basis == FUEL_BASIS_HIGHER else HIGH)
     if (state.fuel_save_said and gap >= 0
             and fuel_reference(state) == TO_THE_FLAG):
         # Once, and only after a save was asked for: he is lifting for fuel
         # he no longer needs.
         return Call(FUEL_REACHES, state.lap, "Fuel reaches the flag now.",
                     "On current burn.", MEDIUM)
-    if gap < -_short_tolerance_laps(state):
+    if verdict == FUEL_IS_SHORT:
         # **A shortfall no lever can cover is a stop, and is said as one.**
         # The Deep Forest race sim heard "Short-shift and lift into the slow
         # corners" three times while 6-8 laps short of the flag with no stop
@@ -2880,8 +2970,9 @@ def _fuel(state: RaceState) -> Call | None:
                 and not saving_covers(abs(gap), remaining)):
             return Call(FUEL_SHORT, state.lap,
                         "Fuel needs a stop.",
-                        f"{abs(gap):.1f} laps short of the flag - short-shifting "
-                        f"cannot cover it.", confidence, severity=-gap,
+                        f"{_short_by(gap)} laps short of the flag - "
+                        f"short-shifting cannot cover it.", confidence,
+                        severity=-gap,
                         fuel_frame=fuel_frame(state)[1])
         drop, still = short_shift_for(state)
         save = fuel_save_l(state)
@@ -2891,10 +2982,11 @@ def _fuel(state: RaceState) -> Call | None:
             return Call(FUEL_SHORT, state.lap,
                         f"Save {_litres_a_lap(save)} litres a lap to make the "
                         f"flag.",
-                        f"You're {abs(gap):.1f} laps short on current burn.",
+                        f"You're {_short_by(gap)} laps short on current "
+                        f"burn.",
                         confidence, severity=-gap, tag=FUEL_SAVE,
                         short_shift_drop_rpm=drop or None)
-        reason = f"You're {abs(gap):.1f} laps short on fuel."
+        reason = f"You're {_short_by(gap)} laps short on fuel."
         if still > 0.05:
             # Said second because the instruction still stands - saving what
             # can be saved shortens the fill even when it cannot delete it.
@@ -2919,7 +3011,7 @@ def _fuel(state: RaceState) -> Call | None:
                     # moving the beep by a figure nobody measured would be
                     # inventing the number the call deliberately withheld.
                     short_shift_drop_rpm=drop or None)
-    if gap > FUEL_LONG_LAPS and _past_half_stint(state):
+    if verdict == FUEL_IS_SPARE and _past_half_stint(state):
         # Only worth saying once the stint is half run. At the start of a
         # stint there is always surplus - the tank was just filled - and
         # "you can push" on lap one is noise the driver learns to ignore.
@@ -4337,14 +4429,16 @@ def _fuel_standing(state: RaceState) -> str:
         return ""
     if not state.fuel_per_lap_l:
         return "No burn figure yet."
-    gap = _fuel_gap(state)
+    verdict, gap, reference = fuel_verdict(state)
     if gap is None:
         return "No burn figure yet."
-    reference = fuel_reference(state)
-    # The fuel call's own tolerance, so the two cannot disagree about short.
-    if gap < -min(FUEL_STANDING_TOLERANCE_LAPS, _short_tolerance_laps(state)):
-        return f"{abs(gap):.1f} short {reference} on current burn."
-    if gap > FUEL_LONG_LAPS:
+    # **The fuel call's own decision, not a copy of its tolerance**, so the
+    # two cannot disagree about short (rule 13).
+    if verdict == FUEL_IS_SHORT:
+        # Up to the tenth, never to nearest: a shortfall of 0.04 laps that
+        # the band calls real is not "0.0 short".
+        return f"{_short_by(gap)} short {reference} on current burn."
+    if verdict == FUEL_IS_SPARE:
         return f"{gap:.1f} spare {reference}."
     return f"Fuel good {reference}."
 
