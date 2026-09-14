@@ -1,0 +1,9459 @@
+{
+ "session": 176,
+ "green_clock_s": 73207.1,
+ "monotonic_offset_s": 39913.596,
+ "monotonic_offset_bounds_s": [
+  39913.28,
+  39913.912
+ ],
+ "event": {
+  "race_laps": 20,
+  "mandatory_stops": 1,
+  "pit_loss_secs": 23.13,
+  "pit_loss_source": "measured",
+  "refuel_rate_lps": 1.0
+ },
+ "stints": [
+  {
+   "laps": 11,
+   "compound": "RS",
+   "fuel_l": 91.07532644991736,
+   "start_lap": 1
+  },
+  {
+   "laps": 9,
+   "compound": "RS",
+   "fuel_l": 74.13854609864103,
+   "start_lap": 12,
+   "tyres": true
+  }
+ ],
+ "laps": [
+  {
+   "lap_num": 1,
+   "lap_time_ms": 145792,
+   "fuel_start": 99.9217758178711,
+   "fuel_end": 91.78333282470703,
+   "fuel_used": 8.138442993164062,
+   "position": 10,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 1,
+   "exclusion_reason": "incident",
+   "off_track_s": 8.6,
+   "laps_completed": 2,
+   "race_elapsed_s": 143.66
+  },
+  {
+   "lap_num": 2,
+   "lap_time_ms": 130449,
+   "fuel_start": 91.78333282470703,
+   "fuel_end": 83.91239929199219,
+   "fuel_used": 7.870933532714844,
+   "position": 10,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 0.05,
+   "laps_completed": 3,
+   "race_elapsed_s": 274.1
+  },
+  {
+   "lap_num": 3,
+   "lap_time_ms": 122484,
+   "fuel_start": 83.91239929199219,
+   "fuel_end": 75.52428436279297,
+   "fuel_used": 8.388114929199219,
+   "position": 10,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 0.0,
+   "laps_completed": 4,
+   "race_elapsed_s": 396.59
+  },
+  {
+   "lap_num": 4,
+   "lap_time_ms": 121979,
+   "fuel_start": 75.52428436279297,
+   "fuel_end": 67.27647399902344,
+   "fuel_used": 8.247810363769531,
+   "position": 10,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 0.3333333333333333,
+   "laps_completed": 5,
+   "race_elapsed_s": 518.58
+  },
+  {
+   "lap_num": 5,
+   "lap_time_ms": 122664,
+   "fuel_start": 67.27647399902344,
+   "fuel_end": 59.401615142822266,
+   "fuel_used": 7.874858856201172,
+   "position": 9,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 0.15,
+   "laps_completed": 6,
+   "race_elapsed_s": 641.24
+  },
+  {
+   "lap_num": 6,
+   "lap_time_ms": 123052,
+   "fuel_start": 59.401615142822266,
+   "fuel_end": 51.15412902832031,
+   "fuel_used": 8.247486114501953,
+   "position": 7,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 0.0,
+   "laps_completed": 7,
+   "race_elapsed_s": 764.29
+  },
+  {
+   "lap_num": 7,
+   "lap_time_ms": 121973,
+   "fuel_start": 51.15412902832031,
+   "fuel_end": 42.99918746948242,
+   "fuel_used": 8.15494155883789,
+   "position": 7,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 0.0,
+   "laps_completed": 8,
+   "race_elapsed_s": 886.26
+  },
+  {
+   "lap_num": 8,
+   "lap_time_ms": 129830,
+   "fuel_start": 42.99918746948242,
+   "fuel_end": 34.83140182495117,
+   "fuel_used": 8.16778564453125,
+   "position": 8,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 2.6333333333333333,
+   "laps_completed": 9,
+   "race_elapsed_s": 1016.09
+  },
+  {
+   "lap_num": 9,
+   "lap_time_ms": 148232,
+   "fuel_start": 34.83140182495117,
+   "fuel_end": 26.15731430053711,
+   "fuel_used": 8.674087524414062,
+   "position": 10,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 1,
+   "exclusion_reason": "incident",
+   "off_track_s": 3.4833333333333334,
+   "laps_completed": 10,
+   "race_elapsed_s": 1164.32
+  },
+  {
+   "lap_num": 10,
+   "lap_time_ms": 147050,
+   "fuel_start": 26.15731430053711,
+   "fuel_end": 17.949604034423828,
+   "fuel_used": 8.207710266113281,
+   "position": 9,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 1,
+   "exclusion_reason": "incident",
+   "off_track_s": 4.166666666666667,
+   "laps_completed": 11,
+   "race_elapsed_s": 1311.37
+  },
+  {
+   "lap_num": 11,
+   "lap_time_ms": 142702,
+   "fuel_start": 17.949604034423828,
+   "fuel_end": 10.131549835205078,
+   "fuel_used": 7.81805419921875,
+   "position": 8,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 1.15,
+   "laps_completed": 12,
+   "race_elapsed_s": 1454.07
+  },
+  {
+   "lap_num": 12,
+   "lap_time_ms": 138775,
+   "fuel_start": 10.131549835205078,
+   "fuel_end": 2.468336820602417,
+   "fuel_used": 7.663213014602661,
+   "position": 8,
+   "is_pit_lap": 1,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 0.0,
+   "laps_completed": 13,
+   "race_elapsed_s": 1592.83
+  },
+  {
+   "lap_num": 13,
+   "lap_time_ms": 190797,
+   "fuel_start": 2.468336820602417,
+   "fuel_end": 58.61956024169922,
+   "fuel_used": 7.848776578903198,
+   "position": 11,
+   "is_pit_lap": 0,
+   "is_out_lap": 1,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 0.15,
+   "laps_completed": 14,
+   "race_elapsed_s": 1783.59
+  },
+  {
+   "lap_num": 14,
+   "lap_time_ms": 126283,
+   "fuel_start": 58.61956024169922,
+   "fuel_end": 50.24845504760742,
+   "fuel_used": 8.371105194091797,
+   "position": 11,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 3.7333333333333334,
+   "laps_completed": 15,
+   "race_elapsed_s": 1909.86
+  },
+  {
+   "lap_num": 15,
+   "lap_time_ms": 122432,
+   "fuel_start": 50.24845504760742,
+   "fuel_end": 41.7315788269043,
+   "fuel_used": 8.516876220703125,
+   "position": 11,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 0.9833333333333333,
+   "laps_completed": 16,
+   "race_elapsed_s": 2032.3
+  },
+  {
+   "lap_num": 16,
+   "lap_time_ms": 153990,
+   "fuel_start": 41.7315788269043,
+   "fuel_end": 33.096832275390625,
+   "fuel_used": 8.634746551513672,
+   "position": 12,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 1,
+   "exclusion_reason": "incident",
+   "off_track_s": 20.483333333333334,
+   "laps_completed": 17,
+   "race_elapsed_s": 2186.3
+  },
+  {
+   "lap_num": 17,
+   "lap_time_ms": 145215,
+   "fuel_start": 33.096832275390625,
+   "fuel_end": 24.674535751342773,
+   "fuel_used": 8.422296524047852,
+   "position": 12,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 1,
+   "exclusion_reason": "incident",
+   "off_track_s": 11.083333333333334,
+   "laps_completed": 18,
+   "race_elapsed_s": 2331.49
+  },
+  {
+   "lap_num": 18,
+   "lap_time_ms": 122158,
+   "fuel_start": 24.674535751342773,
+   "fuel_end": 16.381742477416992,
+   "fuel_used": 8.292793273925781,
+   "position": 12,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 0,
+   "exclusion_reason": null,
+   "off_track_s": 0.016666666666666666,
+   "laps_completed": 19,
+   "race_elapsed_s": 2453.66
+  },
+  {
+   "lap_num": 19,
+   "lap_time_ms": 135620,
+   "fuel_start": 16.381742477416992,
+   "fuel_end": 7.70054292678833,
+   "fuel_used": 8.681199550628662,
+   "position": 12,
+   "is_pit_lap": 0,
+   "is_out_lap": 0,
+   "excluded": 1,
+   "exclusion_reason": "incident",
+   "off_track_s": 3.966666666666667,
+   "laps_completed": 20,
+   "race_elapsed_s": 2589.28
+  }
+ ],
+ "gap_reads": [
+  {
+   "race_s": 3.79,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 0.04,
+   "subject": "76",
+   "row": 3
+  },
+  {
+   "race_s": 3.79,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.056,
+   "subject": "TommyTbone",
+   "row": 3
+  },
+  {
+   "race_s": 8.258,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 0.492,
+   "subject": "72",
+   "row": 2
+  },
+  {
+   "race_s": 10.375,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 0.467,
+   "subject": "72",
+   "row": 2
+  },
+  {
+   "race_s": 10.375,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.251,
+   "subject": "77",
+   "row": 2
+  },
+  {
+   "race_s": 12.574,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 0.414,
+   "subject": "72",
+   "row": 2
+  },
+  {
+   "race_s": 12.574,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.357,
+   "subject": "77",
+   "row": 2
+  },
+  {
+   "race_s": 16.807,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 0.269,
+   "subject": "72",
+   "row": 2
+  },
+  {
+   "race_s": 16.807,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.506,
+   "subject": "77",
+   "row": 2
+  },
+  {
+   "race_s": 18.94,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 0.193,
+   "subject": "72",
+   "row": 2
+  },
+  {
+   "race_s": 18.94,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.534,
+   "subject": "77",
+   "row": 2
+  },
+  {
+   "race_s": 21.041,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 0.098,
+   "subject": "72",
+   "row": 2
+  },
+  {
+   "race_s": 21.041,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.577,
+   "subject": "77",
+   "row": 2
+  },
+  {
+   "race_s": 23.175,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 0.051,
+   "subject": "72",
+   "row": 2
+  },
+  {
+   "race_s": 23.175,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.611,
+   "subject": "77",
+   "row": 2
+  },
+  {
+   "race_s": 27.491,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.169,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 29.575,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.295,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 33.992,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.183,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 42.457,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.244,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 46.723,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.019,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 48.807,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.071,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 50.959,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.11,
+   "subject": "77",
+   "row": 2
+  },
+  {
+   "race_s": 53.091,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.182,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 55.274,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.285,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 59.492,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.19,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 61.658,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.171,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 63.863,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.124,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 68.175,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.225,
+   "subject": "76",
+   "row": 1
+  },
+  {
+   "race_s": 76.557,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 0.963,
+   "subject": "77",
+   "row": 4
+  },
+  {
+   "race_s": 78.791,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.233,
+   "subject": "78",
+   "row": 4
+  },
+  {
+   "race_s": 81.158,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 1.296,
+   "subject": "K.Graebs",
+   "row": 5
+  },
+  {
+   "race_s": 81.158,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.262,
+   "subject": "Car #4",
+   "row": 5
+  },
+  {
+   "race_s": 83.377,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.419,
+   "subject": "78",
+   "row": 4
+  },
+  {
+   "race_s": 85.49,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 1.6059999999999999,
+   "subject": "77",
+   "row": 4
+  },
+  {
+   "race_s": 85.49,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.584,
+   "subject": "78",
+   "row": 4
+  },
+  {
+   "race_s": 89.975,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 1.43,
+   "subject": "K.Graebs",
+   "row": 5
+  },
+  {
+   "race_s": 89.975,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.809,
+   "subject": "Car #4",
+   "row": 5
+  },
+  {
+   "race_s": 92.174,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.918,
+   "subject": "78",
+   "row": 4
+  },
+  {
+   "race_s": 94.358,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.923,
+   "subject": "78",
+   "row": 4
+  },
+  {
+   "race_s": 98.875,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 1.608,
+   "subject": "77",
+   "row": 4
+  },
+  {
+   "race_s": 109.391,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.087,
+   "subject": "80",
+   "row": 5
+  },
+  {
+   "race_s": 117.858,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 1.188,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 119.959,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 9.943999999999999,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 132.659,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.582,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 139.425,
+   "key": 0,
+   "side": "ahead",
+   "gap_s": 5.849,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 139.425,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.691,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 141.708,
+   "key": 0,
+   "side": "behind",
+   "gap_s": 0.717,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 144.047,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 5.677,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 144.047,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 0.694,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 148.458,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 5.806,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 148.458,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 0.659,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 159.274,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.253,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 159.274,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 4.746,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 161.443,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.381,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 163.559,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.442,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 163.559,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 4.377,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 165.708,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 4.206,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 169.876,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.658,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 169.876,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.976,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 172.041,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.848,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 172.041,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.839,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 174.242,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.673,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 174.242,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.7439999999999998,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 176.425,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.498,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 178.69,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.585,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 178.69,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.458,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 180.924,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.467,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 180.924,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.4050000000000002,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 183.141,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.299,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 183.141,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.3449999999999998,
+   "subject": "Car #32",
+   "row": 6
+  },
+  {
+   "race_s": 189.476,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.178,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 189.476,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.317,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 191.641,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.31,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 191.641,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.501,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 193.775,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.29,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 193.775,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.277,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 196.06,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.267,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 196.06,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 3.085,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 198.276,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.213,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 200.376,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.277,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 202.508,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 0.239,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 211.158,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 8.397,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 213.327,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 8.532,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 213.327,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 0.911,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 215.576,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 8.447,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 215.576,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 0.94,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 217.926,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 1.301,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 220.074,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 1.301,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 224.392,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 4.02,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 226.492,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 9.438,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 228.692,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 9.109,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 228.692,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 4.964,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 232.993,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 8.571,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 232.993,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 5.266,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 235.142,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 8.479,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 235.142,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 6.18,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 237.242,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 6.469,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 241.457,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 6.803,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 243.576,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 8.543,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 243.576,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 6.818,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 245.676,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 6.799,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 247.808,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 6.724,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 249.958,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 6.629,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 252.092,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 6.5120000000000005,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 269.024,
+   "key": 1,
+   "side": "ahead",
+   "gap_s": 9.162,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 269.024,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 5.736,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 273.491,
+   "key": 1,
+   "side": "behind",
+   "gap_s": 5.661,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 284.609,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 8.645,
+   "subject": null,
+   "row": null
+  },
+  {
+   "race_s": 284.609,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 5.608,
+   "subject": null,
+   "row": null
+  },
+  {
+   "race_s": 290.991,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 5.952,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 293.092,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 8.654,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 293.092,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 5.9559999999999995,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 299.425,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 8.808,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 299.425,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 5.811,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 304.826,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 5.563,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 307.042,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 8.772,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 309.292,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 8.707,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 309.292,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 5.62,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 311.509,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 8.599,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 311.509,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 5.667,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 317.826,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 5.795,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 320.991,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 8.044,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 320.991,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 6.081,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 323.323,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 7.459,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 323.323,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 6.44,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 327.525,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 6.93,
+   "subject": "82",
+   "row": 8
+  },
+  {
+   "race_s": 327.525,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 6.65,
+   "subject": "Car #5",
+   "row": 8
+  },
+  {
+   "race_s": 338.125,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 6.322,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 338.125,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.334,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 339.559,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 6.224,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 339.559,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.3629999999999995,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 341.825,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 6.162,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 341.825,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.438,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 343.992,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 6.258,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 343.992,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.374,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 346.343,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 6.17,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 352.808,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.31,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 354.959,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 5.925,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 354.959,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.222,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 357.11,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 5.865,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 357.11,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.307,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 359.227,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 5.801,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 359.227,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.267,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 361.36,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 5.712,
+   "subject": "Car #4",
+   "row": 7
+  },
+  {
+   "race_s": 361.36,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.333,
+   "subject": "81",
+   "row": 7
+  },
+  {
+   "race_s": 363.509,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.429,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 372.075,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.46,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 376.325,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 4.915,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 376.325,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.455,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 384.159,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 4.369,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 384.159,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.396,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 392.809,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 3.955,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 392.809,
+   "key": 2,
+   "side": "behind",
+   "gap_s": 7.683,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 394.959,
+   "key": 2,
+   "side": "ahead",
+   "gap_s": 3.769,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 397.293,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 7.694,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 399.476,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 3.496,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 401.692,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 3.268,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 401.692,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.263,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 413.628,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.626,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 415.725,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.6470000000000002,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 415.725,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.65,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 422.142,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.527,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 422.142,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.701,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 424.358,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.725,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 426.608,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.395,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 426.608,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.718,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 427.91,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.375,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 427.91,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.709,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 430.143,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.344,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 430.143,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.699,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 432.325,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.308,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 432.325,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.835,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 434.443,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.204,
+   "subject": null,
+   "row": null
+  },
+  {
+   "race_s": 442.975,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.41,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 442.975,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 9.123,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 445.441,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.327,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 445.441,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.915,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 447.592,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.869,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 453.976,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.26,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 453.976,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.883,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 458.343,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.411,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 458.343,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.918,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 460.509,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.411,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 460.509,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.969,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 461.843,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.334,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 461.843,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.993,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 466.379,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 9.011,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 468.628,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.942,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 470.825,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.531,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 472.96,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.521,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 472.96,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 9.056,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 475.126,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.693,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 475.126,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 9.11,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 477.46,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.382,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 477.46,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 9.048,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 479.643,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.222,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 479.643,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 9.029,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 481.842,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.12,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 481.842,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 8.932,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 488.241,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.046,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 488.241,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 9.386,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 490.426,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 2.052,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 490.426,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 9.419,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 515.526,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 1.819,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 515.526,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 9.626,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 517.71,
+   "key": 3,
+   "side": "ahead",
+   "gap_s": 1.7850000000000001,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 517.71,
+   "key": 3,
+   "side": "behind",
+   "gap_s": 9.624,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 519.777,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 9.66,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 535.06,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 1.349,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 535.06,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 10.321,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 537.21,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 1.332,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 543.675,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 1.298,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 543.675,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 10.313,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 545.86,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 1.212,
+   "subject": "Car #4",
+   "row": 7
+  },
+  {
+   "race_s": 548.276,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 1.134,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 552.86,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 1.08,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 552.86,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 10.258,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 555.042,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 1.065,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 555.042,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 10.201,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 561.427,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 10.682,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 563.61,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.782,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 568.027,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.67,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 568.027,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 11.02,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 569.328,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.646,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 571.459,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.738,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 571.459,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 11.389,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 575.859,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 1.016,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 581.561,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 11.777,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 583.842,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 1.004,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 583.842,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 11.804,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 586.293,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 1.054,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 586.293,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 11.848,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 588.611,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 11.884,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 591.044,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.915,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 591.044,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 11.923,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 593.292,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 11.762,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 595.476,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 11.926,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 597.643,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.813,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 597.643,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 12.006,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 599.959,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.701,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 599.959,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 12.126,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 602.259,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.657,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 602.259,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 12.118,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 604.508,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.625,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 604.508,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 12.088,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 606.725,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 12.111,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 613.443,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 12.448,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 631.693,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 2.283,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 636.311,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.344,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 638.711,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.155,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 640.859,
+   "key": 4,
+   "side": "ahead",
+   "gap_s": 0.061,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 640.859,
+   "key": 4,
+   "side": "behind",
+   "gap_s": 2.898,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 643.294,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 0.196,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 643.294,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 0.065,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 649.878,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 0.172,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 652.111,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 0.148,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 652.111,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 0.496,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 654.36,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 0.128,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 656.527,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 0.1,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 665.028,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 0.063,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 665.028,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 0.964,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 667.178,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.775,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 667.178,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 0.15,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 669.36,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.968,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 669.36,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 0.299,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 671.726,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 0.6,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 672.945,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 8.005,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 672.945,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 0.692,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 674.576,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 8.038,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 674.576,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 0.844,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 677.078,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 8.08,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 677.078,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 0.911,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 679.31,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 8.05,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 679.31,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.21,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 685.744,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.424,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 692.209,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.379,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 694.429,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.405,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 696.645,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.823,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 701.06,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.745,
+   "subject": "Car #31",
+   "row": 8
+  },
+  {
+   "race_s": 701.06,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.786,
+   "subject": "Car #11",
+   "row": 8
+  },
+  {
+   "race_s": 705.743,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.948,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 705.743,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.885,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 707.777,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.8469999999999995,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 707.777,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.76,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 710.276,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.808,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 710.276,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.858,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 712.627,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.568,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 715.094,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.606,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 715.094,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.533,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 718.511,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.558,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 720.628,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.542,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 722.928,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.5859999999999999,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 725.094,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.355,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 725.094,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.6800000000000002,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 727.376,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.35,
+   "subject": "Car #4",
+   "row": 7
+  },
+  {
+   "race_s": 727.376,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.763,
+   "subject": "81",
+   "row": 7
+  },
+  {
+   "race_s": 729.594,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.344,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 729.594,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.837,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 731.91,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.892,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 734.11,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.915,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 736.411,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 7.39,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 736.411,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.928,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 738.727,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 1.928,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 761.06,
+   "key": 5,
+   "side": "ahead",
+   "gap_s": 6.957,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 761.06,
+   "key": 5,
+   "side": "behind",
+   "gap_s": 2.433,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 765.495,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 2.54,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 767.878,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.792,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 772.477,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.7379999999999995,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 774.711,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.643,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 779.111,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.596,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 783.512,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.569,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 783.512,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 2.988,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 787.978,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 3.018,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 791.277,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.534,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 791.277,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 3.035,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 793.629,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 3.042,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 794.977,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.463,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 794.977,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 3.063,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 797.311,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.44,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 797.311,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 3.19,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 799.579,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.463,
+   "subject": "Car #31",
+   "row": 7
+  },
+  {
+   "race_s": 799.579,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 3.304,
+   "subject": "81",
+   "row": 7
+  },
+  {
+   "race_s": 801.78,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.239,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 810.545,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.115,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 812.827,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.107,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 812.827,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 3.512,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 815.077,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 6.058,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 826.412,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.97,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 826.412,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.2379999999999995,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 828.778,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.904,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 828.778,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.307,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 830.778,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.718,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 830.778,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.25,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 833.177,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.639,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 833.177,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.364,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 835.179,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.632,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 835.179,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.371,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 839.761,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.5809999999999995,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 841.929,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.518,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 841.929,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.168,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 844.261,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.126,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 846.526,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.506,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 846.526,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.112,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 848.861,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.497,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 848.861,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.201,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 851.093,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.286,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 853.395,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.361,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 862.679,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.664,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 862.679,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.436,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 871.779,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.307,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 876.029,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.22,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 883.163,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.12,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 885.362,
+   "key": 6,
+   "side": "ahead",
+   "gap_s": 5.742,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 885.362,
+   "key": 6,
+   "side": "behind",
+   "gap_s": 4.199,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 887.445,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 4.227,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 896.495,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 5.346,
+   "subject": "Car #31",
+   "row": 7
+  },
+  {
+   "race_s": 903.128,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 4.719,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 905.327,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 4.784,
+   "subject": "Car #4",
+   "row": 6
+  },
+  {
+   "race_s": 911.912,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 5.343,
+   "subject": null,
+   "row": null
+  },
+  {
+   "race_s": 911.912,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 4.881,
+   "subject": null,
+   "row": null
+  },
+  {
+   "race_s": 916.194,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 5.928,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 916.194,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 4.921,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 918.31,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 5.928,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 918.31,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 4.353,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 920.511,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 6.013,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 922.945,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 0.677,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 922.945,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 1.416,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 925.261,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.078,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 925.261,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.678,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 927.562,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.316,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 927.562,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.488,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 937.828,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.452,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 942.146,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.4689999999999999,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 942.146,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 1.098,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 952.645,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.052,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 952.645,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.834,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 957.263,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.096,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 959.646,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.072,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 961.961,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.3679999999999999,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 961.961,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.517,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 964.28,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.472,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 964.28,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.533,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 968.848,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.516,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 968.848,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.487,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 971.063,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.627,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 971.063,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.513,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 973.312,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.528,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 973.312,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.555,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 975.662,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 1.302,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 975.662,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.644,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 977.945,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.688,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 980.144,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.744,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 989.147,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.627,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1012.264,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 0.777,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1012.264,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.551,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1014.446,
+   "key": 7,
+   "side": "ahead",
+   "gap_s": 0.731,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1014.446,
+   "key": 7,
+   "side": "behind",
+   "gap_s": 0.593,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1016.83,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 0.598,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1025.729,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 11.139,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1032.229,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 11.128,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1034.38,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 11.13,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1034.38,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 0.286,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1042.979,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 0.465,
+   "subject": "Car #32",
+   "row": 7
+  },
+  {
+   "race_s": 1045.196,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 0.363,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1046.53,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 0.314,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1048.761,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 0.295,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1050.963,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 0.34,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1053.178,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 11.053,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1053.178,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 0.409,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1061.879,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 10.883,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1061.879,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 0.692,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1066.362,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 0.654,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1075.596,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 10.546,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1075.596,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 1.722,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1077.963,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 1.722,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1082.762,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 9.945,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1089.512,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 10.826,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1091.745,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 9.704,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1091.745,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 11.074,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1093.012,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 9.704,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1093.012,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 11.241,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1095.296,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 9.704,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1095.296,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 11.222,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1097.447,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 16.403,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1099.58,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 16.434,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1101.729,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 17.476,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1104.078,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 18.172,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1108.646,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 0.652,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1112.997,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 1.357,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1115.129,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 1.665,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1117.432,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 1.413,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1140.18,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 1.8860000000000001,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1140.18,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 27.389,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1142.579,
+   "key": 8,
+   "side": "ahead",
+   "gap_s": 2.2800000000000002,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1142.579,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 27.186,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1149.628,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 26.886,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1151.714,
+   "key": 8,
+   "side": "behind",
+   "gap_s": 26.766,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1169.828,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 6.018,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1191.566,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 7.058,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1193.796,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 7.021,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1193.796,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 22.864,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1197.563,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 7.173,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1197.563,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 23.032,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1199.997,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 7.318,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1199.997,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 23.002,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1202.264,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 7.492,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1202.264,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 22.894,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1206.612,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 22.549,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1213.214,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 7.851,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1213.214,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 21.784,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1215.579,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 7.994,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1215.579,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 21.767,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1217.795,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 8.118,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1217.795,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 21.66,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1226.729,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 8.711,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1226.729,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 21.229,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1229.112,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 8.878,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1229.112,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 21.163,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1231.463,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 9.482,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1231.463,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 21.053,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1233.78,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 9.641,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1233.78,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 20.912,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1235.796,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 20.814,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1240.479,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 9.936,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1240.479,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 20.593,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1245.112,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 20.218,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1249.597,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 10.228,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1251.981,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 10.218,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1254.346,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 10.257,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1258.78,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 28.191,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1272.531,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 12.034,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1272.531,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 31.163,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1281.795,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 31.854,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1288.412,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 33.258,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1295.063,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 41.747,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1295.063,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 34.554,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1297.33,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 35.269,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1301.999,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 36.304,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1304.279,
+   "key": 9,
+   "side": "ahead",
+   "gap_s": 43.826,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1304.279,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 37.013,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1306.647,
+   "key": 9,
+   "side": "behind",
+   "gap_s": 37.383,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1318.046,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 32.654,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1335.564,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 23.694,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1335.564,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 21.115,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1337.729,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 20.531,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1344.197,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 25.689,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1344.197,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 19.21,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1346.399,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 25.729,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1346.399,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 18.497,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1348.58,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 17.465,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1350.863,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 16.362,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1353.181,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 26.961,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1353.181,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 15.229,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1355.498,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 27.299,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1355.498,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 14.419,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1357.797,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 27.569,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1357.797,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 13.609,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1360.08,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 27.949,
+   "subject": "Car #4",
+   "row": 7
+  },
+  {
+   "race_s": 1360.08,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 13.246,
+   "subject": "K.Graebs",
+   "row": 7
+  },
+  {
+   "race_s": 1362.248,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 28.115,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1368.714,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 28.551,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1368.714,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 10.424,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1370.931,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 28.62,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1373.248,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 28.654,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1375.55,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 28.776,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1375.55,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 9.963,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1377.749,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 9.702,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1382.212,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 8.983,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1384.447,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 8.742,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1386.697,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 29.747,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1386.697,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 8.277,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1389.013,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 7.985,
+   "subject": "80",
+   "row": 7
+  },
+  {
+   "race_s": 1393.279,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 6.86,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1395.665,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 6.222,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1398.014,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 5.782,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1400.364,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 5.28,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1404.714,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 31.174,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1404.714,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 4.899,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1406.896,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 4.835,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1409.114,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 31.168,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1409.114,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 4.651,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1411.33,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 31.157,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1413.563,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 31.197,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1413.563,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 4.502,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1415.763,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 31.286,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1415.763,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 4.47,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1418.213,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 4.422,
+   "subject": "82",
+   "row": 6
+  },
+  {
+   "race_s": 1424.898,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 4.024,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1427.165,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 3.701,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1445.281,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 2.093,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1449.848,
+   "key": 10,
+   "side": "ahead",
+   "gap_s": 31.94,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1449.848,
+   "key": 10,
+   "side": "behind",
+   "gap_s": 1.9300000000000002,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1463.615,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.7,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1465.796,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.62,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1468.081,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.622,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1470.281,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.661,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1472.464,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.669,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1472.464,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.7349999999999999,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1476.764,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.642,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1481.064,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.381,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1481.064,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.6219999999999999,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1483.398,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.325,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1483.398,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.5659999999999998,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1484.697,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.338,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1484.697,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.487,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1486.963,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.268,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1486.963,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.442,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1489.13,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.2,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1489.13,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.434,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1491.364,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 45.194,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1491.364,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.409,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1493.513,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 44.482,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1493.513,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.536,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1495.696,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 44.494,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1497.898,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 44.423,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1500.031,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 44.325,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1500.031,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 2.084,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1504.397,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 2.204,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1506.614,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 2.23,
+   "subject": "K.Graebs",
+   "row": 7
+  },
+  {
+   "race_s": 1508.798,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.812,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1511.016,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.653,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1517.714,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.489,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1517.714,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 2.318,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1519.948,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.466,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1519.948,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 2.243,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1522.248,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.344,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1524.547,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.448,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1524.547,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 2.077,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1526.831,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.611,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1526.831,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.986,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1529.28,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.55,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1529.28,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.897,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1531.498,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.493,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1531.498,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.859,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1533.647,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.55,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1533.647,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.823,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1535.965,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.359,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1535.965,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.899,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1538.297,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.245,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1538.297,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.865,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1540.562,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 43.167,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1540.562,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.9140000000000001,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1555.88,
+   "key": 11,
+   "side": "ahead",
+   "gap_s": 42.913,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1555.88,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 2.116,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1566.848,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.9260000000000002,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1569.114,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.924,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1573.447,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 0.982,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1575.482,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 1.7970000000000002,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1581.699,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 19.077,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1583.748,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 19.029,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1585.814,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 19.018,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1587.897,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 18.972,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1589.964,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 18.063,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1592.014,
+   "key": 11,
+   "side": "behind",
+   "gap_s": 19.031,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1598.097,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 25.235,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1605.848,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 35.849,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1607.882,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 35.326,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1612.031,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 41.452,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1616.114,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 41.452,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1671.132,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 34.536,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1673.283,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 21.611,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1679.765,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 45.096,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1679.765,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.925,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1681.964,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.877,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1688.382,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.8149999999999995,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1690.531,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 44.887,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1690.531,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.816,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1692.732,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.779,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1694.833,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 44.538,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1694.833,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.633,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1696.965,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 44.479,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1696.965,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.736,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1699.164,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 44.296,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1699.164,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.769,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1701.349,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 44.251,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1701.349,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.788,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1709.999,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 8.092,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1712.148,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 8.149,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1714.365,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 43.504,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1714.365,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 8.106,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1716.683,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 43.324,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1716.683,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.998,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1718.864,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.927,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1721.098,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.915,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1723.25,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 43.064,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1723.25,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.909,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1725.433,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.627,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1725.433,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.895,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1727.598,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.268,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1727.598,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.968,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1729.748,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.743,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1729.748,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.998,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1731.914,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.811,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1731.914,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.86,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1734.048,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 43.009,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1734.048,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.894,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1736.197,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 43.001,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1736.197,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.351,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1738.314,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 43.065,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1738.314,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 6.977,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1740.448,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 6.884,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1742.548,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 43.023,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1742.548,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 6.819,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1744.697,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.929,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1744.697,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 6.75,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1746.83,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.883,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1746.83,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 6.646,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1749.015,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 6.941,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1751.132,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.065,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1753.265,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.131,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1755.366,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.838,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1755.366,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.18,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1757.514,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.245,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1759.665,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.869,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1761.814,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.883,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1761.814,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.327,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1763.999,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.879,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1763.999,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.359,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1770.313,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.521,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1770.313,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.436,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1774.616,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 42.481,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1774.616,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.503,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1776.799,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.5969999999999995,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1781.0,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 41.964,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1781.0,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.686,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1783.099,
+   "key": 12,
+   "side": "ahead",
+   "gap_s": 41.893,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1783.099,
+   "key": 12,
+   "side": "behind",
+   "gap_s": 7.736,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1785.481,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 7.842,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1789.714,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 41.57,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1789.714,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 7.938,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1791.883,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.053,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1794.016,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.126,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1796.151,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.229,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1798.299,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.159,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1800.481,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.313,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1802.667,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 41.189,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1802.667,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.418,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1804.848,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.493,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1809.181,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 41.169,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1809.181,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.622,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1811.433,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.684,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1813.65,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.723,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1815.833,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 41.025,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1815.833,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.767,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1817.982,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.724,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1820.132,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.704,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1822.298,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 40.831,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1822.298,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.743,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1824.499,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 40.944,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1824.499,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.767,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1833.349,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 40.504,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1833.349,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.833,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1835.55,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.907,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1837.798,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 40.284,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1837.798,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.97,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1840.015,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.948,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1842.216,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 40.082,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1842.216,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 9.023,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1844.416,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 40.297,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1844.416,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 9.067,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1846.599,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 41.15,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1846.599,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 9.14,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1848.849,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.649,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1848.849,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 9.202,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1851.033,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.808,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1851.033,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 9.242,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1853.233,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.734,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1853.233,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 8.143,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1855.418,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.798,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1855.418,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 6.558,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1857.606,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.801,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1857.606,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 6.182,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1859.865,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.812,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1859.865,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.91,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1862.081,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.824,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1862.081,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.728,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1864.215,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 43.075,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1864.215,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.792,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1866.4,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.842,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1866.4,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.818,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1868.581,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.819,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1868.581,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.78,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1870.782,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.842,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1870.782,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.732,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1872.966,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.871,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1872.966,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.648,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1875.15,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.923,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1875.15,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.658,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1877.315,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.652,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1881.531,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 43.197,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1883.699,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.575,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1885.902,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 43.388,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1888.05,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 43.54,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1890.284,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 43.68,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1890.284,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.349,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1896.731,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 4.976,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1901.151,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 43.295,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1901.151,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.057,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1905.6,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.692,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1905.6,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.104,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1907.882,
+   "key": 13,
+   "side": "ahead",
+   "gap_s": 42.523,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1907.882,
+   "key": 13,
+   "side": "behind",
+   "gap_s": 5.13,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1910.615,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 5.127,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1915.082,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 42.277,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1915.082,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 5.529,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1917.299,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 41.844,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1917.299,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 5.674,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1919.598,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 41.716,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1919.598,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 5.735,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1926.402,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 41.698,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1926.402,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.126,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1928.715,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 41.74,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1928.715,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.253,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1931.066,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.283,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1937.984,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 42.002,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1937.984,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.223,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1940.2,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.197,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1942.584,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 42.059,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1942.584,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.089,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1944.798,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 42.047,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1944.798,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.069,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1947.082,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 42.008,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1947.082,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.141,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1949.316,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.152,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1953.882,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 40.997,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1953.882,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.141,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1956.216,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.1370000000000005,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1960.765,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.224,
+   "subject": "89",
+   "row": 7
+  },
+  {
+   "race_s": 1963.015,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 40.569,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1963.015,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.337,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1969.816,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.599,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1972.199,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 40.291,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1972.199,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.729,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1974.532,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 39.716,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1976.933,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.859,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1981.483,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 33.347,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1981.483,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.652,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1986.033,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 33.116,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1986.033,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 5.971,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1988.233,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 5.942,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1990.515,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 33.077,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1990.515,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 5.999,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1992.85,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 32.905,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1992.85,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 5.948,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 1995.199,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 32.893,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 1997.4,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.279,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 2001.965,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 32.8,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 2001.965,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.459,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 2004.349,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 32.741,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 2004.349,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.498,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 2009.033,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 32.6,
+   "subject": null,
+   "row": null
+  },
+  {
+   "race_s": 2011.467,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 32.509,
+   "subject": null,
+   "row": null
+  },
+  {
+   "race_s": 2011.467,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.562,
+   "subject": null,
+   "row": null
+  },
+  {
+   "race_s": 2018.201,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.585,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 2024.766,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.631,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 2028.782,
+   "key": 14,
+   "side": "ahead",
+   "gap_s": 31.31,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 2028.782,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.631,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 2030.984,
+   "key": 14,
+   "side": "behind",
+   "gap_s": 6.631,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 2032.616,
+   "key": 15,
+   "side": "behind",
+   "gap_s": 14.452,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 2036.599,
+   "key": 15,
+   "side": "behind",
+   "gap_s": 16.023,
+   "subject": "78",
+   "row": 4
+  },
+  {
+   "race_s": 2038.617,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 30.579,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 2038.617,
+   "key": 15,
+   "side": "behind",
+   "gap_s": 16.31,
+   "subject": "80",
+   "row": 6
+  },
+  {
+   "race_s": 2042.832,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 30.519,
+   "subject": "78",
+   "row": 6
+  },
+  {
+   "race_s": 2071.684,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 5.491,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2075.951,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 6.261,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2082.401,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 6.92,
+   "subject": "80",
+   "row": 8
+  },
+  {
+   "race_s": 2084.684,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 7.039,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2086.836,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 7.019,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2089.067,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 7.066,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2091.467,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 7.171,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2093.916,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 7.322,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2102.501,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 7.879,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2104.636,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 7.968,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2106.983,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 8.018,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2109.185,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 8.084,
+   "subject": "80",
+   "row": 8
+  },
+  {
+   "race_s": 2123.817,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 8.964,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2126.134,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 9.075,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2128.35,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 9.462,
+   "subject": "80",
+   "row": 8
+  },
+  {
+   "race_s": 2130.667,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 9.517,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2135.168,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 9.495,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2137.317,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 9.542,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2139.635,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 9.663,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2141.917,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 9.545,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2144.117,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 9.547,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2146.285,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 9.592,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2148.449,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 9.701,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2161.517,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 11.157,
+   "subject": "99",
+   "row": 7
+  },
+  {
+   "race_s": 2174.834,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 12.429,
+   "subject": "Car #4",
+   "row": 7
+  },
+  {
+   "race_s": 2181.55,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 12.792,
+   "subject": "Car #4",
+   "row": 7
+  },
+  {
+   "race_s": 2183.717,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 12.776,
+   "subject": "Car #4",
+   "row": 7
+  },
+  {
+   "race_s": 2185.984,
+   "key": 15,
+   "side": "ahead",
+   "gap_s": 12.781,
+   "subject": "Car #4",
+   "row": 7
+  },
+  {
+   "race_s": 2202.818,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 13.375,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2204.951,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 13.579,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2207.133,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 13.706,
+   "subject": "80",
+   "row": 8
+  },
+  {
+   "race_s": 2211.418,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 14.127,
+   "subject": "Car #76",
+   "row": 7
+  },
+  {
+   "race_s": 2215.868,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 14.61,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2218.318,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 14.737,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2220.65,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 14.877,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2223.068,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 15.005,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2231.885,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 15.6,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2236.308,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 15.784,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2240.036,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 15.943999999999999,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2251.102,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 16.818,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2253.301,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 17.127,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2255.501,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 16.987,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2257.785,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 16.35,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2262.301,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 16.349,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2268.984,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 16.153,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2271.217,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 15.795,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2299.051,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 14.837,
+   "subject": "80",
+   "row": 8
+  },
+  {
+   "race_s": 2304.884,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 15.613,
+   "subject": "Car #14",
+   "row": 7
+  },
+  {
+   "race_s": 2307.051,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 15.613,
+   "subject": "Car #14",
+   "row": 7
+  },
+  {
+   "race_s": 2326.902,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 33.36,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2329.333,
+   "key": 16,
+   "side": "ahead",
+   "gap_s": 33.342,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2331.819,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 33.313,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2340.488,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 33.343,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2342.785,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 33.3,
+   "subject": null,
+   "row": null
+  },
+  {
+   "race_s": 2345.0,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 33.264,
+   "subject": null,
+   "row": null
+  },
+  {
+   "race_s": 2349.368,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 33.21,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2351.567,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 33.194,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2360.653,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 32.766,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2362.084,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 32.522,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2364.283,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 32.401,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2366.518,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 32.392,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2368.75,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 32.396,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2370.868,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 32.436,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2377.451,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 32.006,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2379.767,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 31.887,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2384.235,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 31.622,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2395.851,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 31.442,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2398.301,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 31.514,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2400.685,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 31.761,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2402.969,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 31.723,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2409.734,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 31.669,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2412.05,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 31.459,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2414.352,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 31.359,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2416.652,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 31.281,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2449.368,
+   "key": 17,
+   "side": "ahead",
+   "gap_s": 30.835,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2461.019,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 30.277,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2472.451,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 29.845,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2481.436,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 29.875,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2483.702,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 29.903,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2485.936,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 29.896,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2488.17,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 29.906,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2490.353,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 29.969,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2503.653,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 29.81,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2524.519,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 30.497,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2526.918,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 35.808,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2529.369,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 36.339,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2536.284,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 37.76,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2538.551,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 38.192,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2540.8,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 38.369,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2543.184,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 37.756,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2545.536,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 37.656,
+   "subject": "80",
+   "row": 8
+  },
+  {
+   "race_s": 2547.903,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 37.665,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2557.469,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 38.51,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2564.452,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 39.548,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2583.687,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 41.092,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2586.068,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 41.069,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  },
+  {
+   "race_s": 2588.352,
+   "key": 18,
+   "side": "ahead",
+   "gap_s": 41.084,
+   "subject": "ZenPhilosopher",
+   "row": 7
+  }
+ ],
+ "rival_stops": [
+  {
+   "driver": "PUNISHED",
+   "lap": 8,
+   "fuel_in_l": 47.0,
+   "fuel_out_l": 80.0,
+   "partial": 0,
+   "filed_race_s": 1217.9
+  },
+  {
+   "driver": "CruisingChaos",
+   "lap": 9,
+   "fuel_in_l": 41.0,
+   "fuel_out_l": 41.0,
+   "partial": 1,
+   "filed_race_s": 1402.9
+  },
+  {
+   "driver": "Magical daddy",
+   "lap": 10,
+   "fuel_in_l": 32.0,
+   "fuel_out_l": 57.0,
+   "partial": 0,
+   "filed_race_s": 1411.9
+  },
+  {
+   "driver": "Car #31",
+   "lap": 10,
+   "fuel_in_l": 14.0,
+   "fuel_out_l": 71.0,
+   "partial": 0,
+   "filed_race_s": 1470.9
+  },
+  {
+   "driver": "K.Graebs",
+   "lap": 9,
+   "fuel_in_l": 21.0,
+   "fuel_out_l": 72.0,
+   "partial": 0,
+   "filed_race_s": 1526.9
+  },
+  {
+   "driver": "Car #28",
+   "lap": 10,
+   "fuel_in_l": 17.0,
+   "fuel_out_l": 23.0,
+   "partial": 0,
+   "filed_race_s": 1605.9
+  },
+  {
+   "driver": "Car #11",
+   "lap": 11,
+   "fuel_in_l": 6.0,
+   "fuel_out_l": 63.0,
+   "partial": 0,
+   "filed_race_s": 1622.9
+  },
+  {
+   "driver": "TommyTbone",
+   "lap": 12,
+   "fuel_in_l": 7.0,
+   "fuel_out_l": 49.0,
+   "partial": 0,
+   "filed_race_s": 1688.9
+  },
+  {
+   "driver": "Car #76",
+   "lap": 11,
+   "fuel_in_l": 5.0,
+   "fuel_out_l": 60.0,
+   "partial": 0,
+   "filed_race_s": 1796.9
+  },
+  {
+   "driver": "Car #33",
+   "lap": 12,
+   "fuel_in_l": 15.0,
+   "fuel_out_l": 31.0,
+   "partial": 0,
+   "filed_race_s": 1844.9
+  }
+ ],
+ "board_positions": [
+  {
+   "lap": 1,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 1,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 1,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 1,
+   "driver": "K.Graebs",
+   "position": 3
+  },
+  {
+   "lap": 1,
+   "driver": "Car #31",
+   "position": 4
+  },
+  {
+   "lap": 1,
+   "driver": "TommyTbone",
+   "position": 4
+  },
+  {
+   "lap": 1,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 1,
+   "driver": "Car #33",
+   "position": 5
+  },
+  {
+   "lap": 1,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 1,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 1,
+   "driver": "PUNISHED",
+   "position": 6
+  },
+  {
+   "lap": 1,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 1,
+   "driver": "Car #30",
+   "position": 7
+  },
+  {
+   "lap": 1,
+   "driver": "Car #28",
+   "position": 8
+  },
+  {
+   "lap": 1,
+   "driver": "ZenPhilosopher",
+   "position": 8
+  },
+  {
+   "lap": 1,
+   "driver": "Car #5",
+   "position": 9
+  },
+  {
+   "lap": 2,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 2,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 2,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 2,
+   "driver": "K.Graebs",
+   "position": 3
+  },
+  {
+   "lap": 2,
+   "driver": "Car #31",
+   "position": 4
+  },
+  {
+   "lap": 2,
+   "driver": "TommyTbone",
+   "position": 4
+  },
+  {
+   "lap": 2,
+   "driver": "Car #33",
+   "position": 4
+  },
+  {
+   "lap": 2,
+   "driver": "Car #32",
+   "position": 5
+  },
+  {
+   "lap": 2,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 2,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 2,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 2,
+   "driver": "PUNISHED",
+   "position": 6
+  },
+  {
+   "lap": 2,
+   "driver": "Car #4",
+   "position": 7
+  },
+  {
+   "lap": 2,
+   "driver": "Car #28",
+   "position": 7
+  },
+  {
+   "lap": 2,
+   "driver": "ZenPhilosopher",
+   "position": 8
+  },
+  {
+   "lap": 2,
+   "driver": "Car #5",
+   "position": 9
+  },
+  {
+   "lap": 2,
+   "driver": "Car #14",
+   "position": 9
+  },
+  {
+   "lap": 2,
+   "driver": "Car #73",
+   "position": 11
+  },
+  {
+   "lap": 3,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 3,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 3,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 3,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 3,
+   "driver": "K.Graebs",
+   "position": 3
+  },
+  {
+   "lap": 3,
+   "driver": "PUNISHED",
+   "position": 3
+  },
+  {
+   "lap": 3,
+   "driver": "Car #31",
+   "position": 4
+  },
+  {
+   "lap": 3,
+   "driver": "TommyTbone",
+   "position": 4
+  },
+  {
+   "lap": 3,
+   "driver": "Car #33",
+   "position": 4
+  },
+  {
+   "lap": 3,
+   "driver": "Car #32",
+   "position": 5
+  },
+  {
+   "lap": 3,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 3,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 3,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 3,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 3,
+   "driver": "Car #28",
+   "position": 7
+  },
+  {
+   "lap": 3,
+   "driver": "Car #5",
+   "position": 9
+  },
+  {
+   "lap": 3,
+   "driver": "Car #14",
+   "position": 9
+  },
+  {
+   "lap": 3,
+   "driver": "ZenPhilosopher",
+   "position": 10
+  },
+  {
+   "lap": 4,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 4,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 4,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 4,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 4,
+   "driver": "K.Graebs",
+   "position": 3
+  },
+  {
+   "lap": 4,
+   "driver": "PUNISHED",
+   "position": 3
+  },
+  {
+   "lap": 4,
+   "driver": "Car #31",
+   "position": 4
+  },
+  {
+   "lap": 4,
+   "driver": "TommyTbone",
+   "position": 4
+  },
+  {
+   "lap": 4,
+   "driver": "Car #33",
+   "position": 4
+  },
+  {
+   "lap": 4,
+   "driver": "Car #32",
+   "position": 5
+  },
+  {
+   "lap": 4,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 4,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 4,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 4,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 4,
+   "driver": "Car #28",
+   "position": 7
+  },
+  {
+   "lap": 4,
+   "driver": "Car #5",
+   "position": 9
+  },
+  {
+   "lap": 4,
+   "driver": "Car #14",
+   "position": 9
+  },
+  {
+   "lap": 4,
+   "driver": "ZenPhilosopher",
+   "position": 10
+  },
+  {
+   "lap": 5,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 5,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 5,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 5,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 5,
+   "driver": "K.Graebs",
+   "position": 3
+  },
+  {
+   "lap": 5,
+   "driver": "PUNISHED",
+   "position": 3
+  },
+  {
+   "lap": 5,
+   "driver": "Car #31",
+   "position": 4
+  },
+  {
+   "lap": 5,
+   "driver": "TommyTbone",
+   "position": 4
+  },
+  {
+   "lap": 5,
+   "driver": "Car #33",
+   "position": 4
+  },
+  {
+   "lap": 5,
+   "driver": "Car #32",
+   "position": 5
+  },
+  {
+   "lap": 5,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 5,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 5,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 5,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 5,
+   "driver": "Car #28",
+   "position": 8
+  },
+  {
+   "lap": 5,
+   "driver": "ZenPhilosopher",
+   "position": 8
+  },
+  {
+   "lap": 5,
+   "driver": "Car #5",
+   "position": 9
+  },
+  {
+   "lap": 5,
+   "driver": "Car #14",
+   "position": 9
+  },
+  {
+   "lap": 6,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 6,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 6,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 6,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 6,
+   "driver": "PUNISHED",
+   "position": 3
+  },
+  {
+   "lap": 6,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 6,
+   "driver": "TommyTbone",
+   "position": 4
+  },
+  {
+   "lap": 6,
+   "driver": "K.Graebs",
+   "position": 4
+  },
+  {
+   "lap": 6,
+   "driver": "Car #33",
+   "position": 4
+  },
+  {
+   "lap": 6,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 6,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 6,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 6,
+   "driver": "Car #4",
+   "position": 7
+  },
+  {
+   "lap": 6,
+   "driver": "Car #11",
+   "position": 7
+  },
+  {
+   "lap": 6,
+   "driver": "Car #32",
+   "position": 8
+  },
+  {
+   "lap": 6,
+   "driver": "Car #28",
+   "position": 8
+  },
+  {
+   "lap": 6,
+   "driver": "ZenPhilosopher",
+   "position": 8
+  },
+  {
+   "lap": 6,
+   "driver": "Car #5",
+   "position": 9
+  },
+  {
+   "lap": 6,
+   "driver": "Car #14",
+   "position": 9
+  },
+  {
+   "lap": 7,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 7,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 7,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 7,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 7,
+   "driver": "PUNISHED",
+   "position": 3
+  },
+  {
+   "lap": 7,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 7,
+   "driver": "TommyTbone",
+   "position": 4
+  },
+  {
+   "lap": 7,
+   "driver": "K.Graebs",
+   "position": 4
+  },
+  {
+   "lap": 7,
+   "driver": "Car #33",
+   "position": 4
+  },
+  {
+   "lap": 7,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 7,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 7,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 7,
+   "driver": "Car #4",
+   "position": 7
+  },
+  {
+   "lap": 7,
+   "driver": "Car #11",
+   "position": 7
+  },
+  {
+   "lap": 7,
+   "driver": "Car #32",
+   "position": 8
+  },
+  {
+   "lap": 7,
+   "driver": "Car #28",
+   "position": 8
+  },
+  {
+   "lap": 7,
+   "driver": "ZenPhilosopher",
+   "position": 8
+  },
+  {
+   "lap": 7,
+   "driver": "Car #5",
+   "position": 9
+  },
+  {
+   "lap": 7,
+   "driver": "Car #14",
+   "position": 9
+  },
+  {
+   "lap": 8,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 8,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 8,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 8,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 8,
+   "driver": "TommyTbone",
+   "position": 3
+  },
+  {
+   "lap": 8,
+   "driver": "PUNISHED",
+   "position": 3
+  },
+  {
+   "lap": 8,
+   "driver": "Car #33",
+   "position": 3
+  },
+  {
+   "lap": 8,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 8,
+   "driver": "K.Graebs",
+   "position": 4
+  },
+  {
+   "lap": 8,
+   "driver": "Car #5",
+   "position": 4
+  },
+  {
+   "lap": 8,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 8,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 8,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 8,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 8,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 8,
+   "driver": "Car #11",
+   "position": 7
+  },
+  {
+   "lap": 8,
+   "driver": "Car #28",
+   "position": 8
+  },
+  {
+   "lap": 8,
+   "driver": "ZenPhilosopher",
+   "position": 8
+  },
+  {
+   "lap": 8,
+   "driver": "Car #14",
+   "position": 9
+  },
+  {
+   "lap": 9,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 9,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 9,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 9,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 9,
+   "driver": "TommyTbone",
+   "position": 3
+  },
+  {
+   "lap": 9,
+   "driver": "Car #33",
+   "position": 3
+  },
+  {
+   "lap": 9,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 9,
+   "driver": "K.Graebs",
+   "position": 4
+  },
+  {
+   "lap": 9,
+   "driver": "Car #5",
+   "position": 4
+  },
+  {
+   "lap": 9,
+   "driver": "Car #28",
+   "position": 4
+  },
+  {
+   "lap": 9,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 9,
+   "driver": "PUNISHED",
+   "position": 5
+  },
+  {
+   "lap": 9,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 9,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 9,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 9,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 9,
+   "driver": "Car #11",
+   "position": 7
+  },
+  {
+   "lap": 9,
+   "driver": "ZenPhilosopher",
+   "position": 7
+  },
+  {
+   "lap": 9,
+   "driver": "Car #14",
+   "position": 9
+  },
+  {
+   "lap": 10,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 10,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 10,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 10,
+   "driver": "Car #33",
+   "position": 2
+  },
+  {
+   "lap": 10,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 10,
+   "driver": "TommyTbone",
+   "position": 3
+  },
+  {
+   "lap": 10,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 10,
+   "driver": "Car #5",
+   "position": 4
+  },
+  {
+   "lap": 10,
+   "driver": "Car #28",
+   "position": 4
+  },
+  {
+   "lap": 10,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 10,
+   "driver": "K.Graebs",
+   "position": 5
+  },
+  {
+   "lap": 10,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 10,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 10,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 10,
+   "driver": "Car #11",
+   "position": 7
+  },
+  {
+   "lap": 10,
+   "driver": "ZenPhilosopher",
+   "position": 7
+  },
+  {
+   "lap": 10,
+   "driver": "PUNISHED",
+   "position": 8
+  },
+  {
+   "lap": 10,
+   "driver": "Car #32",
+   "position": 8
+  },
+  {
+   "lap": 10,
+   "driver": "Car #14",
+   "position": 8
+  },
+  {
+   "lap": 11,
+   "driver": "Car #4",
+   "position": 1
+  },
+  {
+   "lap": 11,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 11,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 11,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 11,
+   "driver": "Car #33",
+   "position": 2
+  },
+  {
+   "lap": 11,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 11,
+   "driver": "TommyTbone",
+   "position": 3
+  },
+  {
+   "lap": 11,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 11,
+   "driver": "Car #5",
+   "position": 4
+  },
+  {
+   "lap": 11,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 11,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 11,
+   "driver": "Car #28",
+   "position": 5
+  },
+  {
+   "lap": 11,
+   "driver": "Car #21",
+   "position": 5
+  },
+  {
+   "lap": 11,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 11,
+   "driver": "PUNISHED",
+   "position": 7
+  },
+  {
+   "lap": 11,
+   "driver": "Car #11",
+   "position": 7
+  },
+  {
+   "lap": 11,
+   "driver": "ZenPhilosopher",
+   "position": 7
+  },
+  {
+   "lap": 11,
+   "driver": "K.Graebs",
+   "position": 8
+  },
+  {
+   "lap": 11,
+   "driver": "Car #32",
+   "position": 8
+  },
+  {
+   "lap": 11,
+   "driver": "Car #14",
+   "position": 8
+  },
+  {
+   "lap": 12,
+   "driver": "Car #4",
+   "position": 1
+  },
+  {
+   "lap": 12,
+   "driver": "Magical daddy",
+   "position": 1
+  },
+  {
+   "lap": 12,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 12,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 12,
+   "driver": "Car #33",
+   "position": 2
+  },
+  {
+   "lap": 12,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 12,
+   "driver": "TommyTbone",
+   "position": 3
+  },
+  {
+   "lap": 12,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 12,
+   "driver": "Car #5",
+   "position": 4
+  },
+  {
+   "lap": 12,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 12,
+   "driver": "Car #76",
+   "position": 5
+  },
+  {
+   "lap": 12,
+   "driver": "PUNISHED",
+   "position": 5
+  },
+  {
+   "lap": 12,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 12,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 12,
+   "driver": "Car #28",
+   "position": 5
+  },
+  {
+   "lap": 12,
+   "driver": "Car #21",
+   "position": 5
+  },
+  {
+   "lap": 12,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 12,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 12,
+   "driver": "ZenPhilosopher",
+   "position": 7
+  },
+  {
+   "lap": 12,
+   "driver": "K.Graebs",
+   "position": 8
+  },
+  {
+   "lap": 12,
+   "driver": "Car #14",
+   "position": 8
+  },
+  {
+   "lap": 13,
+   "driver": "TommyTbone",
+   "position": 1
+  },
+  {
+   "lap": 13,
+   "driver": "Car #26",
+   "position": 1
+  },
+  {
+   "lap": 13,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 13,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 13,
+   "driver": "Magical daddy",
+   "position": 2
+  },
+  {
+   "lap": 13,
+   "driver": "Car #33",
+   "position": 3
+  },
+  {
+   "lap": 13,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 13,
+   "driver": "Car #5",
+   "position": 4
+  },
+  {
+   "lap": 13,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 13,
+   "driver": "Car #28",
+   "position": 5
+  },
+  {
+   "lap": 13,
+   "driver": "Car #76",
+   "position": 5
+  },
+  {
+   "lap": 13,
+   "driver": "PUNISHED",
+   "position": 5
+  },
+  {
+   "lap": 13,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 13,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 13,
+   "driver": "Car #21",
+   "position": 5
+  },
+  {
+   "lap": 13,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 13,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 13,
+   "driver": "K.Graebs",
+   "position": 7
+  },
+  {
+   "lap": 13,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 13,
+   "driver": "ZenPhilosopher",
+   "position": 7
+  },
+  {
+   "lap": 13,
+   "driver": "Car #14",
+   "position": 8
+  },
+  {
+   "lap": 14,
+   "driver": "CruisingChaos",
+   "position": 1
+  },
+  {
+   "lap": 14,
+   "driver": "TommyTbone",
+   "position": 1
+  },
+  {
+   "lap": 14,
+   "driver": "Car #26",
+   "position": 1
+  },
+  {
+   "lap": 14,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 14,
+   "driver": "Magical daddy",
+   "position": 2
+  },
+  {
+   "lap": 14,
+   "driver": "Car #33",
+   "position": 3
+  },
+  {
+   "lap": 14,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 14,
+   "driver": "Car #5",
+   "position": 4
+  },
+  {
+   "lap": 14,
+   "driver": "Car #21",
+   "position": 4
+  },
+  {
+   "lap": 14,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 14,
+   "driver": "Car #28",
+   "position": 5
+  },
+  {
+   "lap": 14,
+   "driver": "Car #76",
+   "position": 5
+  },
+  {
+   "lap": 14,
+   "driver": "PUNISHED",
+   "position": 5
+  },
+  {
+   "lap": 14,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 14,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 14,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 14,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 14,
+   "driver": "K.Graebs",
+   "position": 7
+  },
+  {
+   "lap": 14,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 14,
+   "driver": "ZenPhilosopher",
+   "position": 7
+  },
+  {
+   "lap": 14,
+   "driver": "Car #14",
+   "position": 8
+  },
+  {
+   "lap": 15,
+   "driver": "CruisingChaos",
+   "position": 1
+  },
+  {
+   "lap": 15,
+   "driver": "TommyTbone",
+   "position": 1
+  },
+  {
+   "lap": 15,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 15,
+   "driver": "Magical daddy",
+   "position": 2
+  },
+  {
+   "lap": 15,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 15,
+   "driver": "Car #33",
+   "position": 3
+  },
+  {
+   "lap": 15,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 15,
+   "driver": "Car #21",
+   "position": 4
+  },
+  {
+   "lap": 15,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 15,
+   "driver": "Car #28",
+   "position": 5
+  },
+  {
+   "lap": 15,
+   "driver": "Car #76",
+   "position": 5
+  },
+  {
+   "lap": 15,
+   "driver": "PUNISHED",
+   "position": 5
+  },
+  {
+   "lap": 15,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 15,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 15,
+   "driver": "ZenPhilosopher",
+   "position": 5
+  },
+  {
+   "lap": 15,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 15,
+   "driver": "Car #1",
+   "position": 6
+  },
+  {
+   "lap": 15,
+   "driver": "K.Graebs",
+   "position": 7
+  },
+  {
+   "lap": 15,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 15,
+   "driver": "Car #5",
+   "position": 8
+  },
+  {
+   "lap": 15,
+   "driver": "Car #14",
+   "position": 8
+  },
+  {
+   "lap": 16,
+   "driver": "TommyTbone",
+   "position": 1
+  },
+  {
+   "lap": 16,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 16,
+   "driver": "Magical daddy",
+   "position": 2
+  },
+  {
+   "lap": 16,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 16,
+   "driver": "Car #73",
+   "position": 2
+  },
+  {
+   "lap": 16,
+   "driver": "Car #33",
+   "position": 3
+  },
+  {
+   "lap": 16,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 16,
+   "driver": "K.Graebs",
+   "position": 4
+  },
+  {
+   "lap": 16,
+   "driver": "Car #21",
+   "position": 4
+  },
+  {
+   "lap": 16,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 16,
+   "driver": "Car #28",
+   "position": 5
+  },
+  {
+   "lap": 16,
+   "driver": "Car #76",
+   "position": 5
+  },
+  {
+   "lap": 16,
+   "driver": "PUNISHED",
+   "position": 5
+  },
+  {
+   "lap": 16,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 16,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 16,
+   "driver": "Car #4",
+   "position": 6
+  },
+  {
+   "lap": 16,
+   "driver": "ZenPhilosopher",
+   "position": 6
+  },
+  {
+   "lap": 16,
+   "driver": "Car #14",
+   "position": 6
+  },
+  {
+   "lap": 16,
+   "driver": "Car #1",
+   "position": 7
+  },
+  {
+   "lap": 16,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 16,
+   "driver": "Car #5",
+   "position": 8
+  },
+  {
+   "lap": 17,
+   "driver": "TommyTbone",
+   "position": 1
+  },
+  {
+   "lap": 17,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 17,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 17,
+   "driver": "Magical daddy",
+   "position": 2
+  },
+  {
+   "lap": 17,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 17,
+   "driver": "Car #33",
+   "position": 3
+  },
+  {
+   "lap": 17,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 17,
+   "driver": "Car #21",
+   "position": 4
+  },
+  {
+   "lap": 17,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 17,
+   "driver": "Car #28",
+   "position": 5
+  },
+  {
+   "lap": 17,
+   "driver": "Car #76",
+   "position": 5
+  },
+  {
+   "lap": 17,
+   "driver": "K.Graebs",
+   "position": 5
+  },
+  {
+   "lap": 17,
+   "driver": "PUNISHED",
+   "position": 5
+  },
+  {
+   "lap": 17,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 17,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 17,
+   "driver": "ZenPhilosopher",
+   "position": 6
+  },
+  {
+   "lap": 17,
+   "driver": "Car #14",
+   "position": 6
+  },
+  {
+   "lap": 17,
+   "driver": "Car #4",
+   "position": 7
+  },
+  {
+   "lap": 17,
+   "driver": "Car #1",
+   "position": 7
+  },
+  {
+   "lap": 17,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 17,
+   "driver": "Car #5",
+   "position": 8
+  },
+  {
+   "lap": 18,
+   "driver": "TommyTbone",
+   "position": 1
+  },
+  {
+   "lap": 18,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 18,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 18,
+   "driver": "Magical daddy",
+   "position": 2
+  },
+  {
+   "lap": 18,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 18,
+   "driver": "Car #33",
+   "position": 3
+  },
+  {
+   "lap": 18,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 18,
+   "driver": "Car #21",
+   "position": 4
+  },
+  {
+   "lap": 18,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 18,
+   "driver": "Car #28",
+   "position": 5
+  },
+  {
+   "lap": 18,
+   "driver": "Car #76",
+   "position": 5
+  },
+  {
+   "lap": 18,
+   "driver": "K.Graebs",
+   "position": 5
+  },
+  {
+   "lap": 18,
+   "driver": "PUNISHED",
+   "position": 5
+  },
+  {
+   "lap": 18,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 18,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 18,
+   "driver": "ZenPhilosopher",
+   "position": 6
+  },
+  {
+   "lap": 18,
+   "driver": "Car #14",
+   "position": 6
+  },
+  {
+   "lap": 18,
+   "driver": "Car #1",
+   "position": 7
+  },
+  {
+   "lap": 18,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 18,
+   "driver": "Car #4",
+   "position": 8
+  },
+  {
+   "lap": 18,
+   "driver": "Car #5",
+   "position": 8
+  },
+  {
+   "lap": 19,
+   "driver": "TommyTbone",
+   "position": 1
+  },
+  {
+   "lap": 19,
+   "driver": "Car #73",
+   "position": 1
+  },
+  {
+   "lap": 19,
+   "driver": "CruisingChaos",
+   "position": 2
+  },
+  {
+   "lap": 19,
+   "driver": "Magical daddy",
+   "position": 2
+  },
+  {
+   "lap": 19,
+   "driver": "Car #26",
+   "position": 2
+  },
+  {
+   "lap": 19,
+   "driver": "Car #33",
+   "position": 3
+  },
+  {
+   "lap": 19,
+   "driver": "Car #72",
+   "position": 3
+  },
+  {
+   "lap": 19,
+   "driver": "Car #21",
+   "position": 4
+  },
+  {
+   "lap": 19,
+   "driver": "Car #31",
+   "position": 5
+  },
+  {
+   "lap": 19,
+   "driver": "Car #28",
+   "position": 5
+  },
+  {
+   "lap": 19,
+   "driver": "Car #76",
+   "position": 5
+  },
+  {
+   "lap": 19,
+   "driver": "K.Graebs",
+   "position": 5
+  },
+  {
+   "lap": 19,
+   "driver": "PUNISHED",
+   "position": 5
+  },
+  {
+   "lap": 19,
+   "driver": "Car #30",
+   "position": 5
+  },
+  {
+   "lap": 19,
+   "driver": "Car #11",
+   "position": 5
+  },
+  {
+   "lap": 19,
+   "driver": "ZenPhilosopher",
+   "position": 6
+  },
+  {
+   "lap": 19,
+   "driver": "Car #14",
+   "position": 6
+  },
+  {
+   "lap": 19,
+   "driver": "Car #1",
+   "position": 7
+  },
+  {
+   "lap": 19,
+   "driver": "Car #32",
+   "position": 7
+  },
+  {
+   "lap": 19,
+   "driver": "Car #4",
+   "position": 8
+  },
+  {
+   "lap": 19,
+   "driver": "Car #5",
+   "position": 8
+  }
+ ]
+}
