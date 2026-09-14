@@ -36,7 +36,7 @@ lap with a helmet on.**
 | D4 | **George sees live race position** and the size of the field. |
 | D5 | **Rivals are read after the race, not during it.** Live rival vision in VR is refused on evidence, not on effort. |
 | D6 | **No model runs in the live loop.** George stays deterministic. Everything smart is precomputed. |
-| D7 | **Two registers: George volunteers decisions and answers facts on request.** Position is the single documented exception — it is a fact and he volunteers it anyway. |
+| D7 | **Two registers: George volunteers decisions and answers facts on request.** Position is the single documented exception — it is a fact and he volunteers it anyway. **Amended 14 Sep 2026 by the driver after Bathurst Rd7 ("want more comms from him about what is going on in the race"):** George also volunteers the gap ahead and behind with names, rival stops and what they mean for us (on the road versus after the stops), championship rivals' running positions, and pace against the car ahead or behind. There is no per-lap talk cap ("talk whenever it matters"). The limit is WHERE he speaks: instructions first, a clip only on a straight long enough to carry it, never in a braking zone. Every volunteered figure still carries its source and hedge (CLAUDE.md §4 rules 4, 5, 13). |
 | D8 | **Free dictation through the existing gate**, not a closed phrase list. |
 | D9 | **A per-event knowledge record** carries race-specific numbers Ludo writes and George's rules consume. |
 | D10 | **Wear is measured off the replay and carried forward**; the live gauge corrects the measured baseline rather than being the baseline. |
