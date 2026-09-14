@@ -36,13 +36,18 @@ def fuji_inputs(**over):
     return fields
 
 
-class Inputs:
-    """Only what `binding_limit` and its two helpers read."""
+class Inputs(model.RaceInputs):
+    """The real inputs, with every compound answering as the one under test.
 
-    is_timed = False
+    It used to be a bare object carrying only the three fields `binding_limit`
+    read. The tank limit now asks the same question the plan is fuelled with
+    (`tank_limited_laps` -> `planned_fill_l`, rule 12), which reads the margin
+    and the load too - so the fixture is the dataclass itself, and a field the
+    model starts reading cannot be missing from it."""
 
     def __init__(self, **fields) -> None:
-        self.__dict__.update(fields)
+        fields.setdefault("lap_time_ms", 100_000)
+        super().__init__(**fields)
 
     def profile_for(self, code):
         return a_profile(code=code)

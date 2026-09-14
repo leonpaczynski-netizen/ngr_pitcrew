@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from pitcrew.strategy.model import (
     STINT_SAFETY_FACTOR,
     RaceInputs,
-    fuel_limited_laps,
+    tank_limited_laps,
     tyre_limited_laps,
 )
 
@@ -375,7 +375,10 @@ def certify(plan: dict, inputs: RaceInputs) -> Certificate:
     # A fuel-limited check needs both the capacity and the burn; where either is
     # missing the tank check above has already said so.
     if capacity and inputs.fuel_per_lap_l:
-        reach = fuel_limited_laps(capacity, inputs.fuel_per_lap_l)
+        # The optimiser's own tank limit (`tank_limited_laps`, rule 12): a
+        # certifier that measured the tank another way refused plans the
+        # optimiser had built, which is how Suzuka's was refused on the grid.
+        reach = tank_limited_laps(inputs)
         if reach:
             for index, count in enumerate(laps, 1):
                 if count > reach:

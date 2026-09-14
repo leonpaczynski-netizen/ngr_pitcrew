@@ -814,32 +814,88 @@ def fuel_limited_laps(fuel_capacity_l: float | None,
     return max(0, int(fuel_capacity_l / fuel_per_lap_l - FUEL_MARGIN_LAPS))
 
 
-def fuel_limited_laps_at_load(inputs: "RaceInputs") -> int | None:
-    """`fuel_limited_laps`, but costing each lap at the load it carries.
+def tank_limited_laps(inputs: "RaceInputs") -> int | None:
+    """The longest stint whose planned fill fits the tank.
 
-    A full tank is heavy and the first laps of it are expensive; the old
-    product priced every lap at the median. Falls back to `fuel_limited_laps`
-    whenever the reference load is unknown.
+    **The same expression the plan is fuelled with and refused on**
+    (`planned_fill_l`, rule 12). There used to be three: `fuel_limited_laps`
+    (median burn, a flat lap of margin) laid the stints out,
+    `fuel_limited_laps_at_load` (load-integrated, a flat lap) judged whether
+    the compound choice was moot, and `planned_fill_l` (load-integrated, the
+    margin `fuel_margin_l` sizes) decided whether the tank held the fill.
+    Where they disagreed the optimiser built a split its own feasibility check
+    then threw away. Suzuka, strategy 32's inputs, found by the flip search of
+    plan row 5.1 on 14 Sep 2026: at 7.13 L/lap the flat limit allowed a
+    13-lap stint, its planned fill was 101 L against a 100 L tank, the one-stop
+    was discarded and a two-stop of 12 + 1 + 1 took first place - and as the
+    burn fell the first choice went 1 stop, none, 1, 4, 1, 3, 1, 2.
+
+    None when the burn or the capacity is unknown, and for a capacity of 0 -
+    an electric car, which has no fuel ceiling at all (`CLAUDE.md` §3.4: a
+    real value, not an error). 0, not None, when a tank cannot carry even one
+    lap and its margin (rule 3).
+
+    **Bounded, and refuses a fill that shrinks.** The walk stops at
+    `TANK_WALK_LAPS`, as the load-integrated loop it replaced did; and at a
+    tiny burn the load slope drives the integrated burn negative, so
+    `planned_fill_l` falls as laps rise and "fits" forever - critic pass 1
+    killed a probe at 0.2 L/lap after 120 s. A fill that does not grow with the
+    stint is not a tank limit; the answer is None and the other ceilings bind.
     """
-    if not inputs.fuel_capacity_l or not inputs.fuel_per_lap_l:
+    capacity = inputs.fuel_capacity_l
+    burn = inputs.fuel_per_lap_l
+    if capacity is None or capacity <= 0 or not burn or burn <= 0:
         return None
-    if inputs.fuel_reference_load_l is None:
-        return fuel_limited_laps(inputs.fuel_capacity_l, inputs.fuel_per_lap_l)
-    laps = 0
-    while laps < 200:
-        need = stint_burn_l(inputs.fuel_per_lap_l, laps + 1,
-                            inputs.fuel_capacity_l,
-                            reference_load_l=inputs.fuel_reference_load_l)
-        if need + FUEL_MARGIN_LAPS * inputs.fuel_per_lap_l > inputs.fuel_capacity_l:
-            break
+    scratch = _SCRATCH.get()
+    key = ("tank", capacity, burn, inputs.fuel_reference_load_l,
+           inputs.fuel_sd_l, inputs.is_timed, inputs.lap_count_firm)
+    if scratch is not None and key in scratch:
+        return scratch[key]
+
+    fills: dict[int, float | None] = {}
+
+    def fill(laps: int) -> float | None:
+        if laps not in fills:
+            fills[laps] = planned_fill_l(laps, inputs)[0]
+        return fills[laps]
+
+    def fits(laps: int) -> bool:
+        need = fill(laps)
+        return need is not None and need <= capacity
+
+    # Start at the flat estimate and walk; the answer is within a lap or two
+    # of it, and each probe is a bisection, so this is cheap where a count up
+    # from zero is not.
+    laps = max(0, min(int(capacity / burn), TANK_WALK_LAPS))
+    answer: int | None
+    while laps > 0 and not fits(laps):
+        laps -= 1
+    while laps < TANK_WALK_LAPS and fits(laps + 1):
         laps += 1
-    return laps
+    answer = laps
+    if laps >= TANK_WALK_LAPS or (
+            laps >= 1 and fill(laps + 1) is not None and fill(laps) is not None
+            and fill(laps + 1) <= fill(laps)):
+        answer = None
+    if scratch is not None:
+        scratch[key] = answer
+    return answer
+
+
+# The longest stint `tank_limited_laps` walks to before it stops believing the
+# tank is the ceiling. The loop it replaced stopped at the same figure.
+TANK_WALK_LAPS = 200
+
+
+def fuel_limited_laps_at_load(inputs: "RaceInputs") -> int | None:
+    """Kept for its callers: now exactly `tank_limited_laps`."""
+    return tank_limited_laps(inputs)
 
 
 def max_stint_laps(inputs: RaceInputs) -> tuple[int | None, str]:
     """The longest runnable stint, and what limits it."""
     tyre = tyre_limited_laps(inputs.wear_per_lap)
-    fuel = fuel_limited_laps(inputs.fuel_capacity_l, inputs.fuel_per_lap_l)
+    fuel = tank_limited_laps(inputs)
 
     if tyre is None and fuel is None:
         return None, CONSTRAINT_UNKNOWN
@@ -1011,8 +1067,7 @@ def stint_limit(inputs: RaceInputs,
     """
     candidates = [
         (tyre_limited_laps(profile.wear_per_lap), CONSTRAINT_TYRE),
-        (fuel_limited_laps(inputs.fuel_capacity_l, inputs.fuel_per_lap_l),
-         CONSTRAINT_FUEL),
+        (tank_limited_laps(inputs), CONSTRAINT_FUEL),
     ]
     if not _wear_curve_was_watched(profile):
         candidates.append((profile.longest_stint_laps or None,
@@ -1142,6 +1197,21 @@ def build_plan(inputs: RaceInputs, stops: int,
     total = 0.0
     start_lap = 1
     feasible = not over
+    # **The fill each stint starts with, before any stop is costed**, because a
+    # stop takes on the NEXT stint's fuel. This loop charged the stint that had
+    # just ended, so a 12 + 8 was costed as refuelling 12 laps' worth at the
+    # stop and reported 8.7 s slower than the 11 + 9 it beats (Daytona event 10,
+    # critic pass 1 on row 5.1) - while `timed_race_laps` and `stint_cost_s`
+    # charged the next stint. One rule now: fill k is paid at the stop before
+    # stint k.
+    starting_fills: list[float | None] = []
+    for index, laps in enumerate(stint_lengths):
+        if not inputs.fuel_per_lap_l:
+            starting_fills.append(None)
+        elif clock_fills is not None:
+            starting_fills.append(clock_fills[index])
+        else:
+            starting_fills.append(planned_fill_l(laps, inputs)[0])
     for index, laps in enumerate(stint_lengths):
         fuel_needed = None
         if inputs.fuel_per_lap_l:
@@ -1201,8 +1271,9 @@ def build_plan(inputs: RaceInputs, stops: int,
                     f"race; this plan cannot be run as written.")
             stopped_at = total
             total += inputs.stop_overhead_s()
-            if fuel_needed:
-                total += refuel_time_s(fuel_needed, inputs)
+            next_fill = starting_fills[index + 1]
+            if next_fill:
+                total += refuel_time_s(next_fill, inputs)
             # **And a stop the clock runs out during.** The next crossing is
             # the flag, so this stop is on the last lap too, just entered a
             # few seconds sooner - and the lap after it takes the race past
@@ -1370,7 +1441,11 @@ def stint_cost_s(inputs: RaceInputs, profile: CompoundProfile, laps: int, *,
         if hit is not None:
             return hit
 
-    fuel = stint_fuel_l(laps, inputs)
+    # **The fill the plan will write** (`planned_fill_l`), not a flat lap of
+    # margin: the stop before this stint is costed with the litres the pump is
+    # handed, the same as `timed_race_laps` and `build_plan` (rule 12, critic
+    # pass 1 on row 5.1).
+    fuel = planned_fill_l(laps, inputs)[0]
     total = stint_time_s(laps, inputs, fuel_at_start_l=fuel, profile=profile)
     if not first:
         total += inputs.stop_overhead_s()
@@ -1471,21 +1546,6 @@ def optimal_split(inputs: RaceInputs, profiles: list[CompoundProfile],
         lengths.append(laps)
         remaining -= laps
     return lengths
-
-
-def stint_fuel_l(laps: int, inputs: RaceInputs) -> float | None:
-    """What a stint of this length is fuelled for: the distance plus a lap.
-
-    Integrated over the stint rather than multiplied, because burn rises with
-    the fuel aboard - see `strategy/fuel_model.py`. Identical to the old
-    product whenever `fuel_reference_load_l` is None.
-    """
-    if not inputs.fuel_per_lap_l:
-        return None
-    return fill_for_l(inputs.fuel_per_lap_l, laps,
-                      reference_load_l=inputs.fuel_reference_load_l,
-                      buffer_l=FUEL_MARGIN_LAPS * inputs.fuel_per_lap_l,
-                      capacity_l=inputs.fuel_capacity_l)
 
 
 def elapsed_for_s(inputs: RaceInputs, stint_lengths: list[int],
