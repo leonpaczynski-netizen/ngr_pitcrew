@@ -30,7 +30,14 @@ BATHURST = (
     "8 laps to the stop.",
     "P9 of 13. You've made 2 places.",
     "6 laps to the stop.",
-    "Box in 2 laps. Stop 1. The regulations need a stop.",
+    # **Through today's box ladder, not as heard.** That night lap 9 said
+    # "Box in 2 laps." - the old ladder, a lap late (e9c7657). The same
+    # crossing (plan in-lap 11, `laps_to_stop()` 2) now says "Box next lap.",
+    # and lap 8's "Box in 3 laps." is the first "Box in N" the race can say.
+    # "Box in 2 laps." is a sentence nothing can produce any more, so it is
+    # not kept here to demand a clip for it.
+    "Box in 3 laps. Stop 1. The regulations need a stop.",
+    "Box next lap. Stop 1. The regulations need a stop.",
     "Box this lap. RS on. The regulations need a stop. "
     "Fuel to 67 litres - 8 laps after the box.",
     "Fuel to 67 litres. 8 laps to the flag, at this race's burn.",
