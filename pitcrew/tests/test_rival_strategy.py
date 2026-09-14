@@ -394,7 +394,38 @@ def test_the_ruler_never_raises_on_a_bad_packet():
     ruler = LapRuler(circuit_length_m=7004.0)
     ruler.note_packet(None)
     ruler.note_packet(_Packet("x", "y"))
-    assert ruler.where() == 0.0
+    # **Unknown, not the start line** (rule 3): nothing it was handed was a
+    # packet, so it has measured nothing. It answered 0.0 here, and 0.0 is
+    # what five races of `gap_reads` were filed at.
+    assert ruler.where() is None
+
+
+def test_a_ruler_nobody_has_fed_does_not_say_zero_metres():
+    """Sessions 143-176: the bridge was asked to feed a ruler it was never
+    given, and every gap reading was filed at `track_m = 0.0`."""
+    from pitcrew.race.lap_ruler import LapRuler
+
+    ruler = LapRuler(circuit_length_m=7004.0)
+    assert ruler.where() is None
+    ruler.note_packet(_Packet(1, 50.0))
+    assert ruler.where() == pytest.approx(50.0 / 60.0)
+    ruler.crossed_line(1)
+    assert ruler.where() == 0.0          # fed, and genuinely at the line
+
+
+def test_the_bridge_is_handed_the_ruler_it_feeds():
+    """**The defect was two objects, not arithmetic.** `TelemetryBridge.
+    _on_packet` reads `self._lap_ruler`; the controller built the ruler on
+    ITSELF. The wiring is asserted in the source because building a whole
+    controller for one attribute costs a QApplication."""
+    import inspect
+
+    from pitcrew import controller
+
+    bridge_src = inspect.getsource(controller.TelemetryBridge)
+    assert 'getattr(self, "_lap_ruler", None)' in bridge_src
+    start_src = inspect.getsource(controller.PitCrewController)
+    assert "self.bridge._lap_ruler = self._lap_ruler" in start_src
 
 
 # --- the rival pit pattern -------------------------------------------------

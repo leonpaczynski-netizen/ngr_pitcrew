@@ -5210,6 +5210,12 @@ class PitCrewController(QObject):
 
             self._lap_ruler = LapRuler(
                 circuit_length_m=self._circuit_length_m())
+            # **The bridge feeds it, so the bridge has to hold it.** The
+            # packet slot reads `TelemetryBridge._lap_ruler`, which nothing
+            # set: the ruler was never fed and five races of `gap_reads` were
+            # filed at `track_m = 0.0` (sessions 143-176). One object, two
+            # holders - the controller closes its laps, the bridge integrates.
+            self.bridge._lap_ruler = self._lap_ruler
             seed = self.store.driver_exemplars()
             self._last_session_id = self.session_id
             self._pit_wall = PitWall(Roster(seed=seed),

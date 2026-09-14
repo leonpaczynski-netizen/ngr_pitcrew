@@ -63,7 +63,12 @@ class LapRuler:
     def note_packet(self, packet) -> None:
         """One 60 Hz packet. Never raises: the race matters more than the map."""
         try:
-            packet_id = int(getattr(packet, "packet_id", 0) or 0)
+            raw_id = getattr(packet, "packet_id", None)
+            if raw_id is None:
+                # **Not a packet.** Counted as one with id 0 and speed 0, it
+                # marked the ruler as fed and `where()` answered 0.0 m.
+                return
+            packet_id = int(raw_id)
             speed = float(getattr(packet, "speed_ms", 0.0) or 0.0)
         except (TypeError, ValueError):
             return
@@ -113,7 +118,17 @@ class LapRuler:
         `None` once the integration has already lost packets on THIS lap -
         the figure would be short by an unknown amount, and a sector boundary
         placed with it is somewhere else on the road.
+
+        **And `None` from a ruler that has never been fed a packet** (14 Sep
+        2026). The controller built the ruler and the telemetry bridge was
+        the one asked to feed it - on its own attribute, which nothing ever
+        set - so `distance_m` sat at its starting 0.0 for five races and
+        every one of 3,583 `gap_reads` rows, sessions 143-176, was filed at
+        `track_m = 0.0`: the start line, for a reading nobody placed.
+        CLAUDE.md rule 3. Zero metres is a place; "never fed" is not one.
         """
+        if self._last_packet_id is None:
+            return None
         if self.dropped_packets:
             return None
         if self.circuit_length_m and self.distance_m > (
