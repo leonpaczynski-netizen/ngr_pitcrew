@@ -391,6 +391,10 @@ class TelemetryBridge(QObject):
         # and used to compare equal.
         self._abs_setting = None
         self._pushed_abs = False
+        # The driver board's per-packet reader - lap delta, LOCK, TCS (plan
+        # row 5.21). None outside a session. Written on the Qt thread, read
+        # here once into a local, like `quali`.
+        self.board_live = None
         # Whether a REAL car id has been announced yet, as distinct from
         # `_announced`, which only says a packet arrived. The first packet
         # routinely carries id 0 - the car has not loaded - and that is not an
@@ -753,6 +757,24 @@ class TelemetryBridge(QObject):
                 self._lap_short_shift_rpm = None
                 self.lap_completed.emit(event.data["lap"], rows)
             self.session_event.emit(event)
+
+        # **The driver board's live read**, under the same doctrine as the
+        # coach below: guarded, and dropped for the session on its first
+        # exception - a board figure must never cost a recorded lap.
+        board_live = self.board_live
+        if board_live is not None:
+            try:
+                board_live.note_packet(
+                    packet, _monotonic(),
+                    crossed=any(event.kind is EventKind.LAP_COMPLETED
+                                for event in events))
+            except Exception as exc:                       # noqa: BLE001
+                log("ui").error(
+                    "the board's live read raised on the telemetry thread and "
+                    "has been stopped for this session: %s: %s",
+                    type(exc).__name__, exc, exc_info=True)
+                if self.board_live is board_live:
+                    self.board_live = None
 
         # The qualifying coach, under the same doctrine as the outputs
         # below: an adviser must never cost the driver a recorded lap, so it
@@ -2535,6 +2557,11 @@ class PitCrewController(QObject):
             practice_intent=intent,
             game_version=self.settings.game_version)
         self.session_kind = "practice"
+        # **The tyre he said is fitted**, from the Practice screen. It tags the
+        # session's laps until its first pit lap and locks the board's bests.
+        self._started_compound = self.practice.starting_compound()
+        self._fitted_disagreement = None
+        self._arm_board_live(event, self._started_compound)
         self._tell_settings_about_the_session()
         # The rack is NOT cleared. Going out again adds to the session's
         # evidence; it does not replace it. Three runs at one circuit are one
@@ -2925,6 +2952,9 @@ class PitCrewController(QObject):
             "practice session %s open, listening on %s", self.session_id,
             self.port)
 
+        # **The board runs in practice and qualifying too** (the driver, 14 Sep
+        # 2026), with the race-only rows hidden and the lap-time panel leading.
+        self._open_driver_board()
         self.practice.set_recording(True)
         where = (f"Asking the PS5 at {self.settings.ps5_ip} for format "
                  f"{self.listener.heartbeat_format}, listening on "
@@ -2950,6 +2980,10 @@ class PitCrewController(QObject):
         # The coach before the listener, so no frame can arrive for a coach
         # whose session is being closed under it.
         self.bridge.quali = None
+        # The board's reader before the listener, for the coach's reason.
+        self.bridge.board_live = None
+        if self.race is None:
+            self._close_driver_board()
         self.stop_haptics()
         self.stop_wind()
         if self.listener is not None:
@@ -3494,8 +3528,14 @@ class PitCrewController(QObject):
         # session.
         self.hud.note_lap(lap_id, lap.lap_num)
         self.hud.request(lap_id)
-        self._tag_race_compound(lap_id)
+        filed = self._tag_race_compound(
+            lap_id, is_pit_lap=bool(getattr(lap, "is_pit_lap", False)))
         self.refresh_nav_state()
+        if self.session_kind != "practice" and self.race is not None:
+            # Filed under the compound the lap was STORED under, so the board's
+            # best and the archive's tag cannot name two tyres (critic pass 2).
+            self._board_note_lap(
+                lap, rows, filed, lap_id=lap_id, excluded=bool(pending))
         # Race laps belong to the race session, not to the practice rack.
         # They were pushed on here numbered as a continuation of the practice
         # laps, then vanished on the next rebuild because `_rows_for_event`
@@ -3542,6 +3582,8 @@ class PitCrewController(QObject):
         )
         self._tag_practice_compound(lap_id, row)
         self.practice.add_lap(row)
+        self._board_note_lap(lap, rows, row.compound, lap_id=lap_id,
+                             excluded=bool(pending) or bool(row.is_out_lap))
 
     def _event_record(self) -> dict | None:
         """The active event's row, read without `active_event`'s side effects
@@ -3573,14 +3615,41 @@ class PitCrewController(QObject):
                                    exc_info=True)
             declared = None
         carried = compound_for_new_lap(previous, row)
-        compound = carried or declared
+        # **The compound he declared at Start, until the car first stops.** A
+        # pit lap is where a set can change, so after it the declaration is no
+        # longer evidence about the tyre on the car and only the rack's own
+        # carry or the event's single allowed compound may tag a lap.
+        started = getattr(self, "_started_compound", None)
+        if getattr(row, "is_pit_lap", False):
+            self._started_compound = None
+        # **What the HUD label says, first** (the driver, 14 Sep 2026: read it
+        # off the wear panel). Settled reads only, and never on a pit lap -
+        # the set can change inside that lap, so the label at the line may be
+        # the new tyre on a lap mostly driven on the old one.
+        seen = None
+        if not getattr(row, "is_pit_lap", False):
+            try:
+                seen = self.hud.compound_now()
+            except Exception:                                # noqa: BLE001
+                seen = None
+        declared_by_him = carried or started
+        if seen and declared_by_him and seen != declared_by_him.upper():
+            # Rule 1's shape for a fact the game displays: the disagreement is
+            # the finding. The HUD label is GT7's own statement of the set on
+            # the car, so it tags the lap - and the note says so.
+            log("session").warning(
+                "lap %s: the HUD reads %s, the rack/Start said %s - tagged %s",
+                row.lap_num_in_session, seen, declared_by_him, seen)
+        compound = seen or carried or started or declared
         if not compound:
             return
         row.compound = compound
         self.store.set_lap_compound(lap_id, compound)
         log("session").info(
             "lap %s tagged %s - %s", row.lap_num_in_session, compound,
-            "carried from the stint's tag" if carried
+            "read off the HUD label" if seen
+            else "carried from the stint's tag" if carried
+            else "declared at Start" if started
             else "the only compound the event allows")
 
     def plan_qualifying(self) -> bool:
@@ -3949,7 +4018,7 @@ class PitCrewController(QObject):
             self.race_screen.set_status(spoken)
         self._file_informational(call)
 
-    def _tag_race_compound(self, lap_id: int) -> None:
+    def _tag_race_compound(self, lap_id: int, *, is_pit_lap: bool = False) -> str | None:
         """A race lap's compound comes from the approved plan.
 
         **The compound is app state, not telemetry** - GT7 broadcasts no tyre
@@ -3975,8 +4044,19 @@ class PitCrewController(QObject):
         """
         race = self.race
         if race is None or not race.running:
-            return
-        compound = race.state.tyre_compound
+            return None
+        # **The HUD label first when it is settled**, as practice tags - GT7's
+        # own statement of the set on the car (plan row 5.23). The plan's stint
+        # tyre is a decision; the label is what was fitted.
+        # Never on a pit lap, as practice: the set can change inside that lap,
+        # so the label at the line may be the new tyre on the old tyre's lap.
+        seen = None
+        if not is_pit_lap:
+            try:
+                seen = self.hud.compound_now()
+            except Exception:                                # noqa: BLE001
+                seen = None
+        compound = seen or race.state.tyre_compound
         if not compound:
             # **No plan, or none naming the tyre: the event may still say.**
             # Suzuka, 13 Sep 2026 - raced with no plan armed, and all 14 laps
@@ -3993,6 +4073,7 @@ class PitCrewController(QObject):
                 compound = None
         if compound:
             self.store.set_lap_compound(lap_id, compound)
+        return compound
 
     def _on_lap_changed(self, lap_id: int) -> None:
         """Persist a mark the moment it is made."""
@@ -4003,6 +4084,14 @@ class PitCrewController(QObject):
         carried = carry_compound(rows, lap_id)
         for tagged in carried:
             self.store.set_lap_compound(tagged.lap_id, tagged.compound)
+        # **A mark can retire a reference** (critic pass 1): a lap struck by
+        # hand, or re-tagged onto another tyre, is no longer a best on the tyre
+        # the board filed it under. Dropped, not rebuilt from the rack - the
+        # next counted lap on that tyre becomes its best.
+        live = getattr(self.bridge, "board_live", None)
+        if live is not None:
+            for changed in {lap_id, *(tagged.lap_id for tagged in carried)}:
+                live.drop_lap(changed)
         # The carry mutated rows these widgets are holding. Nothing else
         # tells them, so a tagged stint stayed grey on screen while the
         # database had it right.
@@ -4668,6 +4757,7 @@ class PitCrewController(QObject):
         # armed". Arming reopens it (`_open_driver_board`).
         if self.race is not None and getattr(self.race.state, "finished",
                                              False):
+            self.bridge.board_live = None
             self._close_driver_board()
         if self.race_screen is None:
             return False
@@ -4997,6 +5087,15 @@ class PitCrewController(QObject):
         # the game while the lights come on, and a board that appears once he
         # is already racing is one he has to find something out about at
         # exactly the wrong moment.
+        # The lap panel and lights for the race, on the tyre the race is on.
+        from pitcrew.analysis.runs import declared_compound
+
+        try:
+            self._race_declared_compound = declared_compound(event)
+        except Exception:                                    # noqa: BLE001
+            self._race_declared_compound = None
+        self._fitted_disagreement = None
+        self._arm_board_live(event, self._fitted_compound())
         self._open_driver_board()
         return True
 
@@ -5492,6 +5591,7 @@ class PitCrewController(QObject):
         # ordinary evening (take the flag, watch the replay, close the app)
         # never wrote the geometry and the board opened on the primary
         # monitor again next race - the exact failure the setting prevents.
+        self.bridge.board_live = None
         self._close_driver_board()
         # Before the session id is cleared: the stops are filed against it.
         self._stop_pit_wall()
@@ -5823,6 +5923,118 @@ class PitCrewController(QObject):
 
     # ---------------------------------------------------- the driver board
 
+    def _arm_board_live(self, event: dict, compound: str | None) -> None:
+        """A fresh live reader for the board, for this session (rule 11).
+
+        The best lap on file is looked up per compound when the compound is
+        set, on this thread - never on the telemetry thread - and keyed on the
+        event's car, circuit and the game version being driven.
+        """
+        from pitcrew.race.board_live import BoardLive, best_lap_on_file
+
+        car = event["car_name"] if "car_name" in event.keys() else None
+        track = event["track"] if "track" in event.keys() else None
+        layout = event["layout"] if "layout" in event.keys() else None
+        version = self.settings.game_version
+        store = self.store
+        live = BoardLive(file_reference_for=lambda code: best_lap_on_file(
+            store, car, track, layout, version, code))
+        live.set_compound(compound)
+        self.bridge.board_live = live
+
+    def _board_note_lap(self, lap, rows, compound: str | None, *,
+                        lap_id: int | None = None,
+                        excluded: bool = False) -> None:
+        """At the crossing: the compound now fitted, and this lap as that
+        compound's session best if it is one. Never raises into the lap."""
+        live = getattr(self.bridge, "board_live", None)
+        if live is None:
+            return
+        try:
+            from pitcrew.telemetry.recorder import FRAME_FIELDS
+
+            if compound:
+                live.set_compound(compound)
+            if not excluded:
+                live.note_lap(lap, rows, FRAME_FIELDS, compound, lap_id=lap_id)
+        except Exception:                                    # noqa: BLE001
+            log("ui").exception("the board could not take lap %s as a reference",
+                                getattr(lap, "lap_num", None))
+
+    def _fitted_compound(self) -> str | None:
+        """The tyre on the car, answered ONE way for the board, its references
+        and the laps it files (critic pass 1: the race state and the HUD label
+        were each writing it, flipping every tick when they disagreed).
+
+        The HUD label when it is settled - GT7's own statement of the set
+        fitted - else the race state's tyre in a race, else the compound he
+        declared at Start in practice. A disagreement between the label and the
+        declaration is logged once per change, never averaged (rule 1).
+        """
+        try:
+            seen = self.hud.compound_now()
+        except Exception:                                    # noqa: BLE001
+            seen = None
+        if self.race is not None:
+            # The plan's stint tyre, else the one compound the event allows -
+            # the same chain `_tag_race_compound` files the lap under.
+            declared = (getattr(self.race.state, "tyre_compound", None)
+                        or getattr(self, "_race_declared_compound", None))
+        else:
+            # **The rack's latest tag first, then the Start tyre** (critic pass
+            # 2): a lap re-tagged on the rack is the driver correcting the tyre,
+            # and a board still reading the Start picker would file his RM laps
+            # under RM and show an RS best every tick.
+            rows = []
+            try:
+                rows = self.practice.rows()
+            except Exception:                                # noqa: BLE001
+                rows = []
+            # Only laps since the last pit lap: a stop can change the set, and
+            # a tag from before it says nothing about the tyre on now.
+            tagged, stopped = None, False
+            # **This session's laps only** (critic pass 3, rule 11): the rack
+            # holds the whole event, so a fresh session with no laps yet took
+            # the last run's tyre over the Start picker.
+            session = getattr(self, "session_id", None)
+            rows = [row for row in rows
+                    if getattr(row, "session_id", None) == session]
+            for row in reversed(rows):
+                # The pit lap is the in-lap on the OLD set, so its own tag is
+                # checked after the stop, never before.
+                if getattr(row, "is_pit_lap", False):
+                    stopped = True
+                    break
+                if getattr(row, "compound", None):
+                    tagged = row.compound
+                    break
+            declared = tagged or (None if stopped
+                                  else getattr(self, "_started_compound", None))
+        declared = declared.upper() if declared else None
+        pair = (seen, declared)
+        if seen and declared and seen != declared \
+                and getattr(self, "_fitted_disagreement", None) != pair:
+            self._fitted_disagreement = pair
+            log("ui").warning(
+                "the HUD label reads %s where %s was declared - the board and "
+                "the laps follow the label", seen, declared)
+        return seen or declared
+
+    def _board_live_fields(self) -> dict:
+        """The lap-time panel and the three lights, for any session kind."""
+        live = getattr(self.bridge, "board_live", None)
+        if live is not None:
+            fitted = self._fitted_compound()
+            if fitted and live.compound != fitted:
+                live.set_compound(fitted)
+        fields = dict(live.board_fields()) if live is not None else {}
+        try:
+            fields["wet"] = self.hud.wet_now()
+        except Exception:                                    # noqa: BLE001
+            fields["wet"] = None
+        fields["abs_setting"] = getattr(self.bridge, "_abs_setting", None)
+        return fields
+
     def _open_driver_board(self) -> None:
         """Put the glance-up board on the screen above the game.
 
@@ -5978,7 +6190,22 @@ class PitCrewController(QObject):
         from pitcrew.ui.driver_view import DriverState
 
         if self.race is None:
-            return DriverState()
+            if self.session_kind != "practice":
+                return DriverState()
+            # **Practice and qualifying**: the corners, the lights and the lap
+            # panel. Nothing race-only is built, so nothing race-only can be
+            # stale on it.
+            kind = ("qualifying"
+                    if self.practice.practice_intent() == FOR_QUALIFYING
+                    else "practice")
+            fields = self._board_live_fields()
+            return DriverState(
+                session_kind=kind,
+                temps_c=self._board_temps(getattr(self.bridge, "last_packet", None)),
+                compound=fields.get("reference_compound"),
+                split_rates=self._split_rates(),
+                last_call=self._board_call,
+                **fields)
         state = self.race.state
         has_plan = bool(getattr(self.race, "_stints", None))
         # **The flag is let through to its own branch below.** At the chequer
@@ -6017,7 +6244,8 @@ class PitCrewController(QObject):
                 fuel_to_flag_why=FROM_THE_GREEN,
                 position=getattr(state, "position", None),
                 field_size=getattr(state, "field_size", None),
-                last_call=self._board_call)
+                last_call=self._board_call,
+                **self._board_live_fields())
         # **The flag is not a teardown, and this is why that matters here.**
         # `_close_out_finished_race` deliberately leaves the race running -
         # the slow-down lap is still being recorded - so without this the
@@ -6045,7 +6273,7 @@ class PitCrewController(QObject):
                 split_rates=self._split_rates(),
                 position=getattr(state, "position", None),
                 field_size=getattr(state, "field_size", None),
-                last_call=self._board_call, **self._board_splits())
+                last_call=self._board_call, **self._board_live_fields())
         packet = getattr(self.bridge, "last_packet", None)
         # **Live, not per-lap.** `state.fuel_l` is written at a crossing, and
         # in the box there are no crossings - so the countdown and the figure
@@ -6107,7 +6335,7 @@ class PitCrewController(QObject):
             position=getattr(state, "position", None),
             field_size=getattr(state, "field_size", None),
             last_call=self._board_call,
-            **self._board_splits(),
+            **self._board_live_fields(),
             **self._board_fuel(state, has_plan=has_plan),
             # **Both neighbours, on the running panel only.** In the box the
             # gap to a car still circulating is not a thing he can act on, and
@@ -6182,48 +6410,6 @@ class PitCrewController(QObject):
         note = f"{words.board} - {name}" if name else words.board
         return GapView(seconds=seconds, note=note, urgent=words.urgent,
                        good=words.good)
-
-    def _board_splits(self) -> dict:
-        """The two tyre splits the board draws, per lap, with their lap count.
-
-        **The axle gap is the stronger of the two and had no implementation
-        until now**: `tyre_split.PAIRS` is left-right only, so nothing in the
-        app could produce a rear-minus-front figure. The rear pair could be
-        produced and was invisible in practice - it only surfaced on the board
-        as a per-corner figure once it passed `PAIR_GAP_C` at 10 degC, and
-        over the measured stint it reached +4.0.
-
-        Both are whole-lap means from one `SplitHistory`, which is reset at
-        every session boundary **and at every pit exit** (CLAUDE.md rule 11),
-        so the board can neither judge a race's fresh tyres against practice's
-        worn ones nor fit a trend through two sets of rubber. The lap count
-        comes back with them because an aggregate carries its sample count
-        (rule 4) and a split from two laps is not the claim a split from eight
-        is.
-
-        **Positive only for the rear pair, signed for the axle**, and the
-        difference is not an inconsistency - see `SplitHistory.axle_split_now`.
-        """
-        axle_rate, laps = self._splits.axle_rate()
-        found = {
-            "axle_split_c": self._splits.axle_split_now(),
-            "axle_split_rate": axle_rate,
-            "split_laps": laps,
-            "rear_pair_hotter": None,
-            "rear_pair_split_c": None,
-            "rear_pair_rate": None,
-        }
-        for corner in ("rr", "rl"):
-            gap = self._splits.split_now(corner)
-            if gap is None:
-                # The cooler of the pair, or nothing sampled. `split_now`
-                # answers only for the hotter side, so exactly one of the two
-                # can return a figure and neither does before a lap has run.
-                continue
-            found["rear_pair_hotter"] = corner
-            found["rear_pair_split_c"] = gap
-            found["rear_pair_rate"] = self._splits.rate(corner)[0]
-        return found
 
     def _board_fuel(self, state, *, has_plan: bool) -> dict:
         """The two in-hand figures and, where there is none, the reason.
@@ -7441,6 +7627,7 @@ class PitCrewController(QObject):
         # geometry was never written and the board opened on the primary
         # monitor again next race, which is the whole failure the setting was
         # added to prevent. Same three-caller shape as `_stop_pit_wall` below.
+        self.bridge.board_live = None
         self._close_driver_board()
         self._stop_pit_wall()
         self._stop_hud_sampler()

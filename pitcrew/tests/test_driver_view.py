@@ -125,9 +125,13 @@ def test_the_widget_survives_having_nothing_at_all(qt_app):
     assert view.stop_stat.value.text() == "--"
     assert view.flag_stat.value.text() == "--"
     assert view.position_stat.value.text() == "--"
-    assert view.axle_stat.value.text() == "--"
-    assert view.rear_pair_stat.value.text() == "--"
     assert all(t.value.text() == "--" for t in view.tyres.values())
+    # The lap panel dashes, and every light says it cannot see rather than
+    # lighting on nothing (rule 3).
+    assert view.lap_panel_top.diff.value.text() == "--.---"
+    assert not view.wet_light.lit and view.wet_light.sub.text() == "cannot see"
+    assert not view.tcs_light.lit and view.tcs_light.sub.text() == "no signal"
+    assert not view.abs_light.lit
 
 
 def test_no_plan_and_no_burn_say_so_rather_than_showing_a_figure(qt_app):
@@ -308,12 +312,10 @@ def test_the_leading_gap_blocks_actually_get_the_leading_size(qt_app):
     for stat in (view.box_stat, view.stop_stat, view.flag_stat,
                  view.position_stat):
         assert stat.VALUE_PX < view.ahead_stat.VALUE_PX
-        assert stat.VALUE_PX > view.axle_stat.VALUE_PX
-    # The splits are a rank under the corners they are made of, and a rank
-    # under the numbers he plans with.
-    assert view.axle_stat.VALUE_PX == _Stat.SPLIT_PX
-    assert view.rear_pair_stat.VALUE_PX == _Stat.SPLIT_PX
-    assert _Tyre.VALUE_PX > _Stat.SPLIT_PX
+    # In a race the lap panel sits a rank under the numbers he plans with;
+    # in practice it leads at the middle rank's size.
+    assert view.lap_panel_top.diff._value_px < _Stat.VALUE_PX
+    assert view.lap_panel_lead.diff._value_px == _Stat.VALUE_PX
 
 
 def test_the_dashboard_asks_for_faces_that_are_installed(qt_app):

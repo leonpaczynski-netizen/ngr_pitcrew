@@ -977,6 +977,24 @@ class PracticeScreen(QWidget):
         header.addWidget(Field("Practising", self.intent_picker), 0,
                          Qt.AlignmentFlag.AlignBottom)
 
+        # **The tyre on the car when he goes out** (the driver, 14 Sep 2026:
+        # "might need to indicate starting tyre for practice when clicking
+        # start"). Every best lap on the driver board is locked to a compound,
+        # and without this the first laps are untagged until a lap is tagged on
+        # the rack - so the board could compare nothing. "Not set" is allowed
+        # and says so on the board; it is never guessed.
+        self.tyre_picker = QComboBox()
+        self.tyre_picker.addItem("Not set", None)
+        for compound in ALL_COMPOUNDS:
+            self.tyre_picker.addItem(compound.code, compound.code)
+        self.tyre_picker.setToolTip(
+            "The compound fitted as the session starts. Lap bests and the "
+            "board's time diff are kept per compound. Change a lap's tag on "
+            "the rack when you change tyres.")
+        block_wheel(self.tyre_picker)
+        header.addWidget(Field("Tyres fitted", self.tyre_picker), 0,
+                         Qt.AlignmentFlag.AlignBottom)
+
         # Whether the qualifying coach talks, in the Race screen's idiom.
         # Silent still does the work: every call is computed and logged, it
         # simply is not spoken - so a silent qualifying run still leaves the
@@ -1911,6 +1929,10 @@ class PracticeScreen(QWidget):
 
     def practice_intent(self) -> str:
         return self.intent_picker.currentData()
+
+    def starting_compound(self) -> str | None:
+        """The compound he said is fitted, or None for "Not set"."""
+        return self.tyre_picker.currentData()
 
     def coach_speaks(self) -> bool:
         return bool(self.coach_picker.currentData())

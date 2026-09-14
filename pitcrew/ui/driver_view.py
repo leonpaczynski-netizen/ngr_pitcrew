@@ -116,10 +116,18 @@ board from a synthetic `DriverState` with no PS5 and no database attached.
 bottom edge is the shortest eye travel and the lead rank sits there.
 
     rank 4 (top, dimmest)   the last call and its mark
-    rank 3                  four corner temperatures, then the two tyre splits
+    rank 3                  lap-time panel | four corner temperatures |
+                            WET · ABS/LOCK · TCS lights
     rank 2 (middle)         laps to the stop | in hand to the stop | in hand to
                             the flag | position
     rank 1 (bottom, 180px)  gap ahead | gap behind
+
+**In practice and qualifying** (the board opens for them from 14 Sep 2026)
+ranks 1 and 2 are race-only and hidden, and the lap-time panel takes rank 1:
+
+    rank 4                  the last call
+    rank 3                  four corner temperatures | the three lights
+    rank 1 (bottom)         laptime | time diff | pred. time
 
 --- rank 1 · the two neighbour gaps -------------------------------------------
 
@@ -261,40 +269,35 @@ frame, and raw RR frames reach p99 102.6. Nobody has measured how often a
 3-second window crosses 83. Do not repeat "it has never fired" as though it
 had been checked on this aggregate; it has not.
 
---- rank 3 · the two tyre splits ----------------------------------------------
+--- rank 3 · the lap-time panel and the three lights ---------------------------
 
-**The reading on this car with evidence behind it, and until now the board
-could not show one of them at all.** `race/tyre_split.PAIRS` is left-right
-only, so the axle gap - the stronger of the two - had no implementation, and
-the RR-RL gap only appeared as a per-corner figure once it passed 10 degC,
-which on the measured stint it never did (it reached +4.0).
+**The tyre splits were removed on 14 Sep 2026, at the driver's call.** They were
+a whole-stint signal resting on one stint's association (four corners, r=+0.82,
+n=4) that changed nothing he could do on a straight, and the game's own wear
+gauge already tells him which tyre is going. `race/tyre_split.SplitHistory`
+stays: it still drives the per-corner "+N vs RL WIDENING" line under each tyre.
 
-Two items, per lap, never per frame:
+**Laptime / Time Diff / Pred. Time**, laid out as his reference image. The diff
+is live minus the reference lap at the same distance, so **negative is faster
+and green, positive slower and amber**. Two references, both named under the
+panel: this session's best lap (the diff) and the best lap on file for this
+car, circuit and game version (a second figure, because it may be another
+setup or another day).
 
-* **rear minus front**, drawn as a positive figure with the direction in
-  words - `REAR OVER FRONT` or `FRONT OVER REAR`. The sign is a finding both
-  ways, which is why `tyre_split.axle_split_now` returns it signed: rears
-  hotter is a rear-limited car and fronts hotter is a front-limited one, and
-  CLAUDE.md 5.5's worked example - *"Brake balance one click rearward. Fronts
-  are going first."* - is the second of those. A number whose sign he has to
-  decode under a helmet is what rule 13 is about, so the board never shows
-  the sign.
-* **the rear pair**, `RR OVER RL` or `RL OVER RR`, from `split_now`.
+**Three lights**, each lit only on a reading and each saying where it comes from:
 
-Each carries its lap count (rule 4) and, where five laps and the instrument
-allow, `WIDENING` or `SETTLING` - the same two words the per-corner figure
-uses. Silence where the trend is inside the floor: **no rate is not a rate of
-zero.**
-
-⚠️ **What the r=+0.82 behind these is, exactly.** Daytona session 118, 3 Sep
-2026, 71,449 frames: across the FOUR CORNERS OF THE CAR, per-lap mean
-temperature against measured per-lap wear rate (FL 62.5 degC / 0.0275 per lap
-… RR 75.7 / 0.0570). **n=4, and it is an association** - both quantities are
-driven by load. It is not "temperature predicts wear" and it is not a grip
-claim. What it buys is that the gap is a finer instrument than the wear gauge
-for the same thing: the gauge quantises at 2.8-3.3% of tyre life per pixel and
-the gap moves continuously. The trend floor `RATE_WORTH_SAYING_C` = 1.25
-degC/lap is **derived, not measured**, and the board says `derived` beside it.
+* **WET** - `telemetry/hygrometer.py`, calibrated 14 Sep 2026: a fill bar of
+  water under the car, so the light follows the last few HUD reads, and a
+  tunnel on a wet track reads dry for a second. Unreadable HUD is "cannot see",
+  never DRY.
+* **ABS** - GT7 sends no ABS signal and "ABS active" cannot be derived: with ABS
+  off, heavy braking sits in the same slip band ABS holds (13-24% of frames on
+  the Shelby, against 13-44% with ABS Weak). What ABS removes is the lock tail,
+  so the box names the event's setting and lights **LOCK** when a front wheel
+  locks (slip below 0.80) - derived, and it says so.
+* **TCS** - `flags_raw` bit 11, calibrated on his TCS-on lap of 14 Sep 2026:
+  22% of frames with TCS on, 0.01% off, and set on 82% of the hard-throttle
+  wheelspin frames.
 
 --- rank 4 · the last call and its mark ---------------------------------------
 
@@ -349,9 +352,6 @@ from pitcrew.store.tyres import WEAR_ONSET_C
 # the word on the screen and the word in his ear are one decision (rule 12).
 from pitcrew.race.calls import (MARK_UNCONFIRMED, NO_PLAN, NO_STOP_TO_COME,
                                 RACE_OVER)
-# The trend floor, imported rather than restated: it is derived, its
-# arithmetic is documented where it is defined, and two copies would drift.
-from pitcrew.race.tyre_split import RATE_WORTH_SAYING_C
 from pitcrew.ui import theme
 
 # How far below onset still counts as approaching it.
@@ -470,24 +470,42 @@ class DriverState:
     fuel_l: float | None = None
     burn_l: float | None = None
 
-    # ---- the two tyre splits, per lap, both from `race/tyre_split.py`.
-    # **Signed**, rear minus front: rears hotter and fronts hotter are
-    # different diagnoses and the board words the direction rather than
-    # showing him a sign to decode. None before any whole lap is sampled.
-    axle_split_c: float | None = None
-    # degC per lap, only where five laps say so and the movement clears the
-    # derived floor. Absent is absent - it is NOT a rate of zero.
-    axle_split_rate: float | None = None
-    # Which of the two rear tyres is the hotter, and by how much. Positive
-    # only, with the corner named, because a left and a right tyre are
-    # interchangeable and "4 degrees cooler" is the same finding said about
-    # the wrong one.
-    rear_pair_hotter: str | None = None
-    rear_pair_split_c: float | None = None
-    rear_pair_rate: float | None = None
-    # Laps behind both splits. Rule 4: an aggregate carries its sample count,
-    # and a split from two laps and one from eight are not the same claim.
-    split_laps: int = 0
+    # ---- what kind of session this is. The board opens for races, practice
+    # and qualifying (the driver, 14 Sep 2026); in practice and qualifying the
+    # race-only numbers - gaps, stop, fuel to the flag, position - have nothing
+    # to show and are hidden rather than dashed, and the lap-time panel takes
+    # the bottom rank he glances at. In a race the gaps keep it.
+    session_kind: str = "race"          # "race" | "practice" | "qualifying"
+
+    # ---- the lap-time panel (row 5.21). All times are GT7's own current-lap
+    # clock where the C packet carries it. **The delta is live minus the
+    # reference at the same point on the lap**: negative is faster, drawn
+    # green; positive is slower, drawn amber. None is a dash with a reason.
+    lap_time_ms: int | None = None
+    delta_s: float | None = None            # against this session's best lap
+    session_best_ms: int | None = None
+    predicted_ms: int | None = None         # session best plus the live delta
+    delta_file_s: float | None = None       # against the best lap on file
+    file_best_ms: int | None = None
+    delta_why: str | None = None            # why there is no delta
+    # The compound both references are locked to (the driver, 14 Sep 2026:
+    # "all best times should be locked to compound"). Named on the board so
+    # "vs session best" can never be read as a best on another tyre.
+    reference_compound: str | None = None
+
+    # ---- the three lights (row 5.21).
+    # WET: the hygrometer over the last few HUD reads - "wet", "mixed", "dry",
+    # or None where the HUD could not be read (never "dry" for want of a read).
+    wet: str | None = None
+    # ABS: GT7 sends no ABS signal. The box shows the event's ABS setting and
+    # lights LOCK when a front wheel locks under braking - DERIVED from wheel
+    # speed (front slip below 0.80), because that tail is what ABS removes.
+    abs_setting: str | None = None
+    # None: no packet to read a lock off (rule 3) - not "no lock".
+    front_lock: bool | None = None
+    # TCS: flags_raw bit 11, calibrated on the driver's TCS-on lap of 14 Sep
+    # (22% of frames on, 0.01% off). None where no packet carries the flags.
+    tcs_active: bool | None = None
 
     # ---- where he is. On the board because every strategy call is framed in
     # it, and at the middle rank rather than the lead because GT7 does show
@@ -792,12 +810,6 @@ class _Stat(QWidget):
     VALUE_PX = 120
     CAPTION_PX = 21
     SUB_PX = 27
-    # **The tyre splits, one rank under the corner temperatures.** They are
-    # the reading with evidence behind them and the corners are the reading
-    # he asked for, and that tension is resolved by size rather than by
-    # dropping either: the corners stay the subject of that block and the
-    # splits sit under them, clearly a figure rather than a caption.
-    SPLIT_PX = 58
     # **The gap to a neighbour leads this display**, on the driver's own
     # revision of the brief after seeing the corners lead: on a straight, the
     # car ahead and the car behind are what he can act on right now, and the
@@ -841,7 +853,6 @@ class _Stat(QWidget):
     # saying it does not.
     MIDDLE_SUB_W = 640
     GAP_SUB_W = 1100
-    SPLIT_SUB_W = 700
     BOX_SUB_W = 620
 
     def set_sub_width(self, pixels: int) -> None:
@@ -903,64 +914,183 @@ class _Stat(QWidget):
         # metrics resolve to; the elide has to be redone against it.
         self._resub()
 
-    def set_label(self, label: str) -> None:
-        """Rename the block.
-
-        **Only the splits use this, and only to name a direction.** A caption
-        that changes is a caption he has to read, so the rest of the board's
-        are fixed at construction; the axle split has no fixed name because
-        "rear over front" and "front over rear" are opposite diagnoses of one
-        measurement and the board says which rather than showing a sign.
-        """
-        self.caption.setText(label.upper())
+def format_lap_ms(ms: int | float | None) -> str:
+    """`1:32.418`, or a dash. Minutes are shown only when there are some."""
+    if ms is None or ms < 0:
+        return "-:--.---"
+    total_ms = int(round(ms))
+    minutes, rest = divmod(total_ms, 60_000)
+    seconds, millis = divmod(rest, 1000)
+    return f"{minutes}:{seconds:02d}.{millis:03d}"
 
 
-# **The words for a split's direction, and why they are words.** The figure is
-# always drawn positive: a driver reading a minus sign at 200 km/h has to
-# decide what it was a minus of, and rule 13 exists because he could not ask.
-REAR_OVER_FRONT = "rear over front"
-FRONT_OVER_REAR = "front over rear"
-AXLES_LEVEL = "axles level"
-
-# The two trend words, shared verbatim with the per-corner figure above. One
-# vocabulary for one thing (rule 13): a split that is opening and one that has
-# settled are the same number and opposite news.
-WIDENING = "widening"
-SETTLING = "settling"
+def format_delta(seconds: float | None) -> str:
+    """`-0.214` faster, `+0.312` slower, or a dash. Three decimals, as every
+    timing screen draws it, and the sign always printed."""
+    if seconds is None:
+        return "--.---"
+    return f"{seconds:+.3f}"
 
 
-def axle_words(split_c: float | None) -> tuple[float | None, str]:
-    """`(the figure to draw, the direction in words)` for the axle split.
+class _Box(QWidget):
+    """A framed title-over-value box, as on the driver's reference image."""
 
-    The figure comes back as a magnitude and the direction as a phrase, so
-    nothing downstream has to interpret a sign. `None` in, `(None, "")` out -
-    a missing split is a dash, never a zero.
+    def __init__(self, title: str, value_px: int,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("box")
+        # A plain QWidget paints no stylesheet background or border without
+        # this, so the frame and the panel face were silently not drawn.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            f"#box {{ border:2px solid {EDGE}; border-radius:10px;"
+            f" background:{PANEL}; }}")
+        column = QVBoxLayout(self)
+        column.setContentsMargins(22, 6, 22, 10)
+        column.setSpacing(0)
+        self.title = QLabel(title.upper())
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title.setStyleSheet(
+            f"font-family:{LABEL_FACE};font-size:21px;font-weight:600;"
+            f"letter-spacing:5px;color:{INK_DIM};background:transparent;")
+        self.value = QLabel("--")
+        self.value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._value_px = value_px
+        self.set_value("--", INK)
+        column.addWidget(self.title)
+        column.addWidget(self.value)
+
+    def set_value(self, text: str, ink: str) -> None:
+        self.value.setText(text)
+        self.value.setStyleSheet(
+            f"font-family:{NUMBER_FACE};font-size:{self._value_px}px;"
+            f"font-weight:600;color:{ink};background:transparent;")
+
+
+class _LapTimePanel(QWidget):
+    """Laptime | Time Diff | Pred. Time, and what the diff is against.
+
+    The driver's own layout (reference image, 14 Sep 2026). **Two references,
+    both named**: the big diff is against this session's best lap, and the
+    line under the panel carries the best lap on file for this car, circuit
+    and game version - a different setup or day, so it is the second line and
+    not the lead (rule 13: a delta that does not say what it is against is two
+    numbers pretending to be one).
     """
-    if split_c is None:
-        return None, ""
-    if split_c > 0:
-        return split_c, REAR_OVER_FRONT
-    if split_c < 0:
-        return -split_c, FRONT_OVER_REAR
-    return 0.0, AXLES_LEVEL
+
+    def __init__(self, value_px: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(6)
+        row = QHBoxLayout()
+        row.setSpacing(14)
+        self.lap = _Box("laptime", value_px)
+        self.diff = _Box("time diff", value_px)
+        self.pred = _Box("pred. time", value_px)
+        for box in (self.lap, self.diff, self.pred):
+            row.addWidget(box)
+        column.addLayout(row)
+        self.note = QLabel("")
+        self.note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.note.setStyleSheet(
+            f"font-family:{NUMBER_FACE};font-size:24px;color:{INK_DIM};"
+            f"background:transparent;")
+        column.addWidget(self.note)
+
+    def show_state(self, state: "DriverState") -> None:
+        self.lap.set_value(format_lap_ms(state.lap_time_ms), INK)
+        delta = state.delta_s
+        ink = INK if delta is None else GOOD if delta < 0 else NEAR if delta > 0 else INK
+        self.diff.set_value(format_delta(delta), ink)
+        self.pred.set_value(format_lap_ms(state.predicted_ms), INK)
+        parts = []
+        tyre = f"{state.reference_compound} " if state.reference_compound else ""
+        if state.session_best_ms is not None:
+            parts.append(f"vs {tyre}session best "
+                         f"{format_lap_ms(state.session_best_ms)}")
+        elif state.delta_why:
+            parts.append(f"{tyre}{state.delta_why}" if tyre else state.delta_why)
+        if state.file_best_ms is not None:
+            on_file = f"{tyre}on file {format_lap_ms(state.file_best_ms)}"
+            if state.delta_file_s is not None:
+                on_file += f" ({format_delta(state.delta_file_s)})"
+            parts.append(on_file)
+        self.note.setText("  ·  ".join(parts))
 
 
-def trend_word(split_c: float | None, rate: float | None) -> str:
-    """`widening`, `settling`, or "" where nothing may be claimed.
+class _Light(QWidget):
+    """A box that lights: a word, its ink, and one line under it."""
 
-    **Judged against the gap the board is naming, not against the raw sign.**
-    The axle rate is the slope of rear-minus-front, so a front-limited car
-    with the fronts pulling further ahead has a NEGATIVE rate and a widening
-    gap. Reading the raw sign would have told him the front-over-rear split
-    was settling at the exact moment it was running away.
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("light")
+        # Without a styled background the lit fill is never painted and a lit
+        # lamp draws its dark word on the dark ground - invisible (first render).
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(18, 6, 18, 8)
+        column.setSpacing(0)
+        self.word = QLabel("--")
+        self.word.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sub = QLabel("")
+        self.sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.addWidget(self.word)
+        column.addWidget(self.sub)
+        self.lit = False
+        self.show_light("--", "", None)
 
-    Empty where there is no rate at all: five laps have not been sampled, or
-    the movement is inside the derived floor. **No rate is not a rate of
-    zero**, and "settling" would be a claim.
-    """
-    if rate is None or split_c is None or split_c == 0:
-        return ""
-    return WIDENING if (rate > 0) == (split_c > 0) else SETTLING
+    def show_light(self, word: str, sub: str, ink: str | None) -> None:
+        """`ink` None is unlit: the word dim on the panel face. Lit fills the
+        box with the ink and draws the word dark, so it reads as a lamp."""
+        self.lit = ink is not None
+        fill = ink if self.lit else PANEL
+        border = ink if self.lit else EDGE
+        word_ink = GROUND if self.lit else INK_DIM
+        self.setStyleSheet(
+            f"#light {{ border:2px solid {border}; border-radius:10px;"
+            f" background:{fill}; }}")
+        self.word.setText(word.upper())
+        self.word.setStyleSheet(
+            f"font-family:{LABEL_FACE};font-size:44px;font-weight:700;"
+            f"letter-spacing:6px;color:{word_ink};background:transparent;")
+        self.sub.setText(sub)
+        self.sub.setStyleSheet(
+            f"font-family:{NUMBER_FACE};font-size:20px;"
+            f"color:{word_ink};background:transparent;")
+
+
+def wet_light(wet: str | None) -> tuple[str, str, str | None]:
+    """(word, sub, ink) for the WET box. Never says dry without a reading."""
+    if wet == "wet":
+        return "wet", "water under the car", theme.WET_LIGHT
+    if wet == "mixed":
+        return "wet", "patchy", NEAR
+    if wet == "dry":
+        return "dry", "hygrometer", None
+    return "wet", "cannot see", None
+
+
+def abs_light(setting: str | None, front_lock: bool | None) -> tuple[str, str, str | None]:
+    """(word, sub, ink) for the ABS box. GT7 sends no ABS signal: the box names
+    the event's setting and lights LOCK on a front lock, which is derived.
+    `front_lock` None is no telemetry to read one off - said, never "no lock"."""
+    named = f"abs {setting.lower()}" if setting else "abs setting unknown"
+    word = f"abs {setting}" if setting else "abs"
+    if front_lock is None:
+        return word, "no reading", None
+    if front_lock:
+        return "lock", f"{named} · derived", OVER
+    return word, "no lock", None
+
+
+def tcs_light(active: bool | None) -> tuple[str, str, str | None]:
+    """(word, sub, ink) for the TCS box, off flags_raw bit 11."""
+    if active is None:
+        return "tcs", "no signal", None
+    if active:
+        return "tcs", "cutting in", NEAR
+    return "tcs", "", None
 
 
 class _LastCall(QWidget):
@@ -1520,44 +1650,30 @@ class DriverView(QWidget):
             f"letter-spacing:7px;color:{INK_DIM};background:transparent;")
         grid.addWidget(self.tyre_caption, 2, 0, 1, 2)
 
-        # **The two splits, under the corners they are made of.** These are
-        # the readings with evidence behind them - see the spec at the top of
-        # this file for what that evidence is and what it is not - and until
-        # now the board could show neither: the axle gap had no
-        # implementation at all, and the rear pair only surfaced as a
-        # per-corner figure once it passed 10 degC, which on the measured
-        # stint it never did.
-        self.axle_stat = _Stat("", value_px=_Stat.SPLIT_PX)
-        self.rear_pair_stat = _Stat("", value_px=_Stat.SPLIT_PX)
-        for stat in (self.axle_stat, self.rear_pair_stat):
-            stat.set_sub_width(_Stat.SPLIT_SUB_W)
-        # **The floor is named on the board, not only in the file.** It is
-        # derived rather than measured (CLAUDE.md rule 5) and the trend words
-        # above it fall silent below it, so a driver who sees no trend can
-        # tell "nothing to say" from "broken".
-        self.split_caption = QLabel(
-            "TYRE SPLIT °C  ·  TREND DERIVED, "
-            f"{RATE_WORTH_SAYING_C:.2f} °C/LAP FLOOR")
-        self.split_caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.split_caption.setStyleSheet(
-            f"font-family:{LABEL_FACE};font-size:17px;font-weight:600;"
-            f"letter-spacing:4px;color:{INK_DIM};background:transparent;")
-        # **Beside the corner grid, not under it, and the reason is the
-        # monitor.** He is on a 2560x1080 panel and this instrument already
-        # came close to filling its height; a fourth full-width rank pushed
-        # the layout's own minimum past 1080, and Qt answers that by growing
-        # the window off the screen rather than by dropping anything. The
-        # room on an ultrawide is horizontal, and a corner's gaps beside the
-        # corners is where a reader looks for them anyway.
-        split_block = QWidget()
-        split_column = QVBoxLayout(split_block)
-        split_column.setContentsMargins(0, 0, 0, 0)
-        split_column.setSpacing(10)
-        split_column.addStretch(1)
-        split_column.addWidget(self.axle_stat)
-        split_column.addWidget(self.rear_pair_stat)
-        split_column.addWidget(self.split_caption)
-        split_column.addStretch(1)
+        # **Three lights where the tyre splits were** (the driver, 14 Sep 2026:
+        # "drop it, would prefer wet, ABS and TCS indicator boxes that light
+        # up"). Stacked beside the corner grid, which is the room the splits
+        # occupied, so the board's height does not grow.
+        self.wet_light = _Light()
+        self.abs_light = _Light()
+        self.tcs_light = _Light()
+        light_block = QWidget()
+        light_column = QVBoxLayout(light_block)
+        light_column.setContentsMargins(0, 0, 0, 0)
+        light_column.setSpacing(10)
+        light_column.addStretch(1)
+        for light in (self.wet_light, self.abs_light, self.tcs_light):
+            light.setMinimumWidth(300)
+            light_column.addWidget(light)
+        light_column.addStretch(1)
+
+        # **The lap-time panel, twice, and only one is ever shown.** In a race
+        # it sits beside the corners and the gaps keep the bottom edge; in
+        # practice and qualifying there are no gaps and it takes the bottom
+        # rank itself (his choice, 14 Sep 2026). Two instances fed the same
+        # state rather than one widget re-parented on every update.
+        self.lap_panel_top = _LapTimePanel(value_px=58)
+        self.lap_panel_lead = _LapTimePanel(value_px=120)
 
         # **The gaps lead and they sit at the bottom.** This file's layout
         # rule is that he glances UP from the game screen below, so the bottom
@@ -1611,23 +1727,53 @@ class DriverView(QWidget):
         # block. Held to their own widths, with the stretches outside them.
         tyres.setSizePolicy(QSizePolicy.Policy.Maximum,
                             QSizePolicy.Policy.Preferred)
-        split_block.setSizePolicy(QSizePolicy.Policy.Maximum,
+        light_block.setSizePolicy(QSizePolicy.Policy.Maximum,
                                   QSizePolicy.Policy.Preferred)
+        self.lap_panel_top.setSizePolicy(QSizePolicy.Policy.Maximum,
+                                         QSizePolicy.Policy.Preferred)
         centred = QHBoxLayout()
         centred.setSpacing(70)
         centred.addStretch(1)
+        centred.addWidget(self.lap_panel_top, 0, Qt.AlignmentFlag.AlignVCenter)
         centred.addWidget(tyres)
-        centred.addWidget(split_block)
+        centred.addWidget(light_block)
         centred.addStretch(1)
         stacked.addLayout(centred)
 
-        middle_row = QWidget()
-        middle_row.setLayout(middle)
-        stacked.addWidget(middle_row)
+        self.middle_row = QWidget()
+        self.middle_row.setLayout(middle)
+        self.leading = QWidget()
+        self.leading.setLayout(lead)
 
-        leading = QWidget()
-        leading.setLayout(lead)
-        stacked.addWidget(leading)
+        # **The ranks below the corners are swapped whole, never hidden row by
+        # row.** Hiding rows inside a layout that has not been shown leaves Qt's
+        # cached minimum counting them, and the first render came out 1295 px
+        # tall on a 1080 panel. A stack is as tall as its tallest page - the
+        # race page - so the board is one height whatever the session.
+        race_lower = QWidget()
+        race_column = QVBoxLayout(race_lower)
+        race_column.setContentsMargins(0, 0, 0, 0)
+        race_column.setSpacing(12)
+        race_column.addWidget(self.middle_row)
+        race_column.addWidget(self.leading)
+
+        self.leading_lap = QWidget()
+        practice_column = QVBoxLayout(self.leading_lap)
+        practice_column.setContentsMargins(0, 0, 0, 0)
+        # Bottom-anchored like everything else here: the panel sits on the
+        # edge nearest his eye, with the page's spare height above it.
+        practice_column.addStretch(1)
+        lead_lap = QHBoxLayout()
+        lead_lap.addStretch(1)
+        lead_lap.addWidget(self.lap_panel_lead)
+        lead_lap.addStretch(1)
+        practice_column.addLayout(lead_lap)
+
+        self.lower = QStackedLayout()
+        self.lower.addWidget(race_lower)
+        self.lower.addWidget(self.leading_lap)
+        self._race_lower = race_lower
+        stacked.addLayout(self.lower)
 
         # **The two states are two widgets, swapped, not one relabelled.**
         # Relabelling five captions on a screen he reads while stationary in
@@ -1697,7 +1843,12 @@ class DriverView(QWidget):
         self.tyre_caption.setText(
             f"TYRE SURFACE °C · {state.compound.upper()}" if state.compound
             else "TYRE SURFACE °C · COMPOUND UNKNOWN, NO WEAR LINE")
-        self._show_splits(state)
+        self._show_session_kind(state)
+        self.lap_panel_top.show_state(state)
+        self.lap_panel_lead.show_state(state)
+        self.wet_light.show_light(*wet_light(state.wet))
+        self.abs_light.show_light(*abs_light(state.abs_setting, state.front_lock))
+        self.tcs_light.show_light(*tcs_light(state.tcs_active))
         self.last_call.show_call(state.last_call)
 
         if state.finished:
@@ -1867,53 +2018,16 @@ class DriverView(QWidget):
                 f"{state.fuel_to_flag:.1f}", rests_on,
                 urgent=state.fuel_to_flag < 0)
 
-    def _show_splits(self, state: DriverState) -> None:
-        """The axle gap and the rear pair, per lap, with their lap count.
+    def _show_session_kind(self, state: DriverState) -> None:
+        """Race: the gaps lead and the lap panel sits by the corners. Practice
+        and qualifying: the race-only rows are hidden and the lap panel leads.
 
-        **The figure is drawn positive and the direction is a caption.** A
-        minus sign on a glance instrument is a thing to decode; `REAR OVER
-        FRONT` and `FRONT OVER REAR` are two different diagnoses said in
-        words, which is what rule 13 asks for.
+        Hidden rather than dashed: a practice board of five dashes saying "no
+        plan" and "no gap read" is five things to read that can never change.
         """
-        laps = ("no laps yet" if not state.split_laps else
-                "1 lap" if state.split_laps == 1 else
-                f"{state.split_laps} laps")
-        figure, direction = axle_words(state.axle_split_c)
-        if figure is None:
-            self.axle_stat.set_label("rear v front")
-            self.axle_stat.show_value("--", laps)
-        else:
-            self.axle_stat.set_label(direction)
-            self.axle_stat.show_value(
-                f"{figure:.1f}",
-                self._split_sub(laps, trend_word(state.axle_split_c,
-                                                 state.axle_split_rate),
-                                state.axle_split_rate))
-
-        hotter = state.rear_pair_hotter
-        if hotter is None or state.rear_pair_split_c is None:
-            self.rear_pair_stat.set_label("rr v rl")
-            self.rear_pair_stat.show_value("--", laps)
-            return
-        cooler = PAIRS[hotter]
-        self.rear_pair_stat.set_label(f"{hotter} over {cooler}")
-        self.rear_pair_stat.show_value(
-            f"{state.rear_pair_split_c:.1f}",
-            # The pair figure is positive by construction, so its trend word
-            # is read straight off the sign of the rate.
-            self._split_sub(laps, trend_word(state.rear_pair_split_c,
-                                             state.rear_pair_rate),
-                            state.rear_pair_rate))
-
-    @staticmethod
-    def _split_sub(laps: str, word: str, rate: float | None) -> str:
-        """`6 laps · widening 1.4/lap`, or just the lap count.
-
-        Silent about the direction where there is no rate: five laps have not
-        been sampled, or the movement is inside the derived floor. **No rate
-        is not a rate of zero** and "settling" would be a claim - see
-        `race/tyre_split.py`, which owns the arithmetic and the threshold.
-        """
-        if not word or rate is None:
-            return laps
-        return f"{laps} · {word} {abs(rate):.1f}/lap"
+        racing = state.session_kind == "race"
+        self.lower.setCurrentWidget(self._race_lower if racing
+                                    else self.leading_lap)
+        # Width only: the top panel shares the corners' row, whose height the
+        # corner grid sets, so hiding it cannot move the board's height.
+        self.lap_panel_top.setVisible(racing)

@@ -193,6 +193,11 @@ COMPOUND_BANDS: dict[str, str] = {
 }
 UNMARKED_BAND = "#2A2620"   # a set nobody has chalked yet
 
+# **The driver board's WET light.** The heavy-wet compound band's blue, because
+# it is the colour he already reads as "water" on this screen's tyre codes and
+# GT7's own hygrometer fills blue - one meaning, not a new hue.
+WET_LIGHT = COMPOUND_BANDS["HW"]
+
 # The three phases of the wear model, on the tyre gauge. Named rather than
 # written inline: the flat phase used to be the literal #3FA34D, which is
 # byte-identical to the Intermediate band - so one green meant "intermediate

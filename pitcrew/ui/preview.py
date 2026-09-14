@@ -68,7 +68,7 @@ def _sample_temps() -> list[dict[str, float]]:
 SAMPLE_TEMPS = _sample_temps()
 
 
-def sample_board() -> DriverState:
+def sample_board(session_kind: str = "race") -> DriverState:
     """The board eight laps into a race, **computed, not typed**.
 
     The first version of this hand-wrote every figure, and two of them could
@@ -79,8 +79,12 @@ def sample_board() -> DriverState:
     an artefact that disagrees with the code it is a picture of proves the
     opposite of what it was taken for.
 
-    So the tyre splits are run through the real `SplitHistory` and the two
-    fuel figures through the real `race/calls.py`, off one `RaceState`. The
+    So the per-corner split rates are run through the real `SplitHistory`
+    and the two fuel figures through the real `race/calls.py`, off one
+    `RaceState`. **The predicted lap is the session best plus the live delta**,
+    the same sum the board's feed makes; the delta itself, the best on file and
+    the three lights are presentation - a TCS lamp lit so the picture shows
+    one lit. The
     race is the 20-lap Daytona event: burn 4.19 L/lap, a 100 L tank, eight
     laps completed and the stop on app-lap 11 - which is HUD lap 12, and the
     board draws the HUD one, so "plan: lap 12" beside a countdown of 3 from a
@@ -112,16 +116,19 @@ def sample_board() -> DriverState:
     splits = SplitHistory()
     for temps in SAMPLE_TEMPS:
         splits.note_lap(temps)
-    axle_rate, laps = splits.axle_rate()
     to_stop, stop_why = fuel_in_hand_to_stop(state)
     to_flag, flag_why, flag_on = fuel_in_hand_to_flag(state)
 
     return DriverState(
         temps_c=SAMPLE_TEMPS[-1],
         compound="RS",
-        axle_split_c=splits.axle_split_now(), axle_split_rate=axle_rate,
-        rear_pair_hotter="rr", rear_pair_split_c=splits.split_now("rr"),
-        rear_pair_rate=splits.rate("rr")[0], split_laps=laps,
+        split_rates={corner: rate for corner in ("fl", "fr", "rl", "rr")
+                     if (rate := splits.rate(corner)[0]) is not None},
+        session_kind=session_kind,
+        lap_time_ms=71_412, delta_s=-0.214, session_best_ms=92_418,
+        predicted_ms=92_418 - 214, file_best_ms=91_902,
+        delta_file_s=(92_418 - 214 - 91_902) / 1000.0,
+        wet="dry", abs_setting="Weak", front_lock=False, tcs_active=True,
         laps_to_box=float(state.laps_to_stop()),
         box_on_lap=state.lap_on_screen() + state.laps_to_stop(),
         # **The compound the plan says to FIT.** Without it the artefact
@@ -298,6 +305,14 @@ def _capture(window: PreviewWindow, board: DriverView, out: Path) -> None:
     QApplication.processEvents()
     shot = board.grab()
     shot.save(str(out / "driver-board.png"))
+    # **And the practice layout**, where the race-only rows are hidden and the
+    # lap-time panel takes the bottom rank (row 5.21).
+    board.update_state(sample_board(session_kind="practice"))
+    QApplication.processEvents()
+    board.grab().save(str(out / "driver-board-practice.png"))
+    print(f"wrote {out / 'driver-board-practice.png'}")
+    board.update_state(sample_board())
+    QApplication.processEvents()
     # **The size the grab actually came out at, not the one asked for.** They
     # differ whenever the layout minimum is above `BOARD_WINDOW` - `resize`
     # cannot go under it - and printing the request made the harness state a

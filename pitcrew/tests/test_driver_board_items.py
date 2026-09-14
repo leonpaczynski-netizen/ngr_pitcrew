@@ -447,60 +447,6 @@ def test_a_lap_missing_a_corner_is_dropped_from_the_axle_series_too():
 
 # ----------------------------------------------- the board, as it renders
 
-def test_the_board_words_the_axle_direction_and_never_shows_a_sign(qt_app):
-    from pitcrew.ui.driver_view import DriverState, DriverView
-
-    view = DriverView()
-    view.update_state(DriverState(axle_split_c=12.15, axle_split_rate=1.42,
-                                  split_laps=8))
-    assert view.axle_stat.value.text() == "12.2"
-    assert view.axle_stat.caption.text() == "REAR OVER FRONT"
-    assert "widening" in view.axle_stat.sub.text()
-    assert "8 laps" in view.axle_stat.sub.text()
-    # And it is not elided away: the split rank has room for its own trend.
-    assert "…" not in view.axle_stat.sub.text()
-
-    # The other way round: the same magnitude, the opposite diagnosis, and
-    # still no minus sign on the screen.
-    view.update_state(DriverState(axle_split_c=-12.15, axle_split_rate=-1.42,
-                                  split_laps=8))
-    assert view.axle_stat.value.text() == "12.2"
-    assert view.axle_stat.caption.text() == "FRONT OVER REAR"
-    # **Widening, not settling.** The rate is the slope of rear-minus-front,
-    # so a front gap running away has a NEGATIVE rate - reading the raw sign
-    # would have said "settling" at the moment it was going.
-    assert "widening" in view.axle_stat.sub.text()
-
-
-def test_a_split_with_no_trend_claims_none_and_still_says_how_many_laps(qt_app):
-    from pitcrew.ui.driver_view import DriverState, DriverView
-
-    view = DriverView()
-    view.update_state(DriverState(axle_split_c=4.0, axle_split_rate=None,
-                                  rear_pair_hotter="rl",
-                                  rear_pair_split_c=1.5, split_laps=3))
-    assert view.axle_stat.sub.text() == "3 laps"
-    assert "settling" not in view.axle_stat.sub.text()
-    assert "widening" not in view.axle_stat.sub.text()
-    assert view.rear_pair_stat.caption.text() == "RL OVER RR"
-
-
-def test_the_split_caption_says_the_floor_is_derived(qt_app):
-    """CLAUDE.md rule 5: nothing derived is presented as measured, and
-    `RATE_WORTH_SAYING_C` is derived from an instrument-noise argument rather
-    than measured."""
-    from pitcrew.ui.driver_view import DriverView
-
-    # **The view is held.** `DriverView().split_caption` drops the parent on
-    # the same line, Qt deletes the C++ object under the label, and the read
-    # raises "wrapped C/C++ object has been deleted" - the same shape of
-    # fault CLAUDE.md 7 records against the module-scope wheel guard.
-    view = DriverView()
-    caption = view.split_caption.text().lower()
-    assert "derived" in caption
-    assert "1.25" in caption
-
-
 def test_the_last_call_line_prints_the_sentence_the_mark_and_the_lap(qt_app):
     from pitcrew.ui.driver_view import BoardCall, DriverState, DriverView
 
@@ -640,7 +586,13 @@ def test_a_long_call_keeps_the_direction_and_still_ends_in_an_ellipsis(qt_app):
 # noticing growth: it is a little above where the board sits today, and the
 # panel itself is held by
 # `test_the_board_fits_his_monitor_on_the_faces_he_actually_has`.
-OFFSCREEN_GROWTH_CEILING = 3200
+# **Raised 3200 -> 3400 on 14 Sep 2026, and why.** Plan row 5.21 put the
+# lap-time panel into the corners' row beside the three lights, which the
+# offscreen stub font measures at 3,300 px. On the rig's faces the widest state
+# it can be given measured 2,139 x 1,055 - inside his 2,560 x 1,080 panel, which
+# `test_the_board_fits_his_monitor_on_the_faces_he_actually_has` holds. This
+# ceiling is a growth tripwire on a pessimistic font, not the monitor.
+OFFSCREEN_GROWTH_CEILING = 3400
 
 
 def test_the_board_does_not_grow_in_the_widest_state_it_can_be_given(qt_app):
@@ -720,9 +672,13 @@ def test_the_board_does_not_grow_in_the_widest_state_it_can_be_given(qt_app):
                 # theirs.
                 laps_to_box=3, box_on_lap=12, tyres_at_stop=False,
                 compound="RS", position=12, field_size=24, burn_l=4.19,
-                axle_split_c=12.2, axle_split_rate=1.4,
-                rear_pair_hotter="rr", rear_pair_split_c=4.0,
-                rear_pair_rate=1.4, split_laps=8,
+                # The lap panel at its widest: both references, a long
+                # compound, and every light lit.
+                lap_time_ms=599_999, delta_s=-12.345, session_best_ms=599_999,
+                predicted_ms=599_999, delta_file_s=+12.345,
+                file_best_ms=599_999, reference_compound="RMW",
+                wet="mixed", abs_setting="Default", front_lock=True,
+                tcs_active=True,
                 ahead=GapView(
                     seconds=12.4,
                     note=f"he is catching 0.6 s a lap - {long_name}",
@@ -755,6 +711,15 @@ def test_the_board_does_not_grow_in_the_widest_state_it_can_be_given(qt_app):
             {}):
         measure(DriverState(in_box=True, **{**widest_box, **box}), box)
 
+    # **And the practice page**, where the lap panel leads at full size.
+    for why in (None, "no best lap yet on this tyre", "compound not set"):
+        measure(DriverState(session_kind="practice", lap_time_ms=599_999,
+                            delta_s=None if why else -1.234, delta_why=why,
+                            file_best_ms=599_999, delta_file_s=+1.234,
+                            reference_compound="RS", wet="wet",
+                            abs_setting="Weak", front_lock=True,
+                            tcs_active=True), why)
+
     assert widest <= OFFSCREEN_GROWTH_CEILING, widest
     view.hide()
 
@@ -786,12 +751,13 @@ def test_the_preview_sample_is_produced_by_the_code_it_pictures(qt_app):
     history = SplitHistory()
     for temps in SAMPLE_TEMPS:
         history.note_lap(temps)
-    assert board.axle_split_c == pytest.approx(history.axle_split_now())
     assert board.temps_c == SAMPLE_TEMPS[-1]
-    # And the axle figure is what those four temperatures make, to the tenth.
-    last = SAMPLE_TEMPS[-1]
-    assert board.axle_split_c == pytest.approx(
-        (last["rl"] + last["rr"]) / 2 - (last["fl"] + last["fr"]) / 2)
+    # The per-corner trends are what `SplitHistory` makes of those laps.
+    for corner, rate in (board.split_rates or {}).items():
+        assert rate == pytest.approx(history.rate(corner)[0])
+    # The predicted lap is the session best plus the live delta - the same
+    # sum `BoardLive` makes for the real board.
+    assert board.predicted_ms == board.session_best_ms + round(board.delta_s * 1000)
     # The countdown and the lap it names count the same way: the HUD lap he is
     # on plus the laps to the box.
     assert board.box_on_lap == 9 + int(board.laps_to_box)
@@ -845,8 +811,10 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
                 fuel_to_flag_on=C.ON_THE_PLANS_FILL, burn_l=4.19,
                 laps_to_box=3, box_on_lap=12, tyres_at_stop=False,
                 compound="RS", next_compound="RS", position=12, field_size=24,
-                axle_split_c=12.2, axle_split_rate=1.4, rear_pair_hotter="rr",
-                rear_pair_split_c=4.0, rear_pair_rate=1.4, split_laps=8,
+                lap_time_ms=599_999, delta_s=-12.345, session_best_ms=599_999,
+                predicted_ms=599_999, delta_file_s=12.345, file_best_ms=599_999,
+                reference_compound="RS", wet="mixed", abs_setting="Default",
+                front_lock=True, tcs_active=True,
                 ahead=GapView(seconds=12.4,
                               note=f"he is catching 0.6 s a lap - {name}",
                               urgent=True),
@@ -860,6 +828,13 @@ def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():
                            "tyres_at_stop": True}, {"runs_to_flag": True},
                       {"past_the_plan": True}, {"tyres_at_stop": False}):
             states.append(DriverState(**{**common, **extra}))
+        # The practice page, whose lap panel leads at full size.
+        states.append(DriverState(
+            session_kind="practice", lap_time_ms=599_999, delta_s=-1.234,
+            session_best_ms=599_999, predicted_ms=599_999, delta_file_s=1.234,
+            file_best_ms=599_999, reference_compound="RS", wet="wet",
+            abs_setting="Weak", front_lock=True, tcs_active=True,
+            temps_c={"fl": 99.0, "fr": 99.0, "rl": 99.0, "rr": 99.0}))
         for state in states:
             view.update_state(state)
             app.processEvents()

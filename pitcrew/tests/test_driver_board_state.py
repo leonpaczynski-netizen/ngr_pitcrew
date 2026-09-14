@@ -198,7 +198,9 @@ class _Stub:
 
     _someone_set = PitCrewController._someone_set
     _split_rates = PitCrewController._split_rates
-    _board_splits = PitCrewController._board_splits
+    _board_live_fields = PitCrewController._board_live_fields
+    # No session is open on the stub unless a test says so.
+    session_kind = None
     _board_fuel = PitCrewController._board_fuel
 
     def __init__(self, *, race=None, bridge=None, target=74.0, event=None,
@@ -1060,37 +1062,6 @@ def test_a_position_nobody_read_arrives_as_none_and_never_as_zero():
     assert got.position is None and got.field_size is None
 
 
-def test_both_tyre_splits_reach_the_board_with_their_lap_count():
-    """The axle gap had no implementation at all before row 1.8 - the module's
-    `PAIRS` is left-right only - and the rear pair was invisible in practice,
-    because the board only drew a per-corner figure past 10 degC and the
-    measured stint reached +4.0."""
-    from pitcrew.race.tyre_split import SplitHistory
-
-    history = SplitHistory()
-    for lap in range(6):
-        history.note_lap({"fl": 62.0, "fr": 62.0,
-                          "rl": 70.0, "rr": 70.0 + 2.0 * lap})
-    stub = _Stub(splits=history)
-    got = _state_for(stub)
-    # Rears run 70.0 and 80.0 on the last lap: axle mean 75.0 against 62.0.
-    assert got.axle_split_c == pytest.approx(13.0)
-    assert got.split_laps == 6
-    assert got.rear_pair_hotter == "rr"
-    assert got.rear_pair_split_c == pytest.approx(10.0)
-    assert got.rear_pair_rate is not None and got.rear_pair_rate > 0
-
-
-def test_a_split_with_nothing_behind_it_is_absent_rather_than_zero():
-    """A missing key is no claim and a zero is "it has settled"; those are
-    different things to tell a driver about a tyre."""
-    got = _state_for(_Stub())
-    assert got.axle_split_c is None
-    assert got.axle_split_rate is None
-    assert got.rear_pair_hotter is None
-    assert got.split_laps == 0
-
-
 def test_the_two_fuel_figures_reach_the_board_from_the_calls_module():
     """The board computes no fuel number of its own. It asked for one once
     and said "-7.1 laps of fuel in hand to the flag" with 84 L aboard."""
@@ -1179,7 +1150,8 @@ def test_the_flag_keeps_the_result_and_the_tyres_and_drops_the_plan():
     assert got.finished is True
     assert got.position == 2 and got.field_size == 12
     assert got.last_call is not None and got.last_call.lap == 20
-    assert got.axle_split_c == pytest.approx(10.0)
+    # The per-corner trend survives the flag with the corners it describes.
+    assert got.split_rates is not None
     assert got.laps_to_box is None
     assert got.fuel_to_stop is None and got.fuel_to_flag is None
 
