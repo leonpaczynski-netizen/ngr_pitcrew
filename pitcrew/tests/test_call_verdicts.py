@@ -322,8 +322,9 @@ def test_a_lap_he_drove_and_struck_still_fills_the_window():
     laps = [_row(12), _row(13, reason="incident"), _row(14)]
     controller = _stub(laps, {1: (box, None)})
     controller._judge_filed_calls()
+    # Laps 13-14: lap 12 closed on the crossing the call was said on.
     assert [(v, d) for _, v, d in controller.store.written] == [
-        (NOT_ACTED, "no stop on laps 12-14")]
+        (NOT_ACTED, "no stop on laps 13-14")]
 
 
 def test_calls_from_another_session_are_dropped_not_judged():

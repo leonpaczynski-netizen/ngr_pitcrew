@@ -161,7 +161,11 @@ def test_fuel_is_answered_in_laps_not_litres():
 
 
 def test_the_box_call_is_answered():
-    assert answer(BOX_WHEN, a_snapshot()).text == "Box in 2 laps."
+    # `lapsToStop` counts the in-lap, so 2 is "Box next lap." and 1 is the
+    # in-lap itself - the volunteered ladder's words (14 Sep 2026).
+    assert answer(BOX_WHEN, a_snapshot()).text == "Box next lap."
+    assert answer(BOX_WHEN, a_snapshot(lapsToStop=3)).text == "Box in 3 laps."
+    assert answer(BOX_WHEN, a_snapshot(lapsToStop=1)).text == "Box this lap."
     assert answer(BOX_WHEN, a_snapshot(lapsToStop=0)).text == "Box this lap."
 
 
@@ -208,7 +212,7 @@ def test_the_fuel_target_is_answered():
 def test_the_plan_is_one_sentence():
     text = answer(PLAN, a_snapshot()).text
     assert text.count(".") == 1
-    assert "Box in 2 laps" in text and "RS" in text
+    assert "Box next lap" in text and "RS" in text
 
 
 # ----------------------------------------------------------------- refusals

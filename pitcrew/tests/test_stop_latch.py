@@ -90,7 +90,8 @@ def test_a_sustained_reversal_brings_the_stop_back_and_says_so():
     assert state.laps_to_stop() == 2
     call = next_call(state)
     assert call is not None and call.kind == STOP_BACK
-    assert call.call == "The stop is back on."
+    # Two laps to drive to the box is "Box next lap." - `box_when`'s ladder.
+    assert call.call == "The stop is back on. Box next lap."
     assert call.reason == "Fuel won't reach the flag."
     state.record(call)
     again = next_call(state)
@@ -174,13 +175,13 @@ def test_the_box_call_gives_the_reason_of_the_answer_that_boxed_him():
     the reason came from the arithmetic, so on the box lap he heard "Box this
     lap." because "Fuel is fine - the tank covers the next stint.". A held
     stop the tank no longer needs is the plan's stop."""
-    state = _fuelled(lap=10)
+    state = _fuelled(lap=9)                        # the in-lap
     _judge(state)                                  # held, not yet retired
     assert C._why_the_stop_stands(state) is None, "the tank reaches"
     call = C._box_now(state)
     assert call is not None and call.call.startswith("Box this lap.")
     assert call.reason.startswith("On the plan."), call.reason
-    soon = C._box_soon(_fuelled(lap=9))
+    soon = C._box_soon(_fuelled(lap=8))
     assert soon is not None and soon.reason == "Stop 1, on the plan."
 
 
@@ -198,7 +199,7 @@ def test_a_retired_stop_is_not_argued_against():
 def test_a_stop_back_on_its_box_lap_is_a_box_call():
     """Critic 4, MAJOR: reinstated on the box lap it said "The stop is back
     on." and the lap went by with no instruction to box."""
-    state = _retired(lap=10)
+    state = _retired(lap=9)                        # the in-lap
     state.fuel_per_lap_l = 6.0
     _judge(state, STOP_FLIP_LAPS)
     call = next_call(state)
@@ -214,7 +215,8 @@ def test_a_stop_back_after_its_box_lap_is_due_now_not_overdue():
     # the tank still reached, and nothing came back to test.
     state.fuel_per_lap_l = 9.0
     _judge(state, STOP_FLIP_LAPS)
-    assert state.stint_ends_on_lap == 13
+    # The lap in progress - 13 done - becomes the in-lap.
+    assert state.stint_ends_on_lap == 14
     call = next_call(state)
     assert call.call.startswith("The stop is back on. Box this lap.")
 

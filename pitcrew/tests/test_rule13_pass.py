@@ -158,7 +158,7 @@ def test_the_routine_box_call_says_what_it_is_boxing_him_for():
     reason belongs. The decision came from `stop_still_needed`, which turns
     on `plan_binding_constraint`, and that word was never spoken."""
     state = _short_on_fuel()
-    state.lap = 11                                    # the box lap
+    state.lap = 10                                    # the in-lap
     call = _box_now(state)
     assert call is not None and call.kind == BOX_NOW
     assert call.reason.startswith("Fuel won't reach the flag.")
@@ -166,7 +166,7 @@ def test_the_routine_box_call_says_what_it_is_boxing_him_for():
 
 def test_a_plan_that_names_no_constraint_does_not_invent_one():
     state = _short_on_fuel()
-    state.lap = 11
+    state.lap = 10
     state.plan_binding_constraint = None
     call = _box_now(state)
     assert call is not None
@@ -259,7 +259,7 @@ def test_the_two_fuel_clauses_each_name_their_reference():
     case at all - vacuous, then unfalsifiable once the string it looked for
     stopped existing. This drives the fuel branch."""
     state = _fuelled_to_the_flag()          # regs satisfied, plan says fuel
-    state.lap = 11
+    state.lap = 10                          # the in-lap
     state.laps_total = 40                   # 40 laps at 3 L: the tank cannot
     state.next_stint_laps = 8               # but it covers the next stint
     state.further_stop_planned = True

@@ -1009,7 +1009,9 @@ def _disposition(revision: dict, pit_laps: set[int]) -> tuple[str, bool | None]:
         lap = revision["lap_num"]
         if lap is None:
             return DISPOSITION_NOT_TAKEN, None
-        taken = any(lap <= pit <= lap + _INSTRUCTION_WINDOW_LAPS
+        # After the call's own lap, never on it: a call is said on the
+        # crossing that closes `lap`, so that lap cannot answer it.
+        taken = any(lap < pit <= lap + _INSTRUCTION_WINDOW_LAPS
                     for pit in pit_laps)
         return (DISPOSITION_TAKEN if taken else DISPOSITION_NOT_TAKEN), None
     if plan.get("kind"):

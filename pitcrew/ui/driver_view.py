@@ -145,19 +145,20 @@ dash says "no gap read" rather than sitting blank.
 
 --- rank 2 · laps to the stop -------------------------------------------------
 
-From `RaceState.laps_to_stop()`, which clamps at zero, so `laps_past_box`
-carries the sign the clamp throws away: "NOW / box this lap" and "NOW / 2 past
-the box lap" are different news. Urgent inside two laps.
+From `RaceState.laps_to_stop()` - laps still to drive to the box, the in-lap
+included - which clamps at zero, so `laps_past_box` (`RaceState.laps_overdue`)
+carries the sign the clamp throws away: "NOW / box this lap" on the in-lap and
+"NOW / 2 past the box lap" are different news. Urgent inside two laps.
 
-**The caption names the lap in GT7's numbering and counts the same way the
-figure above it does** - `lap_on_screen() + laps_to_stop()`. Both halves of
-that were wrong. It was the app's lap count, which is one behind the HUD at
-every crossing and further behind after a crossing lost in the pit lane (Road
-Atlanta: +1 on lap 1, +2 by lap 20); and the offset has to be `to_stop`
-exactly, because that is the convention the rest of the app executes -
-`_box_now` fires at `to_stop == 0` saying *"Box this lap"*, so at zero the lap
-in progress IS the box lap. Get either wrong and a big "2" sits over a caption
-naming a lap his HUD reaches in one, and he has to work out which lied.
+**The caption names the plan's in-lap in GT7's numbering** -
+`RaceState.box_lap_on_screen()`, which is `lap_on_screen() + laps_to_stop() -
+1`. It was the app's lap count, one behind the HUD at every crossing and
+further behind after a crossing lost in the pit lane (Road Atlanta: +1 on lap
+1, +2 by lap 20). **And then it was `lap_on_screen() + laps_to_stop()`**,
+defended here as the convention `_box_now` executed by firing at zero - which
+was one lap late. Bathurst, 14 Sep 2026, plan `pit_laps` [11]: this block said
+lap 12, the voice said "Box this lap" with eleven laps done, and he boxed on
+12. The lap in progress is the in-lap at ONE (see `laps_to_stop`).
 
 --- rank 2 · fuel in hand, TWO numbers, each naming its own distance ----------
 
@@ -1877,14 +1878,15 @@ class DriverView(QWidget):
         elif state.laps_past_box is not None:
             # **`laps_to_stop()` clamps at zero**, so a driver three laps past
             # his box lap read "0 laps to box, box on lap 15" - the current
-            # lap, every lap, with nothing saying he was late. `past_box_lap`
-            # carries the sign the clamp discards.
-            # **The tyre word survives the box lap.** `past_box_lap` fires
-            # at `to_stop == 0`, so `_box_caption` stopped being called on
-            # the one lap the decision is executed - and the whole case for
-            # putting it on this block is that "fit a set" and "fuel only"
-            # ask for different in-laps and different brake balance. The
-            # voice says "Box this lap. RS on." here; the board said nothing.
+            # lap, every lap, with nothing saying he was late.
+            # `RaceState.laps_overdue` carries the sign the clamp discards:
+            # 0 on the in-lap, N once N in-laps have gone by.
+            # **The tyre word survives the in-lap.** This branch is taken on
+            # the in-lap, so `_box_caption` is not called on the one lap the
+            # decision is executed - and the whole case for putting it on
+            # this block is that "fit a set" and "fuel only" ask for
+            # different in-laps and different brake balance. The voice says
+            # "Box this lap. RS on." here; the board said nothing.
             late = ("box this lap" if state.laps_past_box <= 0 else
                     f"{state.laps_past_box} past the box lap")
             self.box_stat.show_value(

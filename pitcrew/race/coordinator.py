@@ -514,6 +514,9 @@ class RaceCoordinator:
             self.state.tyre_compound = None
         self._brief_the_wear_rate()
         start = stint.get("start_lap") or 1
+        # **The IN-LAP**: the last lap of the stint, whose end is the pit
+        # lane - the plan's `pit_laps` entry. "Box this lap." is said on the
+        # crossing that STARTS it, `laps_to_stop() == 1` (14 Sep 2026).
         self.state.stint_ends_on_lap = start + stint.get("laps", 0) - 1
         following = self._stints[index + 1] if index + 1 < len(self._stints) else None
         self.state.next_compound = following.get("compound") if following else None
@@ -2064,7 +2067,11 @@ class RaceCoordinator:
             # can make it." voiced on the chequered-flag crossing, recorded
             # as a driver decision about a race that was already over.
             return None
-        overdue = state.lap - (state.stint_ends_on_lap or 0)
+        # **In-laps gone by, not laps past the box call.** "Box this lap." is
+        # said on the in-lap (overdue 0), so an overdue count of two is two
+        # box calls he drove past - the same two it was before the ladder
+        # moved a lap earlier (14 Sep 2026).
+        overdue = state.laps_overdue() or 0
         if overdue < BOX_IGNORED_LAPS:
             return None
         call = stay_out_call(state)
@@ -2438,12 +2445,14 @@ class RaceCoordinator:
             # warning ink on the lap "You're fuelled to the flag. No more
             # stops on fuel." went out, and again in the box and after the
             # flag, where every voice call is silent by design.
+            # **`laps_overdue()`, the box call's own count**: 0 on the
+            # in-lap, where the box call says "Box this lap." and nothing is
+            # late, N once N in-laps have gone by (14 Sep 2026).
             "lapsPastBox": (
-                self.state.lap - self.state.stint_ends_on_lap
-                if self.state.laps_to_stop() == 0
-                and self.state.past_box_lap
+                self.state.laps_overdue()
+                if self.state.past_box_lap
                 and not self.state.in_pit and not self.state.finished
-                and self.state.stint_ends_on_lap is not None else None),
+                else None),
             # **Only while there IS a next stop** (the critic on row 2.6, pass
             # 3). After the fuel retired the stop the call said "No more stops
             # on fuel." and "what tyres?" still answered "Tyres on." - the

@@ -86,9 +86,9 @@ def sample_board(session_kind: str = "race") -> DriverState:
     the three lights are presentation - a TCS lamp lit so the picture shows
     one lit. The
     race is the 20-lap Daytona event: burn 4.19 L/lap, a 100 L tank, eight
-    laps completed and the stop on app-lap 11 - which is HUD lap 12, and the
-    board draws the HUD one, so "plan: lap 12" beside a countdown of 3 from a
-    driver on HUD lap 9 is the two agreeing rather than disagreeing. The gaps and the
+    laps completed and the plan's in-lap 11, so "plan: lap 11" beside a
+    countdown of 3 from a driver on HUD lap 9 - laps 9, 10 and 11 still to
+    drive - is the two agreeing rather than disagreeing. The gaps and the
     last call are the Deep Forest reconstruction that
     `test_undercut_deep_forest.py` is written against - those two are
     presentation, and there is no expression behind them to disagree with.
@@ -130,9 +130,9 @@ def sample_board(session_kind: str = "race") -> DriverState:
         delta_file_s=(92_418 - 214 - 91_902) / 1000.0,
         wet="dry", abs_setting="Weak", front_lock=False, tcs_active=True,
         laps_to_box=float(state.laps_to_stop()),
-        box_on_lap=state.lap_on_screen() + state.laps_to_stop(),
+        box_on_lap=state.box_lap_on_screen(),
         # **The compound the plan says to FIT.** Without it the artefact
-        # draws `plan: lap 12 · new set` and pictures none of what the last
+        # draws `plan: lap 11 · new set` and pictures none of what the last
         # two rounds were about - the board naming the set coming OFF.
         # **A DIFFERENT compound from the one on the car**, so the picture
         # shows the thing two rounds of critics were about: the board naming

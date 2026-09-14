@@ -344,7 +344,7 @@ def _box_fuel_states() -> list:
             for basis in bases:
                 for tyres in (True, False, None):
                     states.append(_state(
-                        lap=12, laps_total=20, stint_ends_on_lap=12,
+                        lap=12, laps_total=20, stint_ends_on_lap=13,
                         fuel_capacity_l=100.0, next_compound="RS",
                         next_tyres=tyres, **reason, **fuel, **basis))
     # **One lap of fill, both frames** (critic 3, pass 2): "1 lap after the
@@ -359,7 +359,7 @@ def _box_fuel_states() -> list:
             for basis in (dict(), dict(next_stint_laps=1,
                                        further_stop_planned=False)):
                 states.append(_state(
-                    lap=12, laps_total=total, stint_ends_on_lap=12,
+                    lap=12, laps_total=total, stint_ends_on_lap=13,
                     fuel_l=1.0, fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
                     next_compound="RS", next_tyres=True,
                     crossed_in_box=crossed, **basis))
@@ -585,15 +585,15 @@ def _opener_states() -> list:
     states = [
         _state(lap=0),                                        # green flag
         _state(lap=6, finished=True),                         # chequered flag
-        _state(lap=6, stint_ends_on_lap=6),                   # box now
+        _state(lap=6, stint_ends_on_lap=7),                   # box now
         # **A stop he was told was off, back on** - the call that reverses
         # `STOPS_OFF`, so it cannot be the one that pauses.
-        _state(lap=8, laps_total=20, stint_ends_on_lap=10, fuel_l=20.0,
+        _state(lap=8, laps_total=20, stint_ends_on_lap=11, fuel_l=20.0,
                fuel_per_lap_l=6.0, fuel_capacity_l=100.0,
                plan_binding_constraint="fuel", mandatory_stops_left=0,
                drop_stop_granted=True, stop_back_due=True),
-        _state(lap=6, stint_ends_on_lap=7),                   # box next lap
-        _state(lap=6, stint_ends_on_lap=8),                   # box in 2
+        _state(lap=6, stint_ends_on_lap=8),                   # box next lap
+        _state(lap=6, stint_ends_on_lap=9),                   # box in 3
         _state(lap=18, laps_total=20, fuel_l=20.0,            # fuel long
                fuel_per_lap_l=1.0),
         _state(lap=6, laps_since_stop=6, wear_per_lap=0.15),  # tyres
@@ -673,9 +673,9 @@ def _call_states() -> list:
         # racing speed with no clip behind them. `test_phrase_manifest`
         # checks that a declared opener still exists in its module and never
         # the reverse, so nothing caught it.
-        _state(lap=6, laps_total=20, stint_ends_on_lap=6,
+        _state(lap=6, laps_total=20, stint_ends_on_lap=7,
                mandatory_stops_left=1),
-        _state(lap=6, laps_total=40, stint_ends_on_lap=6, fuel_l=40.0,
+        _state(lap=6, laps_total=40, stint_ends_on_lap=7, fuel_l=40.0,
                fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
                plan_binding_constraint="fuel", mandatory_stops_left=0),
         # **The ungranted drop, which is the DEFAULT branch**: with no
@@ -686,7 +686,7 @@ def _call_states() -> list:
         # Retired by the fuel too, or the "not granted" clause is never
         # reached: it answers "You're fuelled to the flag.", which only a
         # retired stop says.
-        _state(lap=10, laps_total=20, stint_ends_on_lap=10, fuel_l=60.0,
+        _state(lap=10, laps_total=20, stint_ends_on_lap=11, fuel_l=60.0,
                fuel_per_lap_l=3.0, fuel_capacity_l=100.0,
                plan_binding_constraint="fuel", mandatory_stops_left=0,
                drop_stop_granted=False, stops_off_said=True,
@@ -708,16 +708,16 @@ def _call_states() -> list:
                  stop_needed_held=False, stint_index=index)
           for index in range(1, MAX_STOPS)],
         # Box soon carries the same reason two laps earlier.
-        _state(lap=5, laps_total=20, stint_ends_on_lap=6,
+        _state(lap=5, laps_total=20, stint_ends_on_lap=7,
                mandatory_stops_left=1),
-        _state(lap=5, laps_total=40, stint_ends_on_lap=6, fuel_l=40.0,
+        _state(lap=5, laps_total=40, stint_ends_on_lap=7, fuel_l=40.0,
                fuel_per_lap_l=3.0, plan_binding_constraint="fuel",
                mandatory_stops_left=0),
         # **Overdue, in every shape the reason takes.** None was declared, so
         # "N laps overdue." and both of its tails - the fuel that is fine
         # for the next stint, and FUEL_SHORT's "short of the flag on current
         # burn" - were synthesised live on a repeated box call (11 Sep 2026).
-        _state(lap=7, laps_total=20, stint_ends_on_lap=6),
+        _state(lap=7, laps_total=20, stint_ends_on_lap=7),
         _state(lap=9, laps_total=20, stint_ends_on_lap=6),
         _state(lap=8, laps_total=20, stint_ends_on_lap=6, fuel_l=60.0,
                fuel_per_lap_l=3.4, fuel_capacity_l=100.0),
@@ -725,10 +725,10 @@ def _call_states() -> list:
                fuel_per_lap_l=1.0, fuel_capacity_l=100.0, next_compound="RS",
                next_tyres=True),
         # Box now: on the plan, to a fuel figure, and clamped to the tank.
-        _state(lap=6, stint_ends_on_lap=6),
-        _state(lap=6, laps_total=20, stint_ends_on_lap=6,
+        _state(lap=6, stint_ends_on_lap=7),
+        _state(lap=6, laps_total=20, stint_ends_on_lap=7,
                fuel_per_lap_l=3.4, fuel_capacity_l=100.0),
-        _state(lap=6, laps_total=99, stint_ends_on_lap=6,
+        _state(lap=6, laps_total=99, stint_ends_on_lap=7,
                fuel_per_lap_l=9.0, fuel_capacity_l=100.0),
         # Fuel calls, and the modelled-wear warning - including the one made
         # through a stop that never said whether the tyres came off.
@@ -743,12 +743,12 @@ def _call_states() -> list:
     # The box call with its fuel figure, so its segments are rendered.
     states += _box_fuel_states()
     # Every compound the plan can call for, on a box-now.
-    states += [_state(lap=6, stint_ends_on_lap=6, next_compound=code)
+    states += [_state(lap=6, stint_ends_on_lap=7, next_compound=code)
                for code in _compound_words()]
     # Every stop number a box-soon can announce, at both distances.
     for stint in range(0, MAX_STOPS):
-        states += [_state(lap=6, stint_ends_on_lap=7, stint_index=stint),
-                   _state(lap=6, stint_ends_on_lap=8, stint_index=stint)]
+        states += [_state(lap=6, stint_ends_on_lap=8, stint_index=stint),
+                   _state(lap=6, stint_ends_on_lap=9, stint_index=stint)]
     return states
 
 
@@ -1439,7 +1439,7 @@ def race_call_examples() -> tuple[str, ...]:
                for n in range(1, MAX_POSITION + 1)]
     states += [_state(lap=5, laps_total=n + 5, position=3)
                for n in range(0, MAX_LAPS - 5)]
-    states += [_state(lap=6, laps_total=20, stint_ends_on_lap=6,
+    states += [_state(lap=6, laps_total=20, stint_ends_on_lap=7,
                       fuel_per_lap_l=litres / 15.0, fuel_capacity_l=100.0)
                for litres in range(15, MAX_FUEL_LITRES + 1, 5)]
     lines = []

@@ -638,7 +638,7 @@ def test_the_board_does_not_grow_in_the_widest_state_it_can_be_given(qt_app):
     from pitcrew.ui.driver_view import (BoardCall, DriverState, DriverView,
                                         GapView)
 
-    reasons = [C.NO_STOP_TO_COME, C.STOP_IS_LATE, C.STOP_IS_DUE, C.NO_PLAN,
+    reasons = [C.NO_STOP_TO_COME, C.STOP_IS_LATE, C.NO_PLAN,
                C.FROM_THE_GREEN, C.NO_BURN_YET,
                C.NO_FUEL_READING, C.NO_RACE_LENGTH, C.NOT_REACHING_THE_BOX,
                C.STOP_ON_THE_LAST_LAP, C.STOP_PAST_THE_FLAG,
@@ -759,8 +759,9 @@ def test_the_preview_sample_is_produced_by_the_code_it_pictures(qt_app):
     # sum `BoardLive` makes for the real board.
     assert board.predicted_ms == board.session_best_ms + round(board.delta_s * 1000)
     # The countdown and the lap it names count the same way: the HUD lap he is
-    # on plus the laps to the box.
-    assert board.box_on_lap == 9 + int(board.laps_to_box)
+    # on plus the laps to the box, less the one in progress - it is the first
+    # of them (14 Sep 2026).
+    assert board.box_on_lap == 9 + int(board.laps_to_box) - 1
 
 
 def test_the_board_fits_his_monitor_on_the_faces_he_actually_has():

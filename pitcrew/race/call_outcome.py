@@ -11,10 +11,16 @@ sessions running.
 
 `laps.is_pit_lap` is measured, so whether a stop followed is a fact:
 
-* **Box calls** — did a stop follow. The window is the call's own lap and the
-  two after it, because *"box this lap or next"* is the instruction and a
-  stop three laps later is a different decision rather than a late
-  compliance.
+* **Box calls** — did a stop follow, and on which lap against the one the
+  call named and the plan's. The window opens on the lap AFTER the call's
+  own - a call is said on the crossing that closes `call.lap`, so that lap is
+  already driven - and runs to the lap after the one it named, because
+  *"box this lap or next"* is the instruction and a stop later than that is a
+  different decision rather than a late compliance. A stop inside the window
+  but after the named lap is still `ACTED`, and says how late (14 Sep 2026,
+  Bathurst: every race on file boxed one lap after the plan's lap and every
+  one of those box calls read "acted", judged from a window that started on
+  a lap already completed and never compared against the plan).
 * **The stay-out fold** — the same reading, inverted. *"Staying out? You
   should make it."* asks him not to stop, and no stop in the same window is
   the answer to the question the call actually asked.
@@ -101,7 +107,7 @@ CANNOT_TELL = "cannot-tell"
 BORNE_OUT = "borne-out"
 NOT_BORNE_OUT = "not-borne-out"
 
-# A box call means this lap or the next. A stop on the third lap after it is a
+# A box call means the lap it names or the next. A stop after that is a
 # decision he made later, not the call being obeyed slowly.
 BOX_WINDOW_LAPS = 2
 
@@ -124,6 +130,11 @@ class Outcome:
     verdict: str
     detail: str
     settled: bool = True
+    # **For a box call answered by a stop: laps after the plan's in-lap**
+    # (after the lap the call named where the plan's is not on the call).
+    # 0 is on plan, 1 is a lap late, negative is early; None where no stop
+    # answered it. Not a score - the detail says the same in words.
+    laps_late: int | None = None
 
     @property
     def known(self) -> bool:
@@ -160,25 +171,7 @@ def outcome_for(call, laps, *, final: bool = False,
         return Outcome(CANNOT_TELL, "the call carries no lap number")
 
     if kind in BOX_KINDS:
-        window = _laps_after(lap_num, laps, BOX_WINDOW_LAPS)
-        if not window:
-            return Outcome(CANNOT_TELL,
-                           "no lap on file at or after the call - the race "
-                           "may have ended on it", settled=False)
-        stopped = [lap for lap in window if getattr(lap, "is_pit_lap", False)]
-        if stopped:
-            return Outcome(
-                ACTED, f"pitted on lap {stopped[0].lap_num}, "
-                       f"{stopped[0].lap_num - lap_num} lap(s) after the call")
-        # Only where the window was actually driven. A truncated window says
-        # nothing about a stop that had not come due yet.
-        if len(window) <= BOX_WINDOW_LAPS:
-            return Outcome(CANNOT_TELL,
-                           f"only {len(window)} lap(s) followed the call, so "
-                           f"the window it named was never fully driven",
-                           settled=False)
-        return Outcome(NOT_ACTED,
-                       f"no stop on laps {lap_num}-{lap_num + BOX_WINDOW_LAPS}")
+        return _box(call, lap_num, laps)
 
     if kind == STAY_OUT:
         # **The same reading as a box call, inverted** (critic pass 8, fifth
@@ -226,6 +219,59 @@ def outcome_for(call, laps, *, final: bool = False,
         return _fuel_short(call, lap_num, laps, final=final, flagged=flagged)
 
     return Outcome(CANNOT_TELL, _why_unanswerable(call, kind))
+
+
+def _laps_word(n: int) -> str:
+    return "one lap" if n == 1 else f"{n} laps"
+
+
+def _box(call, lap_num: int, laps) -> Outcome:
+    """A box instruction, held to the pit lap, the lap it named and the plan.
+
+    **The lap it named, not the lap it was said on.** "Box this lap." said on
+    the crossing that closed lap 10 names lap 11, the in-lap - `Call.box_lap`
+    carries it, and a call from before the field existed names `lap + 1`,
+    which is what "this lap" always meant. The window is the laps after the
+    call up to one past the named lap: lap 10 itself is already driven and
+    can hold no answer to a call made at its end.
+
+    **And the plan's in-lap beside it** (`Call.plan_box_lap`), because a call
+    that was itself a lap late can be obeyed to the letter by a stop that is
+    a lap late - which is exactly what happened in every race on file.
+    """
+    named = getattr(call, "box_lap", None) or lap_num + 1
+    planned = getattr(call, "plan_box_lap", None)
+    last = max(named, lap_num + 1) + BOX_WINDOW_LAPS - 1
+    driven = last - lap_num
+    window = [lap for lap in laps if lap_num < lap.lap_num <= last]
+    stopped = [lap for lap in window if getattr(lap, "is_pit_lap", False)]
+    if stopped:
+        pit = stopped[0].lap_num
+        off = pit - named
+        detail = f"pitted on lap {pit}, " + (
+            "the lap the call named" if off == 0 else
+            f"{_laps_word(abs(off))} {'after' if off > 0 else 'before'} "
+            f"lap {named}, the lap the call named")
+        late = off
+        if planned is not None:
+            late = pit - planned
+            detail += ("; on the plan's lap" if late == 0 else
+                       f"; {_laps_word(abs(late))} "
+                       f"{'late' if late > 0 else 'early'} against the "
+                       f"plan's lap {planned}")
+        return Outcome(ACTED, detail, laps_late=late)
+    if not window:
+        return Outcome(CANNOT_TELL,
+                       "no lap on file after the call - the race may have "
+                       "ended on it", settled=False)
+    # Only where the window was actually driven. A truncated window says
+    # nothing about a stop that had not come due yet.
+    if len(window) < driven:
+        return Outcome(CANNOT_TELL,
+                       f"only {len(window)} lap(s) followed the call, so "
+                       f"the window it named was never fully driven",
+                       settled=False)
+    return Outcome(NOT_ACTED, f"no stop on laps {lap_num + 1}-{last}")
 
 
 def _why_unanswerable(call, kind) -> str:

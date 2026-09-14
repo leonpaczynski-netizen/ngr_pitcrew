@@ -323,7 +323,9 @@ def test_a_held_recommendation_is_not_lost(raced):
     _, _, spoken, _ = raced
     notes = [item for item in spoken if not item.verdict.offered]
     assert len(notes) == 1
-    assert notes[0].lap == 11
+    # Lap 10: the box conversation runs a lap earlier since the box call
+    # moved onto the in-lap (14 Sep 2026), so the first free lap does too.
+    assert notes[0].lap == 10
     assert "10% under plan" in notes[0].verdict.call()
 
 
@@ -411,7 +413,10 @@ def test_a_verdict_with_no_stop_count_is_not_read_out_as_none():
 def test_box_now_is_said_at_most_twice_before_the_fold(raced):
     _, calls, _, _ = raced
     box_laps = [c.lap for c in calls if c.kind == BOX_NOW]
-    assert box_laps == [7, 8]
+    # The plan's in-lap is 7: "Box this lap" on the crossing that starts it
+    # (6 laps done), once overdue on 7, then the fold. It ran [7, 8] - a lap
+    # late - until 14 Sep 2026.
+    assert box_laps == [6, 7]
 
 
 def test_the_repeated_box_call_is_never_verbatim(raced):
@@ -424,13 +429,14 @@ def test_the_repeated_box_call_is_never_verbatim(raced):
 def test_the_engineer_folds_to_the_stay_out_with_the_short_shift_lever(raced):
     race, calls, _, _ = raced
     fold = next(c for c in calls if c.kind == STAY_OUT)
-    assert fold.lap == 9
+    assert fold.lap == 8
     assert "Staying out" in fold.call
     assert "Short-shift" in fold.reason
     # No measured slope for the Shelby: the lever carries no rpm number and
     # the confidence drops instead of a figure being invented.
     assert fold.confidence == MEDIUM
-    assert "0.4" in fold.reason
+    # A lap earlier than it was (14 Sep 2026), so a lap's less burn behind it.
+    assert "0.3" in fold.reason
     # The fold adopted the zero-stop shape: no stop left, target is the flag.
     assert race.stops_planned() == 0
     assert race.state.stint_ends_on_lap is None
@@ -438,12 +444,12 @@ def test_the_engineer_folds_to_the_stay_out_with_the_short_shift_lever(raced):
 
 def test_nothing_after_the_fold_asks_him_to_box(raced):
     _, calls, spoken, _ = raced
-    assert not any(c.kind in (BOX_NOW, BOX_SOON) and c.lap > 9 for c in calls)
+    assert not any(c.kind in (BOX_NOW, BOX_SOON) and c.lap > 8 for c in calls)
     # And the re-planner composes with the fold rather than fighting it: from
     # lap 9 the model does keep finding stop shapes it likes, and the driver's
     # own vote outranks every one of them. What he hears after the fold is a
     # note about the burn, which asks nothing of him.
-    assert not any(item.verdict.offered and item.lap > 9 for item in spoken)
+    assert not any(item.verdict.offered and item.lap > 8 for item in spoken)
 
 
 def test_fuel_to_27_litres_is_never_said(raced):
@@ -547,15 +553,16 @@ def test_the_tyre_temperature_conserve_call_fires_once(raced):
     association - with the hysteresis holding it down for the rest of the race
     even though the gap never comes back under the quiet threshold.
 
-    It lands on lap 10 rather than earlier because **one call per lap is a
+    It lands on lap 9 rather than earlier because **one call per lap is a
     hard rule and a box call outranks a temperature**: the gap first clears
-    the threshold on lap 5, which is a "Box in 2", and every lap from there to
-    the fold belongs to the stop conversation. Lap 10 is the first one free.
+    the threshold on lap 5, which is a "Box next lap", and every lap from
+    there to the fold belongs to the stop conversation. Lap 9 is the first
+    one free.
     """
     _, calls, _, _ = raced
     conserve = [c for c in calls if c.kind == TYRE_TEMP and c.tag == "conserve"]
     assert len(conserve) == 1
-    assert conserve[0].lap == 10
+    assert conserve[0].lap == 9
     # The scope resolved for this car at this circuit, off the real event row.
     assert raced[0].state.temp_gap_conserve_c == 8.0
     assert "Ease the" in conserve[0].call
@@ -587,11 +594,16 @@ def test_the_normal_rear_hot_offset_never_raises_a_trend_call(raced):
     assert not any("heating" in c.call for c in calls)
 
 
-def test_the_push_call_of_the_night_still_exists(raced):
-    """Lap 4's "You can push" - a FUEL call, about fuel in hand, and nothing
-    to do with tyre temperature - is not this pass's target."""
+def test_the_push_call_of_the_night_gives_way_to_the_box_countdown(raced):
+    """Lap 4's "You can push" - a FUEL call, about fuel in hand - sat on the
+    crossing three laps before the plan's in-lap. Since the box ladder moved
+    onto the in-lap (14 Sep 2026) that crossing is "Box in 3 laps.", and a box
+    instruction outranks a fuel suggestion: the countdown still starts two
+    crossings before "Box this lap.", exactly as it did."""
     _, calls, _, _ = raced
-    assert any(c.kind == FUEL_LONG and c.lap == 4 for c in calls)
+    lap_four = [c for c in calls if c.lap == 4]
+    assert [c.call for c in lap_four] == ["Box in 3 laps."]
+    assert not any(c.kind == FUEL_LONG for c in calls)
 
 
 def test_no_lap_is_wasted_on_a_repeated_box_call(raced):
@@ -600,7 +612,8 @@ def test_no_lap_is_wasted_on_a_repeated_box_call(raced):
     are the proof: the fold, and then the temperature call the box repeats
     used to bury."""
     _, calls, _, _ = raced
-    assert {c.kind for c in calls if c.lap in (9, 10)} == {STAY_OUT, TYRE_TEMP}
+    # Laps 8 and 9 since the box call moved onto the in-lap (14 Sep 2026).
+    assert {c.kind for c in calls if c.lap in (8, 9)} == {STAY_OUT, TYRE_TEMP}
 
 
 def test_the_status_call_still_reports_when_it_has_the_lap_free():
@@ -1225,8 +1238,9 @@ def test_no_pace_means_no_pace_verdict():
 # ---------------------------------------------------------------- stay out
 
 def a_state(**overrides) -> RaceState:
+    # In-lap 8, so lap 9 done is two laps overdue.
     fields = dict(lap=9, laps_total=15, fuel_l=38.1, fuel_per_lap_l=6.77,
-                  position=5, stint_ends_on_lap=7, laps_since_stop=9,
+                  position=5, stint_ends_on_lap=8, laps_since_stop=9,
                   fuel_capacity_l=100.0)
     fields.update(overrides)
     return RaceState(**fields)
@@ -1334,9 +1348,10 @@ def test_the_fold_never_fires_on_the_chequered_crossing():
     overdue trigger exactly on the final lap - and the fold used to run there,
     voicing "Staying out? You can make it." 200 ms before the chequer and
     recording an accepted stay-out about a race already over."""
+    # In-lap 14: box on 13 done, overdue on 14, the fold's trigger on 15.
     plan = {"stints": [
-        {"laps": 13, "compound": "RS", "start_lap": 1},
-        {"laps": 2, "compound": "RS", "start_lap": 14},
+        {"laps": 14, "compound": "RS", "start_lap": 1},
+        {"laps": 1, "compound": "RS", "start_lap": 15},
     ]}
     now = FakeMonotonic()
     race = RaceCoordinator(plan, fuel_per_lap_l=PLANNED_BURN,

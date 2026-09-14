@@ -114,7 +114,7 @@ def test_box_this_lap_names_the_compound_and_the_fuel():
     # 10 litres aboard, so the fill is a real instruction. With the default
     # 40 L the new sanity guard rightly says no fuel is needed - the tank
     # already covers the next stint - which is its own test below.
-    state = a_state(lap=10, next_compound="RS", fuel_l=10.0)
+    state = a_state(lap=9, next_compound="RS", fuel_l=10.0)    # the in-lap
     call = next_call(state)
     assert call.kind == BOX_NOW
     assert "RS" in call.call
@@ -127,7 +127,7 @@ def test_a_fill_below_what_is_aboard_is_not_an_instruction():
     fuel is fine, which also says what the stop is for. And it must not
     open with "No fuel": under a helmet that phrase is an emergency until
     the second half of the sentence lands."""
-    state = a_state(lap=10, next_compound="RS", fuel_l=51.9,
+    state = a_state(lap=9, next_compound="RS", fuel_l=51.9,
                     fuel_per_lap_l=6.79, next_stint_laps=3)
     call = next_call(state)
     assert call.kind == BOX_NOW
@@ -137,9 +137,12 @@ def test_a_fill_below_what_is_aboard_is_not_an_instruction():
 
 
 def test_box_soon_counts_down():
-    assert next_call(a_state(lap=8)).kind == BOX_SOON
-    assert "Box in 2" in next_call(a_state(lap=8)).call
-    assert "next lap" in next_call(a_state(lap=9)).call
+    """In-lap 10: laps completed 7, 8, 9 hear "Box in 3 laps.", "Box next
+    lap.", "Box this lap." (14 Sep 2026 - it used to run a lap later)."""
+    assert next_call(a_state(lap=7)).kind == BOX_SOON
+    assert next_call(a_state(lap=7)).call == "Box in 3 laps."
+    assert next_call(a_state(lap=8)).call == "Box next lap."
+    assert next_call(a_state(lap=9)).kind == BOX_NOW
 
 
 def test_no_box_call_on_the_last_stint():
@@ -440,7 +443,7 @@ def test_no_push_call_at_the_start_of_a_stint():
 
 def test_the_push_call_arrives_late_in_a_stint():
     state = a_state(lap=13, laps_since_stop=13, fuel_l=40.0,
-                    stint_ends_on_lap=16)
+                    stint_ends_on_lap=17)
     call = next_call(state)
     assert call.kind == FUEL_LONG
 

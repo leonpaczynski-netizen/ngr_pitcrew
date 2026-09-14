@@ -6305,7 +6305,7 @@ class PitCrewController(QObject):
                 has_plan=has_plan,
                 laps_to_box=None if to_stop is None else float(max(0, to_stop)),
                 box_on_lap=(None if to_stop is None
-                            else state.lap_on_screen() + max(0, to_stop)),
+                            else state.box_lap_on_screen()),
                 fuel_to_stop_why=FROM_THE_GREEN,
                 fuel_to_flag_why=FROM_THE_GREEN,
                 position=getattr(state, "position", None),
@@ -6377,23 +6377,21 @@ class PitCrewController(QObject):
             next_compound=(getattr(state, "next_compound", None)
                            if to_stop is not None else None),
             laps_to_box=None if to_stop is None else float(max(0, to_stop)),
-            # **The lap number GT7 is showing him, and it counts the same way
-            # the countdown beside it does.**
+            # **The plan's in-lap, as the number GT7 is showing him.**
             #
-            # Two things were wrong. It was the app's lap count, which is one
-            # behind the HUD at every crossing and further behind after a
-            # crossing lost in the pit lane - Road Atlanta ran +1 on lap 1 and
-            # +2 by lap 20 - and `RaceState.lap_on_screen` settles that in as
-            # many words: the number he is given has to match the number he
-            # can see, because under a helmet the screen wins. And the offset
-            # has to be `to_stop` exactly, because that is the convention the
-            # rest of the app executes: `_box_now` fires at `to_stop == 0`
-            # saying *"Box this lap"*, so the lap in progress IS the box lap
-            # at zero, and `_box_soon` says *"Box in 2"* at two. Anything else
-            # puts a big "2" over a caption naming a lap his HUD reaches in
-            # one, and he has to do arithmetic to find out which lied.
+            # It was the app's lap count, which is one behind the HUD at every
+            # crossing and further behind after a crossing lost in the pit
+            # lane - Road Atlanta ran +1 on lap 1 and +2 by lap 20 - and
+            # `RaceState.lap_on_screen` settles that: under a helmet the
+            # screen wins. **And then it was `lap_on_screen() + to_stop`,
+            # one lap past the plan**, defended here as the convention the
+            # box call executed - which was the defect: `laps_to_stop()`
+            # counts the in-lap, so the lap in progress is the in-lap at ONE,
+            # not zero. Bathurst, 14 Sep 2026, plan `pit_laps` [11]: the
+            # board said lap 12 and he boxed on 12. `box_lap_on_screen` is
+            # the one expression for it.
             box_on_lap=(None if to_stop is None
-                        else state.lap_on_screen() + max(0, to_stop)),
+                        else state.box_lap_on_screen()),
             laps_of_fuel=state.laps_of_fuel(),
             fuel_l=fuel_l,
             burn_l=state.fuel_per_lap_l,
@@ -6410,12 +6408,10 @@ class PitCrewController(QObject):
             behind=self._gap_view("behind"),
             # The sign `laps_to_stop()` throws away when it clamps at zero,
             # and how far past he is - "box this lap" and "two laps late" are
-            # not the same news.
-            laps_past_box=(
-                state.lap - state.stint_ends_on_lap
-                if getattr(state, "past_box_lap", False)
-                and getattr(state, "stint_ends_on_lap", None) is not None
-                else None),
+            # not the same news. **0 on the in-lap itself**, where the voice
+            # says "Box this lap." and the block says NOW; N once N in-laps
+            # have gone by. `laps_overdue` is the box call's own count.
+            laps_past_box=state.laps_overdue(),
         )
         if not in_box:
             return base

@@ -134,6 +134,24 @@ class _State:
             return self.screen_lap
         return self.lap + self.laps_missed() + 1
 
+    # **The two box readings the board takes off the race state**, with the
+    # real `RaceState`'s arithmetic over the stub's `_to_stop` (14 Sep 2026):
+    # `laps_to_stop()` counts the in-lap, so the lap in progress is the
+    # in-lap at ONE.
+    def box_lap_on_screen(self):
+        if self._to_stop is None:
+            return None
+        if self.stint_ends_on_lap is not None:
+            return self.lap_on_screen() - self.lap - 1 + self.stint_ends_on_lap
+        return self.lap_on_screen() + self._to_stop - 1
+
+    def laps_overdue(self):
+        if self._to_stop is None or self._to_stop > 1:
+            return None
+        if self.stint_ends_on_lap is None:
+            return 0 if self._to_stop == 1 else None
+        return self.lap - self.stint_ends_on_lap + 1
+
 
 @dataclass
 class _Race:
@@ -252,11 +270,11 @@ def test_on_track_it_shows_the_set_he_is_on_not_the_one_going_on():
     assert got.in_box is False
     assert got.compound == "RM"
     assert got.laps_to_box == 3.0
-    # Twelve laps completed, so he is driving HUD lap 13 and boxes on 16: the
-    # caption counts the same way the figure beside it does. This pinned the
-    # app's own lap count, which is one behind his screen - see
+    # Twelve laps completed, so he is driving HUD lap 13, and three laps to
+    # the stop are laps 13, 14 and 15: the in-lap is 15. This pinned the app's
+    # own lap count once, and then 16 - a lap past the stop - see
     # `test_the_box_lap_is_the_number_on_his_hud_not_the_apps_count`.
-    assert got.box_on_lap == 16
+    assert got.box_on_lap == 15
 
 
 def test_on_track_none_of_the_box_figures_are_set():
@@ -1028,18 +1046,17 @@ def test_the_box_lap_is_the_number_on_his_hud_not_the_apps_count():
     stub.race.state.lap = 8
     stub.race.state._to_stop = 3
     # **The countdown and the caption count the same way.** He is driving HUD
-    # lap 9 with three laps to go, so the caption names lap 12 - and the
-    # offset is `to_stop` exactly because that is what the rest of the app
-    # executes: `_box_now` fires at `to_stop == 0` saying "Box this lap", so
-    # at zero the lap in progress IS the box lap.
+    # lap 9 with three laps to drive to the box - 9, 10 and 11 - so the
+    # caption names lap 11. It said 12 while `_box_now` fired at
+    # `to_stop == 0`, a lap after the in-lap (Bathurst, 14 Sep 2026).
     got = _state_for(stub)
     assert got.laps_to_box == 3.0
-    assert got.box_on_lap == 12
+    assert got.box_on_lap == 11
 
     # Two crossings lost in the pit lane. The app still counts 8, GT7 counts
-    # 10, he is driving HUD lap 11, and the box lap on his screen is 14.
+    # 10, he is driving HUD lap 11, and the box lap on his screen is 13.
     stub.race.state.laps_dropped = 2
-    assert _state_for(stub).box_on_lap == 14
+    assert _state_for(stub).box_on_lap == 13
 
 
 def test_the_position_and_the_field_reach_the_board():
@@ -1329,7 +1346,7 @@ def test_the_grid_board_shows_the_plan_it_is_armed_to(qt_app):  # noqa: F811
     assert got.laps_to_box == 11.0
     # The same expression the running board uses, so the grid and lap one
     # count the same way.
-    assert got.box_on_lap == stub.race.state.lap_on_screen() + 11
+    assert got.box_on_lap == stub.race.state.lap_on_screen() + 11 - 1
     assert got.fuel_to_stop_why == got.fuel_to_flag_why == C.FROM_THE_GREEN
     view = DriverView()
     view.update_state(got)
@@ -1382,9 +1399,13 @@ def test_at_the_flag_the_board_keeps_his_result(qt_app):  # noqa: F811
 
 
 def test_the_box_lap_itself_is_due_not_late():
+    """On the in-lap the stop is still the frame and has a figure; once the
+    in-lap is behind him the stop is late (14 Sep 2026: the in-lap is
+    `laps_to_stop() == 1`, so "due" never reaches the late branch)."""
     from pitcrew.race import calls as C
 
-    state = C.RaceState(lap=11, laps_total=20, stint_ends_on_lap=11)
-    assert C.fuel_in_hand_to_stop(state) == (None, C.STOP_IS_DUE)
-    state.lap = 12
+    state = C.RaceState(lap=10, laps_total=20, stint_ends_on_lap=11,
+                        fuel_l=10.0, fuel_per_lap_l=8.0)
+    assert C.fuel_in_hand_to_stop(state) == (0.2, None)
+    state.lap = 11
     assert C.fuel_in_hand_to_stop(state) == (None, C.STOP_IS_LATE)

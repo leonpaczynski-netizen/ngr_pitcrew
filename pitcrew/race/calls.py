@@ -629,6 +629,14 @@ class Call:
     # different laps.
     position_called: int | None = None
     fuel_frame: str | None = None
+    # **The lap a box instruction named, and the plan's in-lap beside it**,
+    # both as `laps.lap_num` (the lap whose row carries `is_pit_lap`). A box
+    # call is said on the crossing that CLOSES `lap`, so "Box this lap." names
+    # `lap + 1` - and the verdict judged the window from `lap` itself, a lap
+    # already driven, and never looked at the plan, so a stop a lap late read
+    # "acted" in every race on file (Bathurst, 14 Sep 2026). Never spoken.
+    box_lap: int | None = None
+    plan_box_lap: int | None = None
 
     def spoken(self) -> str:
         """Instruction, then reason. Then the one word that marks a register.
@@ -1111,7 +1119,31 @@ class RaceState:
         return self.fuel_l / self.fuel_per_lap_l
 
     def laps_to_stop(self) -> int | None:
-        """Laps still to run before the planned stop. **Never negative.**
+        """Laps still to DRIVE to reach the planned stop, the in-lap included.
+        **Never negative.**
+
+        **THE box count - every "box" word and every "to the stop" figure is
+        said from this one number, and `box_when` is the one place it is
+        turned into words** (rule 13). `stint_ends_on_lap` is the plan's
+        IN-LAP: the lap at whose end he turns into the pit lane, `start_lap +
+        laps - 1` of the stint, which is `plan.pit_laps`. `self.lap` counts laps
+        COMPLETED. So on the crossing that starts the in-lap this is 1 - the
+        lap in progress is the last one before the stop - and the ladder is:
+
+        * 1: "Box this lap." - "One lap to the stop."
+        * 2: "Box next lap." - "2 laps to the stop."
+        * N: "Box in N laps." - "N laps to the stop."
+        * 0: the in-lap has been COMPLETED and he did not stop. "Box this
+          lap." with `laps_overdue()` laps overdue.
+
+        **It used to fire "Box this lap" at zero, one lap late, in every race
+        on file.** Bathurst, 14 Sep 2026 (session 176, plan `pit_laps` [11]):
+        "Box this lap" was said with eleven laps COMPLETED, so the lap it named
+        was lap 12, he pitted at the end of lap 12, and race runs 3, 4, 9, 14,
+        17 and 21 all stopped one lap after the plan's lap. The countdown and
+        the fuel frame already counted this way; only the box ladder, the
+        board and push-to-talk were one out, and on the plan's 91 L load a
+        stop a lap late is a car that runs dry.
 
         A stop cannot be fewer than no laps away, and the negative this used
         to return was read straight into the fuel gap as surplus: every lap
@@ -1139,6 +1171,41 @@ class RaceState:
             return None
         return max(0, self.stint_ends_on_lap - self.lap)
 
+    def laps_overdue(self) -> int | None:
+        """How many in-laps have gone by without the stop, or None.
+
+        0 on the in-lap itself (the stop is due, not late); N once N laps have
+        been completed past the plan's in-lap and he is still out. None before
+        the in-lap, with no stop planned, or once the fuel has retired the
+        stop - the same retirement `laps_to_stop` reads, so a stop that is no
+        longer a stop cannot be late either.
+
+        **The sign `laps_to_stop()` clamps away, recovered from the same
+        fields** rather than re-derived at each consumer: the box call's
+        "1 lap overdue", the board's "NOW / 1 past the box lap", the desk's
+        `lapsPastBox` and the ignored-box fold all read this.
+        """
+        to_stop = self.laps_to_stop()
+        if to_stop is None or to_stop > 1:
+            return None
+        return self.lap - self.stint_ends_on_lap + 1
+
+    def box_lap_on_screen(self) -> int | None:
+        """The plan's in-lap, as the number GT7's HUD will show on it.
+
+        `lap_on_screen()` is the lap in progress and `laps_to_stop()` counts
+        it, so the in-lap is `lap_on_screen() + laps_to_stop() - 1`. That puts
+        the missed-crossing offset where `lap_on_screen` puts it, so the
+        caption and the countdown beside it can never disagree about which
+        lap his HUD reaches first. Past the in-lap it stays the plan's lap
+        rather than walking forward with the race.
+        """
+        if self.laps_to_stop() is None:
+            return None
+        # `lap_on_screen() - lap - 1` is the HUD's offset over the app's count
+        # (the missed crossings); the in-lap carries the same offset.
+        return self.lap_on_screen() - self.lap - 1 + self.stint_ends_on_lap
+
     def forget_said(self, kind: str) -> None:
         """Make `kind` sayable again this stint. `_worth_saying_again`
         silences a kind already in `said` for the whole stint."""
@@ -1157,10 +1224,11 @@ class RaceState:
         a sustained one moves it once. Each change makes the opposite call
         sayable again. **Every accept is logged.**
 
-        **A stop that comes back on or after its box lap is due now**, not a
-        lap late: `stint_ends_on_lap` moves to the lap in progress, so
-        `STOP_BACK` carries "Box this lap." and "overdue" counts from when he
-        was told, not from the lap he was told it was off (critic 4, MAJOR).
+        **A stop that comes back after its in-lap is due now**, not a lap
+        late: `stint_ends_on_lap` moves to the lap in progress (`lap + 1` -
+        `lap` counts laps completed), so `STOP_BACK` carries "Box this lap."
+        and "overdue" counts from when he was told, not from the lap he was
+        told it was off (critic 4, MAJOR).
         """
         if self.stint_ends_on_lap is None:
             self.stop_needed_held = None
@@ -1190,7 +1258,8 @@ class RaceState:
             self.stops_off_said = False
             self.forget_said(STOPS_OFF)
             if self.lap >= self.stint_ends_on_lap:
-                self.stint_ends_on_lap = self.lap
+                # The in-lap has gone by: the lap in progress becomes it.
+                self.stint_ends_on_lap = self.lap + 1
             log("race").info("the stop is back on from lap %s, box lap %s",
                              self.lap, self.stint_ends_on_lap)
         else:
@@ -1201,7 +1270,10 @@ class RaceState:
 
     @property
     def past_box_lap(self) -> bool:
-        """The planned stop has come and it has not been taken."""
+        """The plan's in-lap has been COMPLETED and the stop was not taken.
+
+        Late, not due: on the in-lap itself this is False and `laps_to_stop()`
+        is 1. See `laps_to_stop` for the convention."""
         return (self.stint_ends_on_lap is not None
                 and self.lap >= self.stint_ends_on_lap)
 
@@ -2180,18 +2252,53 @@ def _stop_back(state: RaceState) -> Call | None:
     to_stop = state.laps_to_stop()
     if to_stop is None:
         return None
-    # **It outranks the box call, so on the box lap it IS the box call**
+    # **It outranks the box call, so on the in-lap it IS the box call**
     # (critic 4, MAJOR): reinstated there it said "The stop is back on." and
     # the lap went by with no instruction to box. The tyre word every box
-    # instruction carries, too (rule 13).
-    if to_stop == 0:
-        said = f"The stop is back on. Box this lap.{_tyre_word(state)}"
-    elif to_stop == 1:
-        said = "The stop is back on. Box next lap."
+    # instruction carries, too (rule 13). The ladder is `box_when`'s.
+    if to_stop <= 1:
+        said = f"The stop is back on. {box_when(to_stop)}{_tyre_word(state)}"
+    elif to_stop == 2:
+        said = f"The stop is back on. {box_when(to_stop)}"
     else:
         said = "The stop is back on."
     return Call(STOP_BACK, state.lap, said,
-                _why_the_stop_is_held(state) or "On the plan.")
+                _why_the_stop_is_held(state) or "On the plan.",
+                box_lap=_box_lap_named(state),
+                plan_box_lap=state.stint_ends_on_lap)
+
+
+def box_when(to_stop: int) -> str:
+    """**The box ladder, in words - the one place it is rendered.**
+
+    `to_stop` is `RaceState.laps_to_stop()`: laps still to drive to reach the
+    box, the in-lap included. So 1 (or 0, overdue) is "Box this lap.", 2 is
+    "Box next lap." and N is "Box in N laps." - the same N the countdown says
+    as "N laps to the stop", so "Box in 3 laps." and "3 laps to the stop." are
+    one claim in two registers and never two numbers for one stop (rule 13).
+    The voice call, the stop-back call and push-to-talk all say it from here.
+
+    Bathurst, 14 Sep 2026: the ladder said "Box this lap" at 0 and "Box next
+    lap" at 1, a lap behind the countdown and the fuel frame that shared the
+    number, and the stop came one lap after the plan's in-lap.
+    """
+    if to_stop <= 1:
+        return "Box this lap."
+    if to_stop == 2:
+        return "Box next lap."
+    return f"Box in {to_stop} laps."
+
+
+def _box_lap_named(state: RaceState) -> int | None:
+    """The lap, in `laps.lap_num` terms, that a box call made now names.
+
+    The lap in progress when overdue or on the in-lap; the plan's in-lap
+    before it. Carried on the call so its verdict is judged against the lap
+    it actually asked for, not against the lap it was said on."""
+    to_stop = state.laps_to_stop()
+    if to_stop is None:
+        return None
+    return state.lap + max(1, to_stop)
 
 
 def _tyre_word(state: RaceState) -> str:
@@ -2217,13 +2324,18 @@ def _box_now(state: RaceState) -> Call | None:
         return None
     if not stop_still_needed(state):
         return None
-    if to_stop > 0 or _crossing_the_line(state):
+    # **On the in-lap, `to_stop == 1`** - see `RaceState.laps_to_stop`. This
+    # fired at zero, which is the crossing AFTER the in-lap, and every race on
+    # file stopped a lap late for it.
+    if to_stop > 1 or _crossing_the_line(state):
         return None
 
     fuel = _fuel_instruction(state)
     compound = _tyre_word(state)
-    # `to_stop` is not None here, so neither is the lap it came from.
-    overdue = state.lap - (state.stint_ends_on_lap or 0)
+    named = dict(box_lap=_box_lap_named(state),
+                 plan_box_lap=state.stint_ends_on_lap)
+    # `to_stop` is not None and at most 1 here, so neither is this.
+    overdue = state.laps_overdue() or 0
     if overdue > 0:
         # **Never the same sentence twice.** The deterioration threshold
         # re-fires this call every lap once a planned stop is skipped -
@@ -2257,7 +2369,7 @@ def _box_now(state: RaceState) -> Call | None:
         elif fuel:
             reason += f" {fuel}"
         return Call(BOX_NOW, state.lap, f"Box this lap.{compound}", reason,
-                    confidence, severity=float(overdue))
+                    confidence, severity=float(overdue), **named)
     if state.drop_stop_granted is False and not _stop_needed_on_fuel(state):
         # He has heard "You're fuelled to the flag." and now hears the box
         # call anyway: say why, or the two contradict each other.
@@ -2266,7 +2378,7 @@ def _box_now(state: RaceState) -> Call | None:
             f"Box this lap.{compound}",
             "On the plan. Fuel would reach the flag - dropping the stop was "
             "not granted.",
-            severity=float(overdue),
+            severity=float(overdue), **named,
         )
     # **The routine box call was the only one of four that did not say what
     # it was boxing him for** (row 1.10, rule 12). The wear cliff says
@@ -2288,7 +2400,7 @@ def _box_now(state: RaceState) -> Call | None:
         BOX_NOW, state.lap,
         f"Box this lap.{compound}",
         reason,
-        severity=float(overdue),
+        severity=float(overdue), **named,
     )
 
 
@@ -2298,7 +2410,9 @@ def _box_soon(state: RaceState) -> Call | None:
         return None
     if not stop_still_needed(state):
         return None
-    if not 1 <= to_stop <= 2 or _crossing_the_line(state):
+    # "Box next lap." at 2 and "Box in 3 laps." at 3 - `box_when`'s ladder,
+    # one step ahead of `_box_now`'s "Box this lap." at 1.
+    if not 2 <= to_stop <= 3 or _crossing_the_line(state):
         return None
     # **The same clause `_box_now` carries, and for the same reason** (critic
     # pass 6). He has heard "You're fuelled to the flag." from `_stops_off`
@@ -2319,12 +2433,12 @@ def _box_soon(state: RaceState) -> Call | None:
     return Call(
         BOX_SOON, state.lap,
         # **The unit, because the PTT answer has always carried it**
-        # (row 1.10): `intents._laps` renders the same instruction as "Box
-        # in 2 laps." and the volunteered one said "Box in 2." The one he
-        # acts on under a helmet was the bare one.
-        f"Box in {to_stop} laps." if to_stop > 1 else "Box next lap.",
+        # (row 1.10), and the words from the one renderer both of them use.
+        box_when(to_stop),
         reason,
         severity=float(-to_stop),
+        box_lap=_box_lap_named(state),
+        plan_box_lap=state.stint_ends_on_lap,
     )
 
 
@@ -2340,6 +2454,14 @@ def _laps_after_this_stop(state: RaceState) -> int | None:
     19 Aug 2026 the in-box call asked for 94 L where the stint needed 78, and
     this was the second of the two reasons - the clock's late green was the
     first. One litre is one second stationary at the measured 1.002 L/s.
+
+    **Read at the moment of the stop, never ahead of it.** "The lap in
+    progress" is the in-lap only on the in-lap: on the crossing that starts
+    it (`laps_to_stop() == 1`, where "Box this lap." is now said), in the box
+    before the line, or past the in-lap when the stop is late. Until 14 Sep
+    2026 the box call fired a crossing later, on the lap AFTER the plan's
+    in-lap, so the fill it named was sized for that later stop - a lap
+    shorter than the run home from the plan's.
     """
     remaining = (state.laps_after_stops if state.laps_after_stops is not None
                  else state.laps_remaining())
@@ -2402,9 +2524,11 @@ def _laps_the_fill_covers(state: RaceState) -> tuple[int | None, str | None]:
         stint = state.next_stint_laps
         return stint, f"the next {stint}-lap stint"
     if (state.stint_ends_on_lap is not None and state.laps_total
-            and not state.in_pit and state.lap < state.stint_ends_on_lap):
+            and not state.in_pit and state.lap + 1 < state.stint_ends_on_lap):
         # The box is still laps away: the fill it will need starts at the
         # planned box lap, not at the current lap. Labelled as the plan's.
+        # Not on the in-lap itself (`laps_to_stop() == 1`, 14 Sep 2026):
+        # there the stop is this lap and `_laps_after_this_stop` answers.
         laps = state.laps_total - state.stint_ends_on_lap
         if laps > 0:
             return laps, f"{counted(laps)} after the planned box"
@@ -3717,11 +3841,11 @@ NO_STOP_TO_COME = "no stop still to come"
 # box lap" about a different quantity, and one phrase for two things a glance
 # apart is rule 13 with the two ends on the same screen.
 STOP_IS_LATE = "the stop is late"
-# **Due is not late.** On the box lap itself `past_box_lap` is already true,
-# and `DriverState.laps_past_box` records why the two must read differently -
-# the box block says "box this lap" there, and "late" beside it was the
-# defect that block was fixed for, one block along (critic on row 1.8).
-STOP_IS_DUE = "the stop is this lap"
+# **Due is not late - and due no longer reaches this block.** A "the stop is
+# this lap" reason lived here for the crossing `past_box_lap` used to be true
+# on while the stop was still due. Since the in-lap is `laps_to_stop() == 1`
+# (14 Sep 2026) that lap keeps the stop as its frame and shows a figure, and
+# `past_box_lap` is only ever late.
 # The board's word for no plan running at all - the driver chose "No plan",
 # or none was approved. Not `NO_STOP_TO_COME`, which is a PLAN's answer: said
 # beside a red flag figure it told him a stop nobody planned was not needed.
@@ -3797,8 +3921,7 @@ def fuel_in_hand_to_stop(state: RaceState) -> tuple[float | None, str | None]:
         # stop still to come", after he had heard "No more stops on fuel".
         # "Late" is the word that sends him in for fuel he does not need.
         if state.past_box_lap and stop_still_needed(state):
-            return None, (STOP_IS_LATE if state.lap > state.stint_ends_on_lap
-                          else STOP_IS_DUE)
+            return None, STOP_IS_LATE
         return None, NO_STOP_TO_COME
     gap = _fuel_gap(state)
     if gap is None:

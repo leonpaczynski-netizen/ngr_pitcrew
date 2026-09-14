@@ -729,9 +729,12 @@ def answer(intent: str, snapshot: dict, *,
             if not _has_plan(snapshot):
                 return Answer(NO_PLAN, intent, answered=False)
             return Answer("No stop planned. Running to the flag.", intent)
-        if to_stop <= 0:
-            return Answer("Box this lap.", intent)
-        return Answer(f"Box in {_laps(to_stop)}.", intent)
+        # **The volunteered ladder's own words, from its one renderer**
+        # (rule 13). This said "Box in 1 lap." on the lap the engineer said
+        # "Box next lap." - and both were a lap late, 14 Sep 2026.
+        from pitcrew.race.calls import box_when
+
+        return Answer(box_when(to_stop), intent)
 
     if intent == BOX_WHAT:
         compound = snapshot.get("nextCompound")
@@ -936,10 +939,10 @@ def _plan_summary(snapshot: dict) -> str:
     to_stop = snapshot.get("lapsToStop")
     if to_stop is None:
         parts.append("Running to the flag")
-    elif to_stop <= 0:
-        parts.append("Box this lap")
     else:
-        parts.append(f"Box in {_laps(to_stop)}")
+        from pitcrew.race.calls import box_when
+
+        parts.append(box_when(to_stop).rstrip("."))
     if snapshot.get("nextTyres") is False:
         # A fuel-only stop is not "onto RS" (the critic on row 2.6).
         parts.append("no tyres")

@@ -53,7 +53,8 @@ def test_no_stop_in_a_fully_driven_window_is_not_acted_on():
     figure was the thing that was wrong."""
     outcome = outcome_for(a_call(lap=10), a_race(20))
     assert outcome.verdict == NOT_ACTED
-    assert "10-12" in outcome.detail
+    # From the lap after the call: lap 10 was driven before it was said.
+    assert "11-12" in outcome.detail
 
 
 def test_a_stop_after_the_window_is_not_late_compliance():

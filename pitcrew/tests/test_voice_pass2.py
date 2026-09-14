@@ -100,10 +100,11 @@ def test_a_one_lap_fill_plays_from_the_pack(crossed, frame):
     from pitcrew.race.calls import next_call
 
     # Not yet across the line in the box, the fill covers the laps AFTER the
-    # box lap - so one of them needs a 14-lap race from lap 12; across the
-    # line, the lap in progress is the one it covers.
+    # in-lap - so one of them needs a 14-lap race from lap 12; across the
+    # line, the lap in progress is the one it covers. The in-lap is 13: the
+    # box call is said on the crossing that starts it (14 Sep 2026).
     state = RaceState(lap=12, laps_total=13 if crossed else 14,
-                      stint_ends_on_lap=12, fuel_l=1.0, fuel_per_lap_l=3.0,
+                      stint_ends_on_lap=13, fuel_l=1.0, fuel_per_lap_l=3.0,
                       fuel_capacity_l=100.0, next_compound="RS",
                       next_tyres=True, crossed_in_box=crossed)
     spoken = next_call(state).spoken()

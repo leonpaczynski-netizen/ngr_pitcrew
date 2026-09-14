@@ -201,7 +201,7 @@ def test_a_withheld_drop_keeps_the_stop_in_the_plan():
     race = _fuelled_to_the_flag(a_plan())
     assert race.state.drop_stop_granted is False
     assert stop_still_needed(race.state) is True
-    race.state.lap = 10
+    race.state.lap = 9                           # the in-lap, box on 10
     call = _box_now(race.state)
     assert call is not None and call.kind == BOX_NOW
     assert "dropping the stop was not granted" in call.reason
@@ -223,9 +223,10 @@ def test_box_soon_says_why_too():
     assert race.state.drop_stop_granted is False
     call = _box_soon(race.state)                 # lap 8, box on 10
     assert call is not None and call.kind == BOX_SOON
-    # Row 1.10: the PTT answer has always said "Box in 2 laps."; the
-    # volunteered instruction - the one he acts on - was the bare one.
-    assert call.call == "Box in 2 laps."
+    # Row 1.10: the PTT answer has always carried the unit; the volunteered
+    # instruction - the one he acts on - was the bare one. Two laps to drive
+    # to the box is "Box next lap." (14 Sep 2026, `calls.box_when`).
+    assert call.call == "Box next lap."
     assert "dropping the stop was not granted" in call.reason
 
     granted = _fuelled_to_the_flag(a_plan([an_entry(trigger="fuel_long",
