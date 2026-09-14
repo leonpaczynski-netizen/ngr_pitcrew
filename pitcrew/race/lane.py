@@ -17,6 +17,16 @@ A stop is now retired in exactly two ways: **it was said**, or **it went
 stale** - the car has left the lane and a whole lap has been driven since
 without a chance to say it. Nothing else removes one.
 
+### Said means heard (14 Sep 2026, the integration pass)
+
+**Handed to the voice is not said.** Since lines carry a class, a rival's
+stop is NEWS: it waits for a straight, and the voice may drop it as stale or
+for an instruction before it plays. Retired when it was handed over, it was
+lost exactly as the queue lost it. So a stop handed over is IN FLIGHT -
+`offer` - and not offered again while it is; `tell` retires it when the voice
+says it played, and `release` puts it back when the voice says it did not,
+where `stale` still applies to it as to any untold stop.
+
 ### What stale means, exactly
 
 `left_lap` is our completed-lap count when his finished stop was filed.
@@ -31,9 +41,11 @@ a belt: the wall closes a silent visit within three minutes.
 ### Threads
 
 Entries are added and filed on the Qt thread (`coordinator.note_rival_*`);
-they are TOLD from the Qt thread at a crossing and from the telemetry thread
-mid-lap. So nothing here removes from the list while it can be read: telling
-and explaining are set insertions, and every reader walks a copy. Rule 11:
+they are OFFERED from the Qt thread at a crossing and from the telemetry
+thread mid-lap, and told or released on the Qt thread when the voice answers.
+So nothing here removes from the list while it can be read: telling and
+explaining are set insertions, the in-flight set is replaced rather than
+mutated, and every reader walks a copy. Rule 11:
 `new_session` empties all of it, and the coordinator calls it on arming.
 
 ### What this is for next
@@ -44,6 +56,7 @@ ahead of us when he went in, and whether he is still in there.
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 # Laps after the lap a stop BEGAN on past which an entry that was never
@@ -80,6 +93,10 @@ class LaneLog:
     def __init__(self) -> None:
         self._stops: list[LaneStop] = []
         self._told: set[str] = set()
+        self._in_flight: frozenset[str] = frozenset()
+        # Offered on the telemetry thread, told or released on the Qt thread:
+        # a read-modify-write on both sides needs the one lock.
+        self._flight_lock = threading.Lock()
         self._explained: set[str] = set()
         self._returned: set[str] = set()
 
@@ -89,6 +106,8 @@ class LaneLog:
         """CLAUDE.md rule 11: a stop is news about one race."""
         self._stops = []
         self._told = set()
+        with self._flight_lock:
+            self._in_flight = frozenset()
         self._explained = set()
         self._returned = set()
 
@@ -135,12 +154,33 @@ class LaneLog:
         return lap >= began + STALE_AFTER_LAPS
 
     def untold(self, lap: int) -> list[LaneStop]:
-        """Stops not yet said and still news, in the order they were seen."""
+        """Stops not yet said, not waiting on the voice, and still news, in
+        the order they were seen."""
+        flying = self._in_flight
         return [stop for stop in list(self._stops)
-                if stop.key not in self._told and not self.stale(stop, lap)]
+                if stop.key not in self._told and stop.key not in flying
+                and not self.stale(stop, lap)]
+
+    def offer(self, keys) -> None:
+        """Handed to the voice: not offered again until it answers."""
+        with self._flight_lock:
+            self._in_flight = self._in_flight | frozenset(keys)
+
+    def release(self, keys) -> None:
+        """The voice did not say them: untold again, and still subject to
+        `stale` like any other untold stop."""
+        with self._flight_lock:
+            self._in_flight = self._in_flight - frozenset(keys)
 
     def tell(self, keys) -> None:
+        """Said - heard, not merely handed over. Retired for the race."""
+        keys = list(keys)
         self._told.update(keys)
+        with self._flight_lock:
+            self._in_flight = self._in_flight - frozenset(keys)
+
+    def in_flight(self, key: str) -> bool:
+        return key in self._in_flight
 
     def told(self, key: str) -> bool:
         return key in self._told

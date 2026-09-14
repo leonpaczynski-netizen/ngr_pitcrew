@@ -1618,9 +1618,12 @@ class RaceState:
         if call.tag:
             self.said_tags.add(call.tag)
         if call.kind == RIVAL_BOXED:
-            # **Said, so retired** - and only the stops this call named. The
-            # lane record is never drained by being OFFERED (race/lane.py).
-            self.lane.tell(self.lane.keys_in_tag(RIVAL_BOXED, call.tag))
+            # **Handed to the voice, so in flight** - and only the stops this
+            # call named. The lane record is never drained by being OFFERED
+            # on a crossing another call won, and a stop is retired only once
+            # the voice says it was HEARD: `RaceCoordinator.delivered`, or at
+            # once by `_hand_out` where nothing acknowledges (race/lane.py).
+            self.lane.offer(self.lane.keys_in_tag(RIVAL_BOXED, call.tag))
         if call.kind == TYRE_TEMP and call.tag:
             self.temp_said.add(call.tag)
             if call.tag == "conserve":

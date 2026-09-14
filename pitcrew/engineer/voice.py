@@ -398,16 +398,20 @@ def _coalesce_key(kind: str | None, text: str) -> str | None:
 class _Line:
     """One thing to say, and what the queue needs to know about it."""
 
-    __slots__ = ("text", "kind", "cls", "queued_at", "seq", "clip_s")
+    __slots__ = ("text", "kind", "cls", "queued_at", "seq", "clip_s",
+                 "on_done")
 
     def __init__(self, text: str, kind: str | None, queued_at: float,
-                 seq: int) -> None:
+                 seq: int, on_done=None) -> None:
         self.text = text
         self.kind = kind
         self.cls = class_of(kind)
         self.queued_at = queued_at
         self.seq = seq
         self.clip_s: float | None = None
+        # `on_done(played)`, once, when the line is finished with - see
+        # `Voice.say`.
+        self.on_done = on_done
 
     def __repr__(self) -> str:                      # pragma: no cover
         return f"<{CLASS_NAMES[self.cls]} {self.kind} {self.text!r}>"
@@ -435,9 +439,9 @@ class _LineQueue:
             return len(self._lines)
 
     def line(self, text: str, kind: str | None = None,
-             queued_at: float | None = None) -> _Line:
+             queued_at: float | None = None, on_done=None) -> _Line:
         return _Line(text, kind, _now() if queued_at is None else queued_at,
-                     next(self._seq))
+                     next(self._seq), on_done)
 
     def put(self, item) -> None:
         if item is None:
@@ -625,23 +629,44 @@ class Voice:
         return (f"The engineer has said nothing for {self._failures} "
                 f"{calls}: {self.last_error}")
 
-    def say(self, text: str, kind: str | None = None) -> None:
+    def say(self, text: str, kind: str | None = None,
+            on_done=None) -> None:
         """Queue `text`. `kind` is the call kind (`race.calls`, `race.colour`,
         `race.refuel`) and decides its class - see the table above `_Line`.
 
         No kind is EVENT: the queue's old behaviour, so a caller that has not
         been given a kind is never made worse.
+
+        **`on_done(played)` is how a caller learns whether it was HEARD.**
+        Queued is not said: since lines carry a class a NEWS line can wait for
+        a straight and go stale, be replaced by a newer place, or be dropped
+        for an instruction with the queue full. A caller that retires a fact
+        when it hands it over - a rival's stop, a place - loses it every time
+        that happens, which is the Bathurst defect (eight of ten stops never
+        said) moved one layer down. So the callback is called exactly once:
+        `True` when the engine returned from speaking the line, `False` when
+        it was dropped, went stale, failed, or the voice is off.
+
+        **It runs on whichever thread finished the line** - the voice thread
+        for a line that played or went stale, the caller's own thread for one
+        dropped as it was queued. The callback must hand anything touching
+        its owner's state back to the owner's thread (the controller emits a
+        Qt signal), and it must not block: it is on the voice's inner loop.
         """
         if not text:
             return
         self.spoken.append(text)
         if not self.enabled:
+            if on_done is not None:
+                _finish(self._queue.line(text, kind, on_done=on_done), False,
+                        "the voice is off")
             return
-        line = self._queue.line(text, kind)
+        line = self._queue.line(text, kind, on_done=on_done)
         for dropped, why in self._queue.offer(line):
             log("voice").info("not saying %r (%s, %s): %s", dropped.text,
                               dropped.kind or "no kind",
                               CLASS_NAMES[dropped.cls], why)
+            _finish(dropped, False, why)
 
     @property
     def busy(self) -> bool:
@@ -713,6 +738,7 @@ class Voice:
                             "%.1fs", line.text, line.kind or "no kind",
                             CLASS_NAMES[line.cls], age,
                             stale_after_s(line.kind))
+                        _finish(line, False, "stale")
                     continue
                 if self._may_start(line) and self._queue.remove(line):
                     return line
@@ -749,6 +775,10 @@ class Voice:
         while not self._stop.is_set():
             line = self._next_line()
             if line is None:
+                # Closed with lines still waiting: none of them will play.
+                for left in self._queue.snapshot():
+                    if self._queue.remove(left):
+                        _finish(left, False, "the voice stopped")
                 return
             self._playing = line
             try:
@@ -788,6 +818,7 @@ class Voice:
                 log("voice").warning(
                     "%s - cut %r off. It is %.1fs old now, so it is "
                     "dropped rather than said late.", why, text, age)
+                _finish(line, False, "cut off and stale")
         except Exception as exc:            # noqa: BLE001 - see below
             # Deliberately broad: a synthesis failure mid-race must not
             # take the app with it, and the driver still has the screen
@@ -797,12 +828,42 @@ class Voice:
             log("voice").error("%s (nothing said for %d call(s))",
                                self.last_error, self._failures,
                                exc_info=True)
+            _finish(line, False, "the engine made no sound")
         else:
             if self._failures:
                 log("voice").info("voice recovered after %d silent call(s)",
                                   self._failures)
             self._failures = 0
             self.last_error = None
+            _finish(line, True)
+
+
+def _finish(line: _Line, played: bool, why: str = "") -> None:
+    """Tell whoever asked whether `line` was heard. Once, and never fatally.
+
+    **The accept is logged as well as the drop** (CLAUDE.md rule 10): a fact
+    the race retires on this answer was invisible in the log when only the
+    refusals were written, and the retirement is the number that decides
+    whether it is offered again.
+    """
+    done, line.on_done = line.on_done, None
+    if done is None:
+        return
+    if played:
+        log("voice").info("said %r (%s, %s) - acknowledged as heard",
+                          line.text, line.kind or "no kind",
+                          CLASS_NAMES[line.cls])
+    else:
+        log("voice").info("not heard %r (%s, %s) - acknowledged as dropped: "
+                          "%s", line.text, line.kind or "no kind",
+                          CLASS_NAMES[line.cls], why)
+    try:
+        done(played)
+    except Exception as exc:                    # noqa: BLE001 - see below
+        # The callback is the caller's bookkeeping. A fault in it must cost
+        # that fact, not the voice thread and every call after it.
+        log("voice").error("the acknowledgement for %r raised: %s: %s",
+                           line.text, type(exc).__name__, exc, exc_info=True)
 
 
 def _now() -> float:

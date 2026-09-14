@@ -1256,6 +1256,7 @@ class RaceCoordinator:
                 and not getattr(packet, "loading", False):
             self._packets += 1
             self._note_composure(packet)
+            self._expire_in_flight()
             call = self._mid_lap(packet)
         self._note_lap_counter(packet)
         return call
@@ -1282,6 +1283,11 @@ class RaceCoordinator:
         # Keys of cars that stood in the lane, ahead of us when they went in,
         # at any frame since the last place he was told - see `_through_the_lane`.
         self._lane_while_moving: dict[str, object] = {}
+        # Calls handed to the voice and not yet heard, by `id` - see
+        # `_hand_out`. Rule 11: a new race hears nothing about the last one's.
+        self._in_flight: dict[int, tuple] = {}
+        # A place call's lane explanation, applied when it is heard.
+        self._lane_use: dict[int, tuple] = {}
 
     def _note_crossing_for_mid_lap(self) -> None:
         """Qt thread, at the crossing: where the lap began, and how long it is
@@ -1342,7 +1348,7 @@ class RaceCoordinator:
         to the crossing's own call. A held call is never booked as said, so
         it is still true, and still said, when the slot opens.
         """
-        from pitcrew.race.calls import FACT, RIVAL_BOXED
+        from pitcrew.race.calls import FACT
 
         proposal = self._note_position(packet)
         in_pit = bool(self.state.in_pit)
@@ -1365,22 +1371,152 @@ class RaceCoordinator:
             return None
         rival = self._rival_stop_mid_lap()
         if rival is not None:
-            self.state.lane.tell(
-                self.state.lane.keys_in_tag(RIVAL_BOXED, rival.tag))
             self._spoke_mid_lap()
             log("race").info("mid-lap: %s", rival.spoken())
+            self._hand_out(rival)
             return rival
         if proposal is None:
             return None
         if not self.composure.may_volunteer(FACT):
             self._hold("position", "off the road or still regathering")
             return None
+        if self._place_waiting_on_the_voice(proposal):
+            # **The same place, already handed over and not yet heard.** The
+            # voice holds it for a straight; handing it over again would
+            # queue it twice. A DIFFERENT place goes through, and the voice
+            # replaces the queued line with it.
+            self._hold("position", "that place is waiting on the voice")
+            return None
         call = self._through_the_lane(proposal)
-        from pitcrew.race.calls import position_spoken
-
-        position_spoken(self.state, call)
         self._spoke_mid_lap()
+        self._hand_out(call)
         return call
+
+    # ------------------------------------------------- said means heard
+    #
+    # **A volunteered fact is retired when the voice says it was HEARD, not
+    # when it is handed over** (14 Sep 2026, after the voice fix). NEWS waits
+    # for a straight and can go stale, be replaced by a newer place, or be
+    # dropped for an instruction; a rival stop retired at hand-over was lost
+    # every time that happened, which is the Bathurst defect - eight of ten
+    # stops never said - one layer further down.
+    #
+    # So a rival stop, a place, and the tagged rival facts (committed, short,
+    # closing) are IN FLIGHT from `_hand_out` until `delivered` is told what
+    # happened: heard, and they are booked exactly as they used to be at
+    # hand-over; not heard, and they are offered again, still subject to
+    # their own staleness.
+    #
+    # **Only where something will answer.** `acknowledged_delivery` is set
+    # by the controller, which routes the voice's answer back here; a
+    # coordinator driven by a replay or a test has nobody to answer, and
+    # books at hand-over as before rather than holding facts forever.
+    #
+    # **And a hand-over nobody answers is released** after `ACK_TIMEOUT_S`
+    # (rule 10: a reference that nothing can retire is a latch). The voice's
+    # slowest line goes stale at 30 s, so an answer later than that is one
+    # that is never coming.
+
+    acknowledged_delivery = False
+    ACK_TIMEOUT_S = 45.0
+
+    @staticmethod
+    def _heard_matters(call) -> bool:
+        from pitcrew.race.calls import (
+            CLOSING, POSITION, RIVAL_BOXED, RIVAL_COMMITTED, RIVAL_SHORT)
+
+        if call is None:
+            return False
+        if call.kind == POSITION:
+            return call.position_called is not None
+        return call.kind in (RIVAL_BOXED, RIVAL_COMMITTED, RIVAL_SHORT,
+                             CLOSING)
+
+    def _hand_out(self, call) -> None:
+        """`call` is being given to the voice: in flight, or booked now."""
+        from pitcrew.race.calls import RIVAL_BOXED
+
+        if not self._heard_matters(call):
+            return
+        if call.kind == RIVAL_BOXED:
+            self.state.lane.offer(
+                self.state.lane.keys_in_tag(RIVAL_BOXED, call.tag))
+        if not self.acknowledged_delivery:
+            self._book(call)
+            return
+        self._in_flight[id(call)] = (call, self._packets)
+
+    def awaits_delivery(self, call) -> bool:
+        """Whether `call` is in flight and wants to hear back from the voice."""
+        entry = self._in_flight.get(id(call))
+        return entry is not None and entry[0] is call
+
+    def delivered(self, call, played: bool) -> None:
+        """The voice's answer about a handed-over call. Qt thread.
+
+        Heard: booked - the stop retired, the place the new baseline. Not
+        heard: offered again. An answer about a call that is not in flight
+        (a new race since, or already released) changes nothing.
+        """
+        if not self.awaits_delivery(call):
+            return
+        if self._in_flight.pop(id(call), None) is None:
+            return                          # the timeout took it first
+        if played:
+            log("race").info("heard, so retired: %s", call.spoken())
+            self._book(call)
+        else:
+            log("race").info("not heard, so offered again: %s",
+                             call.spoken())
+            self._release(call)
+
+    def _book(self, call) -> None:
+        from pitcrew.race.calls import POSITION, RIVAL_BOXED, position_spoken
+
+        lane = self.state.lane
+        if call.kind == RIVAL_BOXED:
+            lane.tell(lane.keys_in_tag(RIVAL_BOXED, call.tag))
+        elif call.kind == POSITION:
+            position_spoken(self.state, call)
+            use = self._lane_use.pop(id(call), None)
+            if use is not None and use[0] is call:
+                _, gained, keys = use
+                (lane.explain if gained else lane.returned)(keys)
+
+    def _release(self, call) -> None:
+        from pitcrew.race.calls import RIVAL_BOXED
+
+        lane = self.state.lane
+        if call.kind == RIVAL_BOXED:
+            lane.release(lane.keys_in_tag(RIVAL_BOXED, call.tag))
+        if call.tag:
+            # A crossing's tagged rival fact is "said" by its tag
+            # (`_worth_saying_again`); unheard, it is sayable again.
+            self.state.said_tags.discard(call.tag)
+        self._lane_use.pop(id(call), None)
+
+    def _place_waiting_on_the_voice(self, proposal) -> bool:
+        from pitcrew.race.calls import POSITION
+
+        return any(call.kind == POSITION
+                   and call.position_called == proposal.position_called
+                   for call, _ in list(self._in_flight.values()))
+
+    def _expire_in_flight(self) -> None:
+        """Release what the voice never answered about. Telemetry thread."""
+        if not self._in_flight:
+            return
+        limit = int(self.ACK_TIMEOUT_S * SAMPLE_HZ)
+        for key, (call, at) in list(self._in_flight.items()):
+            if self._packets - at <= limit:
+                continue
+            if self._in_flight.pop(key, None) is None:
+                continue
+            log("race").warning(
+                "no word from the voice %.0f s after handing it %r - "
+                "released and offered again", self.ACK_TIMEOUT_S,
+                call.spoken())
+            self._release(call)
 
     def _rival_stop_mid_lap(self) -> "Call | None":
         """The untold rival stops, if this is a moment to say them.
@@ -1441,14 +1577,15 @@ class RaceCoordinator:
         if reason is None:
             return call
         used = [stop.key for stop in cars[:abs(places)]]
-        if places > 0:
-            lane.explain(used)
-        else:
-            lane.returned(used)
+        call = replace(call, reason=reason)
+        # **Marked explained when the place is HEARD** (`_book`), not here:
+        # a line the voice drops has explained nothing to the driver, and the
+        # same cars have to be able to explain the place when it is said.
+        self._lane_use[id(call)] = (call, places > 0, used)
         log("race").info("position through the lane: %s (%s)",
                          reason, ", ".join(stop.driver
                                            for stop in cars[:abs(places)]))
-        return replace(call, reason=reason)
+        return call
 
     def _note_composure(self, packet) -> None:
         """Watch the surface, so the engineer knows when to stop volunteering.
@@ -2203,6 +2340,7 @@ class RaceCoordinator:
         heartbeat = call if call is not None and call.kind == STATUS else None
         if call is not None and heartbeat is None:
             self.state.record(call)
+            self._hand_out(call)
             if call.kind == FUEL_SHORT and call.tag == FUEL_SAVE:
                 self.note_save_asked(self.state.lap)
             elif call.kind == FUEL_REACHES:

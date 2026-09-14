@@ -942,6 +942,10 @@ class PitCrewController(QObject):
     # What each screen has to show for itself, for the nav rail. Emitted
     # rather than polled so the rail cannot drift from the store.
     nav_state_changed = pyqtSignal(dict)
+    # **The voice's answer about a volunteered fact**: (the race that handed
+    # it over, the call, whether it was heard). Emitted on the voice thread,
+    # delivered on this one - see `_on_voice_heard`.
+    voice_heard = pyqtSignal(object, object, bool)
 
     def __init__(self, store: Store, event_screen, practice_screen,
                  strategy_screen=None, race_screen=None, *,
@@ -1110,6 +1114,7 @@ class PitCrewController(QObject):
         self.bridge.incident_seen.connect(self._on_incident_seen)
         self.bridge.straight_reached.connect(self._on_straight_reached)
         self.bridge.position_changed.connect(self._on_position_changed)
+        self.voice_heard.connect(self._on_voice_heard)
         # **The connection this signal never had.** `_on_rival_stop` emitted
         # into it from the worker thread and nothing was listening, so every
         # rival call in `race/rival_calls.py` was unreachable - written,
@@ -4968,6 +4973,10 @@ class PitCrewController(QObject):
             refusal = self.race.refusal
             self.race = None
             return refuse(f"Plan refused: {refusal}")
+        # **This controller answers for the voice**, so the race keeps a
+        # rival's stop or a place in flight until it is heard rather than
+        # retiring it when it is handed over. See `_say_volunteered`.
+        self.race.acknowledged_delivery = True
 
         # **Declare the instrument, once, on the grid.** Silence is this
         # app's most-used output and it has never meant one thing - no plan,
@@ -5931,8 +5940,16 @@ class PitCrewController(QObject):
             self._note_board_call(call.spoken(), call.mark(),
                                   self._screen_lap())
         if self._engineer_speaks and replan is None:
-            self.voice.say(call.spoken())
+            self._say_volunteered(call)
             self.ptt.last_call = call.spoken()
+        elif replan is not None:
+            # The re-planner had the lap: a rival fact this call carried was
+            # not heard, and the race offers it again next time.
+            self._not_heard(call)
+        else:
+            # The engineer is silent: the screen is the only channel and
+            # showing it is all the delivery there will be.
+            self._heard_on_screen(call)
         row = None
         if self.race_screen is not None:
             row = self.race_screen.show_call(call)
@@ -7179,8 +7196,13 @@ class PitCrewController(QObject):
         from pitcrew.race.calls import POSITION
 
         if self._engineer_speaks:
-            self.voice.say(call.spoken())
+            # **Its own kind, so its own class**: a place and a rival's stop
+            # are NEWS and wait for a straight; "You're back on it." rides
+            # the position kind too. Retired by the race only when heard.
+            self._say_volunteered(call)
             self.ptt.last_call = call.spoken()
+        else:
+            self._heard_on_screen(call)
         row = None
         if self.race_screen is not None:
             row = self.race_screen.show_call(call)
@@ -7212,9 +7234,58 @@ class PitCrewController(QObject):
             self._league_last_said = moved
             log("race").info("league: %s", moved)
             if self._engineer_speaks:
-                self.voice.say(moved)
+                # **The place's own class**, so it queues BEHIND the place
+                # line it follows rather than jumping it as an EVENT would.
+                self.voice.say(moved, kind=POSITION)
             if self.race_screen is not None:
                 self.race_screen.set_status(moved)
+
+    def _say_volunteered(self, call) -> None:
+        """Say `call` in its own class, and tell the race whether it was heard.
+
+        **Handed to the voice is not heard** (14 Sep 2026). A rival's stop and
+        a place are NEWS: the voice holds them for a straight and may drop
+        one as stale, replaced or outranked. The race keeps such a call in
+        flight (`RaceCoordinator._hand_out`) and this routes the voice's
+        answer back to it - on the voice thread, so through `voice_heard`,
+        which Qt delivers on this one, where the race's crossing path runs.
+
+        A voice that is off has no queue to wait in: what reaches the driver
+        is the screen, and that is booked as the delivery.
+        """
+        race = self.race
+        wants = race is not None and race.awaits_delivery(call)
+        if not wants:
+            self.voice.say(call.spoken(), kind=call.kind)
+            return
+        if not getattr(self.voice, "enabled", False):
+            self.voice.say(call.spoken(), kind=call.kind)
+            race.delivered(call, True)
+            return
+        emit = self.voice_heard.emit
+        self.voice.say(call.spoken(), kind=call.kind,
+                       on_done=lambda played: emit(race, call, played))
+
+    def _heard_on_screen(self, call) -> None:
+        race = self.race
+        if race is not None and race.awaits_delivery(call):
+            race.delivered(call, True)
+
+    def _not_heard(self, call) -> None:
+        race = self.race
+        if race is not None and race.awaits_delivery(call):
+            race.delivered(call, False)
+
+    def _on_voice_heard(self, race, call, played: bool) -> None:
+        """Qt thread: the voice finished with a volunteered call.
+
+        **Only the race that handed it over hears the answer** (rule 11): a
+        line still queued when a race is stopped and another armed answers
+        about a stop that is not this race's news.
+        """
+        if race is None or race is not self.race:
+            return
+        race.delivered(call, played)
 
     def _on_incident_seen(self) -> None:
         """Qt thread: the car stopped mid-lap. Decide what it is worth.
@@ -7606,7 +7677,9 @@ class PitCrewController(QObject):
         """Say it, show it, and file it with the rest of the race's calls."""
         spoken = call.spoken()
         if self._engineer_speaks:
-            self.voice.say(spoken)
+            # The fill, the release and "short": instructions, said with the
+            # car stationary - never held behind a queued line.
+            self.voice.say(spoken, kind=call.kind)
         self.ptt.last_call = spoken
         self.last_call = spoken
         if self.race_screen is not None:
