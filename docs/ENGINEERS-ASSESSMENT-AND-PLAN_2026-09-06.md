@@ -532,6 +532,9 @@ its n.
 | 5.14 | **What reads it:** `rain` leaves `CANNOT_SEE`; the `rain` trigger fires off it; the penalty detector stands down on a *read* wet, not only a *declared* one; George's call is one line with its source (*"Track's getting wet — hygrometer, unconfirmed"*); Ludo's plan names the compound crossover the playbook acts on | a plan that assumed dry cannot see rain | harness replay fires `rain` once, a rain playbook entry arms, and the penalty detector stands down |
 | 5.15 | **Wind in the debrief.** Same-gear same-speed acceleration per straight (the 11 Sep method), **corrected for fuel mass**, so a fuel or top-speed change is not credited to the setup or a tow | Random weather is wind | reproduces the Sardegna 9 vs 10 Sep finding |
 | 5.20 | **Damage reader** (the driver, 14 Sep: *"have we built the damage reader?"* - no; 0.3 deferred it with the hygrometer for want of a calibration frame, and revision 0-9 of this phase left it out). The car icon between the tyre-bar columns turns red where parts are damaged, more red for more damage (`reference_gt7_wear_panel_geometry`). **Calibration on file:** session 135's replay (`2026-09-06 14-32-00.mp4`, 1080p) shows the icon's front red after his lap-2 crash - a replay frame, so geometry is checked against a flat live capture before use. Per-region red share (front / rear / left / right), anchored off `locate_gauge`'s bars like 5.13; tri-state with `cannot see`; rule 10 guards; read per lap. **What reads it:** the `incident` trigger gains a damage fact ("Front damage - unconfirmed"), the debrief separates a pace step after contact from tyre wear, and the wear model refuses a lap on a damaged car as a wear sample | Phase 0 row 0.3; the driver, 14 Sep | a reader that reads the s135 front damage and no damage on the dry Suzuka race frames, checked on every frame of one clip |
+| 5.21 | **The driver board, rebuilt to his spec (14 Sep).** Tyre splits dropped (a whole-stint association on n=4 corners that changed nothing on a straight). **Lap-time panel** - Laptime / Time Diff / Pred. Time as his reference image - against this session's best AND the best on file, both locked to compound (`race/board_live.py`; distance integrated as the recorder does, GT7's current-lap clock). **Three lights**: WET off the hygrometer's last 10 s of HUD reads (`HudSession.wet_now`, never DRY without reads); ABS box showing the event setting that lights **LOCK** on a front lock (derived - ABS-off braking shares ABS's slip band, only the lock tail separates them); **TCS off `flags_raw` bit 11**, calibrated on his TCS-on lap (22% vs 0.01%). **Opens in practice and qualifying** too, race rows swapped for the lap panel at the bottom. A **Tyres fitted** picker at Start tags laps until the first pit lap | the driver, 14 Sep | the board renders 2,139 x 1,055 at its widest on the rig's faces; 38 tests on the live path, lights, compound locking and practice board |
+| 5.22 | **Bests and comparisons per compound** (the driver, 14 Sep: *"a best time for each compound run and best sector times for each compound, how does the total lap time compare per compound as well as each sector"*). Per car x circuit x game version: best lap and best sectors per compound with n; the compound delta ("RM +0.5 s on RS") on the lap and per sector, from comparable laps only (fuel band, lap in stint) with its spread, on the Practice screen and in the debrief. **Depends on laps carrying their compound** - 5.21's Start picker and 5.23's label reader | the driver, 14 Sep | the Sardegna RSR archive (RH 41 laps, RM 30) prints per-compound bests and per-sector deltas with n |
+| 5.23 | **The compound read off the HUD label** (`telemetry/hud_compound.py`, 14 Sep). Surveyed on 7 flat recordings / 327 frames: white 10 px letters flush above the front bars and below the rear, never coloured on track; RS vs RM separate by a wide margin (own worst 0.873, other best 0.039). Templates for **RS and RM only** - every other label is refused, never rounded to the nearer; front and rear must agree; a tyre counts as known only on three agreeing and undisputed reads (`HudSession.compound_now`). Tags practice laps first (never a pit lap), and the board's references follow it. **Still to do:** templates for RH, IM, HW and the S/C tyres the first time each is on a flat capture; race lap tagging off the label | the driver, 14 Sep | six real panels read correctly; a blanked label and a fake unseen code refused |
 
 #### 5E — Teammates (George and Ludo)
 
@@ -673,6 +676,30 @@ and pinned by `test_best_corner_rule.py` (shown failing on the parent's text fir
   teammate per series, so the second write would silently replace the first. Not written.
   5.16 gains a schema change to (series, driver) and `race/teammate.py` a list, before 5.17.
   `series_teammates` left `wiring_audit.EXPECTED_EMPTY`.
+- **5.21 / 5.23 built, critic AGREED at pass 4.** What the four passes caught, in order:
+  - **Pass 1 (blocker).** The per-packet reader read the session best twice, so a compound
+    switch between the reads raised and killed the lap panel for the session. It now
+    publishes one tuple.
+  - **Pass 1, other defects.**
+    - The race state and the HUD label fought over the compound every tick.
+    - A pause mid-lap added its whole length as distance, the recorder's own documented
+      defect.
+    - An abandoned lap kept timing.
+    - A struck lap stayed the reference.
+    - Lights stayed lit after the stream stopped.
+    - 9 of 22 mutants survived.
+  - **Pass 2.** The "lap clock went backwards" rule could blank a whole lap if GT7 resets
+    the clock a packet after the crossing (no capture shows the order), so it is now
+    guarded. Practice still disagreed with the rack after a re-tag.
+  - **Pass 3.** The practice answer walked the whole event's rack, so a new session took
+    the last run's tyre (rule 11).
+  - **Pass 4 agreed.** Minors left open: a restart inside a lap's first 2 s is not
+    detected, and LOCK fires with ABS Weak on some laps; both docstrings say so. The
+    label reader has RS/RM templates at 36 px only.
+  - **One tyre answer now.** HUD label, then the plan tyre or the event's single compound
+    in a race, or this session's rack tag since the last stop, then the Start tyre, in
+    practice. Race laps are stored under that answer, and the board's best is filed under
+    what was stored.
 - **5.12 done, 5.13 reader built (not wired - 5.14).** The driver recorded a flat-screen
   video with water on the track (`InstantReplays/2026-09-14 11-46-35.mp4`); the dry Suzuka
   race of 13 Sep reads 0 on every lit frame. **The hygrometer is not a slow wetness gauge:**
