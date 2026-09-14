@@ -2066,8 +2066,10 @@ def test_a_dropped_lap_names_the_pit_lane_rather_than_the_two_measures():
     This branch also had no `confidence` bound at all - an UnboundLocalError
     on the two calls made at the very end of a race, which no test covered
     and which a replay of the rehearsal found."""
+    # A timed race: the clock these reasons name only exists in one, and a
+    # lap race says "Last lap." with no clock in it (14 Sep 2026).
     state = RaceState(lap=25, laps_to_go_estimate=1, laps_dropped=1,
-                      clock_corroborated=False)
+                      clock_corroborated=False, race_minutes=50.0)
     call = _laps_to_go(state)
     assert call is not None
     assert call.call == "Last lap."
@@ -2077,14 +2079,14 @@ def test_a_dropped_lap_names_the_pit_lane_rather_than_the_two_measures():
 
 def test_a_drift_with_no_dropped_lap_still_names_the_lap_times():
     state = RaceState(lap=25, laps_to_go_estimate=2, laps_dropped=0,
-                      clock_corroborated=False)
+                      clock_corroborated=False, race_minutes=50.0)
     call = _laps_to_go(state)
     assert "lap times" in call.reason and call.confidence == MEDIUM
 
 
 def test_a_clock_that_agrees_says_so_plainly():
     state = RaceState(lap=25, laps_to_go_estimate=1, laps_dropped=0,
-                      clock_corroborated=True)
+                      clock_corroborated=True, race_minutes=50.0)
     call = _laps_to_go(state)
     assert call.reason == "On the clock." and call.confidence == HIGH
 

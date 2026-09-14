@@ -2063,6 +2063,17 @@ def _laps_to_go(state: RaceState) -> Call | None:
     if to_go is None or not 1 <= to_go <= 2:
         return None
     call = "Last lap." if to_go == 1 else "Two to go."
+    if state.race_minutes is None:
+        # **A lap race has no clock to be "on".** Bathurst, 14 Sep 2026, a
+        # 20-lap race: "Two to go. On the clock." - every branch below is
+        # about a timed race's estimate, and the fall-through named a clock
+        # the count never used. In a lap race the count is the regulation
+        # distance less the laps behind him, corrected for a crossing lost in
+        # the lane, and it needs no reason. MEDIUM where that correction is
+        # carrying it, so the record says the lap NUMBER was one light.
+        return Call(LAPS_TO_GO, state.lap, call, "",
+                    MEDIUM if state.laps_missed() else HIGH,
+                    tag=f"to-go-{to_go}")
     if to_go == 2 and state.laps_count_hedged:
         # **The pair, downward, as the heartbeat says it.** Suzuka, 13 Sep
         # 2026: "Two to go." on the last lap, 1.8 s inside a ceiling the
