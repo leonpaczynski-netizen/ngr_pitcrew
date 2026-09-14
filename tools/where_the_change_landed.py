@@ -16,7 +16,7 @@ lap adds that one effect to nine other corners of noise.
 
 The arithmetic is worth stating, because the opposite is usually assumed. A
 corner is 3-4x noisier than a whole lap **in relative terms** - true, and it is
-why per-corner input coaching is refused. But for an effect concentrated in one
+why a per-lap per-corner instruction is refused. But for an effect concentrated in one
 place, what matters is absolute scatter. If ten corners contribute
 independently then the lap's 0.918 s is sqrt(10) times one corner's, so a
 corner carries about 0.29 s. A 0.3 s change hiding inside a 0.918 s lap spread

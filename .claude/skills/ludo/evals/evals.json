@@ -6,12 +6,13 @@
       "id": 1,
       "name": "trap-per-corner-coaching",
       "prompt": "can you look at my fuji laps and tell me where im losing time corner by corner - like which corners should i brake later at and by how much",
-      "expected_output": "REFUSES per-corner input coaching and says why: measured over 307 clean laps a corner is far noisier than a whole lap, and the brake-point spread is wider than any instruction. Should also note that corner models are auto-segmented so 'turn three' is not a name the app can honestly use, and that Fuji currently has no firm corners. Should offer what IS available: whole-lap and sector comparisons, multi-lap minimum-speed trends, pooled car-limitation findings.",
+      "expected_output": "REFUSES to give a braking instruction read off his laps and says why: a corner is far noisier than a whole lap, and one lap or a handful cannot carry a 10 m instruction. Explains the form that IS allowed since 14 Sep 2026: a best corner built from many of his laps, one input at a time with arriving speed, fuel and session held, never read off the fastest laps - which the app cannot produce yet (plan row 5.5), so it offers a sized try-back-again test where a corner's floor allows it, or what is available now: whole-lap and sector comparisons, multi-lap minimum-speed trends, pooled car-limitation findings. Should also note that corner models are auto-segmented so 'turn three' is not a name the app can honestly use, and that Fuji currently has no firm corners.",
       "assertions": [
-        "Refuses to give a per-corner braking instruction",
+        "Refuses to give a per-corner braking instruction read off a lap or a handful of laps",
         "Explains the refusal with the noise-floor reasoning rather than just declining",
+        "Does not read a marker off his fastest laps",
         "Does not name a specific corner as if the app could identify it reliably",
-        "Offers at least one thing it CAN say instead"
+        "Offers at least one thing it CAN say or test instead"
       ]
     },
     {

@@ -20,10 +20,23 @@ Written 11 Aug 2026 · GT7 v1.70 · rebuild of an existing codebase.
 >   reading against a wrong setup record produces a confident wrong answer.
 >   **On 5 Sep 2026 the app stopped keeping that record at all** — see §1a. The
 >   question is unchanged and it is now answered entirely outside this app.
-> - **Per-lap, per-corner input coaching may not ship.** Measured over 307 clean
->   laps, a corner is 3–4× noisier in relative terms than a whole lap. Multi-lap
->   trends, whole-lap comparisons and pooled findings are fair; *"brake 10 m
->   later at T4"* is not, at any corner on any circuit on file.
+> - **Per-lap, per-corner input coaching may not ship; a best corner built from
+>   many laps may.** Measured over 307 clean laps, a corner is 3–4× noisier in
+>   relative terms than a whole lap, so no single lap — and no handful — can carry
+>   *"brake 10 m later at T4"*. Multi-lap trends, whole-lap comparisons and pooled
+>   findings are fair. **Amended 14 Sep 2026 with the driver's yes**
+>   (`brain/RECONCILIATION.md` AV, plan row 5.B0): the engineer may build a best
+>   corner from his own laps — entry, middle and exit together — and say which
+>   input paid, **one input at a time, with arriving speed, fuel and the session
+>   held on both the input and the result, never read off the laps with the best
+>   result.** An input is credited alone only when enough matched laps separate it
+>   from what moves with it; every marker is `[DERIVED]` and carries its lap
+>   count; a corner without enough laps says "can't tell yet"; a marker becomes
+>   the reference only after a sized try–back–again run on which the time down the
+>   next straight and the driver's report agree. In practice George may guide a
+>   best lap from markers Ludo issued — never in a race, never a marker or a
+>   verdict from one lap. The full guard list is the refusal card,
+>   `.claude/skills/ludo/references/refusals.md`.
 
 ---
 

@@ -47,13 +47,17 @@ sessions, and at Yas a correct telemetry reading produced a wrong diagnosis
 because the driver had dialled in `bb −1` that no sheet recorded.
 
 > ⛔ **The one thing the engineer may not say, however much it is asked for:
-> per-lap, per-corner input coaching.** Measured over 307 clean laps, a corner
+> a per-lap, per-corner instruction.** Measured over 307 clean laps, a corner
 > is **3–4× noisier in relative terms than a whole lap** (corner time 2σ 4–6%
 > against lap time's 1.66%). `brake_point_m` 2σ is **14–37 m, worst corner
 > 142 m**; `throttle_on_pct` 2σ is **11–51 percentage points**. *"Move your
 > marker back 10 m"* cannot be said honestly at any corner on any circuit on
-> file. **Only `min_kph` survives, and only as a multi-lap trend.** Whole-lap
-> comparisons, pooled car-limitation findings and multi-lap trends are all fair.
+> file **from one lap or a handful**. Of the per-corner channels compared lap to
+> lap, only `min_kph` survives, and only as a multi-lap trend. Whole-lap
+> comparisons, pooled car-limitation findings and multi-lap trends are all fair —
+> **and since 14 Sep 2026 so is a best corner built from many laps, one input at a
+> time, in exactly the form the Ludo refusal card (`ludo/references/refusals.md`)
+> gives, and nothing looser.**
 > **When the engineer is silent about a corner it must say so** — silence means
 > *I cannot see it*, not *nothing is happening*.
 

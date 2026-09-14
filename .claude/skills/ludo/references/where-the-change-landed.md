@@ -17,7 +17,7 @@ one effect to nine other corners of noise and then asks you to find it.
 
 The arithmetic, because the opposite is usually assumed. A corner is 3–4×
 noisier than a whole lap **in relative terms** — true, and it is exactly why
-per-corner input coaching is refused. But for an effect concentrated in one
+a per-lap per-corner instruction is refused. But for an effect concentrated in one
 place what matters is *absolute* scatter. If ten corners contribute
 independently, the lap's 0.918 s is √10 × one corner's, so a corner carries
 about 0.29 s. A 0.3 s change is a third of the noise on the lap and all of it

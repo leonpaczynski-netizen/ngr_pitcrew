@@ -1278,3 +1278,36 @@ Monza's rear-left. Measured, not inferred — **60 % of the loaded cornering on
 this lap is left-hand turns, carrying 1.5× the lateral load of the rights**
 (101,641 frames above 0.6 g, sessions 128–132), and a left-hander loads the
 right-hand wheels.
+
+---
+
+## AV — Corner coaching: the blanket refusal was wider than its evidence. Amended with the driver's yes. 14 Sep 2026
+
+**Two records disagreed.** `CLAUDE.md`'s header, charter §2, the Ludo refusal card and
+`gt7-brain` refused *"brake 10 m later at T4"* at any corner on any circuit. The driver
+disputed it: *"brake 10 m later this is achievable, we have a map of the track now … you can
+overlay throttle and braking onto the map for analysis."*
+
+**What the evidence behind the refusal measured.** A **lap-to-lap** noise floor (22 Aug, v1.70,
+three circuits): brake-point 2σ 14–37 m as circuit medians. That refutes an instruction from
+**one lap or a handful**. It does not refute a pooled finding — the header itself already said
+pooled findings are fair — and the 1 Sep re-measure showed the distance axis is sound, so the
+spread is his driving, not the ruler.
+
+**What does not follow either.** Reading a marker off his fastest laps is outcome selection
+(the fastest laps are partly luck), and a later brake usually comes with a harder brake and a
+different line. Nine critic passes on plan Phase 5 settled the permitted form: one input at a
+time, arriving speed/fuel/session held on both sides, matched pairs before single-input credit,
+false-discovery control, sized try–back–again judged on segment time and his report.
+
+**Resolution — his yes, 14 Sep, to plan row 5.B0 (both parts, and the sentence explaining the
+edit to his words).** Per-lap per-corner instruction stays refused. A best corner built from
+many laps is allowed in exactly the refusal card's form. **And his second answer the same day:
+George may guide a best lap in practice** from markers Ludo issued (plan row 5.19) — never in a
+race, never a marker or a verdict from one lap.
+
+**Amended in one commit:** `CLAUDE.md` header; charter §2; `ludo/references/refusals.md`;
+`gt7-brain/SKILL.md`; `where-the-change-landed.md` and its tool docstring; eval 1; memory
+`project_corner_noise_floor_2026_08_22`. **Superseded, not deleted:** the 22 Aug floors stand as
+lap-to-lap floors; plan 5.3 re-measures them on v1.71.
+

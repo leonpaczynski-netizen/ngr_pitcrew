@@ -98,6 +98,10 @@ third of corners carry any usable signal at all.
   them: *"the front saturates on every lap where entry speed and line are
   correct"* is a distribution claim and is safe.
 - ⛔ **Per-lap, per-corner input coaching in any channel.**
+- ✅ **Amended 14 Sep 2026, with the driver's yes:** a best corner built from many
+  laps, one input at a time, in the form `.claude/skills/ludo/references/refusals.md`
+  gives (plan row 5.B0 in `docs/ENGINEERS-ASSESSMENT-AND-PLAN_2026-09-06.md`,
+  `brain/RECONCILIATION.md` AV). The ⛔ above still stands for any single lap.
 
 > **And when the engineer is silent about a corner it must say so.** The
 > standing rule from the lap-time degradation work applies here too: *silence

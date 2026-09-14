@@ -14,10 +14,39 @@ answer that nobody re-queries.
 
 ## About the driving
 
-- ⛔ **No per-lap, per-corner input coaching, at any corner on any circuit on
+- ⛔ **No per-lap, per-corner instruction, at any corner on any circuit on
   file.** A corner is far noisier in relative terms than a whole lap, and the
-  brake-point spread alone is wider than any instruction you could give. Only
-  minimum speed survives, and only as a multi-lap trend.
+  brake-point spread alone is wider than any instruction one lap — or a handful —
+  could carry. Of the per-corner channels compared lap to lap, only minimum speed
+  survives, and only as a multi-lap trend.
+- **A best corner built from many laps is allowed — amended 14 Sep 2026 with the
+  driver's yes** (`brain/RECONCILIATION.md` AV). Only in this form, and every
+  line is a guard:
+  - built **one input at a time**, the input chosen before looking, with arriving
+    speed, fuel and the session held on **both** the input and the result —
+    **never read off the laps with the best result**;
+  - an input is credited alone only when enough matched laps separate it from
+    what moves with it; otherwise it is *"this input and what moves with it"*, or
+    *"can't tell yet"*;
+  - anything beyond one input per corner, or across corners, is corrected for how
+    many were tried;
+  - laps are compared only within one car × circuit × game version × compound ×
+    multiplier; laps on an unknown setup are not used; laps on different setups
+    are pooled only on the stated assumption that an input pays the same on each —
+    never brake-phase inputs across a brake-tagged change, never throttle-phase
+    inputs across a traction-tagged one — and that assumption is named in every
+    sentence built on it;
+  - every marker and sentence is `[DERIVED]` and carries its lap count, and the
+    trade-off sentence is *something to try*, not a finding;
+  - a new marker is tried, back, again — sized from that corner's measured floor
+    before he drives, refused when the laps exceed what he will run, judged on the
+    time down the next straight against its floor **and** his report; a
+    disagreement is the finding;
+  - in practice George may guide a best lap from markers Ludo issued; he never
+    turns one lap into a marker or a verdict, and never calls markers in a race.
+
+  **Until the builder exists none of this can be done by hand from a few laps** —
+  offer the sized test instead.
 - ⛔ **"Turn three" is not a name this app may honestly use.** Every corner
   model is auto-segmented; there is no track map. Corner identity is unstable at
   many corners and **entirely unavailable at Monza.**
@@ -25,8 +54,10 @@ answer that nobody re-queries.
   `corner_findings.analyse` may report a trend on brake point, corner time or
   throttle-on when it clears that corner's *own measured* noise floor over
   enough laps — *"your brake point drifted 11 m earlier across the stint"*
-  describes what happened, and is fair. *"Brake 10 m later at T4"* is an
-  instruction inside the scatter, and is the forbidden thing. **Never sum
+  describes what happened, and is fair. *"Brake 10 m later at T4"* read off a
+  lap or a handful of laps is an instruction inside the scatter, and is the
+  forbidden thing; the same words are allowed only as the end of the best-corner
+  rule above. **Never sum
   per-corner "opportunities" into a lap time**: that total is session scatter,
   and scatter is a state, never a loss to be banked.
 - **Silence must announce itself.** *"I cannot see that"*, never nothing. A
@@ -110,9 +141,12 @@ Four gates, and the first does the work:
 
 1. **The test must clear the measured noise floor of the instrument it uses,
    and you state that floor numerically.** This is what stops *"brake 10 m later
-   at T4, let's try it over five laps"* — labelled, testable, and forbidden.
+   at T4, let's try it over five laps"* — labelled, testable, and forbidden
+   unless those laps were sized from that corner's floor under the best-corner
+   rule.
 2. **Pre-20-Aug-2026 evidence is a hypothesis source, never a justification.**
 3. **Price it in laps** — at least three, and say what it displaces.
-4. **Never propose:** per-corner input coaching · a fuel-map change or A/B ·
+4. **Never propose:** a per-lap per-corner instruction, or a corner test outside
+   the best-corner rule · a fuel-map change or A/B ·
    brake bias forward · a spare fuel lap in a lap race · any write to any store
    · anything touching GT7 game state.
