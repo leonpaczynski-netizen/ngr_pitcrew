@@ -216,7 +216,8 @@ never as a step of a diagnosis.**
 - `tools/derive_grip_observations.py --apply` — grip observations from sessions on disk.
 - `tools/fit_tyre_models.py --apply` — clears and refits the tyre models from those observations.
 - `tools/flag_out_laps.py --apply` — re-judges each session's opening lap as an out-lap or not.
-- `tools/reaggregate.py --apply` — re-reads stored sessions for stops the app missed.
+- `tools/repair_in_out_laps.py --apply --db PATH` — makes every stored in-lap and out-lap obey the driver's rule (the lap after an in-lap is an out-lap), with the in-lap read off the frames; sets `is_pit_lap` both ways and `is_out_lap` only ever on, backs up first. A practice reset is not a stop and strikes nothing.
+- `tools/reaggregate.py --apply` — the old name for `repair_in_out_laps`, kept so the command line still reaches it.
 - `tools/repair_dropped_laps.py --apply` — restores laps GT7 counted and the app did not.
 - `tools/stamp_game_versions.py --apply` — the GT7 version on sessions recorded before the column.
 - `tools/read_hud_wear.py --apply` — the wear gauge read off an OBS capture, against the laps.
@@ -225,7 +226,7 @@ never as a step of a diagnosis.**
 - `tools/bridge_driver_names.py --apply` — renames the live pit wall's `Car #N` drivers to the names typed for the replay board, where both readers agree on the same row.
 - `tools/derive_straights.py --all --apply --db PATH` — each circuit's straights as lap-distance windows, `[DERIVED]` from his clean laps, so George starts a volunteered line only where it fits before the braking. Only windows that pass the gates (10 laps, end spread 40 m) are stored and the rest are printed; a stored model is never replaced by a worse one without `--replace`. The app also re-derives a circuit on its own when a session closes. Changes when the engineer may speak; the dry run prints the model and a `--replay SESSION` of how often a clip would have finished on the straight.
 
-  Each of those thirteen leaves the DATABASE alone without `--apply` — not the
+  Each of those fourteen leaves the DATABASE alone without `--apply` — not the
   disk: `read_replay_board` writes its roster JSON and its cluster PNGs on the
   dry run, by design. **Three do not work that way at all:**
 - `tools/derive_sectors.py` — **writes by default**; `--dry-run` reports only.
