@@ -42,6 +42,49 @@ def _clock(stamp: str) -> float:
     return moment.hour * 3600 + moment.minute * 60 + moment.second
 
 
+def monotonic_offset(db, sid: int):
+    """`(offset, lo, hi, green)` placing `gap_reads.at_s` on the wall clock.
+
+    Wall-clock seconds of the day for a reading are `at_s + offset`; `green`
+    is the race's green on the same clock. Raises `ValueError` saying why
+    where it cannot be placed. Shared with `tools/split_slot_handles.py`, so
+    the one conversion is made one way.
+    """
+    laps = [dict(zip(("lap_num", "race_elapsed_s", "recorded_at"), row))
+            for row in db.execute(
+                "SELECT lap_num, race_elapsed_s, recorded_at FROM laps "
+                "WHERE session_id = ? ORDER BY lap_num", (sid,))]
+    if not laps:
+        raise ValueError(f"no laps for session {sid}")
+    # The green, on the wall clock: each crossing's filing time less the race
+    # clock at it. The earliest is the one least delayed by the filing.
+    timed = [_clock(lap["recorded_at"]) - lap["race_elapsed_s"]
+             for lap in laps if lap["race_elapsed_s"] is not None]
+    if not timed:
+        raise ValueError(f"no race clock on the laps of session {sid}")
+    green = min(timed)
+    crossing = {0: green}
+    for lap in laps:
+        if lap["race_elapsed_s"] is not None:
+            crossing[lap["lap_num"]] = green + lap["race_elapsed_s"]
+
+    lower, upper = [], []
+    for key, first, last in db.execute(
+            "SELECT lap, MIN(at_s), MAX(at_s) FROM gap_reads "
+            "WHERE session_id = ? GROUP BY lap", (sid,)):
+        if key in crossing and key + 1 in crossing:
+            lower.append(crossing[key] - first)
+            upper.append(crossing[key + 1] - last)
+    if not lower:
+        raise ValueError(f"no gap reads for session {sid}")
+    lo, hi = max(lower), min(upper)
+    if lo > hi:
+        raise ValueError(f"the monotonic offset bounds cross ({lo:.2f} > "
+                         f"{hi:.2f}) - the readings cannot be placed on the "
+                         f"race clock")
+    return (lo + hi) / 2.0, lo, hi, green
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session", type=int, required=True)
@@ -57,33 +100,11 @@ def main() -> int:
         "position, is_pit_lap, is_out_lap, excluded, exclusion_reason, "
         "off_track_s, laps_completed, race_elapsed_s, recorded_at "
         "FROM laps WHERE session_id = ? ORDER BY lap_num", (sid,))]
-    if not laps:
-        print(f"no laps for session {sid}")
+    try:
+        offset, lo, hi, green = monotonic_offset(db, sid)
+    except ValueError as exc:
+        print(exc)
         return 1
-    # The green, on the wall clock: each crossing's filing time less the race
-    # clock at it. The earliest is the one least delayed by the filing.
-    green = min(_clock(lap["recorded_at"]) - lap["race_elapsed_s"]
-                for lap in laps if lap["race_elapsed_s"] is not None)
-    crossing = {0: green}
-    for lap in laps:
-        crossing[lap["lap_num"]] = green + lap["race_elapsed_s"]
-
-    lower, upper = [], []
-    for key, first, last in db.execute(
-            "SELECT lap, MIN(at_s), MAX(at_s) FROM gap_reads "
-            "WHERE session_id = ? GROUP BY lap", (sid,)):
-        if key in crossing and key + 1 in crossing:
-            lower.append(crossing[key] - first)
-            upper.append(crossing[key + 1] - last)
-    if not lower:
-        print(f"no gap reads for session {sid}")
-        return 1
-    lo, hi = max(lower), min(upper)
-    if lo > hi:
-        print(f"the monotonic offset bounds cross ({lo:.2f} > {hi:.2f}) - "
-              f"the readings cannot be placed on the race clock")
-        return 1
-    offset = (lo + hi) / 2.0
 
     reads = [{"race_s": round(row["at_s"] + offset - green, 3),
               "key": row["lap"], "side": row["side"], "gap_s": row["gap_s"],
