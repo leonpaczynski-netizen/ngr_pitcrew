@@ -847,6 +847,150 @@ def spoken_openers() -> tuple[str, ...]:
     )
 
 
+# ------------------------------------- the families said away from next_call
+#
+# **Six families the pack never swept** (Bathurst, 14 Sep 2026: 32 of 46 race
+# lines missed the pack and were synthesised live). None of them comes out of
+# `next_call`, so none was reached by `race_call_lines`: the straight's data
+# line and the colour countdown live in `colour.py`, the word on the way back
+# from an off in the coordinator, the incident call behind a crossing's
+# ranking, and the fill and the release in the pit box. Each is driven through
+# the function that says it - never retyped - and kept as the numberless
+# sentences (which `_decompose` peels) plus the words either side of its one
+# number (which the number words already in the pack complete).
+#
+# **Not the rival's stop.** "TommyTbone has boxed on 7 litres." carries a name
+# no clip can hold, and the engine plays a line from the pack only whole - a
+# pack clip spliced to a live-synthesised name would be two voices in one
+# sentence. It stays live, and says so in the miss log.
+
+WEAR_CORNERS = ("fl", "fr", "rl", "rr")
+
+
+def _pieces(*lines: str) -> tuple[str, ...]:
+    """Each line's numberless sentences, and the words around each number."""
+    out: list[str] = []
+    for line in lines:
+        for sentence in re.split(r"(?<=\.)\s+", line.strip()):
+            if not sentence:
+                continue
+            if not _NUMBER.search(sentence):
+                out.append(sentence)
+                continue
+            split = _split_on_number(sentence)
+            if split is None:
+                continue
+            numbers = set(number_fragments()) | {POINT}
+            out.extend(piece for piece in split if piece not in numbers)
+    return tuple(dict.fromkeys(out))
+
+
+@lru_cache(maxsize=1)
+def colour_data_lines() -> tuple[str, ...]:
+    """The straight's data line and the crossing's stop countdown.
+
+    "RR 19 percent.", "Worst tyre 19 percent.", "6 laps to the stop.", and the
+    gap to his best in both of `say.spoken_gap`'s forms - off
+    `ColourCalls._data` and `_countdown` themselves.
+    """
+    from pitcrew.race.colour import CHATTY, ColourCalls
+
+    lines = []
+    for corner in (*WEAR_CORNERS, None):
+        call = ColourCalls(level=CHATTY)._data(
+            None, "", 0.19, corner, None, None, 1)
+        lines.append(call.spoken())
+    for to_box in (1, 6):
+        call = ColourCalls(level=CHATTY)._data(
+            None, "", None, None, None, 1 + to_box, 1)
+        lines.append(call.spoken())
+        countdown = ColourCalls()._countdown(1, 1 + to_box)
+        if countdown is not None:
+            lines.append(countdown.spoken())
+    for off_ms in (*range(100, 1000, 100), 1300):
+        colour = ColourCalls(level=CHATTY)
+        colour._best_ms = 90_000
+        call = colour._data(None, "", None, None, 90_000 + off_ms, None, 1)
+        lines.append(call.spoken())
+    return _pieces(*lines)
+
+
+@lru_cache(maxsize=1)
+def off_road_lines() -> tuple[str, ...]:
+    """The incident call, and the word on the way back from an off.
+
+    "Lap 1 is out. You stopped on it.", "Lap 16 is out. That cost you 32
+    seconds against your pace." and "You're back on it. About 9 seconds off
+    the road." - all three said at Bathurst, none in the pack.
+    """
+    from types import SimpleNamespace
+
+    from pitcrew.race.calls import RaceState, _incident
+    from pitcrew.race.coordinator import RaceCoordinator
+
+    lines = []
+    for cost_ms in (None, 32_000):
+        state = RaceState(lap=2)
+        state.incident_lap = 1
+        state.incident_cost_ms = cost_ms
+        call = _incident(state)
+        if call is not None:
+            lines.append(call.spoken())
+    stub = SimpleNamespace(
+        composure=SimpleNamespace(owed=lambda: 9.0),
+        state=SimpleNamespace(lap=1))
+    call = RaceCoordinator._compose(stub, None)
+    if call is not None:
+        lines.append(call.spoken())
+    return _pieces(*lines)
+
+
+@lru_cache(maxsize=1)
+def refuel_lines() -> tuple[str, ...]:
+    """What is said in the box: the fill, the release, and leaving short.
+
+    Driven frame by frame through `RefuelWatch.note`, over every basis
+    `calls.fuel_target_basis` names for the box states the manifest already
+    sweeps, so a reworded basis is a re-rendered clip.
+    """
+    from pitcrew.race.calls import fuel_target_basis
+    from pitcrew.race.refuel import RefuelWatch
+
+    bases = [None]
+    for state in _box_fuel_states():
+        basis = fuel_target_basis(state)
+        if basis:
+            bases.append(basis)
+    lines = []
+    for basis in dict.fromkeys(bases):
+        for start_l, to_flag_l in ((5.0, None), (5.0, 40.0), (19.9, None),
+                                   (19.9, 40.0)):
+            watch = RefuelWatch()
+            watch.note(start_l, speed_kph=100.0, target_l=None)
+            fuel = start_l
+            while fuel < 30.0:
+                fuel += 0.5
+                call = watch.note(fuel, speed_kph=0.0, target_l=20.0,
+                                  fuel_per_lap_l=2.5, to_flag_l=to_flag_l,
+                                  basis=basis)
+                if call is not None:
+                    lines.append(call.spoken())
+    watch = RefuelWatch()
+    watch.note(5.0, speed_kph=100.0, target_l=None)
+    for fuel in (5.5, 6.0, 6.5, 7.0):
+        watch.note(fuel, speed_kph=0.0, target_l=20.0)
+    short = watch.left_early(10.0)
+    if short is not None:
+        lines.append(short.spoken())
+    return _pieces(*lines)
+
+
+def volunteered_lines() -> tuple[str, ...]:
+    """Every clip the families above need."""
+    return tuple(dict.fromkeys((*colour_data_lines(), *off_road_lines(),
+                                *refuel_lines())))
+
+
 # The two references the fuel clause is measured against, mirrored from
 # `calls.TO_THE_STOP` / `TO_THE_FLAG`. Imported lazily there would be a cycle;
 # a test asserts the two stay in step.
@@ -1026,6 +1170,7 @@ def clips() -> tuple[str, ...]:
         *orientation_lines(),
         *race_call_lines(),
         *spoken_openers(),
+        *volunteered_lines(),
     ]
     return tuple(dict.fromkeys(everything))
 
@@ -1041,19 +1186,49 @@ def segments_for(text: str) -> tuple[str, ...] | None:
     """
     if not text:
         return None
-    match = _FUEL_LINE.match(text)
+    shaped = _shaped(text)
+    if shaped is not None:
+        return shaped or None
+    return _decompose(text)
+
+
+def _shaped(sentence: str) -> tuple[str, ...] | None:
+    """`sentence` played by one of the two fixed shapes, or None if neither.
+
+    Returns an EMPTY tuple for a sentence that has the shape but a figure out
+    of range - a shape that matched is never handed on to the generic split,
+    which would cut it in the wrong place.
+
+    **Applied per sentence, not only to the whole line** (Bathurst, 14 Sep
+    2026). The shapes were anchored to the whole string and tried only in
+    `segments_for`, so "P11 of 13. You've lost a place." reached `_decompose`,
+    where "P11 of 13." went to `_split_on_number` - whose `(?<![\\w.])` edge
+    rightly refuses the 11 in "P11", so it split on the 13 and asked for a
+    clip called "P11 of" that nothing renders. Eleven position calls missed
+    the pack that night, every one of them made of pieces the pack held.
+    """
+    match = _FUEL_LINE.match(sentence)
     if match is not None:
         whole, tenth = int(match.group(1)), int(match.group(2))
         if whole > MAX_FUEL_LAPS:
+            return ()
+        if match.group(3) not in fuel_fragments():
             return None
-        return (number_word(whole), POINT, number_word(tenth), _fuel_tail())
-    match = _POSITION_LINE.match(text)
+        # **The tail the sentence said, not the answer's sampled one.** This
+        # returned `_fuel_tail()` - sampled with the reference "to the stop" -
+        # whatever the line said, so the straight's "4.5 laps of fuel in hand
+        # to the flag." and the answer's "4.5 laps of fuel in the tank." were
+        # both PLAYED as "... in hand to the stop": the right number with the
+        # other journey's words, the rule-13 defect produced by the pack
+        # itself. A tail the pack does not hold is not this shape.
+        return (number_word(whole), POINT, number_word(tenth), match.group(3))
+    match = _POSITION_LINE.match(sentence)
     if match is not None:
         position, field = int(match.group(1)), int(match.group(2))
         if not 1 <= position <= MAX_POSITION or not 2 <= field <= MAX_FIELD:
-            return None
+            return ()
         return (f"P{position}", f"of {field}.")
-    return _decompose(text)
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -1078,6 +1253,11 @@ def _reusable_lines() -> frozenset[str]:
                       *place_change_lines(),
                       *orientation_lines(),
                       *spoken_openers(),
+                      # "You're back on it." and "Go." open a line whose
+                      # second sentence carries the number - peelable, or
+                      # the whole line is one clip nothing renders.
+                      *(line for line in volunteered_lines()
+                        if line.endswith(".") and line[0].isupper()),
                       *box_when_lines(), *box_fuel_lines(),
                       *laps_remaining_lines(), *plan_single_part_lines(),
                       *call_openers()))
@@ -1147,13 +1327,22 @@ def _decompose(text: str) -> tuple[str, ...]:
         # the clock, the laps remaining and the fuel - so stopping at the
         # first would have made every crossing of the race a pack miss, and
         # rendering the combinations whole is tens of thousands of files.
-        split = _split_on_number(sentence) or _split_on_numbers(sentence)
+        shaped = _shaped(sentence)
+        if shaped == ():
+            # The shape, with a figure the pack has no clip for: a miss, and
+            # said whole rather than cut somewhere arbitrary.
+            return (*parts, rest)
+        split = (shaped or _split_on_number(sentence)
+                 or _split_on_numbers(sentence))
         if split is None:
             break
         parts.extend(split)
         rest = tail
     if not rest:
         return tuple(parts)
+    shaped = _shaped(rest)
+    if shaped:
+        return (*parts, *shaped)
 
     # **One implementation of the split.** This was a second copy of
     # `_split_on_number`, and the two drifted the moment one of them learned

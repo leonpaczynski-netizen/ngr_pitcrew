@@ -338,8 +338,20 @@ def test_the_pack_stays_within_budget():
     the fuel line already is, it is 53. If this ceiling comes under pressure
     again, look for a family being enumerated that could be split before
     raising it.
+
+    **Raised to 750 on 14 Sep 2026, for the lines said away from
+    `next_call`.** At Bathurst 32 of 46 race lines missed the pack; the
+    ceiling stood at 699, one under. The six families declared in
+    `volunteered_lines` cost 37 clips and cover 19 of those 46 lines - the
+    straight's data line, the stop countdown, the incident call, the word
+    back from an off, and the fill and release in the box - every one of
+    them already split on its number. The families that could still be split
+    (`box_fuel_lines`, `box_when_lines`, `laps_remaining_lines`) are the
+    PTT answers and the box call's own figure, played whole on purpose: a
+    join in the middle of the number he dials in is the wrong place to save
+    a file.
     """
-    assert len(manifest.clips()) < 700
+    assert len(manifest.clips()) < 750
 
 
 def test_the_same_line_always_names_the_same_file():
