@@ -21,16 +21,20 @@ same detector the live path uses, never a second one:
   ever used to KEEP a stored flag - a session that ended in the pits has an
   in-lap and nothing after it.
 
-**A practice reset is not a stop** (`Stop.reset`). The game puts the car back
-in the box: moved there in one frame, landing stationary, the tank and the
-tyres replaced in the same frame. Nothing was driven into the pit lane, so it
-makes no in-lap and no out-lap. It still ends the tank - `runs.starts_run`
-sees the fill in the lap's fuel readings and splits the run - because a tank
-and a pace sample are different things.
+**A practice reset is not a stop** (`pit_detect.reset_at`). The game puts the
+car back in the box: moved there in one frame, landing stationary, the tank
+and the tyres replaced in the same frame. Nothing was driven into the pit
+lane, so it makes no in-lap and no out-lap - but the lap itself is struck,
+reason `reset` (the driver, 15 Sep 2026: "Strike the reset lap."), because its
+time was clocked from the box, not round the circuit. It still ends the tank:
+`runs.starts_run` sees the fill in the lap's fuel readings.
 
 **The out-lap is then THE RULE** (`runs.out_lap_after_in_lap`, the driver,
 15 Sep 2026): *"A lap in the same session after an in lap has to be an out
-lap."* No exceptions within a session; a session change creates none.
+lap."* No exceptions within a session; a session change creates none. **A row
+that holds both the in-lap and its out-lap satisfies it**
+(`LapReading.holds_out_lap`): that row is the out-lap, and the next row is a
+flying lap that counts.
 
 The unit is the lap, and the session is the scope.
 """
@@ -39,20 +43,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from pitcrew.analysis.runs import out_lap_after_in_lap
+from pitcrew.analysis.runs import REASON_RESET, out_lap_after_in_lap
 from pitcrew.telemetry.pit_detect import (
+    RACING_KPH,
     Sample,
     Stop,
     find_stops,
     placed_in_pit_lane,
+    reset_at,
 )
 
 CORNERS = ("fl", "fr", "rl", "rr")
 
-# Above this the car is racing, not rolling down a pit lane. The limiters on
-# file are 40-80 km/h; `session_state.PIT_MAX_SPEED_KMH` is the same gate on
-# the live side.
-PIT_LANE_MAX_KPH = 120.0
+# Above this the car is racing, not rolling down a pit lane.
+PIT_LANE_MAX_KPH = RACING_KPH
 
 # A lap's frames have to span this much of its lap time before the frames'
 # SILENCE about a stop is believed. Less, and a stop may sit in the part the
@@ -77,9 +81,15 @@ class LapReading:
     stops: tuple[Stop, ...] = ()
     # The first of them comes before any racing frame of this lap.
     opens_on_stop: bool = False
-    # Practice resets seen in the frames (`Stop.reset` on a serviced window).
-    resets: tuple[Stop, ...] = ()
     placed_s: float | None = None
+    # **This row holds its in-lap AND its out-lap** (the driver, 15 Sep 2026:
+    # "A row that contains both the in-lap and the out-lap satisfies the
+    # rule; the next row is a flying lap and counts"): a pit stop after racing
+    # in this lap, and the car back above racing speed after that stop ended -
+    # released and driven back up to speed before the line closed the row.
+    holds_out_lap: bool = False
+    # When a practice reset happened in this lap (`pit_detect.reset_at`).
+    reset_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -169,18 +179,48 @@ def read_lap(lap: dict, frames: list[dict] | None) -> LapReading:
     samples = samples_from(frames, rate)
     windows = find_stops(samples)
     stops = tuple(stop for stop in windows if stop.pit_stop)
-    resets = tuple(stop for stop in windows if stop.serviced and stop.reset)
     opens = False
+    holds_out = False
     if stops:
         first = stops[0]
         opens = not any(sample.speed_kph > PIT_LANE_MAX_KPH
                         for sample in samples if sample.t_s < first.start_s)
+        driven_into = [stop for index, stop in enumerate(stops)
+                       if index or not opens]
+        if driven_into:
+            holds_out = back_up_to_speed_s(samples, driven_into[-1]) is not None
     lap_time_ms = lap.get("lap_time_ms")
     covered = (bool(lap_time_ms) and lap_time_ms > 0
                and len(frames) / rate >= COVERED_FRACTION * lap_time_ms / 1000.0)
     return LapReading(**base, has_frames=True, covered=covered, stops=stops,
-                      opens_on_stop=opens, resets=resets,
-                      placed_s=placed_in_pit_lane(samples, windows))
+                      opens_on_stop=opens,
+                      placed_s=placed_in_pit_lane(samples, windows),
+                      holds_out_lap=holds_out, reset_s=reset_at(samples))
+
+
+def back_up_to_speed_s(samples, stop: Stop) -> float | None:
+    """Seconds from the car first being back above racing speed after `stop`
+    to the end of these samples - or None where it never was.
+
+    The out-lap half of a merged row: released from the box and driven back
+    above `RACING_KPH` before the line closed the row. A box before the line
+    whose exit comes AFTER it (session 136 lap 6: the stop ends 2 s before
+    the row does, and the car leaves at 80 km/h) never gets there, and its
+    out-lap is the next row.
+    """
+    after = [sample for sample in samples
+             if sample.t_s > stop.end_s and sample.speed_kph > RACING_KPH]
+    if not after:
+        return None
+    return samples[-1].t_s - after[0].t_s
+
+
+def lap_reset_s(frames: list[dict] | None, sample_hz: float) -> float | None:
+    """When a practice reset happened in these frames - the live recorder's
+    question, asked of the one detector."""
+    if not frames:
+        return None
+    return reset_at(samples_from(frames, sample_hz))
 
 
 def _same_session(a: LapReading, b: LapReading) -> bool:
@@ -214,6 +254,43 @@ def in_lap_evidence(readings: list[LapReading]) -> dict[int, str]:
     return found
 
 
+def _flags(reading: LapReading, is_pit: bool, is_out: bool):
+    """A reading as the duck type `out_lap_after_in_lap` asks of."""
+    return SimpleNamespace(is_pit_lap=is_pit, is_out_lap=is_out,
+                           session_id=reading.session_id)
+
+
+def outs_by_rule(readings: list[LapReading], pit: dict[int, bool],
+                 stored_out: dict[int, bool]) -> dict[int, tuple[bool, str]]:
+    """{lap_id: (is_out_lap, why)} across one session, given its in-laps.
+
+    **One walk, for `read_session` and the repair alike.** A lap is an out-lap
+    where it already was one, where it is an in-lap whose own frames hold its
+    out-lap, or where THE RULE makes it one - asked of
+    `runs.out_lap_after_in_lap` with the flags as they will stand, so the row
+    after a merged in-lap is judged against that row's own out-lap flag.
+    """
+    out: dict[int, tuple[bool, str]] = {}
+    shown: list = []
+    for index, reading in enumerate(readings):
+        is_pit = pit.get(reading.lap_id, False)
+        is_out, why = stored_out.get(reading.lap_id, False), ""
+        if not is_out and is_pit and reading.holds_out_lap:
+            is_out, why = True, ("this row holds its out-lap too: after the "
+                                 "stop the car is back above racing speed "
+                                 "before the line")
+        previous = shown[index - 1] if index else None
+        before = shown[index - 2] if index >= 2 else None
+        if (not is_out and previous is not None
+                and out_lap_after_in_lap(
+                    previous, _flags(reading, is_pit, False), before)):
+            is_out = True
+            why = f"the lap after in-lap {readings[index - 1].lap_num}"
+        out[reading.lap_id] = (is_out, why)
+        shown.append(_flags(reading, is_pit, is_out))
+    return out
+
+
 def read_session(laps: list[dict], frames_for) -> list[LapFinding]:
     """Every in-lap in one session's stored laps, and the out-laps THE RULE makes.
 
@@ -224,58 +301,42 @@ def read_session(laps: list[dict], frames_for) -> list[LapFinding]:
     """
     readings = [read_lap(lap, frames_for(lap["id"])) for lap in laps]
     in_laps = in_lap_evidence(readings)
+    outs = outs_by_rule(readings, {lap_id: True for lap_id in in_laps}, {})
 
     findings: list[LapFinding] = []
-    previous: LapReading | None = None
     for reading in readings:
         is_in = reading.lap_id in in_laps
-        is_out = (previous is not None
-                  and out_lap_after_in_lap(_Flags(previous, in_laps),
-                                           _Flags(reading, in_laps)))
-        if is_in or is_out:
-            stop = reading.stops
-            findings.append(LapFinding(
-                lap_id=reading.lap_id,
-                session_id=reading.session_id,
-                lap_num=reading.lap_num,
-                is_pit_lap=is_in,
-                is_out_lap=is_out,
-                # **One finding per lap, never two.** A lap can be the
-                # out-lap of one stop and the in-lap of the next.
-                tyres_changed=(any(s.changed_tyres for s in stop)
-                               if stop else None),
-                fuel_added_l=(round(sum(s.fuel_added_l for s in stop), 2)
-                              if stop else None),
-                stop_s=sum(s.duration_s for s in stop) if stop else None,
-                note=_note(reading, in_laps.get(reading.lap_id), is_out)))
-        previous = reading
+        is_out, why = outs[reading.lap_id]
+        if not (is_in or is_out):
+            continue
+        stop = reading.stops
+        findings.append(LapFinding(
+            lap_id=reading.lap_id,
+            session_id=reading.session_id,
+            lap_num=reading.lap_num,
+            is_pit_lap=is_in,
+            is_out_lap=is_out,
+            # **One finding per lap, never two.** A lap can be the out-lap of
+            # one stop and the in-lap of the next.
+            tyres_changed=(any(s.changed_tyres for s in stop)
+                           if stop else None),
+            fuel_added_l=(round(sum(s.fuel_added_l for s in stop), 2)
+                          if stop else None),
+            stop_s=sum(s.duration_s for s in stop) if stop else None,
+            note="; ".join(part for part in (
+                _EVIDENCE.get(in_laps.get(reading.lap_id), ""), why) if part)))
     return findings
 
 
 @dataclass(frozen=True)
-class _Flags:
-    """A reading seen through the duck type `out_lap_after_in_lap` asks of."""
-    reading: LapReading
-    in_laps: dict
-
-    @property
-    def is_pit_lap(self) -> bool:
-        return self.reading.lap_id in self.in_laps
-
-    @property
-    def session_id(self):
-        return self.reading.session_id
-
-
-@dataclass(frozen=True)
 class FlagChange:
-    """One stored flag the repair would move, and why."""
+    """One stored column the repair would move, and why."""
     lap_id: int
     session_id: int | None
     lap_num: int
-    column: str             # `is_pit_lap` or `is_out_lap`
-    stored: int
-    target: int
+    column: str             # `is_pit_lap`, `is_out_lap` or `exclusion_reason`
+    stored: object
+    target: object
     reason: str
 
     def describe(self) -> str:
@@ -287,8 +348,8 @@ def plan_session(laps: list[dict], frames_for) -> list[FlagChange]:
     """What the stored flags of one session should become, and nothing else.
 
     `laps` are stored rows in lap order, carrying `is_pit_lap`, `is_out_lap`,
-    `lap_time_ms` and `sample_hz`. The rules, in order of how much they are
-    allowed to do:
+    `excluded`, `exclusion_reason`, `lap_time_ms` and `sample_hz`. The rules,
+    in order of how much they are allowed to do:
 
     * **`is_pit_lap` is SET** where the frames show an in-lap - (A) or (B).
     * **`is_pit_lap` is CLEARED** only where the frames cover the lap and show
@@ -296,13 +357,13 @@ def plan_session(laps: list[dict], frames_for) -> list[FlagChange]:
       out-lap of a stop whose line came before the box. A lap without frames,
       or with frames that do not span its lap time, keeps what it has -
       silence from a recording that missed part of the lap is not evidence.
-    * **`is_out_lap` is SET by THE RULE** on the lap after every in-lap, and
-      **never cleared**. A stored out-lap is either a session's opener, or a
-      row that holds both halves of a stop (the exit came before the next
-      crossing the app saw), and `race.pit_loss` reads that second one.
+    * **`is_out_lap` is SET** on an in-lap whose own frames hold its out-lap,
+      and by THE RULE on the lap after every other in-lap. **Never cleared.**
+    * **A lap with a practice reset in it is STRUCK**, `excluded = 1` with
+      reason `reset` - only where nothing had struck it, so a reason he gave
+      is never overwritten.
 
-    No lap is deleted, no time is rewritten, and nothing but the two flags
-    moves.
+    No lap is deleted and no time is rewritten.
     """
     readings = [read_lap(lap, frames_for(lap["id"])) for lap in laps]
     evidence = in_lap_evidence(readings)
@@ -326,7 +387,7 @@ def plan_session(laps: list[dict], frames_for) -> list[FlagChange]:
             if reading.stops and reading.opens_on_stop:
                 what = ("its stop opens the lap, so the line came before the "
                         "box and this is the out-lap")
-            elif reading.resets:
+            elif reading.reset_s is not None:
                 what = "a practice reset: the car was moved to the box"
             else:
                 what = "no pit stop and no pit-lane placement"
@@ -337,18 +398,21 @@ def plan_session(laps: list[dict], frames_for) -> list[FlagChange]:
                                       reading.lap_num, "is_pit_lap",
                                       int(stored), int(target), why))
 
-    previous = None
-    for lap in laps:
-        if previous is not None and not lap.get("is_out_lap"):
-            after = SimpleNamespace(is_pit_lap=target_pit[previous["id"]],
-                                    session_id=previous.get("session_id"))
-            this = SimpleNamespace(session_id=lap.get("session_id"))
-            if out_lap_after_in_lap(after, this):
-                changes.append(FlagChange(
-                    lap["id"], lap.get("session_id"), lap["lap_num"],
-                    "is_out_lap", 0, 1,
-                    f"the lap after in-lap {previous['lap_num']}"))
-        previous = lap
+    stored_out = {lap["id"]: bool(lap.get("is_out_lap")) for lap in laps}
+    outs = outs_by_rule(readings, target_pit, stored_out)
+    for reading in readings:
+        is_out, why = outs[reading.lap_id]
+        if is_out and not stored_out[reading.lap_id]:
+            changes.append(FlagChange(reading.lap_id, reading.session_id,
+                                      reading.lap_num, "is_out_lap", 0, 1, why))
+
+    for lap, reading in zip(laps, readings):
+        if reading.reset_s is not None and not lap.get("excluded"):
+            changes.append(FlagChange(
+                reading.lap_id, reading.session_id, reading.lap_num,
+                "exclusion_reason", lap.get("exclusion_reason"), REASON_RESET,
+                f"a practice reset {reading.reset_s:.1f} s into the frames: "
+                f"the time is clocked from the box, not round the circuit"))
     return changes
 
 
@@ -362,26 +426,22 @@ _EVIDENCE = {
 def rule_violations(laps: list[dict]) -> list[tuple]:
     """(session_id, in-lap, next lap) wherever THE RULE is broken.
 
-    `laps` in session and lap order, as stored rows or anything with the
-    same keys. An in-lap that ends its session has no lap after it to break
-    the rule.
+    `laps` in session and lap order, as stored rows or anything with the same
+    keys. Asked of `runs.out_lap_after_in_lap` itself, so an in-lap row that
+    holds its own out-lap is not a break, and an in-lap that ends its session
+    has no lap after it to break the rule with.
     """
+    rows = [SimpleNamespace(is_pit_lap=bool(lap.get("is_pit_lap")),
+                            is_out_lap=bool(lap.get("is_out_lap")),
+                            session_id=lap.get("session_id"))
+            for lap in laps]
     out = []
-    for previous, lap in zip(laps, laps[1:]):
-        if (previous.get("session_id") == lap.get("session_id")
-                and previous.get("is_pit_lap") and not lap.get("is_out_lap")):
-            out.append((lap.get("session_id"), previous["lap_num"],
-                        lap["lap_num"]))
+    for index in range(1, len(rows)):
+        previous, row = rows[index - 1], rows[index]
+        if previous.session_id != row.session_id or row.is_out_lap:
+            continue
+        before = rows[index - 2] if index >= 2 else None
+        if out_lap_after_in_lap(previous, row, before):
+            out.append((row.session_id, laps[index - 1]["lap_num"],
+                        laps[index]["lap_num"]))
     return out
-
-
-def _note(reading: LapReading, evidence: str | None, is_out: bool) -> str:
-    parts = []
-    if evidence == IN_LAP_STOP:
-        parts.append("a pit stop in this lap's frames, after racing")
-    elif evidence == IN_LAP_CROSSED:
-        parts.append("the next lap opens on its pit stop: the line was "
-                     "crossed in the pit lane before the box")
-    if is_out:
-        parts.append("the lap after an in-lap")
-    return "; ".join(parts)

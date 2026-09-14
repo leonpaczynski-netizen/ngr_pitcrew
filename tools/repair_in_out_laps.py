@@ -24,8 +24,14 @@ the value it read - a row something else changed in between is skipped and
 reported, never overwritten. Every change is printed, and on `--apply` also
 written to `<db>.in-out-laps-<stamp>.log`.
 
-It only ever moves `is_pit_lap` and `is_out_lap`. No lap is deleted, no time
-is rewritten, and an out-lap flag is never cleared.
+The driver's two rulings the same day are applied too. **A row that holds both
+the in-lap and its out-lap satisfies the rule** - it is flagged out-lap itself
+and the next row is a flying lap. **A lap with a practice reset in it is
+struck**, reason `reset`, where nothing had struck it already.
+
+It moves `is_pit_lap`, `is_out_lap` and, for a reset, `excluded` with
+`exclusion_reason`. No lap is deleted, no time is rewritten, and an out-lap
+flag is never cleared.
 """
 from __future__ import annotations
 
@@ -45,7 +51,7 @@ from pitcrew.analysis.reaggregate import (                  # noqa: E402
 from pitcrew.telemetry.recorder import decode_frames         # noqa: E402
 
 LAP_COLUMNS = ("id", "session_id", "lap_num", "lap_time_ms", "is_pit_lap",
-               "is_out_lap")
+               "is_out_lap", "excluded", "exclusion_reason")
 
 
 def parse_sessions(spec: str | None) -> set[int] | None:
@@ -67,7 +73,8 @@ def read_laps(conn: sqlite3.Connection,
     """Every stored lap in session and lap order, with its sample rate."""
     rows = conn.execute(
         "SELECT laps.id, laps.session_id, laps.lap_num, laps.lap_time_ms, "
-        "       laps.is_pit_lap, laps.is_out_lap, lap_frames.sample_hz "
+        "       laps.is_pit_lap, laps.is_out_lap, laps.excluded, "
+        "       laps.exclusion_reason, lap_frames.sample_hz "
         "FROM laps LEFT JOIN lap_frames ON lap_frames.lap_id = laps.id "
         "ORDER BY laps.session_id, laps.lap_num").fetchall()
     laps = []
@@ -112,9 +119,11 @@ def applied(laps: list[dict], changes: list[FlagChange]) -> list[dict]:
     out = []
     for lap in laps:
         lap = dict(lap)
-        for column in ("is_pit_lap", "is_out_lap"):
+        for column in ("is_pit_lap", "is_out_lap", "exclusion_reason"):
             if (lap["id"], column) in moved:
                 lap[column] = moved[(lap["id"], column)]
+                if column == "exclusion_reason":
+                    lap["excluded"] = 1
         out.append(lap)
     return out
 
@@ -148,10 +157,17 @@ def write(db_path: Path, changes: list[FlagChange]) -> tuple[int, list[FlagChang
     try:
         with conn:
             for change in changes:
-                cursor = conn.execute(
-                    f"UPDATE laps SET {change.column} = ? "
-                    f"WHERE id = ? AND {change.column} = ?",
-                    (change.target, change.lap_id, change.stored))
+                if change.column == "exclusion_reason":
+                    # A strike: only where nothing had struck the lap.
+                    cursor = conn.execute(
+                        "UPDATE laps SET excluded = 1, exclusion_reason = ? "
+                        "WHERE id = ? AND excluded = 0",
+                        (change.target, change.lap_id))
+                else:
+                    cursor = conn.execute(
+                        f"UPDATE laps SET {change.column} = ? "
+                        f"WHERE id = ? AND {change.column} = ?",
+                        (change.target, change.lap_id, change.stored))
                 if cursor.rowcount == 1:
                     written += 1
                 else:

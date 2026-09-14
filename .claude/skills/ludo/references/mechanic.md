@@ -216,7 +216,7 @@ never as a step of a diagnosis.**
 - `tools/derive_grip_observations.py --apply` — grip observations from sessions on disk.
 - `tools/fit_tyre_models.py --apply` — clears and refits the tyre models from those observations.
 - `tools/flag_out_laps.py --apply` — re-judges each session's opening lap as an out-lap or not.
-- `tools/repair_in_out_laps.py --apply --db PATH` — makes every stored in-lap and out-lap obey the driver's rule (the lap after an in-lap is an out-lap), with the in-lap read off the frames; sets `is_pit_lap` both ways and `is_out_lap` only ever on, backs up first. A practice reset is not a stop and strikes nothing.
+- `tools/repair_in_out_laps.py --apply --db PATH` — makes every stored in-lap and out-lap obey the driver's rule (the lap after an in-lap is an out-lap), with the in-lap read off the frames; sets `is_pit_lap` both ways and `is_out_lap` only ever on, backs up first. A row holding both the in-lap and its out-lap is the out-lap and the next row counts; a lap with a practice reset in it is struck, reason `reset`, and is not an out-lap.
 - `tools/reaggregate.py --apply` — the old name for `repair_in_out_laps`, kept so the command line still reaches it.
 - `tools/repair_dropped_laps.py --apply` — restores laps GT7 counted and the app did not.
 - `tools/stamp_game_versions.py --apply` — the GT7 version on sessions recorded before the column.

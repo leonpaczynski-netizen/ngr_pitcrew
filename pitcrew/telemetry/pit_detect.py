@@ -324,6 +324,54 @@ def entered_the_pits(previous_kph: float | None, speed_kph: float | None, *,
     return previous_kph > from_kph and speed_kph < to_kph
 
 
+# Above this the car is racing, not rolling down a pit lane or waiting on a
+# grid. The limiters on file are 40-80 km/h; `session_state.PIT_MAX_SPEED_KMH`
+# is the same gate on the live side.
+RACING_KPH = 120.0
+
+
+def reset_at(samples) -> float | None:
+    """When the game reset the car during this lap, or None. **The one reset
+    detector** - the rack, the export, the repair and the live recorder all
+    strike a lap by it (`runs.REASON_RESET`).
+
+    A practice reset is the car MOVED to the box and handed a fresh car: after
+    the car has raced in the lap, one sample step either relocates it (more
+    than `RELOCATED_M`) to a standstill **with all four tyres set to one
+    temperature in that same step**, or puts fuel in faster than any rig does
+    (`MAX_FILL_LPS`). Measured on file (15 Sep 2026): session 158 lap 11 at
+    3.2 s (moved 168 m, 31.08 -> 100.00 L, four tyres 70.0 C), session 108
+    lap 5 at 3.0 s (114 m, 66.86 -> 100.00 L), and fourteen more - 114-1786 m,
+    every one with the four corners equal to the tenth after the step.
+
+    Three things look alike and are not this. **A real pit stop**: the game
+    places the car in the lane ROLLING at the limiter and fills at 1-3.6 L/s.
+    **A race's grid fill**: the tank steps 50 -> 100 L in one frame, but
+    before the car has raced at all - every race opener on file fills 26-31 s
+    before its first frame above `RACING_KPH`. **GT7 putting a stranded car
+    back on the track**: moved 33-51 m off the grass to a standstill, but the
+    tyres keep their own temperatures (26-48 C apart across the four on the
+    four on file: sessions 103, 125, 141, 149), the tank is untouched, and the
+    lap clock runs on - a lap with an off in it, not a reset.
+    """
+    raced = False
+    for before, after in zip(samples, samples[1:]):
+        raced = raced or before.speed_kph > RACING_KPH
+        if not raced:
+            continue
+        if (relocated(before, after) and after.speed_kph <= STOPPED_KPH
+                and after.temps is not None
+                and max(after.temps) - min(after.temps) <= TEMP_STEP_SPREAD_C):
+            return after.t_s
+        step_s = after.t_s - before.t_s
+        # A reading of 0.0 is how a missing fuel channel reaches a `Sample`,
+        # so a rise FROM it is "cannot tell", never a tank handed back.
+        if (step_s > 0 and before.fuel_l > 0
+                and (after.fuel_l - before.fuel_l) / step_s > MAX_FILL_LPS):
+            return after.t_s
+    return None
+
+
 def placed_in_pit_lane(samples, stops=None) -> float | None:
     """When GT7 put the car into the pit lane, or None.
 

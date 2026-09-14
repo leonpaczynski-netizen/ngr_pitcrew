@@ -36,6 +36,7 @@ from pitcrew.analysis.session import counted_laps
 from pitcrew.analysis.runs import (
     FOR_QUALIFYING,
     REASON_FUEL_IMPLAUSIBLE,
+    REASON_RESET,
     auto_out_laps,
     carry_compound,
     flag_opening_lap,
@@ -3520,6 +3521,19 @@ class PitCrewController(QObject):
             # a lap that never crossed the line does not belong on it.
             return
 
+        # **A lap with a practice reset in it is struck** (the driver, 15 Sep
+        # 2026: "Strike the reset lap."). The game moved the car to the box
+        # and handed it a tank part-way round, so the time GT7 gave it was
+        # clocked from the box - session 108 lap 5 read 127.8 s against a
+        # 138 s lap and became the session best. Not an out-lap, and the lap
+        # after it counts. Same detector as the export and the repair.
+        reset = self._reset_in(rows, frames)
+        if reset is not None:
+            self.store.exclude_lap(lap_id, REASON_RESET)
+            log("session").info(
+                "lap %s struck: a practice reset %.1f s into its frames",
+                lap.lap_num, reset)
+
         # **The filed calls are judged HERE, past the fragment check** (critic
         # pass 8). Judged immediately after `add_lap` they were judged against
         # a lap population that still contained the phantom row - "two laps
@@ -3563,7 +3577,8 @@ class PitCrewController(QObject):
             # Filed under the compound the lap was STORED under, so the board's
             # best and the archive's tag cannot name two tyres (critic pass 2).
             self._board_note_lap(
-                lap, rows, filed, lap_id=lap_id, excluded=bool(pending))
+                lap, rows, filed, lap_id=lap_id,
+                excluded=bool(pending) or reset is not None)
         # Race laps belong to the race session, not to the practice rack.
         # They were pushed on here numbered as a continuation of the practice
         # laps, then vanished on the next rebuild because `_rows_for_event`
@@ -3583,6 +3598,11 @@ class PitCrewController(QObject):
             compound=lap.compound,
             is_out_lap=lap.is_out_lap,
             is_pit_lap=lap.is_pit_lap,
+            # As stored above, so the rack does not count a reset lap until
+            # the next rebuild reads the strike back.
+            excluded=bool(pending) or reset is not None,
+            exclusion_reason=(pending or
+                              (REASON_RESET if reset is not None else None)),
             session_id=self.session_id,
             # **The rack names out-laps itself and cannot do it without this.**
             # `PracticeScreen.add_lap` applies `auto_out_laps`, whose one
@@ -3612,7 +3632,27 @@ class PitCrewController(QObject):
         self.practice.add_lap(row)
         self._refresh_compound_pace(self.store.active_event_id())
         self._board_note_lap(lap, rows, row.compound, lap_id=lap_id,
-                             excluded=bool(pending) or bool(row.is_out_lap))
+                             excluded=(bool(pending) or reset is not None
+                                       or bool(row.is_out_lap)))
+
+    @staticmethod
+    def _reset_in(rows, frames) -> float | None:
+        """Seconds into this lap's frames of a practice reset, or None.
+
+        Never raises into the crossing: a detector failure is logged and
+        reads as "cannot tell", which strikes nothing.
+        """
+        if not rows or frames is None:
+            return None
+        try:
+            from pitcrew.analysis.reaggregate import lap_reset_s
+
+            return lap_reset_s([dict(zip(FRAME_FIELDS, row)) for row in rows],
+                               frames.sample_hz)
+        except Exception:                                    # noqa: BLE001
+            log("session").warning("the reset check could not read the lap",
+                                   exc_info=True)
+            return None
 
     def _event_record(self) -> dict | None:
         """The active event's row, read without `active_event`'s side effects

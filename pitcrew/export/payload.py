@@ -34,7 +34,7 @@ _N_CLASS = re.compile(r"^N(100|[1-9]\d{2}|1000)$")
 
 # Contract §5 and §16.3 row 5.
 EXCLUSION_REASONS = ("out-lap", "in-lap", "incident", "traffic",
-                     "fuel-implausible", "manual")
+                     "fuel-implausible", "reset", "manual")
 EXCLUSION_SOURCES = ("auto", "driver")
 
 # Contract §8. **Spelled out here rather than imported from `analysis/wear.py`**

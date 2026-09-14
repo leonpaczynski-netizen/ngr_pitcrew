@@ -211,7 +211,7 @@ lines and it keeps the register in sync automatically.
   laps, and laps whose fuel burn says they never went round. `lapsExcluded` lists
   which; **`lapsExcludedDetail` says why and who worked it out.**
 - `lapsExcludedDetail[].reason` ∈ `out-lap` | `in-lap` | `incident` | `traffic` |
-  `fuel-implausible` | `manual`; `.source` ∈ `auto` | `driver`. `note` appears only
+  `fuel-implausible` | `reset` | `manual`; `.source` ∈ `auto` | `driver`. `note` appears only
   where the driver's own words say more than the vocabulary does — "spun at T4"
   survives, "struck by hand" does not, because it repeats `source`.
 - **`in-lap` and `out-lap` have one definition each.** An in-lap is the lap the
@@ -220,9 +220,18 @@ lines and it keeps the register in sync automatically.
   the box (Daytona, Spa) - the lap before one whose frames open on the stop. A
   practice reset (the car moved to the box, tank and tyres replaced in one
   frame) is not a stop and makes neither. An out-lap is a session's opening lap
-  out of the lobby box, or **the lap after an in-lap in the same session, always**
-  (the driver's rule, 15 Sep 2026). A run can open with no out-lap: a reset ends
-  the tank, and the lap after it is a flying lap.
+  out of the lobby box, or **the lap after an in-lap in the same session** (the
+  driver's rule, 15 Sep 2026) - **unless the in-lap row already holds its
+  out-lap**: where the app never saw the crossing inside GT7's pit sequence, one
+  row carries the stop, the release and the drive back above racing speed to
+  the line. That row is both `in-lap` and out-lap (reported `out-lap`), and the
+  row after it is a flying lap that counts. A run can open with no out-lap: a
+  reset ends the tank, and the lap after it is a flying lap.
+- **`reset`** is a lap with a practice reset in it: after the car had raced in
+  the lap, one frame moved it more than 25 m to a standstill, or put fuel in
+  faster than 25 L/s (a rig fills at 1-3.6 L/s). Its time was clocked from the
+  box, so it is struck and can never be `bestLapMs`. It is not an out-lap, and
+  the lap after it counts. `source` is always `auto`.
 - **Fuel plausibility is part of validity.** A lap burning less than half the
   session's median burn is a lap boundary that landed inside a pit or garage
   transition: it is `valid: false`, absent from `lapsCounted`, and never eligible

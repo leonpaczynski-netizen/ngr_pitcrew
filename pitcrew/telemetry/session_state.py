@@ -883,12 +883,16 @@ class SessionState:
             # the exit came before the next crossing the app saw (the Monza
             # stops on file, sessions 52, 53, 58 and 78), and the lap after it
             # was counted: `is_pit_lap` followed by a lap that was not an
-            # out-lap. The in-lap keeps that flag too - `race.pit_loss` reads
-            # it as "this row holds both halves of the stop".
+            # out-lap. **That flag on the in-lap is right, and it is what
+            # satisfies the rule** (the driver, 15 Sep 2026): the row holds the
+            # stop, the release and the drive back up to speed past the line,
+            # so it IS the out-lap and the next row is a flying lap -
+            # `runs.holds_its_own_out_lap`, which needs the lap before too.
             is_out_lap=(self._out_lap_pending
                         or out_lap_after_in_lap(
                             self._laps[-1] if self._laps else None,
-                            _THIS_SESSION)),
+                            _THIS_SESSION,
+                            self._laps[-2] if len(self._laps) >= 2 else None)),
             gear_ratios=list(self._gear_ratios) if self._gear_ratios else None,
             # **`None` until the stop has actually closed.** The swap is read
             # at PIT_ENTRY, before it has happened, so a `False` filed on the

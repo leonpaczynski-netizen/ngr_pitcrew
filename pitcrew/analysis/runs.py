@@ -48,6 +48,11 @@ REASON_FUEL_IMPLAUSIBLE = "fuel-implausible"
 REASON_OUT_LAP = "out-lap"
 REASON_IN_LAP = "in-lap"
 REASON_MANUAL = "manual"
+# A lap with a practice reset in it: the game moved the car to the box and
+# handed it a tank part-way round, so its time is not a lap of the circuit
+# (`telemetry.pit_detect.reset_at`). Struck, never an out-lap - the driver,
+# 15 Sep 2026: "Strike the reset lap."
+REASON_RESET = "reset"
 
 SOURCE_AUTO = "auto"
 SOURCE_DRIVER = "driver"
@@ -725,13 +730,46 @@ def _same_session(previous, lap) -> bool:
     return before is None or after is None or before == after
 
 
-def out_lap_after_in_lap(previous, lap) -> bool:
+def holds_its_own_out_lap(in_lap, before) -> bool:
+    """Does this in-lap ROW also hold its out-lap?
+
+    The driver, 15 Sep 2026: *"A row that contains both the in-lap and the
+    out-lap satisfies the rule; the next row is a flying lap and counts."*
+    Where the app never saw the crossing inside GT7's pit sequence, one row
+    carries the entry, the stop, the release and the drive back up to speed
+    past the line - every Monza stop on file, 286 s of frames under a 168 s
+    lap time. The frames say so (`analysis.reaggregate.LapReading.
+    holds_out_lap`); what is stored is the row flagged BOTH `is_pit_lap` and
+    `is_out_lap`, which is also exactly what the live state files when the
+    pit exit comes before the next crossing it sees.
+
+    One stored shape means something else, and `before` tells them apart: a
+    row that is the out-lap of the stop before it and the in-lap of the next
+    (the lap before is an in-lap), or a session's opening lap, whose out-lap
+    flag is the lobby box's. Neither holds the out-lap of ITS OWN stop, and
+    without `before` nothing can say so - cannot tell is not a merged row, so
+    the lap after is struck, the error that stays visible on the rack.
+    """
+    if not (getattr(in_lap, "is_pit_lap", False)
+            and getattr(in_lap, "is_out_lap", False)):
+        return False
+    if before is None or not _same_session(before, in_lap):
+        return False
+    return not getattr(before, "is_pit_lap", False)
+
+
+def out_lap_after_in_lap(previous, lap, before=None) -> bool:
     """**THE RULE: in the same session, the lap after an in-lap is an out-lap.**
 
     The driver, 15 Sep 2026: *"A lap in the same session after an in lap has
     to be an out lap."* No exceptions within a session. A session change makes
     none - the first lap of a session is judged by `opening_lap_verdict` -
     and a race's grid lap is not an out-lap, because nothing comes before it.
+
+    **Except that a row can already hold the out-lap** (`holds_its_own_out_lap`,
+    the driver's second ruling the same day): then the rule is satisfied
+    inside that row, and the next row is a flying lap. `before` is the lap
+    before `previous`, which that test needs.
 
     **The one place this is decided.** The live state files it on the lap
     (`session_state`), the rack and the export name it through
@@ -749,8 +787,10 @@ def out_lap_after_in_lap(previous, lap) -> bool:
     """
     if previous is None or lap is None:
         return False
-    return bool(getattr(previous, "is_pit_lap", False)) and _same_session(
-        previous, lap)
+    if not (getattr(previous, "is_pit_lap", False)
+            and _same_session(previous, lap)):
+        return False
+    return not holds_its_own_out_lap(previous, before)
 
 
 def auto_out_laps(laps: list[LapInput]) -> set[int]:
@@ -807,8 +847,9 @@ def auto_out_laps(laps: list[LapInput]) -> set[int]:
     always holds a mode, so every session recorded since it existed is
     declared, and the nineteen undeclared sessions on file all predate it.
     """
-    out = {lap.lap_num for previous, lap in zip(laps, laps[1:])
-           if out_lap_after_in_lap(previous, lap)}
+    out = {laps[index].lap_num for index in range(1, len(laps))
+           if out_lap_after_in_lap(laps[index - 1], laps[index],
+                                   laps[index - 2] if index >= 2 else None)}
     openers = _session_opening_laps(laps)
     for lap in laps:
         if lap.lap_num not in openers:
@@ -842,7 +883,7 @@ def _session_opening_laps(laps: list[LapInput]) -> set[int]:
 # hand" notes carry no information; four of the eight in the 11 Aug session
 # were out-laps the refuel boundary names for free.
 EXCLUSION_REASONS = (REASON_OUT_LAP, REASON_IN_LAP, REASON_INCIDENT, "traffic",
-                     REASON_FUEL_IMPLAUSIBLE, REASON_MANUAL)
+                     REASON_FUEL_IMPLAUSIBLE, REASON_RESET, REASON_MANUAL)
 
 
 def classify_exclusions(laps: list[LapInput],
@@ -904,6 +945,12 @@ def _reason_for(lap: LapInput, implausible: set[int],
         return REASON_OUT_LAP, SOURCE_AUTO
     if lap.is_pit_lap:
         return REASON_IN_LAP, SOURCE_AUTO
+    # Stored by the app off the frames (the live recorder, or the repair), so
+    # it is the app's finding and says so - not a hand strike that happens to
+    # use the word.
+    if (lap.excluded
+            and (lap.exclusion_reason or "").strip().lower() == REASON_RESET):
+        return REASON_RESET, SOURCE_AUTO
     # Ahead of the driver's own strike, so a lap he struck *and* the frames
     # explain reads as the explanation rather than as an unexplained mark.
     # His note survives either way - `_driver_note` carries it separately.

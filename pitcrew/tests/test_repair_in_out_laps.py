@@ -43,15 +43,17 @@ def copy_of_real_laps(target: Path) -> None:
             for num in nums:
                 row = source.execute(
                     "SELECT l.id, l.lap_time_ms, l.is_pit_lap, l.is_out_lap, "
-                    "f.sample_hz, f.frame_count, f.blob FROM laps l "
+                    "f.sample_hz, f.frame_count, f.blob, l.excluded, "
+                    "l.exclusion_reason FROM laps l "
                     "JOIN lap_frames f ON f.lap_id = l.id "
                     "WHERE l.session_id = ? AND l.lap_num = ?",
                     (session_id, num)).fetchone()
                 dest.execute(
                     "INSERT INTO laps (id, session_id, lap_num, lap_time_ms, "
-                    "is_pit_lap, is_out_lap, recorded_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, '2026-09-15')",
-                    (row[0], session_id, num, row[1], row[2], row[3]))
+                    "is_pit_lap, is_out_lap, excluded, exclusion_reason, "
+                    "recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2026-09-15')",
+                    (row[0], session_id, num, row[1], row[2], row[3], row[7],
+                     row[8]))
                 dest.execute(
                     "INSERT INTO lap_frames (lap_id, sample_hz, frame_count, "
                     "blob) VALUES (?, ?, ?, ?)", (row[0], row[4], row[5], row[6]))
@@ -77,27 +79,34 @@ def test_the_repair_takes_the_violations_to_zero_on_a_copy(tmp_path, capsys):
 
     db = tmp_path / "copy.db"
     copy_of_real_laps(db)
-    assert sorted(stored_violations(db)) == [
-        (49, 13, 14), (53, 14, 15), (60, 1, 2), (74, 2, 3), (88, 6, 7),
-        (93, 1, 2), (149, 7, 8)]
+    # Read off the stored flags: a pit row also flagged out-lap, after a lap
+    # that is not an in-lap, is a row holding its own out-lap (session 53 lap
+    # 14) - so session 49 lap 13, 74 lap 2 and 149 lap 7 pass here too, and it
+    # takes their frames to show they are not stops at all.
+    assert sorted(stored_violations(db)) == [(60, 1, 2), (88, 6, 7), (93, 1, 2)]
 
     assert main(["--db", str(db)]) == 0                 # dry run
-    assert len(stored_violations(db)) == 7              # nothing written
+    assert len(stored_violations(db)) == 3              # nothing written
 
     assert main(["--db", str(db), "--apply"]) == 0
     assert stored_violations(db) == []
     out = capsys.readouterr().out
     assert "s158 lap 12" not in out, "the lap after a reset is never struck"
     assert "s108 lap 6" not in out
+    assert "s53 lap 15" not in out, "the row after a merged in-lap counts"
 
     conn = sqlite3.connect(db)
-    flags = dict(((s, n), (p, o)) for s, n, p, o in conn.execute(
-        "SELECT session_id, lap_num, is_pit_lap, is_out_lap FROM laps"))
+    flags = dict(((s, n), (p, o, e, r)) for s, n, p, o, e, r in conn.execute(
+        "SELECT session_id, lap_num, is_pit_lap, is_out_lap, excluded, "
+        "exclusion_reason FROM laps"))
     conn.close()
-    assert flags[(19, 14)] == (1, 0) and flags[(19, 15)] == (0, 1)
-    assert flags[(158, 11)] == (0, 0) and flags[(158, 12)] == (0, 0)
-    assert flags[(108, 5)] == (0, 0) and flags[(108, 6)] == (0, 0)
-    assert flags[(49, 12)] == (1, 0) and flags[(49, 13)] == (0, 1)
+    assert flags[(19, 14)][:2] == (1, 1) and flags[(19, 15)][:2] == (0, 0)
+    assert flags[(53, 14)][:2] == (1, 1) and flags[(53, 15)][:2] == (0, 0)
+    assert flags[(158, 11)] == (0, 0, 1, "reset")
+    assert flags[(158, 12)] == (0, 0, 0, None)
+    assert flags[(108, 5)] == (0, 0, 1, "reset")
+    assert flags[(108, 6)] == (0, 0, 0, None)
+    assert flags[(49, 12)][:2] == (1, 0) and flags[(49, 13)][:2] == (0, 1)
     assert list(tmp_path.glob("copy.db.bak-before-in-out-laps-*"))
 
 
